@@ -993,7 +993,6 @@ apps/coding_agent/
 |   |   |   +-- protocol.ex, tool_factory.ex
 |   |   |   +-- sidecar_session.ex, sidecar_supervisor.ex
 |   |   +-- security/
-|   |   |   +-- external_content.ex
 |   |   |   +-- untrusted_tool_boundary.ex
 |   |   +-- workspace.ex                      # Bootstrap file loading
 |   |   +-- system_prompt.ex                  # Lemon base system prompt builder

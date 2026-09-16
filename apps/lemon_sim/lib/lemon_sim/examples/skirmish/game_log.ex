@@ -1,13 +1,7 @@
 defmodule LemonSim.Examples.Skirmish.GameLog do
   @moduledoc false
 
-  alias LemonCore.MapHelpers
-  alias LemonSim.Examples.GameLog, as: SharedGameLog
-
-  defdelegate start(path), to: SharedGameLog
-  defdelegate stop(log), to: SharedGameLog
-  defdelegate default_log_path(sim_id), to: SharedGameLog
-  defdelegate read_log(path), to: SharedGameLog
+  use LemonSim.Examples.GameLog
 
   def log_init(nil, _world), do: :ok
 

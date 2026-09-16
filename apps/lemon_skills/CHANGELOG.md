@@ -93,6 +93,9 @@ modules nothing outside the package touches are marked internal.
 
 ### Changed
 
+- `LemonSkills.HttpClient.Httpc` now fetches through Req instead of
+  Erlang `:httpc`/`LemonCore.Httpc`; the `fetch/2` contract is unchanged.
+
 - Avoid unnecessary full-list traversal when validating official Hermes skill
   identifiers.
 

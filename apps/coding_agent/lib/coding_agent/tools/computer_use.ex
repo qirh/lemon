@@ -3,12 +3,12 @@ defmodule CodingAgent.Tools.ComputerUse do
   Cross-platform desktop computer-use tool backed by LemonBrowser and cua-driver.
   """
 
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.{ImageContent, TextContent}
   alias LemonBrowser.{Artifacts, ComputerUseSession}
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @actions ~w(capture click double_click right_click middle_click drag scroll type key set_value wait list_apps list_windows focus_app)
 

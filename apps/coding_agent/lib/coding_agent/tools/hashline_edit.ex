@@ -30,7 +30,7 @@ defmodule CodingAgent.Tools.HashlineEdit do
   alias CodingAgent.Tools.Hashline
   alias CodingAgent.Tools.Hashline.HashlineMismatchError
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
 
   @doc """
   Returns the tool definition for the hashline_edit tool.

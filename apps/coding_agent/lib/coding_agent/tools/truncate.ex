@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.Truncate do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
-  import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [aborted?: 1]
 
   @default_max_chars 50_000
   @default_strategy "smart"

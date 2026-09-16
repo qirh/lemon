@@ -73,7 +73,7 @@ of `CHANGELOG.md`.
 | `lib/lemon_skills/application.ex` | OTP app startup: `ensure_dirs!()`, `seed!()`, starts Registry |
 | `lib/lemon_skills/mcp_source.ex` | GenServer source for stdio, HTTP JSON-RPC, and legacy HTTP+SSE MCP tool discovery/calls into `CodingAgent.ToolRegistry`; configured stdio sampling policies can route reviewed sampling through `LemonCore.ExecApprovals` with redacted summaries; configured HTTP OAuth sources can resolve client secrets, persist token caches through `LemonCore.Secrets`, capture local PKCE callbacks through LemonCore's localhost listener, and route local authorization requests through `mcp_*_oauth` operator approvals |
 | `lib/lemon_skills/http_client.ex` | Behaviour for HTTP fetching (injectable for testing) |
-| `lib/lemon_skills/http_client/httpc.ex` | Default implementation using Erlang `:httpc` |
+| `lib/lemon_skills/http_client/httpc.ex` | Default implementation, backed by Req |
 | `lib/mix/tasks/lemon.skill.ex` | CLI: `mix lemon.skill list/search/discover/install/update/remove/info` |
 
 ### Built-in Skills
@@ -231,7 +231,7 @@ The sidecar stores load/write counters, last-use metadata, agent-authored creati
 
 ### HTTP Client Injection
 
-`LemonSkills.HttpClient` is a behaviour. The default `Httpc` module uses Erlang `:httpc`. In tests, it is replaced with `LemonSkills.HttpClient.Mock` via `config :lemon_skills, :http_client, MockModule`.
+`LemonSkills.HttpClient` is a behaviour. The default `Httpc` module fetches through Req. In tests, it is replaced with `LemonSkills.HttpClient.Mock` via `config :lemon_skills, :http_client, MockModule`.
 
 ## Testing Guidance
 

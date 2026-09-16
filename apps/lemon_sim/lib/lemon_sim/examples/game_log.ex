@@ -5,9 +5,31 @@ defmodule LemonSim.Examples.GameLog do
   Scenario loggers own their domain-specific metadata and public APIs. This
   module owns the common file handling, entry envelope, event normalization,
   timestamping, and recursive conversion of JSON-unsafe tuples and map sets.
+
+  Per-scenario loggers `use LemonSim.Examples.GameLog` to inherit the shared
+  lifecycle delegates, then define their own domain log_step/log_terminal fns.
   """
 
   @type log :: File.io_device() | nil
+
+  defmacro __using__(_opts) do
+    quote do
+      alias LemonCore.MapHelpers
+      alias LemonSim.Examples.GameLog, as: SharedGameLog
+
+      defdelegate start(path), to: SharedGameLog
+      defdelegate stop(log), to: SharedGameLog
+      defdelegate log_init(log, world), to: SharedGameLog
+      defdelegate default_log_path(sim_id), to: SharedGameLog
+      defdelegate read_log(path), to: SharedGameLog
+
+      defoverridable start: 1,
+                     stop: 1,
+                     log_init: 2,
+                     default_log_path: 1,
+                     read_log: 1
+    end
+  end
 
   @spec start(String.t()) :: File.io_device()
   def start(path) when is_binary(path) do

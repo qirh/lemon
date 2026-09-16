@@ -7,12 +7,12 @@ defmodule CodingAgent.Tools.BrowserExec do
   REST backends while retaining Lemon's per-action policy boundaries.
   """
 
-  alias CodingAgent.Security.ExternalContent
+  alias LemonAgent.Security.ExternalContent
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonBrowser.RoutePolicy
 
-  import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
+  import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   @max_steps 25
   @actions %{

@@ -81,7 +81,7 @@ Hosted rooms are single-node while persistence is local SQLite and PubSub is loc
 
 ### Multi-Model Assignment
 
-For social-deduction and multi-player domains (Werewolf, Stock Market, Survivor, Space Station), each player seat can be assigned a distinct model from the launch form. `SimManager` builds a `model_assignments` map keyed by the domain's canonical actor ID and uses an `on_before_step` callback to switch the active model before each turn. For Werewolf, those IDs are villager names (`"Alice"`, `"Bram"`, etc.), not `player_n` seat labels. All provider credentials are resolved through `LemonSim.GameHelpers.Config`.
+For social-deduction and multi-player domains (Werewolf, Stock Market, Survivor, Space Station), each player seat can be assigned a distinct model from the launch form. `SimManager` builds a `model_assignments` map keyed by the domain's canonical actor ID and uses an `on_before_step` callback to switch the active model before each turn. For Werewolf, those IDs are villager names (`"Alice"`, `"Bram"`, etc.), not `player_n` seat labels. All provider credentials are resolved through `LemonSim.LLM.GameHelpers.Config`.
 
 Werewolf renders any `character_profiles` supplied in the initial world. Live
 runs do not mutate persisted snapshots from a detached lore task; traits and

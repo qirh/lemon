@@ -1008,7 +1008,7 @@ Optional, each with a documented fallback:
 - `sentry` + `finch` - error reporting sink; the logger handler is skipped when absent
 - `file_system` - file watching for config reload; the reloader polls when absent
 
-UUIDs come from the vendored `LemonCore.UUID` (v4 + v7), not the unmaintained `:uuid` package.
+UUIDs come from the vendored `LemonCore.Id` (v4 + v7), not the unmaintained `:uuid` package.
 
 ## Supervised Process Tree
 

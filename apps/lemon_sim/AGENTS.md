@@ -148,7 +148,7 @@ Boundary namespaces:
 | `lib/lemon_sim/kernel/event.ex` | `LemonSim.Kernel.Event` | Canonical event envelope |
 | `lib/lemon_sim/kernel/plan_step.ex` | `LemonSim.Kernel.PlanStep` | Compact plan-history entries |
 | `lib/lemon_sim/kernel/decision_frame.ex` | `LemonSim.Kernel.DecisionFrame` | Snapshot fed to projector |
-| `lib/lemon_sim/kernel/event_coalescer.ex` | `LemonSim.Kernel.EventCoalescer` | Coalescing/filtering behaviour |
+
 | `lib/lemon_sim/kernel/updater.ex` | `LemonSim.Kernel.Updater` | Event -> state updater behaviour |
 | `lib/lemon_sim/kernel/action_space.ex` | `LemonSim.Kernel.ActionSpace` | Turn-scoped tool exposure behaviour |
 | `lib/lemon_sim/kernel/projector.ex` | `LemonSim.Kernel.Projector` | Frame -> AI context behaviour |

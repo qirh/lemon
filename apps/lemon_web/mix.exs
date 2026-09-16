@@ -35,9 +35,9 @@ defmodule LemonWeb.MixProject do
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
-      {:gettext, "~> 0.26"},
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      {:lazy_html, "~> 0.1", only: :test}
     ]
   end
 end
