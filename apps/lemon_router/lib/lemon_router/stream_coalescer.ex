@@ -555,8 +555,6 @@ defmodule LemonRouter.StreamCoalescer do
       {:error, reason, next_state} ->
         {:error, reason, %{next_state | flush_timer: nil}}
     end
-  rescue
-    _ -> {:error, :finalize_crashed, %{state | finalized: false, flush_timer: nil}}
   end
 
   defp dispatch_or_mark_finalized(state, intent_text, last_sent_text, false)
@@ -614,8 +612,6 @@ defmodule LemonRouter.StreamCoalescer do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp move_presentation_state_answer(state, target_surface) when not is_nil(target_surface) do
@@ -625,8 +621,6 @@ defmodule LemonRouter.StreamCoalescer do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp cancel_timer(nil), do: :ok

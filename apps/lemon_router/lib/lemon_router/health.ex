@@ -106,15 +106,9 @@ defmodule LemonRouter.Health do
       _ ->
         {:error, :not_running}
     end
-  rescue
-    error ->
-      {:error, error}
   end
 
   defp run_counts_check do
     {:ok, LemonRouter.RunOrchestrator.counts()}
-  rescue
-    error ->
-      {:error, error}
   end
 end

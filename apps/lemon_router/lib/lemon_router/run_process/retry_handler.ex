@@ -46,11 +46,6 @@ defmodule LemonRouter.RunProcess.RetryHandler do
 
         false
     end
-  rescue
-    error ->
-      Logger.warning("RunProcess #{state.run_id} auto-retry crashed: #{Exception.message(error)}")
-
-      false
   end
 
   @doc """
@@ -231,5 +226,4 @@ defmodule LemonRouter.RunProcess.RetryHandler do
     end
   end
 
-  defp fetch(_, _), do: nil
 end
