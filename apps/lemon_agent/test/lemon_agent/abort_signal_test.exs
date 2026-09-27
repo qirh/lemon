@@ -808,63 +808,35 @@ defmodule LemonAgent.AbortSignalTest do
   # ============================================================================
 
   describe "guard clauses and type validation" do
-    test "abort/1 only accepts references" do
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort("not a reference")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort(123)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort(:an_atom)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort(nil)
+    @tag invalid_signals: ["not a reference", 123, :an_atom, nil]
+    test "abort/1 only accepts references", %{invalid_signals: signals} do
+      for signal <- signals do
+        assert_raise FunctionClauseError, fn -> AbortSignal.abort(signal) end
       end
     end
 
-    test "aborted?/1 accepts reference or nil" do
+    @tag invalid_signals: ["not a reference", 123, :an_atom]
+    test "aborted?/1 accepts reference or nil", %{invalid_signals: signals} do
       ref = AbortSignal.new()
 
-      # These should work
-      assert is_boolean(AbortSignal.aborted?(ref))
-      assert is_boolean(AbortSignal.aborted?(nil))
+      refute AbortSignal.aborted?(ref)
+      refute AbortSignal.aborted?(nil)
 
-      # These should raise
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.aborted?("not a reference")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.aborted?(123)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.aborted?(:an_atom)
+      for signal <- signals do
+        assert_raise FunctionClauseError, fn -> AbortSignal.aborted?(signal) end
       end
     end
 
-    test "clear/1 accepts reference or nil" do
+    @tag invalid_signals: ["not a reference", 123, :an_atom]
+    test "clear/1 accepts reference or nil", %{invalid_signals: signals} do
       ref = AbortSignal.new()
 
       # These should work
       assert :ok = AbortSignal.clear(ref)
       assert :ok = AbortSignal.clear(nil)
 
-      # These should raise
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.clear("not a reference")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.clear(123)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.clear(:an_atom)
+      for signal <- signals do
+        assert_raise FunctionClauseError, fn -> AbortSignal.clear(signal) end
       end
     end
   end

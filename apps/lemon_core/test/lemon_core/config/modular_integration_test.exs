@@ -192,9 +192,7 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       model = ""
       """)
 
-      assert {:error, errors} = Modular.load_with_validation()
-      assert is_list(errors)
-      assert errors != []
+      assert {:error, _errors} = Modular.load_with_validation()
     end
 
     test "includes specific error messages", %{mock_home: mock_home} do

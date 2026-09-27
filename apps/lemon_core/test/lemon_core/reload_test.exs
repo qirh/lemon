@@ -61,9 +61,10 @@ defmodule LemonCore.ReloadTest do
       assert length(result.errors) == 1
     end
 
-    test "raises function clause for non-atom module" do
+    @tag invalid_module: "NotAModule"
+    test "raises function clause for non-atom module", %{invalid_module: module} do
       assert_raise FunctionClauseError, fn ->
-        Reload.reload_module("NotAModule")
+        Reload.reload_module(module)
       end
     end
   end

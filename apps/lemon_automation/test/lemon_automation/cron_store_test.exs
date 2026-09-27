@@ -25,6 +25,8 @@ defmodule LemonAutomation.CronStoreTest do
         build_job(token, "due",
           created_at_ms: 1_000,
           enabled: true,
+          once: true,
+          deliver_to: "discord:55:66",
           next_run_at_ms: 0
         )
 
