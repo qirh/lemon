@@ -80,7 +80,7 @@ defmodule LemonControlPlane.Methods.LogsTail do
 
   defp redact_value(value) when is_map(value) do
     Map.new(value, fn {key, nested} ->
-      if sensitive_key?(key) do
+      if LemonCore.Redact.sensitive_key?(key) do
         {key, %{"redacted" => true, "kind" => "secret"}}
       else
         {key, redact_value(nested)}
@@ -89,31 +89,12 @@ defmodule LemonControlPlane.Methods.LogsTail do
   end
 
   defp redact_value(value) when is_list(value), do: Enum.map(value, &redact_value/1)
-  defp redact_value(value) when is_binary(value), do: redact_text(value)
+  defp redact_value(value) when is_binary(value), do: LemonCore.Redact.text(value)
   defp redact_value(value), do: value
 
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
+  
 
-  defp sensitive_key?(key) do
-    normalized = key |> to_string() |> String.downcase()
-
-    Enum.any?(
-      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
-      &String.contains?(normalized, &1)
-    )
-  end
+  
 
   defp normalize_limit(limit) when is_integer(limit) and limit > 0, do: min(limit, @max_limit)
 

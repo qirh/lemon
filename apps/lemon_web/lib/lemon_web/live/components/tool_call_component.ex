@@ -31,7 +31,7 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
       |> assign(:name, name)
       |> assign(:summary, summary(fetch(action, :title), name))
       |> assign(:status, status)
-      |> assign(:args, Payload.format(Payload.redact(fetch(detail, :args))))
+      |> assign(:args, Payload.format(LemonCore.Redact.map(fetch(detail, :args))))
       |> assign(:result, Payload.format(fetch(detail, :result)))
       |> assign(:message, Payload.format(fetch(assigns.event, :message)))
 

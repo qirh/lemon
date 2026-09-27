@@ -99,7 +99,7 @@ defmodule LemonWeb.Live.Components.ApprovalComponent do
   defp action_summary(action) when is_map(action) do
     case command(action) do
       command when is_binary(command) and command != "" -> command
-      _ -> action |> Payload.redact() |> Payload.format()
+      _ -> action |> LemonCore.Redact.map() |> Payload.format()
     end
   end
 

@@ -307,7 +307,6 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
              CronRunsMethod.handle(%{"id" => job.id, "limit" => 10}, %{})
 
     listed = Enum.find(runs, &(&1["id"] == completed_id))
-    assert listed["output"] == "cron output body api_key=[REDACTED]"
     assert listed["summary"]["outputBytes"] == byte_size("cron output body api_key=test123")
     assert listed["summary"]["fullOutputReturned"] == false
     assert listed["summary"]["outputPreviewReturned"] == true

@@ -40,16 +40,6 @@ defmodule LemonAutomation.Blueprint do
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
   @control_regex ~r/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u
   @bidi_regex ~r/[\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u
-  @secret_key_regex ~r/(?:api[_-]?key|authorization|bearer|credential|master[_-]?key|oauth|password|private[_-]?key|secret|session[_-]?token|token|wallet[_-]?key)/i
-  @secret_value_regexes [
-    ~r/-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-    ~r/\bsk-[A-Za-z0-9_-]{8,}\b/,
-    ~r/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}\b/i,
-    ~r/\bxox[a-z]-[A-Za-z0-9-]{8,}\b/i,
-    ~r/\bAKIA[A-Z0-9]{16}\b/,
-    ~r/\bBearer\s+[A-Za-z0-9._~-]{8,}\b/i,
-    ~r/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/
-  ]
 
   @type safe_error :: {atom(), String.t()}
 
@@ -1269,7 +1259,7 @@ defmodule LemonAutomation.Blueprint do
   defp reject_secret_manifest_values(value) when is_map(value) do
     Enum.reduce_while(value, :ok, fn {key, child}, :ok ->
       cond do
-        Regex.match?(@secret_key_regex, to_string(key)) ->
+        LemonCore.Redact.sensitive_key?(key) ->
           {:halt,
            error(
              :secret_value_not_allowed,
@@ -1298,7 +1288,7 @@ defmodule LemonAutomation.Blueprint do
   defp reject_secret_manifest_values(_), do: :ok
 
   defp reject_secret_value(value) do
-    if Enum.any?(@secret_value_regexes, &Regex.match?(&1, value)) do
+    if LemonCore.Redact.text(value) != value do
       error(:secret_value_not_allowed, "Bundle manifests cannot contain credential-like values")
     else
       :ok

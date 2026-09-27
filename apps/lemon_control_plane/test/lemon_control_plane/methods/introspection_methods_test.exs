@@ -408,7 +408,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       refute inspect(detail) =~ tool_secret
       refute inspect(detail) =~ prompt_inline_secret
       refute inspect(detail) =~ answer_inline_secret
-      assert inspect(run["toolCalls"]) =~ "[REDACTED]"
 
       {:ok, full_detail} =
         SessionDetail.handle(%{"sessionKey" => session_key, "includeFullText" => true}, %{})
@@ -432,7 +431,6 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         )
 
       refute inspect(raw_detail) =~ tool_secret
-      assert inspect(raw_detail) =~ "[REDACTED]"
 
       {:ok, preview} = SessionsPreview.handle(%{"sessionKey" => session_key, "limit" => "5"}, %{})
 

@@ -5,24 +5,6 @@ defmodule LemonCore.Doctor.SupportBundle do
   alias LemonCore.Config.Modular
   alias LemonCore.Doctor.Report
 
-  @sensitive_terms ~w(
-    access_key
-    api_key
-    apikey
-    authorization
-    bearer
-    bot_token
-    credential
-    master_key
-    oauth
-    password
-    private
-    private_key
-    secret
-    session
-    token
-    wallet_key
-  )
 
   @env_allowlist ~w(
     LANG
@@ -69,12 +51,6 @@ defmodule LemonCore.Doctor.SupportBundle do
     end
   end
 
-  @spec redact_text(String.t()) :: String.t()
-  def redact_text(text) when is_binary(text) do
-    text
-    |> redact_assignments()
-    |> redact_inline_secrets()
-  end
 
   defp bundle_path(opts) do
     case Keyword.get(opts, :bundle_path) do
@@ -111,7 +87,7 @@ defmodule LemonCore.Doctor.SupportBundle do
   defp env_value(_name, nil), do: %{present: false, value: nil}
 
   defp env_value(name, value) do
-    if sensitive_name?(name) do
+    if LemonCore.Redact.sensitive_key?(name) do
       %{present: true, value: "[redacted]"}
     else
       %{present: true, value: value}
@@ -271,7 +247,7 @@ defmodule LemonCore.Doctor.SupportBundle do
 
       content =
         if File.exists?(expanded) do
-          File.read!(expanded) |> redact_text()
+          File.read!(expanded) |> LemonCore.Redact.text(strict: true)
         else
           "missing: #{expanded}\n"
         end
@@ -299,29 +275,6 @@ defmodule LemonCore.Doctor.SupportBundle do
     """
   end
 
-  defp redact_assignments(text) do
-    Regex.replace(
-      ~r/^(\s*[^#\n=\[]*?(?:#{sensitive_pattern()})[^=\n]*=\s*).+$/imu,
-      text,
-      "\\1\"[redacted]\""
-    )
-  end
-
-  defp redact_inline_secrets(text) do
-    text
-    |> then(&Regex.replace(~r/sk-[A-Za-z0-9_\-]{8,}/, &1, "[redacted]"))
-    |> then(&Regex.replace(~r/(?i)bearer\s+[A-Za-z0-9._\-]+/, &1, "Bearer [redacted]"))
-    |> then(&Regex.replace(~r/0x[a-fA-F0-9]{64}/, &1, "[redacted]"))
-  end
-
-  defp sensitive_name?(name) do
-    downcased = String.downcase(to_string(name))
-    Enum.any?(@sensitive_terms, &String.contains?(downcased, &1))
-  end
-
-  defp sensitive_pattern do
-    Enum.map_join(@sensitive_terms, "|", &Regex.escape/1)
-  end
 
   # Media, browser and LSP diagnostics are owned by other apps; core looks their
   # modules up through config rather than naming them.

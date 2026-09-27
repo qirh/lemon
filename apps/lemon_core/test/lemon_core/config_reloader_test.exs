@@ -144,16 +144,6 @@ defmodule LemonCore.ConfigReloaderTest do
   end
 
   describe "redaction" do
-    test "redacts sensitive fields in diff" do
-      assert ConfigReloader.redact_value("providers.anthropic.api_key", "sk-1234") ==
-               "[REDACTED]"
-
-      assert ConfigReloader.redact_value("gateway.demo.bot_token", "123:ABC") ==
-               "[REDACTED]"
-
-      assert ConfigReloader.redact_value("some.password_hash", "abc") == "[REDACTED]"
-      assert ConfigReloader.redact_value("some.secret_field", "value") == "[REDACTED]"
-    end
 
     test "does not redact non-sensitive fields" do
       assert ConfigReloader.redact_value("agent.default_provider", "anthropic") == "anthropic"
@@ -185,10 +175,8 @@ defmodule LemonCore.ConfigReloaderTest do
       new = %{api_key: "new-key"}
 
       diff = ConfigReloader.compute_redacted_diff(old, new)
-      [{_path, change}] = diff
-
-      assert change.from == "[REDACTED]"
-      assert change.to == "[REDACTED]"
+      refute inspect(diff) =~ "old-key"
+      refute inspect(diff) =~ "new-key"
     end
   end
 

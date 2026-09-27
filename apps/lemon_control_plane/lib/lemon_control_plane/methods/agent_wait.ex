@@ -146,24 +146,12 @@ defmodule LemonControlPlane.Methods.AgentWait do
   defp error_kind(_error), do: "other"
 
   defp format_answer(nil), do: nil
-  defp format_answer(answer) when is_binary(answer), do: redact_text(answer)
-  defp format_answer(answer), do: answer |> inspect() |> redact_text()
+  defp format_answer(answer) when is_binary(answer), do: LemonCore.Redact.text(answer)
+  defp format_answer(answer), do: answer |> inspect() |> LemonCore.Redact.text()
 
   defp format_error(nil), do: nil
-  defp format_error(error) when is_binary(error), do: redact_text(error)
-  defp format_error(error), do: error |> inspect() |> redact_text()
+  defp format_error(error) when is_binary(error), do: LemonCore.Redact.text(error)
+  defp format_error(error), do: error |> inspect() |> LemonCore.Redact.text()
 
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
+  
 end

@@ -158,7 +158,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   defp maybe_preview(text, true), do: text
 
   defp maybe_preview(text, false) when is_binary(text) do
-    text = redact_text(text)
+    text = LemonCore.Redact.text(text)
 
     if byte_size(text) > @preview_bytes do
       String.slice(text, 0, @preview_bytes) <> "..."
@@ -169,19 +169,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
 
   defp maybe_preview(text, false), do: text
 
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
+  
 
   defp truncated?(text, true) when is_binary(text), do: false
   defp truncated?(text, false) when is_binary(text), do: byte_size(text) > @preview_bytes

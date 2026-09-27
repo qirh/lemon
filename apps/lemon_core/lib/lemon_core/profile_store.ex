@@ -39,10 +39,6 @@ defmodule LemonCore.ProfileStore do
   @max_export_total_bytes 8_388_608
   @export_workspace_files ~w(AGENTS.md IDENTITY.md README.md SOUL.md USER.md)
   @export_text_extensions ~w(.ex .exs .js .json .md .py .sh .toml .ts .txt .yaml .yml)
-  @sensitive_terms ~w(
-    access_key api_key apikey authorization bearer bot_token cookie credential
-    master_key oauth password private_key secret session_token token wallet_key
-  )
 
   @type profile :: map()
 
@@ -509,7 +505,7 @@ defmodule LemonCore.ProfileStore do
         case File.read(path) do
           {:ok, content} when is_binary(content) ->
             if String.valid?(content) do
-              {redacted, redactions} = redact_export_text(content)
+              {redacted, redactions} = LemonCore.Redact.text(content, strict: true, count: true)
               bytes = byte_size(redacted)
 
               if state.bytes + bytes <= @max_export_total_bytes do
@@ -563,7 +559,7 @@ defmodule LemonCore.ProfileStore do
     basename = Path.basename(downcased)
 
     basename in [".env", ".env.local", "id_rsa", "id_ed25519"] or
-      Enum.any?(@sensitive_terms, &String.contains?(downcased, &1))
+      LemonCore.Redact.sensitive_key?(downcased)
   end
 
   defp omit_export(state, reason) do
@@ -580,7 +576,7 @@ defmodule LemonCore.ProfileStore do
     Enum.reduce(["name", "description", "systemPrompt"], {profile, 0}, fn key, {acc, count} ->
       case acc[key] do
         value when is_binary(value) ->
-          {redacted, redactions} = redact_export_text(value)
+          {redacted, redactions} = LemonCore.Redact.text(value, strict: true, count: true)
           {Map.put(acc, key, redacted), count + redactions}
 
         _ ->
@@ -589,24 +585,6 @@ defmodule LemonCore.ProfileStore do
     end)
   end
 
-  defp redact_export_text(text) do
-    patterns = [
-      {~r/^(\s*[^#\n=\[]*?(?:#{sensitive_pattern()})[^=\n]*=\s*).+$/imu, "\\1\"[redacted]\""},
-      {~r/sk-[A-Za-z0-9_-]{8,}/, "[redacted]"},
-      {~r/(?i)bearer\s+[A-Za-z0-9._~-]+/, "Bearer [redacted]"},
-      {~r/(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/i, "[redacted]"},
-      {~r/xox[a-z]-[A-Za-z0-9-]{8,}/i, "[redacted]"},
-      {~r/AKIA[A-Z0-9]{16}/, "[redacted]"},
-      {~r/0x[a-fA-F0-9]{64}/, "[redacted]"}
-    ]
-
-    Enum.reduce(patterns, {text, 0}, fn {regex, replacement}, {content, count} ->
-      matches = length(Regex.scan(regex, content))
-      {Regex.replace(regex, content, replacement), count + matches}
-    end)
-  end
-
-  defp sensitive_pattern, do: Enum.map_join(@sensitive_terms, "|", &Regex.escape/1)
 
   defp move_home_to_trash(profile, opts) do
     home = profile["paths"]["home"]
