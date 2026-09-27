@@ -28,6 +28,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Finished LemonSim spectator games now display `COMPLETED`, rather than
+  `STOPPED`, after their runner exits. Live Werewolf playback keeps its
+  playback indicator until the final scene has been shown.
+
 - Bash streaming previews retain the most recent 50,000 output bytes plus an
   omission marker, preserving UTF-8 boundaries without retaining discarded
   source binaries. Final results and full-output files are unchanged.
