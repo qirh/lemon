@@ -197,13 +197,12 @@ mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 ## Not a mix task
 
 `scripts/release_package` and `scripts/verify_packages` are shell **scripts**,
-not `mix` tasks — invoke them directly (`scripts/release_package <package>
-<version>`; see `docs/release/hex-packages.md`). They are not listed by
+not Mix tasks. Invoke `scripts/release_package PACKAGE VERSION` directly; see
+[standalone packages](release/hex-packages.md). They are not listed by
 `mix lemon.help`.
 
 `./bin/lemon node join` is also a source wrapper, not a Mix task. It starts a
-long-lived native coding execution worker and therefore has no `mix
-lemon.node.*` entry:
+long-lived native coding execution worker and has no corresponding Mix task.
 
 ```bash
 LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
@@ -238,12 +237,9 @@ near-identical thin wrappers over each scenario's shared `VideoGenerator`
 covers them all. `vending_bench_replay` stayed separate (it builds a static HTML
 browser, not a video). Net: 15 tasks removed with no loss of capability.
 
-**Deliberately not done — scenario runners.** The 19 `mix lemon.sim.<scenario>`
-runners look consolidatable but are not: each has a distinct switch set and calls
-distinct example-module entrypoints (e.g. `werewolf` does multi-model per-seat
-assignment via `--models`/`--player-count`; `vending_bench` has `--preset` and
-offline strategies; `tic_tac_toe` has `--offline-strategy`). A single
-`mix lemon.sim <scenario>` would either be a leaky mega-task branching on
-scenario, or a dispatcher that still keeps all 19 modules — both worse than 19
-focused tasks. `vending_bench` is also called directly by CI
-(`scripts/ci_sim_bench.sh`, `scripts/generate_sim_demo_bundles.sh`). Left as-is.
+**Scenario runners remain separate.** The four retained runners have distinct
+switch sets and example entrypoints: `werewolf` supports per-seat models,
+`vending_bench` has benchmark presets, and `tic_tac_toe` exposes kernel-level
+offline strategies. A shared dispatcher would not remove those differences.
+VendingBench is also called directly by `scripts/ci_sim_bench.sh` and
+`scripts/generate_sim_demo_bundles.sh`.
