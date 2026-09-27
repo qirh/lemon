@@ -268,7 +268,7 @@ describe("compact (shelf) form", () => {
 		expect(lines.length).toBe(1);
 		const text = renderPlain(lines);
 		expect(text).toContain("✓");
-		expect(text).toContain("grep: upsertTool");
+		expect(text).toContain("grep: `upsertTool`");
 		expect(text).toContain("2 matches");
 	});
 

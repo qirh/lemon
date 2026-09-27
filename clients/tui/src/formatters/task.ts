@@ -68,9 +68,7 @@ function formatTaskResult(result: unknown): FormattedOutput {
 	const obj: Record<string, unknown> =
 		result && typeof result === "object" ? (result as Record<string, unknown>) : {};
 	const details: Record<string, unknown> =
-		obj.details && typeof obj.details === "object"
-			? (obj.details as Record<string, unknown>)
-			: {};
+		obj.details && typeof obj.details === "object" ? (obj.details as Record<string, unknown>) : {};
 
 	const status = nonEmptyString(details.status);
 	const currentAction =
