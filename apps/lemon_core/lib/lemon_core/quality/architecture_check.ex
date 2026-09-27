@@ -41,7 +41,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_agent: ["LemonAgent"],
     lemon_ai: ["LemonAi"],
     coding_agent: ["CodingAgent"],
-    coding_agent_ui: ["CodingAgent.UI", "CodingAgentUi"],
     lemon_automation: ["LemonAutomation"],
     lemon_browser: ["LemonBrowser"],
     lemon_channels: ["LemonChannels"],
@@ -58,20 +57,10 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_router: ["LemonRouter"],
     lemon_skills: ["LemonSkills"],
     lemon_web: ["LemonWeb"],
-    # lemon-sim product block — delete with the lemon-sim repo extraction
-    # (docs/platform-split.md Phase 5). Namespace strings only: this table is a
-    # lint inventory of the apps in *this* repo, not a dependency.
+    # lemon-sim product block (docs/platform-split.md). Namespace strings only:
+    # this table is a lint inventory of the apps in *this* repo, not a dependency.
     lemon_sim: ["LemonSim"],
-    lemon_sim_ui: ["LemonSimUi"],
-    lemon_tcg: ["LemonTcg"]
-  }
-
-  @exact_module_owners %{
-    "CodingAgent.UI" => :coding_agent,
-    "CodingAgent.UI.Context" => :coding_agent,
-    "CodingAgent.UI.RPC" => :coding_agent_ui,
-    "CodingAgent.UI.Headless" => :coding_agent_ui,
-    "CodingAgent.UI.DebugRPC" => :coding_agent_ui
+    lemon_sim_ui: ["LemonSimUi"]
   }
 
   @namespace_prefix_owners @app_namespaces
@@ -152,9 +141,9 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   @doc """
   Reads the direct umbrella dependency graph declared by `apps/*/mix.exs`.
 
-  Dependency lists may be returned directly or wrapped by a helper such as
-  `Lemon.HexPackage.deps/1`; the parser walks the complete `deps/0` body so both
-  forms produce the same graph.
+  Dependency lists may be returned directly or wrapped by a helper such as the
+  published packages' `lemon_deps/1`; the parser walks the complete `deps/0`
+  body so both forms produce the same graph.
   """
   @spec actual_direct_deps(String.t()) :: %{optional(atom()) => [atom()]}
   def actual_direct_deps(root) do
@@ -444,19 +433,13 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   end
 
   defp owner_for_module(full_name) when is_binary(full_name) do
-    case Map.get(@exact_module_owners, full_name) do
-      nil ->
-        @namespace_prefix_owners
-        |> Enum.find(fn {prefix, _owner} ->
-          full_name == prefix || String.starts_with?(full_name, prefix <> ".")
-        end)
-        |> case do
-          nil -> nil
-          {_prefix, owner} -> owner
-        end
-
-      owner ->
-        owner
+    @namespace_prefix_owners
+    |> Enum.find(fn {prefix, _owner} ->
+      full_name == prefix || String.starts_with?(full_name, prefix <> ".")
+    end)
+    |> case do
+      nil -> nil
+      {_prefix, owner} -> owner
     end
   end
 

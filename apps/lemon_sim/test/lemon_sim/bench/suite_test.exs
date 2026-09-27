@@ -38,13 +38,13 @@ defmodule LemonSim.Bench.SuiteTest do
 
   test "suite run fails clearly when a scenario has no run adapter" do
     spec = %{
-      scenario: "courtroom",
+      scenario: "tic_tac_toe",
       preset: nil,
       seeds: [1],
       competitors: [%{id: "fixture", offline_strategy: "fixture"}]
     }
 
-    assert {:error, {:no_suite_adapter, "courtroom"}} =
+    assert {:error, {:no_suite_adapter, "tic_tac_toe"}} =
              Suite.run(spec, suite_dir: tmp_dir("suite_no_adapter"))
   end
 
@@ -69,13 +69,13 @@ defmodule LemonSim.Bench.SuiteTest do
 
   test "external competitor on an unsupported adapter reports a clean failure" do
     spec = %{
-      scenario: "tcg_shop",
+      scenario: "vending_bench_arena",
       preset: "ci",
       seeds: [7],
       competitors: [%{id: "external-agent", external_cmd: "cat >/dev/null"}]
     }
 
-    assert {:ok, %{suite: suite}} = Suite.run(spec, suite_dir: tmp_dir("suite_external_tcg"))
+    assert {:ok, %{suite: suite}} = Suite.run(spec, suite_dir: tmp_dir("suite_external_arena"))
     assert suite.rankings == []
     assert [failure] = suite.failures
     assert failure["competitor"] == "external-agent"
@@ -234,7 +234,7 @@ defmodule LemonSim.Bench.SuiteTest do
     assert suite.primary_metric["name"] == "total_money_balance"
   end
 
-  test "metric paths, directions, null cost aggregation, and failure exclusion aggregate correctly" do
+  test "metric paths, direction, null cost aggregation, and failure exclusion aggregate correctly" do
     assert Suite.metric_value(%{"net_worth" => 12.5}, "net_worth") == {:ok, 12.5}
 
     assert Suite.metric_value(%{"score_modes" => %{"v1_net_worth" => 9}}, [
@@ -242,44 +242,29 @@ defmodule LemonSim.Bench.SuiteTest do
              "v1_net_worth"
            ]) == {:ok, 9}
 
-    maximize_spec = %{
-      "scenario" => "stock_market",
+    spec = %{
+      "scenario" => "poker",
       "preset" => nil,
       "seeds" => [1],
       "competitors" => [%{"id" => "low"}, %{"id" => "high"}]
     }
 
-    assert {:ok, maximize_suite} =
-             Suite.build_suite(maximize_spec, [
-               verified_run(0, "stock_market", "low", 1, 10, %{"cost_usd" => 0.1}),
-               verified_run(1, "stock_market", "high", 1, 20, %{"cost_usd" => nil})
+    assert {:ok, suite} =
+             Suite.build_suite(spec, [
+               verified_run(0, "poker", "low", 1, 10, %{"cost_usd" => 0.1}),
+               verified_run(1, "poker", "high", 1, 20, %{"cost_usd" => nil}),
+               failed_run(2, "poker", "high", 2)
              ])
 
-    assert Enum.map(maximize_suite.rankings, & &1["competitor"]) == ["high", "low"]
-    assert get_in(maximize_suite.rankings, [Access.at(0), "usage_totals", "cost_usd"]) == nil
-
-    minimize_spec = %{
-      "scenario" => "pandemic",
-      "preset" => nil,
-      "seeds" => [1],
-      "competitors" => [%{"id" => "worse"}, %{"id" => "better"}]
-    }
-
-    assert {:ok, minimize_suite} =
-             Suite.build_suite(minimize_spec, [
-               verified_run(0, "pandemic", "worse", 1, 0.4, %{"cost_usd" => 0.1}),
-               verified_run(1, "pandemic", "better", 1, 0.2, %{"cost_usd" => 0.2}),
-               failed_run(2, "pandemic", "better", 2)
-             ])
-
-    assert Enum.map(minimize_suite.rankings, & &1["competitor"]) == ["better", "worse"]
-    assert get_in(minimize_suite.rankings, [Access.at(0), "failed_runs"]) == 1
-    assert length(minimize_suite.failures) == 1
+    assert Enum.map(suite.rankings, & &1["competitor"]) == ["high", "low"]
+    assert get_in(suite.rankings, [Access.at(0), "usage_totals", "cost_usd"]) == nil
+    assert get_in(suite.rankings, [Access.at(0), "failed_runs"]) == 1
+    assert length(suite.failures) == 1
   end
 
   test "ranking stats use primary metric values across included seeds" do
     spec = %{
-      "scenario" => "stock_market",
+      "scenario" => "poker",
       "preset" => nil,
       "seeds" => [1, 2, 3],
       "competitors" => [%{"id" => "steady"}, %{"id" => "single"}]
@@ -287,10 +272,10 @@ defmodule LemonSim.Bench.SuiteTest do
 
     assert {:ok, suite} =
              Suite.build_suite(spec, [
-               verified_run(0, "stock_market", "steady", 1, 10, %{}),
-               verified_run(1, "stock_market", "steady", 2, 20, %{}),
-               verified_run(2, "stock_market", "steady", 3, 30, %{}),
-               verified_run(3, "stock_market", "single", 1, 5, %{})
+               verified_run(0, "poker", "steady", 1, 10, %{}),
+               verified_run(1, "poker", "steady", 2, 20, %{}),
+               verified_run(2, "poker", "steady", 3, 30, %{}),
+               verified_run(3, "poker", "single", 1, 5, %{})
              ])
 
     assert [steady, single] = suite.rankings
@@ -302,17 +287,17 @@ defmodule LemonSim.Bench.SuiteTest do
 
   test "suite serialization stays byte deterministic with stats" do
     spec = %{
-      "scenario" => "stock_market",
+      "scenario" => "poker",
       "preset" => nil,
       "seeds" => [1, 2],
       "competitors" => [%{"id" => "alpha"}, %{"id" => "beta"}]
     }
 
     runs = [
-      verified_run(0, "stock_market", "alpha", 1, 10.5, %{}),
-      verified_run(1, "stock_market", "alpha", 2, 12.5, %{}),
-      verified_run(2, "stock_market", "beta", 1, 9.0, %{}),
-      verified_run(3, "stock_market", "beta", 2, 11.0, %{})
+      verified_run(0, "poker", "alpha", 1, 10.5, %{}),
+      verified_run(1, "poker", "alpha", 2, 12.5, %{}),
+      verified_run(2, "poker", "beta", 1, 9.0, %{}),
+      verified_run(3, "poker", "beta", 2, 11.0, %{})
     ]
 
     assert {:ok, suite_a} = Suite.build_suite(spec, runs)
@@ -428,7 +413,7 @@ defmodule LemonSim.Bench.SuiteTest do
 
     suite_json = %{
       "schema_version" => "lemon_sim.suite.v1",
-      "spec" => %{"scenario" => "stock_market", "preset" => nil, "seeds" => [1]},
+      "spec" => %{"scenario" => "poker", "preset" => nil, "seeds" => [1]},
       "primary_metric" => %{"name" => "fixture", "direction" => "maximize"},
       "runs" => [],
       "rankings" => [
@@ -518,12 +503,12 @@ defmodule LemonSim.Bench.SuiteTest do
 
   defp write_poker_bundle!(artifact_dir, sim_id, seed) do
     state = Poker.initial_state(sim_id: sim_id, player_count: 2, max_hands: 1, seed: seed)
-    events = [%{kind: "hand_started", payload: %{hand: 1}, ts_ms: 123}]
 
     assert {:ok, _paths} =
-             PokerArtifacts.write_run_artifacts(state, events, [],
+             PokerArtifacts.write_run_artifacts(state, [], [],
                artifact_dir: artifact_dir,
-               deterministic_artifacts?: true
+               deterministic_artifacts?: true,
+               replay: %{config: PokerArtifacts.replay_config(state), batches: []}
              )
   end
 

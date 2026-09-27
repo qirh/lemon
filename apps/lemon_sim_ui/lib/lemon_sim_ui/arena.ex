@@ -3,15 +3,15 @@ defmodule LemonSimUi.Arena do
   Always-on arena for one simulation domain: keeps a league game running at
   all times and records every finished game into persistent standings.
 
-  One `Arena` process runs per enabled domain (werewolf, space_station,
-  stock_market, survivor, poker — see `@domains`). Each game samples a randomized
+  One `Arena` process runs per enabled domain (werewolf, poker — see
+  `@domains`). Each game samples a randomized
   model lineup from the domain's configured pool
   (`LemonSim.Bench.League.plan_match/2`); the recorded seed reproduces both
   the lineup and the scenario's own role/seat randomization.
 
   The arena is resilient by construction:
 
-    * finished games (world status `game_over`) are recorded into the league
+    * finished games (`LemonSim.Examples.terminal?/1`) are recorded into the league
       via the domain's `LemonSim.Bench.League.Registry` adapter, and a fresh
       game starts after a short intermission;
     * games that die mid-flight are resumed via `SimManager.resume_sim/1`
@@ -34,6 +34,7 @@ defmodule LemonSimUi.Arena do
 
   alias LemonCore.MapHelpers
   alias LemonSim.Bench.{Domains, League}
+  alias LemonSim.Examples
   alias LemonSim.Kernel.State
   alias LemonSimUi.SimManager
 
@@ -254,7 +255,7 @@ defmodule LemonSimUi.Arena do
          state.current.status == :running do
       world = world_from_event(event, sim_id, state)
 
-      if world && MapHelpers.get_key(world, :status) == "game_over" do
+      if world && Examples.terminal?(world) do
         {:noreply, finalize_game(state, world)}
       else
         {:noreply, maybe_snapshot_usage(state)}
@@ -298,7 +299,7 @@ defmodule LemonSimUi.Arena do
           {:error, :already_running} ->
             {:noreply, put_in(state.current.status, :running)}
 
-          {:error, :game_over} ->
+          {:error, :finished} ->
             case state.deps.get_state.(sim_id) do
               %{world: world} -> {:noreply, finalize_game(state, world)}
               _ -> {:noreply, abandon_game(state, :missing_final_state)}
@@ -398,7 +399,7 @@ defmodule LemonSimUi.Arena do
       %State{sim_id: sim_id, world: world} = stored_state ->
         String.starts_with?(sim_id, prefix) and
           arena_owned?(stored_state, state.domain) and
-          MapHelpers.get_key(world, :status) == "game_over" and
+          Examples.terminal?(world) and
           not league_recorded?(stored_state, state.domain)
 
       _ ->
@@ -560,7 +561,7 @@ defmodule LemonSimUi.Arena do
     case state.deps.get_state.(sim_id) do
       %{world: world} = stored_state ->
         cond do
-          MapHelpers.get_key(world, :status) == "game_over" ->
+          Examples.terminal?(world) ->
             finalize_game(state, world)
 
           persisted_run_resumable?(stored_state) ->

@@ -2,7 +2,7 @@ defmodule LemonGateway.M6IntegrationTest do
   use ExUnit.Case, async: false
 
   alias LemonGateway.{BindingResolver, Config}
-  alias LemonCore.{ChatScope, ChatState, Store}
+  alias LemonCore.{ChatScope, ChatState, ChatStateStore}
 
   setup do
     test_toml_dir =
@@ -171,7 +171,7 @@ defmodule LemonGateway.M6IntegrationTest do
       scope = %ChatScope{transport: :telegram, chat_id: chat_id}
 
       # Initially no chat state
-      assert Store.get_chat_state(scope) == nil
+      assert ChatStateStore.get(scope) == nil
 
       # Store chat state (simulating what Run does after completion)
       chat_state = %ChatState{
@@ -180,11 +180,10 @@ defmodule LemonGateway.M6IntegrationTest do
         updated_at: System.system_time(:millisecond)
       }
 
-      Store.put_chat_state(scope, chat_state)
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope, chat_state)
 
       # Retrieve and verify
-      retrieved = Store.get_chat_state(scope)
+      retrieved = ChatStateStore.get(scope)
       assert retrieved != nil
 
       # Get values from either struct or map

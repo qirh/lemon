@@ -19,9 +19,9 @@ defmodule LemonSkills.PromptRegressionTest do
 
   ## Deterministic regression loop
 
-  This file is included in the `Deterministic regression loop` step of
-  `quality.yml` and run twice to catch any non-determinism in prompt
-  rendering or snapshot sizes.
+  The nightly workflow (`nightly.yml`) runs this file repeatedly in its
+  deterministic regression loop to catch non-determinism in prompt rendering
+  or snapshot sizes.
   """
 
   use ExUnit.Case, async: false

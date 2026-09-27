@@ -3,16 +3,20 @@
  *
  * This module provides a central registry for tool formatters that convert
  * tool arguments and results into human-readable displays for the TUI.
+ * The default registry covers Lemon's native tools by exact name: read, write,
+ * edit, patch, bash, bash_output, kill_process, grep, find, ls, todo, task,
+ * agent, webfetch, websearch, and the browser_* tools. Anything else falls back
+ * to generic JSON/text formatting.
  */
 
 import { extractText, safeStringify, truncateLines, truncateText } from "./base.js";
 // Import all formatters
-import { bashFormatter } from "./bash.js";
+import { bashFormatter, bashOutputFormatter, killProcessFormatter } from "./bash.js";
+import { browserFormatter } from "./browser.js";
 import { editFormatter } from "./edit.js";
-import { findFormatter, globFormatter, lsFormatter } from "./find.js";
+import { findFormatter, lsFormatter } from "./find.js";
 import { grepFormatter } from "./grep.js";
 import { patchFormatter } from "./patch.js";
-import { processFormatter } from "./process.js";
 import { readFormatter } from "./read.js";
 import { taskFormatter } from "./task.js";
 import { todoFormatter } from "./todo.js";
@@ -293,19 +297,20 @@ export const defaultRegistry = new FormatterRegistry();
 
 // Register all formatters with the default registry
 defaultRegistry.register(bashFormatter);
+defaultRegistry.register(bashOutputFormatter);
+defaultRegistry.register(killProcessFormatter);
 defaultRegistry.register(readFormatter);
 defaultRegistry.register(editFormatter);
 defaultRegistry.register(grepFormatter);
 defaultRegistry.register(writeFormatter);
 defaultRegistry.register(patchFormatter);
 defaultRegistry.register(findFormatter);
-defaultRegistry.register(globFormatter);
 defaultRegistry.register(lsFormatter);
 defaultRegistry.register(webFetchFormatter);
 defaultRegistry.register(webSearchFormatter);
 defaultRegistry.register(todoFormatter);
 defaultRegistry.register(taskFormatter);
-defaultRegistry.register(processFormatter);
+defaultRegistry.register(browserFormatter);
 
 export * from "./base.js";
 // Re-export types and utilities

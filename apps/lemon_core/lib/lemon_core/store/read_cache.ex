@@ -12,8 +12,8 @@ defmodule LemonCore.Store.ReadCache do
   Public ETS read-through cache for high-traffic Store domains.
 
   This module maintains a set of public ETS tables that mirror the backing
-  store for domains that receive heavy read traffic (chat state, runs,
-  progress mappings, session index, and whatever tables collaborators register
+  store for domains that receive heavy read traffic (runs, the session index,
+  chat state, progress mappings, and whatever tables collaborators register
   through `register_cached_table/1`). Reads are served directly from ETS
   without going through the Store GenServer, eliminating mailbox contention on
   the read path.
@@ -23,15 +23,14 @@ defmodule LemonCore.Store.ReadCache do
 
   ## Cached Domains
 
-  Intrinsic domains, mirrored for the store's own typed APIs:
+  The intrinsic domain, mirrored for the store's own run lifecycle API:
 
-  - `:chat` — chat state by scope
   - `:runs` — run records by run_id
-  - `:progress` — progress mappings by {scope, msg_id}
 
-  Generic tables are added per store instance — `:sessions_index` by default,
-  plus whatever owners register with `LemonCore.Store.register_cached_table/2`.
-  The store does not know what those tables hold.
+  Generic tables are added per store instance — `:sessions_index`, `:chat`,
+  and `:progress` by default, plus whatever owners register with
+  `LemonCore.Store.register_cached_table/2`. The store does not know what
+  those tables hold.
 
   ## Instances
 
@@ -55,9 +54,9 @@ defmodule LemonCore.Store.ReadCache do
 
   alias LemonCore.Store.ReadCache.CollisionError
 
-  # Domains the Store caches for its own typed APIs. Generic tables are added on
-  # top of these per instance (see `init/2`).
-  @intrinsic_domains [:chat, :runs, :progress]
+  # Domains the Store caches for its own run lifecycle API. Generic tables are
+  # added on top of these per instance (see `init/2`).
+  @intrinsic_domains [:runs]
   @default_store LemonCore.Store
 
   @type store :: atom()

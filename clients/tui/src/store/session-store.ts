@@ -19,6 +19,7 @@ import {
 	type NoticeBlock,
 	type NoticeLevel,
 	nextBlockId,
+	type ReasoningBlock,
 	type ToolBlock,
 	type ToolPhase,
 	toolTitle,
@@ -65,6 +66,8 @@ export class SessionStore {
 	readonly blocks: Block[] = [];
 	/** Tool blocks by `action.id`, for phase upserts. */
 	readonly byActionId = new Map<string, ToolBlock>();
+	/** Reasoning blocks by `action.id`, for phase upserts. */
+	readonly reasoningByActionId = new Map<string, ReasoningBlock>();
 
 	activeRunId: string | undefined;
 	busy = false;
@@ -333,6 +336,42 @@ export class SessionStore {
 	}
 
 	/**
+	 * Insert or update the reasoning block for a `kind: "reasoning"` action. Each
+	 * phase carries the block's accumulated text, so it replaces rather than
+	 * appends. Like tools, the phase only advances: a replayed `updated` after
+	 * `completed` is dropped.
+	 */
+	upsertReasoning(
+		action: AgentAction | undefined,
+		phase: ToolPhase,
+		options: { runId?: string | null } = {},
+	): ReasoningBlock {
+		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:reasoning`;
+		const reasoning = action?.detail?.reasoning as { text?: unknown } | undefined;
+		const text =
+			typeof reasoning?.text === "string" && reasoning.text.length > 0 ? reasoning.text : undefined;
+		const existing = this.reasoningByActionId.get(actionId);
+		if (existing) {
+			if (existing.phase === "completed" && phase !== "completed") return existing;
+			existing.phase = phase;
+			if (text !== undefined) existing.text = text;
+			return existing;
+		}
+		const block: ReasoningBlock = {
+			id: nextBlockId("reasoning"),
+			kind: "reasoning",
+			at: Date.now(),
+			runId: options.runId ?? undefined,
+			actionId,
+			text: text ?? "",
+			phase,
+		};
+		this.reasoningByActionId.set(actionId, block);
+		this.#push(block);
+		return block;
+	}
+
+	/**
 	 * End a run. Returns the assistant block, creating one when `completed`
 	 * outran `started` and the whole stream — the answer it carries (truncated
 	 * or not) is all the client will ever get for that run, so it must not be
@@ -348,6 +387,11 @@ export class SessionStore {
 			this.activeRunId = undefined;
 			this.busy = false;
 			this.lastRunEndedAtMs = Date.now();
+		}
+		// Thinking the run never closed (an abort, a dropped `thinking_end`) is
+		// over too: a live reasoning block would pin the commit seam forever.
+		for (const reasoning of this.reasoningByActionId.values()) {
+			if (reasoning.runId === runId) reasoning.phase = "completed";
 		}
 		if (!block) return undefined;
 		if (block.status !== "streaming") return block;

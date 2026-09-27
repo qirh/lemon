@@ -13,20 +13,19 @@ a `%LemonAi.Types.Model{}` at any provider and the rest of your code stays ident
 
 ## Install
 
-`lemon_ai` is not yet on Hex. Add it as a git dependency for now:
-
 ```elixir
 def deps do
   [
-    {:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
+    {:lemon_ai, "~> 0.2"}
   ]
 end
 ```
 
-Once published, this becomes:
+`0.2.0` is the first installable release line; the `0.1.0` release on Hex cannot be
+installed and is retired. Until `0.2.0` is on Hex, depend on the repository instead:
 
 ```elixir
-{:lemon_ai, "~> 0.1"}
+{:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
 ```
 
 The OTP application is named `:lemon_ai`, so you call it as `LemonAi.*`. It starts its own
@@ -169,7 +168,11 @@ from arbitrary catalog strings.
 
 Vision and reasoning are additionally gated **per model** by the model's `input` and
 `reasoning` fields — a wire module supporting vision doesn't make a text-only model
-accept images. Query the specific model:
+accept images. The thinking request shape is driven by explicit capability flags on
+each catalog entry: `adaptive_thinking` (Anthropic `thinking: adaptive` plus
+`output_config.effort`, required from Claude Opus 4.7 on) and `reasoning_efforts` (the
+Lemon levels a model accepts; other levels clamp to the nearest declared one via
+`LemonAi.Models.reasoning_effort_for/2`). Query the specific model:
 
 ```elixir
 LemonAi.Models.supports_vision?(model)
@@ -205,7 +208,10 @@ LemonAi.CircuitBreaker.get_state(:anthropic)   # state, failure count, last fail
 ### Rate limiting and concurrency caps
 
 A per-provider token bucket plus an in-flight concurrency cap, both enforced by the
-dispatcher before the provider is ever called.
+dispatcher before the provider is ever called. A caller that finds the provider at its
+cap waits in a FIFO queue for a free slot (default up to 120s,
+`config :lemon_ai, LemonAi.CallDispatcher, queue_timeout_ms: ...`) before
+`{:error, :max_concurrency}` is returned.
 
 ```elixir
 config :lemon_ai, :rate_limiter,
@@ -228,15 +234,19 @@ cost = LemonAi.calculate_cost(model, message.usage)
 
 ### Automatic retries
 
-Providers retry transient failures (429, 5xx, connection resets, TLS hiccups) on the
-call's own async task with exponential backoff + jitter, honoring `retry-after` headers
-when present. Retries are bounded — 2 for Anthropic, 3 for the OpenAI family — and each
-request retries in isolation, so one slow retry never blocks another caller.
+Providers retry transient failures (429, 529 overloaded, 5xx, connection resets, TLS
+hiccups) on the call's own async task, so one slow retry never blocks another caller.
+Anthropic, OpenAI Chat Completions, Responses and Codex share one policy: 4 attempts,
+exponential backoff with jitter starting around 1s and capped at 30s, and the server's
+`retry-after` / `retry-after-ms` / Anthropic `anthropic-ratelimit-*-reset` hint when
+present. A server-requested wait longer than `max_retry_after_ms` (60s) is not slept
+in-provider; the error message carries it as `AssistantMessage.retry_after_ms` so the
+caller can schedule its own retry.
 
-### Context compaction
-
-`LemonAi.CompactingClient` wraps a call and, on a `ContextLengthExceeded` error,
-automatically compacts the conversation and retries instead of failing outright.
+```elixir
+config :lemon_ai, :provider_retry,
+  max_attempts: 4, base_delay_ms: 1_000, max_delay_ms: 30_000, max_retry_after_ms: 60_000
+```
 
 ### Token estimation
 
@@ -307,6 +317,8 @@ All defined in `LemonAi.Types`:
   provider: atom(),          # keyed for circuit breaker / rate limiter
   base_url: String.t(),
   reasoning: boolean(),
+  adaptive_thinking: boolean(),  # Anthropic adaptive thinking + effort
+  reasoning_efforts: [:minimal | :low | :medium | :high | :xhigh],  # [] = undeclared
   input: [:text | :image],
   cost: %LemonAi.Types.ModelCost{input: float(), output: float()},
   context_window: non_neg_integer(),

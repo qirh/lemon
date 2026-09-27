@@ -1,13 +1,26 @@
 defmodule LemonAutomation.CronMemory do
-  @moduledoc false
+  @moduledoc """
+  Per-job markdown memory that carries context across cron runs.
+
+  Each run appends a `## Run <id>` entry. When the file outgrows 24,000
+  characters it is compacted deterministically (no model call):
+  the header and the most recent whole run entries are kept, and every older
+  entry is reduced to one line - start time, status, and the first line of its
+  result - under `## Earlier Runs`. Earlier summaries carry forward, with a
+  bounded number of lines and cumulative status counts.
+  """
 
   alias LemonAutomation.{CronJob, CronRun}
 
   @default_memory_dir ".lemon/cron_memory"
   @max_prompt_chars 8_000
   @max_file_chars 24_000
-  @recent_tail_chars 14_000
+  @recent_entries_chars 14_000
+  @max_header_chars 2_000
+  @max_summary_lines 40
+  @summary_line_chars 160
   @max_result_chars 2_000
+  @summary_heading "## Earlier Runs"
 
   @spec memory_file(CronJob.t()) :: binary()
   def memory_file(%CronJob{} = job) do
@@ -55,7 +68,7 @@ defmodule LemonAutomation.CronMemory do
     Use the memory notes below as prior run history for continuity across runs.
     Update durable findings in that memory file through the normal file tools when the task produces reusable state.
 
-    Delivery: the scheduler forwards your concise completion summary back to the originating session.
+    Delivery: your final answer is sent to the user's chat (the originating chat, or their paired chat when the job was created elsewhere). Write it for the user and keep it concise.
 
     Scheduling guardrail: do not create, update, remove, or recursively schedule cron jobs from this run unless the task explicitly asks you to manage schedules.
 
@@ -167,58 +180,134 @@ defmodule LemonAutomation.CronMemory do
     """
   end
 
-  defp compact_if_needed(content) when is_binary(content) do
+  @doc false
+  @spec compact_if_needed(binary()) :: binary()
+  def compact_if_needed(content) when is_binary(content) do
     if String.length(content) <= @max_file_chars do
       content
     else
-      total_chars = String.length(content)
-      removed_chars = max(total_chars - @recent_tail_chars, 0)
-      tail = String.slice(content, -@recent_tail_chars, @recent_tail_chars)
-      compacted_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-      summary = summarize_removed_content(content, removed_chars)
+      compact(content)
+    end
+  end
 
-      compacted = """
-      # Cron Memory (Compacted)
+  defp compact(content) do
+    {header, previous_summary, entries} = split_sections(content)
+    {kept, dropped} = keep_recent_entries(entries)
+    {prior_counts, prior_lines} = parse_summary(previous_summary)
 
-      - compacted_at: #{compacted_at}
-      - previous_size_chars: #{total_chars}
-      - removed_chars: #{removed_chars}
+    counts = Enum.reduce(dropped, prior_counts, &count_status(entry_field(&1, "status"), &2))
+    lines = Enum.take(prior_lines ++ Enum.map(dropped, &summary_line/1), -@max_summary_lines)
 
-      ## Summary Of Older Content
-      #{summary}
+    compacted_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
-      ## Recent Content
-      #{tail}
-      """
+    summary =
+      Enum.join(
+        [
+          @summary_heading,
+          "",
+          "- compacted_at: #{compacted_at}",
+          "- runs_summarized: #{format_counts(counts)}"
+          | lines
+        ],
+        "\n"
+      )
 
-      if String.length(compacted) > @max_file_chars do
-        String.slice(compacted, -@max_file_chars, @max_file_chars)
-      else
-        compacted
+    [String.slice(header, 0, @max_header_chars), summary | kept]
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+    |> Kernel.<>("\n")
+  end
+
+  # Header = everything before the first summary/run heading.
+  defp split_sections(content) do
+    [header | rest] = String.split(content, ~r/^(?=## (?:Run |Earlier Runs))/m)
+
+    {summaries, entries} =
+      Enum.split_with(rest, &String.starts_with?(&1, @summary_heading))
+
+    {header, Enum.join(summaries, "\n"), entries}
+  end
+
+  # Keep whole recent entries within the budget; always keep the newest one.
+  defp keep_recent_entries(entries) do
+    {kept, _size} =
+      entries
+      |> Enum.reverse()
+      |> Enum.reduce_while({[], 0}, fn entry, {kept, size} ->
+        entry_size = String.length(entry)
+
+        cond do
+          kept == [] ->
+            {:cont, {[String.slice(entry, 0, @recent_entries_chars)], entry_size}}
+
+          size + entry_size <= @recent_entries_chars ->
+            {:cont, {[entry | kept], size + entry_size}}
+
+          true ->
+            {:halt, {kept, size}}
+        end
+      end)
+
+    {kept, Enum.take(entries, length(entries) - length(kept))}
+  end
+
+  defp parse_summary(summary) do
+    counts =
+      case Regex.run(~r/runs_summarized: \d+ \(([^)]*)\)/, summary) do
+        [_, pairs] ->
+          ~r/(\w+): (\d+)/
+          |> Regex.scan(pairs)
+          |> Map.new(fn [_, status, n] -> {status, String.to_integer(n)} end)
+
+        _ ->
+          %{}
       end
-    end
-  end
 
-  defp summarize_removed_content(_content, removed_chars) when removed_chars <= 0 do
-    "- No truncation was needed."
-  end
-
-  defp summarize_removed_content(content, removed_chars) do
-    removed = String.slice(content, 0, removed_chars)
-
-    highlights =
-      removed
+    lines =
+      summary
       |> String.split("\n")
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.reject(&String.starts_with?(&1, "#"))
-      |> Enum.take(6)
-      |> Enum.map(fn line -> "- #{String.slice(line, 0, 140)}" end)
+      |> Enum.filter(&String.starts_with?(&1, "- run "))
 
-    case highlights do
-      [] -> "- Older run history was condensed automatically."
-      list -> Enum.join(list, "\n")
+    {counts, lines}
+  end
+
+  defp summary_line(entry) do
+    id =
+      case Regex.run(~r/^## Run (\S+)/, entry) do
+        [_, id] -> id
+        _ -> "?"
+      end
+
+    result =
+      case Regex.run(~r/### Result\s*```text\n(.*?)\n/s, entry) do
+        [_, first_line] -> String.trim(first_line)
+        _ -> ""
+      end
+
+    "- run #{id} · #{entry_field(entry, "started_at") || "?"} · " <>
+      "#{entry_field(entry, "status") || "unknown"} · #{result}"
+    |> String.slice(0, @summary_line_chars)
+  end
+
+  defp entry_field(entry, field) do
+    case Regex.run(~r/^- #{field}: (.+)$/m, entry) do
+      [_, value] -> String.trim(value)
+      _ -> nil
     end
+  end
+
+  defp count_status(status, counts), do: Map.update(counts, status || "unknown", 1, &(&1 + 1))
+
+  defp format_counts(counts) do
+    total = counts |> Map.values() |> Enum.sum()
+
+    pairs =
+      counts
+      |> Enum.sort()
+      |> Enum.map_join(", ", fn {status, n} -> "#{status}: #{n}" end)
+
+    "#{total} (#{pairs})"
   end
 
   defp prompt_slice(content) when is_binary(content) do

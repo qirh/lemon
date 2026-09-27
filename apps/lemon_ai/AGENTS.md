@@ -1,5 +1,12 @@
 # AI App - Agent Guidelines
 
+**Hex package.** `lemon_ai` is one of the five published packages
+(`docs/release/hex-packages.md`). Its `mix.exs` ships verbatim in the tarball, so
+it must stay self-contained: no `Code.require_file`, nothing read outside the app
+directory.
+`scripts/verify_packages` builds a consumer from the tarball; run it after
+touching `mix.exs`. User-visible `lib/` changes need a `CHANGELOG.md` entry.
+
 ## Purpose and Responsibilities
 
 The `ai` app provides a unified LLM API abstraction layer for the Lemon platform. It enables seamless interaction with multiple AI providers through a consistent streaming interface.
@@ -44,7 +51,6 @@ LemonAi (main API)
 | `LemonAi.Models` | Compile-time registry assembled from per-provider modules whose catalogs live in `priv/models/*.json`. Registry entries should stay aligned with live provider IDs; dead preview/model aliases that return provider 404s should be removed instead of left selectable. |
 | `LemonAi.Types` | All type/struct definitions (inline in module) |
 | `LemonAi.Error` | HTTP error parsing, classification, retryability, and formatting utilities; provider-specific overloaded responses such as Anthropic HTTP 529 are transient retryable errors |
-| `LemonAi.HttpInspector` | Captures and saves request dumps for 4xx errors |
 | `LemonAi.PromptDiagnostics` | Opt-in prompt size + token usage diagnostics |
 
 ### Provider Implementation Modules
@@ -74,9 +80,11 @@ and refresh persistence.
 - `LemonAi.Providers.Anthropic` - Anthropic Messages provider, including Claude Code-compatible
   OAuth request/response shaping for Claude subscription auth (`anthropic-beta` headers,
   dynamic Claude CLI version detection, Claude Code system identity, OAuth-only system prompt
-  sanitization, `mcp_` tool name normalization/prefixing/stripping, adaptive thinking on Claude 4.6,
-  and normalization of restored map-shaped content blocks (`text`, `image`, `thinking`, `tool_use`,
-  tool-result text) before Anthropic-compatible request building for providers like MiniMax
+  sanitization, `mcp_` tool name normalization/prefixing/stripping, adaptive thinking + effort for
+  models flagged `adaptive_thinking` (manual `budget_tokens` otherwise; `:xhigh` maps to effort
+  `"max"`), image blocks inside `tool_result.content` for vision models, and normalization of
+  restored map-shaped content blocks (`text`, `image`, `thinking`, `tool_use`, tool-result text)
+  before Anthropic-compatible request building for providers like MiniMax
 - `LemonAi.Models.OpenAI` - Static direct OpenAI model catalog used by channel pickers; keep latest alias IDs aligned with live `GET /v1/models` results for the configured key and remove dead aliases instead of leaving them selectable
 - `LemonAi.Models.Google` - Treat direct Google Generative AI entries the same way: remove IDs that fail live `generateContent` on the configured surface instead of leaving dead models selectable in Telegram
 - `:"openai-codex"` model registry - Derived from the direct OpenAI catalog plus Codex OAuth-only IDs; do not assume `/v1/models` is authoritative for ChatGPT/Codex-authenticated model availability
@@ -103,6 +111,8 @@ and refresh persistence.
   provider: atom(),      # used for circuit breaker / rate limiter keying
   base_url: String.t(),
   reasoning: boolean(),
+  adaptive_thinking: boolean(),  # Anthropic: thinking.type "adaptive" + output_config.effort
+  reasoning_efforts: [:minimal | :low | :medium | :high | :xhigh],  # [] = undeclared, pass through
   input: [:text | :image],
   cost: %LemonAi.Types.ModelCost{input: float(), output: float(), cache_read: float(), cache_write: float()},
   context_window: non_neg_integer(),
@@ -232,6 +242,8 @@ the fields of `LemonAi.Types.Model`:
     "provider": "my_provider",
     "base_url": "https://api.myprovider.com",
     "reasoning": false,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [],
     "input": ["text", "image"],
     "cost": {"input": 1.0, "output": 2.0, "cache_read": 0.0, "cache_write": 0.0},
     "context_window": 128000,
@@ -304,6 +316,9 @@ LemonAi.CallDispatcher.dispatch(:anthropic, fn ->
   LemonAi.Providers.Anthropic.stream(model, context, opts)
 end)
 # Returns: {:ok, stream} | {:error, :circuit_open} | {:error, :rate_limited} | {:error, :max_concurrency}
+
+# Fail fast instead of waiting for a slot
+LemonAi.CallDispatcher.dispatch(:anthropic, callback, queue_timeout_ms: 0)
 ```
 
 **Concurrency Control** (default cap: 10 per provider):
@@ -311,8 +326,16 @@ end)
 ```elixir
 LemonAi.CallDispatcher.set_concurrency_cap(:anthropic, 20)
 LemonAi.CallDispatcher.get_active_requests(:anthropic)
-LemonAi.CallDispatcher.get_state()  # returns full dispatcher state map
+LemonAi.CallDispatcher.get_state()  # caps, active_requests, queued waiter counts per provider
 ```
+
+A dispatch that arrives while the provider is at its cap waits in a per-provider FIFO queue until a slot is released (or the cap is raised); it is not rejected immediately. `{:error, :max_concurrency}` means the bounded wait timed out (the callback never ran). The wait defaults to 120s and is configurable globally or per call (`queue_timeout_ms: 0` restores fail-fast):
+
+```elixir
+config :lemon_ai, LemonAi.CallDispatcher, queue_timeout_ms: 120_000
+```
+
+Telemetry: `[:lemon_ai, :dispatcher, :queued]` fires when a caller has to wait; `[:lemon_ai, :dispatcher, :rejected]` with `reason: :max_concurrency` fires when the wait times out.
 
 The dispatcher also tracks streaming task completion to record circuit breaker success/failure after stream finishes.
 
@@ -380,7 +403,7 @@ LemonAi.EventStream.cancel(stream, :user_requested)
 
 ```elixir
 # Look up a model
-model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")  # returns nil if not found
+model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")  # returns nil if not found
 
 # List all models for a provider
 models = LemonAi.Models.get_models(:openai)  # returns []  if unknown provider
@@ -394,10 +417,11 @@ all = LemonAi.Models.list_models()
 # Capability checks
 LemonAi.Models.supports_vision?(model)      # checks :image in model.input
 LemonAi.Models.supports_reasoning?(model)  # checks model.reasoning flag
-LemonAi.Models.supports_xhigh(model)       # checks if :xhigh reasoning is supported
+LemonAi.Models.supports_xhigh(model)       # :xhigh in model.reasoning_efforts
+LemonAi.Models.reasoning_effort_for(model, :xhigh)  # clamp to the model's declared levels
 
 # Find by model ID string alone (searches all providers)
-model = LemonAi.Models.find_by_id("claude-sonnet-4-20250514")
+model = LemonAi.Models.find_by_id("claude-sonnet-5")
 
 # Compare models
 LemonAi.Models.models_equal?(model_a, model_b)  # compares id + provider
@@ -413,7 +437,7 @@ ids = LemonAi.Models.get_model_ids(:anthropic)
 ### Making a Simple Request
 
 ```elixir
-model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
 context = LemonAi.Types.Context.new(system_prompt: "You are helpful")
 context = LemonAi.Types.Context.add_user_message(context, "Explain OTP")
 
@@ -672,7 +696,7 @@ LemonAi.Supervisor (one_for_one)
 ### Adding a New Model to an Existing Provider
 
 1. Open the relevant `priv/models/<provider>.json` file
-2. Add a new entry under the model key, with the fields of `%LemonAi.Types.Model{}` (`api`, `provider` and `input` as strings, `cost` as an object)
+2. Add a new entry under the model key, with the fields of `%LemonAi.Types.Model{}` (`api`, `provider` and `input` as strings, `cost` as an object). Declare reasoning capabilities explicitly: `adaptive_thinking: true` for Anthropic models that take adaptive thinking/effort (Claude 4.6+; manual budgets are rejected from Opus 4.7 on) and `reasoning_efforts` with the levels the provider documents. Providers must never gate request shapes on model-id substrings
 3. Ensure `api`, `provider`, and `base_url` match the existing provider convention; the module recompiles from the file, and `mix lemon.models` lists the result
 
 ### Adding OAuth Support for a New Provider
@@ -698,6 +722,7 @@ LemonAi.Supervisor (one_for_one)
 
 - Error classification: `LemonAi.Error.classify_status/1` (private) and `LemonAi.Error.parse_http_error/3`
 - Retry logic: `LemonAi.Error.retryable?/1` and `LemonAi.Error.suggested_retry_delay/1`
+- In-provider HTTP retry: `LemonAi.Providers.RetryHelper.policy/0` (`config :lemon_ai, :provider_retry` — `max_attempts` 4, `base_delay_ms` 1_000, `max_delay_ms` 30_000, `max_retry_after_ms` 60_000, injectable `sleep_fun`). Anthropic, Chat Completions, Responses and Codex retry 429/529/5xx and transport errors with capped jittered backoff, preferring the server's `retry-after`/`retry-after-ms`/`anthropic-ratelimit-*-reset`; longer server waits end retries and surface as `AssistantMessage.retry_after_ms` for session-level retry. `test/test_helper.exs` installs a no-op `sleep_fun`
 - Provider-specific error messages: `LemonAi.Error.extract_provider_message/1` handles Anthropic, OpenAI, Google, AWS, atom-key Elixir maps and enum values, OAuth-style `error_description`, string error codes with sibling `message` / `detail` / `description`, symbolic `type` / string `code` prefixes with direct or nested effective messages, FastAPI/Pydantic `detail` arrays, JSON:API-style `errors[].detail` / `errors[].title`, nested validation-array `error` objects, nested detail-array `error_description` / `error_message` / `description` formats, symbolic top-level error maps whose actionable text lives under nested `details`, and placeholder-empty top-level messages with actionable nested details
 - Provider body retry hints: `LemonAi.Error.parse_http_error/3` merges `retry_after`, `retryAfter`, `retry_after_ms`, `retryAfterMs`, and Google `RetryInfo.retryDelay` into `rate_limit_info.retry_after` when retry headers are absent
 
@@ -712,7 +737,6 @@ LemonAi.Supervisor (one_for_one)
 - Set `LEMON_AI_HTTP_TRACE=1` to see all HTTP requests/responses in logs
 - Set `LEMON_AI_DEBUG=1` to dump raw SSE events from Anthropic to `/tmp/lemon_anthropic_sse.log`
 - Set `LEMON_AI_PROMPT_DIAGNOSTICS=1` to log prompt sizes and token usage for every call
-- Check `~/.lemon/logs/http-errors/` for saved 4xx error dumps from `LemonAi.HttpInspector`
 - Use `LemonAi.CircuitBreaker.get_state(:provider)` to inspect circuit breaker status
 - Use `LemonAi.CallDispatcher.get_state()` to see concurrency caps and active request counts
 - Use `LemonAi.ModelCache.stats()` to inspect cache entries

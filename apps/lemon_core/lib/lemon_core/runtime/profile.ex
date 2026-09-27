@@ -47,8 +47,7 @@ defmodule LemonCore.Runtime.Profile do
         :lemon_automation,
         :lemon_skills,
         :lemon_web,
-        # lemon-sim product block — drop with the lemon-sim repo extraction
-        # (docs/platform-split.md Phase 5)
+        # lemon-sim product block (docs/platform-split.md)
         :lemon_sim_ui
       ]
     }

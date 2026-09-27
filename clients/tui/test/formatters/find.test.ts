@@ -1,5 +1,5 @@
 /**
- * Tests for the find, glob, and ls tool formatters.
+ * Tests for the find and ls tool formatters.
  *
  * Tests formatting of file search and directory listing operations
  * including patterns, filters, result counts, and file type indicators.
@@ -35,26 +35,15 @@ describe("findFormatter", () => {
 			expect(result.summary).toBe("*.tsx");
 		});
 
-		it("shows type filter for files", async () => {
+		it("shows the type filter", async () => {
 			const { findFormatter } = await import("../../src/formatters/find.js");
 
 			const result = findFormatter.formatArgs({
 				pattern: "*",
-				type: "f",
+				type: "directory",
 			});
 
-			expect(result.details).toContain("type: files");
-		});
-
-		it("shows type filter for directories", async () => {
-			const { findFormatter } = await import("../../src/formatters/find.js");
-
-			const result = findFormatter.formatArgs({
-				pattern: "*",
-				type: "d",
-			});
-
-			expect(result.details).toContain("type: directories");
+			expect(result.details).toContain("type: directory");
 		});
 
 		it("shows max_depth in details", async () => {
@@ -115,7 +104,7 @@ describe("findFormatter", () => {
 			const result = findFormatter.formatArgs({
 				pattern: "*.md",
 				path: "/Users/testuser/docs",
-				type: "f",
+				type: "file",
 				max_depth: 5,
 				max_results: 50,
 			});
@@ -123,7 +112,7 @@ describe("findFormatter", () => {
 			expect(result.summary).toBe("*.md in ~/docs");
 			expect(result.details).toContain("pattern: *.md");
 			expect(result.details).toContain("path: ~/docs");
-			expect(result.details).toContain("type: files");
+			expect(result.details).toContain("type: file");
 			expect(result.details).toContain("max_depth: 5");
 			expect(result.details).toContain("max_results: 50");
 		});
@@ -245,6 +234,45 @@ describe("findFormatter", () => {
 
 			expect(result.summary).toBe("2 files found");
 		});
+
+		it("uses details.count/files/truncated from the real tool result", async () => {
+			const { findFormatter } = await import("../../src/formatters/find.js");
+
+			const result = findFormatter.formatResult({
+				content: [
+					{
+						type: "text",
+						text: "Found 2 matches (limited to 2):\n\nlib/a.ex\nlib/b.ex",
+					},
+				],
+				details: { count: 2, truncated: true, max_results: 2, files: ["lib/a.ex", "lib/b.ex"] },
+				is_error: false,
+			});
+
+			expect(result.summary).toBe("2 files found (limited)");
+			expect(result.details).toEqual(["lib/a.ex", "lib/b.ex"]);
+		});
+
+		it("skips the Found header when parsing the text", async () => {
+			const { findFormatter } = await import("../../src/formatters/find.js");
+
+			const result = findFormatter.formatResult({
+				content: [{ type: "text", text: "Found 1 match:\n\nmix.exs" }],
+			});
+
+			expect(result.summary).toBe("1 file found");
+			expect(result.details).toEqual(["mix.exs"]);
+		});
+
+		it("treats the no-match message as no matches", async () => {
+			const { findFormatter } = await import("../../src/formatters/find.js");
+
+			const result = findFormatter.formatResult({
+				content: [{ type: "text", text: "No files found matching the pattern." }],
+			});
+
+			expect(result.summary).toBe("No matches");
+		});
 	});
 
 	describe("tools property", () => {
@@ -252,135 +280,6 @@ describe("findFormatter", () => {
 			const { findFormatter } = await import("../../src/formatters/find.js");
 
 			expect(findFormatter.tools).toContain("find");
-		});
-	});
-});
-
-describe("globFormatter", () => {
-	describe("formatArgs", () => {
-		it("shows pattern with path in summary", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatArgs({
-				pattern: "**/*.tsx",
-				path: "/Users/testuser/projects/app",
-			});
-
-			expect(result.summary).toBe("**/*.tsx in ~/projects/app");
-		});
-
-		it("shows pattern only when no path provided", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatArgs({
-				pattern: "src/**/*.ts",
-			});
-
-			expect(result.summary).toBe("src/**/*.ts");
-		});
-
-		it("includes pattern in details", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatArgs({
-				pattern: "*.{js,ts,jsx,tsx}",
-			});
-
-			expect(result.details).toContain("pattern: *.{js,ts,jsx,tsx}");
-		});
-
-		it("includes path in details when provided", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatArgs({
-				pattern: "**/*",
-				path: "/Users/testuser/src",
-			});
-
-			expect(result.details).toContain("path: ~/src");
-		});
-
-		it("shows max_results in details", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatArgs({
-				pattern: "*.md",
-				max_results: 25,
-			});
-
-			expect(result.details).toContain("max_results: 25");
-		});
-
-		it("handles missing pattern", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatArgs({});
-
-			expect(result.summary).toBe("*");
-		});
-	});
-
-	describe("formatResult", () => {
-		it('shows "N files found" summary', async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatResult({
-				content: [
-					{
-						type: "text",
-						text: "src/index.ts\nsrc/app.ts",
-					},
-				],
-			});
-
-			expect(result.summary).toBe("2 files found");
-		});
-
-		it("shows file list in details", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatResult({
-				content: [
-					{
-						type: "text",
-						text: "package.json\ntsconfig.json\n.eslintrc.json",
-					},
-				],
-			});
-
-			expect(result.details).toContain("package.json");
-			expect(result.details).toContain("tsconfig.json");
-			expect(result.details).toContain(".eslintrc.json");
-		});
-
-		it('shows "No matches" when empty', async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const result = globFormatter.formatResult({
-				content: [{ type: "text", text: "" }],
-			});
-
-			expect(result.summary).toBe("No matches");
-		});
-
-		it("truncates long lists similar to find", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			const files = Array.from({ length: 15 }, (_, i) => `component${i}.tsx`).join("\n");
-			const result = globFormatter.formatResult({
-				content: [{ type: "text", text: files }],
-			});
-
-			expect(result.details.length).toBeLessThanOrEqual(11);
-			expect(result.details.some((d) => d.includes("more"))).toBe(true);
-		});
-	});
-
-	describe("tools property", () => {
-		it("handles glob tool", async () => {
-			const { globFormatter } = await import("../../src/formatters/find.js");
-
-			expect(globFormatter.tools).toContain("glob");
 		});
 	});
 });
@@ -621,6 +520,33 @@ describe("lsFormatter", () => {
 			expect(result.details).toContain("package.json");
 			expect(result.details).toContain("README.md");
 		});
+
+		it("drops the Directory header and count footer of the real tool output", async () => {
+			const { lsFormatter } = await import("../../src/formatters/find.js");
+
+			const result = lsFormatter.formatResult(
+				{
+					content: [
+						{
+							type: "text",
+							text: "Directory: /Users/testuser/app\nd lib\nf mix.exs\n\n[Showing 2 of 7 entries. Limit: 2]",
+						},
+					],
+					details: {
+						path: "/Users/testuser/app",
+						total_entries: 7,
+						shown_entries: 2,
+						truncated: true,
+						recursive: false,
+					},
+					is_error: false,
+				},
+				{ path: "/Users/testuser/app", max_entries: 2 },
+			);
+
+			expect(result.summary).toBe("~/app (2 of 7 entries)");
+			expect(result.details).toEqual(["d lib", "f mix.exs"]);
+		});
 	});
 
 	describe("tools property", () => {
@@ -633,14 +559,10 @@ describe("lsFormatter", () => {
 });
 
 describe("default export", () => {
-	it("exports array of all three formatters", async () => {
+	it("exports the find and ls formatters", async () => {
 		const formatters = await import("../../src/formatters/find.js");
 
-		expect(formatters.default).toBeInstanceOf(Array);
-		expect(formatters.default).toHaveLength(3);
-		expect(formatters.default[0].tools).toContain("find");
-		expect(formatters.default[1].tools).toContain("glob");
-		expect(formatters.default[2].tools).toContain("ls");
+		expect(formatters.default.map((formatter) => formatter.tools)).toEqual([["find"], ["ls"]]);
 	});
 });
 

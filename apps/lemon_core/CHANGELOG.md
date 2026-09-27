@@ -10,49 +10,55 @@ First release as a standalone package. `lemon_core` used to be the umbrella's
 catch-all shared app; this release turns it into a library you can embed. The
 theme of every change below is the same: nothing in `lemon_core` knows about
 Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
-### Removed
-
-- Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
-  `[runtime.cli]` is rejected.
 
 ### Fixed
 
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained.
+
+### Removed
+
+- This repository's own tooling is no longer in the package: `LemonCore.Quality.*`,
+  `LemonCore.Update.*`, and the `mix lemon.quality`, `lemon.architecture.docs`,
+  `lemon.check_duplicate_tests`, `lemon.update`, `lemon.bench` and `lemon.help`
+  tasks. They remain in the lemon repository.
+- Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
+  `[runtime.cli]` is rejected.
+- `LemonCore.Store`'s domain functions: `put/get/delete_chat_state`, the
+  agent/channel/session/runtime `*_policy` functions, and
+  `put/delete_progress_mapping` / `get_run_by_progress`. Use
+  `LemonCore.ChatStateStore`, `LemonCore.PolicyStore`, and
+  `LemonCore.ProgressStore`, which now sit on the generic table API. The
+  `:chat_state_ttl_ms` store option is gone; chat state always expires after
+  24 hours.
+- `LemonCore.Quality.RatchetCheck`, `ArchitectureRulesCheck`,
+  `StoreTableOwnershipCheck`, `DocsCatalog`, and `Cleanup`, plus the
+  `mix lemon.ratchet` and `mix lemon.cleanup` tasks. `mix lemon.quality` now
+  runs only the docs link check, the architecture docs check, the `deps/0`
+  policy check, and the duplicate test module guard. `DocsCheck` no longer
+  reads `docs/catalog.exs` or enforces review dates.
+
+### Fixed
+
+- `LemonCore.Backup` digests files with `File.stream!(path, bytes)` instead of
+  the deprecated `File.stream!(path, modes, bytes)` order, so Elixir 1.20 no
+  longer prints a deprecation warning into `lemon backup` JSON output.
 - Run finalization is now synchronous and retry-safe. A session-index failure
   is returned to the caller, retrying repairs the index without double-counting
   the run, conflicting summaries fail without exposing the original summary,
-  and finalize hooks explicitly use at-least-once delivery.
+  and finalize hooks explicitly use at-least-once delivery. The per-session
+  idempotency marker is bounded to the last 32 run ids, so a session index
+  entry no longer grows with every run the session has ever finalized.
 
 ### Added
-
-- `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
-  future cache, retention, persistence, and schema-version metadata without
-  generating CRUD functions or changing backend behavior. The existing
-  architecture quality gate parses all supported generic Store operations at
-  default and explicit server arities, including direct calls, `apply/3`, and
-  multi-entry operations, and permits owner calls only when every resolved
-  table matches the declaration.
-- `LemonCore.PolicyStore` now declares ownership metadata for the existing
-  agent, channel, session, and runtime policy tables while retaining its
-  specialized public API and Store behavior.
-
-- `LemonCore.ChatStateStore` now declares ownership of the cached `:chat` table
-  and its `:expires_at` retention policy. Its public API and the specialized
-  Store runtime that applies TTL, expiry, sweeping, and cache behavior are
-  unchanged.
-- `LemonCore.RunStore` declares `:runs` and `:sessions_index` as its owned
-  tables. The declaration records their cache and persistence intent explicitly
-  and brings the existing wrapper under the AST ownership gate without changing
-  the specialized `LemonCore.Store` run lifecycle or finalization semantics.
 
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
   exposes the check used by router startup; optional callbacks remain optional,
   and invalid behaviour metadata returns a structured error instead of escaping
   the validation boundary.
-- `LemonCore.Quality.RatchetCheck` and `mix lemon.ratchet` provide a
-  data-only baseline for a narrow set of parsed architecture-debt metrics.
-  `mix lemon.quality` now fails when those counts increase.
-
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and
@@ -232,12 +238,6 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   - `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN` and `XMTP_WALLET_KEY` left
     `HermeticEnv`'s built-in scrub list for the `:test_credential_env_vars`
     registration described above.
-  - `LemonCore.Quality.ArchitectureRulesCheck` gained
-    `:core_vendor_channel_reference`, which fails the quality gate on any
-    mention of a chat platform under `apps/lemon_core/lib`, and retired
-    `:core_telegram_store_leak` / `:core_telegram_resume_index_leak`, which the
-    broader rule subsumes (`:core_known_target_store_leak` keeps the
-    non-vendor half).
 
 ### Known gaps
 

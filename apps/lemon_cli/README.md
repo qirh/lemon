@@ -50,7 +50,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` | Use the same Mix-free command boundary |
-| Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
+| Inspect channel configuration | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
 | Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
 | Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` | Use the same control-plane command boundary |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
@@ -291,6 +291,12 @@ and performs the provider's live credential check by default. Use
 defer that live check when offline; a failed verification is not reported as a
 completed setup.
 
+After a usable provider, setup offers an opt-in daily brief (default off). It
+writes `[automation] daily_brief = "HH:MM"` (server-local time) to the global
+config; the runtime reconciles the brief job at its next boot. Non-interactive
+runs skip the question unless `--daily-brief HH:MM` is passed. An existing
+`daily_brief` is only reported, never replaced.
+
 The derived state lives in `LemonCore.Setup.Readiness`, so the setup wizard,
 first-run TUI gate, and Web UI agree on exactly what is missing. The browser is
 read-only during setup: it lists pending items and rejects prompts/uploads until
@@ -312,8 +318,11 @@ and secrets may not exist yet or when live provider verification is required.
 `lemon gateway setup` provides interactive and non-interactive adapters for
 both supported messaging gateways:
 
-- `telegram` stores a Telegram bot token in encrypted secrets and verifies it
-  with the Telegram Bot API.
+- `telegram` stores a Telegram bot token in encrypted secrets, verifies it with
+  `getMe`, pairs the owner's chat (send `/start` to the bot; setup polls
+  `getUpdates` for up to `--pair-timeout` seconds, default 120), and writes
+  `enable_telegram`, `bot_token_secret`, and `allowed_chat_ids` to
+  `[gateway.telegram]`. Non-interactive runs require `--chat-id` (repeatable).
 - `discord` stores a Discord bot token in encrypted secrets, enables Discord,
   writes its secret reference and a default/allowed channel scope to
   `[gateway.discord]`, and verifies the token with Discord's bot identity API.
@@ -326,6 +335,10 @@ lemon gateway setup
 lemon gateway setup telegram
 lemon gateway setup discord
 
+# Scripted Telegram pairing without waiting for /start.
+lemon gateway setup telegram --non-interactive \
+  --token "$TELEGRAM_BOT_TOKEN" --chat-id 12345678
+
 # Source checkout: use the matching wrapper.
 ./bin/lemon gateway setup discord --non-interactive \
   --token "$DISCORD_BOT_TOKEN" \
@@ -333,7 +346,8 @@ lemon gateway setup discord
   --allowed-channel-id 234567890123456789
 ```
 
-The Discord token is persisted as `discord_bot_token` by default and only its
+The Telegram token is persisted as `telegram_bot_token` by default. The
+Discord token is persisted as `discord_bot_token` by default and only its
 secret key is written to TOML. Pass `--secret-key <name>` to use another key,
 `--allowed-guild-id <id>` to restrict by guild as well, or `--skip-smoke` when
 the Discord API identity check cannot be reached.

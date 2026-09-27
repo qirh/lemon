@@ -17,6 +17,12 @@ defmodule LemonAi.Models.Catalog do
   compile-time shape. Editing a model or its price is editing the JSON file;
   `mix lemon.models` lists what is currently defined.
 
+  The optional `adaptive_thinking` (boolean, default `false`) and
+  `reasoning_efforts` (array of `"minimal" | "low" | "medium" | "high" |
+  "xhigh"`, default `[]`) fields are explicit reasoning capability flags; see
+  `LemonAi.Types.Model`. Providers must gate thinking/effort request shapes on
+  these flags, never on model-id substrings.
+
   The optional `compat` field is either `null` (the same as omitting overrides)
   or an object with a fixed schema. Compatibility field names normalize to the
   atom keys consumed by providers; enum values and routing object keys remain
@@ -71,6 +77,15 @@ defmodule LemonAi.Models.Catalog do
   }
 
   @inputs %{"image" => :image, "text" => :text}
+
+  # Ascending; `reasoning_efforts` entries are stored in this order.
+  @reasoning_efforts [
+    {"minimal", :minimal},
+    {"low", :low},
+    {"medium", :medium},
+    {"high", :high},
+    {"xhigh", :xhigh}
+  ]
 
   @compat_boolean_fields %{
     "supports_store" => :supports_store,
@@ -134,6 +149,8 @@ defmodule LemonAi.Models.Catalog do
       provider: normalize_atom!(:provider, Map.fetch!(entry, "provider"), @providers),
       base_url: fetch_string!(entry, "base_url"),
       reasoning: fetch_boolean!(entry, "reasoning"),
+      adaptive_thinking: optional_boolean!(entry, "adaptive_thinking", false),
+      reasoning_efforts: to_reasoning_efforts(Map.get(entry, "reasoning_efforts", [])),
       input: to_input(Map.fetch!(entry, "input")),
       cost: to_cost(Map.fetch!(entry, "cost")),
       context_window: fetch_non_neg_integer!(entry, "context_window"),
@@ -174,6 +191,16 @@ defmodule LemonAi.Models.Catalog do
   defp to_input(other),
     do: raise(ArgumentError, "expected input to be an array, got: #{inspect(other)}")
 
+  defp to_reasoning_efforts(efforts) when is_list(efforts) do
+    allowed = Map.new(@reasoning_efforts)
+    declared = Enum.map(efforts, &normalize_atom!(:reasoning_efforts, &1, allowed))
+
+    for {_name, level} <- @reasoning_efforts, level in declared, do: level
+  end
+
+  defp to_reasoning_efforts(other),
+    do: raise(ArgumentError, "expected reasoning_efforts to be an array, got: #{inspect(other)}")
+
   defp fetch_string!(entry, field) do
     case Map.fetch!(entry, field) do
       value when is_binary(value) -> value
@@ -183,6 +210,13 @@ defmodule LemonAi.Models.Catalog do
 
   defp fetch_boolean!(entry, field) do
     case Map.fetch!(entry, field) do
+      value when is_boolean(value) -> value
+      value -> raise ArgumentError, "expected #{field} to be a boolean, got: #{inspect(value)}"
+    end
+  end
+
+  defp optional_boolean!(entry, field, default) do
+    case Map.get(entry, field, default) do
       value when is_boolean(value) -> value
       value -> raise ArgumentError, "expected #{field} to be a boolean, got: #{inspect(value)}"
     end

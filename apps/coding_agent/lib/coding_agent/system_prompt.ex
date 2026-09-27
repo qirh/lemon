@@ -1,11 +1,12 @@
 defmodule CodingAgent.SystemPrompt do
   @moduledoc """
-  Builds Lemon system prompts with workspace context + skills.
+  Builds Lemon system prompts: identity, coding-agent working rules, skills,
+  memory workflow, and workspace context.
 
-  This is a Lemon-specific adaptation of OpenClaw's prompt structure:
-  - No tool list section (Lemon surfaces tools elsewhere)
-  - No gateway restart/self-update section
-  - Keeps skills + workspace file context
+  Sections are ordered static-first so provider prompt caches keep the longest
+  possible prefix: fixed guidance comes before workspace files, and the
+  per-session environment block (`CodingAgent.SystemPrompt.Environment`) is
+  appended last by `CodingAgent.Session.PromptComposer`.
   """
 
   require Logger
@@ -24,8 +25,13 @@ defmodule CodingAgent.SystemPrompt do
           optional(:session_key) => String.t(),
           optional(:session_id) => String.t(),
           optional(:agent_id) => String.t(),
-          optional(:contributed_sections) => [ContextRegistry.section()]
+          optional(:contributed_sections) => [ContextRegistry.section()],
+          optional(:tool_names) => [String.t()]
         }
+
+  # Tool guidance assumes this set when the caller does not say which tools the
+  # session actually has (one-shot builds outside a session).
+  @default_tool_names ~w(read write edit patch bash grep find ls todo task)
 
   @doc """
   Build the system prompt for a Lemon coding agent session.
@@ -65,7 +71,9 @@ defmodule CodingAgent.SystemPrompt do
       )
 
     sections = [
-      "You are a personal assistant running inside Lemon.",
+      "You are a personal assistant running inside Lemon. You also work as a coding agent: " <>
+        "you read, change, and run code in the project root with the tools you are given.",
+      build_coding_section(Map.get(opts, :tool_names)),
       build_runtime_section(session_scope),
       build_skills_section(cwd, skill_trace_opts),
       build_memory_workflow_section(session_scope),
@@ -103,6 +111,55 @@ defmodule CodingAgent.SystemPrompt do
   # ============================================================================
   # Sections
   # ============================================================================
+
+  # Each rule names the tools it needs and is left out when the session lacks
+  # any of them, so a restricted session is never told to use a tool it does
+  # not have.
+  @coding_rules [
+    {~w(read edit),
+     "Read before you edit: open the relevant part of a file with `read` before changing it, " <>
+       "and read it again if `edit` reports that it changed on disk."},
+    {~w(edit),
+     "Use `edit` for changes to existing files. Keep each change as small as the task allows."},
+    {~w(write),
+     "Use `write` only to create new files or when replacing a whole file is genuinely simpler than editing it."},
+    {~w(patch),
+     "Use `patch` for coordinated multi-hunk or multi-file changes."},
+    {~w(grep find),
+     "Use `grep` to search file contents and `find` to locate files by name instead of shell grep/find; " <>
+       "both respect .gitignore."},
+    {~w(bash),
+     "Use `bash` to build, test, lint, and run git. Prefer the dedicated file tools over shell commands for reading, searching, and editing files."},
+    {~w(bash bash_output kill_process),
+     "For long-running commands, raise the `bash` timeout or start them with `run_in_background: true`, " <>
+       "then poll with `bash_output` and stop them with `kill_process`."},
+    {[],
+     "Independent reads and searches can go in parallel tool calls in one turn; run dependent steps in order."},
+    {[],
+     "Match the style and conventions of the surrounding code. Do not add unrelated refactors, " <>
+       "and never leave stubs or TODO placeholders in place of the requested work."},
+    {[],
+     "Verify before you report success: run the relevant tests or build and read the output. " <>
+       "If you could not verify something, say so plainly."},
+    {[],
+     "Git safety: do not commit, push, or run destructive commands (reset --hard, push --force, " <>
+       "clean -fd, checkout of uncommitted files) unless the user asks. Treat existing uncommitted changes as the user's work."},
+    {~w(todo), "Use `todo` to track multi-step work while it is in progress."},
+    {~w(task), "Use `task` to delegate self-contained subtasks that can run on their own."},
+    {[],
+     "Be concise. When you finish, say what changed, how you verified it, and what is still open."}
+  ]
+
+  defp build_coding_section(tool_names) do
+    available = MapSet.new(tool_names || @default_tool_names)
+
+    rules =
+      for {required, rule} <- @coding_rules,
+          Enum.all?(required, &MapSet.member?(available, &1)),
+          do: "- " <> rule
+
+    Enum.join(["## Working on code" | rules], "\n")
+  end
 
   defp build_skills_section(cwd, trace_opts) do
     PromptView.render_for_prompt(cwd, trace_opts)
@@ -159,8 +216,24 @@ defmodule CodingAgent.SystemPrompt do
 
   defp build_learning_workflow_section(:subagent), do: ""
 
+  # `CodingAgent.Session.EventHandler` keys its missed-learning audit on the
+  # `<learning-workflow>` tag, so the tag is part of the contract.
   defp build_learning_workflow_section(:main) do
-    CodingAgent.PromptBuilder.build_learning_section()
+    """
+    <learning-workflow>
+    Choose the right persistence surface:
+    - Prefer dedicated memory and skill tools over shell commands for memory or skill work; use shell commands for project execution, not for bypassing these tools.
+    - Use `read_skill` before following a relevant installed skill; skill hints are summaries, not the full procedure.
+    - Use `search_memory` before answering prompts that mention prior work, previous decisions, remembered context, or "last time"; this recalls completed run history.
+    - Use `session_search` when a prompt or imported workflow explicitly asks for Hermes-style session search, browse, or scroll behavior.
+    - Use `memory` for compact assistant-home `USER.md` profile facts and curated `MEMORY.md` quick facts.
+    - Use `memory_topic` for longer durable facts, preferences, decisions, people, dates, or project context that should be recalled later but is not a reusable procedure.
+    - Use `skill_manage` when you discover a reusable workflow, recurring command sequence, API integration, debugging playbook, project convention, or verification checklist that will likely help future runs.
+    - Use `todo` for the active run's task list and progress tracking; do not use todos as long-term memory.
+    - At the end of substantial work, before the final answer, decide whether the run produced durable context or a reusable workflow; write the memory topic or skill before finalizing when the lesson is clear.
+    </learning-workflow>
+    """
+    |> String.trim()
   end
 
   # Sections contributed through `LemonAgent.ContextRegistry` are rendered as

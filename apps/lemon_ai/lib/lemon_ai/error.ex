@@ -414,9 +414,10 @@ defmodule LemonAi.Error do
   `:context_length` never fails over: the context is too large for the model,
   a condition no fallback candidate can satisfy — retrying the same oversized
   context would just burn every provider in the chain. Context-overflow
-  recovery is owned by `LemonAi.CompactingClient`, which compacts the context
-  and retries, so the error must surface to it (`:compact`) instead of walking
-  the fallback chain.
+  recovery belongs to the caller that owns the conversation (for coding
+  sessions, `CodingAgent.Session.OverflowRecovery` compacts the session and
+  retries the turn), so the error must surface to it (`:compact`) instead of
+  walking the fallback chain.
 
   `:retry_same` is reserved in the type for callers that retry in place (see
   `transport_retry_statuses/0` for that set); no category currently maps to it.
@@ -502,7 +503,7 @@ defmodule LemonAi.Error do
     classify(reason) not in [:auth, :rate_limit, :client, :context_length]
   end
 
-  @transport_retry_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+  @transport_retry_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529]
 
   @doc """
   HTTP status codes worth retrying in place against the SAME provider (with

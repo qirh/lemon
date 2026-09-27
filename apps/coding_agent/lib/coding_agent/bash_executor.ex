@@ -15,7 +15,8 @@ defmodule CodingAgent.BashExecutor do
       :exit_code,
       :cancelled,
       :truncated,
-      :full_output_path
+      :full_output_path,
+      timed_out: false
     ]
 
     @type t :: %__MODULE__{
@@ -23,7 +24,8 @@ defmodule CodingAgent.BashExecutor do
             exit_code: integer() | nil,
             cancelled: boolean(),
             truncated: boolean(),
-            full_output_path: String.t() | nil
+            full_output_path: String.t() | nil,
+            timed_out: boolean()
           }
   end
 
@@ -137,50 +139,13 @@ defmodule CodingAgent.BashExecutor do
   defp collect_output(state) do
     receive do
       {port, {:data, data}} when port == state.port ->
-        # Check abort signal
+        # Buffer the chunk before honoring an abort so output that raced the
+        # abort is still part of the partial result.
+        state = buffer_chunk(state, data)
+
         if state.signal && AbortSignal.aborted?(state.signal) do
           handle_abort(state)
         else
-          sanitized = sanitize_output(data)
-
-          # Call chunk callback if provided
-          if state.on_chunk, do: state.on_chunk.(sanitized)
-
-          new_total = state.total_bytes + byte_size(sanitized)
-
-          state =
-            if new_total > state.temp_file_threshold && is_nil(state.temp_file) do
-              # Start writing to temp file
-              path = generate_temp_path()
-              {:ok, file} = File.open(path, [:write, :binary])
-
-              # Write existing buffer to file
-              existing_content = IO.iodata_to_binary(Enum.reverse(state.output_buffer))
-              IO.binwrite(file, existing_content)
-              IO.binwrite(file, sanitized)
-
-              %{
-                state
-                | temp_file: file,
-                  temp_file_path: path,
-                  output_buffer: [],
-                  total_bytes: new_total
-              }
-            else
-              if state.temp_file do
-                # Continue writing to temp file
-                IO.binwrite(state.temp_file, sanitized)
-                %{state | total_bytes: new_total}
-              else
-                # Buffer in memory
-                %{
-                  state
-                  | output_buffer: [sanitized | state.output_buffer],
-                    total_bytes: new_total
-                }
-              end
-            end
-
           collect_output(state)
         end
 
@@ -203,25 +168,75 @@ defmodule CodingAgent.BashExecutor do
     end
   end
 
+  defp buffer_chunk(state, data) do
+    sanitized = sanitize_output(data)
+
+    # Call chunk callback if provided
+    if state.on_chunk, do: state.on_chunk.(sanitized)
+
+    new_total = state.total_bytes + byte_size(sanitized)
+
+    cond do
+      new_total > state.temp_file_threshold && is_nil(state.temp_file) ->
+        # Start writing to temp file
+        path = generate_temp_path()
+        {:ok, file} = File.open(path, [:write, :binary])
+
+        # Write existing buffer to file
+        existing_content = IO.iodata_to_binary(Enum.reverse(state.output_buffer))
+        IO.binwrite(file, existing_content)
+        IO.binwrite(file, sanitized)
+
+        %{
+          state
+          | temp_file: file,
+            temp_file_path: path,
+            output_buffer: [],
+            total_bytes: new_total
+        }
+
+      state.temp_file ->
+        # Continue writing to temp file
+        IO.binwrite(state.temp_file, sanitized)
+        %{state | total_bytes: new_total}
+
+      true ->
+        # Buffer in memory
+        %{state | output_buffer: [sanitized | state.output_buffer], total_bytes: new_total}
+    end
+  end
+
   defp handle_abort(state) do
-    cleanup_port(state)
+    state = stop_process(state)
     finalize_result(%{state | cancelled: true, exit_code: nil})
   end
 
   defp handle_timeout(state) do
-    cleanup_port(state)
-    finalize_result(%{state | cancelled: true, exit_code: nil})
+    state = stop_process(state)
+    result = finalize_result(%{state | cancelled: true, exit_code: nil})
+    %Result{result | timed_out: true}
   end
 
-  defp cleanup_port(state) do
-    # Kill the process tree
+  # Kill the process tree, keep any output already delivered to the mailbox
+  # (partial output is part of an aborted/timed-out result), then close the port.
+  defp stop_process(state) do
     if state.os_pid, do: kill_process_tree(state.os_pid)
+    state = drain_output(state)
 
-    # Close the port
     try do
       Port.close(state.port)
     catch
       :error, _ -> :ok
+    end
+
+    state
+  end
+
+  defp drain_output(%{port: port} = state) do
+    receive do
+      {^port, {:data, data}} -> drain_output(buffer_chunk(state, data))
+    after
+      0 -> state
     end
   end
 
@@ -410,29 +425,27 @@ defmodule CodingAgent.BashExecutor do
   end
 
   @doc """
-  Kill a process and its children.
+  Kill a process and all of its descendants.
 
-  On Unix, attempts to kill the process group first, then falls back to killing
-  the single process. On Windows, uses taskkill with /T to kill the tree.
+  On Unix, the descendant tree is collected with `pgrep -P` before signalling,
+  so children of `bash -c` (a `sleep`, a test runner) do not outlive the
+  shell. The process group is signalled as well. `signal` is `:sigkill`
+  (default) or `:sigterm`. On Windows, uses `taskkill /T` to kill the tree.
   """
-  @spec kill_process_tree(os_pid :: integer()) :: :ok
-  def kill_process_tree(os_pid) when is_integer(os_pid) do
+  @spec kill_process_tree(os_pid :: integer(), signal :: :sigkill | :sigterm) :: :ok
+  def kill_process_tree(os_pid, signal \\ :sigkill) when is_integer(os_pid) do
     case :os.type() do
       {:unix, _} ->
-        # Try to kill process group first (negative PID)
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -9 -#{os_pid} 2>/dev/null")
-        catch
-          _, _ -> :ok
-        end
+        signal_number = if signal == :sigterm, do: 15, else: 9
+        pids = [os_pid | descendant_pids(os_pid)] |> Enum.map_join(" ", &Integer.to_string/1)
 
-        # Also try single process as fallback
+        command =
+          "kill -#{signal_number} -#{os_pid} 2>/dev/null; kill -#{signal_number} #{pids} 2>/dev/null"
+
         try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # Every pid is an integer (guard + pgrep parse); shell kill syntax is deliberate.
           # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -9 #{os_pid} 2>/dev/null")
+          :os.cmd(String.to_charlist(command))
         catch
           _, _ -> :ok
         end
@@ -450,6 +463,31 @@ defmodule CodingAgent.BashExecutor do
 
         :ok
     end
+  end
+
+  defp descendant_pids(os_pid) do
+    case System.find_executable("pgrep") do
+      nil ->
+        []
+
+      pgrep ->
+        {output, _status} =
+          System.cmd(pgrep, ["-P", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+        children =
+          output
+          |> String.split()
+          |> Enum.flat_map(fn token ->
+            case Integer.parse(token) do
+              {pid, ""} -> [pid]
+              _ -> []
+            end
+          end)
+
+        children ++ Enum.flat_map(children, &descendant_pids/1)
+    end
+  rescue
+    _ -> []
   end
 
   # Get the OS PID from a port

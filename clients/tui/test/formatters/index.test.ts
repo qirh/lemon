@@ -549,138 +549,74 @@ describe("FormatterRegistry", () => {
 			expect(defaultRegistry).toBeInstanceOf(FormatterRegistry);
 		});
 
-		it("should have bash formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("bash")).toBe(true);
-			expect(defaultRegistry.hasFormatter("exec")).toBe(true);
+		it("registers exactly Lemon's native tool names", () => {
+			const expected = [
+				"agent",
+				"bash",
+				"bash_output",
+				"browser_analyze",
+				"browser_back",
+				"browser_clear_state",
+				"browser_click",
+				"browser_download",
+				"browser_evaluate",
+				"browser_events",
+				"browser_get_content",
+				"browser_get_cookies",
+				"browser_hover",
+				"browser_navigate",
+				"browser_press",
+				"browser_screenshot",
+				"browser_scroll",
+				"browser_select_option",
+				"browser_set_cookies",
+				"browser_snapshot",
+				"browser_tab_activate",
+				"browser_tab_close",
+				"browser_tab_open",
+				"browser_tabs",
+				"browser_type",
+				"browser_upload_file",
+				"browser_wait_for_selector",
+				"edit",
+				"find",
+				"grep",
+				"kill_process",
+				"ls",
+				"patch",
+				"read",
+				"task",
+				"todo",
+				"webfetch",
+				"websearch",
+				"write",
+			];
+
+			expect([...defaultRegistry.getRegisteredTools()].sort()).toEqual(expected);
 		});
 
-		it("should have read formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("read")).toBe(true);
+		it("registers no formatter for tools Lemon does not have", () => {
+			for (const tool of [
+				"process",
+				"glob",
+				"exec",
+				"multiedit",
+				"todoread",
+				"todowrite",
+				"hashline_edit",
+			]) {
+				expect(defaultRegistry.hasFormatter(tool)).toBe(false);
+			}
 		});
 
-		it("should have edit formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("edit")).toBe(true);
-			expect(defaultRegistry.hasFormatter("multiedit")).toBe(true);
-		});
-
-		it("should have grep formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("grep")).toBe(true);
-		});
-
-		it("should have write formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("write")).toBe(true);
-		});
-
-		it("should have patch formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("patch")).toBe(true);
-		});
-
-		it("should have find/glob/ls formatters registered", () => {
-			expect(defaultRegistry.hasFormatter("find")).toBe(true);
-			expect(defaultRegistry.hasFormatter("glob")).toBe(true);
-			expect(defaultRegistry.hasFormatter("ls")).toBe(true);
-		});
-
-		it("should have web formatters registered", () => {
-			expect(defaultRegistry.hasFormatter("webfetch")).toBe(true);
-			expect(defaultRegistry.hasFormatter("websearch")).toBe(true);
-		});
-
-		it("should have todo formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("todoread")).toBe(true);
-			expect(defaultRegistry.hasFormatter("todowrite")).toBe(true);
-		});
-
-		it("should have task formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("task")).toBe(true);
-		});
-
-		it("should have process formatter registered", () => {
-			expect(defaultRegistry.hasFormatter("process")).toBe(true);
-		});
-
-		it("should format bash tool args", () => {
-			const result = defaultRegistry.formatArgs("bash", {
-				command: "ls -la /tmp",
-				timeout: 5000,
-			});
-
-			expect(result).toHaveProperty("summary");
-			expect(result).toHaveProperty("details");
-			expect(result.summary).toContain("ls");
-		});
-
-		it("should format read tool args", () => {
+		it("formats native read args by path", () => {
 			const result = defaultRegistry.formatArgs("read", {
-				file_path: "/path/to/file.txt",
+				path: "/path/to/file.txt",
 				offset: 0,
 				limit: 100,
 			});
 
-			expect(result).toHaveProperty("summary");
 			expect(result.summary).toContain("file.txt");
-		});
-
-		it("should format edit tool args", () => {
-			const result = defaultRegistry.formatArgs("edit", {
-				file_path: "/path/to/file.txt",
-				old_string: "old",
-				new_string: "new",
-			});
-
-			expect(result).toHaveProperty("summary");
-		});
-
-		it("should format grep tool args", () => {
-			const result = defaultRegistry.formatArgs("grep", {
-				pattern: "TODO",
-				path: "/src",
-			});
-
-			expect(result).toHaveProperty("summary");
-			expect(result.summary).toContain("TODO");
-		});
-
-		it("should format tool results correctly", () => {
-			const bashResult = defaultRegistry.formatResult(
-				"bash",
-				"total 16\ndrwxr-xr-x  4 user staff 128 Jan  1 12:00 .",
-			);
-			expect(bashResult.summary).toBeDefined();
-			expect(bashResult.details.length).toBeGreaterThan(0);
-
-			const readResult = defaultRegistry.formatResult("read", "file contents here", {
-				file_path: "/test.txt",
-			});
-			expect(readResult.summary).toBeDefined();
-		});
-
-		it("should return all expected tools from getRegisteredTools", () => {
-			const tools = defaultRegistry.getRegisteredTools();
-
-			const expectedTools = [
-				"bash",
-				"exec",
-				"read",
-				"edit",
-				"multiedit",
-				"grep",
-				"write",
-				"patch",
-				"find",
-				"glob",
-				"ls",
-				"webfetch",
-				"websearch",
-				"todoread",
-				"todowrite",
-				"task",
-				"process",
-			];
-
-			for (const tool of expectedTools) {
-				expect(tools).toContain(tool);
-			}
 		});
 	});
 

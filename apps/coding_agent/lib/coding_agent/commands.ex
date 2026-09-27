@@ -174,32 +174,6 @@ defmodule CodingAgent.Commands do
     end
   end
 
-  @doc """
-  Format commands for display/description.
-
-  ## Parameters
-
-    * `cwd` - The current working directory
-
-  ## Returns
-
-  Formatted string listing available commands.
-  """
-  @spec format_for_description(String.t()) :: String.t()
-  def format_for_description(cwd) do
-    commands = list(cwd)
-
-    if commands == [] do
-      ""
-    else
-      commands
-      |> Enum.map(fn cmd ->
-        "- /#{cmd.name}: #{cmd.description}"
-      end)
-      |> Enum.join("\n")
-    end
-  end
-
   # ============================================================================
   # Private Functions
   # ============================================================================

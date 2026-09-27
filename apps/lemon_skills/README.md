@@ -19,17 +19,11 @@ Skill registry, discovery, installation, audit, and lifecycle management for the
 
 LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, static security audit, optional LLM-backed audit review, status checking, and relevance-based retrieval.
 
-`lemon_skills` is one of the packages that make up the [Lemon](https://github.com/z80dev/lemon)
-agent platform. It depends on `lemon_core`, `lemon_agent`, `lemon_ai`,
-`lemon_memory` and `lemon_media`.
+`lemon_skills` is an app in the [Lemon](https://github.com/z80dev/lemon) umbrella,
+not a Hex package; it ships as part of the reference runtime. It depends on
+`lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
-## Installation
-
-```elixir
-def deps do
-  [{:lemon_skills, "~> 0.1"}]
-end
-```
+## Usage
 
 Start the application (it is an OTP application with its own supervision tree)
 and the skill registry is available through the `LemonSkills` facade:

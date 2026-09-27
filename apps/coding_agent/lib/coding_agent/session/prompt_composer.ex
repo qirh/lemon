@@ -18,8 +18,14 @@ defmodule CodingAgent.Session.PromptComposer do
 
   1. Explicit system_prompt option (highest priority)
   2. Prompt template content (if prompt_template option provided)
-  3. Lemon base prompt (skills + workspace context)
+  3. Lemon base prompt (coding rules + skills + workspace context)
   4. CLAUDE.md/AGENTS.md content from ResourceLoader
+  5. The session's environment block (`build_opts[:environment]`, captured once
+     per session by `CodingAgent.SystemPrompt.Environment`)
+
+  The environment block goes last on purpose: it holds the most volatile text
+  (date, git status), and provider prompt caches keep every byte before the
+  first difference.
 
   `build_opts` is merged into the map handed to `CodingAgent.SystemPrompt.build/2`.
   It carries the run identifiers used for skill-resolution tracing, and — from a
@@ -70,7 +76,9 @@ defmodule CodingAgent.Session.PromptComposer do
           end
       end
 
-    # Build Lemon base prompt (skills + workspace context)
+    {environment, build_opts} = Map.pop(build_opts, :environment)
+
+    # Build Lemon base prompt (coding rules + skills + workspace context)
     base_prompt =
       CodingAgent.SystemPrompt.build(
         cwd,
@@ -85,8 +93,8 @@ defmodule CodingAgent.Session.PromptComposer do
     # Load instructions (CLAUDE.md, AGENTS.md) from cwd and parent directories
     instructions = ResourceLoader.load_instructions(cwd)
 
-    # Compose in order: explicit > template > base > instructions
-    [explicit_prompt, template_content, base_prompt, instructions]
+    # Static first, volatile last: explicit > template > base > instructions > environment
+    [explicit_prompt, template_content, base_prompt, instructions, environment]
     |> Enum.reject(&is_nil/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")

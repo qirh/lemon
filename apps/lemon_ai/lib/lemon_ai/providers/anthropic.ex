@@ -8,9 +8,14 @@ defmodule LemonAi.Providers.Anthropic do
   ## Features
 
   - Server-Sent Events (SSE) streaming
-  - Content blocks: text, thinking, tool_use
-  - Token usage tracking
+  - Content blocks: text, thinking, tool_use; tool results with text and image blocks
+  - Thinking shape from the model's capability flags: adaptive thinking + effort for
+    `adaptive_thinking` models, manual `budget_tokens` otherwise
+  - Token usage tracking and cost from catalog pricing
   - Prompt caching support
+  - Retries for 429/529/5xx and transport errors per
+    `LemonAi.Providers.RetryHelper.policy/0`, honoring `retry-after` and
+    `anthropic-ratelimit-*-reset`; the final error carries `retry_after_ms`
 
   ## Configuration
 
@@ -38,8 +43,6 @@ defmodule LemonAi.Providers.Anthropic do
 
   @api_base_url "https://api.anthropic.com"
   @api_version "2023-06-01"
-  @max_retries 2
-  @base_retry_delay_ms 400
   @kimi_history_limit_env "LEMON_KIMI_MAX_REQUEST_MESSAGES"
   @kimi_default_history_limit 200
 
@@ -136,7 +139,16 @@ defmodule LemonAi.Providers.Anthropic do
           oauth_request?: anthropic_oauth_request?(model.provider, api_key)
         }
 
-        result = stream_request_with_retries(url, headers, body, initial_state, trace_id)
+        result =
+          stream_request_with_retries(
+            url,
+            headers,
+            body,
+            initial_state,
+            trace_id,
+            RetryHelper.policy(),
+            0
+          )
 
         case result do
           {:ok, %Req.Response{status: 200, private: %{sse_state: final_state}}} ->
@@ -172,7 +184,14 @@ defmodule LemonAi.Providers.Anthropic do
             })
 
             error_msg = extract_error_message(body, status)
-            error_output = %{output | stop_reason: :error, error_message: error_msg}
+
+            error_output = %{
+              output
+              | stop_reason: :error,
+                error_message: error_msg,
+                retry_after_ms: RetryHelper.retry_after_ms(response_headers)
+            }
+
             EventStream.error(stream, error_output)
 
           {:error, reason} ->
@@ -308,7 +327,15 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt \\ 0) do
+  defp stream_request_with_retries(
+         url,
+         headers,
+         body,
+         initial_state,
+         trace_id,
+         policy,
+         attempt
+       ) do
     chunk_key = {__MODULE__, :chunk_seen, make_ref()}
     output_seen_key = {__MODULE__, :meaningful_output_seen, make_ref()}
     Process.put(chunk_key, false)
@@ -350,57 +377,74 @@ defmodule LemonAi.Providers.Anthropic do
         result
 
       {:ok, %Req.Response{status: status} = response} = wrapped_response ->
-        if attempt < @max_retries and
-             retryable_http_response?(response, initial_state.model) do
-          retry_delay = RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
+        retry_delay =
+          if RetryHelper.retry_allowed?(attempt, policy) and
+               retryable_http_response?(response, initial_state.model) do
+            RetryHelper.http_retry_delay_ms(attempt, response.headers, policy)
+          else
+            :give_up
+          end
 
-          debug_log("retry_http", %{
-            status: status,
-            attempt: attempt + 1,
-            max_retries: @max_retries,
-            delay_ms: retry_delay
-          })
+        case retry_delay do
+          :give_up ->
+            wrapped_response
 
-          HttpTrace.log("anthropic", "retry_http", %{
-            trace_id: trace_id,
-            status: status,
-            attempt: attempt + 1,
-            max_retries: @max_retries,
-            delay_ms: retry_delay
-          })
+          delay_ms ->
+            log_retry(trace_id, "retry_http", %{status: status}, attempt, policy, delay_ms)
+            RetryHelper.sleep(delay_ms)
 
-          Process.sleep(retry_delay)
-          stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt + 1)
-        else
-          wrapped_response
+            stream_request_with_retries(
+              url,
+              headers,
+              body,
+              initial_state,
+              trace_id,
+              policy,
+              attempt + 1
+            )
         end
 
       {:error, reason} = error ->
-        if attempt < @max_retries and not saw_meaningful_output and
+        if RetryHelper.retry_allowed?(attempt, policy) and not saw_meaningful_output and
              RetryHelper.retryable_transport_error?(reason) do
-          retry_delay = RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
+          delay_ms = RetryHelper.backoff_delay_ms(attempt, policy)
 
-          debug_log("retry_transport", %{
-            reason: inspect(reason),
-            attempt: attempt + 1,
-            max_retries: @max_retries,
-            delay_ms: retry_delay
-          })
+          log_retry(
+            trace_id,
+            "retry_transport",
+            %{reason: inspect(reason, limit: 50, printable_limit: 8_000)},
+            attempt,
+            policy,
+            delay_ms
+          )
 
-          HttpTrace.log("anthropic", "retry_transport", %{
-            trace_id: trace_id,
-            reason: inspect(reason, limit: 50, printable_limit: 8_000),
-            attempt: attempt + 1,
-            max_retries: @max_retries,
-            delay_ms: retry_delay
-          })
+          RetryHelper.sleep(delay_ms)
 
-          Process.sleep(retry_delay)
-          stream_request_with_retries(url, headers, body, initial_state, trace_id, attempt + 1)
+          stream_request_with_retries(
+            url,
+            headers,
+            body,
+            initial_state,
+            trace_id,
+            policy,
+            attempt + 1
+          )
         else
           error
         end
     end
+  end
+
+  defp log_retry(trace_id, tag, details, attempt, policy, delay_ms) do
+    payload =
+      Map.merge(details, %{
+        attempt: attempt + 1,
+        max_attempts: policy.max_attempts,
+        delay_ms: delay_ms
+      })
+
+    debug_log(tag, payload)
+    HttpTrace.log("anthropic", tag, Map.put(payload, :trace_id, trace_id))
   end
 
   defp meaningful_output_transition?(acc_state, new_state) do
@@ -992,35 +1036,36 @@ defmodule LemonAi.Providers.Anthropic do
 
     body = maybe_apply_tool_choice(body, opts.tool_choice, oauth_request?)
 
-    # Add thinking/extended thinking if model supports reasoning
+    # Thinking request shape is driven by the model's capability flags:
+    # adaptive-thinking models take effort levels, older models a manual budget.
     body =
-      if model.reasoning && opts.reasoning && adaptive_thinking_model?(model.id) do
-        Map.merge(body, %{
-          "thinking" => %{"type" => "adaptive"},
-          "output_config" => %{
-            "effort" => Map.get(@adaptive_thinking_effort_map, opts.reasoning, "medium")
-          }
-        })
-      else
-        body
-      end
+      cond do
+        !model.reasoning or !opts.reasoning ->
+          body
 
-    body =
-      if model.reasoning && opts.reasoning && not adaptive_thinking_model?(model.id) do
-        thinking_budget = get_thinking_budget(opts.reasoning, opts.thinking_budgets)
+        model.adaptive_thinking ->
+          effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
 
-        body
-        |> Map.put("thinking", %{
-          "type" => "enabled",
-          "budget_tokens" => thinking_budget
-        })
-        |> Map.put("temperature", 1)
-        |> Map.update!(
-          "max_tokens",
-          &max(&1, thinking_budget + @manual_thinking_min_output_tokens)
-        )
-      else
-        body
+          Map.merge(body, %{
+            "thinking" => %{"type" => "adaptive"},
+            "output_config" => %{
+              "effort" => Map.get(@adaptive_thinking_effort_map, effort, "medium")
+            }
+          })
+
+        true ->
+          thinking_budget = get_thinking_budget(opts.reasoning, opts.thinking_budgets)
+
+          body
+          |> Map.put("thinking", %{
+            "type" => "enabled",
+            "budget_tokens" => thinking_budget
+          })
+          |> Map.put("temperature", 1)
+          |> Map.update!(
+            "max_tokens",
+            &max(&1, thinking_budget + @manual_thinking_min_output_tokens)
+          )
       end
 
     {body, history_info}
@@ -1137,8 +1182,8 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp convert_message(%LemonAi.Types.ToolResultMessage{} = msg, _model, _opts) do
-    content = convert_tool_result_content(msg.content)
+  defp convert_message(%LemonAi.Types.ToolResultMessage{} = msg, model, _opts) do
+    content = convert_tool_result_content(msg.content, model)
 
     %{
       "role" => "user",
@@ -1337,26 +1382,40 @@ defmodule LemonAi.Providers.Anthropic do
 
   defp convert_assistant_content_block(_, _oauth_request?), do: nil
 
-  defp convert_tool_result_content(content) when is_list(content) do
-    text_parts =
+  # Text parts are joined into one text block; image parts become Anthropic
+  # `image` blocks inside `tool_result.content` when the model accepts images.
+  # A text-only result keeps the plain-string form.
+  defp convert_tool_result_content(content, model) when is_list(content) do
+    text =
       content
-      |> Enum.filter(fn
-        %TextContent{} -> true
-        %{"type" => "text", "text" => text} when is_binary(text) -> true
-        %{type: :text, text: text} when is_binary(text) -> true
-        _ -> false
-      end)
-      |> Enum.map(fn
-        %TextContent{text: text} -> text
-        %{"text" => text} -> text
-        %{text: text} -> text
+      |> Enum.flat_map(fn
+        %TextContent{text: text} -> [text]
+        %{"type" => "text", "text" => text} when is_binary(text) -> [text]
+        %{type: :text, text: text} when is_binary(text) -> [text]
+        _ -> []
       end)
       |> Enum.join("\n")
 
-    if text_parts != "", do: text_parts, else: "(empty result)"
+    images =
+      content
+      |> Enum.filter(&tool_result_image?/1)
+      |> Enum.map(&convert_user_content_block(&1, model))
+      |> Enum.reject(&is_nil/1)
+
+    cond do
+      images == [] and text != "" -> text
+      images == [] -> "(empty result)"
+      text == "" -> images
+      true -> [%{"type" => "text", "text" => text} | images]
+    end
   end
 
-  defp convert_tool_result_content(_), do: "(empty result)"
+  defp convert_tool_result_content(_, _model), do: "(empty result)"
+
+  defp tool_result_image?(%LemonAi.Types.ImageContent{}), do: true
+  defp tool_result_image?(%{"type" => "image"}), do: true
+  defp tool_result_image?(%{type: :image}), do: true
+  defp tool_result_image?(_), do: false
 
   defp add_cache_control_to_last_user_message([]), do: []
 
@@ -1445,17 +1504,6 @@ defmodule LemonAi.Providers.Anthropic do
   defp anthropic_oauth_request?(provider, api_key) do
     anthropic_oauth_provider?(provider) and LemonAi.Auth.AnthropicOAuth.oauth_token?(api_key)
   end
-
-  defp adaptive_thinking_model?(model_id) when is_binary(model_id) do
-    normalized = String.downcase(model_id)
-
-    String.contains?(normalized, "claude-opus-4-6") or
-      String.contains?(normalized, "claude-sonnet-4-6") or
-      String.contains?(normalized, "claude-opus-4.6") or
-      String.contains?(normalized, "claude-sonnet-4.6")
-  end
-
-  defp adaptive_thinking_model?(_), do: false
 
   defp build_system_prompt(system_prompt, true) do
     cc_block = %{"type" => "text", "text" => @claude_code_system_prefix}

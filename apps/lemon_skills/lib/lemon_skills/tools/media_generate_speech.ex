@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   @moduledoc """
   Supervised speech-generation preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local WAV previews,
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local WAV previews,
   OpenAI TTS, ElevenLabs TTS, and Google Cloud Text-to-Speech; the cloud
   providers require their respective credentials.
   """

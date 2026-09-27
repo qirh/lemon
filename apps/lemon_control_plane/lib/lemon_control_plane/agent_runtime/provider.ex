@@ -42,10 +42,6 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
 
-  @doc "Reads or mutates one live session's same-context recurring heartbeat."
-  @callback session_heartbeat(session_key(), atom(), map()) ::
-              {:ok, map()} | {:error, term()}
-
   @doc "Starts an isolated durable background agent session."
   @callback background_start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
 
@@ -107,7 +103,6 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,
-                      session_heartbeat: 3,
                       background_start: 2,
                       background_list: 1,
                       background_status: 1,

@@ -42,7 +42,7 @@ Canonical files:
 - `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md` (bounded profile and preference notes about the human)
-- `HEARTBEAT.md`
+- `HEARTBEAT.md` (checklist the scheduled heartbeat cron job works through; see [Reminders and heartbeats](user-guide/reminders-and-heartbeats.md))
 - `BOOTSTRAP.md`
 - `MEMORY.md` (bounded curated quick facts and topic index, main sessions only)
 

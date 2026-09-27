@@ -5,7 +5,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "init/2" do
     test "creates ETS tables for cached domains" do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :chat, :progress, :demo_targets])
 
       for domain <- ReadCache.cached_domains() do
         table = ReadCache.table_for(domain)
@@ -20,7 +20,7 @@ defmodule LemonCore.Store.ReadCacheTest do
     end
 
     test "is additive: re-initializing with fewer tables keeps live ones" do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :chat, :progress, :demo_targets])
       tables = ReadCache.init(LemonCore.Store, [])
 
       assert Map.has_key?(tables, :sessions_index)
@@ -30,7 +30,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "cached?/2" do
     setup do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :chat, :progress, :demo_targets])
       :ok
     end
 
@@ -50,7 +50,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "put/get/delete" do
     setup do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :chat, :progress, :demo_targets])
       :ok
     end
 
@@ -110,7 +110,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
   describe "concurrent access" do
     setup do
-      ReadCache.init(LemonCore.Store, [:sessions_index, :demo_targets])
+      ReadCache.init(LemonCore.Store, [:sessions_index, :chat, :progress, :demo_targets])
       :ok
     end
 

@@ -29,20 +29,18 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 # `app_findings` below), so a finding in an app's `lib/mix/tasks/*.ex` or
 # `lib/<app>.ex` counts against it just like one under `lib/<app>/`.
 #
-# PUBLISHED packages (part of the consumer-facing Hex packages — 12 as of
-# D14, which adds lemon_browser and lemon_skills) are marked; keeping those
-# green is the headline "per-published-package" guarantee.
+# Apps that are Hex packages (docs/platform-split.md) are marked; keeping
+# those green is the headline "per-published-package" guarantee.
 GATED_APPS=(
-  lemon_media          # published
+  lemon_media
   lemon_memory         # published
   lemon_platform_test  # published
-  lemon_browser        # published
+  lemon_browser
   lemon_web
   lemon_lsp
   lemon_cli
   lemon_evals
   lemon_honcho
-  lemon_tcg
   lemon_mcp
 )
 

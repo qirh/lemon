@@ -130,8 +130,7 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 |------|-------------|
 | `read` | Read file contents, optionally a specific line range |
 | `write` | Create or overwrite a file |
-| `edit` | Find-and-replace text in a file (must be a unique match) |
-| `hashline_edit` | Edit by line number when text isn't unique |
+| `edit` | Find-and-replace text in a file (must be a unique match; re-read first if the file changed on disk) |
 | `patch` | Apply a unified diff patch |
 | `multiedit` | Multiple find-and-replace edits in one call |
 | `ls` | List directory contents |
@@ -141,15 +140,15 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 | Tool | What It Does |
 |------|-------------|
 | `grep` | Search file contents with regex or literal text (via ripgrep) |
-| `find` | Find files by name pattern |
+| `find` | Find files by name pattern (skips `.gitignore`d files unless `no_ignore` is set) |
 
 ### Execution
 
 | Tool | What It Does |
 |------|-------------|
-| `bash` | Run a shell command (streaming output, abort-aware) |
-| `exec` | Run a long-running background process |
-| `process` | Control background processes (poll output, send input, kill) |
+| `bash` | Run a shell command (streaming output, abort-aware; `timeout` up to 10 minutes, or `run_in_background` for servers and long builds) |
+| `bash_output` | Read new output and the status of a background command |
+| `kill_process` | Stop a background command and its children |
 | `browser` | Control Chrome via Playwright (navigate, click, type, screenshot) |
 
 ### Web
@@ -241,28 +240,43 @@ even though older messages have been summarized.
 ## The System Prompt
 
 The system prompt tells the AI who it is and what it can do. coding_agent
-composes it from multiple sources, layered in order:
+composes it from multiple sources, layered in order — fixed text first and
+changing text last, so the AI provider can reuse its cached copy of the start
+of the prompt:
 
-1. **Opening line** — "You are a personal assistant running inside Lemon."
-2. **Available skills** — a list of lemon_skills discovered for the current
+1. **Explicit system_prompt** (if provided by caller)
+2. **Prompt template** (if configured)
+3. **Opening line** — "You are a personal assistant running inside Lemon. You
+   also work as a coding agent…"
+4. **Working on code** — rules for the tools this session actually has: read
+   before editing, prefer `edit` over `write`, run tests before claiming
+   success, never run destructive git commands unasked
+5. **Available skills** — a list of lemon_skills discovered for the current
    working directory
-3. **Memory guidance** — instructions for using SOUL.md, MEMORY.md, daily notes
-4. **Workspace bootstrap files:**
+6. **Memory guidance** — instructions for using SOUL.md, MEMORY.md, daily notes
+7. **Workspace bootstrap files:**
    - `SOUL.md` — the agent's personality and values
    - `USER.md` — facts about the user
    - `AGENTS.md` — project-specific agent instructions
    - `TOOLS.md` — tool configuration notes
    - `MEMORY.md` — persistent memory across sessions
-   - `HEARTBEAT.md` — heartbeat task config
+   - `HEARTBEAT.md` — checklist the scheduled heartbeat cron job works
+     through; a reply of exactly `HEARTBEAT_OK` means "nothing to report"
    - `BOOTSTRAP.md` — additional bootstrap content
-5. **Prompt template** (if configured)
-6. **Explicit system_prompt** (if provided by caller)
-7. **Resource walk** — CLAUDE.md/AGENTS.md files found by walking up the
+8. **Resource walk** — CLAUDE.md/AGENTS.md files found by walking up the
    directory tree from cwd to root
+9. **Environment** — working directory, platform, shell, git branch and
+   status, and today's date. This block is captured once when the session
+   starts and kept as-is, so the prompt doesn't change every time a file does.
 
 The system prompt is **rebuilt before each user prompt** so it picks up any
 edits to workspace files. If you update SOUL.md between messages, the next
 message will use the updated version.
+
+A single prompt can run as many tool calls as the task needs; set
+`[runtime] max_tool_turns` if you want a cap. If the AI provider is briefly
+overloaded or rate-limited before it answers, Lemon waits and retries
+(`[runtime.retry]`).
 
 Subagents (spawned via the `task` tool) get a reduced set — only AGENTS.md and
 TOOLS.md, not the personality files.

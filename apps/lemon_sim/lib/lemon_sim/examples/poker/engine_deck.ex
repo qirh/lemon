@@ -1,6 +1,7 @@
 defmodule LemonSim.Examples.Poker.Engine.Deck do
   @moduledoc """
-  Deck utilities with deterministic shuffle support.
+  Deck utilities. Shuffles are always seeded, so a hand's deck order is a pure
+  function of its seed.
   """
 
   alias LemonSim.Examples.Poker.Engine.Card
@@ -14,17 +15,22 @@ defmodule LemonSim.Examples.Poker.Engine.Deck do
   def new, do: Card.full_deck()
 
   @doc """
-  Shuffles a deck. Use `seed:` for deterministic order.
+  Shuffles a deck deterministically from `seed` (any term; non-integers are hashed).
   """
-  @spec shuffle(t(), keyword()) :: t()
-  def shuffle(deck \\ new(), opts \\ []) do
-    case Keyword.get(opts, :seed) do
-      nil ->
-        Enum.shuffle(deck)
+  @spec shuffle(t(), term()) :: t()
+  def shuffle(deck, seed) do
+    {a, b, c} = normalize_seed(seed)
+    state = :rand.seed_s(:exsss, {a, b, c})
 
-      seed ->
-        deterministic_shuffle(deck, seed)
-    end
+    {pairs, _state} =
+      Enum.map_reduce(deck, state, fn card, acc ->
+        {value, next_acc} = :rand.uniform_s(acc)
+        {{value, card}, next_acc}
+      end)
+
+    pairs
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
   end
 
   @doc """
@@ -56,21 +62,6 @@ defmodule LemonSim.Examples.Poker.Engine.Deck do
   @spec valid?(t()) :: boolean()
   def valid?(deck) when is_list(deck) do
     length(deck) == MapSet.size(MapSet.new(deck)) and Enum.all?(deck, &match?(%Card{}, &1))
-  end
-
-  defp deterministic_shuffle(deck, seed) do
-    {a, b, c} = normalize_seed(seed)
-    state = :rand.seed_s(:exsss, {a, b, c})
-
-    {pairs, _state} =
-      Enum.map_reduce(deck, state, fn card, acc ->
-        {value, next_acc} = :rand.uniform_s(acc)
-        {{value, card}, next_acc}
-      end)
-
-    pairs
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(&elem(&1, 1))
   end
 
   defp normalize_seed(seed) when is_integer(seed) do

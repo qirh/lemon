@@ -300,7 +300,7 @@ defmodule LemonControlPlane.WS.Connection do
       "scopes" => Enum.map(auth.scopes, &to_string/1)
     }
 
-    # Helpful for nodes: when authenticated via token, client_id is set to nodeId/deviceId.
+    # Helpful for nodes: when authenticated via token, client_id is set to nodeId.
     if auth.client_id do
       Map.put(base, "clientId", auth.client_id)
     else

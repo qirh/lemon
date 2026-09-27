@@ -4,9 +4,6 @@ defmodule LemonSim.Bench.LeagueTest do
   alias LemonSim.Bench.League
   alias LemonSim.Bench.League.Registry
   alias LemonSim.Examples.Poker
-  alias LemonSim.Examples.SpaceStation
-  alias LemonSim.Examples.StockMarket
-  alias LemonSim.Examples.Survivor
   alias LemonSim.Examples.Werewolf
 
   @moduletag :tmp_dir
@@ -63,14 +60,8 @@ defmodule LemonSim.Bench.LeagueTest do
   end
 
   describe "registry" do
-    test "registers the five arena scenarios" do
-      assert Registry.scenario_ids() == [
-               "poker",
-               "space_station",
-               "stock_market",
-               "survivor",
-               "werewolf"
-             ]
+    test "registers the arena scenarios" do
+      assert Registry.scenario_ids() == ["poker", "werewolf"]
 
       assert {:ok, Werewolf.League} = Registry.fetch(:werewolf)
       assert Registry.get("nope") == nil
@@ -147,52 +138,6 @@ defmodule LemonSim.Bench.LeagueTest do
     end
   end
 
-  describe "team mode winner-take-all (survivor adapter)" do
-    test "sole survivor's model beats the field", %{tmp_dir: dir} do
-      record =
-        League.game_record(Survivor.League, survivor_world(),
-          game_id: "s1",
-          recorded_at: "2026-07-06T00:00:00Z"
-        )
-
-      {:ok, league} = League.record_game!(dir, record)
-
-      assert record["winner"] == "Kai"
-      kai_seat = record["seats"]["Kai"]
-      assert kai_seat["won"]
-      assert kai_seat["model"] == "zai/glm-5"
-      assert kai_seat["metrics"]["jury_votes_received"] == 2
-
-      [top | _] = league["models"]
-      assert top["model"] == "zai/glm-5"
-      assert top["wins"] == 1
-    end
-  end
-
-  describe "ranked mode (stock market adapter)" do
-    test "pairwise ratings follow portfolio values", %{tmp_dir: dir} do
-      record =
-        League.game_record(StockMarket.League, stock_market_world(),
-          game_id: "m1",
-          recorded_at: "2026-07-06T00:00:00Z"
-        )
-
-      {:ok, league} = League.record_game!(dir, record)
-
-      assert record["mode"] == "ranked"
-      assert record["direction"] == "maximize"
-      assert league["mode"] == "ranked"
-
-      [top | _rest] = league["models"]
-      assert top["model"] == "anthropic/claude-x"
-      assert top["value_mean"] > 0
-
-      bottom = List.last(league["models"])
-      assert bottom["model"] == "openai/gpt-x"
-      assert bottom["rating"] < top["rating"]
-    end
-  end
-
   describe "ranked mode (poker adapter)" do
     test "pairwise ratings follow final chip stacks", %{tmp_dir: dir} do
       record =
@@ -221,26 +166,6 @@ defmodule LemonSim.Bench.LeagueTest do
       bottom = List.last(league["models"])
       assert bottom["model"] == "openai/gpt-x"
       assert bottom["rating"] < top["rating"]
-    end
-  end
-
-  describe "space station adapter" do
-    test "handles list-shaped scorecard players and team split" do
-      record =
-        League.game_record(SpaceStation.League, space_station_world(),
-          game_id: "sp1",
-          recorded_at: "2026-07-06T00:00:00Z"
-        )
-
-      assert record["winner"] == "crew"
-      saboteur = record["seats"]["player_1"]
-      refute saboteur["won"]
-      assert saboteur["role"] == "saboteur"
-      assert saboteur["metrics"]["fake_repairs"] == 2
-
-      crew = record["seats"]["player_2"]
-      assert crew["won"]
-      assert crew["metrics"]["correct_votes"] == 1
     end
   end
 
@@ -301,41 +226,6 @@ defmodule LemonSim.Bench.LeagueTest do
     }
   end
 
-  defp survivor_world do
-    %{
-      status: "game_over",
-      winner: "Kai",
-      players: %{
-        "Kai" => %{model: "zai/glm-5", status: "alive"},
-        "Sierra" => %{model: "openai/gpt-x", status: "alive"},
-        "Talon" => %{model: "anthropic/claude-x", status: "eliminated"}
-      },
-      challenge_history: [],
-      whisper_history: [%{from: "Kai", to: "Sierra"}],
-      vote_history: [],
-      idol_history: [],
-      jury_votes: %{"Talon" => "Kai", "Marlow" => "Kai"},
-      elimination_log: [%{player: "Talon"}]
-    }
-  end
-
-  defp stock_market_world do
-    %{
-      status: "game_over",
-      winner: "player_1",
-      round: 10,
-      players: %{
-        "player_1" => %{name: "Ava", model: "anthropic/claude-x", cash: 2000, holdings: %{}},
-        "player_2" => %{name: "Bo", model: "zai/glm-5", cash: 1200, holdings: %{}},
-        "player_3" => %{name: "Cy", model: "openai/gpt-x", cash: 800, holdings: %{}}
-      },
-      stocks: %{},
-      market_call_history: [],
-      round_summaries: [],
-      whisper_history: []
-    }
-  end
-
   defp poker_world do
     %{
       status: "game_over",
@@ -375,31 +265,5 @@ defmodule LemonSim.Bench.LeagueTest do
       bet_count: 6,
       raise_count: 6
     })
-  end
-
-  defp space_station_world do
-    %{
-      status: "game_over",
-      winner: "crew",
-      round: 5,
-      players: %{
-        "player_1" => %{name: "Nova", role: "saboteur", model: "openai/gpt-x", status: "ejected"},
-        "player_2" => %{name: "Rex", role: "engineer", model: "zai/glm-5", status: "alive"},
-        "player_3" => %{name: "Lyra", role: "crew", model: "anthropic/claude-x", status: "alive"}
-      },
-      action_history: [
-        %{
-          round: 1,
-          actions: %{
-            "player_1" => %{action: "fake_repair"},
-            "player_2" => %{action: "repair"}
-          }
-        },
-        %{round: 2, actions: %{"player_1" => %{action: "fake_repair"}}}
-      ],
-      vote_history: [
-        %{round: 3, votes: %{"player_2" => "player_1", "player_3" => "player_1"}}
-      ]
-    }
   end
 end

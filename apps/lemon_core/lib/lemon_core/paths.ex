@@ -83,8 +83,8 @@ defmodule LemonCore.Paths do
   @doc """
   A path inside a project's state directory.
 
-      iex> LemonCore.Paths.project_path("/srv/app", ["proofs"])
-      "/srv/app/.lemon/proofs"
+      iex> LemonCore.Paths.project_path("/srv/app", ["extensions"])
+      "/srv/app/.lemon/extensions"
   """
   @spec project_path(Path.t(), [String.t()] | String.t(), opts()) :: String.t()
   def project_path(cwd, segments, opts \\ []) do

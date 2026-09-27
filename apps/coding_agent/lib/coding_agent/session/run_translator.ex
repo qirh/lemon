@@ -126,6 +126,7 @@ defmodule CodingAgent.Session.RunTranslator do
 
         detail =
           %{name: name, result: Presentation.truncate_result(result)}
+          |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
         ok? = Presentation.action_ok?(name, result, is_error)
@@ -143,6 +144,7 @@ defmodule CodingAgent.Session.RunTranslator do
         detail =
           action.detail
           |> Map.merge(%{result: Presentation.truncate_result(result)})
+          |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
         ok? = Presentation.action_ok?(name, result, is_error)
@@ -195,6 +197,26 @@ defmodule CodingAgent.Session.RunTranslator do
         {:approval_resolved, _approval_id, _decision, _pending} = event
       ) do
     emit_approval_action(t, event)
+  end
+
+  def handle_event(%__MODULE__{} = t, {:provider_retry, details}) when is_map(details) do
+    attempt = Map.get(details, :attempt, 1)
+    max_retries = Map.get(details, :max_retries, attempt)
+    seconds = Float.round(Map.get(details, :delay_ms, 0) / 1000, 1)
+
+    text =
+      "Provider request failed (#{Map.get(details, :category, :transient)}); " <>
+        "retrying in #{seconds}s (attempt #{attempt}/#{max_retries})"
+
+    emit_action_event(t, %{
+      id: "provider_retry_#{attempt}_#{System.unique_integer([:positive])}",
+      kind: :note,
+      title: text,
+      phase: :completed,
+      level: :warning,
+      message: Map.get(details, :reason),
+      detail: %{text: text, retry: details}
+    })
   end
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do

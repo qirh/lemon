@@ -27,7 +27,7 @@ cryptographic, network, and boundary machinery those docs assume.
 | Inbound webhooks | Caller with the shared token | The open internet | `authorized?/1` before body parse, timing-safe token compare, body limit (`LemonChannels.InboundHttp`) |
 | Tool side effects | Human/admin approver | The model's chosen actions | Approval gates (`LemonCore.ExecApprovals`) + tool policy |
 | Model context | System + operator instructions | Email bodies, web content, external agents | Untrusted-content wrapping (`LemonAgent.Security.ExternalContent`) |
-| Package graph | Declared dependencies | Undeclared cross-package reach | Empty grandfather allowlist (`LemonCore.Quality.ArchitectureRulesCheck`) |
+| Package graph | Declared dependencies | Undeclared cross-package reach | `deps/0` policy + namespace-reference check (`LemonCore.Quality.ArchitectureCheck`) |
 | Published tarball | Files you intend to ship | Gitignored local secrets in the tree | `exclude_patterns` in each package's `mix.exs` |
 
 ## 1. Secrets at rest
@@ -77,7 +77,7 @@ resolution and error semantics are in
 store but does not hold the master key. **What is not:**
 
 - **No key rotation.** Re-encrypting existing secrets under a new master key is
-  not implemented. This is a *known, documented gap* (item 1.5 in
+  not implemented. This is a *known, documented gap* ("Known gaps" in
   `docs/platform-split.md`, and the `LemonCore.Secrets` moduledoc), not an
   oversight — if the master key is exposed, rotation today means re-entering
   secrets, not an in-place re-wrap.
@@ -98,15 +98,16 @@ tarball and published to a public registry. This nearly happened.
 The guard is `exclude_patterns` in each publishable package's `mix.exs`:
 
 ```elixir
-# apps/lemon_channels/mix.exs
-files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE),
+# apps/lemon_ai/mix.exs
+files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
 exclude_patterns: [~r/\.env/, ~r/node_modules/],
 ```
 
 **Reviewer checklist for any new published package:** the `files` list should be
 an allowlist (not `.`), and if it includes `priv`, `exclude_patterns` must
-exclude `\.env` and any local-only build artifacts. `mix hex.build` and the
-tarball-audit lane verify the shipped file set. Never assume `.gitignore`
+exclude `\.env` and any local-only build artifacts. `scripts/verify_packages`
+(`mix hex.build --unpack`, then a consumer build from the unpacked tree) shows the
+shipped file set. Never assume `.gitignore`
 protects a published tarball — it does not.
 
 ## 3. Inbound webhooks — the internet-facing surface
@@ -206,17 +207,16 @@ or a human confirms it.
 ## 6. The boundary guarantee (blast radius)
 
 Lemon's package graph is enforced, not merely documented. The architecture
-lane (`LemonCore.Quality.ArchitectureRulesCheck`) fails the build on any
-cross-package reference that violates the dependency direction, and its
-grandfather allowlist is **empty**:
+check (`LemonCore.Quality.ArchitectureCheck`, run by `mix lemon.quality`) fails
+the build when an app's `deps/0` leaves the policy in
+`LemonCore.Quality.ArchitecturePolicy`, or when code under `apps/*/lib`
+references another app's namespace without a declared dependency. The only
+exemptions are the reference-only exceptions listed in that policy module
+(currently `lemon_gateway` → `lemon_ai`, `lemon_automation`), which can never
+authorize a `mix.exs` edge.
 
-```elixir
-@grandfathered []
-```
-
-An empty allowlist means there are **zero** exempted violations — every
-cross-package reference in the tree is a declared dependency. For a security
-reviewer, this bounds blast radius and supply-chain reasoning: a published
+Apart from those listed exceptions, every cross-package reference in the tree
+is a declared dependency. For a security reviewer, this bounds blast radius and supply-chain reasoning: a published
 package reaches only what its `mix.exs` says it reaches, so auditing one
 package's dependencies is sufficient to know what it can touch. There is no
 hidden runtime reach around the declared graph except the two explicitly
@@ -244,7 +244,7 @@ compile-time edge.
 
 ## Known gaps (tracked)
 
-- **Secret key rotation** is not implemented (`docs/platform-split.md` item 1.5).
+- **Secret key rotation** is not implemented (`docs/platform-split.md`, "Known gaps").
 - **Prompt injection** via untrusted content is mitigated, not solved (§5).
 - **Local host compromise** is out of the threat model — anything that can read
   the master key source can decrypt secrets (§1).

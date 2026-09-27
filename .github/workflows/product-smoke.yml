@@ -14,8 +14,8 @@ on:
       - "priv/**"
       - ".github/workflows/product-smoke.yml"
   schedule:
-    # Daily at 05:30 UTC (off-peak, intentionally not :00 or :30)
-    - cron: "30 5 * * *"
+    # Weekly, Monday 05:30 UTC. PRs touching apps/** already run it.
+    - cron: "30 5 * * 1"
   workflow_dispatch:
     inputs:
       profile:

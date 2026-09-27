@@ -250,7 +250,8 @@ defmodule LemonSimUi.WerewolfPlayback do
   end
 
   defp game_over?(state) do
-    world_value(state, :status) == "game_over" or not is_nil(world_value(state, :winner))
+    LemonSim.Examples.terminal_status?(world_value(state, :status)) or
+      not is_nil(world_value(state, :winner))
   end
 
   defp phase_changed?(prev_state, next_state), do: phase(prev_state) != phase(next_state)

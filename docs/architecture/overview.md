@@ -91,33 +91,32 @@ destination `CodingAgent.Executor`.
 
 ## Application Map
 
-The project is an Elixir umbrella with 24 applications:
+The project is an Elixir umbrella with 22 applications:
 
 **Stack (bottom-up):**
 
 | App | Role |
 |---|---|
-| `ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
-| `lemon_core` | EventBus, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
+| `lemon_ai` | Provider abstraction, streaming, cost tracking (published; no umbrella deps) |
+| `lemon_core` | EventBus, Store, config, secrets, boundary contracts (published; no umbrella deps) |
 | `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
-| `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
-| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Executor, Store backend, and memory-provider implementations (published) |
+| `lemon_agent` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics (published) |
+| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Store backend, event, memory-provider and channel Plugin implementations (published; `PluginCase` needs the in-repo `lemon_channels`) |
 
 **Assistant product:**
 
 | App | Role |
 |---|---|
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
-| `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
-| `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
+| `lemon_automation` | CronManager, heartbeats, reminders, daily brief, scheduled-result delivery |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
-| `lemon_web` | React web frontend bridge |
+| `lemon_web` | Phoenix LiveView web UI |
 | `lemon_evals` | Eval harness for assistant behavior |
 | `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
@@ -136,12 +135,6 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
 | `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
 
-**Other products:**
-
-| App | Role |
-|---|---|
-| `lemon_tcg` | Live market data and paper execution for an agent-operated on-chain TCG shop — the real-world counterpart of `LemonSim.Examples.TcgShop` |
-
 ### Package dependency graph
 
 The graph below is the compile-time dependency structure of the platform tier,
@@ -156,19 +149,19 @@ replaceable.
 %% Source of truth: apps/*/mix.exs in_umbrella deps (see docs/architecture_boundaries.md).
 %% Solid = compile-time dependency. Dashed = runtime-only seam (no compile edge).
 graph TD
-    subgraph published["Published packages · Hex (the nine)"]
+    subgraph published["Published packages · Hex (the five)"]
         core["lemon_core"]
         ai["lemon_ai"]
         agent["lemon_agent"]
         mem["lemon_memory"]
-        media["lemon_media"]
-        chan["lemon_channels"]
-        router["lemon_router"]
-        gw["lemon_gateway"]
         kit["lemon_platform_test"]
     end
 
     subgraph reference["Reference runtime · in-repo, unpublished"]
+        router["lemon_router"]
+        gw["lemon_gateway"]
+        chan["lemon_channels"]
+        media["lemon_media"]
         cp["lemon_control_plane"]
         cli["lemon_cli"]
         web["lemon_web"]
@@ -178,17 +171,15 @@ graph TD
         lsp["lemon_lsp"]
     end
 
-    subgraph products["Products · consume the packages as a third party would"]
+    subgraph products["Products · in-repo"]
         ca["coding_agent"]
-        caui["coding_agent_ui"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
         sim["lemon_sim"]
         simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
     end
 
-    %% Published-tier compile edges (full fidelity from mix.exs)
+    %% Platform compile edges (full fidelity from mix.exs)
     agent --> ai
     agent --> core
     mem --> core
@@ -206,8 +197,7 @@ graph TD
     kit --> core
     kit --> agent
     kit --> ai
-    kit --> chan
-    kit --> gw
+    kit -->|"PluginCase · umbrella only"| chan
     kit --> mem
 
     %% The one allowed router->channels compile edge
@@ -225,23 +215,23 @@ graph TD
 Consumption is one-directional: reference-runtime, product, and satellite apps
 depend on the platform packages, and no platform package depends back on any of
 them. Only one representative consume-edge per tier is drawn; the invariant is
-that no arrow ever runs from `published` into the outer three tiers.
+that no arrow runs from `published` into the outer three tiers, except
+`lemon_platform_test`'s umbrella-only edge to `lemon_channels` (its Hex package
+does not carry it).
 
 ---
 
 ## Data Flow
 
-Five main paths through the system:
+Four main paths through the system:
 
-1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → LemonAgent → Tools/LemonAi
+1. **Control Plane (TUI)**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
 
-2. **Control Plane**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
+2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
-3. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
+3. **Automation**: CronManager tick → Due jobs → Router → terminalization (heartbeat suppression) → EventBus + CronDelivery → originating or paired owner chat
 
-4. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
-
-5. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
+4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
    `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
    authenticated control-plane WebSocket → destination `CodingAgent.Executor`
 

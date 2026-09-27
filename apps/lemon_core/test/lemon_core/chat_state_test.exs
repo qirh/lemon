@@ -2,7 +2,7 @@ defmodule LemonCore.ChatStateTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.ChatState
-  alias LemonCore.{ChatScope, Store}
+  alias LemonCore.{ChatScope, ChatStateStore}
 
   setup do
     :ok
@@ -529,7 +529,7 @@ defmodule LemonCore.ChatStateTest do
     end
   end
 
-  describe "Store ChatState round-trip" do
+  describe "ChatStateStore round-trip" do
     test "stores and retrieves ChatState" do
       scope = %ChatScope{transport: :demo, chat_id: 12_345}
 
@@ -539,14 +539,10 @@ defmodule LemonCore.ChatStateTest do
         updated_at: System.system_time(:millisecond)
       }
 
-      # Store the chat state
-      Store.put_chat_state(scope, original)
-
-      # Give the async cast time to complete
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope, original)
 
       # Retrieve and verify
-      retrieved = Store.get_chat_state(scope)
+      retrieved = ChatStateStore.get(scope)
 
       # The Store may return either the struct or a map depending on backend
       case retrieved do
@@ -565,7 +561,7 @@ defmodule LemonCore.ChatStateTest do
     test "returns nil for missing chat state" do
       scope = %ChatScope{transport: :demo, chat_id: 99_999}
 
-      assert Store.get_chat_state(scope) == nil
+      assert ChatStateStore.get(scope) == nil
     end
 
     test "overwrites existing chat state" do
@@ -574,12 +570,10 @@ defmodule LemonCore.ChatStateTest do
       first = %ChatState{last_engine: "first", last_resume_token: "token1", updated_at: 1000}
       second = %ChatState{last_engine: "second", last_resume_token: "token2", updated_at: 2000}
 
-      Store.put_chat_state(scope, first)
-      Process.sleep(50)
-      Store.put_chat_state(scope, second)
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope, first)
+      :ok = ChatStateStore.put(scope, second)
 
-      retrieved = Store.get_chat_state(scope)
+      retrieved = ChatStateStore.get(scope)
 
       case retrieved do
         %ChatState{} = chat_state ->
@@ -599,12 +593,11 @@ defmodule LemonCore.ChatStateTest do
       state1 = %ChatState{last_engine: "engine1", last_resume_token: "t1", updated_at: 1000}
       state2 = %ChatState{last_engine: "engine2", last_resume_token: "t2", updated_at: 2000}
 
-      Store.put_chat_state(scope1, state1)
-      Store.put_chat_state(scope2, state2)
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope1, state1)
+      :ok = ChatStateStore.put(scope2, state2)
 
-      retrieved1 = Store.get_chat_state(scope1)
-      retrieved2 = Store.get_chat_state(scope2)
+      retrieved1 = ChatStateStore.get(scope1)
+      retrieved2 = ChatStateStore.get(scope2)
 
       # Get last_engine from either struct or map
       get_engine = fn

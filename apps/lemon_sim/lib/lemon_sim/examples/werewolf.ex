@@ -19,13 +19,16 @@ defmodule LemonSim.Examples.Werewolf do
   import LemonSim.Examples.Helpers
   import LemonSim.Examples.Helpers.EventHelpers
 
+  alias LemonSim.Bench.Artifacts.Replay.Recorder
   alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
 
   alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Werewolf.{
     ActionSpace,
+    Artifacts,
     Lore,
+    OfflineRunner,
     Performance,
     Roles,
     TranscriptLogger,
@@ -33,32 +36,44 @@ defmodule LemonSim.Examples.Werewolf do
   }
 
   alias LemonSim.LLM.Projectors.SectionedProjector
-  alias LemonSim.Kernel.State
+  alias LemonSim.Kernel.{Rng, State}
 
   @default_max_turns 200
   @default_player_count 6
 
+  @doc """
+  Builds the initial world.
+
+  All randomized setup draws from `LemonSim.Kernel.Rng.new(seed)`, where
+  `seed` is the `:seed` option (a fresh seed is generated when omitted). The
+  world records `:seed` and the remaining generator as `:rng_state`; updaters
+  thread `:rng_state` through every later draw, so the world after any event
+  sequence is a pure function of the seed and events.
+  """
   @spec initial_world(keyword()) :: map()
   def initial_world(opts \\ []) do
     player_count = Keyword.get(opts, :player_count, @default_player_count)
+    seed = Keyword.get_lazy(opts, :seed, fn -> :erlang.phash2(:erlang.monotonic_time()) end)
+    rng = Rng.new(seed)
 
-    players =
+    {players, rng} =
       case Keyword.get(opts, :player_ids) do
         player_ids when is_list(player_ids) ->
-          assign_roles(player_count, player_ids, opts)
+          assign_roles(player_count, player_ids, opts, rng)
 
         _ ->
           if Keyword.get(opts, :balanced_roles?, false) do
-            assign_roles(player_count, Roles.player_names(player_count), opts)
+            {names, rng} = Roles.player_names(player_count, rng)
+            assign_roles(player_count, names, opts, rng)
           else
-            Roles.assign_roles(player_count)
+            Roles.assign_roles(player_count, rng)
           end
       end
 
     # Assign personality traits and backstory connections
     player_names = Map.keys(players)
-    traits = Roles.assign_traits(player_names)
-    backstory_connections = Roles.generate_connections(player_names)
+    {traits, rng} = Roles.assign_traits(player_names, rng)
+    {backstory_connections, rng} = Roles.generate_connections(player_names, rng)
 
     # Add traits to player maps (before lore so LLM sees traits)
     players =
@@ -97,6 +112,8 @@ defmodule LemonSim.Examples.Werewolf do
       end
 
     %{
+      seed: seed,
+      rng_state: rng,
       players: players,
       phase: initial_phase,
       day_number: 1,
@@ -149,11 +166,11 @@ defmodule LemonSim.Examples.Werewolf do
     }
   end
 
-  defp assign_roles(player_count, player_ids, opts) do
+  defp assign_roles(player_count, player_ids, opts, rng) do
     if Keyword.get(opts, :balanced_roles?, false) do
-      Roles.assign_balanced_roles(player_count, player_ids)
+      {Roles.assign_balanced_roles(player_count, player_ids), rng}
     else
-      Roles.assign_roles(player_count, player_ids)
+      Roles.assign_roles(player_count, player_ids, rng)
     end
   end
 
@@ -331,10 +348,24 @@ defmodule LemonSim.Examples.Werewolf do
 
   defp stream_options_for_model(_model), do: %{max_tokens: 768, tool_choice: :any}
 
+  @doc """
+  Runs a single-model Werewolf game. With `:artifact_dir`, the run is recorded
+  and written as a replay-verifiable bundle.
+  """
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
     state = initial_state(opts)
 
+    Recorder.with_bundle(
+      state,
+      opts,
+      Artifacts.replay_config(state, opts),
+      &Artifacts.write_run_artifacts/4,
+      &run_state(state, &1)
+    )
+  end
+
+  defp run_state(state, opts) do
     GameRunner.run(state, modules(), &default_opts/1, opts,
       print_setup: fn s ->
         IO.puts("Starting Werewolf game with #{map_size(get(s.world, :players, %{}))} players")
@@ -345,11 +376,22 @@ defmodule LemonSim.Examples.Werewolf do
   end
 
   @doc """
+  Runs a keyless Werewolf game where every seat is played by a deterministic
+  offline strategy (`"heuristic"`), writing a replay-verifiable bundle.
+  """
+  @spec run_offline_strategy(String.t() | atom(), keyword()) ::
+          {:ok, %{state: State.t(), artifacts: map(), steps: non_neg_integer()}}
+          | {:error, term()}
+  def run_offline_strategy(strategy, opts \\ []),
+    do: OfflineRunner.run_strategy(strategy, opts)
+
+  @doc """
   Runs a Werewolf game with different models assigned to different players.
 
   ## Options
     * `:model_assignments` - map of player_name => {%Model{}, api_key_string}
     * `:transcript_path` - path to write JSONL transcript
+    * `:artifact_dir` - record the run and write a replay-verifiable bundle
     * All other opts from `run/1`
   """
   @spec run_multi_model(keyword()) :: {:ok, State.t()} | {:error, term()}
@@ -357,6 +399,16 @@ defmodule LemonSim.Examples.Werewolf do
     model_assignments = Keyword.fetch!(opts, :model_assignments)
     state = initial_state(opts) |> attach_model_assignments(model_assignments)
 
+    Recorder.with_bundle(
+      state,
+      opts,
+      Artifacts.replay_config(state, opts),
+      &Artifacts.write_run_artifacts/4,
+      &run_multi_model_state(state, &1)
+    )
+  end
+
+  defp run_multi_model_state(state, opts) do
     GameRunner.run_multi_model(state, modules(), &default_opts/1, opts,
       print_setup: fn s ->
         IO.puts(
@@ -1052,7 +1104,13 @@ defmodule LemonSim.Examples.Werewolf do
 
   # -- Callbacks --
 
-  defp terminal?(state), do: get(state.world, :status) in ["game_over"]
+  @terminal_statuses ["game_over"]
+
+  @doc "World `:status` values that end a Werewolf game."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: get(state.world, :status) in @terminal_statuses
 
   defp announce_turn(turn, state) do
     actor_id = get(state.world, :active_actor_id)

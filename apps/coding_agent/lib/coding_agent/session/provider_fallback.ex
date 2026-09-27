@@ -351,8 +351,8 @@ defmodule CodingAgent.Session.ProviderFallback do
   #   - :fail (client errors): the request itself is malformed — every
   #     fallback candidate would reject it the same way.
   #   - :compact (context overflow): no candidate can satisfy an oversized
-  #     context; recovery is owned by LemonAi.CompactingClient upstream, which
-  #     needs to SEE the error to compact and retry.
+  #     context; recovery is owned by CodingAgent.Session.OverflowRecovery,
+  #     which needs to SEE the error to compact the session and retry.
   defp failover_action({:error, _reason, _message} = event) do
     case LemonAi.Error.failover_action(event) do
       :next_credential -> :next_credential

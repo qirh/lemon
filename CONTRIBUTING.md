@@ -45,11 +45,12 @@ Full setup: [`docs/user-guide/setup.md`](docs/user-guide/setup.md)
 ```bash
 scripts/test fast                 # compile with warnings as errors + ExUnit excluding integration
 scripts/test path apps/lemon_core/test
-scripts/test quality              # lint + architecture boundaries + doc freshness
+scripts/test quality              # format, credo, skip guard, docs links, architecture boundaries
 ```
 
-`scripts/test quality` runs the same `mix lemon.quality` lane CI runs, and it is
-the gate most PRs need to pass. See [`docs/testing.md`](docs/testing.md) for the
+CI (`.github/workflows/ci.yml`) runs `scripts/test quality`, `scripts/test fast`,
+and `scripts/test clients` on every PR and push to main, so the same commands pass
+locally and in CI. See [`docs/testing.md`](docs/testing.md) for the
 canonical local test lanes and how they map to CI.
 
 ## Your first contribution
@@ -166,12 +167,11 @@ Use `LemonCore.Config.Features.enabled?/2` — not `System.get_env`.
 - Branch from `main`; branch name: `<type>/<short-description>`
 - PRs require approval from the CODEOWNERS of affected files
 - Cross-cutting changes (`mix.exs`, shared schemas) require `@z80` sign-off
-- `mix lemon.quality` must be green (lint + architecture boundaries + doc freshness)
-- Register any new docs files under `docs/` in `docs/catalog.exs`
-- **Changed a published package's `lib/`?** Add an entry to that package's
-  `CHANGELOG.md` in the same PR — the change is visible to third parties who
-  installed it from Hex. A CI job annotates PRs that miss this (advisory, per
-  `docs/platform-split.md` §4.4); it does not block the merge, but reviewers do.
+- `scripts/test quality` must be green (lint + docs links + architecture boundaries)
+- **Changed a published package's `lib/`?** (`lemon_ai`, `lemon_core`,
+  `lemon_agent`, `lemon_memory`, `lemon_platform_test`.) Add an entry to that
+  package's `CHANGELOG.md` in the same PR — the change is visible to third
+  parties who installed it from Hex. No CI job checks this; reviewers do.
 
 The [pull request template](.github/pull_request_template.md) has the full
 checklist.

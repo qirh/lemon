@@ -12,13 +12,14 @@ of what was found, and the migration tables in §8–§9 say which rows have sin
 > map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
 
 Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
-`test/`), the topics they publish to, and every process that subscribes. The plan of record is
-[`docs/platform-split.md`](../platform-split.md) §5 item **3.1**; its risk row predicts that
-"catalog first will reveal undocumented consumer assumptions." It does — §6 lists thirteen, two
+`test/`), the topics they publish to, and every process that subscribes. This was item **3.1** of
+the platform-split plan ([`docs/platform-split.md`](../platform-split.md) is now its status
+page), whose risk row predicted that "catalog first will reveal undocumented consumer
+assumptions." It does — §6 lists thirteen, two
 of which are live bugs.
 
 This document is the canonical catalog for bus topics and payload types.
-`docs/platform/lemon_core.md` provides the higher-level core boundary.
+`apps/lemon_core/README.md` describes the higher-level core boundary.
 
 > **Top-level execution end state.** `engine` remains in run events, completion
 > records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
@@ -106,6 +107,8 @@ Subscribers:
 | 12 | webhook transport | `transports/webhook/response.ex:61,100,148` | `:run_completed` |
 | 13 | telegram plugin | `telegram/transport.ex:737` | `:run_completed`, catch-all |
 
+> **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
+
 ### 2.2 `session:<session_key>` — 4 subscribers
 
 | Event type | Publisher | Payload | Env |
@@ -120,7 +123,7 @@ Subscribers:
 Subscribers: `lemon_web/live/session_live.ex:17`, `discord/transport.ex:3408`,
 `telegram/transport.ex:729`, `LemonControlPlane.EventBridge` (dynamic).
 
-### 2.3 `exec_approvals` — 6 subscribers
+### 2.3 `exec_approvals` — 7 subscribers
 
 | Event type | Publisher | Payload | Env |
 |---|---|---|---|
@@ -130,7 +133,8 @@ Subscribers: `lemon_web/live/session_live.ex:17`, `discord/transport.ex:3408`,
 
 Subscribers: `exec_approvals.ex:77` (the requester itself, awaiting resolution),
 `coding_agent/session.ex:1139`, `discord:3414`, `telegram:1354`, `control_plane/acp.ex:361`,
-`EventBridge`.
+`EventBridge`, `lemon_web/live/session_live.ex` (chat approval panel, filtered to the tab's
+session key).
 
 ### 2.4 `cron` — 2 subscribers
 
@@ -173,7 +177,6 @@ the only listener silently discards them.
 | `sim:lobby` | `lemon_sim_ui/sim_manager.ex:1739` | 4 LiveViews + `arena.ex:179` | empty payload |
 | `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
 | hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
-| philosopher-chat topic | `philosopher_chat/thread_server.ex:844` | `philosopher_chat_api_controller.ex:172` | `%{type, event_seq, …}` |
 | `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
 | `logs` | **none** | **none** | documented in the Bus contract; dead |
 
@@ -199,7 +202,7 @@ crosses an app boundary *and* has a consumer that is not its publisher's sibling
 |---|---|---|
 | `run:<id>` | 12 | Consumed by router, coding_agent, control plane (WS + SSE + ACP), automation, gateway, channels |
 | `session:<key>` | 4 | Consumed by the web UI and two channel plugins |
-| `exec_approvals` | 6 | Consumed by two channel plugins, the ACP server and coding_agent |
+| `exec_approvals` | 7 | Consumed by two channel plugins, the ACP server, coding_agent and the web chat |
 | `cron` | 2 | Crosses `lemon_automation` → `lemon_control_plane` → WS clients |
 | `system` | 1 | Publishers in `lemon_core` and `lemon_control_plane`; reaches WS clients |
 | `goals` | 1 | Crosses `agent_core` → `lemon_control_plane` → WS clients |
@@ -388,7 +391,7 @@ Compatibility for one release cycle rests on two mechanisms:
    *(History: the shim was removed in S13 on 2026-08-13, before 0.2 — §9. The contract-kit
    assertion now checks the opposite, that no payload module implements `Access`.)*
 
-Semver rule once a struct is published, to go in `docs/platform/lemon_core.md`:
+Semver rule for a published struct (`lemon_core` is a Hex package):
 
 | Change | Bump |
 |---|---|
@@ -716,8 +719,8 @@ neither Farcaster nor the email port appears anywhere in this catalog (Farcaster
 Bus; the email adapter at `apps/lemon_channels/lib/lemon_channels/adapters/email/` has no Bus
 call sites). The email port (task #27) is therefore not expected to change any row above. The one
 row that would move is webhook's `run:<id>` subscription (`transports/webhook/response.ex`), if
-webhook is ever relocated — per `transport-unification.md` §1 it stays in the gateway, so it
-should not be.
+webhook is ever relocated — per decision D2 in `docs/platform-split.md` it stays in the gateway,
+so it should not be.
 
 ## 9. S13 — removing the `Access` shim
 

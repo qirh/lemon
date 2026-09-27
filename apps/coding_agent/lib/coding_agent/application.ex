@@ -24,19 +24,16 @@ defmodule CodingAgent.Application do
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
-      {Registry, keys: :unique, name: CodingAgent.RateLimitHealerRegistry},
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
+      CodingAgent.MutationLock,
+      CodingAgent.FileReadTracker,
       CodingAgent.SessionSupervisor,
       CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,
       CodingAgent.Tools.Task.LiveBridgeSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
-      # one_for_all Python REPL subsystem (session supervisor + registry).
-      # Must start after TaskSupervisor: per-cell RPC servers started for
-      # REPL workers depend on it.
-      CodingAgent.PythonRepl.Supervisor,
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},

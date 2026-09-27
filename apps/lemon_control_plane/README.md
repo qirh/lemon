@@ -4,7 +4,7 @@ HTTP and WebSocket control plane API server for the Lemon agent system. Provides
 
 
 ## Overview
-LemonControlPlane is the external interface through which clients (terminal UI, web dashboards, mobile apps, browser extensions) interact with the Lemon agent runtime. It exposes 80 JSON-RPC methods over WebSocket for submitting agent runs, managing sessions, configuring the system, scheduling cron jobs, pairing nodes, and streaming real-time events.
+LemonControlPlane is the external interface through which clients (terminal UI, web dashboards, mobile apps, browser extensions) interact with the Lemon agent runtime. It exposes 79 JSON-RPC methods over WebSocket for submitting agent runs, managing sessions, configuring the system, scheduling cron jobs, pairing nodes, and streaming real-time events.
 
 
 
@@ -318,7 +318,7 @@ Each method declares required scopes; a connection must have at least one
 matching scope. Methods with no required scopes are public.
 ## API Method Inventory
 
-The control plane exposes these 80 retained methods:
+The control plane exposes these 79 retained methods:
 
 | Methods |
 |---------|
@@ -333,8 +333,12 @@ The control plane exposes these 80 retained methods:
 | `health`, `logs.tail`, `models.list`, `node.invoke`, `node.invoke.control.result`, `node.invoke.result`, `node.pair.approve`, `node.pair.request` |
 | `profile.chat`, `profiles.clone`, `profiles.create`, `profiles.delete`, `profiles.export`, `profiles.get`, `profiles.list`, `profiles.rename`, `profiles.roster` |
 | `runs.active.list`, `runs.recent.list` |
-| `session.btw`, `session.detail`, `sessions.active`, `sessions.active.list`, `sessions.compact`, `sessions.delete`, `sessions.export`, `sessions.heartbeat`, `sessions.list`, `sessions.metadata.patch`, `sessions.patch`, `sessions.preview`, `sessions.prune`, `sessions.reset`, `sessions.stats` |
+| `session.btw`, `session.detail`, `sessions.active`, `sessions.active.list`, `sessions.compact`, `sessions.delete`, `sessions.export`, `sessions.list`, `sessions.metadata.patch`, `sessions.patch`, `sessions.preview`, `sessions.prune`, `sessions.reset`, `sessions.stats` |
 | `skills.hermes.catalog`, `skills.install`, `status`, `tasks.active.list`, `tasks.recent.list`, `usage.cost`, `usage.status` |
+
+Heartbeat scheduling uses automation cron jobs with `meta.heartbeat`, not a
+separate control-plane RPC family.
+
 ## Event System
 
 The EventBridge forwards bus events to WebSocket clients. Each non-node client
@@ -342,10 +346,35 @@ receives all events; node connections receive only targeted node traffic.
 
 ### WebSocket Events
 
-The server emits run, chat, goal, presence, tick, heartbeat, approval, cron,
-task, shutdown, health, and node pairing/invocation events. Approval events
-include structured action metadata and report timeouts as
-`exec.approval.resolved` with `decision: "timeout"`.
+| Event | Trigger |
+|-------|---------|
+| `agent` | Run started/completed, tool use; tool-use events preserve nested `action.detail` metadata, including `result_meta` failure fields such as `error_type` and `exit_code`. `detail.result` is the bounded full tool result (≤32 KB, not the 500-char channel preview), `detail.details` carries structured tool details such as an edit's `diff` and `first_changed_line`, and reasoning `detail.reasoning.text` is the bounded full thought (≤16 KB) |
+| `chat` | Chat delta/streaming content |
+| `goal` | Durable goal set/pause/resume/complete/clear, supervised continuation, or loop verdict |
+| `presence` | Connection count changed |
+| `tick` | Heartbeat tick |
+| `heartbeat` | Agent heartbeat or alert |
+| `exec.approval.requested` | Approval needed, including structured `action` metadata for operator UI controls such as MCP OAuth links |
+| `exec.approval.resolved` | Approval decided or timed out, including approval id, decision, and pending approval run/session/agent/tool metadata when available |
+| `cron` | Cron job started/completed |
+| `cron.job` | Cron job created/updated/deleted |
+| `cron.audit` | Cron lifecycle audit event recorded |
+| `task.started` | Subtask/subagent started |
+| `task.completed` | Subtask/subagent completed |
+| `task.error` | Subtask/subagent errored |
+| `task.timeout` | Subtask/subagent timed out |
+| `task.aborted` | Subtask/subagent aborted |
+| `run.graph.changed` | Run graph/status changed |
+| `shutdown` | System shutting down |
+| `health` | Health status changed |
+| `node.pair.requested` | Node wants to pair |
+| `node.pair.resolved` | Node pairing approved/rejected |
+| `node.invoke.request` | Operator invoked a node method |
+| `node.invoke.completed` | Node invoke completed |
+
+### State Versioning
+
+State-versioned events include a `stateVersion` map for client reconciliation. Version counters are bumped for `presence`, `health`, and `cron` keys on relevant events. Clients can use these versions to detect stale state and reconcile without re-fetching.
 
 ## Presence System
 

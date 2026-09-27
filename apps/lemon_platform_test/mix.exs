@@ -1,18 +1,28 @@
-Code.require_file("../../hex_package.exs", __DIR__)
-
 defmodule LemonPlatformTest.MixProject do
   use Mix.Project
 
+  @version "0.2.0"
   @source_url "https://github.com/z80dev/lemon"
+
+  # This file ships verbatim in the hex tarball, so it must not read anything
+  # outside its own directory. Inside the lemon repo it sits at
+  # apps/lemon_platform_test/mix.exs under the umbrella's mix.exs: it shares
+  # the umbrella's build, deps and lockfile, and sibling packages resolve
+  # in_umbrella. Anywhere else (deps/lemon_platform_test in a consumer, an
+  # unpacked tarball) sibling packages resolve from hex. LEMON_HEX_PUBLISH=1
+  # forces the hex form inside the repo: `mix hex.build` records only hex
+  # dependencies and refuses to build with an in_umbrella one.
+  @umbrella Path.basename(Path.dirname(__DIR__)) == "apps" and
+              File.regular?(Path.expand("../../mix.exs", __DIR__)) and
+              System.get_env("LEMON_HEX_PUBLISH") not in ["1", "true"]
+
+  # What a published release requires of its sibling Lemon packages.
+  @lemon_requirement "~> 0.2"
 
   def project do
     [
       app: :lemon_platform_test,
-      version: "0.1.0",
-      build_path: "../../_build",
-      config_path: "../../config/config.exs",
-      deps_path: "../../deps",
-      lockfile: "../../mix.lock",
+      version: @version,
       test_pattern: "*_test.exs",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
@@ -26,18 +36,30 @@ defmodule LemonPlatformTest.MixProject do
       description: description(),
       package: package(),
       docs: docs()
-    ]
+    ] ++ umbrella_paths()
+  end
+
+  defp umbrella_paths do
+    if @umbrella do
+      [
+        build_path: "../../_build",
+        config_path: "../../config/config.exs",
+        deps_path: "../../deps",
+        lockfile: "../../mix.lock"
+      ]
+    else
+      []
+    end
   end
 
   defp description do
     "Contract-test kit for the Lemon platform's extension behaviours: ExUnit " <>
-      "case templates that hold your Plugin, Store backend, or memory Provider " <>
+      "case templates that hold your Store backend or memory Provider " <>
       "implementation to the documented contract."
   end
 
   defp package do
     [
-      name: Lemon.HexPackage.name(:lemon_platform_test),
       licenses: ["MIT"],
       files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
       links: %{
@@ -73,27 +95,51 @@ defmodule LemonPlatformTest.MixProject do
   end
 
   defp deps do
-    Lemon.HexPackage.deps([
+    # lemon_channels is not published to hex, so PluginCase's target exists
+    # only inside the umbrella; a hex consumer who reaches for PluginCase gets
+    # LemonPlatformTest.require_dep!/3's error instead.
+    channels = if @umbrella, do: [{:lemon_channels, in_umbrella: true}], else: []
+
+    lemon_deps([
       # One dep per behaviour/tool the kit provides, and every one is
       # `optional: true`. A third party pulls in only the platform apps whose
-      # case they actually use — someone testing a Plugin should not also
-      # compile exqlite and nostrum as test deps. Each case template guards on
+      # case they actually use — someone testing a Store backend should not
+      # also compile exqlite as a test dep. Each case template guards on
       # `Code.ensure_loaded?` of its target and raises a pointed "add this dep"
-      # error if the app is absent (see below).
+      # error if the app is absent (see LemonPlatformTest.require_dep!/3).
       #
       #   BackendCase        -> lemon_core     ProviderCase -> lemon_memory
-      #   EventsCase         -> lemon_core     FakeLLM      -> ai + agent_core
-      #   PluginCase         -> lemon_channels
+      #   EventsCase         -> lemon_core     FakeLLM      -> ai + agent
+      #   PluginCase         -> lemon_channels (umbrella only)
       #
       # The kit is a leaf: nothing in the platform depends on it, so these edges
       # cannot create a cycle. In the umbrella all siblings are present, so the
       # self-validation suites in test/compliance still compile and pass.
       {:lemon_core, in_umbrella: true, optional: true},
-      {:lemon_channels, in_umbrella: true, optional: true},
       {:lemon_memory, in_umbrella: true, optional: true},
       {:lemon_ai, in_umbrella: true, optional: true},
       {:lemon_agent, in_umbrella: true, optional: true},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
-    ])
+    ]) ++ channels
+  end
+
+  # Sibling Lemon packages are declared `in_umbrella: true` (the architecture
+  # check reads that form). Outside the umbrella each becomes a hex requirement
+  # on the current release line. `optional: true` only means something to hex —
+  # Mix rejects it on in_umbrella deps — so the umbrella form drops it.
+  defp lemon_deps(deps) do
+    Enum.map(deps, fn
+      {app, opts} = dep when is_list(opts) ->
+        if Keyword.get(opts, :in_umbrella, false) do
+          if @umbrella,
+            do: {app, Keyword.delete(opts, :optional)},
+            else: {app, @lemon_requirement, Keyword.delete(opts, :in_umbrella)}
+        else
+          dep
+        end
+
+      dep ->
+        dep
+    end)
   end
 end

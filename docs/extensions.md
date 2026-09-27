@@ -416,102 +416,6 @@ The validator accepts a manifest path or an extension directory, does not load
 extension code, and fails if required package fields are missing or unsupported
 capability-hosting metadata is declared.
 
-## BEAM Host Proof
-
-The local BEAM extension-host proof exercises the runtime trust boundary without
-starting channel adapters or loading default directories implicitly:
-
-```bash
-mix run --no-start scripts/live_extension_host_smoke.exs
-```
-
-The proof creates a temporary project, confirms the default `.lemon/extensions`
-directory is not executed without trust, loads an explicitly configured
-extension path, executes an extension tool through `CodingAgent.ToolRegistry`,
-verifies redacted extension tool execution telemetry, and confirms built-in
-tools win namespace conflicts. It also proves `[runtime.extensions] enabled =
-false` blocks explicit-path extension execution without loading extension code.
-It writes the redacted artifact
-`.lemon/proofs/extension-host-smoke-latest.json` with aggregate counts only.
-This is BEAM extension-host proof, not public registry, WASM, MCP, or sandbox
-execution proof.
-
-## WASM Host Telemetry Proof
-
-The WASM tool boundary also has a focused telemetry proof for the wrapper that
-invokes discovered WASM tools through the sidecar session:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
-```
-
-The proof exercises successful execution, returned sidecar errors, and a dead
-sidecar exit. It verifies `[:coding_agent, :wasm, :tool, :start]`,
-`[:coding_agent, :wasm, :tool, :stop]`, and
-`[:coding_agent, :wasm, :tool, :exception]` events with hashed WASM paths and
-tool-call ids. The proof artifact is
-`.lemon/proofs/wasm-tool-telemetry-latest.json` and records only aggregate
-counts, host-boundary flags, and redaction booleans.
-
-This is wrapper telemetry proof for the WASM execution boundary. It is not
-public registry, broad sandbox policy, MCP, or marketplace parity proof.
-
-## WASM Policy Proof
-
-The WASM policy proof exercises the default approval boundary for discovered
-WASM tools:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_policy_smoke.exs
-```
-
-The proof verifies that WASM tools declaring `http`, `tool_invoke`, or `exec`
-capabilities require approval by default, that tools without those risky
-capabilities execute without approval, and that an explicit
-`approvals.<tool> = never` policy can override the default. It writes
-`.lemon/proofs/wasm-policy-latest.json` with aggregate counts, policy-boundary
-flags, and redaction booleans.
-
-This is a policy-wrapper proof. It does not prove full WASM runtime sandboxing,
-public registry review, or marketplace install/update flows.
-
-## WASM Lifecycle Proof
-
-The WASM sidecar lifecycle proof exercises the lower-level supervised sidecar
-session boundary:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
-```
-
-The proof starts a temporary sidecar, discovers a tool, invokes it, reads
-running status, stops the sidecar, and verifies discover/invoke telemetry uses
-hashed session, cwd, and tool metadata. It writes
-`.lemon/proofs/wasm-lifecycle-latest.json` with aggregate counts,
-lifecycle-boundary flags, and redaction booleans.
-
-This is per-session sidecar lifecycle proof. It does not prove full runtime
-sandboxing, public marketplace hosting, or broad WASM tool-package parity.
-
-## Registry Audit Proof
-
-The registry audit proof exercises Lemon's code-free install/update review
-boundary for extension packages:
-
-```bash
-MIX_ENV=test mix run scripts/live_extension_registry_audit_smoke.exs
-```
-
-The proof validates a temporary extension registry index, classifies audited
-packages as installable, blocks unaudited or blocked packages, detects a newer
-audited update candidate, and verifies the registry audit does not execute
-extension code. It writes
-`.lemon/proofs/extension-registry-audit-latest.json` with aggregate counts,
-registry-boundary flags, and redaction booleans.
-
-This proves the registry metadata review workflow, not full marketplace
-distribution, sandboxed non-BEAM execution, or bundled plugin breadth.
-
 ## Example Extension
 
 See `examples/extensions/hello_world_extension.ex` for a complete working example.
@@ -681,22 +585,6 @@ WASM tool wrappers emit the matching redacted host telemetry through
 host label, tool name, hashed WASM path, hashed tool-call id, status, duration,
 and redacted exception type.
 
-`mix lemon.doctor --verbose` includes `extensions.telemetry`,
-`extensions.wasm_telemetry`, `extensions.wasm_policy`, and
-`extensions.registry_audit`, and `extensions.wasm_lifecycle` checks backed by
-these redacted summaries.
-`extensions.telemetry` passes only when the latest extension-host smoke proof
-completed the redacted start/stop/exception telemetry check and the config/env
-disabled-mode execution block checks. `extensions.wasm_telemetry` passes only
-when the latest WASM smoke proof completed success, sidecar-error,
-sidecar-exit, and redaction checks. `extensions.wasm_policy` passes only when
-the latest WASM policy proof completed risky-capability approval-default and
-explicit-override checks. `extensions.registry_audit` passes only when the
-latest registry audit proof validates the code-free index, blocks unaudited
-installs, detects an audited update candidate, avoids code loading, and keeps
-sensitive registry values redacted. `extensions.wasm_lifecycle` passes only
-when the latest lifecycle proof completed discover/invoke telemetry, running
-status, stop termination, and redaction checks.
 
 ## Extension Status Report
 

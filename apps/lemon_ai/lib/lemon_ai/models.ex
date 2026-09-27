@@ -12,7 +12,7 @@ defmodule LemonAi.Models do
   ## Usage
 
       # Get a specific model
-      model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
 
       # List all models for a provider
       models = LemonAi.Models.get_models(:openai)
@@ -58,11 +58,14 @@ defmodule LemonAi.Models do
       provider: :"openai-codex",
       base_url: "https://chatgpt.com",
       reasoning: true,
+      reasoning_efforts: [:low, :medium, :high, :xhigh],
       input: [:text, :image],
       cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 128_000,
       max_tokens: 32_000
     },
+    # Overrides the direct-API gpt-5.5 entry: the Codex surface serves a
+    # 400k window rather than the API's 1.05M.
     "gpt-5.5" => %Model{
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -70,6 +73,7 @@ defmodule LemonAi.Models do
       provider: :"openai-codex",
       base_url: "https://chatgpt.com",
       reasoning: true,
+      reasoning_efforts: [:low, :medium, :high, :xhigh],
       input: [:text, :image],
       cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
       context_window: 400_000,
@@ -175,9 +179,9 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> model.name
-      "Claude Sonnet 4"
+      "Claude Sonnet 5"
 
       iex> LemonAi.Models.get_model(:anthropic, "nonexistent")
       nil
@@ -283,7 +287,7 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> LemonAi.Models.supports_vision?(model)
       true
 
@@ -302,7 +306,7 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> LemonAi.Models.supports_reasoning?(model)
       true
 
@@ -317,46 +321,78 @@ defmodule LemonAi.Models do
   end
 
   @doc """
-  Check if a model supports the xhigh thinking level.
+  Check if a model supports the xhigh reasoning level.
 
-  Supported models:
-  - GPT-5.2 / GPT-5.3 model families
-  - Anthropic Opus 4.6 models (xhigh maps to adaptive effort "max")
-
-  Ported from Pi's model-resolver.
+  Driven by the model's `reasoning_efforts` capability flag (see
+  `LemonAi.Types.Model`). On Anthropic adaptive-thinking models `:xhigh` maps
+  to effort `"max"`.
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.2")
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.5")
       iex> LemonAi.Models.supports_xhigh(model)
       true
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-opus-4-6")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-opus-5-5")
       iex> LemonAi.Models.supports_xhigh(model)
       true
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-5")
       iex> LemonAi.Models.supports_xhigh(model)
       false
   """
   @spec supports_xhigh(Model.t()) :: boolean()
-  def supports_xhigh(%Model{id: id, api: api}) do
-    cond do
-      String.contains?(id, "gpt-5.2") or String.contains?(id, "gpt-5.3") ->
-        true
-
-      api == :anthropic_messages and
-          (String.contains?(id, "opus-4-6") or String.contains?(id, "opus-4.6")) ->
-        true
-
-      true ->
-        false
-    end
-  end
+  def supports_xhigh(%Model{reasoning_efforts: efforts}), do: :xhigh in efforts
 
   @doc false
   @spec supports_xhigh?(Model.t()) :: boolean()
   def supports_xhigh?(model), do: supports_xhigh(model)
+
+  @reasoning_levels [:minimal, :low, :medium, :high, :xhigh]
+
+  @doc """
+  Resolve the reasoning level to send for `model`.
+
+  Models that declare `reasoning_efforts` get the requested level when it is
+  declared, otherwise the highest declared level below it, otherwise their
+  lowest declared level. Models with no declaration (and unknown levels) pass
+  the requested level through unchanged.
+
+  ## Examples
+
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.1")
+      iex> LemonAi.Models.reasoning_effort_for(model, :xhigh)
+      :high
+
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.2")
+      iex> LemonAi.Models.reasoning_effort_for(model, :minimal)
+      :low
+
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.5")
+      iex> LemonAi.Models.reasoning_effort_for(model, :xhigh)
+      :xhigh
+  """
+  @spec reasoning_effort_for(Model.t(), atom() | nil) :: atom() | nil
+  def reasoning_effort_for(%Model{}, nil), do: nil
+  def reasoning_effort_for(%Model{reasoning_efforts: []}, level), do: level
+
+  def reasoning_effort_for(%Model{reasoning_efforts: efforts}, level)
+      when level in @reasoning_levels do
+    if level in efforts do
+      level
+    else
+      below =
+        Enum.take_while(@reasoning_levels, &(&1 != level))
+        |> Enum.filter(&(&1 in efforts))
+
+      case below do
+        [] -> Enum.find(@reasoning_levels, &(&1 in efforts))
+        levels -> List.last(levels)
+      end
+    end
+  end
+
+  def reasoning_effort_for(%Model{}, level), do: level
 
   @default_thinking_budgets %{
     minimal: 1024,
@@ -473,12 +509,12 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      iex> model2 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
+      iex> model2 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> LemonAi.Models.models_equal?(model1, model2)
       true
 
-      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> model2 = LemonAi.Models.get_model(:openai, "gpt-4o")
       iex> LemonAi.Models.models_equal?(model1, model2)
       false
@@ -501,7 +537,7 @@ defmodule LemonAi.Models do
   ## Examples
 
       iex> ids = LemonAi.Models.get_model_ids(:anthropic)
-      iex> "claude-sonnet-4-20250514" in ids
+      iex> "claude-sonnet-5" in ids
       true
 
   """

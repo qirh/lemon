@@ -421,8 +421,8 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.cost.output == 15.0
       assert model.cost.cache_read == 0.3
       assert model.cost.cache_write == 3.75
-      assert model.context_window == 200_000
-      assert model.max_tokens == 64_000
+      assert model.context_window == 1_000_000
+      assert model.max_tokens == 128_000
       assert model.reasoning == true
     end
 
@@ -433,22 +433,9 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.cost.output == 25.0
       assert model.cost.cache_read == 0.5
       assert model.cost.cache_write == 6.25
-      assert model.context_window == 200_000
+      assert model.context_window == 1_000_000
       assert model.max_tokens == 128_000
       assert model.reasoning == true
-    end
-
-    test "claude opus 4.6 thinking has correct specs" do
-      model = Models.get_model(:anthropic, "claude-opus-4-6-thinking")
-
-      assert model.cost.input == 5.0
-      assert model.cost.output == 25.0
-      assert model.cost.cache_read == 0.5
-      assert model.cost.cache_write == 6.25
-      assert model.context_window == 200_000
-      assert model.max_tokens == 128_000
-      assert model.reasoning == true
-      assert model.name == "Claude Opus 4.6 (Thinking)"
     end
 
     test "gemini 3.1 pro preview has correct specs" do
@@ -529,13 +516,91 @@ defmodule LemonAi.ModelsLegacyTest do
     test "gpt 5.4 mini has correct specs" do
       model = Models.get_model(:openai, "gpt-5.4-mini")
 
-      assert model.cost.input == 0.4
-      assert model.cost.output == 3.2
-      assert model.cost.cache_read == 0.04
+      assert model.cost.input == 0.75
+      assert model.cost.output == 4.5
+      assert model.cost.cache_read == 0.075
       assert model.cost.cache_write == 0.0
       assert model.context_window == 400_000
       assert model.max_tokens == 128_000
       assert model.reasoning == true
+    end
+  end
+
+  describe "2026 frontier catalog entries" do
+    # {provider, id, {input, output, cache_read, cache_write}, context_window, max_tokens}
+    @frontier [
+      {:anthropic, "claude-opus-5-5", {4.0, 20.0, 0.2, 5.0}, 1_000_000, 128_000},
+      {:anthropic, "claude-opus-5", {5.0, 25.0, 0.5, 6.25}, 1_000_000, 128_000},
+      {:anthropic, "claude-opus-4-8", {5.0, 25.0, 0.5, 6.25}, 1_000_000, 128_000},
+      {:anthropic, "claude-opus-4-7", {5.0, 25.0, 0.5, 6.25}, 1_000_000, 128_000},
+      {:anthropic, "claude-sonnet-5", {2.0, 10.0, 0.2, 2.5}, 1_000_000, 128_000},
+      {:anthropic, "claude-fable-5-1", {10.0, 50.0, 0.25, 12.5}, 1_000_000, 128_000},
+      {:openai, "gpt-5.5", {5.0, 30.0, 0.5, 0.0}, 1_050_000, 128_000},
+      {:openai, "gpt-5.5-pro", {30.0, 180.0, 0.0, 0.0}, 1_050_000, 128_000},
+      {:openai, "gpt-6-astra", {10.0, 50.0, 1.0, 12.5}, 1_050_000, 128_000}
+    ]
+
+    test "new models carry documented pricing and limits" do
+      for {provider, id, {input, output, cache_read, cache_write}, context, max_tokens} <-
+            @frontier do
+        model = Models.get_model(provider, id)
+        assert %Model{id: ^id, reasoning: true} = model
+        assert model.cost == %ModelCost{
+                 input: input,
+                 output: output,
+                 cache_read: cache_read,
+                 cache_write: cache_write
+               }
+
+        assert model.context_window == context, "#{id} context_window"
+        assert model.max_tokens == max_tokens, "#{id} max_tokens"
+        assert :image in model.input
+      end
+    end
+
+    test "Claude 4.6+ models declare adaptive thinking; older Claude models do not" do
+      for id <- ~w(claude-opus-5-5 claude-opus-5 claude-opus-4-8 claude-opus-4-7
+                   claude-opus-4-6 claude-sonnet-5 claude-sonnet-4-6 claude-fable-5-1) do
+        model = Models.get_model(:anthropic, id)
+        assert model.adaptive_thinking, "#{id} should use adaptive thinking"
+        assert Models.supports_xhigh(model), "#{id} should accept xhigh"
+      end
+
+      for id <- ~w(claude-sonnet-4-5 claude-opus-4-5 claude-haiku-4-5) do
+        model = Models.get_model(:anthropic, id)
+        refute model.adaptive_thinking, "#{id} uses manual thinking budgets"
+        refute Models.supports_xhigh(model)
+      end
+    end
+
+    test "direct gpt-5.5 declares its reasoning efforts" do
+      model = Models.get_model(:openai, "gpt-5.5")
+      assert model.reasoning_efforts == [:low, :medium, :high, :xhigh]
+      assert model.api == :openai_responses
+    end
+
+    test "the retired duplicate-id pseudo model is gone" do
+      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") == nil
+    end
+  end
+
+  describe "reasoning_effort_for/2" do
+    test "keeps declared levels, clamps down to the nearest declared level, else up to the lowest" do
+      model = %Model{reasoning: true, reasoning_efforts: [:low, :medium, :high]}
+
+      assert Models.reasoning_effort_for(model, :medium) == :medium
+      assert Models.reasoning_effort_for(model, :xhigh) == :high
+      assert Models.reasoning_effort_for(model, :minimal) == :low
+
+      pro = %Model{reasoning: true, reasoning_efforts: [:high]}
+      assert Models.reasoning_effort_for(pro, :low) == :high
+    end
+
+    test "passes levels through when the model declares none, and nil stays nil" do
+      model = %Model{reasoning: true}
+      assert Models.reasoning_effort_for(model, :xhigh) == :xhigh
+      assert Models.reasoning_effort_for(model, nil) == nil
+      assert Models.reasoning_effort_for(%Model{reasoning_efforts: [:high]}, nil) == nil
     end
   end
 
@@ -565,7 +630,6 @@ defmodule LemonAi.ModelsLegacyTest do
       assert Models.get_model(:anthropic, "claude-haiku-4-5-20251001") != nil
       assert Models.get_model(:anthropic, "claude-sonnet-4-6") != nil
       assert Models.get_model(:anthropic, "claude-opus-4-6") != nil
-      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") != nil
     end
 
     test "openai flagship models" do
@@ -1112,7 +1176,7 @@ defmodule LemonAi.ModelsLegacyTest do
       assert Models.supports_xhigh(model) == true
     end
 
-    test "returns false for Claude Sonnet models" do
+    test "returns false for manual-budget Claude models" do
       model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
       assert model != nil
       assert Models.supports_xhigh(model) == false

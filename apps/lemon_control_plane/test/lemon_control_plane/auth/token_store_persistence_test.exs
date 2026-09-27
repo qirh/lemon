@@ -30,7 +30,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
   describe "validate/1 with atom keys" do
     test "validates token with atom keys" do
       token = "atom-key-token-#{System.unique_integer([:positive])}"
-      identity = %{"type" => "device", "deviceId" => "dev-123"}
+      identity = %{"type" => "node", "nodeId" => "node-123"}
 
       # Store with atom keys (normal case)
       LemonCore.Store.put(:session_tokens, token, %{
@@ -41,8 +41,8 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       })
 
       {:ok, retrieved_identity} = TokenStore.validate(token)
-      assert retrieved_identity["type"] == "device"
-      assert retrieved_identity["deviceId"] == "dev-123"
+      assert retrieved_identity["type"] == "node"
+      assert retrieved_identity["nodeId"] == "node-123"
     end
 
     test "rejects expired token with atom keys" do
@@ -50,7 +50,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
 
       LemonCore.Store.put(:session_tokens, token, %{
         token: token,
-        identity: %{"type" => "device"},
+        identity: %{"type" => "node"},
         issued_at_ms: System.system_time(:millisecond) - 60_000,
         expires_at_ms: System.system_time(:millisecond) - 1000  # Expired
       })
@@ -85,7 +85,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
 
       LemonCore.Store.put(:session_tokens, token, %{
         "token" => token,
-        "identity" => %{"type" => "device"},
+        "identity" => %{"type" => "node"},
         "issued_at_ms" => System.system_time(:millisecond) - 60_000,
         "expires_at_ms" => System.system_time(:millisecond) - 1000  # Expired
       })
@@ -102,13 +102,13 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       # Mix of atom and string keys (edge case)
       LemonCore.Store.put(:session_tokens, token, %{
         :token => token,
-        "identity" => %{"type" => "device"},
+        "identity" => %{"type" => "node"},
         :issued_at_ms => System.system_time(:millisecond),
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })
 
       {:ok, retrieved_identity} = TokenStore.validate(token)
-      assert retrieved_identity["type"] == "device"
+      assert retrieved_identity["type"] == "node"
     end
   end
 
@@ -119,7 +119,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
         token = "valid-token-#{i}-#{System.unique_integer([:positive])}"
         LemonCore.Store.put(:session_tokens, token, %{
           token: token,
-          identity: %{"type" => "device"},
+          identity: %{"type" => "node"},
           issued_at_ms: System.system_time(:millisecond),
           expires_at_ms: System.system_time(:millisecond) + 60_000
         })
@@ -131,7 +131,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
         token = "expired-token-#{i}-#{System.unique_integer([:positive])}"
         LemonCore.Store.put(:session_tokens, token, %{
           token: token,
-          identity: %{"type" => "device"},
+          identity: %{"type" => "node"},
           issued_at_ms: System.system_time(:millisecond) - 60_000,
           expires_at_ms: System.system_time(:millisecond) - 1000
         })
@@ -158,7 +158,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       token = "not-expired-#{System.unique_integer([:positive])}"
       LemonCore.Store.put(:session_tokens, token, %{
         token: token,
-        identity: %{"type" => "device"},
+        identity: %{"type" => "node"},
         issued_at_ms: System.system_time(:millisecond),
         expires_at_ms: System.system_time(:millisecond) + 60_000
       })
@@ -172,7 +172,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       token = "expired-string-cleanup-#{System.unique_integer([:positive])}"
       LemonCore.Store.put(:session_tokens, token, %{
         "token" => token,
-        "identity" => %{"type" => "device"},
+        "identity" => %{"type" => "node"},
         "issued_at_ms" => System.system_time(:millisecond) - 60_000,
         "expires_at_ms" => System.system_time(:millisecond) - 1000
       })
@@ -241,7 +241,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
       valid_token = "active-string-#{System.unique_integer([:positive])}"
       LemonCore.Store.put(:session_tokens, valid_token, %{
         "token" => valid_token,
-        "identity" => %{"type" => "device"},
+        "identity" => %{"type" => "node"},
         "issued_at_ms" => System.system_time(:millisecond),
         "expires_at_ms" => System.system_time(:millisecond) + 60_000
       })

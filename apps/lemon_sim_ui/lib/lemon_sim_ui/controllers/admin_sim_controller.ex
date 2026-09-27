@@ -3,9 +3,7 @@ defmodule LemonSimUi.AdminSimController do
 
   alias LemonSimUi.SimManager
 
-  @player_count_domains ~w(werewolf stock_market survivor space_station auction diplomacy courtroom startup_incubator intel_network legislature pandemic murder_mystery supply_chain)a
-  @multi_model_domains ~w(werewolf stock_market survivor space_station)a
-  @watchable_domains ~w(werewolf vending_bench tcg_shop)a
+  @watchable_domains ~w(werewolf vending_bench)a
 
   def create(conn, params) do
     with {:ok, domain} <- parse_domain(params["domain"]),
@@ -82,26 +80,7 @@ defmodule LemonSimUi.AdminSimController do
   defp parse_domain(_), do: {:error, :invalid_domain}
 
   defp domain_supported?(domain) do
-    domain in [
-      :tic_tac_toe,
-      :skirmish,
-      :werewolf,
-      :stock_market,
-      :survivor,
-      :space_station,
-      :auction,
-      :diplomacy,
-      :dungeon_crawl,
-      :courtroom,
-      :startup_incubator,
-      :intel_network,
-      :legislature,
-      :pandemic,
-      :murder_mystery,
-      :supply_chain,
-      :vending_bench,
-      :tcg_shop
-    ]
+    domain in [:tic_tac_toe, :werewolf, :vending_bench]
   end
 
   defp build_start_opts(:tic_tac_toe, params) do
@@ -109,24 +88,6 @@ defmodule LemonSimUi.AdminSimController do
      []
      |> maybe_put_string(:sim_id, params["sim_id"])
      |> maybe_put_int(:max_turns, params["max_turns"])}
-  end
-
-  defp build_start_opts(:skirmish, params) do
-    {:ok,
-     []
-     |> maybe_put_string(:sim_id, params["sim_id"])
-     |> maybe_put_int(:max_turns, params["max_turns"])
-     |> maybe_put_int(:rng_seed, params["rng_seed"])
-     |> maybe_put_int(:map_width, params["map_width"])
-     |> maybe_put_int(:map_height, params["map_height"])
-     |> maybe_put_string(:map_preset, params["map_preset"])}
-  end
-
-  defp build_start_opts(:dungeon_crawl, params) do
-    {:ok,
-     []
-     |> maybe_put_string(:sim_id, params["sim_id"])
-     |> maybe_put_int(:party_size, params["party_size"])}
   end
 
   defp build_start_opts(:vending_bench, params) do
@@ -142,17 +103,6 @@ defmodule LemonSimUi.AdminSimController do
      |> maybe_put_string(:worker_model_spec, params["worker_model_spec"])}
   end
 
-  defp build_start_opts(:tcg_shop, params) do
-    {:ok,
-     []
-     |> maybe_put_string(:sim_id, params["sim_id"])
-     |> maybe_put_int(:max_days, params["max_days"])
-     |> maybe_put_int(:max_turns, params["max_turns"])
-     |> maybe_put_int(:driver_max_turns, params["driver_max_turns"])
-     |> maybe_put_string(:operator_model_spec, params["operator_model_spec"])
-     |> maybe_put_model_specs(params["model_specs"])}
-  end
-
   defp build_start_opts(:werewolf, params) do
     with {:ok, sim_id} <- parse_optional_sim_id(params["sim_id"]),
          {:ok, player_count} <- parse_optional_int(params["player_count"], 5..8, 6),
@@ -166,37 +116,6 @@ defmodule LemonSimUi.AdminSimController do
       {:ok, opts}
     end
   end
-
-  defp build_start_opts(domain, params) when domain in @player_count_domains do
-    opts =
-      []
-      |> maybe_put_string(:sim_id, params["sim_id"])
-      |> maybe_put_int(:player_count, params["player_count"])
-
-    opts =
-      if domain in @multi_model_domains do
-        maybe_put_model_specs(opts, params["model_specs"])
-      else
-        opts
-      end
-
-    {:ok, opts}
-  end
-
-  defp build_start_opts(_domain, params) do
-    {:ok, maybe_put_string([], :sim_id, params["sim_id"])}
-  end
-
-  defp maybe_put_model_specs(opts, specs) when is_list(specs) do
-    cleaned =
-      specs
-      |> Enum.map(&normalize_string/1)
-      |> Enum.reject(&is_nil/1)
-
-    if cleaned == [], do: opts, else: Keyword.put(opts, :model_specs, cleaned)
-  end
-
-  defp maybe_put_model_specs(opts, _), do: opts
 
   defp maybe_put_int(opts, _key, nil), do: opts
 

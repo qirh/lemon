@@ -79,6 +79,8 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
+| `lib/lemon_channels/reminders.ex` | `LemonChannels.Reminders` | Channel-agnostic `/remind`, `/reminders`, `/unremind`. `create/2`, `list/1`, `cancel/2` return reply text. Reminders are cron jobs (`timezone: "local"`, `meta["reminder"] = true`) created via `LemonAutomation.CronManager`, resolved at runtime from `:cron_module` opt or `config :lemon_channels, :reminder_cron_module`. The job's `session_key` is the chat's, so cron delivery replies in the originating chat/topic; list/cancel only see reminders whose session key has the same channel/account/peer/thread. |
+| `lib/lemon_channels/reminders/parser.ex` | `LemonChannels.Reminders.Parser` | Pure, deterministic `<when> <what>` parser (injectable `:now`): `in 20m`/`in 1h30m`/`in 3d`, `9am`/`21:15`/`at 9`/`noon`/`midnight`, `tomorrow 9am` (one-shot, pinned `"M H D Mo *"`), `every day`/`every weekday`/`every weekend`/`every monday 8:30`, `every 30m`/`every 2h` (must divide an hour/day). |
 | `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`; submission, cancel, and keepalive preserve explicit errors, while busy checks return `{:ok, boolean()} | {:error, term()}` without soft-success fallbacks |
 
 ### Outbox Pipeline
@@ -135,7 +137,6 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
-| `telegram/fake_api.ex` | In-process fake of `telegram/api.ex` for hermetic transport tests: update queue with real getUpdates offset semantics, `simulate_message`/`simulate_callback_query` builders, outbound-call capture with `sent/0`/`await_send/2`. Select via `[gateway.telegram] api_mod = "LemonChannels.Telegram.FakeAPI"`. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
 | `telegram/known_target_store.ex` | Typed wrapper for Telegram known-target chat/topic metadata. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
@@ -379,8 +380,12 @@ Outbox.stats()
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
 | `/checkpoint` | Preview checkpoint status/events, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
+| `/remind <when> <what>` | Create a reminder via `LemonChannels.Reminders` (server-local time; one-shot or recurring cron job delivered back to this chat/topic) |
+| `/reminders` | List this chat's enabled reminders with ids and next run |
+| `/unremind <id>` | Cancel one of this chat's reminders |
 | `/thinking` | Toggle extended thinking |
-| `/trigger` | Switch `:all` / `:mentions` mode |
+| `/trigger` | Switch `:all` / `:mentions` mode (groups default to `:mentions`) |
+| `/whoami` | Reply with chat/user/topic ids; answered in every chat, before authorization |
 | `/cwd` | Set working directory |
 | `/file` | File put/get operations |
 | `/topic` | Topic management |
@@ -434,7 +439,20 @@ Renders markdown to plain text + Telegram entities (avoids MarkdownV2 escaping):
 # opts is nil or %{entities: [...]}
 ```
 
+### Authorization (fail closed)
+
+`UpdateProcessor.chat_authorization/2` gates messages and callback queries. A
+non-empty `allowed_chat_ids` is authoritative; an empty/missing allowlist means
+the bot is unpaired and every update is dropped (`:unpaired`) unless
+`allow_all_chats: true` is configured. `Pipeline` answers `/whoami` before
+authorization and, for unpaired drops, emits at most one `:send_unpaired_notice`
+per chat per 10 minutes (`RuntimeState.claim_unpaired_notice/3`). Voice
+transcription only runs for authorized chats. `lemon doctor` fails
+`channels.telegram.allowlist` for an enabled, unpaired adapter.
+
 ### TriggerMode
+
+Group/supergroup/channel peers default to `:mentions` (same as Discord).
 
 ```elixir
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}
@@ -466,33 +484,16 @@ LemonChannels.Telegram.TriggerMode.set(scope, account_id, :mentions)
 
 ## Doctor Diagnostics
 
-`LemonChannels.Doctor.Diagnostics` (config diagnostics), `Doctor.Readiness`
-(launch-gate summary), `Doctor.Checks.Channels` (the doctor check) and
-`Doctor.ProofSpec` (the per-channel smoke-proof vocabulary) live here rather
-than in `lemon_core`, which must not name a chat platform. They reach the
-doctor framework through the reference runtime's registrations in
-`config/config.exs`: `:doctor_runtime` keys `channel_diagnostics:`,
-`channel_readiness:` and `channel_proofs:`, plus the `:doctor_checks` list.
-`ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
-or proof check name means editing `ProofSpec`, not core.
+`LemonChannels.Doctor.Diagnostics` provides channel configuration diagnostics,
+and `Doctor.Checks.Channels` registers the Telegram and Discord configuration
+checks with the doctor framework through `:doctor_checks`.
 
-Discord diagnostics also publish a redacted `compatibility_commands` map for
-the generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas.
-Keep those booleans derived from `SlashCommands.slash_commands/0`; the static
-names are release-readiness sentinels, not a second command registry.
+Discord diagnostics publish a redacted `compatibility_commands` map for the
+generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas. Keep
+those booleans derived from `SlashCommands.slash_commands/0`; the static names
+are release-readiness sentinels, not a second command registry.
 
-All of it must stay redacted. Discord DM, free-response, reconnect, slash
-registration, deterministic slash and real client-click gates use
-`Doctor.Diagnostics` plus sanitized `LemonCore.Doctor.ProofDiagnostics`
-status/reason kinds, never raw Discord IDs, message bodies, bot tokens or
-secret names. Free-response checks distinguish a missing local Message Content
-Intent declaration from proof artifacts that still report Message Content
-Intent or unmentioned-message delivery drift after declaration. Slash
-client-click checks preserve stable reason kinds for missing, invalid,
-non-promotable and stale proof artifacts, so doctor and support bundles can
-point operators at the exact wait-mode proof step.
-
-`mix lemon.channels` prints the same redacted readiness summary from the CLI.
+`mix lemon.channels` inspects redacted Telegram and Discord configuration.
 
 ## Gateway Config Sections
 
@@ -649,6 +650,8 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.
 | `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
 | `gateway_config_test.exs` | Config merging |
 | `application_test.exs` | App startup |
+
+`test/support/telegram_fake_api.ex` (`LemonChannels.Telegram.FakeAPI`, compiled only under `MIX_ENV=test`) is an in-process fake of `telegram/api.ex` for hermetic transport tests: update queue with real getUpdates offset semantics, `simulate_message`/`simulate_callback_query` builders, outbound-call capture with `sent/0`/`await_send/2`. Pass it as the transport's `api_mod` (see `telegram/transport_fake_api_test.exs`).
 
 ### Test Patterns
 

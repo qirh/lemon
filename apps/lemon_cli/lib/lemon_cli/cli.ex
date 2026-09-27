@@ -842,53 +842,26 @@ defmodule LemonCli.CLI do
 
       project_dir = opts[:project_dir] || File.cwd!()
 
-      status =
-        :channel_readiness
-        |> LemonCore.Doctor.RuntimeModules.fetch()
-        |> apply(:status, [[project_dir: project_dir]])
+      # lemon_cli does not depend on lemon_channels; the umbrella registers the
+      # diagnostics module under :doctor_runtime.
+      case LemonCore.Doctor.RuntimeModules.fetch(:channel_diagnostics) do
+        nil ->
+          IO.puts(:stderr, "Channel diagnostics are not available in this build.")
+          @exit_error
 
-      if opts[:json] do
-        IO.puts(Jason.encode!(status, pretty: true))
-      else
-        print_channels(status)
+        diagnostics ->
+          status = diagnostics.status(project_dir: project_dir)
+
+          if opts[:json] do
+            IO.puts(Jason.encode!(status, pretty: true))
+          else
+            status |> diagnostics.format_text() |> Enum.each(&IO.puts/1)
+          end
+
+          @exit_ok
       end
-
-      @exit_ok
     end
   end
-
-  defp print_channels(status) do
-    cleanup = Map.get(status, :cleanup, %{})
-
-    IO.puts("Lemon Channels")
-    IO.puts("Status: #{Map.get(status, :status, "unknown")}")
-    IO.puts("Promoted platforms: #{Enum.join(Map.get(status, :promoted_platforms, []), ", ")}")
-    IO.puts("Gates: #{Map.get(status, :gate_count, 0)}")
-    IO.puts("Passed: #{Map.get(status, :passed_count, 0)}")
-    IO.puts("Blocked: #{Map.get(status, :blocked_count, 0)}")
-    IO.puts("Warnings: #{Map.get(status, :warning_count, 0)}")
-    IO.puts("Skipped: #{Map.get(status, :skipped_count, 0)}")
-    IO.puts("Includes raw bot tokens: #{truthy?(cleanup[:includes_raw_bot_tokens])}")
-    IO.puts("Includes secret names: #{truthy?(cleanup[:includes_secret_names])}")
-    IO.puts("Includes chat IDs: #{truthy?(cleanup[:includes_chat_ids])}")
-    IO.puts("Includes channel IDs: #{truthy?(cleanup[:includes_channel_ids])}")
-    IO.puts("Includes message bodies: #{truthy?(cleanup[:includes_message_bodies])}")
-    IO.puts("Includes raw proof paths: #{truthy?(cleanup[:includes_raw_proof_paths])}")
-    IO.puts("Includes raw proof details: #{truthy?(cleanup[:includes_raw_proof_details])}")
-
-    IO.puts("")
-    IO.puts("Launch Gates:")
-
-    status
-    |> Map.get(:gates, [])
-    |> Enum.each(fn gate ->
-      reason = if gate[:reason_kind], do: " reason=#{gate.reason_kind}", else: ""
-      next_action = if gate[:next_action], do: " next=#{gate.next_action}", else: ""
-      IO.puts("  #{gate.id}: #{gate.status} evidence=#{gate.evidence}#{reason}#{next_action}")
-    end)
-  end
-
-  defp truthy?(value), do: if(value, do: "true", else: "false")
 
   # ──────────────────────────────────────────────────────────────────────────
   # backup

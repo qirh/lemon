@@ -57,12 +57,11 @@ defmodule LemonAi.Providers.OpenAICompletions do
   }
 
   alias LemonAi.EventStream
+  alias LemonAi.Providers.RetryHelper
 
   require Logger
 
   @fallback_tool_name "unknown_tool"
-  @max_retries 3
-  @base_retry_delay_ms 400
 
   # ============================================================================
   # Provider Behaviour Implementation
@@ -100,7 +99,10 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
       EventStream.push_async(stream, {:start, output})
 
-      output = stream_request_with_retries(stream, output, url, headers, params)
+      output =
+        stream
+        |> stream_request_with_retries(output, url, headers, params, RetryHelper.policy(), 0)
+        |> with_cost(model)
 
       if output.stop_reason in [:error, :aborted] do
         EventStream.error(stream, output)
@@ -365,7 +367,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
          supports_reasoning_effort: true
        }) do
     if model.reasoning do
-      Map.put(params, "reasoning_effort", to_string(reasoning))
+      effort = LemonAi.Models.reasoning_effort_for(model, reasoning)
+      Map.put(params, "reasoning_effort", to_string(effort))
     else
       params
     end
@@ -860,49 +863,59 @@ defmodule LemonAi.Providers.OpenAICompletions do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request_with_retries(stream, initial_output, url, headers, params, attempt \\ 0) do
+  defp stream_request_with_retries(stream, initial_output, url, headers, params, policy, attempt) do
+    retry = fn ->
+      stream_request_with_retries(stream, initial_output, url, headers, params, policy, attempt + 1)
+    end
+
     case stream_request(url, headers, params) do
       {:ok, response} ->
         cond do
           response.status in 200..299 ->
             output = process_sse_stream(stream, initial_output, response)
 
-            if attempt < @max_retries and retryable_stream_output_error?(output) do
-              Process.sleep(retry_delay_ms(attempt, output.error_message))
-
-              stream_request_with_retries(
-                stream,
-                initial_output,
-                url,
-                headers,
-                params,
-                attempt + 1
-              )
+            if RetryHelper.retry_allowed?(attempt, policy) and
+                 retryable_stream_output_error?(output) do
+              RetryHelper.sleep(retry_delay_ms(attempt, policy, output.error_message))
+              retry.()
             else
               output
             end
 
-          attempt < @max_retries and
-              LemonAi.Providers.RetryHelper.retryable_http_status?(response.status) ->
-            Process.sleep(retry_delay_ms(attempt, response))
-            stream_request_with_retries(stream, initial_output, url, headers, params, attempt + 1)
-
           true ->
             error_body = materialize_response_body(response)
-            error = LemonAi.Error.parse_http_error(response.status, error_body, response.headers)
 
-            %{
-              initial_output
-              | stop_reason: :error,
-                error_message: error.message
-            }
+            retry_delay =
+              if RetryHelper.retry_allowed?(attempt, policy) and
+                   RetryHelper.retryable_http_status?(response.status) do
+                http_retry_delay_ms(attempt, policy, error_body, response.headers)
+              else
+                :give_up
+              end
+
+            case retry_delay do
+              :give_up ->
+                error =
+                  LemonAi.Error.parse_http_error(response.status, error_body, response.headers)
+
+                %{
+                  initial_output
+                  | stop_reason: :error,
+                    error_message: error.message,
+                    retry_after_ms: RetryHelper.retry_after_ms(response.headers)
+                }
+
+              delay_ms ->
+                RetryHelper.sleep(delay_ms)
+                retry.()
+            end
         end
 
       {:error, %Req.TransportError{reason: reason} = error} ->
-        if attempt < @max_retries and
-             LemonAi.Providers.RetryHelper.retryable_transport_error?(error) do
-          Process.sleep(retry_delay_ms(attempt))
-          stream_request_with_retries(stream, initial_output, url, headers, params, attempt + 1)
+        if RetryHelper.retry_allowed?(attempt, policy) and
+             RetryHelper.retryable_transport_error?(error) do
+          RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+          retry.()
         else
           %{
             initial_output
@@ -915,6 +928,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
         %{initial_output | stop_reason: :error, error_message: "Request error: #{inspect(error)}"}
     end
   end
+
+  defp with_cost(%AssistantMessage{usage: %Usage{} = usage} = output, model) do
+    %{output | usage: %{usage | cost: LemonAi.calculate_cost(model, usage)}}
+  end
+
+  defp with_cost(output, _model), do: output
 
   defp stream_request(url, headers, params) do
     Req.new(
@@ -1075,25 +1094,21 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp process_sse_line(_stream, state, _line), do: state
 
-  defp retry_delay_ms(attempt) when is_integer(attempt) and attempt >= 0 do
-    LemonAi.Providers.RetryHelper.exponential_backoff_with_jitter(@base_retry_delay_ms, attempt)
+  # A server retry hint (headers or body text) wins over backoff; a hint longer
+  # than the policy allows ends in-provider retries.
+  defp http_retry_delay_ms(attempt, policy, error_body, headers) do
+    error_text = extract_error_message(error_body)
+
+    case RetryHelper.extract_retry_delay_ms(error_text, headers) do
+      nil -> RetryHelper.backoff_delay_ms(attempt, policy)
+      ms when ms > policy.max_retry_after_ms -> :give_up
+      ms -> ms
+    end
   end
 
-  defp retry_delay_ms(attempt, %Req.Response{} = response) do
-    error_text =
-      response
-      |> materialize_response_body()
-      |> extract_error_message()
-
-    LemonAi.Providers.RetryHelper.extract_retry_delay_ms(error_text, response.headers) ||
-      retry_delay_ms(attempt)
+  defp retry_delay_ms(attempt, policy, error_text) when is_binary(error_text) do
+    RetryHelper.extract_retry_delay_ms(error_text) || RetryHelper.backoff_delay_ms(attempt, policy)
   end
-
-  defp retry_delay_ms(attempt, error_text) when is_binary(error_text) do
-    LemonAi.Providers.RetryHelper.extract_retry_delay_ms(error_text) || retry_delay_ms(attempt)
-  end
-
-  defp retry_delay_ms(attempt, _), do: retry_delay_ms(attempt)
 
   defp retryable_stream_output_error?(
          %AssistantMessage{

@@ -9,21 +9,7 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
   # LemonSim.Examples.Rendering.DomainVideoGenerator, so they all expose the same
   # generate/2 and check_dependencies/0 interface.
   @generators %{
-    "skirmish" => LemonSim.Examples.Skirmish.VideoGenerator,
-    "auction" => LemonSim.Examples.Auction.VideoGenerator,
-    "courtroom" => LemonSim.Examples.Courtroom.VideoGenerator,
-    "diplomacy" => LemonSim.Examples.Diplomacy.VideoGenerator,
-    "dungeon_crawl" => LemonSim.Examples.DungeonCrawl.VideoGenerator,
-    "intel_network" => LemonSim.Examples.IntelNetwork.VideoGenerator,
-    "legislature" => LemonSim.Examples.Legislature.VideoGenerator,
-    "murder_mystery" => LemonSim.Examples.MurderMystery.VideoGenerator,
-    "pandemic" => LemonSim.Examples.Pandemic.VideoGenerator,
     "poker" => LemonSim.Examples.Poker.VideoGenerator,
-    "space_station" => LemonSim.Examples.SpaceStation.VideoGenerator,
-    "startup_incubator" => LemonSim.Examples.StartupIncubator.VideoGenerator,
-    "stock_market" => LemonSim.Examples.StockMarket.VideoGenerator,
-    "supply_chain" => LemonSim.Examples.SupplyChain.VideoGenerator,
-    "survivor" => LemonSim.Examples.Survivor.VideoGenerator,
     "werewolf" => LemonSim.Examples.Werewolf.VideoGenerator
   }
 
@@ -38,15 +24,9 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
 
       mix lemon.sim.replay <scenario> path/to/game.jsonl [options]
 
-  A single positional argument is treated as a skirmish log for backwards
-  compatibility (`mix lemon.sim.replay path/to/game.jsonl`).
-
   ## Scenarios
 
-  `skirmish`, `auction`, `courtroom`, `diplomacy`, `dungeon_crawl`,
-  `intel_network`, `legislature`, `murder_mystery`, `pandemic`, `poker`,
-  `space_station`, `startup_incubator`, `stock_market`, `supply_chain`,
-  `survivor`, `werewolf`.
+  `poker`, `werewolf`.
 
   ## Options
 
@@ -62,7 +42,6 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
 
       mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
       mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
-      mix lemon.sim.replay priv/game_logs/abc123.jsonl   # skirmish (back-compat)
 
   ## Requirements
 
@@ -99,15 +78,17 @@ defmodule Mix.Tasks.Lemon.Sim.Replay do
     end
   end
 
-  # Two positionals: <scenario> <log>. One positional: back-compat skirmish log,
-  # unless it is a bare scenario name (then the log path is missing).
+  # Two positionals: <scenario> <log>. A bare scenario name means the log path
+  # is missing.
   defp parse_positionals([scenario, log_path | _]), do: {scenario, log_path}
 
   defp parse_positionals([only]) do
     if Map.has_key?(@generators, only) do
       Mix.raise("missing log path\n\nUsage: mix lemon.sim.replay #{only} path/to/game.jsonl")
     else
-      {"skirmish", only}
+      Mix.raise(
+        "missing scenario\n\nUsage: mix lemon.sim.replay <scenario> path/to/game.jsonl\n\nScenarios: #{scenarios_list()}"
+      )
     end
   end
 

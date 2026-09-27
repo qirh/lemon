@@ -6,12 +6,15 @@ defmodule LemonSim.Examples.Poker do
   alias LemonAgent.Types.AgentTool
   alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
+  alias LemonSim.Bench.Artifacts.Replay.Recorder
   alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Poker.{
     ActionSpace,
+    Artifacts,
     DecisionAdapter,
     Events,
+    OfflineRunner,
     Performance,
     ToolPolicy,
     Updater
@@ -65,6 +68,7 @@ defmodule LemonSim.Examples.Poker do
       winner_ids: [],
       game_over_reason: nil,
       current_actor_id: current_actor_id,
+      active_actor_id: current_actor_id,
       current_seat: current_seat,
       completed_hands: 0,
       max_hands: max_hands,
@@ -240,11 +244,16 @@ defmodule LemonSim.Examples.Poker do
     _model_assignments = Keyword.fetch!(opts, :model_assignments)
     state = initial_state(opts)
 
-    state =
-      State.put_world(state, %{
-        active_actor_id: MapHelpers.get_key(state.world, :current_actor_id)
-      })
+    Recorder.with_bundle(
+      state,
+      opts,
+      Artifacts.replay_config(state),
+      &Artifacts.write_run_artifacts/4,
+      &run_multi_model_state(state, &1)
+    )
+  end
 
+  defp run_multi_model_state(state, opts) do
     default_opts_fn = fn overrides ->
       default_opts(Keyword.merge(opts, overrides))
     end
@@ -300,10 +309,39 @@ defmodule LemonSim.Examples.Poker do
     end
   end
 
+  @doc """
+  Runs single-model self-play. With `:artifact_dir`, the run is recorded and
+  written as a replay-verifiable bundle.
+  """
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
     state = initial_state(opts)
-    run_opts = Keyword.merge(default_opts(opts), opts)
+
+    Recorder.with_bundle(
+      state,
+      opts,
+      Artifacts.replay_config(state),
+      &Artifacts.write_run_artifacts/4,
+      &run_state(state, &1)
+    )
+  end
+
+  @doc """
+  Runs keyless self-play where every seat uses a deterministic offline
+  strategy (`"heuristic"`), writing a replay-verifiable bundle.
+  """
+  @spec run_offline_strategy(String.t() | atom(), keyword()) ::
+          {:ok, %{state: State.t(), artifacts: map(), steps: non_neg_integer()}}
+          | {:error, term()}
+  def run_offline_strategy(strategy, opts \\ []),
+    do: OfflineRunner.run_strategy(strategy, opts)
+
+  defp run_state(state, opts) do
+    run_opts =
+      opts
+      |> default_opts()
+      |> Keyword.merge(opts)
+      |> Recorder.wrap_opts(Keyword.get(opts, :replay_recorder))
 
     IO.puts("Starting Poker self-play")
 
@@ -331,7 +369,13 @@ defmodule LemonSim.Examples.Poker do
     end
   end
 
-  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) == "game_over"
+  @terminal_statuses ["game_over"]
+
+  @doc "World `:status` values that end a Poker session."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in @terminal_statuses
 
   defp announce_turn(turn, state) do
     table = MapHelpers.get_key(state.world, :table)

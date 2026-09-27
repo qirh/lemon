@@ -4,7 +4,7 @@ defmodule LemonControlPlane.Presence do
 
   Tracks all connected WebSocket clients and provides:
   - Connection registration/unregistration
-  - Role-based counting (operators, nodes, devices)
+  - Role-based counting (operators, nodes)
   - Client lookup by connection ID
   - Broadcasting events to all connected clients
   """
@@ -64,7 +64,7 @@ defmodule LemonControlPlane.Presence do
   @doc """
   Returns counts by role.
   """
-  @spec counts() :: %{total: integer(), operators: integer(), nodes: integer(), devices: integer()}
+  @spec counts() :: %{total: integer(), operators: integer(), nodes: integer()}
   def counts do
     GenServer.call(__MODULE__, :counts)
   end
@@ -144,13 +144,12 @@ defmodule LemonControlPlane.Presence do
     clients = :ets.tab2list(state.table)
 
     counts =
-      Enum.reduce(clients, %{total: 0, operators: 0, nodes: 0, devices: 0}, fn {_id, info}, acc ->
+      Enum.reduce(clients, %{total: 0, operators: 0, nodes: 0}, fn {_id, info}, acc ->
         acc = %{acc | total: acc.total + 1}
 
         case info.role do
           :operator -> %{acc | operators: acc.operators + 1}
           :node -> %{acc | nodes: acc.nodes + 1}
-          :device -> %{acc | devices: acc.devices + 1}
           _ -> acc
         end
       end)

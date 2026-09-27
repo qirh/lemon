@@ -112,9 +112,8 @@ defmodule LemonSimUi.Live.Components.SpectatorChrome do
   Renders the "LIVE FEED" footer panel (icon + title + scrollable event
   log). `wrapper_class`/`body_class` are passed through verbatim because the
   panel sits in two different parent layouts: a `flex-shrink-0`, fixed-height
-  footer inside a `flex flex-col overflow-hidden` page (space_station,
-  stock_market, survivor, werewolf), or a plain block at the bottom of a
-  scrolling page (poker).
+  footer inside a `flex flex-col overflow-hidden` page (werewolf), or a plain
+  block at the bottom of a scrolling page (poker).
   """
   attr(:events, :list, required: true)
   attr(:wrapper_class, :string, required: true)

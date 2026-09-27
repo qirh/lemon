@@ -89,7 +89,9 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Meetings do
   defp build_meeting_pairs(requests, living_ids) do
     mutual =
       requests
-      |> Enum.filter(fn {a, b} -> Map.get(requests, b) == a and a < b end)
+      |> Enum.filter(fn {a, b} ->
+        Map.get(requests, b) == a and a < b and a in living_ids and b in living_ids
+      end)
       |> Enum.map(fn {a, b} -> [a, b] end)
 
     mutually_paired = mutual |> List.flatten() |> MapSet.new()

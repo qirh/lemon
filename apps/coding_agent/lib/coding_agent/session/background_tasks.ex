@@ -6,9 +6,7 @@ defmodule CodingAgent.Session.BackgroundTasks do
   alias CodingAgent.SessionManager.SessionEntry
 
   @type callbacks(state) :: %{
-          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
-          required(:ui_set_working_message) => (state, String.t() | nil -> :ok),
-          required(:ui_notify) => (state, String.t(), CodingAgent.UI.notify_type() -> :ok)
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok)
         }
 
   @spec flush_queued_agent_events() :: :ok
@@ -97,18 +95,12 @@ defmodule CodingAgent.Session.BackgroundTasks do
     if Enum.empty?(message_entries) do
       {:error, :empty_branch, state}
     else
-      callbacks.ui_set_working_message.(state, "Summarizing branch...")
-
       case CodingAgent.Compaction.generate_branch_summary(branch_entries, state.model, opts) do
         {:ok, summary} ->
           from_id = SessionManager.get_leaf_id(state.session_manager)
-          new_state = store_branch_summary(state, from_id, summary, callbacks)
-          callbacks.ui_set_working_message.(new_state, nil)
-          {:ok, new_state}
+          {:ok, store_branch_summary(state, from_id, summary, callbacks)}
 
         {:error, reason} ->
-          callbacks.ui_set_working_message.(state, nil)
-          callbacks.ui_notify.(state, "Branch summarization failed: #{inspect(reason)}", :error)
           {:error, reason, state}
       end
     end

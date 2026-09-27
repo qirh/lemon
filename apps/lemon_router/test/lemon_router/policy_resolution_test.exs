@@ -188,39 +188,38 @@ defmodule LemonRouter.PolicyResolutionTest do
   end
 
   describe "resolve_for_run/1 with channel origin" do
-    test "adds group restrictions for group peer_kind" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:telegram:bot:123:group:456",
-        origin: :channel,
-        channel_context: %{
-          channel_id: "telegram",
-          peer_kind: :group
-        }
-      })
+    test "requires approval for every mutating tool in groups" do
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:telegram:bot:123:group:456",
+          origin: :channel,
+          channel_context: %{
+            channel_id: "telegram",
+            peer_kind: :group
+          }
+        })
 
-      # Groups should have stricter policies
-      assert is_map(result)
-      # The group policy adds approvals requirements
-      if result[:approvals] do
-        # If approvals are set, bash should require approval
-        assert result.approvals["bash"] == :always
+      for tool <- ~w(bash write edit patch hashline_edit) do
+        assert Policy.approval_required?(result, tool) == :always
       end
+
+      assert Policy.approval_required?(result, "read") == :default
     end
 
     test "no group restrictions for dm peer_kind" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:telegram:bot:123:dm:456",
-        origin: :channel,
-        channel_context: %{
-          channel_id: "telegram",
-          peer_kind: :dm
-        }
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:telegram:bot:123:dm:456",
+          origin: :channel,
+          channel_context: %{
+            channel_id: "telegram",
+            peer_kind: :dm
+          }
+        })
 
-      # DMs don't have the automatic group restrictions
-      assert is_map(result)
+      assert Policy.approval_required?(result, "bash") == :default
     end
   end
 end

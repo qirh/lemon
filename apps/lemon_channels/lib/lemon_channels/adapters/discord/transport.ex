@@ -2529,143 +2529,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp safe_interaction_response(interaction, payload) do
-    result =
-      case Application.get_env(:lemon_channels, :discord_interaction_responder) do
-        responder when is_function(responder, 2) -> responder.(interaction, payload)
-        {mod, fun} when is_atom(mod) and is_atom(fun) -> apply(mod, fun, [interaction, payload])
-        _ -> Interaction.create_response(interaction, payload)
-      end
-
-    record_slash_client_click_proof(interaction, payload, :completed)
-    result
+    case Application.get_env(:lemon_channels, :discord_interaction_responder) do
+      responder when is_function(responder, 2) -> responder.(interaction, payload)
+      {mod, fun} when is_atom(mod) and is_atom(fun) -> apply(mod, fun, [interaction, payload])
+      _ -> Interaction.create_response(interaction, payload)
+    end
   rescue
     error ->
-      record_slash_client_click_proof(interaction, payload, :failed)
       Logger.warning("discord interaction response failed: #{inspect(error)}")
       :ok
   end
-
-  defp record_slash_client_click_proof(interaction, payload, status) do
-    if real_slash_client_interaction?(interaction) do
-      now = DateTime.utc_now()
-      command = interaction |> map_get(:data) |> map_get(:name) |> safe_proof_value("unknown")
-      response_type = map_get(payload, :type)
-      safe_mentions = safe_interaction_mentions?(payload)
-      completed_count = if status == :completed and safe_mentions, do: 2, else: 1
-      failed_count = if status == :completed and safe_mentions, do: 0, else: 1
-
-      proof = %{
-        proof: "discord_slash_client_click",
-        proof_object: "lemon.discord_slash_client_click",
-        proof_scope: "discord_slash_client_click_observed",
-        status: if(failed_count == 0, do: "completed", else: "failed"),
-        completed_count: completed_count,
-        failed_count: failed_count,
-        skipped_count: 0,
-        generated_at: DateTime.to_iso8601(now),
-        coverage: %{
-          registered_command_count: length(slash_commands()),
-          client_click_command_count: 1,
-          real_client_click_proof: failed_count == 0
-        },
-        checks: [
-          %{
-            name: "discord_slash_client_click_observed",
-            status: "completed",
-            proof_scope: "discord slash client click observed"
-          },
-          %{
-            name: "discord_slash_client_click_safe_mentions",
-            status: if(safe_mentions, do: "completed", else: "failed"),
-            proof_scope: "discord slash client click observed"
-          }
-        ],
-        details: %{
-          command: command,
-          interaction_type: map_get(interaction, :type),
-          response_type: response_type,
-          ephemeral_response: ephemeral_response?(payload),
-          safe_mentions_disabled: safe_mentions,
-          live_fields: %{
-            application_id_present: present?(map_get(interaction, :application_id)),
-            token_present: present?(map_get(interaction, :token)),
-            member_present: present?(map_get(interaction, :member)),
-            user_present: present?(map_get(interaction, :user))
-          }
-        },
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_raw_interaction_tokens: false,
-          includes_raw_application_ids: false,
-          includes_raw_channel_ids: false,
-          includes_raw_user_ids: false,
-          includes_raw_message_bodies: false
-        }
-      }
-
-      write_slash_client_click_proof(proof, now)
-    end
-  rescue
-    error ->
-      Logger.debug("discord slash client-click proof write failed: #{inspect(error)}")
-      :ok
-  end
-
-  defp real_slash_client_interaction?(interaction) do
-    map_get(interaction, :type) == 2 and
-      present?(map_get(interaction, :application_id)) and
-      present?(map_get(interaction, :token))
-  end
-
-  defp write_slash_client_click_proof(proof, now) do
-    dir =
-      Application.get_env(
-        :lemon_channels,
-        :discord_client_click_proof_dir,
-        Path.join([File.cwd!(), ".lemon", "proofs"])
-      )
-
-    File.mkdir_p!(dir)
-    json = Jason.encode!(proof, pretty: true)
-    latest = Path.join(dir, "discord-slash-client-click-proof-latest.json")
-
-    archive =
-      Path.join(
-        dir,
-        "discord-slash-client-click-proof-" <>
-          (now |> DateTime.to_iso8601() |> String.replace(~r/[:.]/, "-")) <> ".json"
-      )
-
-    File.write!(latest, json <> "\n")
-    File.write!(archive, json <> "\n")
-    :ok
-  end
-
-  defp safe_interaction_mentions?(%{data: data}) when is_map(data) do
-    case map_get(data, :allowed_mentions) do
-      %{parse: [], replied_user: false} -> true
-      %{"parse" => [], "replied_user" => false} -> true
-      _ -> false
-    end
-  end
-
-  defp safe_interaction_mentions?(%{type: 6}), do: true
-  defp safe_interaction_mentions?(_), do: false
-
-  defp ephemeral_response?(payload) do
-    flags =
-      payload
-      |> map_get(:data)
-      |> map_get(:flags)
-
-    is_integer(flags) and Bitwise.band(flags, 64) == 64
-  end
-
-  defp safe_proof_value(value, default) when is_binary(value) do
-    if String.match?(value, ~r/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/), do: value, else: default
-  end
-
-  defp safe_proof_value(_value, default), do: default
 
   defp send_followup(interaction, content) do
     token = map_get(interaction, :token)
@@ -3200,10 +3073,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp map_get(_, _), do: nil
-
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present?(nil), do: false
-  defp present?(_), do: true
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)

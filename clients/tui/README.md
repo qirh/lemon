@@ -39,9 +39,19 @@ remains a legacy client-side alias; it does not configure the daemon.
 
 - Streaming markdown transcript committed to native terminal scrollback
   mid-stream (pi-tui `FinalizableBlock` seam), 30fps grapheme-safe reveal.
-- Tool cards with per-tool formatters (bash, read, edit + diffs, grep, write,
-  patch, find/glob/ls, web, todo, task, process), lifecycle states, shelf
-  merging of consecutive completed tools, and collapsible reasoning sections.
+- Tool cards with per-tool formatters for Lemon's native tools (read, write,
+  edit, patch, bash incl. background runs / `bash_output` / `kill_process`,
+  grep, find, ls, todo, task/agent, `browser_*`, webfetch/websearch; anything
+  else gets a generic card), lifecycle states, and shelf merging of
+  consecutive completed tools. Operator clients receive each tool's bounded
+  full result (~32 KB) and structured details, so edits render the tool's own
+  diff with real file line numbers. Against an older daemon that only sends
+  500-char previews, cards fall back to the preview and to unnumbered diffs.
+- The model's thinking is its own dimmed transcript block, collapsed to its
+  first line (up to 16 KB of reasoning is available when expanded).
+- Ctrl+R expands/collapses the latest tool card or thinking block (a merged
+  shelf line opens into a full card); Ctrl+T cycles detail for the whole
+  transcript: collapsed → expanded → per-kind default.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown).
 - Four submission modes while the agent is busy: `queue` (client-side,
@@ -99,7 +109,7 @@ and control plane authoritative:
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compress` | Compact the current session through `sessions.compact`. |
-| `/heartbeat every 10m <prompt>`, `/hb ...` | Persist one recurring prompt in the current conversation; `/heartbeat status`, `pause`, `resume`, and `clear` manage it through `sessions.heartbeat`. Due ticks wait for idle and queued user input wins. |
+| `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
 | `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |
 | `/bg list [status]` | List durable background runs, optionally filtered by lifecycle status. |
 | `/bg status <id>` | Inspect one background run without truncating its id. |
@@ -185,8 +195,8 @@ scripts/         build-binary.ts (bun --compile, per-platform artifacts)
 ### Render-contract notes
 
 pi-tui's append-only scrollback contract is unforgiving; before editing
-components read `~/dev/oh-my-pi/docs/tui-core-renderer.md` (or the pi-tui
-README) and keep to the house rules: return the same array reference from
+components read the [pi-tui README](https://www.npmjs.com/package/@oh-my-pi/pi-tui)
+and keep to the house rules: return the same array reference from
 `render(width)` when unchanged; never exceed `width` (measure with
 `visibleWidth`, never `.length`); never declare a settled row that could
 still change; animate via `requestComponentRender` only; `initTheme()`

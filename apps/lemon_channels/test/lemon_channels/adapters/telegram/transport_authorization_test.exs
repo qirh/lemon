@@ -62,7 +62,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
       end
     end
 
-    def send_message(_token, _chat_id, _text, _reply_to_or_opts \\ nil, _parse_mode \\ nil) do
+    def send_message(_token, chat_id, text, _reply_to_or_opts \\ nil, _parse_mode \\ nil) do
+      if pid = :persistent_term.get(@pid_key, nil) do
+        send(pid, {:send_message, chat_id, text})
+      end
+
       {:ok, %{"ok" => true, "result" => %{"message_id" => System.unique_integer([:positive])}}}
     end
 
@@ -111,6 +115,77 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     end)
 
     :ok
+  end
+
+  test "unpaired bot drops DMs from any chat and tells the chat once how to pair" do
+    chat_id = 100_010
+
+    AuthMockAPI.set_updates([
+      message_update(chat_id, "run rm -rf ~"),
+      message_update(chat_id, "second attempt")
+    ])
+
+    assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil})
+
+    assert_receive {:send_message, ^chat_id, notice}, 400
+    assert notice =~ "This bot is not paired."
+    assert notice =~ "lemon gateway setup telegram"
+
+    refute_receive {:inbound, _msg}, 250
+    refute_receive {:send_message, ^chat_id, _second_notice}, 100
+  end
+
+  test "an empty allowlist is unpaired, not open" do
+    chat_id = 100_011
+    AuthMockAPI.set_updates([message_update(chat_id, "hello")])
+
+    assert {:ok, _pid} = start_transport(%{allowed_chat_ids: []})
+
+    assert_receive {:send_message, ^chat_id, notice}, 400
+    assert notice =~ "not paired"
+    refute_receive {:inbound, _msg}, 250
+  end
+
+  test "/whoami answers with chat and user ids while unpaired and never reaches the router" do
+    chat_id = 100_012
+    AuthMockAPI.set_updates([message_update(chat_id, "/whoami")])
+
+    assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil})
+
+    assert_receive {:send_message, ^chat_id, reply}, 400
+    assert reply =~ "chat_id: #{chat_id}"
+    assert reply =~ "user_id: 99"
+    refute reply =~ "not paired"
+    refute_receive {:inbound, _msg}, 250
+  end
+
+  test "allow_all_chats = true explicitly opts an unpaired bot into every chat" do
+    chat_id = 100_013
+    AuthMockAPI.set_updates([message_update(chat_id, "hello from anyone")])
+
+    assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil, allow_all_chats: true})
+
+    assert_receive {:inbound, msg}, 400
+    assert msg.message.text == "hello from anyone"
+  end
+
+  test "a non-empty allowlist wins over allow_all_chats" do
+    chat_id = 100_014
+    AuthMockAPI.set_updates([message_update(chat_id, "hello from stranger")])
+
+    assert {:ok, _pid} =
+             start_transport(%{allowed_chat_ids: [chat_id + 1], allow_all_chats: true})
+
+    refute_receive {:inbound, _msg}, 250
+  end
+
+  test "unpaired bot ignores callback queries" do
+    chat_id = 200_010
+    AuthMockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
+
+    assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil})
+
+    refute_receive {:answer_callback, _cb_id, _opts}, 250
   end
 
   test "drops message updates when chat is not in allowed_chat_ids" do

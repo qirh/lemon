@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Lemon.Memory do
 
   - **run_history.sqlite3** — full run data (messages, events, tool calls).
     Used for session replay and compaction. Managed by
-    `LemonCore.RunHistoryStore`. Use `mix lemon.cleanup` to prune old runs.
+    `LemonCore.RunHistoryStore`.
 
   Erasing memory documents does not affect run history, and vice versa.
   """

@@ -13,8 +13,12 @@ defmodule LemonNew.GeneratorTest do
   end
 
   defp generate(tmp, opts \\ []) do
-    project =
-      Project.new(Path.join(tmp, "my_agent"), Keyword.put_new(opts, :lemon_path, @lemon_path))
+    opts =
+      if Keyword.has_key?(opts, :packages_path),
+        do: opts,
+        else: Keyword.put_new(opts, :lemon_path, @lemon_path)
+
+    project = Project.new(Path.join(tmp, "my_agent"), opts)
 
     {project, Generator.copy(project)}
   end
@@ -62,14 +66,33 @@ defmodule LemonNew.GeneratorTest do
     assert mix_exs =~ ~s({:lemon_agent, path: "#{@lemon_path}/apps/lemon_agent"})
   end
 
-  test "keeps the eventual hex names alongside the path deps", %{tmp: tmp} do
-    {project, _} = generate(tmp)
-    mix_exs = read(project, "mix.exs")
+  describe "with --packages-path" do
+    @packages_path "/tmp/unpacked"
 
-    # The two packages whose hex name differs from the application name are the
-    # ones most likely to be mistyped, so the generated file spells them out.
-    assert mix_exs =~ ~s(# {:lemon_ai, "~> 0.1", hex: :lemon_ai})
-    assert mix_exs =~ ~s(# {:lemon_agent, "~> 0.1", hex: :lemon_agent})
+    test "points every platform dep at the unpacked packages and overrides", %{tmp: tmp} do
+      {project, _} = generate(tmp, packages_path: @packages_path, memory: true)
+      mix_exs = read(project, "mix.exs")
+
+      # The unpacked packages declare their siblings as hex requirements, so
+      # without override: true Mix would report the path and hex deps diverged.
+      for pkg <- ~w(lemon_core lemon_ai lemon_agent lemon_memory) do
+        assert mix_exs =~ ~s({:#{pkg}, path: "#{@packages_path}/#{pkg}", override: true})
+      end
+
+      refute mix_exs =~ "/apps/"
+    end
+
+    test "cannot generate the channel adapter", %{tmp: tmp} do
+      assert_raise ArgumentError, ~r/lemon_channels, which is not a published package/, fn ->
+        generate(tmp, packages_path: @packages_path, channel: true)
+      end
+    end
+
+    test "is mutually exclusive with a lemon checkout", %{tmp: tmp} do
+      assert_raise ArgumentError, ~r/mutually exclusive/, fn ->
+        generate(tmp, packages_path: @packages_path, lemon_path: @lemon_path)
+      end
+    end
   end
 
   describe "without --channel" do

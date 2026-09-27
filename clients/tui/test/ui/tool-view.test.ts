@@ -1,11 +1,10 @@
 /**
- * The protocol → formatter translation table.
+ * The protocol → formatter adapter.
  *
- * Every engine adapter puts its own keys in `action.detail` and nothing in the
- * Elixir pipeline normalises them, so these cases pin the mapping for each
- * dialect the daemon can emit. If a formatter stops receiving what it expects,
- * a card renders placeholder noise instead of the tool's output — and that
- * failure is silent, which is exactly what these tests exist to catch.
+ * `action.detail` is the native engine's shape (`name`, `args`, `result`,
+ * `details`, `result_meta`, `partial_result`). These cases pin how it reaches
+ * the formatters and the diff renderer — including the fallback for a server
+ * that predates structured details and sends only a 500-char `result` preview.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -19,10 +18,9 @@ import {
 	buildToolView,
 	extractToolDiff,
 	isToolError,
-	normalizeToolArgs,
-	normalizeToolName,
 	normalizeToolResult,
 	resolveToolName,
+	serverDiffToRows,
 	stripUnifiedHeaders,
 	toolArgs,
 	toolCardState,
@@ -62,102 +60,43 @@ function block(
 	);
 }
 
-describe("tool name resolution", () => {
-	test("reads each engine's own name key", () => {
-		expect(resolveToolName(block({ detail: { name: "Bash" } }))).toBe("bash");
-		expect(resolveToolName(block({ detail: { tool_name: "read" } }))).toBe("read");
-		expect(resolveToolName(block({ detail: { tool: "list_issues", server: "sentry" } }))).toBe(
-			"listissues",
-		);
+describe("tool name and arguments", () => {
+	test("the tool name is detail.name, or the one an error path recorded", () => {
+		expect(resolveToolName(block({ detail: { name: "bash" } }))).toBe("bash");
 		expect(resolveToolName(block({ detail: { result_meta: { tool_name: "grep" } } }))).toBe("grep");
-	});
-
-	test("falls back to the action kind when no engine reported a name", () => {
-		// Codex opens shell calls with no detail at all.
-		expect(resolveToolName(block({ kind: "command" }))).toBe("bash");
-		expect(resolveToolName(block({ kind: "subagent" }))).toBe("task");
-		expect(resolveToolName(block({ kind: "file_change" }))).toBe("edit");
-		expect(resolveToolName(block({ kind: "web_search" }))).toBe("websearch");
-		expect(
-			resolveToolName(block({ kind: "web_search", detail: { args: { url: "https://x" } } })),
-		).toBe("webfetch");
 		expect(resolveToolName(block({ kind: "note" }))).toBeUndefined();
 	});
 
-	test("normalizes casing, separators and known synonyms", () => {
-		expect(normalizeToolName("Web_Search")).toBe("websearch");
-		expect(normalizeToolName("MultiEdit")).toBe("multiedit");
-		expect(normalizeToolName("read_file")).toBe("read");
-		expect(normalizeToolName("Shell")).toBe("bash");
-		expect(normalizeToolName("Agent")).toBe("task");
-	});
-});
-
-describe("argument extraction", () => {
-	test("finds the argument map under every engine's key", () => {
-		expect(toolArgs(block({ detail: { input: { a: 1 } } }))).toEqual({ a: 1 });
-		expect(toolArgs(block({ detail: { args: { a: 2 } } }))).toEqual({ a: 2 });
-		expect(toolArgs(block({ detail: { arguments: { a: 3 } } }))).toEqual({ a: 3 });
-		expect(toolArgs(block({}))).toEqual({});
-	});
-
-	test("fills the canonical alias the formatters read, keeping the original", () => {
-		const args = normalizeToolArgs({
-			file_path: "/tmp/x.ts",
-			old_string: "a",
-			new_string: "b",
-			cmd: "ls",
-			patch: "@@",
+	test("arguments are detail.args, passed through untouched", () => {
+		expect(toolArgs(block({ detail: { args: { path: "a.ts", limit: 3 } } }))).toEqual({
+			path: "a.ts",
+			limit: 3,
 		});
-		expect(args.path).toBe("/tmp/x.ts");
-		expect(args.old_text).toBe("a");
-		expect(args.new_text).toBe("b");
-		expect(args.command).toBe("ls");
-		expect(args.patch_text).toBe("@@");
-		// Nothing the engine sent is dropped.
-		expect(args.file_path).toBe("/tmp/x.ts");
-	});
-
-	test("never overwrites a canonical key the engine already used", () => {
-		expect(normalizeToolArgs({ path: "canonical", file_path: "alias" }).path).toBe("canonical");
+		expect(toolArgs(block({}))).toEqual({});
 	});
 });
 
 describe("result extraction", () => {
-	test("rebuilds the {content, details} shape from each engine's result key", () => {
-		for (const detail of [
-			{ result: "output" },
-			{ result_preview: "output" },
-			{ output_preview: "output" },
-			{ result_summary: "output" },
-		]) {
-			const result = normalizeToolResult(block({ detail, phase: "completed", ok: true })) as {
-				content: Array<{ text: string }>;
-			};
-			expect(result.content[0]?.text).toBe("output");
-		}
-	});
-
-	test("folds result_meta, exit_code and changes into details", () => {
+	test("merges result_meta with the structured details the server sent", () => {
 		const result = normalizeToolResult(
 			block({
 				detail: {
+					name: "read",
 					result: "done",
 					result_meta: { error_type: "timeout" },
-					exit_code: 3,
-					changes: [{ path: "a.ts", kind: "update" }],
+					details: { path: "a.ts", total_lines: 40 },
 				},
 				phase: "completed",
 				ok: false,
 			}),
-		) as { details: Record<string, unknown>; is_error: boolean };
-		expect(result.details.error_type).toBe("timeout");
-		expect(result.details.exit_code).toBe(3);
-		expect(result.details.files).toEqual([{ path: "a.ts", kind: "update" }]);
+			"read",
+		) as { content: Array<{ text: string }>; details: Record<string, unknown>; is_error: boolean };
+		expect(result.content[0]?.text).toBe("done");
+		expect(result.details).toEqual({ error_type: "timeout", path: "a.ts", total_lines: 40 });
 		expect(result.is_error).toBe(true);
 	});
 
-	test("mirrors combined output onto stdout/stderr for the command formatters", () => {
+	test("mirrors the output onto stdout/stderr for the command formatters", () => {
 		const ok = normalizeToolResult(
 			block({ detail: { name: "bash", result: "hello" }, phase: "completed", ok: true }),
 			"bash",
@@ -165,12 +104,11 @@ describe("result extraction", () => {
 		expect(ok.details.stdout).toBe("hello");
 
 		const failed = normalizeToolResult(
-			block({ detail: { name: "bash", result: "boom" }, phase: "completed", ok: false }),
-			"bash",
+			block({ detail: { name: "bash_output", result: "boom" }, phase: "completed", ok: false }),
+			"bash_output",
 		) as { details: Record<string, unknown> };
 		expect(failed.details.stderr).toBe("boom");
 
-		// Only the command family: everything else reads `content`.
 		const read = normalizeToolResult(
 			block({ detail: { name: "read", result: "text" }, phase: "completed", ok: true }),
 			"read",
@@ -179,127 +117,147 @@ describe("result extraction", () => {
 	});
 });
 
-describe("error detection", () => {
-	test("recognises all four shapes engines use", () => {
+describe("error detection and lifecycle", () => {
+	test("an action failed when the event said so or the result carries an error type", () => {
 		expect(isToolError(block({ phase: "completed", ok: false }))).toBe(true);
-		expect(isToolError(block({ detail: { is_error: true } }))).toBe(true);
-		expect(isToolError(block({ detail: { error: "EACCES" } }))).toBe(true);
-		expect(isToolError(block({ detail: { error_message: "no server" } }))).toBe(true);
 		expect(isToolError(block({ detail: { result_meta: { error_type: "timeout" } } }))).toBe(true);
+		expect(isToolError(block({ detail: { result_meta: { error_type: null } } }))).toBe(false);
 	});
 
-	test("a null error field is not an error (codex file_change always sends one)", () => {
-		expect(isToolError(block({ detail: { changes: [], error: null } }))).toBe(false);
-	});
-});
-
-describe("lifecycle state", () => {
 	test("maps phase and ok onto the four card states", () => {
 		expect(toolCardState(block({ phase: "started" }))).toBe("streaming");
-		expect(toolCardState(block({ phase: "started", detail: { args: { command: "ls" } } }))).toBe(
-			"running",
-		);
+		expect(
+			toolCardState(block({ phase: "started", detail: { name: "bash", args: { command: "ls" } } })),
+		).toBe("running");
 		expect(toolCardState(block({ phase: "updated" }))).toBe("running");
 		expect(toolCardState(block({ phase: "completed", ok: true }))).toBe("success");
 		expect(toolCardState(block({ phase: "completed", ok: false }))).toBe("error");
-		// The detail can say it failed even when the event's `ok` is absent.
-		expect(toolCardState(block({ phase: "completed", detail: { is_error: true } }))).toBe("error");
 	});
 });
 
 describe("diff extraction", () => {
-	test("numbers removals against the old text and additions against the new", () => {
-		expect(buildDiffText("a\nb", "A\nb")).toBe("-1|a\n+1|A\n 2|b");
+	test("an edit renders the tool's own diff with its real line numbers", () => {
+		const diff =
+			" 118\tfunction a() {\n-119\t\treturn 1;\n+119\t\treturn 2;\n 120\t}\n...\n 300\tend";
+		const edit = block({
+			detail: {
+				name: "edit",
+				args: { path: "lib/a.ts", old_text: "\treturn 1;", new_text: "\treturn 2;" },
+				result: "Successfully replaced text in lib/a.ts.",
+				details: { diff, first_changed_line: 119 },
+			},
+			phase: "completed",
+			ok: true,
+		});
+		const view = buildToolView(edit);
+		expect(view.diff?.path).toBe("lib/a.ts");
+		expect(view.diff?.text.split("\n")).toEqual([
+			" 118|function a() {",
+			"-119|\treturn 1;",
+			"+119|\treturn 2;",
+			" 120|}",
+			"...",
+			" 300|end",
+		]);
 	});
 
-	test("an insertion advances only the new-side counter", () => {
-		expect(buildDiffText("a\nb", "a\nx\nb")).toBe(" 1|a\n+2|x\n 3|b");
+	test("without a server diff, first_changed_line anchors the old/new pair", () => {
+		const edit = block({
+			detail: {
+				name: "edit",
+				args: { path: "a.ts", old_text: "keep\nold", new_text: "keep\nnew" },
+				details: { first_changed_line: 41 },
+			},
+			phase: "completed",
+			ok: true,
+		});
+		expect(extractToolDiff(edit, toolArgs(edit), "edit")?.text).toBe(" 40|keep\n-41|old\n+41|new");
 	});
 
-	test("old/new string pairs become a diff, whatever the engine called them", () => {
-		const diff = extractToolDiff(
-			block({}),
-			normalizeToolArgs({ file_path: "/tmp/a.ts", old_string: "one", new_string: "two" }),
-			"edit",
-		);
-		expect(diff?.path).toBe("/tmp/a.ts");
-		expect(diff?.text).toContain("-1|one");
-		expect(diff?.text).toContain("+1|two");
+	test("a server with no structured details gets an unnumbered diff, never a fake line 1", () => {
+		const edit = block({
+			detail: {
+				name: "edit",
+				args: { path: "a.ts", old_text: "one", new_text: "two" },
+				result: "Successfully replaced text in a.ts.",
+			},
+			phase: "completed",
+			ok: true,
+		});
+		expect(extractToolDiff(edit, toolArgs(edit), "edit")?.text).toBe("-one\n+two");
 	});
 
-	test("a write's content renders as an all-addition diff", () => {
-		const diff = extractToolDiff(
-			block({}),
-			normalizeToolArgs({ path: "a.ts", content: "x\ny" }),
-			"write",
-		);
-		expect(diff?.text).toBe("+1|x\n+2|y");
-		// `content` on a non-write tool means something else entirely.
+	test("buildDiffText numbers removals against the old text and additions against the new", () => {
+		expect(buildDiffText("a\nb", "A\nb", 10)).toBe("-10|a\n+10|A\n 11|b");
+		expect(buildDiffText("a\nb", "a\nx\nb", 1)).toBe(" 1|a\n+2|x\n 3|b");
+	});
+
+	test("serverDiffToRows leaves hunk separators and foreign rows alone", () => {
+		expect(serverDiffToRows("+5\tx\n...\n-9\ty")).toBe("+5|x\n...\n-9|y");
+	});
+
+	test("a write's content renders as an all-addition diff from line 1", () => {
+		const write = block({ detail: { name: "write", args: { path: "a.ts", content: "x\ny" } } });
+		expect(extractToolDiff(write, toolArgs(write), "write")?.text).toBe("+1|x\n+2|y");
 		expect(extractToolDiff(block({}), { content: "x" }, "read")).toBeUndefined();
 	});
 
-	test("a raw unified patch keeps its hunks and loses its headers", () => {
-		const patch = "diff --git a/x b/x\nindex 1..2\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new";
-		expect(stripUnifiedHeaders(patch)).toBe("-old\n+new");
-		expect(
-			extractToolDiff(block({}), normalizeToolArgs({ patch_text: patch }), "patch")?.text,
-		).toBe("-old\n+new");
+	test("a patch keeps its hunks and loses its envelope and headers", () => {
+		const patch =
+			"*** Begin Patch\n*** Update File: x.ex\n@@\n-old\n+new\n*** End Patch\n--- a/x\n+++ b/x";
+		expect(stripUnifiedHeaders(patch)).toBe("*** Update File: x.ex\n-old\n+new");
+		const view = buildToolView(block({ detail: { name: "patch", args: { patch_text: patch } } }));
+		expect(view.diff?.text).toBe("*** Update File: x.ex\n-old\n+new");
 	});
 
-	test("a multiedit diffs its first edit", () => {
-		const diff = extractToolDiff(
-			block({}),
-			{ path: "a.ts", edits: [{ old_string: "a", new_string: "b" }] },
-			"multiedit",
-		);
-		expect(diff?.text).toContain("+1|b");
-	});
-
-	test("reasoning actions never carry a diff", () => {
+	test("a failed edit shows no diff: nothing changed", () => {
 		const view = buildToolView(
-			block({ kind: "reasoning", detail: { reasoning: { text: "thinking" } } }),
+			block({
+				detail: {
+					name: "edit",
+					args: { path: "a.ts", old_text: "x", new_text: "y" },
+					result: "Could not find the exact text to replace.",
+				},
+				phase: "completed",
+				ok: false,
+			}),
 		);
 		expect(view.diff).toBeUndefined();
-		expect(view.reasoning).toBe("thinking");
+		expect(view.isError).toBe(true);
 	});
 });
 
 describe("buildToolView", () => {
-	test("routes a claude read through the read formatter", () => {
+	test("renders the bounded full result, not just the first 500 characters", () => {
+		const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1} ${"x".repeat(55)}`);
 		const view = buildToolView(
 			block({
-				title: "read: `a.ts`",
 				detail: {
-					name: "Read",
-					input: { file_path: "/tmp/a.ts" },
-					result_preview: "line one\nline two",
+					name: "bash",
+					args: { command: "seq 40" },
+					result: lines.join("\n"),
+					details: { exit_code: 0 },
 				},
 				phase: "completed",
 				ok: true,
 			}),
 		);
-		expect(view.toolName).toBe("read");
-		expect(view.generic).toBe(false);
-		expect(view.state).toBe("success");
-		expect(view.body.join("\n")).toContain("line one");
+		// Line 10 starts past byte 500 of the output: a preview-only card never had it.
+		expect(lines.slice(0, 9).join("\n").length).toBeGreaterThan(500);
+		expect(view.body.join("\n")).toContain("line 10 ");
 	});
 
 	test("an unknown tool falls back to the generic formatter, not an empty card", () => {
 		const view = buildToolView(
 			block({
-				title: "sentry.list_issues",
-				detail: {
-					server: "sentry",
-					tool: "list_issues",
-					arguments: { project: "lemon" },
-					result_preview: "3 issues",
-				},
+				title: "session_search",
+				detail: { name: "session_search", args: { query: "x" }, result: "3 sessions" },
 				phase: "completed",
 				ok: true,
 			}),
 		);
 		expect(view.generic).toBe(true);
-		expect(view.summary).toContain("3 issues");
+		expect(view.summary).toContain("3 sessions");
 	});
 
 	test("the streaming state renders no body at all", () => {
@@ -310,36 +268,25 @@ describe("buildToolView", () => {
 	});
 
 	test("a failing event overrides a formatter that read success out of the args", () => {
-		// write derives "✓ Updated <path>" from `content` alone; the event knows better.
 		const view = buildToolView(
 			block({
-				detail: { name: "write", input: { filePath: "/ro/a.ts", content: "x" }, error: "EACCES" },
+				detail: {
+					name: "write",
+					args: { path: "/ro/a.ts", content: "x" },
+					result: "Permission denied: /ro/a.ts",
+				},
 				phase: "completed",
 				ok: false,
 			}),
 		);
 		expect(view.isError).toBe(true);
-		expect(view.summary).toBe("EACCES");
-	});
-
-	test("a completed action with no result still describes what ran", () => {
-		// Codex commands report an exit code and nothing else.
-		const view = buildToolView(
-			block({
-				kind: "command",
-				title: "mix test",
-				detail: { exit_code: 0, status: "completed" },
-				phase: "completed",
-				ok: true,
-			}),
-		);
-		expect(view.summary.length + view.body.length).toBeGreaterThan(0);
+		expect(view.summary).toContain("Permission denied");
 	});
 
 	test("the daemon's message reaches the body when no formatter mentioned it", () => {
 		const view = buildToolView(
 			block({
-				detail: { name: "read", input: { path: "a.ts" }, result_preview: "x" },
+				detail: { name: "read", args: { path: "a.ts" }, result: "x" },
 				phase: "completed",
 				ok: false,
 				message: "session expired",

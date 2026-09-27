@@ -434,13 +434,17 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
 | `/media` | Preview generated-media job status with redacted type/status/artifact counts and cleanup policy |
+| `/remind <when> <what>` | Schedule a reminder in server-local time, e.g. `/remind in 20m check oven`, `/remind 9am stand-up`, `/remind every weekday 8:30 daily brief`; the cron job's result is delivered back to this chat/topic |
+| `/reminders` | List this chat's enabled reminders (id, schedule, next run) |
+| `/unremind <id>` | Cancel one of this chat's reminders |
 
 The Telegram picker should only surface models that are healthy enough for the
 current transport UX. Known-bad variants may remain in provider registries for
 manual use, but the picker should filter them out and prefer task-capable
 Google preview variants over dead or weaker direct IDs.
 | `/thinking` | Toggle extended thinking |
-| `/trigger` | Switch between `:all` and `:mentions` mode |
+| `/trigger` | Switch between `:all` and `:mentions` mode (groups default to `:mentions`) |
+| `/whoami` | Show the chat and user ids (works before pairing) |
 | `/cwd` | Set working directory |
 | `/file` | File put/get operations |
 | `/topic` | Topic management |
@@ -484,7 +488,10 @@ Avoids fragile MarkdownV2 escaping -- renders markdown to plain text with Telegr
 
 #### TriggerMode
 
-Controls whether the bot responds to all messages or only mentions in a chat/topic:
+Controls whether the bot responds to all messages or only mentions in a chat/topic.
+Groups default to `:mentions`. The bot only accepts chats in `allowed_chat_ids`; an
+empty allowlist leaves it unpaired (every chat ignored) unless `allow_all_chats = true`.
+Run `lemon gateway setup telegram` to pair:
 
 ```elixir
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}

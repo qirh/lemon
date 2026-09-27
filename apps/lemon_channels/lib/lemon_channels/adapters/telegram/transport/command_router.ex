@@ -20,6 +20,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
           handle_media_auto_put: (map(), map() -> map()),
           handle_model_command: (map(), map() -> map()),
           handle_new_session: (map(), map(), binary() | nil -> map()),
+          handle_remind_command: (map(), map() -> map()),
+          handle_reminders_command: (map(), map() -> map()),
+          handle_unremind_command: (map(), map() -> map()),
           handle_portable_command: (map(), map() -> map()),
           handle_reload_command: (map(), map() -> map()),
           handle_resume_command: (map(), map() -> map()),
@@ -71,6 +74,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
         Commands.kanban_command?(original_text, bot_username) ->
           callbacks.handle_kanban_command.(state, inbound)
+
+        Commands.remind_command?(original_text, bot_username) ->
+          callbacks.handle_remind_command.(state, inbound)
+
+        Commands.reminders_command?(original_text, bot_username) ->
+          callbacks.handle_reminders_command.(state, inbound)
+
+        Commands.unremind_command?(original_text, bot_username) ->
+          callbacks.handle_unremind_command.(state, inbound)
 
         Commands.media_command?(original_text, bot_username) ->
           callbacks.handle_media_command.(state, inbound)

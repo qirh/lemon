@@ -45,9 +45,9 @@ defmodule LemonCore.ExecApprovals do
   - `:rationale` - Optional rationale for the request
   - `:expires_in_ms` - Timeout in milliseconds (default: no timeout)
   - `:approval_id` - Optional caller-allocated approval id. Callers that may
-  have to cancel the prompt before it resolves (execute_code dispatches,
-  which can be killed while waiting) allocate the id up front so they can
-  name it to `cancel/2` with no registration race.
+  have to cancel the prompt before it resolves (for example, a dispatch that
+  can be killed while waiting) allocate the id up front so they can name it to
+  `cancel/2` with no registration race.
 
   ## Returns
   - `{:ok, :approved, scope}` - Approved at the given scope
@@ -148,9 +148,9 @@ defmodule LemonCore.ExecApprovals do
   @doc """
   Cancel a pending approval that will never be decided by a user.
 
-  For owners of a blocking `request/1` that can no longer wait — an
-  execute_code dispatch whose sweep was killed while an approval prompt was
-  pending. Removes the pending record (so the prompt disappears and a late
+  For owners of a blocking `request/1` that can no longer wait — for example,
+  a dispatch that was killed while an approval prompt was pending. Removes the
+  pending record (so the prompt disappears and a late
   `resolve/2` can no longer install policy at any scope), wakes a blocked
   waiter as denied, and records the cancellation distinctly from a user
   decision.

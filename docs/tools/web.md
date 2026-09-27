@@ -28,10 +28,6 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
-- `browser_exec`: run a bounded BUA-style program of up to 25 typed browser
-  actions; raw CDP steps require explicit developer mode.
-- `computer_use`: capture and drive native apps through cua-driver with SOM,
-  vision, or AX state and background-first input delivery.
 
 ## Search and extraction providers
 
@@ -86,22 +82,6 @@ uses snapshot refs such as `@e5` as selectors. Hybrid requires
 `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
 backend, public URLs use that configured backend, and provider failure never
 falls back across identities.
-
-`browser_exec` is the provider-neutral Browser Use Agent code-mode equivalent.
-Its program is a bounded typed action list rather than arbitrary Python, so
-Lemon can audit every navigation, input, evaluation, screenshot, and tab step.
-Use `targetId = "$active"` to carry the prior tab result. A `cdp` step requires
-`browser_developer_mode: true`; `Browser.close`, `Target.closeTarget`, and raw
-download-policy mutation remain blocked.
-
-`computer_use` drives native desktop apps through a lazily started private
-`cua-driver` daemon in standard permission mode. Capture supports `som`,
-`vision`, and `ax`; input supports element or coordinates, click variants,
-drag, scroll, type, key/hotkey, value setting, app focus, and optional
-post-action capture. Input defaults to `background`. Foreground focus is an
-explicit escalation, capture artifacts follow browser retention, driver
-session ids are derived hashes, and timeouts/errors are not automatically
-replayed because the external effect may already have happened.
 
 By default the helper launches local Chrome/Chromium and connects over CDP on
 `127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the
@@ -228,65 +208,6 @@ using the supervised
 `LemonBrowser.LocalServer` boundary, and checks browser progress update
 redaction for URL, selector, upload-path, download-path, filename, and failure
 paths.
-
-The repeatable live local smoke runner is:
-
-```bash
-MIX_ENV=test mix run scripts/live_browser_smoke.exs
-```
-
-It launches the supervised local browser driver against Chrome/Chromium,
-drives a local proof page through navigate, wait, evaluate, hover, select, upload,
-download, snapshot, type, click, screenshot,
-model-visible screenshot capture with `includeImage: true`, local
-`media_analyze_image` analysis of that screenshot, one-step `browser_analyze`
-local vision, route classification, metadata-endpoint blocking, public-route
-guarding, attach-only CDP endpoint mode, content, event reads, cookie set/get,
-and clear-state reset, writes screenshots under
-`.lemon/browser-artifacts/`, and writes redacted proof JSON under
-`.lemon/proofs/`. The proof includes progress update counts, method and phase
-counts, browser child-action count, model-visible image hashes/counts plus local
-vision analysis hashes/counts, `browser_analyze` hashes/counts, navigation route
-and target-kind counts, blocked-navigation assertions, CDP attach completion,
-`browser_upload_file_completed`, `browser_upload_file_count`,
-`browser_download_completed`, `browser_download_bytes`, and redaction cleanup
-assertions. Pass
-`--executable` or set
-`LEMON_BROWSER_EXECUTABLE` when Chrome/Chromium is not on `PATH`. Use
-`LEMON_BROWSER_CDP_ENDPOINT` when the browser is already managed by another
-local service, a container, or a remote CDP provider.
-
-The real MV3/Chrome relay proof is:
-
-```bash
-cd clients/lemon-browser-node
-npm run smoke:extension
-```
-
-It launches a disposable Chrome-for-Testing profile, loads the unpacked
-extension, authenticates the loopback relay, enumerates existing tabs, opens a
-new tab, reads title and DOM content through Playwright, detaches, and verifies
-that the attached Chrome process remains alive. The smoke writes a redacted
-`.lemon/proofs/browser-extension-smoke-latest.json` artifact; it persists no
-relay token, loopback port, raw target ID, URL, or page content. Mocked
-service-worker tests separately exercise the real toolbar-click opt-in/detach
-state and debugger-event filtering.
-
-The opt-in live model acceptance harness is:
-
-```bash
-mix run --no-start scripts/live_search_browser_leadership_smoke.exs
-```
-
-It starts real `CodingAgent.Session` turns on `openai-codex:gpt-5.6-luna` with
-`:xhigh` reasoning, using isolated run-history and memory stores, a disposable
-Chrome profile, and restricted trial-specific tool lists. It asserts ordered
-SearXNG-to-DuckDuckGo fallback and multi-source synthesis, stable target-scoped
-multi-tab reads, stale-target recovery, screenshot analysis, and refusal to
-bypass an unpaired controller's consent/capability boundary. The latest and
-archived results under `.lemon/proofs/search-browser-leadership-*.json` contain
-only model/tool identifiers, counts, booleans, durations, and hashes—not
-credentials, prompts, answers, URLs, target IDs, or tool result bodies.
 
 ## API Key Setup
 

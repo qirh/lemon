@@ -11,7 +11,6 @@ defmodule LemonChannels.PortBridge do
           required(:label) => String.t(),
           required(:event_tag) => atom(),
           required(:script_filename) => String.t(),
-          required(:adapter_dir) => String.t(),
           optional(:log_module) => module()
         }
 
@@ -148,25 +147,8 @@ defmodule LemonChannels.PortBridge do
     end
   end
 
-  defp default_script_path(%{script_filename: filename, adapter_dir: adapter_dir}) do
-    relative_gateway_path = "../../../../../lemon_gateway/priv/#{filename}"
-    app_gateway_path = "priv/#{filename}"
-
-    candidates = [
-      safe_app_dir(:lemon_channels, "priv/#{filename}"),
-      safe_app_dir(:lemon_gateway, app_gateway_path),
-      Path.expand(relative_gateway_path, adapter_dir)
-    ]
-
-    Enum.find(candidates, fn path -> is_binary(path) and File.exists?(path) end) ||
-      safe_app_dir(:lemon_gateway, app_gateway_path) ||
-      Path.expand("apps/lemon_gateway/priv/#{filename}", File.cwd!())
-  end
-
-  defp safe_app_dir(app, path) do
-    Application.app_dir(app, path)
-  rescue
-    _ -> nil
+  defp default_script_path(%{script_filename: filename}) do
+    Application.app_dir(:lemon_channels, "priv/#{filename}")
   end
 
   defp validate_script_path(path) when is_binary(path) do

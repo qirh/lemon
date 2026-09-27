@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
   @moduledoc false
 
-  alias LemonSim.Kernel.{Event, State}
+  alias LemonSim.Kernel.{Event, Rng, State}
   alias LemonSim.Examples.Werewolf.{Events, Roles, RulesConfig}
   alias LemonSim.Examples.Werewolf.Updaters.Elimination
   alias LemonSim.Examples.Werewolf.Updaters.Items
@@ -19,6 +19,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
     night_actions = get(state.world, :night_actions, %{})
     players = get(state.world, :players, %{})
     day_number = get(state.world, :day_number, 1)
+    rng = Rng.fetch!(state.world)
 
     # Find the werewolf target (use the last werewolf's choice as the consensus)
     wolf_targets =
@@ -113,11 +114,11 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
       end)
 
     # Generate evidence tokens
-    new_tokens =
+    {new_tokens, rng} =
       if RulesConfig.enabled?(state.world, :evidence) do
-        generate_evidence_tokens(players, wolf_id, victim_id, saved?)
+        generate_evidence_tokens(players, wolf_id, victim_id, saved?, rng)
       else
-        []
+        {[], rng}
       end
 
     evidence_tokens = get(state.world, :evidence_tokens, [])
@@ -128,31 +129,35 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
     # Process wanderers
     wanderer_results = get(state.world, :wanderer_results, [])
 
-    new_wanderer_results =
+    {new_wanderer_results, rng} =
       night_actions
       |> Enum.filter(fn {_id, action} -> get(action, :action) == "wander" end)
-      |> Enum.map(fn {wanderer_id, _action} ->
-        saw_something =
-          new_tokens == [] and not is_nil(victim_id) and not saved? and
-            :rand.uniform() < @wander_sighting_chance
+      |> Enum.map_reduce(rng, fn {wanderer_id, _action}, rng ->
+        {saw_something, rng} =
+          if new_tokens == [] and not is_nil(victim_id) and not saved? do
+            {roll, rng} = Rng.uniform(rng)
+            {roll < @wander_sighting_chance, rng}
+          else
+            {false, rng}
+          end
 
         if saw_something do
-          lead_id = noisy_wolf_lead(players, wolf_id, victim_id)
+          {lead_id, rng} = noisy_wolf_lead(players, wolf_id, victim_id, rng)
 
-          %{
-            day: day_number,
-            wanderer: wanderer_id,
-            saw_shadows: true,
-            description:
-              "In poor visibility, you saw a silhouette moving from #{lead_id}'s side of the village toward #{victim_id}'s house. This is a low-confidence observation, not proof."
-          }
+          {%{
+             day: day_number,
+             wanderer: wanderer_id,
+             saw_shadows: true,
+             description:
+               "In poor visibility, you saw a silhouette moving from #{lead_id}'s side of the village toward #{victim_id}'s house. This is a low-confidence observation, not proof."
+           }, rng}
         else
-          %{
-            day: day_number,
-            wanderer: wanderer_id,
-            saw_shadows: false,
-            description: "The village was quiet. You saw nothing unusual."
-          }
+          {%{
+             day: day_number,
+             wanderer: wanderer_id,
+             saw_shadows: false,
+             description: "The village was quiet. You saw nothing unusual."
+           }, rng}
         end
       end)
 
@@ -221,6 +226,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
           |> State.put_world(
             world_updates(state.world, %{
               players: updated_players,
+              rng_state: rng,
               night_actions: %{},
               night_history: new_night_history,
               elimination_log: new_elimination_log,
@@ -253,6 +259,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
             |> State.put_world(
               world_updates(state.world, %{
                 night_actions: %{},
+                rng_state: rng,
                 night_history: new_night_history,
                 evidence_tokens: all_evidence,
                 wanderer_results: all_wanderer_results,
@@ -279,6 +286,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
           |> State.put_world(
             world_updates(state.world, %{
               night_actions: %{},
+              rng_state: rng,
               night_history: new_night_history,
               evidence_tokens: all_evidence,
               wanderer_results: all_wanderer_results,
@@ -301,7 +309,9 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
       # No kill or saved — generate village event and items, then meetings
       updated_players = players
 
-      village_event_data = VillageEvents.maybe_generate_village_event(day_number, state.world)
+      {village_event_data, rng} =
+        VillageEvents.maybe_generate_village_event(day_number, state.world, rng)
+
       village_event_history = get(state.world, :village_event_history, [])
 
       {village_events_list, new_event_history, current_event} =
@@ -316,7 +326,8 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
             {[], village_event_history, nil}
         end
 
-      item_data = Items.maybe_distribute_items(updated_players, day_number, state.world)
+      {item_data, rng} =
+        Items.maybe_distribute_items(updated_players, day_number, state.world, rng)
 
       {item_events, final_player_items} =
         case item_data do
@@ -335,6 +346,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
         |> State.put_world(
           world_updates(state.world, %{
             players: updated_players,
+            rng_state: rng,
             night_actions: %{},
             night_history: new_night_history,
             evidence_tokens: all_evidence,
@@ -398,28 +410,33 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
     end
   end
 
-  defp generate_evidence_tokens(players, wolf_id, victim_id, saved?) do
-    if not is_nil(wolf_id) and not is_nil(victim_id) and not saved? and
-         :rand.uniform() < @evidence_chance do
-      candidates = evidence_candidates(players, wolf_id, victim_id)
+  defp generate_evidence_tokens(players, wolf_id, victim_id, saved?, rng) do
+    if not is_nil(wolf_id) and not is_nil(victim_id) and not saved? do
+      {roll, rng} = Rng.uniform(rng)
 
-      [
-        %{
-          type: "muddy_footprints",
-          clue:
-            "A broken trail near #{victim_id}'s house could have come from either #{Enum.at(candidates, 0)}'s or #{Enum.at(candidates, 1)}'s side of the village.",
-          related_to: candidates,
-          reliability: "medium",
-          interpretation:
-            "Comparable trails include the killer among the two named players about 70% of the time. Weather or deliberate misdirection can exclude the killer entirely. This is not proof."
-        }
-      ]
+      if roll < @evidence_chance do
+        {candidates, rng} = evidence_candidates(players, wolf_id, victim_id, rng)
+
+        {[
+           %{
+             type: "muddy_footprints",
+             clue:
+               "A broken trail near #{victim_id}'s house could have come from either #{Enum.at(candidates, 0)}'s or #{Enum.at(candidates, 1)}'s side of the village.",
+             related_to: candidates,
+             reliability: "medium",
+             interpretation:
+               "Comparable trails include the killer among the two named players about 70% of the time. Weather or deliberate misdirection can exclude the killer entirely. This is not proof."
+           }
+         ], rng}
+      else
+        {[], rng}
+      end
     else
-      []
+      {[], rng}
     end
   end
 
-  defp evidence_candidates(players, wolf_id, victim_id) do
+  defp evidence_candidates(players, wolf_id, victim_id, rng) do
     decoys =
       players
       |> Roles.living_players()
@@ -427,24 +444,32 @@ defmodule LemonSim.Examples.Werewolf.Updaters.NightResolution do
       |> Enum.reject(&(&1 in [wolf_id, victim_id]))
       |> Enum.sort()
 
-    if :rand.uniform() <= @clue_accuracy or length(decoys) < 2 do
-      [wolf_id, Enum.random(decoys)] |> Enum.sort()
-    else
-      decoys |> Enum.take_random(2) |> Enum.sort()
-    end
+    {roll, rng} = Rng.uniform(rng)
+
+    {candidates, rng} =
+      if roll <= @clue_accuracy or length(decoys) < 2 do
+        {decoy, rng} = Rng.pick(decoys, rng)
+        {[wolf_id, decoy], rng}
+      else
+        Rng.take_random(decoys, 2, rng)
+      end
+
+    {Enum.sort(candidates), rng}
   end
 
-  defp noisy_wolf_lead(players, wolf_id, victim_id) do
+  defp noisy_wolf_lead(players, wolf_id, victim_id, rng) do
     decoys =
       players
       |> Roles.living_players()
       |> Enum.map(fn {player_id, _player} -> player_id end)
       |> Enum.reject(&(&1 in [wolf_id, victim_id]))
 
-    if :rand.uniform() <= @clue_accuracy or decoys == [] do
-      wolf_id
+    {roll, rng} = Rng.uniform(rng)
+
+    if roll <= @clue_accuracy or decoys == [] do
+      {wolf_id, rng}
     else
-      Enum.random(decoys)
+      Rng.pick(decoys, rng)
     end
   end
 end

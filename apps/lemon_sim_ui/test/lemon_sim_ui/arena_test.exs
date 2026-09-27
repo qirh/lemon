@@ -11,7 +11,7 @@ defmodule LemonSimUi.ArenaTest do
 
   defp start_arena(ctx, opts \\ []) do
     test_pid = self()
-    domain = Keyword.get(opts, :domain, :space_station)
+    domain = Keyword.get(opts, :domain, :werewolf)
 
     deps =
       Map.merge(
@@ -62,18 +62,23 @@ defmodule LemonSimUi.ArenaTest do
     start_supervised!({Arena, config})
   end
 
-  defp space_station_world_over do
+  defp werewolf_world_over do
     %{
       status: "game_over",
-      winner: "crew",
-      round: 4,
+      winner: "villagers",
+      day_number: 3,
       players: %{
-        "player_1" => %{role: "saboteur", model: "prov/model-a", status: "ejected"},
-        "player_2" => %{role: "engineer", model: "prov/model-b", status: "alive"},
-        "player_3" => %{role: "crew", model: "prov/model-c", status: "alive"}
+        "Aria" => %{role: "werewolf", model: "prov/model-a", status: "dead"},
+        "Brin" => %{role: "seer", model: "prov/model-b", status: "alive"},
+        "Cole" => %{role: "villager", model: "prov/model-c", status: "alive"}
       },
-      action_history: [],
-      vote_history: []
+      vote_history: [
+        %{voter: "Brin", target: "Aria", voter_role: "seer", target_role: "werewolf"}
+      ],
+      night_history: [
+        %{player: "Aria", action: "choose_victim", successful: false},
+        %{player: "Brin", action: "investigate", result: "werewolf"}
+      ]
     }
   end
 
@@ -112,15 +117,15 @@ defmodule LemonSimUi.ArenaTest do
     assert_receive {:start_sim, start_opts}, 1_000
     assert length(start_opts[:model_specs]) == 3
     assert is_integer(start_opts[:seed])
-    assert start_opts[:arena_domain] == "space_station"
-    assert Arena.current_sim_id(arena) =~ ~r/^spc_/
+    assert start_opts[:arena_domain] == "werewolf"
+    assert Arena.current_sim_id(arena) =~ ~r/^ww_/
   end
 
   test "ignores lobby and world events before the first game is assigned", ctx do
     arena = start_arena(ctx, start_delay_ms: 1_000)
 
     send(arena, LemonCore.Event.new(:sim_lobby_changed, %{}, nil))
-    send(arena, world_update_event("spc_not_current", %{status: "in_progress"}))
+    send(arena, world_update_event("ww_not_current", %{status: "in_progress"}))
 
     Process.sleep(20)
     assert Process.alive?(arena)
@@ -132,17 +137,17 @@ defmodule LemonSimUi.ArenaTest do
     assert_receive {:start_sim, _}, 1_000
     sim_id = Arena.current_sim_id(arena)
 
-    LemonCore.Bus.subscribe(Arena.league_topic(:space_station))
-    send(arena, world_update_event(sim_id, space_station_world_over()))
+    LemonCore.Bus.subscribe(Arena.league_topic(:werewolf))
+    send(arena, world_update_event(sim_id, werewolf_world_over()))
 
-    assert_receive %LemonCore.Event{type: :arena_league_updated, meta: %{domain: :space_station}},
+    assert_receive %LemonCore.Event{type: :arena_league_updated, meta: %{domain: :werewolf}},
                    1_000
 
     assert {:ok, league} = League.load(ctx.tmp_dir)
-    assert league["scenario"] == "space_station"
+    assert league["scenario"] == "werewolf"
     assert league["game_count"] == 1
     assert [game] = league["recent_games"]
-    assert game["winner"] == "crew"
+    assert game["winner"] == "villagers"
     assert "prov/model-b" in game["winning_models"]
 
     # Intermission elapses, then a fresh game begins.
@@ -166,7 +171,7 @@ defmodule LemonSimUi.ArenaTest do
     arena = start_arena(ctx, deps: %{record_game: record_game})
     assert_receive {:start_sim, _}, 1_000
     sim_id = Arena.current_sim_id(arena)
-    send(arena, world_update_event(sim_id, space_station_world_over()))
+    send(arena, world_update_event(sim_id, werewolf_world_over()))
 
     assert_receive {:record_attempt, 1}, 1_000
     refute_receive {:start_sim, _}, 15
@@ -254,13 +259,13 @@ defmodule LemonSimUi.ArenaTest do
     arena =
       start_arena(ctx,
         deps: %{
-          list_running: fn -> ["ww_other", "spc_existing"] end,
+          list_running: fn -> ["pkr_other", "ww_existing"] end,
           get_state: fn
-            "spc_existing" ->
+            "ww_existing" ->
               State.new(
-                sim_id: "spc_existing",
+                sim_id: "ww_existing",
                 world: %{status: "in_progress"},
-                meta: %{run: %{arena_domain: "space_station"}}
+                meta: %{run: %{arena_domain: "werewolf"}}
               )
 
             _sim_id ->
@@ -270,7 +275,7 @@ defmodule LemonSimUi.ArenaTest do
       )
 
     refute_receive {:start_sim, _}, 300
-    assert Arena.current_sim_id(arena) == "spc_existing"
+    assert Arena.current_sim_id(arena) == "ww_existing"
   end
 
   test "does not reconcile a manual terminal simulation into the arena league", ctx do
@@ -278,9 +283,9 @@ defmodule LemonSimUi.ArenaTest do
 
     manual_state =
       State.new(
-        sim_id: "spc_manual_game",
-        world: space_station_world_over(),
-        meta: %{run: %{domain: "space_station", status: "completed", resumable: false}}
+        sim_id: "ww_manual_game",
+        world: werewolf_world_over(),
+        meta: %{run: %{domain: "werewolf", status: "completed", resumable: false}}
       )
 
     start_arena(ctx,
@@ -294,7 +299,7 @@ defmodule LemonSimUi.ArenaTest do
     )
 
     assert_receive {:start_sim, _}, 1_000
-    refute_receive {:unexpected_record, "spc_manual_game"}, 100
+    refute_receive {:unexpected_record, "ww_manual_game"}, 100
   end
 
   test "waits for the runner's final write before persisting the league marker", ctx do
@@ -303,12 +308,12 @@ defmodule LemonSimUi.ArenaTest do
 
     terminal_state =
       State.new(
-        sim_id: "spc_marker_race",
-        world: space_station_world_over(),
+        sim_id: "ww_marker_race",
+        world: werewolf_world_over(),
         meta: %{
           run: %{
-            domain: "space_station",
-            arena_domain: "space_station",
+            domain: "werewolf",
+            arena_domain: "werewolf",
             status: "completed",
             resumable: false,
             finished_at_ms: System.system_time(:millisecond)
@@ -321,8 +326,8 @@ defmodule LemonSimUi.ArenaTest do
     arena =
       start_arena(ctx,
         deps: %{
-          list_running: fn -> if Agent.get(running, & &1), do: ["spc_marker_race"], else: [] end,
-          get_state: fn "spc_marker_race" -> Agent.get(persisted, & &1) end,
+          list_running: fn -> if Agent.get(running, & &1), do: ["ww_marker_race"], else: [] end,
+          get_state: fn "ww_marker_race" -> Agent.get(persisted, & &1) end,
           put_state: fn state ->
             Agent.update(persisted, fn _ -> state end)
             send(test_pid, {:league_marker, state})
@@ -336,8 +341,8 @@ defmodule LemonSimUi.ArenaTest do
       )
 
     refute_receive {:start_sim, _}, 100
-    send(arena, world_update_event("spc_marker_race", space_station_world_over()))
-    assert_receive {:record_game, "spc_marker_race"}, 1_000
+    send(arena, world_update_event("ww_marker_race", werewolf_world_over()))
+    assert_receive {:record_game, "ww_marker_race"}, 1_000
     refute_receive {:league_marker, _state}, 100
 
     Agent.update(running, fn _ -> false end)
@@ -345,7 +350,7 @@ defmodule LemonSimUi.ArenaTest do
     send(arena, LemonCore.Event.new(:sim_lobby_changed, %{}, %{}))
 
     assert_receive {:league_marker, marked_state}, 1_000
-    assert marked_state.meta.run.arena_league_recorded_domain == "space_station"
+    assert marked_state.meta.run.arena_league_recorded_domain == "werewolf"
   end
 
   test "reconciles and durably marks a terminal game before starting another", ctx do
@@ -354,12 +359,12 @@ defmodule LemonSimUi.ArenaTest do
 
     terminal_state =
       State.new(
-        sim_id: "spc_unrecorded",
-        world: space_station_world_over(),
+        sim_id: "ww_unrecorded",
+        world: werewolf_world_over(),
         meta: %{
           run: %{
-            domain: "space_station",
-            arena_domain: "space_station",
+            domain: "werewolf",
+            arena_domain: "werewolf",
             seed: 91,
             started_at_ms: finished_at_ms - 5_000,
             finished_at_ms: finished_at_ms,
@@ -376,7 +381,7 @@ defmodule LemonSimUi.ArenaTest do
         deps: %{
           list_states: fn -> [Agent.get(persisted, & &1)] end,
           get_state: fn
-            "spc_unrecorded" -> Agent.get(persisted, & &1)
+            "ww_unrecorded" -> Agent.get(persisted, & &1)
             _sim_id -> nil
           end,
           put_state: fn state ->
@@ -391,7 +396,7 @@ defmodule LemonSimUi.ArenaTest do
         }
       )
 
-    assert_receive {:record_game, %{"game_id" => "spc_unrecorded", "seed" => 91} = record},
+    assert_receive {:record_game, %{"game_id" => "ww_unrecorded", "seed" => 91} = record},
                    1_000
 
     assert record["recorded_at"] ==
@@ -403,11 +408,11 @@ defmodule LemonSimUi.ArenaTest do
     assert record["duration_ms"] == 5_000
 
     assert_receive {:league_marker, marked_state}, 1_000
-    assert marked_state.meta.run.arena_league_recorded_domain == "space_station"
+    assert marked_state.meta.run.arena_league_recorded_domain == "werewolf"
     assert is_integer(marked_state.meta.run.arena_league_recorded_at_ms)
 
     assert_receive {:start_sim, _}, 1_000
-    assert Arena.current_sim_id(arena) != "spc_unrecorded"
+    assert Arena.current_sim_id(arena) != "ww_unrecorded"
   end
 
   test "restart reconciliation preserves an already-written game record", ctx do
@@ -415,12 +420,12 @@ defmodule LemonSimUi.ArenaTest do
 
     terminal_state =
       State.new(
-        sim_id: "spc_existing_record",
-        world: space_station_world_over(),
+        sim_id: "ww_existing_record",
+        world: werewolf_world_over(),
         meta: %{
           run: %{
-            domain: "space_station",
-            arena_domain: "space_station",
+            domain: "werewolf",
+            arena_domain: "werewolf",
             status: "completed",
             resumable: false,
             finished_at_ms: System.system_time(:millisecond)
@@ -428,7 +433,7 @@ defmodule LemonSimUi.ArenaTest do
         }
       )
 
-    {:ok, adapter} = LemonSim.Bench.League.Registry.fetch(:space_station)
+    {:ok, adapter} = LemonSim.Bench.League.Registry.fetch(:werewolf)
 
     original_record =
       League.game_record(adapter, terminal_state.world,
@@ -444,7 +449,7 @@ defmodule LemonSimUi.ArenaTest do
       deps: %{
         list_states: fn -> [Agent.get(persisted, & &1)] end,
         get_state: fn
-          "spc_existing_record" -> Agent.get(persisted, & &1)
+          "ww_existing_record" -> Agent.get(persisted, & &1)
           _sim_id -> nil
         end,
         put_state: fn state ->
@@ -472,12 +477,12 @@ defmodule LemonSimUi.ArenaTest do
 
     terminal_state =
       State.new(
-        sim_id: "spc_marker_retry",
-        world: space_station_world_over(),
+        sim_id: "ww_marker_retry",
+        world: werewolf_world_over(),
         meta: %{
           run: %{
-            domain: "space_station",
-            arena_domain: "space_station",
+            domain: "werewolf",
+            arena_domain: "werewolf",
             status: "completed",
             resumable: false,
             finished_at_ms: System.system_time(:millisecond)
@@ -492,7 +497,7 @@ defmodule LemonSimUi.ArenaTest do
       deps: %{
         list_states: fn -> [Agent.get(persisted, & &1)] end,
         get_state: fn
-          "spc_marker_retry" -> Agent.get(persisted, & &1)
+          "ww_marker_retry" -> Agent.get(persisted, & &1)
           _sim_id -> nil
         end,
         put_state: fn state ->
@@ -513,10 +518,10 @@ defmodule LemonSimUi.ArenaTest do
       }
     )
 
-    assert_receive {:record_game, "spc_marker_retry"}, 1_000
+    assert_receive {:record_game, "ww_marker_retry"}, 1_000
     assert_receive {:marker_attempt, 1}, 1_000
     assert_receive {:marker_attempt, 2}, 1_000
-    refute_receive {:record_game, "spc_marker_retry"}, 100
+    refute_receive {:record_game, "ww_marker_retry"}, 100
     assert_receive {:start_sim, _}, 1_000
   end
 
@@ -535,14 +540,14 @@ defmodule LemonSimUi.ArenaTest do
     arena =
       start_arena(ctx,
         deps: %{
-          list_running: fn -> ["spc_existing"] end,
+          list_running: fn -> ["ww_existing"] end,
           get_state: fn _sim_id ->
             State.new(
-              sim_id: "spc_existing",
+              sim_id: "ww_existing",
               world: %{status: "in_progress"},
               meta: %{
                 run: %{
-                  arena_domain: "space_station",
+                  arena_domain: "werewolf",
                   seed: 4242,
                   started_at_ms: started_at_ms
                 }
@@ -559,7 +564,7 @@ defmodule LemonSimUi.ArenaTest do
     refute_receive {:start_sim, _}, 300
     assert Arena.status(arena).current_seed == 4242
 
-    send(arena, world_update_event("spc_existing", space_station_world_over()))
+    send(arena, world_update_event("ww_existing", werewolf_world_over()))
     assert_receive {:record, record}, 1_000
     assert record["seed"] == 4242
     assert record["duration_ms"] >= 5_000
@@ -599,12 +604,11 @@ defmodule LemonSimUi.ArenaTest do
   end
 
   test "domain helpers expose prefixes and league dirs" do
-    assert Arena.sim_prefix(:stock_market) == "stk_"
-    assert Arena.sim_prefix(:survivor) == "srv_"
+    assert Arena.sim_prefix(:werewolf) == "ww_"
     assert Arena.sim_prefix(:poker) == "pkr_"
-    assert Arena.league_topic(:stock_market) == "arena:stock_market:league"
-    assert Arena.league_dir(:survivor) =~ "survivor_league"
-    assert :space_station in Arena.domains()
+    assert Arena.league_topic(:poker) == "arena:poker:league"
+    assert Arena.league_dir(:poker) =~ "poker_league"
+    assert :werewolf in Arena.domains()
     assert :poker in Arena.domains()
   end
 end

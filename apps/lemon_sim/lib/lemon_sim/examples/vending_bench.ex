@@ -14,6 +14,8 @@ defmodule LemonSim.Examples.VendingBench do
 
   alias LemonCore.Config.Modular
   alias LemonCore.MapHelpers
+  alias LemonSim.Bench.Artifacts.Replay, as: BenchReplay
+  alias LemonSim.Bench.Artifacts.Replay.Recorder
   alias LemonSim.LLM.GameHelpers.{Config, ProviderThrottle}
 
   alias LemonSim.Examples.VendingBench.{
@@ -153,11 +155,13 @@ defmodule LemonSim.Examples.VendingBench do
         |> stamp_runtime_models(run_opts)
 
       {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, run_opts)
+      {:ok, recorder} = Recorder.start_link()
 
       run_opts =
         run_opts
         |> Keyword.put(:usage_collector, usage_collector)
         |> Keyword.put_new(:usage_actor_id, "operator")
+        |> Keyword.put(:replay_recorder, recorder)
 
       world = state.world
 
@@ -172,6 +176,7 @@ defmodule LemonSim.Examples.VendingBench do
         end)
       after
         stop_usage_collector(usage_collector, owns_usage_collector?)
+        Recorder.stop(recorder)
       end
     after
       ProviderThrottle.stop(throttle)
@@ -180,7 +185,7 @@ defmodule LemonSim.Examples.VendingBench do
 
   @spec resume_from_artifacts(String.t(), keyword()) :: {:ok, State.t()} | {:error, term()}
   def resume_from_artifacts(artifact_dir, opts \\ []) when is_binary(artifact_dir) do
-    with {:ok, state, events, actions} <- load_live_checkpoint(artifact_dir, opts) do
+    with {:ok, state, events, actions, batches} <- load_live_checkpoint(artifact_dir, opts) do
       {run_opts, throttle} =
         default_opts(opts)
         |> Keyword.merge(opts)
@@ -190,11 +195,13 @@ defmodule LemonSim.Examples.VendingBench do
       try do
         state = stamp_runtime_models(state, run_opts)
         {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, run_opts)
+        {:ok, recorder} = Recorder.start_link(batches: batches)
 
         run_opts =
           run_opts
           |> Keyword.put(:usage_collector, usage_collector)
           |> Keyword.put_new(:usage_actor_id, "operator")
+          |> Keyword.put(:replay_recorder, recorder)
 
         world = state.world
 
@@ -209,6 +216,7 @@ defmodule LemonSim.Examples.VendingBench do
           end)
         after
           stop_usage_collector(usage_collector, owns_usage_collector?)
+          Recorder.stop(recorder)
         end
       after
         ProviderThrottle.stop(throttle)
@@ -293,6 +301,7 @@ defmodule LemonSim.Examples.VendingBench do
          {:ok, scorecard} <- read_optional_json_file(scorecard_path, %{}),
          {:ok, events} <- read_event_jsonl(events_path),
          {:ok, actions} <- read_jsonl(actions_path),
+         {:ok, batches} <- read_replay_inputs(Path.join(artifact_dir, "inputs.jsonl")),
          {:ok, sim_id} <- checkpoint_sim_id(opts, scorecard, artifact_dir) do
       state =
         opts
@@ -302,7 +311,17 @@ defmodule LemonSim.Examples.VendingBench do
         |> Map.put(:world, world)
         |> Map.put(:recent_events, Enum.take(events, -25))
 
-      {:ok, state, events, actions}
+      {:ok, state, events, actions, batches}
+    end
+  end
+
+  # Checkpoints keep their recorded replay inputs so the resumed run's final
+  # bundle still covers every input batch.
+  defp read_replay_inputs(path) do
+    case File.read(path) do
+      {:ok, body} -> BenchReplay.decode_inputs(body)
+      {:error, :enoent} -> {:ok, []}
+      {:error, reason} -> {:error, {:checkpoint_read_failed, path, reason}}
     end
   end
 
@@ -368,10 +387,13 @@ defmodule LemonSim.Examples.VendingBench do
 
   # -- Callbacks --
 
-  defp terminal?(state) do
-    status = MapHelpers.get_key(state.world, :status)
-    status in ["complete", "bankrupt"]
-  end
+  @terminal_statuses ["complete", "bankrupt"]
+
+  @doc "World `:status` values that end a VendingBench run (single-operator or Arena)."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in @terminal_statuses
 
   def stamp_runtime_models(%State{} = state, run_opts) do
     external? = external_run?(run_opts)
@@ -503,6 +525,7 @@ defmodule LemonSim.Examples.VendingBench do
       {:ok, result} ->
         maybe_notify(Keyword.get(run_opts, :on_after_step), turn + 1, result)
         appended = appended_recent_events(before_recent, result.state.recent_events)
+        Recorder.record(Keyword.get(run_opts, :replay_recorder), result.events, appended)
         action = live_action_summary(turn + 1, state.world, result, appended)
         next_events = events ++ appended
         next_actions = actions ++ [action]
@@ -606,6 +629,7 @@ defmodule LemonSim.Examples.VendingBench do
     case Runner.ingest_events(state, [event], modules(run_opts).updater) do
       {:ok, next_state, signal} ->
         appended = appended_recent_events(before_recent, next_state.recent_events)
+        Recorder.record(Keyword.get(run_opts, :replay_recorder), [event], appended)
 
         action = %{
           day: get(state.world, :day_number, 1),
@@ -625,10 +649,12 @@ defmodule LemonSim.Examples.VendingBench do
 
   defp recover_live_missed_turn_autowait(state, reason_text, run_opts) do
     before_recent = state.recent_events
+    event = Events.next_day_waited()
 
-    case Runner.ingest_events(state, [Events.next_day_waited()], modules(run_opts).updater) do
+    case Runner.ingest_events(state, [event], modules(run_opts).updater) do
       {:ok, next_state, signal} ->
         appended = appended_recent_events(before_recent, next_state.recent_events)
+        Recorder.record(Keyword.get(run_opts, :replay_recorder), [event], appended)
 
         action = %{
           day: get(state.world, :day_number, 1),

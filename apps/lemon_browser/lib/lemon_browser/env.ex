@@ -47,18 +47,6 @@ defmodule LemonBrowser.Env do
       apps: [:lemon_browser]
     },
     %{
-      name: :lemon_cua_driver_cmd,
-      env_var: "LEMON_CUA_DRIVER_CMD",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Path or executable name for the cua-driver used by computer_use.",
-      secret?: false,
-      required?: false,
-      area: :browser,
-      apps: [:lemon_browser]
-    },
-    %{
       name: :browserbase_api_key,
       env_var: "BROWSERBASE_API_KEY",
       aliases: [],

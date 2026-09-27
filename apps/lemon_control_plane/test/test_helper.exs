@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 # In umbrella `mix test`, other apps may have started/stopped lemon_gateway,
 # lemon_channels, or lemon_control_plane earlier in the same BEAM. Many control

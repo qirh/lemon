@@ -129,3 +129,14 @@ Algorithm: Bradley-Terry MLE with one pseudo draw per active pair.
 | 2 | pressure | 1360.21 | 2 | 0-2-0 | 1 |
 ```
 
+## Watch A Live Game
+
+```bash
+mix lemon.sim.demo
+```
+
+Also keyless: it boots the `lemon_sim_ui` spectator, starts an offline
+Werewolf game whose seats are played by a seeded heuristic (no model calls),
+and prints the `/watch/<sim_id>` URL. Pass `--seed N` to replay the same game.
+See `apps/lemon_sim/README.md` ("Keyless demo") for options.
+

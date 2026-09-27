@@ -403,6 +403,19 @@ defmodule LemonCore.Config.AgentTest do
     end
   end
 
+  describe "max_tool_turns configuration" do
+    test "is unlimited unless a positive cap is configured" do
+      assert Agent.resolve(%{}).max_tool_turns == :infinity
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => 0}}).max_tool_turns == :infinity
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => -3}}).max_tool_turns == :infinity
+    end
+
+    test "accepts a positive cap from [runtime] or legacy [agent]" do
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => 200}}).max_tool_turns == 200
+      assert Agent.resolve(%{"agent" => %{"max_tool_turns" => "80"}}).max_tool_turns == 80
+    end
+  end
+
   describe "shell configuration" do
     test "uses default shell settings (nil)" do
       config = Agent.resolve(%{})

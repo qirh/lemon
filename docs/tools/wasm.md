@@ -71,24 +71,3 @@ CARGO_TARGET_DIR=_build/lemon-wasm-runtime cargo build --release --manifest-path
    - Conflicts are logged and included in `extensions_status`.
 5. If host tool callbacks fail (`tool-invoke` to non-WASM tools), the runtime returns an error to the caller tool.
 
-## Lifecycle Proof
-
-Run the focused sidecar lifecycle proof with:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
-```
-
-The proof writes `.lemon/proofs/wasm-lifecycle-latest.json` and verifies
-redacted discover/invoke start-stop telemetry, running sidecar status, explicit
-stop termination, and omission of raw cwd, session id, tool name, and params.
-`mix lemon.doctor --verbose` surfaces it as `extensions.wasm_lifecycle`.
-
-## Security Model (v1)
-
-- `tool_auth` reads WASM `auth` metadata and helps set up credentials.
-- `secret-exists` checks Lemon secret store first, then environment fallback.
-- `workspace-read` is path-normalized and restricted by allowed prefixes.
-- `http-request` is allowlist/rate-limited by capabilities.
-- `tool-invoke` is alias-based and depth/rate-limited.
-- Direct workspace write imports are intentionally not exposed; write/edit/patch behavior must go through host tool aliases.

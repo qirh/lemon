@@ -76,8 +76,8 @@ defmodule LemonSim.LLM.GameHelpers.ConfigTest do
       providers: LemonCore.Config.Providers.resolve(%{})
     }
 
-    assert_raise RuntimeError, ~r/^Auction House example requires a valid default model\./, fn ->
-      Config.resolve_configured_model!(config, "auction", error_label: "Auction House example")
+    assert_raise RuntimeError, ~r/^Tic Tac Toe example requires a valid default model\./, fn ->
+      Config.resolve_configured_model!(config, "tic_tac_toe", error_label: "Tic Tac Toe example")
     end
   end
 

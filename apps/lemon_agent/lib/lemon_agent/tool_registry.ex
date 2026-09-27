@@ -2,8 +2,8 @@ defmodule LemonAgent.ToolRegistry do
   @moduledoc """
   Runtime registry for agent tools contributed by apps outside the platform.
 
-  The built-in tool lists (`CodingAgent.ToolRegistry`, `CodingAgent.Tools`,
-  `LemonMcp.ToolAdapter`) are compile-time and name the modules they include.
+  The built-in tool list (`@builtin_tools` in `CodingAgent.ToolRegistry`) is
+  compile-time and names the modules it includes.
   That works for tools the platform owns, but a satellite integration — one the
   platform must not know about at compile time — has nowhere to appear. It
   registers here instead, at boot:
@@ -20,19 +20,18 @@ defmodule LemonAgent.ToolRegistry do
 
   Built-ins win. A registration whose name collides with a built-in is kept in
   the registry but ignored by the consumer that already has that name, so a
-  satellite can never silently replace a platform tool. Consumers get this one
-  of two ways, and both are equivalent: filtering with `available/1`
-  (`CodingAgent.ToolRegistry`), or merging their own built-ins *last*
-  (`CodingAgent.Tools`, `LemonMcp.ToolAdapter`).
+  satellite can never silently replace a platform tool. `CodingAgent.ToolRegistry`
+  applies this by filtering registrations with `available/1` before appending
+  them to its built-ins.
 
   The rule is worth stating in terms of what it protects rather than as a
-  merge order. `CodingAgent.Tools.all_tools/2` is what `get_tool/3` resolves
-  through, so it decides which module actually *runs* when the model emits a
-  call. The schema the model was shown for `bash` came from the built-in; if a
+  merge order. `CodingAgent.ToolRegistry.get_tool/3` resolves through that same
+  merged list, so it decides which module actually *runs* when the model emits
+  a call. The schema the model was shown for `bash` came from the built-in; if a
   registration could take that name, the thing that runs would not be the thing
   that was described. That is the failure the precedence rule exists to prevent,
-  which is why it has to hold on every path rather than on the one a consumer
-  happened to write carefully.
+  which is why it has to hold on every path that lists or resolves tools rather
+  than on the one a consumer happened to write carefully.
 
   ## The satellite pattern
 

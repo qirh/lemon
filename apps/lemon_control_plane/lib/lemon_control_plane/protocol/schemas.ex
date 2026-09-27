@@ -299,16 +299,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string
       }
     },
-    "sessions.heartbeat" => %{
-      required: %{
-        "sessionKey" => :string
-      },
-      optional: %{
-        "action" => :string,
-        "prompt" => :string,
-        "intervalSeconds" => :integer
-      }
-    },
     "sessions.active" => %{
       required: %{
         "sessionKey" => :string

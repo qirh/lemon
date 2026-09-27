@@ -46,6 +46,13 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -106,6 +113,13 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -246,6 +260,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -266,6 +286,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -286,6 +312,11 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -306,6 +337,11 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -326,6 +362,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -346,6 +388,10 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -366,6 +412,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -386,6 +438,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -406,6 +464,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -432,6 +496,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.individual.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -458,6 +528,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -484,6 +560,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -510,6 +592,12 @@
     "provider": "github_copilot",
     "base_url": "https://api.githubcopilot.com",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"

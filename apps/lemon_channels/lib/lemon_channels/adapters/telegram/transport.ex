@@ -104,6 +104,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               allow_queue_override: cfg_get(config, :allow_queue_override, false),
               allowed_chat_ids:
                 RuntimeState.parse_allowed_chat_ids(cfg_get(config, :allowed_chat_ids)),
+              allow_all_chats: cfg_get(config, :allow_all_chats, false) == true,
               deny_unbound_chats: cfg_get(config, :deny_unbound_chats, false),
               account_id: account_id,
               voice_transcription: cfg_get(config, :voice_transcription, false),
@@ -131,6 +132,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
               files: cfg_get(config, :files, %{})
             })
 
+          log_authorization_mode(state)
           maybe_subscribe_exec_approvals()
           send(self(), :poll)
           {:ok, state}
@@ -300,7 +302,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       maybe_transcribe_voice: &maybe_transcribe_voice/2,
       process_media_group: &process_media_group/2,
       persist_offset: &persist_offset/2,
+      reply_whoami: &reply_whoami/2,
       send_approval_request: &send_approval_request/2,
+      send_unpaired_notice: &send_unpaired_notice/2,
       start_async_task: &start_async_task/2,
       submit_buffer: &submit_buffer/2
     })
@@ -325,10 +329,70 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       index_known_target: &index_known_target/2,
       maybe_log_drop: &maybe_log_drop/3,
       process_media_group: &process_media_group/2,
+      reply_whoami: &reply_whoami/2,
       send_approval_request: &send_approval_request/2,
+      send_unpaired_notice: &send_unpaired_notice/2,
       start_async_task: &start_async_task/2,
       submit_buffer: &submit_buffer/2
     }
+  end
+
+  @unpaired_notice_text "This bot is not paired. Run `lemon gateway setup telegram`. " <>
+                          "Send /whoami to see this chat's ID."
+
+  defp log_authorization_mode(%{allowed_chat_ids: [_ | _]}), do: :ok
+
+  defp log_authorization_mode(%{allow_all_chats: true, account_id: account_id}) do
+    Logger.warning(
+      "Telegram account_id=#{inspect(account_id)} accepts every chat " <>
+        "(gateway.telegram.allow_all_chats = true); anyone who finds the bot can run the agent"
+    )
+  end
+
+  defp log_authorization_mode(%{account_id: account_id}) do
+    Logger.warning(
+      "Telegram account_id=#{inspect(account_id)} is not paired: " <>
+        "gateway.telegram.allowed_chat_ids is empty, so every chat is ignored. " <>
+        "Run `lemon gateway setup telegram` to pair your chat."
+    )
+  end
+
+  defp reply_whoami(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      user_id = inbound.sender && inbound.sender.id
+
+      text =
+        [
+          "chat_id: #{chat_id}",
+          user_id && "user_id: #{user_id}",
+          thread_id && "topic_id: #{thread_id}"
+        ]
+        |> Enum.reject(&is_nil/1)
+        |> Enum.join("\n")
+
+      send_critical_feedback(state, chat_id, thread_id, user_msg_id, text)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp send_unpaired_notice(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      Logger.warning(
+        "Telegram dropped update from unpaired chat_id=#{chat_id}; " <>
+          "run `lemon gateway setup telegram` to pair the bot"
+      )
+
+      send_critical_feedback(state, chat_id, thread_id, user_msg_id, @unpaired_notice_text)
+    end
+
+    :ok
   end
 
   defp execute_inbound_message(state, inbound) do
@@ -342,6 +406,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       handle_media_auto_put: &handle_media_auto_put/2,
       handle_model_command: &ModelPicker.handle_model_command/2,
       handle_new_session: &handle_new_session/3,
+      handle_remind_command: &handle_remind_command/2,
+      handle_reminders_command: &handle_reminders_command/2,
+      handle_unremind_command: &handle_unremind_command/2,
       handle_portable_command: &handle_portable_command/2,
       handle_reload_command: &handle_reload_command/2,
       handle_resume_command: &handle_resume_command/2,
@@ -1326,6 +1393,52 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             worker_id: agent_id,
             workspace: workspace,
             meta: %{transport: "telegram"}
+          )
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp handle_remind_command(state, inbound) do
+    handle_reminder_command(state, inbound, "remind", fn args, opts ->
+      LemonChannels.Reminders.create(args, opts)
+    end)
+  end
+
+  defp handle_reminders_command(state, inbound) do
+    handle_reminder_command(state, inbound, "reminders", fn _args, opts ->
+      LemonChannels.Reminders.list(opts)
+    end)
+  end
+
+  defp handle_unremind_command(state, inbound) do
+    handle_reminder_command(state, inbound, "unremind", fn args, opts ->
+      LemonChannels.Reminders.cancel(args, opts)
+    end)
+  end
+
+  defp handle_reminder_command(state, inbound, command, reply_fun) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      session_key = build_session_key(state, inbound, scope)
+      args = Commands.telegram_command_args(inbound.message.text || "", command)
+      agent_id = BindingResolver.resolve_agent_id(scope)
+
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          reply_fun.(args,
+            session_key: session_key,
+            agent_id: agent_id,
+            created_via: "telegram"
           )
         )
     end

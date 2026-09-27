@@ -243,10 +243,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
     if is_integer(chat_id) do
       TriggerMode.resolve(account_id, chat_id, topic_id)
     else
-      %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
+      %{mode: :mentions, chat_mode: nil, topic_mode: nil, source: :default}
     end
   rescue
-    _ -> %{mode: :all, chat_mode: nil, topic_mode: nil, source: :default}
+    _ -> %{mode: :mentions, chat_mode: nil, topic_mode: nil, source: :default}
   end
 
   defp explicit_invocation?(state, inbound, text) do
@@ -465,7 +465,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       case chat_mode do
         :mentions -> "Chat default: mentions-only."
         :all -> "Chat default: all."
-        _ -> "Chat default: all."
+        _ -> "Chat default: mentions-only."
       end
 
     topic_line =

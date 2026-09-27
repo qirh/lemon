@@ -3,7 +3,6 @@ defmodule CodingAgent.Tools.BrowserTest do
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.ImageContent
-  alias CodingAgent.Tools
   alias LemonBrowser.LocalServer
 
   setup do
@@ -28,7 +27,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       {:ok, %{"url" => args["url"], "status" => 200, "title" => "Example"}}
     end
 
-    tool = Tools.get_tool("browser_navigate", "/tmp", browser_request: request)
+    tool = browser_tool("browser_navigate", "/tmp", browser_request: request)
 
     result =
       tool.execute.("call-1", %{"url" => "https://example.com", "timeoutMs" => 500}, nil, nil)
@@ -56,10 +55,10 @@ defmodule CodingAgent.Tools.BrowserTest do
        }}
     end
 
-    tabs = Tools.get_tool("browser_tabs", "/tmp", browser_request: request)
-    open = Tools.get_tool("browser_tab_open", "/tmp", browser_request: request)
-    activate = Tools.get_tool("browser_tab_activate", "/tmp", browser_request: request)
-    close = Tools.get_tool("browser_tab_close", "/tmp", browser_request: request)
+    tabs = browser_tool("browser_tabs", "/tmp", browser_request: request)
+    open = browser_tool("browser_tab_open", "/tmp", browser_request: request)
+    activate = browser_tool("browser_tab_activate", "/tmp", browser_request: request)
+    close = browser_tool("browser_tab_close", "/tmp", browser_request: request)
 
     assert %AgentToolResult{} = run_browser_tool(tabs, %{"timeoutMs" => 500})
 
@@ -89,7 +88,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       {:ok, %{"url" => args["url"], "title" => "Example"}}
     end
 
-    tool = Tools.get_tool("browser_navigate", "/tmp", browser_request: request)
+    tool = browser_tool("browser_navigate", "/tmp", browser_request: request)
     assert tool.parameters["properties"]["targetId"]["type"] == "string"
 
     assert %AgentToolResult{} =
@@ -108,7 +107,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       flunk("browser request should not run for blocked navigation")
     end
 
-    tool = Tools.get_tool("browser_navigate", "/tmp", browser_request: request)
+    tool = browser_tool("browser_navigate", "/tmp", browser_request: request)
 
     assert {:error, "browser navigation requires a public http(s) URL"} =
              tool.execute.(
@@ -132,7 +131,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       flunk("browser request should not run for blocked metadata navigation")
     end
 
-    tool = Tools.get_tool("browser_navigate", "/tmp", browser_request: request)
+    tool = browser_tool("browser_navigate", "/tmp", browser_request: request)
 
     assert {:error, "browser navigation blocked metadata endpoint"} =
              tool.execute.(
@@ -164,7 +163,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_navigate", "/tmp", browser_request: request)
+    tool = browser_tool("browser_navigate", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -212,7 +211,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_click", "/tmp", browser_request: request)
+    tool = browser_tool("browser_click", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -241,7 +240,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_snapshot", "/tmp", browser_request: request)
+    tool = browser_tool("browser_snapshot", "/tmp", browser_request: request)
 
     assert {:error, "selector #secret failed: private text"} =
              tool.execute.("call-1", %{"selector" => "#secret"}, nil, on_update)
@@ -268,7 +267,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_wait_for_selector", "/tmp", browser_request: request)
+    tool = browser_tool("browser_wait_for_selector", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -300,7 +299,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_evaluate", "/tmp", browser_request: request)
+    tool = browser_tool("browser_evaluate", "/tmp", browser_request: request)
 
     expression = "(() => ({title: document.title, ready: !!window.secretReady}))()"
 
@@ -335,7 +334,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_hover", "/tmp", browser_request: request)
+    tool = browser_tool("browser_hover", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -368,7 +367,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_select_option", "/tmp", browser_request: request)
+    tool = browser_tool("browser_select_option", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -407,7 +406,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_upload_file", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_upload_file", tmp_dir, browser_request: request)
 
     result =
       tool.execute.(
@@ -451,7 +450,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_upload_file", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_upload_file", tmp_dir, browser_request: request)
 
     assert {:error, "browser_upload_file path must be under the current project"} =
              tool.execute.(
@@ -491,7 +490,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_download", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_download", tmp_dir, browser_request: request)
 
     result =
       tool.execute.(
@@ -537,7 +536,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       :ok
     end
 
-    tool = Tools.get_tool("browser_download", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_download", tmp_dir, browser_request: request)
 
     assert {:error, "browser_download output path must be under the current project"} =
              tool.execute.(
@@ -562,7 +561,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       {:ok, %{"snapshot" => "URL: file:///tmp/page.html", "displayedNodes" => 1}}
     end
 
-    tool = Tools.get_tool("browser_snapshot", "/tmp", browser_request: request)
+    tool = browser_tool("browser_snapshot", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -588,7 +587,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     end
 
     path = Path.join(tmp_dir, "shot.png")
-    tool = Tools.get_tool("browser_screenshot", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_screenshot", tmp_dir, browser_request: request)
 
     result = tool.execute.("call-1", %{"path" => path}, nil, nil)
 
@@ -611,7 +610,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     end
 
     path = Path.join(tmp_dir, "vision.png")
-    tool = Tools.get_tool("browser_screenshot", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_screenshot", tmp_dir, browser_request: request)
 
     result = tool.execute.("call-1", %{"path" => path, "includeImage" => true}, nil, nil)
 
@@ -643,7 +642,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     end
 
     path = Path.join(tmp_dir, "browser-vision.png")
-    tool = Tools.get_tool("browser_analyze", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_analyze", tmp_dir, browser_request: request)
 
     result =
       tool.execute.(
@@ -704,7 +703,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     end
 
     tool =
-      Tools.get_tool("browser_analyze", tmp_dir,
+      browser_tool("browser_analyze", tmp_dir,
         browser_request: browser_request,
         media_vision_config: %{
           providers: %{
@@ -764,7 +763,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     end
 
     path = Path.join(tmp_dir, "channel-shot.png")
-    tool = Tools.get_tool("browser_screenshot", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_screenshot", tmp_dir, browser_request: request)
 
     result = tool.execute.("call-1", %{"path" => path, "sendToChannel" => true}, nil, nil)
 
@@ -793,7 +792,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       {:ok, %{"contentType" => "image/png", "base64" => Base.encode64(png)}}
     end
 
-    tool = Tools.get_tool("browser_screenshot", tmp_dir, browser_request: request)
+    tool = browser_tool("browser_screenshot", tmp_dir, browser_request: request)
 
     result = tool.execute.("call-1", %{}, nil, nil)
 
@@ -822,7 +821,7 @@ defmodule CodingAgent.Tools.BrowserTest do
        }}
     end
 
-    tool = Tools.get_tool("browser_events", "/tmp", browser_request: request)
+    tool = browser_tool("browser_events", "/tmp", browser_request: request)
 
     result = tool.execute.("call-1", %{"limit" => 20, "clear" => true}, nil, nil)
 
@@ -854,7 +853,7 @@ defmodule CodingAgent.Tools.BrowserTest do
        }}
     end
 
-    tool = Tools.get_tool("browser_get_cookies", "/tmp", browser_request: request)
+    tool = browser_tool("browser_get_cookies", "/tmp", browser_request: request)
 
     result =
       tool.execute.("call-1", %{"url" => "https://example.com", "timeoutMs" => 250}, nil, nil)
@@ -871,7 +870,7 @@ defmodule CodingAgent.Tools.BrowserTest do
       {:ok, %{"cookies" => [%{"name" => "session", "value" => "abc"}]}}
     end
 
-    tool = Tools.get_tool("browser_get_cookies", "/tmp", browser_request: request)
+    tool = browser_tool("browser_get_cookies", "/tmp", browser_request: request)
 
     result = tool.execute.("call-1", %{"includeValues" => true}, nil, nil)
 
@@ -887,7 +886,7 @@ defmodule CodingAgent.Tools.BrowserTest do
     end
 
     cookie = %{"name" => "session", "value" => "abc", "url" => "https://example.com"}
-    tool = Tools.get_tool("browser_set_cookies", "/tmp", browser_request: request)
+    tool = browser_tool("browser_set_cookies", "/tmp", browser_request: request)
 
     result = tool.execute.("call-1", %{"cookies" => [cookie]}, nil, nil)
 
@@ -911,7 +910,7 @@ defmodule CodingAgent.Tools.BrowserTest do
        }}
     end
 
-    tool = Tools.get_tool("browser_clear_state", "/tmp", browser_request: request)
+    tool = browser_tool("browser_clear_state", "/tmp", browser_request: request)
 
     result =
       tool.execute.(
@@ -999,7 +998,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           navigate =
             "browser_navigate"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"url" => url, "timeoutMs" => 20_000})
 
           assert navigate.trust == :untrusted
@@ -1007,7 +1006,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           snapshot =
             "browser_snapshot"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"selector" => "main", "maxChars" => 2_000})
 
           assert snapshot.trust == :untrusted
@@ -1015,14 +1014,14 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           waited =
             "browser_wait_for_selector"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"selector" => "#message", "timeoutMs" => 1_000})
 
           assert waited.details["found"] == true
 
           evaluated =
             "browser_evaluate"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{
               "expression" =>
                 "(() => ({title: document.title, hasMessage: !!document.querySelector('#message')}))()",
@@ -1034,14 +1033,14 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           hovered =
             "browser_hover"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"selector" => "#menu", "timeoutMs" => 1_000})
 
           assert hovered.details["hovered"] == true
 
           selected =
             "browser_select_option"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{
               "selector" => "#mode",
               "value" => "otp-mode",
@@ -1052,7 +1051,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           typed =
             "browser_type"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{
               "selector" => "#message",
               "text" => "OTP supervision",
@@ -1064,14 +1063,14 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           clicked =
             "browser_click"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"selector" => "#save"})
 
           assert clicked.details["clicked"] == true
 
           content =
             "browser_get_content"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"includeHtml" => false, "includeText" => true})
 
           assert content.trust == :untrusted
@@ -1080,7 +1079,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
           events =
             "browser_events"
-            |> Tools.get_tool(tmp_dir, browser_request: request)
+            |> browser_tool(tmp_dir, browser_request: request)
             |> run_browser_tool(%{"limit" => 10, "clear" => true})
 
           assert Enum.any?(events.details["events"], fn event ->
@@ -1101,7 +1100,7 @@ defmodule CodingAgent.Tools.BrowserTest do
 
   test "browser_click validates selector" do
     tool =
-      Tools.get_tool("browser_click", "/tmp", browser_request: fn _, _, _ -> flunk("unused") end)
+      browser_tool("browser_click", "/tmp", browser_request: fn _, _, _ -> flunk("unused") end)
 
     assert {:error, "selector is required"} = tool.execute.("call-1", %{}, nil, nil)
   end
@@ -1159,4 +1158,12 @@ defmodule CodingAgent.Tools.BrowserTest do
       end)
     end
   end
+
+  # Builds a browser tool straight from its module (`browser_navigate` ->
+  # `CodingAgent.Tools.BrowserNavigate`) so tests control every tool option.
+  defp browser_tool(name, cwd, opts) do
+    module = Module.concat(CodingAgent.Tools, Macro.camelize(name))
+    module.tool(cwd, opts)
+  end
+
 end

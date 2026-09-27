@@ -78,7 +78,7 @@ defmodule LemonRouter.SubmissionBuilder do
           base_tool_policy
         end
 
-      cwd = resolve_effective_cwd(cwd_override, meta)
+      cwd = resolve_effective_cwd(cwd_override, meta, origin)
 
       {prompt, pending_compaction_marker} =
         if is_map(prepared_compaction_marker) do
@@ -237,10 +237,14 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_profile_tool_policy(_), do: %{}
 
-  defp resolve_effective_cwd(cwd_override, meta) do
+  defp resolve_effective_cwd(cwd_override, meta, origin) do
     normalize_cwd(cwd_override) || normalize_cwd(MapHelpers.get_key(meta, :cwd)) ||
-      Cwd.default_cwd()
+      default_cwd_for(origin)
   end
+
+  # Remote chat runs default to the assistant home, never the user's $HOME.
+  defp default_cwd_for(:channel), do: Cwd.channel_default_cwd()
+  defp default_cwd_for(_origin), do: Cwd.default_cwd()
 
   defp normalize_cwd(cwd) when is_binary(cwd) do
     cwd = String.trim(cwd)

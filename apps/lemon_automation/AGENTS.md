@@ -7,7 +7,9 @@ Elixir app for cron jobs, heartbeats, and automation tasks in the Lemon umbrella
 LemonAutomation provides scheduled and triggered automation for agents:
 
 - **Cron Jobs** - Schedule agent prompts with cron expressions
-- **Heartbeats** - Periodic health checks with smart suppression
+- **Heartbeats** - Cron jobs flagged `meta.heartbeat`; exact `HEARTBEAT_OK` replies are suppressed, everything else is delivered
+- **Delivery** - Finished run results go to an explicit `deliver_to` target, the originating chat, or the paired owner chat (`CronDelivery`)
+- **Daily Brief** - Opt-in `[automation] daily_brief` heartbeat reconciled at boot
 - **Wake** - Immediate manual triggering of scheduled jobs
 - **Goal Continuation** - Supervised one-shot continuation runs for active session goals
 - **Goal Loop Preview** - One supervised judge tick that continues, completes, or pauses a goal
@@ -20,13 +22,18 @@ LemonAutomation provides scheduled and triggered automation for agents:
 ```
 LemonAutomation.Supervisor (one_for_one)
 +-- LemonAutomation.TaskSupervisor  (Task.Supervisor)
-+-- LemonAutomation.CronManager     (GenServer)
-+-- LemonAutomation.HeartbeatManager (GenServer)
++-- LemonAutomation.CronManager     (GenServer; runs Heartbeat policy + CronDelivery at terminalization)
++-- Task :daily_brief_sync          (one-shot Heartbeat.sync_daily_brief/0; omitted when
+|                                     config :lemon_automation, daily_brief_sync: false)
 +-- LemonAutomation.GoalContinuationManager (GenServer)
 +-- LemonAutomation.GoalLoopManager (GenServer)
 +-- LemonAutomation.KanbanDispatcher (GenServer)
 +-- LemonAutomation.SkillCuratorManager (GenServer)
++-- LemonAutomation.SynthesisRunnerManager (GenServer)
 ```
+
+There is no heartbeat process: heartbeats are cron jobs, and their suppression
+runs synchronously inside `CronManager` terminalization.
 
 ## Cron System Architecture
 
@@ -51,9 +58,12 @@ CronManager (GenServer, ticks every 60s)
                                 |
                                 +- returns its result through the monitored Task ref
                                            |
-                                           +- CronManager updates CronStore, emits :cron_run_completed
-                                           +- For `agent:*:main` base sessions, CronManager forwards a synthetic
-                                              `:run_completed` summary into the base main session topic/history
+                                           +- CronManager terminalizes: monitor/preflight policy, then
+                                              Heartbeat.apply_policy/2, updates CronStore, emits :cron_run_completed
+                                           +- If delivered: forwards a synthetic `:run_completed` summary into the
+                                              base main/channel-peer session topic/history, and sends the result to the
+                                              chat chosen by CronDelivery (deliver_to, originating chat, owner chat)
+                                           +- `once` jobs are deleted after their scheduled run (and retries) finish
 ```
 
 **Wake** is a separate module (not intermediary in the above flow). It creates
@@ -64,8 +74,10 @@ runs with `triggered_by: :wake`, submits through the same configured
 **CronCommandRunner** is the operator-owned no-agent cron path. Jobs with
 `command` instead of `prompt` run as supervised local shell commands under
 `CronManager`, persist output/error in `CronRun`, and never create LemonRouter
-runs or channel summaries. Prompt jobs still require `agent_id`, `session_key`,
-and `prompt`; command jobs require only `name`, `schedule`, and `command`.
+runs. They reach chat only with an explicit `deliver_to` target; otherwise
+`CronDelivery.target/2` returns `:none` for them. Prompt jobs
+still require `agent_id`, `session_key`, and `prompt`; command jobs require
+only `name`, `schedule`, and `command`.
 
 **GoalContinuationManager** runs one active persistent-goal continuation at a
 time through `TaskSupervisor`. `GoalContinuation` submits normal
@@ -128,7 +140,7 @@ Goal loops also use its synchronous pre-submit ownership claim; a rejected
 claim prevents the router call entirely.
 Router run-id mismatches are explicit errors; callers never subscribe to a
 replacement id after submission because a synchronous completion could already
-have been lost. Cron, goal judge, autonomous goal continuation, timer heartbeat,
+have been lost. Cron, goal judge, autonomous goal continuation,
 and Kanban worker paths share this lifecycle.
 
 **KanbanDispatcher** is the first BEAM-native fleet-work supervisor. It scans
@@ -149,7 +161,29 @@ lease IDs are reclaimed before return. Completion/failure writes are guarded by
 lease ID, so late results cannot mutate a re-leased task. Starting a board also
 reclaims unexpired leases left by the same dispatcher worker id after restart.
 
-**HeartbeatManager** subscribes to the "cron" bus and auto-processes every `:cron_run_completed` event for suppression checks.
+**Heartbeat** (`LemonAutomation.Heartbeat`) holds the heartbeat policy. A job
+is a heartbeat when `meta.heartbeat == true` (atom or string key).
+`CronManager.terminalize_run` calls `Heartbeat.apply_policy/2` after the monitor
+and preflight policies: a `:completed` run whose output trims to exactly
+`HEARTBEAT_OK` is marked suppressed (`CronRun.suppress/1`), emits
+`:heartbeat_suppressed`, and is not delivered; any other outcome emits
+`:heartbeat_alert` and is delivered. It also reconciles the daily brief:
+`sync_daily_brief/0` reads `[automation] daily_brief` via
+`LemonCore.Config.Modular.load().automation` and creates, reschedules, or
+removes the job `cron_daily_brief` (`timezone: "local"`, agent `default`,
+session `agent:default:main`, `meta: %{heartbeat: true, daily_brief: true}`).
+Invalid times are logged and leave jobs untouched.
+
+**CronDelivery** (`LemonAutomation.CronDelivery`) resolves the delivery target:
+`deliver_to: "none"` → nothing; explicit `"telegram:<chat>[:<thread>]"` /
+`"discord:<channel>[:<thread>]"`; the originating chat for channel-peer session
+keys of registered chat platforms (sub-session suffix dropped, topic/thread
+kept); otherwise the paired owner chat (first `gateway.telegram.allowed_chat_ids`
+when Telegram is enabled, else `gateway.discord.default_channel_id` when Discord
+is enabled); otherwise nothing. `validate/1` normalizes stored values
+(`nil`/`""`/`"auto"` → default). Channel text is `"<job name>\n\n<output>"` or
+`"<job name> (<status>): <error>"`, enqueued through
+`LemonRouter.ChannelsDelivery` with idempotency key `cron_notify_<run_id>`.
 
 **SkillCuratorManager** is the idle-triggered background path for learned-skill
 maintenance. It checks active router sessions every minute, waits for the
@@ -186,8 +220,6 @@ inspection, validation, preview, and activation semantics to `Blueprint`.
 - For cron jobs created from `agent:*:main`, completion summaries are mirrored back into the base main session as synthetic `run_completed` entries (`meta.cron_forwarded_summary = true`)
 - Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover through the same monitor/delivery/retry terminalizer as normal completions.
 - Scheduled runs use deterministic slot ids and `CronStore.claim_scheduled_run/3`, backed by `LemonCore.Store.put_new/3`, so competing dispatchers preserve the first claimant instead of overwriting a run.
-- `scripts/live_cron_runtime_restart_smoke.exs` boots `:runtime_full` twice against one isolated durable store, then proves a scheduled run before restart, persisted job/run history after restart, and a fresh scheduled run after restart.
-- `scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and Discord plugins, completes channel-peer cron runs through `CronManager`, and proves forwarded run history plus `LemonRouter.ChannelsDelivery` -> `LemonChannels` outbox delivery with redacted proof metadata.
 - Scheduled failures/timeouts persist retry due time, attempt, source, and root lineage on the terminal source run. Restart reconstructs the timer, while a deterministic `{root, attempt}` retry-run ID and atomic claim prevent duplicate attempts. Manual and wake runs stay single-shot by default.
 - Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
@@ -430,99 +462,68 @@ Each cron job can have a persistent markdown memory file that accumulates contex
 
 ## Heartbeat Management
 
-Cron-backed heartbeats are special cron jobs for agent health checks; intervals
-that cron cannot represent exactly use the timer path documented below.
-Responses containing exactly `"HEARTBEAT_OK"` (trimmed) are suppressed from
-channels but still logged.
+Heartbeats are ordinary cron jobs; there is no heartbeat process, timer path,
+or separate store. `LemonAutomation.Heartbeat` supplies the policy that
+`CronManager` applies synchronously during run terminalization. Heartbeat
+schedules are cron schedules, so intervals must be cron-exact.
 
 ### Identifying Heartbeat Jobs
 
-A job is treated as a heartbeat if:
-- Its `name` contains `"heartbeat"` (case-insensitive), OR
-- Its `meta` has `heartbeat: true` (atom key only - string key `"heartbeat"` is NOT matched by `heartbeat?/1`)
+A job is a heartbeat only when its `meta` has `heartbeat: true` (atom or string
+key). The job name is not consulted.
 
 ### Creating a Heartbeat via CronManager
 
 ```elixir
 {:ok, job} = LemonAutomation.CronManager.add(%{
-  name: "heartbeat-agent-abc",   # name contains "heartbeat"
-  schedule: "*/5 * * * *",
+  name: "heartbeat-agent_abc",
+  schedule: "every 30m",
+  timezone: "local",
   agent_id: "agent_abc",
-  session_key: "agent:agent_abc:heartbeat",
-  prompt: "HEARTBEAT"
+  session_key: "agent:agent_abc:main",
+  prompt: "Work through HEARTBEAT.md; reply HEARTBEAT_OK if nothing needs attention.",
+  meta: %{heartbeat: true, agent_id: "agent_abc"}
 })
 ```
 
-### HeartbeatManager API
+The TUI `/heartbeat every <interval> <prompt>` command creates or updates this
+per-agent job (it ignores `meta.daily_brief` jobs).
+
+### Heartbeat API
 
 ```elixir
-# Check if job is a heartbeat (checks name and meta[:heartbeat])
-LemonAutomation.HeartbeatManager.heartbeat?(job)
+# meta.heartbeat == true (atom or string key)
+LemonAutomation.Heartbeat.heartbeat?(job)
 
-# Check response health (exact "HEARTBEAT_OK" match after trimming)
-LemonAutomation.HeartbeatManager.healthy_response?(response)
+# Exact "HEARTBEAT_OK" after trimming
+LemonAutomation.Heartbeat.healthy_response?(response)
 
-# Process a completed run's response - called automatically on :cron_run_completed events
-# Returns {:ok, suppressed?}
-LemonAutomation.HeartbeatManager.process_response(run, response)
+# Called by CronManager terminalization; returns {run, deliver?}
+LemonAutomation.Heartbeat.apply_policy(job, run)
 
-# Get suppression stats (%{total_heartbeats, suppressed, alerts})
-LemonAutomation.HeartbeatManager.stats()
-
-# Get persisted heartbeat config for an agent (reads :heartbeat_config store)
-LemonAutomation.HeartbeatManager.get_config(agent_id)
-
-# Get last heartbeat result for an agent (reads :heartbeat_last store)
-# Returns %{timestamp_ms, status: :ok | :alert, response, suppressed, run_id, job_id}
-LemonAutomation.HeartbeatManager.get_last(agent_id)
-
-# Update heartbeat configuration
-# Creates/updates/disables a cron job for the agent
-LemonAutomation.HeartbeatManager.update_config(agent_id, %{
-  enabled: true,
-  interval_ms: 300_000,
-  prompt: "HEARTBEAT"
-})
+# Daily brief: reconcile cron_daily_brief from [automation] daily_brief
+LemonAutomation.Heartbeat.sync_daily_brief()
+# ...or from an explicit HH:MM (nil removes the job); opts[:cron_manager] for tests
+LemonAutomation.Heartbeat.sync_daily_brief("08:00", cron_manager: MyCron)
 ```
-
-### Sub-Minute Heartbeats (Timer-Based)
-
-Intervals that cannot be represented exactly by a five-field cron expression
-use Erlang timers instead of cron jobs. This includes sub-minute values and
-longer values such as 90 minutes or 5 hours. Timer heartbeats create synthetic
-run IDs (`"timer-heartbeat-{agent_id}-{timestamp}"`), submit through the shared
-race-free submit-and-wait lifecycle, and broadcast events on the "cron" bus.
-They do NOT create `CronJob` or `CronRun` records in `CronStore`; terminal status,
-router run id, response, and suppression state are persisted in
-`HeartbeatStore`.
-
-```elixir
-LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
-  enabled: true,
-  interval_ms: 30_000,  # 30 seconds - uses timers, not cron
-  prompt: "HEARTBEAT"
-})
-```
-
-### Heartbeat Schedule Selection
-
-`HeartbeatManager` chooses cron only when the interval stays exact at UTC day
-boundaries: minute intervals must divide 60, hour intervals must divide 24, and
-24 hours maps to daily midnight UTC. Every other positive interval falls back
-to an exact Erlang timer. Invalid non-positive intervals return
-`{:error, :invalid_interval}`. Cron-to-timer transitions disable the cron job;
-timer-to-cron transitions cancel the timer before enabling or updating the cron
-job with mutable fields only.
-
-Only one timer run may be in flight per agent. A tick that overlaps an active
-run is skipped, increments `stats().skipped_overlap`, logs the skip, and records
-`[:lemon, :heartbeat, :skipped]` telemetry with `reason: :overlap`.
 
 ### Heartbeat Suppression Behavior
 
-- Suppressed responses: NOT broadcast to channels, ARE logged to run history, emit `:heartbeat_suppressed` event
-- Non-OK responses: NOT suppressed, emit `:heartbeat_alert` event with `severity: :warning`
-- After suppression check, `HeartbeatManager` stores result in `:heartbeat_last` store keyed by `agent_id`
+- Runs after the monitor and preflight policies in `CronManager.terminalize_run`
+- `:completed` + exact `HEARTBEAT_OK`: `CronRun.suppress/1`, kept in run history, emits `:heartbeat_suppressed`, NOT delivered
+- Any other outcome (including failure/timeout): emits `:heartbeat_alert` with `severity: :warning`, delivered through `CronDelivery`
+- Non-heartbeat jobs pass through unchanged
+
+### Daily Brief
+
+`[automation] daily_brief = "HH:MM"` (`LemonCore.Config.Automation`) is
+reconciled once at boot by the `:daily_brief_sync` task into job
+`cron_daily_brief`: schedule `"M H * * *"`, `timezone: "local"`, agent
+`default`, session `agent:default:main`, `meta: %{heartbeat: true,
+daily_brief: true}`. A changed time updates schedule/timezone and re-enables
+the job; removing the key removes it; an invalid time is logged and returns
+`{:error, :invalid_time}` without touching jobs. `config :lemon_automation,
+daily_brief_sync: false` (used in `config/test.exs`) omits the task.
 
 ## Wake Functionality
 
@@ -570,11 +571,11 @@ All events are broadcast on the `"cron"` bus topic as `%LemonCore.Event{}` struc
 | `:cron_job_created` | `CronManager` | Job added |
 | `:cron_job_updated` | `CronManager` | Job updated |
 | `:cron_job_deleted` | `CronManager` | Job removed |
-| `:cron_run_started` | `CronManager`, `Wake`, `HeartbeatManager` | Run begins |
-| `:cron_run_completed` | `CronManager`, `HeartbeatManager` | Run finishes |
+| `:cron_run_started` | `CronManager`, `Wake` | Run begins |
+| `:cron_run_completed` | `CronManager` | Run finishes (terminalization) |
 | `:cron_lifecycle_action` | `CronManager` | Durable audit event recorded |
-| `:heartbeat_suppressed` | `HeartbeatManager` | "HEARTBEAT_OK" response |
-| `:heartbeat_alert` | `HeartbeatManager` | Non-OK heartbeat response |
+| `:heartbeat_suppressed` | `Heartbeat.apply_policy/2` (CronManager terminalization) | "HEARTBEAT_OK" response |
+| `:heartbeat_alert` | `Heartbeat.apply_policy/2` (CronManager terminalization) | Any other heartbeat outcome |
 
 ### Subscribing to Events
 
@@ -687,11 +688,10 @@ test/lemon_automation/
 +-- cron_schedule_test.exs         # Cron parsing, next_run computation
 +-- cron_store_test.exs            # Persistence operations
 +-- cron_manager_update_test.exs   # Immutable field rejection
-+-- cron_manager_forwarding_test.exs # Summary forwarding to base sessions
++-- cron_manager_forwarding_test.exs # Base-session forwarding, owner-chat default, deliver_to, heartbeat suppression, one-shot removal
++-- cron_delivery_test.exs         # deliver_to validation, target resolution, channel text
 +-- events_test.exs                # Event emission
-+-- heartbeat_manager_test.exs     # Suppression logic
-+-- heartbeat_scheduling_test.exs  # Cron-based heartbeats
-+-- heartbeat_timer_test.exs       # Timer-based heartbeats
++-- heartbeat_test.exs             # apply_policy/2 and daily-brief reconciliation
 +-- run_completion_waiter_test.exs # Wait logic
 +-- run_submitter_test.exs         # Router submission
 +-- goal_loop_test.exs             # Goal loops and router judge proof
@@ -742,12 +742,6 @@ mix test --cover apps/lemon_automation
 # Portable bundle policy, rollback, exact confirmation, and replay
 mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
 
-# Booted control-plane activation proof (disabled job; cleans up after itself)
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
-
-# Source and assembled minimal-runtime CLI proof uses an isolated catalog,
-# profile, control-plane port, and store, then replays activation once.
-scripts/live_blueprint_cli_smoke
 ```
 
 ### Key Testing Patterns
@@ -784,13 +778,13 @@ end
 ```elixir
 test "suppresses exact HEARTBEAT_OK" do
   # Exact match and whitespace-trimmed variants are suppressed
-  assert HeartbeatManager.healthy_response?("HEARTBEAT_OK")
-  assert HeartbeatManager.healthy_response?("  HEARTBEAT_OK  ")
-  assert HeartbeatManager.healthy_response?("HEARTBEAT_OK\n")
+  assert Heartbeat.healthy_response?("HEARTBEAT_OK")
+  assert Heartbeat.healthy_response?("  HEARTBEAT_OK  ")
+  assert Heartbeat.healthy_response?("HEARTBEAT_OK\n")
   # Any other string is NOT suppressed
-  refute HeartbeatManager.healthy_response?("Status: OK")
-  refute HeartbeatManager.healthy_response?("HEARTBEAT_OK extra")
-  refute HeartbeatManager.healthy_response?(nil)
+  refute Heartbeat.healthy_response?("Status: OK")
+  refute Heartbeat.healthy_response?("HEARTBEAT_OK extra")
+  refute Heartbeat.healthy_response?(nil)
 end
 ```
 
@@ -830,7 +824,7 @@ LemonAutomation.CronManager.tick()
 | Module | Purpose |
 |--------|---------|
 | `LemonAutomation` | Top-level facade with delegating functions |
-| `LemonAutomation.Application` | OTP supervisor (TaskSupervisor, CronManager, HeartbeatManager, SkillCuratorManager) |
+| `LemonAutomation.Application` | OTP supervisor (TaskSupervisor, CronManager, daily-brief sync task, goal/kanban/curator/synthesis managers) |
 | `LemonAutomation.Blueprint` | Portable manifest validation, exact preview confirmation, profile-local skill activation, and idempotent cron claim |
 | `LemonAutomation.CronManager` | Scheduling GenServer; owns job state in-memory + persists to CronStore |
 | `LemonAutomation.CronJob` | Job struct, CRUD ops, `due?/1` predicate |
@@ -838,7 +832,8 @@ LemonAutomation.CronManager.tick()
 | `LemonAutomation.CronSchedule` | Cron parsing, next-run computation, `valid?/1`, `matches?/2` |
 | `LemonAutomation.CronStore` | Persistence via LemonCore.Store (tables: `:cron_jobs`, `:cron_runs`) |
 | `LemonAutomation.CronMemory` | Persistent markdown-based cross-run memory; auto-compaction |
-| `LemonAutomation.HeartbeatManager` | Heartbeat suppression GenServer; manages timer and cron heartbeats |
+| `LemonAutomation.Heartbeat` | Heartbeat policy (`meta.heartbeat`, `HEARTBEAT_OK` suppression) applied in CronManager terminalization; daily-brief reconciliation |
+| `LemonAutomation.CronDelivery` | Delivery target resolution (`deliver_to`, originating chat, paired owner chat), channel text, outbox enqueue |
 | `LemonAutomation.SkillCurator` | Idle/config gates plus background submission for learned-skill curator prompts with a learning-only default tool policy |
 | `LemonAutomation.SkillCuratorManager` | Periodic idle scheduler for `SkillCurator.run_once/1` |
 | `LemonAutomation.Wake` | Manual immediate triggering (fire-and-forget, enabled jobs only) |

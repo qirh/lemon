@@ -2,17 +2,11 @@ defmodule LemonCore.RunStore do
   @moduledoc """
   Typed wrapper for run lifecycle and history persistence.
 
-  This module owns the `:runs` and `:sessions_index` table contracts while the
-  existing specialized `LemonCore.Store` lifecycle path provides serialized
-  writes. Finalization is synchronous, retry-safe, and keeps its summary
-  immutable; see `finalize/3` for the hook delivery contract.
+  Runs live in the `:runs` table and each session's summary row in
+  `:sessions_index`. Writes go through `LemonCore.Store`'s serialized run
+  lifecycle path. Finalization is synchronous, retry-safe, and keeps its
+  summary immutable; see `finalize/3` for the hook delivery contract.
   """
-
-  use LemonCore.Store.Table,
-    tables: [
-      runs: [cached: true, persistence: :ephemeral],
-      sessions_index: [cached: true, persistence: :durable]
-    ]
 
   alias LemonCore.Store
   alias LemonCore.RunHistoryStore
@@ -34,8 +28,10 @@ defmodule LemonCore.RunStore do
 
   `:ok` means both the immutable final summary and its derived session index
   were written. Retrying the same summary repairs partial index failures
-  without double-counting the run. Finalize hooks use at-least-once delivery,
-  so hook implementations must be idempotent by run id.
+  without double-counting the run, provided fewer than 32 newer runs of the
+  same session were indexed in between (the session entry remembers only its
+  most recent run ids, so its size stays fixed). Finalize hooks use
+  at-least-once delivery, so hook implementations must be idempotent by run id.
   """
   @spec finalize(Store.server(), term(), map()) :: :ok | {:error, term()}
   def finalize(server \\ Store, run_id, summary), do: Store.finalize_run(server, run_id, summary)
@@ -64,8 +60,11 @@ defmodule LemonCore.RunStore do
     delete_history(session_key)
   end
 
+  # `:__recent_run_ids__` is the store's bounded finalization-idempotency
+  # marker; the other two are the unbounded marker it replaced, still present on
+  # entries whose session has not finalized a run since.
   defp public_session_entry(entry) when is_map(entry) do
-    Map.drop(entry, [:__indexed_run_ids__, :__legacy_run_count__])
+    Map.drop(entry, [:__recent_run_ids__, :__indexed_run_ids__, :__legacy_run_count__])
   end
 
   defp public_session_entry(entry), do: entry

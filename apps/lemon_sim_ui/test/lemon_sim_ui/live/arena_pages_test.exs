@@ -18,48 +18,28 @@ defmodule LemonSimUi.ArenaPagesTest do
     end)
   end
 
-  defp record_space_station_game(tmp_dir, game_id) do
+  defp record_werewolf_game(tmp_dir, game_id) do
     world = %{
       status: "game_over",
-      winner: "crew",
-      round: 4,
+      winner: "villagers",
+      day_number: 3,
       players: %{
-        "player_1" => %{role: "saboteur", model: "openai/gpt-x", status: "ejected"},
-        "player_2" => %{role: "engineer", model: "zai/glm-5", status: "alive"},
-        "player_3" => %{role: "crew", model: "anthropic/claude-x", status: "alive"}
+        "Aria" => %{role: "werewolf", model: "openai/gpt-x", status: "dead"},
+        "Brin" => %{role: "seer", model: "zai/glm-5", status: "alive"},
+        "Cole" => %{role: "doctor", model: "google/gemini-x", status: "alive"},
+        "Dara" => %{role: "villager", model: "anthropic/claude-x", status: "alive"}
       },
-      action_history: [
-        %{round: 1, actions: %{"player_1" => %{action: "fake_repair"}}}
+      vote_history: [
+        %{voter: "Brin", target: "Aria", voter_role: "seer", target_role: "werewolf"}
       ],
-      vote_history: []
+      night_history: [
+        %{player: "Aria", action: "choose_victim", successful: false},
+        %{player: "Brin", action: "investigate", result: "werewolf"}
+      ]
     }
 
     record =
-      League.game_record(LemonSim.Examples.SpaceStation.League, world,
-        game_id: game_id,
-        recorded_at: "2026-07-06T00:00:00Z"
-      )
-
-    {:ok, _} = League.record_game!(tmp_dir, record)
-  end
-
-  defp record_stock_market_game(tmp_dir, game_id) do
-    world = %{
-      status: "game_over",
-      winner: "player_1",
-      round: 10,
-      players: %{
-        "player_1" => %{name: "Ava", model: "anthropic/claude-x", cash: 2000, holdings: %{}},
-        "player_2" => %{name: "Bo", model: "zai/glm-5", cash: 900, holdings: %{}}
-      },
-      stocks: %{},
-      market_call_history: [],
-      round_summaries: [],
-      whisper_history: []
-    }
-
-    record =
-      League.game_record(LemonSim.Examples.StockMarket.League, world,
+      League.game_record(LemonSim.Examples.Werewolf.League, world,
         game_id: game_id,
         recorded_at: "2026-07-06T00:00:00Z"
       )
@@ -99,17 +79,10 @@ defmodule LemonSimUi.ArenaPagesTest do
 
   describe "/arena/:domain" do
     test "shows the intermission page when no game is live", %{conn: conn} do
-      {:ok, _view, html} = live(conn, "/arena/space_station")
-
-      assert html =~ "Space Station Crisis Arena"
-      assert html =~ "Intermission"
-      assert html =~ "/arena/space_station/leaderboard"
-    end
-
-    test "resolves the poker domain", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/arena/poker")
 
       assert html =~ "Poker Arena"
+      assert html =~ "Intermission"
       assert html =~ "/arena/poker/leaderboard"
     end
 
@@ -127,48 +100,33 @@ defmodule LemonSimUi.ArenaPagesTest do
 
   describe "/arena/:domain/leaderboard" do
     test "shows empty state without any recorded games", %{conn: conn, tmp_dir: tmp_dir} do
-      with_league_dir(:space_station, tmp_dir)
+      with_league_dir(:poker, tmp_dir)
 
-      {:ok, _view, html} = live(conn, "/arena/space_station/leaderboard")
+      {:ok, _view, html} = live(conn, "/arena/poker/leaderboard")
 
-      assert html =~ "Space Station Crisis League"
+      assert html =~ "Poker Arena League"
       assert html =~ "No Games Recorded Yet"
     end
 
     test "renders team standings with role specialists", %{conn: conn, tmp_dir: tmp_dir} do
-      with_league_dir(:space_station, tmp_dir)
-      record_space_station_game(tmp_dir, "spc_page1")
+      with_league_dir(:werewolf, tmp_dir)
+      record_werewolf_game(tmp_dir, "ww_page1")
 
-      {:ok, _view, html} = live(conn, "/arena/space_station/leaderboard")
+      {:ok, _view, html} = live(conn, "/arena/werewolf/leaderboard")
 
+      assert html =~ "Werewolf League"
       assert html =~ "Overall Standings"
       assert html =~ "Role-adjusted"
       assert html =~ "Provisional"
       assert html =~ "zai/glm-5"
       assert html =~ "Role Specialists"
-      assert html =~ "Saboteur"
+      assert html =~ "Seer"
       assert html =~ "Recent Games"
-      assert html =~ "spc_page1"
-      assert html =~ "Crew"
+      assert html =~ "ww_page1"
+      assert html =~ "Village"
     end
 
-    test "renders ranked standings with mean value and stat leaders", %{
-      conn: conn,
-      tmp_dir: tmp_dir
-    } do
-      with_league_dir(:stock_market, tmp_dir)
-      record_stock_market_game(tmp_dir, "stk_page1")
-
-      {:ok, _view, html} = live(conn, "/arena/stock_market/leaderboard")
-
-      assert html =~ "Stock Market Arena League"
-      assert html =~ "Mean value"
-      assert html =~ "anthropic/claude-x"
-      refute html =~ "Role Specialists"
-      assert html =~ "Stat Leaders"
-    end
-
-    test "renders poker ranked standings", %{conn: conn, tmp_dir: tmp_dir} do
+    test "renders poker ranked standings with stat leaders", %{conn: conn, tmp_dir: tmp_dir} do
       with_league_dir(:poker, tmp_dir)
       record_poker_game(tmp_dir, "pkr_page1")
 
@@ -178,38 +136,33 @@ defmodule LemonSimUi.ArenaPagesTest do
       assert html =~ "Mean value"
       assert html =~ "anthropic/claude-x"
       refute html =~ "Role Specialists"
+      assert html =~ "Stat Leaders"
     end
 
     test "refreshes when the arena records a game", %{conn: conn, tmp_dir: tmp_dir} do
-      with_league_dir(:space_station, tmp_dir)
+      with_league_dir(:poker, tmp_dir)
 
-      {:ok, view, html} = live(conn, "/arena/space_station/leaderboard")
+      {:ok, view, html} = live(conn, "/arena/poker/leaderboard")
       assert html =~ "No Games Recorded Yet"
 
-      record_space_station_game(tmp_dir, "spc_page2")
+      record_poker_game(tmp_dir, "pkr_page2")
 
       LemonCore.Bus.broadcast(
-        Arena.league_topic(:space_station),
-        LemonCore.Event.new(:arena_league_updated, %{game_id: "spc_page2"}, %{
-          domain: :space_station
-        })
+        Arena.league_topic(:poker),
+        LemonCore.Event.new(:arena_league_updated, %{game_id: "pkr_page2"}, %{domain: :poker})
       )
 
-      assert render_eventually(view, "spc_page2")
+      assert render_eventually(view, "pkr_page2")
     end
   end
 
   describe "lobby" do
-    test "features all five arenas with watch and league links", %{conn: conn} do
+    test "features the arenas with watch and league links", %{conn: conn} do
       {:ok, _view, html} = live(conn, "/")
 
       assert html =~ "Always-on leagues"
       assert html =~ "Werewolf"
-      assert html =~ "Space Station Crisis"
-      assert html =~ "Stock Market Arena"
-      assert html =~ "Survivor"
       assert html =~ "Poker Arena"
-      assert html =~ "/arena/stock_market/leaderboard"
       assert html =~ "/arena/poker/leaderboard"
     end
   end

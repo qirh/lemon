@@ -26,8 +26,6 @@
 #   ./bin/lemon providers --provider openai
 #   ./bin/lemon profile create research --name "Research"
 #   ./bin/lemon policy list
-#   ./bin/lemon proofs --limit 5
-#   ./bin/lemon readiness
 #   ./bin/lemon secrets status
 #   ./bin/lemon skill list
 #   ./bin/lemon usage
@@ -71,8 +69,6 @@ Usage: ./bin/lemon [options]
        ./bin/lemon models --provider anthropic
        ./bin/lemon providers --provider openai
        ./bin/lemon policy list
-       ./bin/lemon proofs --limit 5
-       ./bin/lemon readiness
        ./bin/lemon secrets status
        ./bin/lemon skill list
        ./bin/lemon usage
@@ -548,18 +544,6 @@ if [[ "${1:-}" == "policy" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.policy "$@"
-fi
-
-if [[ "${1:-}" == "proofs" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.proofs "$@"
-fi
-
-if [[ "${1:-}" == "readiness" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.readiness "$@"
 fi
 
 if [[ "${1:-}" == "secrets" ]]; then

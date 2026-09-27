@@ -8,7 +8,6 @@ defmodule LemonControlPlane.Auth.Authorize do
     token; the WebSocket boundary may explicitly opt direct loopback peers into
     a legacy tokenless compatibility path
   - `node` - Role for paired nodes (browser extensions, etc.)
-  - `device` - Role for paired devices
 
   Each role has associated scopes that control method access.
 
@@ -18,16 +17,12 @@ defmodule LemonControlPlane.Auth.Authorize do
   - `operator.read` - Read-only operations (status, list, get, etc.)
   - `operator.write` - Write operations (agent, chat, etc.)
   - `operator.approvals` - Approval management (exec.approvals.*, exec.approval.*)
-  - `operator.pairing` - Node/device pairing (node.pair.*)
+  - `operator.pairing` - Node pairing (node.pair.*)
 
   ## Node Scopes
 
   - `node.invoke` - Receive and respond to invocations
   - `node.event` - Send events
-
-  ## Device Scopes
-
-  - `device.control` - Control operations
 
   ## Method Authorization
 
@@ -45,7 +40,7 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   alias LemonControlPlane.Auth.TokenStore
 
-  @type role :: :operator | :node | :device
+  @type role :: :operator | :node
   @type scope ::
           :admin
           | :read
@@ -54,7 +49,6 @@ defmodule LemonControlPlane.Auth.Authorize do
           | :pairing
           | :invoke
           | :event
-          | :control
 
   @type auth_context :: %{
           role: role(),
@@ -82,6 +76,9 @@ defmodule LemonControlPlane.Auth.Authorize do
     configured_operator_token = operator_token()
 
     cond do
+      requested_role == :unsupported ->
+        {:error, {:unauthorized, "Unsupported role"}}
+
       requested_role == :operator and
           secure_token_match?(token, configured_operator_token) ->
         operator_context(params)
@@ -146,11 +143,6 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp identity_to_auth(%{"type" => "node"} = identity) do
     node_id = identity["nodeId"] || identity["node_id"]
     {:ok, {:node, [:invoke, :event], node_id}}
-  end
-
-  defp identity_to_auth(%{"type" => "device"} = identity) do
-    device_id = identity["deviceId"] || identity["device_id"]
-    {:ok, {:device, [:control], device_id}}
   end
 
   defp identity_to_auth(_identity) do
@@ -305,8 +297,7 @@ defmodule LemonControlPlane.Auth.Authorize do
         "sessions.prune",
         "sessions.reset",
         "sessions.delete",
-        "sessions.compact",
-        "sessions.heartbeat"
+        "sessions.compact"
       ]
   end
 
@@ -338,12 +329,12 @@ defmodule LemonControlPlane.Auth.Authorize do
   end
 
   defp parse_role("node"), do: :node
-  defp parse_role("device"), do: :device
-  defp parse_role(_), do: :operator
+  defp parse_role("operator"), do: :operator
+  defp parse_role(nil), do: :operator
+  defp parse_role(_), do: :unsupported
 
   defp parse_scopes(nil, :operator), do: [:admin, :read, :write, :approvals, :pairing]
   defp parse_scopes(nil, :node), do: [:invoke, :event]
-  defp parse_scopes(nil, :device), do: [:control]
 
   defp parse_scopes(scopes, _role) when is_list(scopes) do
     scopes
@@ -360,7 +351,6 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp parse_scope("operator.pairing"), do: :pairing
   defp parse_scope("node.invoke"), do: :invoke
   defp parse_scope("node.event"), do: :event
-  defp parse_scope("device.control"), do: :control
   defp parse_scope("admin"), do: :admin
   defp parse_scope("read"), do: :read
   defp parse_scope("write"), do: :write

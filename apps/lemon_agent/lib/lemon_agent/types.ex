@@ -69,14 +69,19 @@ defmodule LemonAgent.Types do
     it must not be obeyed. `LemonAgent.Security.ExternalContent` wraps such
     content with the right framing and metadata — use it rather than setting
     the field by hand.
+
+    `:is_error` marks a result that reports a failure (a denied approval, a
+    timed-out command) while keeping structured `:details`. The loop sends it
+    to the model as an error tool result, exactly like `{:error, reason}`.
     """
     @type content_block :: LemonAi.Types.TextContent.t() | LemonAi.Types.ImageContent.t()
     @type t :: %__MODULE__{
             content: [content_block()],
             details: any(),
-            trust: LemonAi.Types.trust_level()
+            trust: LemonAi.Types.trust_level(),
+            is_error: boolean()
           }
-    defstruct content: [], details: nil, trust: :trusted
+    defstruct content: [], details: nil, trust: :trusted, is_error: false
   end
 
   # ============================================================================
@@ -89,7 +94,7 @@ defmodule LemonAgent.Types do
     that runs when it calls it.
 
     This is the unit every tool in the platform reduces to, whether it is a
-    built-in, an MCP tool adapted by `LemonMcp.ToolAdapter`, or one contributed
+    built-in, a tool discovered from an external MCP server, or one contributed
     at runtime by an app the platform does not know about (see
     `LemonAgent.ToolRegistry`).
 

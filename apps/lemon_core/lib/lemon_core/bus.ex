@@ -25,8 +25,8 @@ defmodule LemonCore.Bus do
   They are listed here only so this is a complete map of what is on the bus: `"nodes"` and
   `"presence"` (lemon_control_plane), `"run_graph:<run_id>"` and
   `"parent_question:<request_id>"` (coding_agent), and `"sim:<id>"`, `"sim:<id>:decisions"`,
-  `"sim:lobby"`, `"arena:<domain>:league"` plus the hosted-game and philosopher-chat topics
-  (lemon_sim / lemon_sim_ui).
+  `"sim:lobby"`, `"arena:<domain>:league"` plus the hosted-game topics (lemon_sim /
+  lemon_sim_ui).
 
   `"channels"` and `"logs"` were listed here as stable topics until Phase 3.1 with no
   publisher at all. Since 2026-08-16 `"channels"` carries the typed `:channel_delivery`

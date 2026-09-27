@@ -9,9 +9,10 @@ paste any block into the project you generate in step 2 and it will work.
 
 ## 1. Install the generator
 
-The platform packages are not on Hex yet, so both the generator and the
-dependencies come from a checkout of the [lemon](https://github.com/z80dev/lemon)
-repository.
+The generator is built from a checkout of the
+[lemon](https://github.com/z80dev/lemon) repository, and the project it writes
+depends on the platform packages in that checkout. (The packages are also
+published to Hex from `0.2.0`; see "About those path dependencies" below.)
 
 ```bash
 git clone https://github.com/z80dev/lemon
@@ -20,7 +21,8 @@ MIX_ENV=prod mix archive.build
 mix archive.install lemon_new-0.1.0.ez
 ```
 
-You need Elixir 1.19 or later on OTP 27+. Check with `elixir --version`.
+The packages declare Elixir 1.15 or later; CI tests them on Elixir 1.19 / OTP 28,
+which is the safest choice. Check with `elixir --version`.
 
 ## 2. Generate a project
 
@@ -59,10 +61,10 @@ my_agent/
 
 The generator bakes in the checkout it was built from. Override it with
 `mix lemon.new my_agent --lemon-path /elsewhere/lemon` or by exporting
-`LEMON_PATH`. When the packages publish, each path line is replaced by the Hex
-line commented beneath it — note that two of the packages have a Hex name that
-differs from the application name your code uses (`LemonAi` ships as `lemon_ai`,
-`LemonAgent` as `lemon_agent`).
+`LEMON_PATH`. Each path line has the Hex requirement commented beneath it
+(`{:lemon_core, "~> 0.2"}`); swap them to build against a Hex release instead of
+the checkout. `0.2.0` is the first installable release — the `0.1.0` releases
+on Hex are broken and retired.
 
 ## 3. Read the agent
 

@@ -46,7 +46,9 @@ defmodule LemonCore.Update.ReceiptStoreTest do
         end)
       end)
 
-    assert_receive :locked
+    # Taking the lock fsyncs the lock file (F_FULLFSYNC on macOS), which can
+    # exceed the default 100ms receive window under a loaded full-suite run.
+    assert_receive :locked, 5_000
     assert {:error, :update_locked} = ReceiptStore.with_lock(opts, fn -> :unexpected end)
     send(task.pid, :release)
     assert Task.await(task) == :ok

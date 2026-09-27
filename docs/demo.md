@@ -28,7 +28,9 @@ used, and flag anything you could not verify.
 ```
 
 Watch the tool activity and final response. You should be able to connect each
-claim to a file in the repository. Follow up with a narrower question, such as
+claim to a file in the repository. Press `Ctrl+R` to expand the latest tool card
+or thinking block (and again to collapse it), or `Ctrl+T` to cycle detail for the
+whole transcript. Follow up with a narrower question, such as
 “Where would I add a new command?” or “Explain the startup path.”
 
 Use `/status` to inspect the session and `/usage` to see reported usage. With an empty input, press

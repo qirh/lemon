@@ -75,9 +75,8 @@ describe("lifecycle rendering", () => {
 		expect(running).toContain("`ls -la clients/tui`");
 	});
 
-	test("subagents and reasoning get their own completed glyph", () => {
-		expect(renderPlain(card("task", "success").render(80))).toContain("◈ task(codex)");
-		expect(renderPlain(card("reasoning", "success").render(80)).startsWith("✻")).toBe(true);
+	test("subagents get their own completed glyph", () => {
+		expect(renderPlain(card("task", "success").render(80))).toContain("◈ task: audit");
 	});
 
 	test("streaming shows the header alone — nothing is known yet", () => {
@@ -91,19 +90,22 @@ describe("lifecycle rendering", () => {
 		expect(renderPlain(card("bash", "success").render(120))).toContain("drwxr-xr-x");
 	});
 
-	test("an edit renders a colourised diff in place of the formatter's plain one", () => {
+	test("an edit renders the tool's own diff, gutter starting at the file's real line", () => {
 		const text = renderPlain(card("edit", "success").render(120));
-		expect(text).toContain("-1│");
-		// The replacement's `+` row inherits the removed row's number, so its
-		// gutter is blanked; the inserted lines below it carry their own.
-		expect(text).toContain("+4│");
-		expect(text).toContain("AgentAction");
+		const rows = text.split("\n");
+		// The first diff row is the edit tool's first context line, at line 118.
+		const firstDiffRow = rows.find((row) => row.includes("│"));
+		expect(firstDiffRow).toContain("118│");
+		expect(text).toContain("+121│");
+		expect(text).toContain("+122│");
+		expect(text).not.toContain(" 1│");
+		expect(text).toContain("const kind");
 	});
 
 	test("an unknown tool still renders a titled card with its result", () => {
 		const text = renderPlain(card("unknown", "success").render(80));
-		expect(text).toContain("sentry.list_issues");
-		expect(text).toContain("LEMON-91");
+		expect(text).toContain("session_search");
+		expect(text).toContain("tui-1755");
 	});
 });
 
@@ -229,9 +231,8 @@ describe("render contract", () => {
 });
 
 describe("accordion integration", () => {
-	test("tools expand and reasoning collapses by default", () => {
+	test("tools expand by default", () => {
 		expect(card("read", "success").accordion.state).toBe("expanded");
-		expect(card("reasoning", "success").accordion.state).toBe("collapsed");
 	});
 
 	test("the global override wins over the per-kind default", () => {
@@ -241,15 +242,21 @@ describe("accordion integration", () => {
 		expect(component.render(80).length).toBe(1);
 	});
 
-	test("toggling cycles expanded → collapsed → hidden and changes the row count", () => {
+	test("toggling flips expanded ↔ collapsed and changes the row count", () => {
 		const component = card("bash", "success");
 		const expanded = component.render(120).length;
 		expect(component.toggleAccordion()).toBe("collapsed");
 		expect(component.render(120).length).toBe(2);
-		expect(component.toggleAccordion()).toBe("hidden");
-		expect(component.render(120).length).toBe(1);
 		expect(component.toggleAccordion()).toBe("expanded");
 		expect(component.render(120).length).toBe(expanded);
+	});
+
+	test("toggling a card the global override hid opens it fully", () => {
+		accordionSettings.setOverride("hidden");
+		const component = card("bash", "success");
+		expect(component.render(120).length).toBe(1);
+		expect(component.toggleAccordion()).toBe("expanded");
+		expect(component.render(120).length).toBeGreaterThan(2);
 	});
 });
 
@@ -261,7 +268,7 @@ describe("compact (shelf) form", () => {
 		expect(lines.length).toBe(1);
 		const text = renderPlain(lines);
 		expect(text).toContain("✓");
-		expect(text).toContain("grep: upsertTool");
+		expect(text).toContain("grep: `upsertTool`");
 		expect(text).toContain("2 matches");
 	});
 

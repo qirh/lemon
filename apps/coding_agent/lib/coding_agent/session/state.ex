@@ -240,7 +240,7 @@ defmodule CodingAgent.Session.State do
   defp default_context_guardrail_opts(cwd, session_id) do
     %{
       max_thinking_bytes: 65_536,
-      max_tool_result_images: 0,
+      max_tool_result_images: 3,
       spill_dir: Config.spill_dir(cwd, session_id)
     }
   end

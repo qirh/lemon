@@ -149,6 +149,60 @@ defmodule LemonGateway.Tools.CronTest do
     assert LemonAgent.get_text(result) =~ "Unknown action"
   end
 
+  test "a job added from a non-Lemon session id (TUI) targets the agent main session" do
+    tool = Cron.tool(".", session_key: "tui-20260927T081500", agent_id: "default")
+
+    result =
+      call_tool(tool, %{
+        "action" => "add",
+        "schedule" => "0 9 * * *",
+        "prompt" => "morning check"
+      })
+
+    refute Map.get(result.details, :error)
+    assert result.details["sessionKey"] == "agent:default:main"
+    assert result.details["deliverTo"] == nil
+    assert result.details["once"] == false
+  end
+
+  test "deliverTo and once are stored, validated, and updatable" do
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+
+    added =
+      call_tool(tool, %{
+        "action" => "add",
+        "schedule" => "30 14 28 9 *",
+        "timezone" => "local",
+        "prompt" => "take the bread out",
+        "deliverTo" => "telegram:-100123:7",
+        "once" => true
+      })
+
+    assert added.details["deliverTo"] == "telegram:-100123:7"
+    assert added.details["once"] == true
+    assert added.details["timezone"] == "local"
+
+    update = call_tool(tool, %{"action" => "update", "id" => added.details["id"], "deliverTo" => "none"})
+    assert update.details["updated"] == true
+
+    listed =
+      call_tool(tool, %{"action" => "list"}).details["jobs"]
+      |> Enum.find(&(&1["id"] == added.details["id"]))
+
+    assert listed["deliverTo"] == "none"
+
+    rejected =
+      call_tool(tool, %{
+        "action" => "add",
+        "schedule" => "0 9 * * *",
+        "prompt" => "nope",
+        "deliverTo" => "sms:+15551234"
+      })
+
+    assert %{error: true} = rejected.details
+    assert LemonAgent.get_text(rejected) =~ "deliver_to must be"
+  end
+
   defp call_tool(tool, params) do
     tool.execute.("call_1", params, nil, nil)
   end

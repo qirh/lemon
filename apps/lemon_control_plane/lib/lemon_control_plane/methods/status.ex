@@ -82,7 +82,6 @@ defmodule LemonControlPlane.Methods.Status do
       "connectionCount" => connections["active"],
       "operatorCount" => connections["operators"],
       "nodeCount" => connections["nodes"],
-      "deviceCount" => connections["devices"],
       "activeRunCount" => runs["active"],
       "queuedRunCount" => runs["queued"],
       "completedTodayCount" => runs["completed_today"],
@@ -132,8 +131,7 @@ defmodule LemonControlPlane.Methods.Status do
     %{
       "active" => presence_counts.total,
       "operators" => presence_counts.operators,
-      "nodes" => presence_counts.nodes,
-      "devices" => presence_counts.devices
+      "nodes" => presence_counts.nodes
     }
   end
 
@@ -173,13 +171,13 @@ defmodule LemonControlPlane.Methods.Status do
     try do
       case Process.whereis(LemonControlPlane.Presence) do
         nil ->
-          %{total: 0, operators: 0, nodes: 0, devices: 0}
+          %{total: 0, operators: 0, nodes: 0}
 
         pid when is_pid(pid) ->
           LemonControlPlane.Presence.counts()
       end
     rescue
-      _ -> %{total: 0, operators: 0, nodes: 0, devices: 0}
+      _ -> %{total: 0, operators: 0, nodes: 0}
     end
   end
 

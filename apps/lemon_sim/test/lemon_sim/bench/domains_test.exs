@@ -43,8 +43,7 @@ defmodule LemonSim.Bench.DomainsTest do
       end
     end
 
-    test "tcg_shop and vending_bench carry SimManager's sim_id_prefix without a league adapter" do
-      assert %Descriptor{sim_id_prefix: "tcg_", league_adapter: nil} = Domains.get("tcg_shop")
+    test "vending_bench carries SimManager's sim_id_prefix without a league adapter" do
       assert %Descriptor{sim_id_prefix: "vb_", league_adapter: nil} = Domains.get("vending_bench")
     end
   end
@@ -69,36 +68,18 @@ defmodule LemonSim.Bench.DomainsTest do
   end
 
   describe "arena_domains/0" do
-    test "returns exactly the five always-on league domains with their arena metadata" do
+    test "returns the always-on league domains, in display order, with their arena metadata" do
       arena =
         Domains.arena_domains() |> Enum.map(&{&1.id, &1.sim_id_prefix, &1.default_player_count})
 
-      assert Enum.sort(arena) == [
-               {"poker", "pkr_", 4},
-               {"space_station", "spc_", 6},
-               {"stock_market", "stk_", 4},
-               {"survivor", "srv_", 8},
-               {"werewolf", "ww_", 6}
+      assert arena == [
+               {"werewolf", "ww_", 6},
+               {"poker", "pkr_", 4}
              ]
     end
 
     test "every arena domain has a non-nil league_adapter" do
       assert Enum.all?(Domains.arena_domains(), &(&1.league_adapter != nil))
-    end
-
-    test "returns domains in the curated display order, not declaration/alphabetical order" do
-      # LemonSimUi.Arena and the lobby page have shown arenas in this exact
-      # order (werewolf first) since before this registry existed; @domains
-      # interleaves the arena entries among the non-arena ones specifically
-      # to preserve it. Order matters here, unlike the set-equality check
-      # above.
-      assert Enum.map(Domains.arena_domains(), & &1.id) == [
-               "werewolf",
-               "space_station",
-               "stock_market",
-               "survivor",
-               "poker"
-             ]
     end
   end
 

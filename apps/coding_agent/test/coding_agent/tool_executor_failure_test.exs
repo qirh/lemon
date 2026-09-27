@@ -140,6 +140,7 @@ defmodule CodingAgent.ToolExecutorFailureTest do
     result = wrapped.execute.("call-1", %{}, nil, nil)
 
     assert result.details.approval_error == :approval_unavailable
+    assert result.is_error
     refute_received ^marker
   end
 
@@ -169,7 +170,8 @@ defmodule CodingAgent.ToolExecutorFailureTest do
         Map.merge(Map.new(opts), %{approval_request_fun: request_fun})
       )
 
-    assert %AgentToolResult{} = result
+    # Every fail-closed outcome reaches the model as an error tool result.
+    assert %AgentToolResult{is_error: true} = result
     refute_received ^marker
     result
   end

@@ -108,7 +108,6 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
 | `LemonControlPlane.Methods.CommandsCatalog` | `lib/lemon_control_plane/methods/commands_catalog.ex` | Read-only `commands.catalog` discovery projection over `LemonChannels.CommandCatalog`; execution remains with consuming surfaces and runtime owners. |
 | `LemonControlPlane.Methods.Background*` / `SessionBtw` | `lib/lemon_control_plane/methods/background_commands.ex` | Provider-backed lifecycle RPCs for isolated `/bg` sessions and bounded no-tools `/btw` questions; the control plane owns only validation and wire projection. |
-| `LemonControlPlane.Methods.SessionHeartbeat` | `lib/lemon_control_plane/methods/session_heartbeat.ex` | Admin projection for status/set/pause/resume/clear of a live durable coding-session heartbeat; validates provider state before returning it. |
 | `LemonControlPlane.Methods.Profiles*` / `ProfileChat` | `lib/lemon_control_plane/methods/profiles.ex` | Lifecycle, node-aware roster, credential-safe export, and stable canonical chat projection over `LemonCore.ProfileStore` and the existing router. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
@@ -133,7 +132,7 @@ defmodule LemonControlPlane.Methods.MyMethod do
   def name, do: "my.method"
 
   @impl true
-  def scopes, do: [:read]  # or :write, :admin, :approvals, :pairing, :invoke, :event, :control
+  def scopes, do: [:read]  # or :write, :admin, :approvals, :pairing, :invoke, :event
 
   @impl true
   def handle(params, ctx) do
@@ -203,7 +202,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 
 ## API Method Reference
 
-The control plane retains these 80 methods:
+The control plane retains these 79 methods:
 
 | Methods |
 |---------|
@@ -218,8 +217,12 @@ The control plane retains these 80 methods:
 | `health`, `logs.tail`, `models.list`, `node.invoke`, `node.invoke.control.result`, `node.invoke.result`, `node.pair.approve`, `node.pair.request` |
 | `profile.chat`, `profiles.clone`, `profiles.create`, `profiles.delete`, `profiles.export`, `profiles.get`, `profiles.list`, `profiles.rename`, `profiles.roster` |
 | `runs.active.list`, `runs.recent.list` |
-| `session.btw`, `session.detail`, `sessions.active`, `sessions.active.list`, `sessions.compact`, `sessions.delete`, `sessions.export`, `sessions.heartbeat`, `sessions.list`, `sessions.metadata.patch`, `sessions.patch`, `sessions.preview`, `sessions.prune`, `sessions.reset`, `sessions.stats` |
+| `session.btw`, `session.detail`, `sessions.active`, `sessions.active.list`, `sessions.compact`, `sessions.delete`, `sessions.export`, `sessions.list`, `sessions.metadata.patch`, `sessions.patch`, `sessions.preview`, `sessions.prune`, `sessions.reset`, `sessions.stats` |
 | `skills.hermes.catalog`, `skills.install`, `status`, `tasks.active.list`, `tasks.recent.list`, `usage.cost`, `usage.status` |
+
+Heartbeat scheduling is owned by `LemonAutomation.Heartbeat` and cron jobs with
+`meta.heartbeat`; it has no separate control-plane RPC family.
+
 ## Authentication and Authorization
 
 ### Roles and Scopes
@@ -359,10 +362,31 @@ State-versioned events include a `stateVersion` map for client reconciliation;
 the server broadcasts all events to non-node clients, while node connections
 receive only targeted node traffic.
 
-The server emits run, chat, goal, presence, tick, heartbeat, approval, cron,
-task, shutdown, health, and node pairing/invocation events. Approval events
-include structured action metadata and report timeouts as
-`exec.approval.resolved` with `decision: "timeout"`.
+| Event | Trigger |
+|-------|---------|
+| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`; tool-use events preserve nested `action.detail`, including `result_meta` failure fields such as `error_type` and `exit_code`. For operators, `detail.result` is the bounded full result (`result_full`, ≤32 KB) rather than the 500-char channel preview, `detail.details` carries the tool's structured details (edit `diff`/`first_changed_line`, `exit_code`, …), and reasoning `detail.reasoning.text` is the bounded full thought (≤16 KB)) |
+| `chat` | Chat delta/streaming content |
+| `presence` | Connection count changed |
+| `tick` | Heartbeat tick (from `:tick` or `:cron_tick` bus events) |
+| `heartbeat` | Agent heartbeat or heartbeat alert |
+| `exec.approval.requested` | Approval needed, including structured `action` metadata for operator UI controls such as MCP OAuth links |
+| `exec.approval.resolved` | Approval decided or timed out, including approval id, decision, and pending approval metadata when available |
+| `cron` | Cron job started/completed |
+| `cron.job` | Cron job created/updated/deleted |
+| `cron.audit` | Cron lifecycle audit event recorded |
+| `task.started` | Subtask/subagent started |
+| `task.completed` | Subtask/subagent completed |
+| `task.error` | Subtask/subagent errored |
+| `task.timeout` | Subtask/subagent timed out |
+| `task.aborted` | Subtask/subagent aborted/interrupted |
+| `run.graph.changed` | Run graph/status changed |
+| `shutdown` | System shutting down |
+| `health` | Health status changed |
+| `node.pair.requested` | Node wants to pair |
+| `node.pair.resolved` | Node pairing approved or rejected |
+| `node.invoke.request` | Operator invoked a node method |
+| `node.invoke.completed` | Node invoke completed |
+
 
 ## EventBridge
 

@@ -4,9 +4,25 @@ defmodule LemonWeb.SessionLive do
   use LemonWeb, :live_view
   require Logger
 
-  alias LemonCore.{Bus, MapHelpers, NodeRegistry, RouterBridge, SessionKey, SessionLifecycle}
+  alias LemonCore.{
+    Bus,
+    Events,
+    ExecApprovals,
+    ExecApprovalStore,
+    MapHelpers,
+    NodeRegistry,
+    RouterBridge,
+    SessionKey,
+    SessionLifecycle
+  }
+
   alias LemonCore.Setup.Readiness
-  alias LemonWeb.Live.Components.{FileUploadComponent, MessageComponent}
+
+  alias LemonWeb.Live.Components.{
+    ApprovalComponent,
+    FileUploadComponent,
+    MessageComponent
+  }
 
   @max_messages 250
   @max_history_runs 100
@@ -20,6 +36,7 @@ defmodule LemonWeb.SessionLive do
     if connected?(socket) do
       Bus.subscribe(Bus.session_topic(session_key))
       Bus.subscribe("system")
+      Bus.subscribe("exec_approvals")
     end
 
     setup_state = setup_readiness()
@@ -32,7 +49,11 @@ defmodule LemonWeb.SessionLive do
       |> assign(:session_key, session_key)
       |> assign(:agent_id, agent_id)
       |> assign(:prompt, "")
-      |> assign(:messages, messages)
+      |> assign(:transcript_empty?, messages == [])
+      |> assign(:streaming, %{})
+      |> assign(:streamed_runs, MapSet.new())
+      |> assign(:approvals, pending_approvals(session_key))
+      |> assign(:approval_notice, nil)
       |> assign(:last_run_id, last_run_id)
       |> assign(:run_status, run_status)
       |> assign(:control_mode, :followup)
@@ -46,6 +67,7 @@ defmodule LemonWeb.SessionLive do
         max_file_size: 20_000_000,
         auto_upload: true
       )
+      |> stream(:messages, messages, limit: -@max_messages)
 
     {:ok, socket}
   end
@@ -125,6 +147,36 @@ defmodule LemonWeb.SessionLive do
   end
 
   def handle_event("stop-run", _params, socket), do: {:noreply, socket}
+
+  # Resolves through `LemonCore.ExecApprovals.resolve/2`, the same single-winner
+  # transition the TUI (`exec.approval.resolve`) and Telegram buttons use. The
+  # store, not the rendered list, decides whether the approval belongs to this
+  # tab's session, so a forged id for another session is refused.
+  def handle_event("resolve-approval", %{"id" => approval_id, "decision" => decision}, socket)
+      when is_binary(approval_id) do
+    case ApprovalComponent.decision(decision) do
+      {:ok, decision} ->
+        notice =
+          if approval_for_session?(approval_id, socket.assigns.session_key) do
+            case ExecApprovals.resolve(approval_id, decision) do
+              :ok -> approval_decision_notice(decision)
+              {:error, :not_pending} -> "That approval was already answered."
+            end
+          else
+            "That approval is no longer pending for this session."
+          end
+
+        {:noreply,
+         socket
+         |> drop_approval(approval_id)
+         |> assign(:approval_notice, notice)}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("resolve-approval", _params, socket), do: {:noreply, socket}
 
   def handle_event("submit", %{"chat" => chat}, socket) when is_map(chat) do
     prompt = String.trim(chat["prompt"] || "")
@@ -329,10 +381,14 @@ defmodule LemonWeb.SessionLive do
     {:noreply, socket}
   end
 
-  def handle_info(%LemonCore.Event{type: :engine_action, payload: payload}, socket) do
+  def handle_info(%LemonCore.Event{type: :engine_action, payload: payload, meta: meta}, socket) do
+    run_id = read(meta, :run_id) || socket.assigns.last_run_id
+
     socket =
-      append_message(socket, %{
-        id: message_id("tool"),
+      socket
+      |> maybe_close_assistant_segment(run_id, payload)
+      |> append_message(%{
+        id: tool_message_id(run_id, payload),
         kind: :tool_call,
         event: payload,
         ts_ms: now_ms()
@@ -355,6 +411,53 @@ defmodule LemonWeb.SessionLive do
       |> assign(:last_run_id, nil)
       |> assign(:run_status, :idle)
       |> assign(:control_notice, nil)
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, socket) do
+    session_key = socket.assigns.session_key
+
+    socket =
+      case Events.coerce(:approval_requested, payload) do
+        %Events.ApprovalRequested{
+          approval_id: approval_id,
+          pending: %Events.ApprovalPending{session_key: ^session_key} = pending
+        }
+        when is_binary(approval_id) and is_binary(session_key) ->
+          if approval_listed?(socket, approval_id) do
+            socket
+          else
+            approval = ApprovalComponent.view(%{pending | id: approval_id})
+
+            socket
+            |> assign(:approvals, socket.assigns.approvals ++ [approval])
+            |> assign(:approval_notice, nil)
+          end
+
+        _other ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(%LemonCore.Event{type: :approval_resolved, payload: payload}, socket) do
+    socket =
+      case Events.coerce(:approval_resolved, payload) do
+        %Events.ApprovalResolved{approval_id: approval_id, decision: decision}
+        when is_binary(approval_id) ->
+          if approval_listed?(socket, approval_id) do
+            socket
+            |> drop_approval(approval_id)
+            |> assign(:approval_notice, approval_resolved_elsewhere_notice(decision))
+          else
+            socket
+          end
+
+        _other ->
+          socket
+      end
 
     {:noreply, socket}
   end
@@ -441,21 +544,24 @@ defmodule LemonWeb.SessionLive do
           id="messages"
           aria-label="Conversation"
           aria-live="polite"
-          class="mt-4 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4"
+          class="mt-4 flex-1 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4"
         >
-          <%= if @messages == [] do %>
-            <div class="mx-auto max-w-md py-8 text-center">
-              <p class="font-medium text-slate-800">Start with a small task</p>
-              <p class="mt-1 text-sm text-slate-500">
-                Ask a question, explain what you are working on, or attach files for Lemon to inspect.
-              </p>
-            </div>
-          <% else %>
-            <%= for message <- @messages do %>
-              <MessageComponent.message message={message} />
-            <% end %>
-          <% end %>
+          <div :if={@transcript_empty?} id="transcript-empty" class="mx-auto max-w-md py-8 text-center">
+            <p class="font-medium text-slate-800">Start with a small task</p>
+            <p class="mt-1 text-sm text-slate-500">
+              Ask a question, explain what you are working on, or attach files for Lemon to inspect.
+            </p>
+          </div>
+          <div id="transcript" phx-update="stream" class="space-y-3">
+            <MessageComponent.message
+              :for={{dom_id, message} <- @streams.messages}
+              id={dom_id}
+              message={message}
+            />
+          </div>
         </section>
+
+        <ApprovalComponent.panel approvals={@approvals} notice={@approval_notice} />
 
         <section
           aria-labelledby="composer-title"
@@ -1019,72 +1125,152 @@ defmodule LemonWeb.SessionLive do
     end
   end
 
+  # The streaming reply lives server-side in `:streaming` (run_id => message);
+  # each delta re-inserts only that one stream item, so the diff pushed per
+  # token carries this message and nothing else from the transcript.
   defp upsert_assistant_delta(socket, run_id, text) do
     run_id = run_id || "unknown"
 
-    {messages, found?} =
-      Enum.map_reduce(socket.assigns.messages, false, fn message, found ->
-        if message.kind == :assistant and message.run_id == run_id and
-             Map.get(message, :pending, false) do
-          {Map.update!(message, :content, &(&1 <> text)), true}
-        else
-          {message, found}
-        end
-      end)
+    message =
+      case Map.fetch(socket.assigns.streaming, run_id) do
+        {:ok, message} ->
+          %{message | content: message.content <> text}
 
-    if found? do
-      assign(socket, :messages, messages)
+        :error ->
+          %{
+            id: message_id("assistant"),
+            kind: :assistant,
+            run_id: run_id,
+            content: text,
+            pending: true,
+            ts_ms: now_ms()
+          }
+      end
+
+    socket
+    |> assign(:streaming, Map.put(socket.assigns.streaming, run_id, message))
+    |> assign(:streamed_runs, MapSet.put(socket.assigns.streamed_runs, run_id))
+    |> append_message(message)
+  end
+
+  # A tool starting ends the text segment before it: later deltas open a new
+  # reply below the tool card, matching the order the agent produced them.
+  # Reasoning updates stream alongside text, so they never split it.
+  defp maybe_close_assistant_segment(socket, run_id, payload) do
+    action = MapHelpers.get_key(payload, :action)
+    phase = MapHelpers.get_key(payload, :phase)
+    kind = MapHelpers.get_key(action, :kind)
+
+    if phase in [:started, "started"] and kind not in [:reasoning, "reasoning"] do
+      close_assistant_segment(socket, run_id || "unknown")
     else
-      append_message(socket, %{
-        id: message_id("assistant"),
-        kind: :assistant,
-        run_id: run_id,
-        content: text,
-        pending: true,
-        ts_ms: now_ms()
-      })
+      socket
+    end
+  end
+
+  defp close_assistant_segment(socket, run_id) do
+    case Map.pop(socket.assigns.streaming, run_id) do
+      {nil, _streaming} ->
+        socket
+
+      {message, streaming} ->
+        socket
+        |> assign(:streaming, streaming)
+        |> append_message(%{message | pending: false})
     end
   end
 
   defp finalize_assistant_message(socket, run_id, answer) do
     run_id = run_id || "unknown"
+    streamed? = MapSet.member?(socket.assigns.streamed_runs, run_id)
 
-    {messages, found?} =
-      Enum.map_reduce(socket.assigns.messages, false, fn message, found ->
-        if message.kind == :assistant and message.run_id == run_id do
-          content =
-            if message.content in [nil, ""] and is_binary(answer) and answer != "" do
-              answer
-            else
-              message.content
-            end
+    socket =
+      socket
+      |> close_assistant_segment(run_id)
+      |> assign(:streamed_runs, MapSet.delete(socket.assigns.streamed_runs, run_id))
 
-          {%{message | content: content, pending: false}, true}
-        else
-          {message, found}
-        end
-      end)
-
-    socket = assign(socket, :messages, messages)
-
-    cond do
-      found? ->
-        socket
-
-      is_binary(answer) and answer != "" ->
-        append_message(socket, %{
-          id: message_id("assistant"),
-          kind: :assistant,
-          run_id: run_id,
-          content: answer,
-          pending: false,
-          ts_ms: now_ms()
-        })
-
-      true ->
-        socket
+    if not streamed? and is_binary(answer) and answer != "" do
+      append_message(socket, %{
+        id: message_id("assistant"),
+        kind: :assistant,
+        run_id: run_id,
+        content: answer,
+        pending: false,
+        ts_ms: now_ms()
+      })
+    else
+      socket
     end
   end
+
+  defp tool_message_id(run_id, payload) do
+    action_id =
+      payload
+      |> MapHelpers.get_key(:action)
+      |> MapHelpers.get_key(:id)
+
+    if is_binary(action_id) and action_id != "" do
+      digest =
+        :crypto.hash(:sha256, "#{run_id}:#{action_id}")
+        |> Base.url_encode64(padding: false)
+
+      "tool-#{binary_part(digest, 0, 16)}"
+    else
+      message_id("tool")
+    end
+  end
+
+  defp pending_approvals(session_key) do
+    now_ms = LemonCore.Clock.now_ms()
+
+    ExecApprovalStore.list_pending()
+    |> Enum.map(fn {_id, pending} -> pending end)
+    |> Enum.filter(fn pending ->
+      is_map(pending) and read(pending, :session_key) == session_key and
+        approval_active?(pending, now_ms)
+    end)
+    |> Enum.map(&ApprovalComponent.view/1)
+    |> Enum.sort_by(& &1.requested_at_ms)
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp approval_active?(pending, now_ms) do
+    case read(pending, :expires_at_ms) do
+      nil -> true
+      expires_at_ms when is_integer(expires_at_ms) -> expires_at_ms > now_ms
+      _ -> false
+    end
+  end
+
+  defp approval_for_session?(approval_id, session_key) do
+    case ExecApprovalStore.get_pending(approval_id) do
+      pending when is_map(pending) -> read(pending, :session_key) == session_key
+      _ -> false
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
+  end
+
+  defp approval_listed?(socket, approval_id),
+    do: Enum.any?(socket.assigns.approvals, &(&1.id == approval_id))
+
+  defp drop_approval(socket, approval_id) do
+    assign(socket, :approvals, Enum.reject(socket.assigns.approvals, &(&1.id == approval_id)))
+  end
+
+  defp approval_decision_notice(:deny), do: "Denied. Lemon will not run that tool call."
+  defp approval_decision_notice(:approve_once), do: "Approved once."
+  defp approval_decision_notice(:approve_session), do: "Approved for this session."
+  defp approval_decision_notice(:approve_global), do: "Approved for all future matching calls."
+
+  defp approval_resolved_elsewhere_notice(:timeout), do: "An approval request expired."
+  defp approval_resolved_elsewhere_notice(:cancelled), do: "An approval request was withdrawn."
+  defp approval_resolved_elsewhere_notice(_decision), do: "An approval was answered elsewhere."
 
   defp maybe_append_run_completion(socket, true, _error), do: socket
 
@@ -1128,12 +1314,15 @@ defmodule LemonWeb.SessionLive do
 
   defp maybe_append_system(socket, _), do: socket
 
+  # Inserts at the end of the transcript, or updates in place when a message
+  # with the same id is already rendered (streaming replies, tool cards). The
+  # stream limit keeps the browser transcript bounded like the history load.
   defp append_message(socket, message) do
-    messages = trim_messages(socket.assigns.messages ++ [message])
-    assign(socket, :messages, messages)
+    socket
+    |> stream_insert(:messages, message, limit: -@max_messages)
+    |> assign(:transcript_empty?, false)
   end
 
-  defp trim_messages(messages) when length(messages) <= @max_messages, do: messages
   defp trim_messages(messages), do: Enum.take(messages, -@max_messages)
 
   defp history_messages(session_key) do

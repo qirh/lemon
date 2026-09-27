@@ -128,7 +128,7 @@ Pick one path to try next. Advanced background and goal workflows have
 | Run work in the background | Use `/bg start <prompt>`, then `/bg list` and `/bg result <id>` | [Long-running harnesses](../long-running-agent-harnesses.md) |
 | Keep a standing objective | Use `/goal set <objective>`, inspect `/goal status`, and pause or clear it explicitly | [Long-running harnesses](../long-running-agent-harnesses.md) |
 | Browse or fetch the Web | Ask for a bounded search/fetch task and inspect sources before acting on them | [Web and Browser Tools](../tools/web.md) |
-| Add Telegram or Discord | Leave the TUI, run `lemon gateway setup telegram` or `lemon gateway setup discord`, then `lemon channels` | [Setup](../user-guide/setup.md#optional-telegram-or-discord) |
+| Add Telegram or Discord | Leave the TUI, run `lemon gateway setup telegram` or `lemon gateway setup discord`, then inspect redacted configuration with `lemon channels` | [Setup](../user-guide/setup.md#optional-telegram-or-discord) |
 | Migrate from Hermes | Preview the import before writing any Lemon state | [Migrate from Hermes](../user-guide/migrate-from-hermes.md) |
 
 ## Recovery path

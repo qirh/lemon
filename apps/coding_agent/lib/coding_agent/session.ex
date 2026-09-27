@@ -45,8 +45,6 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
-  @python_repl_terminate_detach_wait_ms 100
-  @execute_code_config_query_timeout_ms 1_000
 
   alias LemonAgent.ContextRegistry
   alias LemonAgent.Types.AgentTool
@@ -57,7 +55,6 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.EventHandler
-  alias CodingAgent.Session.Heartbeat
   alias CodingAgent.Session.Lifecycle
   alias CodingAgent.Session.Notifier
   alias CodingAgent.Session.OverflowRecovery
@@ -68,9 +65,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
-  alias CodingAgent.UI.Context, as: UIContext
   alias CodingAgent.Messages.CustomMessage
-  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
 
   # ============================================================================
   # State
@@ -85,12 +80,12 @@ defmodule CodingAgent.Session do
     :session_key,
     :agent_id,
     :settings_manager,
-    :ui_context,
     :cwd,
     :tools,
     :model,
     :thinking_level,
     :system_prompt,
+    :prompt_environment,
     :relevant_skill_keys,
     :explicit_system_prompt,
     :prompt_template,
@@ -111,9 +106,6 @@ defmodule CodingAgent.Session do
     :session_file,
     :register_session,
     :session_registry,
-    :python_repl_mod,
-    :execute_code_effective,
-    :settings_manager_static,
     :convert_to_llm,
     :transform_context,
     :tool_policy,
@@ -124,7 +116,6 @@ defmodule CodingAgent.Session do
     :wasm_sidecar_pid,
     :wasm_tool_names,
     :wasm_status,
-    heartbeat: %Heartbeat.State{},
     auto_compaction: %CompactionLifecycle.State{},
     overflow_recovery: %OverflowRecovery.State{}
   ]
@@ -139,12 +130,12 @@ defmodule CodingAgent.Session do
           session_key: String.t() | nil,
           agent_id: String.t(),
           settings_manager: term() | nil,
-          ui_context: UIContext.t() | nil,
           cwd: String.t(),
           tools: [AgentTool.t()],
           model: LemonAi.Types.Model.t(),
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
+          prompt_environment: String.t() | nil,
           relevant_skill_keys: [String.t()],
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
@@ -155,7 +146,6 @@ defmodule CodingAgent.Session do
           context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
-          heartbeat: Heartbeat.State.t(),
           event_listeners: [{pid(), reference()}],
           event_streams: %{reference() => %{pid: pid(), stream: pid()}},
           abort_signal: reference() | nil,
@@ -165,9 +155,6 @@ defmodule CodingAgent.Session do
           session_file: String.t() | nil,
           register_session: boolean(),
           session_registry: atom(),
-          python_repl_mod: module() | nil,
-          execute_code_effective: ExecuteCodeConfig.t(),
-          settings_manager_static: boolean(),
           convert_to_llm: (list() -> list()),
           transform_context: (list(), reference() | nil ->
                                 list() | {:ok, list()} | {:error, term()}),
@@ -184,8 +171,6 @@ defmodule CodingAgent.Session do
         }
 
   @type event_handler_callbacks :: %{
-          required(:set_working_message) => (t(), String.t() | nil -> :ok),
-          required(:notify) => (t(), String.t(), CodingAgent.UI.notify_type() -> :ok),
           required(:complete_event_streams) => (t(), term() -> :ok),
           required(:maybe_trigger_compaction) => (t() -> t()),
           required(:persist_message) => (t(), term() -> t())
@@ -222,7 +207,6 @@ defmodule CodingAgent.Session do
     * `:session_key` - Optional logical session key used for introspection and tool provenance
     * `:agent_id` - Optional agent identifier used for introspection and tool provenance
     * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
-    * `:ui_context` - UI context for dialogs and notifications
     * `:thinking_level` - Extended reasoning level. If not provided, uses
       `default_thinking_level` from SettingsManager.
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
@@ -232,21 +216,27 @@ defmodule CodingAgent.Session do
     * `:context_guardrails` - Optional map/list overrides for built-in context guardrails
       (for example `max_tool_result_bytes`, `max_tool_result_images`, `spill_dir`)
     * `:name` - GenServer name for registration
-    * `:python_repl_mod` - Persistent Python REPL facade to use for owner cleanup
-      (default: `CodingAgent.PythonRepl`; set to `nil` when the subsystem is unavailable)
+    * `:max_tool_turns` - Cap on tool-using assistant turns per prompt. Defaults to
+      `[runtime] max_tool_turns`, which is unlimited (`:infinity`) unless configured.
+
+  Transient provider failures (rate limits, overloads, 5xx, network errors) that
+  arrive before any output are retried by `CodingAgent.Session.ProviderRetry`
+  under `[runtime.retry]`; each retry is broadcast as `{:provider_retry, details}`.
 
   ## System Prompt Composition
 
   The final system prompt is composed from multiple sources, joined with newlines.
-  Components are included in this order (most specific first):
+  Components are included in this order (static first, volatile last):
 
   1. Explicit `:system_prompt` option (if provided)
   2. Prompt template content loaded via `:prompt_template` (if provided)
-  3. Lemon base prompt (workspace bootstrap + skills)
+  3. Lemon base prompt (coding rules for the session's tools + skills + workspace bootstrap)
   4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from cwd)
+  5. Environment block (cwd, platform, shell, git snapshot, date), captured once at start
 
   Empty strings are filtered out before joining.
-  The composed prompt is refreshed before each user prompt to pick up workspace/memory file edits.
+  The composed prompt is refreshed before each user prompt to pick up workspace/memory file edits;
+  the environment block is reused unchanged so the prompt stays cache-stable.
 
   ## Examples
 
@@ -412,30 +402,6 @@ defmodule CodingAgent.Session do
   end
 
   @doc """
-  Return the authoritative execute-code config for this session.
-
-  The call is deliberately bounded. Tool closures use it at invocation time so
-  a closure created before a config reload cannot select persistence from its
-  stale settings snapshot.
-  """
-  @spec execute_code_config(GenServer.server(), pos_integer()) ::
-          {:ok, ExecuteCodeConfig.t()} | {:error, :session_unavailable}
-  def execute_code_config(session, timeout_ms \\ @execute_code_config_query_timeout_ms)
-
-  def execute_code_config(session, timeout_ms)
-      when is_integer(timeout_ms) and timeout_ms > 0 do
-    timeout_ms = min(timeout_ms, @execute_code_config_query_timeout_ms)
-
-    try do
-      GenServer.call(session, :execute_code_config, timeout_ms)
-    catch
-      :exit, _reason -> {:error, :session_unavailable}
-    end
-  end
-
-  def execute_code_config(_session, _timeout_ms), do: {:error, :session_unavailable}
-
-  @doc """
   Get session statistics including message count, token usage, etc.
   """
   @spec get_stats(GenServer.server()) :: map()
@@ -507,8 +473,7 @@ defmodule CodingAgent.Session do
   @doc """
   Reset the session, clearing all messages and restarting.
   """
-  @spec reset(GenServer.server()) ::
-          :ok | {:error, :busy | {:heartbeat_persistence_failed, term()}}
+  @spec reset(GenServer.server()) :: :ok | {:error, :busy}
   def reset(session) do
     GenServer.call(session, :reset)
   end
@@ -585,37 +550,6 @@ defmodule CodingAgent.Session do
     GenServer.call(session, :save)
   end
 
-  @doc "Return the current same-session recurring heartbeat configuration."
-  @spec heartbeat_status(GenServer.server()) :: {:ok, map()}
-  def heartbeat_status(session) do
-    GenServer.call(session, :heartbeat_status)
-  end
-
-  @doc "Set or replace the same-session recurring heartbeat."
-  @spec heartbeat_set(GenServer.server(), String.t(), pos_integer()) ::
-          {:ok, map()} | {:error, term()}
-  def heartbeat_set(session, prompt, interval_seconds) do
-    GenServer.call(session, {:heartbeat_set, prompt, interval_seconds})
-  end
-
-  @doc "Pause the current heartbeat without clearing its prompt."
-  @spec heartbeat_pause(GenServer.server()) :: {:ok, map()} | {:error, term()}
-  def heartbeat_pause(session) do
-    GenServer.call(session, :heartbeat_pause)
-  end
-
-  @doc "Resume and re-anchor a paused heartbeat."
-  @spec heartbeat_resume(GenServer.server()) :: {:ok, map()} | {:error, term()}
-  def heartbeat_resume(session) do
-    GenServer.call(session, :heartbeat_resume)
-  end
-
-  @doc "Clear the current heartbeat."
-  @spec heartbeat_clear(GenServer.server()) :: {:ok, map()} | {:error, term()}
-  def heartbeat_clear(session) do
-    GenServer.call(session, :heartbeat_clear)
-  end
-
   @doc """
   Create a summary for the current branch.
 
@@ -676,9 +610,8 @@ defmodule CodingAgent.Session do
     send(self(), {:publish_extension_status_report, extension_status_report})
 
     maybe_subscribe_exec_approvals(state)
-    subscribe_config_reload()
 
-    {:ok, Heartbeat.restore(state)}
+    {:ok, state}
   end
 
   @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()}
@@ -687,7 +620,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
-      state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
+      state = CompactionLifecycle.cancel_for_new_prompt(state)
       {state, recalled} = refresh_turn_context(state, text)
 
       user_message =
@@ -720,7 +653,7 @@ defmodule CodingAgent.Session do
   # and queued, while `outgoing` is the same message with this turn's recalled
   # context attached and is only ever handed to the agent.
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
-    state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
+    state = CompactionLifecycle.cancel_for_new_prompt(state)
     message = State.build_async_followup_message(message_or_attrs)
     {state, recalled} = refresh_turn_context(state, message_skill_context(message))
     state = persist_message(state, message)
@@ -783,10 +716,6 @@ defmodule CodingAgent.Session do
   def handle_call({:subscribe, pid}, _from, state) do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
     {:reply, unsubscribe, new_state}
-  end
-
-  def handle_call(:execute_code_config, _from, state) do
-    {:reply, {:ok, state.execute_code_effective}, state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -883,7 +812,7 @@ defmodule CodingAgent.Session do
 
   def handle_call(:reset, _from, state) do
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
-      {:ok, new_state} -> {:reply, :ok, Heartbeat.clear_runtime(new_state)}
+      {:ok, new_state} -> {:reply, :ok, new_state}
       {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
     end
   end
@@ -926,9 +855,6 @@ defmodule CodingAgent.Session do
 
     custom_summary = Keyword.get(opts, :summary)
     compaction_opts = CompactionManager.normalize_compaction_opts(state, opts)
-
-    # Show working message before compaction
-    Notifier.ui_set_working_message(state, "Compacting context...")
 
     result = CodingAgent.Compaction.compact(state.session_manager, state.model, compaction_opts)
 
@@ -1009,26 +935,6 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_call(:heartbeat_status, _from, state) do
-    {:reply, {:ok, Heartbeat.status(state.heartbeat)}, state}
-  end
-
-  def handle_call({:heartbeat_set, prompt, interval_seconds}, _from, state) do
-    mutate_heartbeat(state, :set, fn -> Heartbeat.set(state, prompt, interval_seconds) end)
-  end
-
-  def handle_call(:heartbeat_pause, _from, state) do
-    mutate_heartbeat(state, :pause, fn -> Heartbeat.pause(state) end)
-  end
-
-  def handle_call(:heartbeat_resume, _from, state) do
-    mutate_heartbeat(state, :resume, fn -> Heartbeat.resume(state) end)
-  end
-
-  def handle_call(:heartbeat_clear, _from, state) do
-    mutate_heartbeat(state, :clear, fn -> Heartbeat.clear(state) end)
-  end
-
   def handle_call({:summarize_branch, opts}, _from, state) do
     case BackgroundTasks.summarize_branch(state, opts, branch_summary_callbacks()) do
       {:ok, new_state} -> {:reply, :ok, new_state}
@@ -1095,7 +1001,7 @@ defmodule CodingAgent.Session do
     state =
       state
       |> cancel_pending_prompt()
-      |> CompactionLifecycle.cancel_for_new_prompt(session_callbacks())
+      |> CompactionLifecycle.cancel_for_new_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
       |> Map.put(:follow_up_queue, :queue.new())
 
@@ -1111,10 +1017,9 @@ defmodule CodingAgent.Session do
        state
        |> Map.put(:steering_queue, :queue.new())
        |> Map.put(:follow_up_queue, :queue.new())
-       |> Map.put(:event_streams, %{})
-       |> maybe_schedule_due_heartbeat()}
+       |> Map.put(:event_streams, %{})}
     else
-      {:noreply, maybe_schedule_due_heartbeat(state)}
+      {:noreply, state}
     end
   end
 
@@ -1144,10 +1049,7 @@ defmodule CodingAgent.Session do
         # Process the event and update state
         new_state = handle_agent_event(event, state)
 
-        {:noreply,
-         event
-         |> CompactionManager.clear_overflow_recovery_state_on_terminal(new_state)
-         |> maybe_schedule_due_heartbeat()}
+        {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
     end
   end
 
@@ -1165,10 +1067,7 @@ defmodule CodingAgent.Session do
     # Process the event and update state
     new_state = handle_agent_event(event, state)
 
-    {:noreply,
-     event
-     |> CompactionManager.clear_overflow_recovery_state_on_terminal(new_state)
-     |> maybe_schedule_due_heartbeat()}
+    {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -1195,7 +1094,7 @@ defmodule CodingAgent.Session do
       |> Map.put(:steering_queue, :queue.new())
       |> Map.put(:follow_up_queue, :queue.new())
 
-    {:noreply, maybe_schedule_due_heartbeat(state)}
+    {:noreply, state}
   end
 
   def handle_info({:store_branch_summary, from_id, summary}, state) do
@@ -1210,45 +1109,24 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:auto_compaction_result, signature, result}, state) do
-    {:noreply,
-     state
-     |> CompactionLifecycle.handle_result(signature, result, session_callbacks())
-     |> maybe_schedule_due_heartbeat()}
+    {:noreply, CompactionLifecycle.handle_result(state, signature, result, session_callbacks())}
   end
 
   def handle_info({:overflow_recovery_result, signature, result}, state) do
-    {:noreply,
-     state
-     |> OverflowRecovery.handle_result(signature, result, session_callbacks())
-     |> maybe_schedule_due_heartbeat()}
+    {:noreply, OverflowRecovery.handle_result(state, signature, result, session_callbacks())}
   end
 
   def handle_info({:auto_compaction_task_timeout, monitor_ref}, state) do
-    case CompactionLifecycle.handle_timeout(state, monitor_ref, session_callbacks()) do
-      {:handled, new_state} -> {:noreply, maybe_schedule_due_heartbeat(new_state)}
+    case CompactionLifecycle.handle_timeout(state, monitor_ref) do
+      {:handled, new_state} -> {:noreply, new_state}
       :stale -> {:noreply, state}
     end
   end
 
   def handle_info({:overflow_recovery_task_timeout, monitor_ref}, state) do
     case OverflowRecovery.handle_timeout(state, monitor_ref, session_callbacks()) do
-      {:handled, new_state} -> {:noreply, maybe_schedule_due_heartbeat(new_state)}
+      {:handled, new_state} -> {:noreply, new_state}
       :stale -> {:noreply, state}
-    end
-  end
-
-  def handle_info({:session_heartbeat_due, token}, state) do
-    state = state |> Heartbeat.mark_due(token) |> maybe_schedule_due_heartbeat()
-    {:noreply, state}
-  end
-
-  def handle_info({:session_heartbeat_idle, token}, state) do
-    case Heartbeat.consume_idle_check(state, token) do
-      {:stale, state} ->
-        {:noreply, state}
-
-      {:current, state} ->
-        {:noreply, maybe_dispatch_heartbeat(state)}
     end
   end
 
@@ -1313,8 +1191,12 @@ defmodule CodingAgent.Session do
     handle_info({:do_prompt, message, state.system_prompt}, state)
   end
 
-  def handle_info(%LemonCore.Event{type: :config_reloaded}, state) do
-    {:noreply, Lifecycle.apply_execute_code_config_transition(state, self())}
+  # Sent by `CodingAgent.Session.ProviderRetry` from the provider stream task
+  # just before it waits to retry a transient failure. Subscribers see
+  # `{:provider_retry, details}` so a UI can show "retrying in Ns".
+  def handle_info({:provider_retry, details}, state) when is_map(details) do
+    Notifier.broadcast_event(state, {:provider_retry, details})
+    {:noreply, state}
   end
 
   def handle_info(_msg, state) do
@@ -1324,14 +1206,7 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
-    _ = Heartbeat.clear_runtime(state)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
-
-    Lifecycle.detach_owner_on_terminate(
-      state.python_repl_mod,
-      self(),
-      @python_repl_terminate_detach_wait_ms
-    )
 
     # Emit introspection event for session end
     Introspection.record(
@@ -1660,7 +1535,9 @@ defmodule CodingAgent.Session do
              session_key: state.session_key,
              session_id: state.session_manager && state.session_manager.header.id,
              agent_id: state.agent_id,
-             contributed_sections: system_sections
+             contributed_sections: system_sections,
+             tool_names: Enum.map(state.tools || [], & &1.name),
+             environment: state.prompt_environment
            }
          ) do
       :unchanged ->
@@ -1846,17 +1723,12 @@ defmodule CodingAgent.Session do
 
   defp recalled_block?(_block, _marker), do: false
 
-  @spec ui_set_working_message(t(), String.t() | nil) :: :ok
-  defp ui_set_working_message(state, message), do: Notifier.ui_set_working_message(state, message)
-
   defp maybe_subscribe_exec_approvals(%{approval_context: approval_context})
        when is_map(approval_context) do
     LemonCore.Bus.subscribe("exec_approvals")
   end
 
   defp maybe_subscribe_exec_approvals(_state), do: :ok
-
-  defp subscribe_config_reload, do: LemonCore.Bus.subscribe("system")
 
   defp approval_event_payload(payload, state) when is_map(payload) do
     pending = map_value(payload, :pending)
@@ -1889,105 +1761,14 @@ defmodule CodingAgent.Session do
 
   defp map_value(_map, _key), do: nil
 
-  @spec ui_notify(t(), String.t(), CodingAgent.UI.notify_type()) :: :ok
-  defp ui_notify(state, message, type), do: Notifier.ui_notify(state, message, type)
-
   @spec handle_agent_event(LemonAgent.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
     EventHandler.handle(event, state, event_handler_callbacks())
   end
 
-  defp mutate_heartbeat(%{context_frozen: true} = state, _action, _fun) do
-    {:reply, {:error, :ephemeral_session}, state}
-  end
-
-  defp mutate_heartbeat(_state, action, fun) do
-    case fun.() do
-      {:ok, new_state} ->
-        heartbeat_status = Heartbeat.status(new_state.heartbeat)
-        emit_heartbeat_event(new_state, action, heartbeat_status)
-        {:reply, {:ok, heartbeat_status}, new_state}
-
-      {:error, reason, unchanged_state} ->
-        {:reply, {:error, reason}, unchanged_state}
-    end
-  end
-
-  defp maybe_schedule_due_heartbeat(%{heartbeat: %Heartbeat.State{due: true}} = state),
-    do: Heartbeat.schedule_idle_check(state)
-
-  defp maybe_schedule_due_heartbeat(state), do: state
-
-  defp maybe_dispatch_heartbeat(%{heartbeat: %Heartbeat.State{due: false}} = state), do: state
-  defp maybe_dispatch_heartbeat(%{heartbeat: %Heartbeat.State{config: nil}} = state), do: state
-
-  defp maybe_dispatch_heartbeat(state) do
-    cond do
-      state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
-        state.auto_compaction.in_progress or state.overflow_recovery.in_progress ->
-        state
-
-      Heartbeat.queued_user_input?() ->
-        Heartbeat.schedule_idle_check(state)
-
-      true ->
-        dispatch_heartbeat(state)
-    end
-  end
-
-  defp dispatch_heartbeat(state) do
-    case Heartbeat.claim_fire(state) do
-      {:ok, prompt, claimed_state} ->
-        {claimed_state, recalled} = refresh_turn_context(claimed_state, prompt)
-
-        message =
-          prompt
-          |> State.build_prompt_message()
-          |> attach_recalled_context(recalled)
-
-        timer_ref =
-          Process.send_after(
-            self(),
-            {:do_prompt, message, claimed_state.system_prompt},
-            @prompt_defer_ms
-          )
-
-        heartbeat_status = Heartbeat.status(claimed_state.heartbeat)
-        emit_heartbeat_event(claimed_state, :fired, heartbeat_status)
-        State.begin_prompt(claimed_state, timer_ref)
-
-      {:error, _reason, retry_state} ->
-        retry_state
-    end
-  end
-
-  defp emit_heartbeat_event(state, action, heartbeat_status) do
-    event = {:session_heartbeat, %{action: action, heartbeat: heartbeat_status}}
-    Notifier.broadcast_event(state, event)
-
-    Introspection.record(
-      :session_heartbeat,
-      %{
-        action: action,
-        status: heartbeat_status.status,
-        interval_seconds: heartbeat_status.interval_seconds,
-        fire_count: heartbeat_status.fire_count,
-        prompt_bytes:
-          if(is_binary(heartbeat_status.prompt), do: byte_size(heartbeat_status.prompt), else: 0)
-      },
-      run_id: state.run_id,
-      session_key: state.session_key,
-      agent_id: state.agent_id,
-      engine: "lemon",
-      provenance: :direct
-    )
-  end
-
   @spec event_handler_callbacks() :: event_handler_callbacks()
   defp event_handler_callbacks do
     %{
-      set_working_message: &ui_set_working_message/2,
-      notify: &ui_notify/3,
       complete_event_streams: &complete_event_streams/2,
       maybe_trigger_compaction: &maybe_trigger_compaction/1,
       persist_message: &persist_message/2
@@ -2024,18 +1805,12 @@ defmodule CodingAgent.Session do
     %{
       restore_messages_from_session: &restore_messages_from_session/1,
       broadcast_event: &broadcast_event/2,
-      ui_set_working_message: &ui_set_working_message/2,
-      ui_notify: &ui_notify/3,
       handle_agent_event: &handle_agent_event/2
     }
   end
 
   defp branch_summary_callbacks do
-    %{
-      broadcast_event: &broadcast_event/2,
-      ui_set_working_message: &ui_set_working_message/2,
-      ui_notify: &ui_notify/3
-    }
+    %{broadcast_event: &broadcast_event/2}
   end
 
   # ============================================================================
@@ -2055,7 +1830,7 @@ defmodule CodingAgent.Session do
 
   @spec maybe_start_overflow_recovery(t(), term(), term()) :: {:ok, t()} | :no_recovery
   defp maybe_start_overflow_recovery(state, reason, partial_state),
-    do: OverflowRecovery.maybe_start(state, reason, partial_state, self(), session_callbacks())
+    do: OverflowRecovery.maybe_start(state, reason, partial_state, self())
 
   @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
           {:ok, t()} | {:error, term(), t()}
@@ -2069,5 +1844,5 @@ defmodule CodingAgent.Session do
 
   @spec maybe_trigger_compaction(t()) :: t()
   defp maybe_trigger_compaction(state),
-    do: CompactionLifecycle.maybe_trigger(state, self(), session_callbacks())
+    do: CompactionLifecycle.maybe_trigger(state, self())
 end

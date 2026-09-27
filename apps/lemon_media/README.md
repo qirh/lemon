@@ -18,11 +18,10 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 
 ## Installation
 
-```elixir
-def deps do
-  [{:lemon_media, "~> 0.1"}]
-end
-```
+`lemon_media` is an app in the Lemon umbrella, not a Hex package: it ships as part
+of the reference runtime and is consumed in-repo by `lemon_router`,
+`lemon_channels` and `lemon_skills`. See `docs/platform-split.md` for the
+published package set.
 
 ## Recording a job
 

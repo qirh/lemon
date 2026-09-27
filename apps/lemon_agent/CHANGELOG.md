@@ -10,6 +10,19 @@ First release as a standalone package. `lemon_agent` is the `:lemon_agent`
 application from the Lemon umbrella; the OTP application name and every
 `LemonAgent.*` module name are unchanged.
 
+### Removed
+
+- `LemonAgent.Workspace.HeartbeatStore`; heartbeat configuration and results now
+  use automation cron jobs and cron history.
+
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained, and requires
+  `lemon_ai` and `lemon_core` as `~> 0.2`.
+
 ### Added
 
 - `LemonAgent.ToolRegistry` — runtime tool registration backed by
@@ -18,7 +31,7 @@ application from the Lemon umbrella; the OTP application name and every
   on a name collision, which keeps a third-party registration from shadowing
   core behaviour by accident. This is the tool-side analogue of the channel
   adapter and engine registries.
-- `LemonAgent.Workspace.GoalStore`, `.KanbanStore` and `.HeartbeatStore` — the
+- `LemonAgent.Workspace.GoalStore` and `.KanbanStore` — the
   multi-agent work-coordination stores, moved here from `lemon_core`. They are
   built purely on core primitives and every consumer already depended on this
   package.

@@ -47,6 +47,7 @@ export default {
           { text: "Browser interface", link: "/user-guide/web" },
           { text: "Agent profiles", link: "/user-guide/profiles" },
           { text: "CLI & sessions", link: "/user-guide/cli" },
+          { text: "Reminders & heartbeats", link: "/user-guide/reminders-and-heartbeats" },
           { text: "Learn from sources", link: "/user-guide/learn-from-sources" },
           { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Skills", link: "/user-guide/skills" },
@@ -111,7 +112,6 @@ export default {
         items: [
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
-          { text: "Execute Code", link: "/tools/execute-code" },
           { text: "Media", link: "/tools/media" },
           { text: "LSP", link: "/tools/lsp" },
           { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },

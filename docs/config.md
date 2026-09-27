@@ -54,6 +54,9 @@ reserve_tokens = 16384
 keep_recent_tokens = 20000
 
 [runtime.retry]
+# Session-level retry of transient provider failures (429, 5xx, overloaded,
+# network) that happen before any output. Exponential backoff with jitter from
+# base_delay_ms; a retry-after hint from the provider replaces the backoff.
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
@@ -61,6 +64,8 @@ base_delay_ms = 1000
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
 extension_paths = []
+# Optional cap on tool-using turns per prompt. Unset or 0 = unlimited (default).
+# max_tool_turns = 200
 
 [runtime.extensions]
 # Disable all extension code execution while keeping manifest diagnostics available.
@@ -95,19 +100,6 @@ cache_compiled = true
 cache_dir = ""
 max_tool_invoke_depth = 4
 
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""
-timeout_ms = 120000
-max_rpc_calls = 100
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000
-tools = []
-kernel_mode = "per_call"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-
 [tui]
 theme = "lemon"
 debug = false
@@ -119,6 +111,10 @@ file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
 
+[automation]
+# Optional: opt-in daily brief at this server-local time (HH:MM, 24-hour).
+# daily_brief = "08:00"
+
 [gateway]
 max_concurrent_runs = 2
 auto_resume = false
@@ -127,8 +123,13 @@ enable_discord = false
 enable_xmtp = false
 
 [gateway.telegram]
-bot_token = "123456:token"
+# `lemon gateway setup telegram` stores the token in encrypted secrets, pairs
+# your chat via /start, and writes these three keys.
+bot_token_secret = "telegram_bot_token"
+# Required: chats allowed to use the bot. With no allowlist the bot is unpaired
+# and ignores every chat (it only answers /whoami and a pairing hint).
 allowed_chat_ids = [12345678]
+# allow_all_chats = true         # explicit opt-out: accept every chat when allowed_chat_ids is empty
 default_account_id = "default"   # optional account for ./bin/lemon send account-scoped lookups
 default_chat_id = 12345678       # optional default for ./bin/lemon send --to telegram
 default_thread_id = 35           # optional forum topic/thread
@@ -315,8 +316,6 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
-- `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_PYTHON_PATH`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`, `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`, `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`, `LEMON_EXECUTE_CODE_TOOLS`
-- `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -389,6 +388,7 @@ Use only these top-level sections:
 - `gateway`
 - `tui`
 - `logging`
+- `automation`
 
 Deprecated sections now fail validation and runtime loading:
 
@@ -524,7 +524,6 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 Lemon can auto-load a `.env` file at startup:
 
 - `./bin/lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
-- `clients/lemon-web/server` bridge: loads `<cwd>/.env` from `--cwd` (or current directory).
 - `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
 
 By default, existing environment variables are preserved. `.env` values only fill missing variables.
@@ -903,7 +902,6 @@ environment variables select an existing CDP browser or the opt-in MV3 relay:
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
-| `LEMON_CUA_DRIVER_CMD` | PATH lookup | cua-driver executable for `computer_use` |
 
 For the existing-Chrome relay, set `LEMON_BROWSER_CDP_ENDPOINT` to
 `ws://127.0.0.1:<port>/cdp?token=<token>` and set attach-only mode. Treat that
@@ -931,48 +929,6 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
-## Execute Code (`execute_code`)
-
-`execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`). The
-result comes back through `text()` blocks; stdout/stderr is returned as a labeled
-diagnostics tail (a script that never calls `text()` keeps the stdout-only result), and
-`notify()`/`batch()` add streaming updates and parallel helper calls. It is disabled by
-default and **bash-equivalent** — the script runs as host code with the user's
-permissions, not in a sandbox. For the full behavior, security, and lifecycle contract
-see [`docs/tools/execute-code.md`](tools/execute-code.md).
-
-```toml
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""              # empty = find python3 on PATH
-timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
-max_rpc_calls = 100           # helper calls per run
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
-max_text_bytes = 65536        # total text() result-block bytes per run
-max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
-tools = []                    # helper subset; empty = full fixed allowlist
-
-# Persistent-kernel opt-in:
-kernel_mode = "per_call"      # "per_call" (default) | "session"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-```
-
-`kernel_mode = "session"` keeps one supervised python3 interpreter per session/cwd/
-interpreter/helper identity so imports, globals, and objects survive across calls
-(`reset = true` discards them). Kernel state is live process memory only — never durable,
-never in the transcript — and is lost on session close/reset, idle reap
-(`kernel_idle_timeout_ms`), eviction (`max_live_kernels`, idle-only LRU), or node restart.
-Only the literal value `"session"` enables persistence; any other value resolves to
-`"per_call"`. Cells are serialized one at a time per kernel with a bounded queue
-(`max_queued_cells_per_kernel`); a full queue is an error, not a fallback. Session mode
-falls back to an isolated per-call run only before code starts (missing session identity,
-unavailable registry, exhausted capacity, or startup failure) and reports it in result
-details.
-
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -980,13 +936,37 @@ details.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
-- `runtime.tools.execute_code`: programmatic tool calling (python3 scripts, helper allowlist, optional persistent kernels).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
-- `runtime.retry`: retry settings.
+- `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
+- `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
+- `automation`: opt-in proactive automation (`daily_brief`).
+
+## Automation
+
+`[automation]` holds opt-in proactive automation. It currently has one key:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+```
+
+- `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
+  `cron_daily_brief`, running every day at that time in the server's local
+  timezone (DST-aware) for the default agent's main session
+  (`agent:default:main`). The agent sends a short brief to your paired owner
+  chat, or replies `HEARTBEAT_OK` and sends nothing.
+- The job is reconciled when Lemon boots: a new or changed time takes effect at
+  the next start, and removing the key removes the job.
+- `lemon setup` offers to write this key (default: off); `lemon setup
+  --daily-brief HH:MM` writes it non-interactively.
+- A value that is not a `HH:MM` 24-hour time fails config validation
+  (`automation.daily_brief: must be a HH:MM 24-hour time`).
+
+See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 
 ## Gateway Projects and Bindings
 
@@ -998,7 +978,9 @@ Why it matters:
 - The native executor runs with `cwd` set to the project root (so file edits/commands happen in the right repo).
 - The gateway loads per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
   models, tool policy, etc. compared to your global `~/.lemon/config.toml`).
-- If a chat has no bound project, gateway falls back to `gateway.default_cwd` (or `~/` by default).
+- If a chat has no bound project, runs use `gateway.default_cwd` when configured, otherwise the
+  assistant home (`~/.lemon/agent/workspace`, or `$LEMON_AGENT_DIR/workspace`). Channel runs never
+  default to your `$HOME`.
 
 ### Projects
 
@@ -1028,7 +1010,8 @@ queue_mode = "steer"
 ```
 
 Notes:
-- If you omit `project`, LemonGateway will run with `cwd` set to `gateway.default_cwd` when configured, otherwise `~/`.
+- If you omit `project`, LemonGateway will run with `cwd` set to `gateway.default_cwd` when configured, otherwise the
+  assistant home (`~/.lemon/agent/workspace`).
 - You can also bind at the topic/thread level by setting `topic_id` in the binding (takes precedence over the chat-level
   binding when a matching topic exists).
 - `topic_id` corresponds to Telegram's `message_thread_id` (only present in forum topics).
@@ -1059,7 +1042,7 @@ Lemon can run as an XMTP bot through the `lemon_channels` XMTP adapter.
 ./bin/lemon-xmtp-bootstrap
 ```
 
-This installs bridge dependencies in `apps/lemon_gateway/priv/node_modules` (where `xmtp_bridge.mjs` resolves imports).
+This installs bridge dependencies in `apps/lemon_channels/priv/node_modules`, next to `xmtp_bridge.mjs`, where Node resolves its imports.
 
 ### 2. Configure gateway XMTP
 
@@ -1128,22 +1111,12 @@ voice_max_bytes = 10485760                            # optional (default: 10MB)
 voice_transcription_base_url = "https://api.openai.com/v1"
 ```
 
-Use `voice_transcription_provider = "local_transcript"` for deterministic
-no-credential voice-note proof. It routes a local transcript preview through the
-normal Telegram inbound path and does not require an API key. Use
-`openai_transcribe` for real speech-to-text.
+Use `voice_transcription_provider = "local_transcript"` for local transcript
+handling without an API key. Use `openai_transcribe` for real speech-to-text.
 
-The deterministic local proof runner writes a redacted artifact under
-`.lemon/proofs/`:
-
-```bash
-MIX_ENV=test mix run scripts/live_telegram_voice_local_smoke.exs
-```
-
-When that artifact is present, `mix lemon.doctor --verbose` reports
-`channels.telegram.voice_transcription` as a passing readiness check. If voice
-transcription is enabled with `local_transcript` and the proof is missing,
-doctor tells the operator to run the local smoke.
+`mix lemon.doctor` checks this configuration: when voice transcription is
+disabled the check is skipped, and when the provider requires an API key that
+is missing it warns.
 
 ## Telegram File Transfer
 
@@ -1171,7 +1144,8 @@ Commands:
 - `/file put [--force] <path>`: upload a Telegram document into the active working root.
 - `/file get <path>`: fetch a file (or zip a directory) from the active working root back into Telegram.
 
-If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or `~/`).
+If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or the assistant home,
+`~/.lemon/agent/workspace`).
 
 When `auto_send_generated_files = true`, Lemon tracks generated files requested
 by browser/media tools and sends up to
@@ -1236,12 +1210,35 @@ reserve_tokens = 16384          # optional safety margin before limit
 trigger_ratio = 0.9             # optional; 0.9 means trigger at 90% of context window
 ```
 
+## Telegram Pairing and Access
+
+The Telegram adapter fails closed. It accepts updates only from chats listed in
+`gateway.telegram.allowed_chat_ids`. With an empty or missing allowlist the bot is
+**unpaired**: it drops every message and callback, logs a warning, and replies at
+most once per chat every 10 minutes with
+"This bot is not paired. Run `lemon gateway setup telegram`." `lemon doctor` reports
+an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist`).
+
+- `/whoami` is answered in any chat, paired or not, with the chat id and your user id.
+  Use it to find the id of a group you want to add to `allowed_chat_ids`.
+- `lemon gateway setup telegram` pairs interactively: it asks you to send `/start` to the
+  bot, waits up to `--pair-timeout` seconds (default 120), and writes the chat id. For
+  scripts: `lemon gateway setup telegram --non-interactive --token <token> --chat-id <id>`
+  (`--chat-id` is repeatable).
+- `allow_all_chats = true` explicitly accepts every chat when no allowlist is set. Anyone
+  who finds the bot can then run the agent; doctor reports it as a warning.
+
+In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
+for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call,
+because any member can prompt the agent.
+
 ## Trigger Mode (Mentions-Only)
 
-In Telegram group chats, you can gate runs so Lemon only triggers when explicitly invoked:
+Telegram group chats (like Discord) default to mentions-only: Lemon runs only on `@botname`, a reply to the bot, or a
+slash command. Direct messages always run.
 - `/trigger`: show current trigger mode.
-- `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands.
-- `/trigger all`: run on all messages.
+- `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands (default).
+- `/trigger all`: run on all messages in this chat or topic (group admins only).
 - `/trigger clear`: clear a topic override (forum topics only).
 - `/cwd [project_id|path|clear]`: show, set, or clear the chat/topic working directory override used by future `/new` sessions.
 

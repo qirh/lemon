@@ -1,8 +1,8 @@
 import Config
 
 # Keep Logger defaults in tests: several test suites assert on `:info`/`:warning`
-# messages via `ExUnit.CaptureLog`. If you need quieter output, prefer per-test
-# `capture_log/2` or configure console formatting in CI.
+# messages via `ExUnit.CaptureLog`. Every app's test_helper starts ExUnit with
+# `capture_log: true`, so log output is only printed for failing tests.
 
 # Isolate on-disk poller locks per `mix test` OS process. This prevents cross-process
 # test interference if multiple `mix test` commands run concurrently on the same host.
@@ -97,6 +97,10 @@ config :lemon_automation, :skill_curator, enabled: false
 # from generating drafts (and touching the memory store) during unrelated suites.
 config :lemon_automation, :synthesis_runner, enabled: false
 
+# The daily brief job is reconciled from the developer's config.toml at boot;
+# `LemonAutomation.HeartbeatTest` exercises the sync explicitly instead.
+config :lemon_automation, daily_brief_sync: false
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.
@@ -124,7 +128,7 @@ config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_gateway, :telegram, nil
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4092],
   secret_key_base:

@@ -45,8 +45,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
           required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
-          required(:ui_set_working_message) => (state, String.t() | nil -> :ok),
-          required(:ui_notify) => (state, String.t(), atom() -> :ok),
           required(:handle_agent_event) => (LemonAgent.Types.agent_event(), state -> state)
         }
 
@@ -62,12 +60,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
         failure_reason = :overflow_recovery_task_down
         failed_state = CompactionManager.clear_overflow_recovery_task_state(state)
 
-        callbacks.ui_notify.(
-          failed_state,
-          "Overflow compaction worker stopped unexpectedly",
-          :error
-        )
-
         CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
           duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
           reason: CompactionManager.normalize_overflow_reason(failure_reason)
@@ -77,8 +69,8 @@ defmodule CodingAgent.Session.OverflowRecovery do
     end
   end
 
-  @spec maybe_start(map(), term(), term(), pid(), callbacks(map())) :: {:ok, map()} | :no_recovery
-  def maybe_start(state, reason, partial_state, session_pid, callbacks) do
+  @spec maybe_start(map(), term(), term(), pid()) :: {:ok, map()} | :no_recovery
+  def maybe_start(state, reason, partial_state, session_pid) do
     cond do
       not state.is_streaming ->
         :no_recovery
@@ -98,13 +90,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
         model = state.model
         started_at_ms = System.monotonic_time(:millisecond)
         compaction_opts = CompactionManager.overflow_recovery_compaction_opts(state)
-
-        callbacks.ui_notify.(state, "Context window exceeded. Compacting and retrying...", :info)
-
-        callbacks.ui_set_working_message.(
-          state,
-          "Context overflow detected. Compacting and retrying..."
-        )
 
         CompactionManager.emit_overflow_recovery_telemetry(:attempt, state, %{
           reason: CompactionManager.normalize_overflow_reason(reason)
@@ -168,7 +153,7 @@ defmodule CodingAgent.Session.OverflowRecovery do
 
         case CompactionLifecycle.apply_result(state, result, nil, callbacks) do
           {:ok, compacted_state} ->
-            case continue_after_compaction(compacted_state, callbacks) do
+            case continue_after_compaction(compacted_state) do
               {:ok, resumed_state} ->
                 CompactionManager.emit_overflow_recovery_telemetry(:success, resumed_state, %{
                   duration_ms: CompactionManager.overflow_recovery_duration_ms(state)
@@ -177,12 +162,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
                 resumed_state
 
               {:error, reason, failed_state} ->
-                callbacks.ui_notify.(
-                  failed_state,
-                  "Auto-retry failed after compaction: #{inspect(reason)}",
-                  :error
-                )
-
                 CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
                   duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
                   reason: CompactionManager.normalize_overflow_reason(reason)
@@ -192,12 +171,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
             end
 
           {:error, reason, failed_state} ->
-            callbacks.ui_notify.(
-              failed_state,
-              "Overflow compaction failed: #{inspect(reason)}",
-              :error
-            )
-
             CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
               duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
               reason: CompactionManager.normalize_overflow_reason(reason)
@@ -221,8 +194,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
         )
         |> CompactionManager.clear_overflow_recovery_task_state()
 
-      callbacks.ui_notify.(failed_state, "Overflow compaction timed out", :error)
-
       CompactionManager.emit_overflow_recovery_telemetry(:failure, failed_state, %{
         duration_ms: CompactionManager.overflow_recovery_duration_ms(state),
         reason: CompactionManager.normalize_overflow_reason(failure_reason)
@@ -234,11 +205,9 @@ defmodule CodingAgent.Session.OverflowRecovery do
     end
   end
 
-  defp continue_after_compaction(state, callbacks) do
+  defp continue_after_compaction(state) do
     case LemonAgent.Agent.wait_for_idle(state.agent, timeout: 5_000) do
       :ok ->
-        callbacks.ui_set_working_message.(state, "Retrying after compaction...")
-
         case LemonAgent.Agent.continue(state.agent) do
           :ok ->
             {:ok,

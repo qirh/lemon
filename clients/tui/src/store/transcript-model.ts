@@ -8,7 +8,7 @@
 
 import type { AgentAction, AgentActionKind } from "../protocol/types.ts";
 
-export type BlockKind = "user" | "assistant" | "tool" | "approval" | "notice";
+export type BlockKind = "user" | "assistant" | "tool" | "reasoning" | "approval" | "notice";
 
 interface BlockBase {
 	/** Unique within a session; stable for the block's lifetime. */
@@ -50,6 +50,20 @@ export interface ToolBlock extends BlockBase {
 	message: string | undefined;
 }
 
+/**
+ * The model's thinking for one reasoning block of a run. Its own transcript
+ * block (not a tool card): `kind: "reasoning"` actions carry the accumulated
+ * text, so each phase replaces {@link text} rather than appending to it.
+ */
+export interface ReasoningBlock extends BlockBase {
+	kind: "reasoning";
+	runId: string | undefined;
+	/** `action.id` from the protocol; the upsert key. */
+	actionId: string;
+	text: string;
+	phase: ToolPhase;
+}
+
 export interface ApprovalBlock extends BlockBase {
 	kind: "approval";
 	approvalId: string;
@@ -66,7 +80,13 @@ export interface NoticeBlock extends BlockBase {
 	text: string;
 }
 
-export type Block = UserBlock | AssistantBlock | ToolBlock | ApprovalBlock | NoticeBlock;
+export type Block =
+	| UserBlock
+	| AssistantBlock
+	| ToolBlock
+	| ReasoningBlock
+	| ApprovalBlock
+	| NoticeBlock;
 
 let blockSeq = 0;
 

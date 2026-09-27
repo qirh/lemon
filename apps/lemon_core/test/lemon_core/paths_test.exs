@@ -33,7 +33,7 @@ defmodule LemonCore.PathsTest do
       assert Paths.global_config(home_dir: "/home/x") == "/home/x/.lemon/config.toml"
       assert Paths.project_config("/srv/app") == "/srv/app/.lemon/config.toml"
       assert Paths.home_path("store", home_dir: "/home/x") == "/home/x/.lemon/store"
-      assert Paths.project_path("/srv/app", "proofs") == "/srv/app/.lemon/proofs"
+      assert Paths.project_path("/srv/app", "extensions") == "/srv/app/.lemon/extensions"
     end
 
     test "home comes from HOME when no option is given" do
@@ -53,7 +53,7 @@ defmodule LemonCore.PathsTest do
       assert Paths.home_state_dir(home_dir: "/home/x") == "/home/x/.myapp"
       assert Paths.global_config(home_dir: "/home/x") == "/home/x/.myapp/config.toml"
       assert Paths.project_config("/srv/app") == "/srv/app/.myapp/config.toml"
-      assert Paths.project_path("/srv/app", "proofs") == "/srv/app/.myapp/proofs"
+      assert Paths.project_path("/srv/app", "extensions") == "/srv/app/.myapp/extensions"
     end
 
     test "renaming the config file moves both config paths" do

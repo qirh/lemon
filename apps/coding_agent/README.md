@@ -13,7 +13,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
 - **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
-- **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, @mentions, and project-local CLAUDE.md/AGENTS.md
+- **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, and project-local CLAUDE.md/AGENTS.md
 - **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
 
 ## Architecture
@@ -23,7 +23,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
                                |
                                v
                       +------------------+
-                      |   CodingAgent    |   Public API: start_session, coding_tools, load_settings
+                      |   CodingAgent    |   Public API: start_session, lookup_session, load_settings
                       +--------+---------+
                                |
                  +-------------+-------------+
@@ -71,9 +71,6 @@ CodingAgent.Supervisor (one_for_one)
   +-- BackgroundRun.Supervisor (DynamicSupervisor for isolated `/bg` workers)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (Task.Supervisor for async ops)
-  +-- PythonRepl.Supervisor (one_for_all: PythonRepl.Registry + PythonRepl.SessionSupervisor;
-  |   supervised temporary workers for persistent execute_code kernels; starts after
-  |   TaskSupervisor because per-cell RPC servers depend on it)
   +-- TaskStoreServer (DETS-backed async task tracking)
   +-- ParentQuestionStoreServer (DETS-backed child-to-parent question tracking)
   +-- RunGraphServer (ETS+DETS persistent run graph)
@@ -103,7 +100,6 @@ CodingAgent.Supervisor (one_for_one)
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
 | `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, clears diagnostic queue mirrors on every terminal path, triggers compaction, and fires extension hooks |
-| `CodingAgent.Session.Heartbeat` | Persists and schedules one idle-only recurring prompt inside the current session, including pause/resume/clear and reset tombstones |
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
@@ -112,7 +108,6 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.SessionManager` | JSONL persistence engine with tree-structured entries (branching, compaction, labels), atomic writes, append-only incremental saves, and version migrations (v1-v3) |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes with health check and list capabilities |
 | `CodingAgent.SessionRegistry` | Registry wrapper for session lookup by ID |
-| `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infrastructure (currently delegated into `Application`) |
 | `CodingAgent.Executor` | Selects the normal local runner or a named-node remote runner from execution request metadata |
 | `CodingAgent.Executor.RemoteSessionRunner` | Bridges one local gateway execution to one live named node and propagates completion/cancellation |
 
@@ -130,21 +125,20 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2` (55 default tools), `read_only_tools/2`, `all_tools/2`, `get_tool/3`; assistant-platform tools are implemented in `LemonSkills.Tools` and exposed here by name |
-| `CodingAgent.ToolRegistry` | Dynamic tool resolution with precedence (builtin > WASM > extension), ETS extension cache, conflict reporting |
+| `CodingAgent.ToolRegistry` | The session tool set: `@builtin_tools` plus non-colliding satellite registrations, resolved with precedence (builtin > WASM > extension > MCP); `get_tools/2`, `get_tool/3`, ETS extension cache, conflict reporting. Assistant-platform tools are implemented in `LemonSkills.Tools` and listed here by name |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; integrates with `LemonCore.ExecApprovals` |
 | `CodingAgent.ToolPolicy` | Policy profiles (`full_access`, `read_only`, `safe_mode`, `subagent_restricted`, `no_external`, `minimal_core`) with allow/deny lists and router-style approval maps |
 
 ### Built-in Tools
 
-**Default set (coding_tools/2):**
+**Default set (`CodingAgent.ToolRegistry.get_tools/2`):**
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
+| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
-| Execution | `bash` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
-| Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| Execution | `bash`, `bash_output`, `kill_process` |
+| Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
 
@@ -154,18 +148,6 @@ currently connected execution node. If `cwd` is omitted, the destination uses
 the default supplied to `node join`; an explicit `cwd` is interpreted and
 validated on the destination. The `task` tool remains an in-process child of
 the current coding session and does not expose named-node routing.
-
-`execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed compile-time allowlist of agent tools (`read`, `grep`, `find`, `ls`,
-`webfetch`) through policy- and approval-gated helpers. The result comes back via the
-shim's `text()` blocks (write-through flushed, so they survive a timeout kill), with
-stdout/stderr demoted to a labeled diagnostics tail; `notify()` streams progress and
-`batch()` runs helper calls in parallel. It is bash-equivalent host code, not a sandbox.
-The default `kernel_mode = "per_call"` runs every script in a fresh process; the opt-in
-`"session"` mode reuses one supervised persistent interpreter per
-session/cwd/interpreter/helper identity whose state is live process memory only (never
-durable) and is discarded on reset, close, idle reap, or cancellation. See
-`docs/tools/execute-code.md` for the full contract.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a
@@ -238,6 +220,16 @@ metadata and synthesize nonzero `bash` exits as structured `result_meta` with
 `error_type`, `tool_name`, `exit_code`, and a safe message so router and channel
 status surfaces do not need to parse terminal text.
 
+Completed tool action events carry two views of the result. `detail.result` is
+the 500-character preview that channel status renderers (Telegram, Discord)
+show. Next to it, `CodingAgent.Session.Presentation.put_operator_result/2`
+adds `detail.result_full` (the result text bounded to 32 KB, omitted when the
+preview already is the whole result) and `detail.details` (the tool's
+structured details — an edit's `diff` and `first_changed_line`, `exit_code`,
+`path`, … — made JSON-safe and bounded). Reasoning actions likewise carry a
+500-character `reasoning.text` preview plus a `reasoning.full_text` bounded to
+16 KB. The control plane promotes the full copies for operator clients.
+
 Local `patch` calls preflight every hunk in memory, reject duplicate paths and
 destructive move overwrites, revalidate each operation immediately before
 commit, and exclusively create new targets. Commits remain sequential, so a
@@ -266,13 +258,12 @@ that should outlive one session. Kanban-dispatched worker runs block the
 
 | Tool | Module | Notes |
 |------|--------|-------|
-| `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `skill_manage` | `Tools.SkillManage` | Create, patch, delete, and maintain audited Lemon skills |
 | `memory_topic` | `LemonSkills.Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers (not exposed as tools):** `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers (not exposed as tools):** `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
 Internal task runs infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. For internal bash-only tasks, the runner accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks on the normal child-session path.
 
@@ -294,7 +285,6 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
 | `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
 | `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + stable available-skills metadata + memory workflow + runtime metadata) |
-| `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mention sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd hierarchy up to root, then home directory; also loads prompts, themes, and skills |
 
 ### Extensions and WASM
@@ -321,10 +311,7 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
-| `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
-| `CodingAgent.PythonRepl` | Facade for persistent `execute_code` kernels -- `execute/1`, `reset/3`, `detach_owner/2`, aggregate-only `snapshot/1` |
-| `CodingAgent.PythonRepl.Registry` | Serialized ownership/lifetime authority: key/owner mappings, generations, strict `max_live_kernels` admission with idle-only LRU eviction, idle reaping, owner monitors and co-owner forks |
-| `CodingAgent.PythonRepl.SessionSupervisor` | DynamicSupervisor for temporary `PythonRepl.Session` kernel workers (one python3 process each; serialized cells, bounded queue, live in-memory state only) |
+| `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
@@ -398,24 +385,12 @@ only with filesystem checkpoints enabled. Risky shell checkpoints snapshot the
 configured file paths through `LemonCore.Checkpoint` before backend launch and
 return `checkpoint_id`, `checkpoint_kind`, and `checkpoint_trigger` in result
 details.
-`scripts/live_terminal_backend_smoke.exs` provides the opt-in live proof lane:
-it runs a fixed command through every available registered backend via
-`ProcessManager.exec_sync/1`, writes hashed command/cwd/output proof JSON, and
-exits nonzero on any backend failure or missing expected output. When no SSH
-target is configured and local `sshd` plus `ssh-keygen` are available, the
-smoke starts an ephemeral loopback `sshd` with generated host/client keys and
-temporary known-hosts storage instead of touching `~/.ssh`.
-`scripts/live_terminal_process_smoke.exs` separately proves process metadata and
-manual restart behavior: it completes a local process, validates backend/log
-metadata, restarts it as a fresh supervised child, verifies restart lineage, and
-writes a redacted proof without raw commands, logs, or process ids.
 
 ### Subagents and Commands
 
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Subagents` | Subagent definition loading (built-in: `research`, `implement`, `review`, `test`; custom: `.lemon/subagents.json`) |
-| `CodingAgent.Mentions` | `@name prompt` parsing for subagent invocation |
 | `CodingAgent.Commands` | Slash command discovery from `.lemon/command/*.md` and `~/.lemon/agent/command/*.md` with YAML frontmatter |
 
 ### Harness and Checkpointing
@@ -447,15 +422,12 @@ shell history.
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.UI` | Pluggable UI abstraction (notify, working messages, approval requests) |
-| `CodingAgent.UI.Context` | UI context helpers and test support |
 | `CodingAgent.Messages` | Message type definitions and LLM format conversion |
 | `CodingAgent.BashExecutor` | Streaming shell command execution |
 | `CodingAgent.InternalUrls` | Internal URL protocol handling |
 | `CodingAgent.InternalUrls.NotesProtocol` | `notes://` protocol handler |
 | `CodingAgent.Progress` | Progress reporting utilities |
 | `CodingAgent.Utils.Http` | HTTP utility functions |
-| `CodingAgent.Project.Codexignore` | `.codexignore` file parsing |
 
 ### Mix Tasks
 
@@ -476,11 +448,10 @@ A session is a `GenServer` process that wraps an `LemonAgent.Agent` loop. Each s
 
 - A working directory (`cwd`)
 - A model configuration
-- A set of tools (default: `coding_tools/2`)
+- A set of tools (default: `CodingAgent.ToolRegistry.get_tools/2`)
 - JSONL persistence with tree-structured entries
 - Event subscription (direct send or backpressure-aware streams)
 - Steering (mid-run interrupts) and follow-up (post-run) queues
-- One optional durable same-session heartbeat that fires only while idle
 - Auto-compaction and overflow recovery
 
 The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
@@ -489,8 +460,7 @@ clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
 
 Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
-logical runtime session key used by clients; logical-key lookup fails closed if
-more than one live process claims it.
+logical runtime session key used by clients.
 
 ### Tool Execution
 
@@ -594,7 +564,7 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 | `TOOLS.md` | main + subagent | Tool documentation |
 | `IDENTITY.md` | main only | Identity configuration |
 | `USER.md` | main only | User preferences |
-| `HEARTBEAT.md` | main only | Health check configuration |
+| `HEARTBEAT.md` | main only | Checklist the scheduled heartbeat cron job reads (`HEARTBEAT_OK` = nothing to report) |
 | `BOOTSTRAP.md` | main only | Startup instructions |
 | `MEMORY.md` | main only | Persistent memory (optional) |
 
@@ -631,21 +601,10 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 
 # Abort current operation
 :ok = CodingAgent.Session.abort(session)
-
-# Recur inside this same durable conversation every ten minutes
-{:ok, heartbeat} =
-  CodingAgent.Session.heartbeat_set(session, "review CI and report changes", 600)
-
-{:ok, heartbeat} = CodingAgent.Session.heartbeat_pause(session)
-{:ok, heartbeat} = CodingAgent.Session.heartbeat_resume(session)
-{:ok, heartbeat} = CodingAgent.Session.heartbeat_clear(session)
 ```
 
-Session heartbeats use the ordinary prompt/agent/provider path after the
-session becomes idle; queued user input takes priority and missed ticks
-coalesce. See
-[`docs/user-guide/session-heartbeats.md`](../../docs/user-guide/session-heartbeats.md)
-for TUI, control-plane, persistence, and live-smoke details.
+Recurring check-ins are cron jobs flagged as heartbeats, not session state;
+see [`docs/user-guide/reminders-and-heartbeats.md`](../../docs/user-guide/reminders-and-heartbeats.md).
 
 ### Subscribing to Events
 
@@ -782,4 +741,4 @@ mix test apps/coding_agent/test/coding_agent/tools/read_test.exs:46
 mix test --include integration apps/coding_agent
 ```
 
-The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories, direct `start_link` (not supervised), and mock UIs via `CodingAgent.UI.Context`.
+The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories and direct `start_link` (not supervised).

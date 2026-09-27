@@ -1,29 +1,22 @@
 defmodule LemonSim.Bench.Artifacts.VerifierTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureIO
+
   alias LemonSim.Bench.Artifacts.{Bundle, Verifier}
-  alias LemonSim.Examples.{Pandemic, Poker, StockMarket}
-  alias LemonSim.Examples.Pandemic.Artifacts, as: PandemicArtifacts
+  alias LemonSim.Bench.Suite
+  alias LemonSim.Examples.Poker
   alias LemonSim.Examples.Poker.Artifacts, as: PokerArtifacts
-  alias LemonSim.Examples.StockMarket.Artifacts, as: StockMarketArtifacts
+  alias Mix.Tasks.Lemon.Sim.Verify, as: VerifyTask
 
   test "registered poker bundle recomputes and rejects a tampered scorecard" do
     artifact_dir = tmp_dir("poker_bundle")
-
-    state =
-      Poker.initial_state(sim_id: "poker_bundle_test", player_count: 2, max_hands: 1, seed: 7)
-
-    events = [%{kind: "hand_started", payload: %{hand: 1}, ts_ms: 123}]
-
-    assert {:ok, _paths} =
-             PokerArtifacts.write_run_artifacts(state, events, [],
-               artifact_dir: artifact_dir,
-               deterministic_artifacts?: true
-             )
+    write_poker_bundle!(artifact_dir, "poker_bundle_test", 7)
 
     assert {:ok, verified} = Verifier.verify_run(artifact_dir)
     assert verified.manifest["sim"]["id"] == "poker"
     assert verified.scorecard["sim_id"] == "poker_bundle_test"
+    assert verified.replay == %{batches: 0, events: 0}
 
     tamper_scorecard!(artifact_dir, fn scorecard ->
       Map.update!(scorecard, "hands_completed", &(&1 + 1))
@@ -32,48 +25,62 @@ defmodule LemonSim.Bench.Artifacts.VerifierTest do
     assert {:error, {:scorecard_mismatch, "poker"}} = Verifier.verify_run(artifact_dir)
   end
 
-  test "registered stock market bundle recomputes and rejects a tampered scorecard" do
-    artifact_dir = tmp_dir("stock_bundle")
-    state = StockMarket.initial_state(sim_id: "stock_bundle_test", player_count: 2)
-    events = [%{kind: "market_news_generated", payload: %{round: 1}, ts_ms: 456}]
+  test "bundle with hashes.json deleted and an edited scorecard fails verify and is excluded from recompute" do
+    suite_dir = tmp_dir("suite_unhashed")
+    good_dir = Path.join([suite_dir, "runs", "good", "1"])
+    bad_dir = Path.join([suite_dir, "runs", "bad", "1"])
 
-    assert {:ok, _paths} =
-             StockMarketArtifacts.write_run_artifacts(state, events, [],
-               artifact_dir: artifact_dir,
-               deterministic_artifacts?: true
-             )
+    write_poker_bundle!(good_dir, "poker_good", 10)
+    write_poker_bundle!(bad_dir, "poker_bad", 11)
 
-    assert {:ok, verified} = Verifier.verify_run(artifact_dir)
-    assert verified.manifest["sim"]["id"] == "stock_market"
-    assert is_number(verified.scorecard["best_final_value"])
+    File.rm!(Path.join(bad_dir, "hashes.json"))
 
-    tamper_scorecard!(artifact_dir, fn scorecard ->
-      Map.update!(scorecard, "best_final_value", &(&1 + 1))
+    scorecard_path = Path.join(bad_dir, "scorecard.json")
+
+    scorecard_path
+    |> File.read!()
+    |> Jason.decode!()
+    |> Map.put("best_profit_loss", 1_000_000)
+    |> Jason.encode!()
+    |> then(&File.write!(scorecard_path, &1))
+
+    assert {:error, {:missing_bundle_file, "hashes.json"}} = Verifier.verify_run(bad_dir)
+
+    capture_io(:stderr, fn ->
+      assert catch_exit(VerifyTask.run([bad_dir])) == {:shutdown, 1}
     end)
 
-    assert {:error, {:scorecard_mismatch, "stock_market"}} = Verifier.verify_run(artifact_dir)
+    write_suite_json!(suite_dir, [
+      %{"competitor" => "good", "sim_id" => "poker_good", "artifact_dir" => "runs/good/1"},
+      %{"competitor" => "bad", "sim_id" => "poker_bad", "artifact_dir" => "runs/bad/1"}
+    ])
+
+    assert {:ok, suite} = Suite.recompute(suite_dir)
+    assert Enum.map(suite.rankings, & &1["competitor"]) == ["good"]
+    assert [%{"competitor" => "bad", "error" => error}] = suite.failures
+    assert error =~ "missing_bundle_file"
   end
 
-  test "registered pandemic bundle recomputes and rejects a tampered scorecard" do
-    artifact_dir = tmp_dir("pandemic_bundle")
-    state = Pandemic.initial_state(sim_id: "pandemic_bundle_test", player_count: 4, max_rounds: 2)
-    events = [%{kind: "phase_changed", payload: %{phase: "intelligence"}, ts_ms: 789}]
+  test "bundle without manifest.json fails verification" do
+    artifact_dir = tmp_dir("poker_no_manifest")
+    write_poker_bundle!(artifact_dir, "poker_no_manifest", 3)
+    File.rm!(Path.join(artifact_dir, "manifest.json"))
+
+    assert {:error, {:missing_bundle_file, "manifest.json"}} = Verifier.verify_run(artifact_dir)
+  end
+
+  test "replay-capable bundles must hash their replay inputs" do
+    artifact_dir = tmp_dir("poker_no_inputs")
+    state = Poker.initial_state(sim_id: "poker_no_inputs", player_count: 2, max_hands: 1, seed: 5)
 
     assert {:ok, _paths} =
-             PandemicArtifacts.write_run_artifacts(state, events, [],
+             PokerArtifacts.write_run_artifacts(state, [], [],
                artifact_dir: artifact_dir,
                deterministic_artifacts?: true
              )
 
-    assert {:ok, verified} = Verifier.verify_run(artifact_dir)
-    assert verified.manifest["sim"]["id"] == "pandemic"
-    assert is_number(get_in(verified.scorecard, ["team", "global_death_rate"]))
-
-    tamper_scorecard!(artifact_dir, fn scorecard ->
-      put_in(scorecard, ["team", "global_death_rate"], 99.99)
-    end)
-
-    assert {:error, {:scorecard_mismatch, "pandemic"}} = Verifier.verify_run(artifact_dir)
+    assert {:error, {:missing_required_hashed_file, "config.json"}} =
+             Verifier.verify_run(artifact_dir)
   end
 
   test "unregistered bundles still skip scorecard recompute" do
@@ -114,6 +121,37 @@ defmodule LemonSim.Bench.Artifacts.VerifierTest do
 
     assert {:ok, verified} = Verifier.verify_run(artifact_dir)
     assert verified.scorecard["made_up"] == 2
+    assert verified.replay == :unsupported
+  end
+
+  defp write_poker_bundle!(artifact_dir, sim_id, seed) do
+    state = Poker.initial_state(sim_id: sim_id, player_count: 2, max_hands: 1, seed: seed)
+
+    assert {:ok, _paths} =
+             PokerArtifacts.write_run_artifacts(state, [], [],
+               artifact_dir: artifact_dir,
+               deterministic_artifacts?: true,
+               replay: %{config: PokerArtifacts.replay_config(state), batches: []}
+             )
+  end
+
+  defp write_suite_json!(suite_dir, runs) do
+    suite_json = %{
+      "schema_version" => "lemon_sim.suite.v1",
+      "spec" => %{
+        "scenario" => "poker",
+        "preset" => nil,
+        "seeds" => [1],
+        "competitors" =>
+          Enum.map(runs, &%{"id" => &1["competitor"], "offline_strategy" => "fixture"})
+      },
+      "runs" =>
+        runs
+        |> Enum.with_index()
+        |> Enum.map(fn {run, index} -> Map.merge(run, %{"index" => index, "seed" => 1}) end)
+    }
+
+    File.write!(Path.join(suite_dir, "suite.json"), Jason.encode!(suite_json, pretty: true))
   end
 
   defp tmp_dir(prefix) do

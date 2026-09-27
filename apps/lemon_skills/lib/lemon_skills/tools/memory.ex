@@ -5,8 +5,7 @@ defmodule LemonSkills.Tools.Memory do
   Agents read, add, replace, or remove durable notes in the assistant-home
   `USER.md` (user profile) and `MEMORY.md` (long-term memory) files, guarded
   against secrets, invisible characters, and prompt injection. Requires no
-  external service. Registered as a builtin tool in `CodingAgent.ToolRegistry`
-  and exposed through the `CodingAgent.Tools` factories.
+  external service. Registered as a builtin tool in `CodingAgent.ToolRegistry`.
   """
 
   alias LemonAgent.AbortSignal

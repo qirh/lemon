@@ -28,7 +28,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_platform_test,
       :lemon_skills
     ],
-    coding_agent_ui: [:coding_agent, :lemon_core],
     lemon_automation: [:lemon_agent, :lemon_core, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
     lemon_control_plane: [
@@ -63,7 +62,8 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
-    lemon_mcp: [:lemon_agent, :coding_agent, :lemon_core, :lemon_skills],
+    # test-only: lemon_skills hosts the moved LemonSkills.McpSource suite.
+    lemon_mcp: [:lemon_core, :lemon_skills],
     # The contract-test kit is a leaf: one (optional) dep per behaviour it
     # tests, and nothing in the platform depends on it outside test code. ai +
     # agent_core back the FakeLLM double, which drives a real agent loop.
@@ -85,7 +85,6 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
     lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
-    lemon_tcg: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_sim],
     # The management UI consumes agent-owned provider configuration,
     # automation-owned blueprint catalog, and memory-owned lifecycle
     # boundaries; mutation, confirmation, and redaction semantics stay

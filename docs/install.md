@@ -108,6 +108,10 @@ lemon gateway setup discord
 lemon channels
 ```
 
+`lemon channels` inspects redacted Telegram and Discord configuration status,
+including enabled state, configured credentials, binding and allowlist counts,
+and registered transports.
+
 The Telegram and Discord setup adapters store their bot tokens in encrypted
 secrets, write their configuration, and verify the adapter inputs. Follow the
 prompt for the allowed Telegram chat or Discord channel scope.

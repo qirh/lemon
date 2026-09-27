@@ -144,8 +144,10 @@ this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
 
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
-tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
-files with no pipeline, so it needs the digest step only. Skipping either one
+tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` commits its
+built `app.css` (Tailwind source in `apps/lemon_web/assets`, rebuilt by
+developers with `mix do --app lemon_web assets.build`), so it needs the digest
+step only. Skipping either one
 makes the release log "Could not warm up static assets" at boot and serve
 undigested assets.
 
@@ -225,7 +227,7 @@ invite or placing the service in maintenance mode. Ask hosts to pause active
 matches, then inspect protected `/api/admin/metrics` until no room is `running`
 and hosted recovery reports `ok`. A graceful restart can resume running timers,
 but an offline backup must have no application writer. Hosted room records,
-reconnect-token hashes, RNG checkpoints, replay events, deadlines, and rematch
+reconnect-token hashes, game state (including its seeded RNG), replay events, deadlines, and rematch
 archives are stored inside the same SQLite backup below; raw host/player tokens
 exist only in browser cookies and are never part of a backup.
 
@@ -360,28 +362,6 @@ Runtime ownership is independent of token origin: every daemon started by
 was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
 the source runtime must remain persistent; already-running runtimes are never
 stopped by the TUI launcher.
-
-### Web client (`lemon-web`)
-
-```bash
-cd clients/lemon-web
-npm start
-```
-
-`npm start` runs the root `prestart` hook first, rebuilding the ignored shared
-and server entrypoints so this works from a clean checkout after dependencies
-are installed.
-
-This source command starts the Node debug bridge on `http://localhost:3939` by
-default. The packaged Phoenix Web endpoint remains `http://localhost:4080`.
-
-The separate browser monitoring client has no delegated browser-session login
-exchange today. It therefore does not receive the server's shared operator
-token and cannot connect to an authenticated control plane. Do not put that
-secret in a `VITE_*` variable or URL, and do not enable tokenless loopback
-behind a reverse proxy. Authenticated browser monitoring requires a future
-short-lived, scoped server-issued browser credential flow.
-
 
 ---
 

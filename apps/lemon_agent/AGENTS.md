@@ -2,6 +2,14 @@
 
 Elixir library for building AI agents with multi-turn conversations, tool execution, and streaming events.
 
+**Hex package.** `lemon_agent` is one of the five published packages
+(`docs/release/hex-packages.md`). Its `mix.exs` ships verbatim in the tarball, so
+it must stay self-contained — no `Code.require_file`, nothing read outside the app
+directory — and sibling Lemon deps stay `in_umbrella: true` inside
+`lemon_deps/1`, which rewrites them to `~> 0.2` outside the umbrella.
+`scripts/verify_packages` builds a consumer from the tarball; run it after
+touching `mix.exs`. User-visible `lib/` changes need a `CHANGELOG.md` entry.
+
 ## Purpose and Responsibilities
 
 LemonAgent provides the runtime foundation for AI agents in the Lemon project:
@@ -54,7 +62,6 @@ LemonAgent.Supervisor (:one_for_one)
 | `lib/lemon_agent/security/tool_result_trust.ex` | Central policy for marking data-bearing `AgentToolResult`s untrusted and preserving only explicitly audited builtin skill semantics as trusted. |
 | `lib/agent_core/abort_signal.ex` | ETS-based abort flag. `new/0` creates a ref, `abort/1` sets it, `aborted?/1` checks it. Fast reads via `read_concurrency: true`. |
 | `lib/agent_core/proxy.ex` | SSE proxy for routing LLM calls through an HTTP server. Reconstructs partial `AssistantMessage` from stripped delta events. |
-| `lib/agent_core/text_generation.ex` | Simple `complete_text/4` bridge so callers don't import `LemonAi` directly. |
 | `lib/lemon_agent/model_runtime/provider_configuration.ex` | Shared provider-routing mutation boundary for packaged/source CLI, control-plane, and authenticated Web callers. It edits only `runtime.provider_routing`, preserves comments, validates and atomically replaces TOML, requires explicit apply plus operation-bound confirmation for destructive changes, rejects stale preview/apply revisions under the target lock, and returns counts without credential references. |
 | `lib/agent_core/agent_registry.ex` | Thin wrapper around `Registry`. Keys are `{session_id, role, index}` tuples. `via/1`, `lookup/1`, `list_by_session/1`, `list_by_role/1`. |
 | `lib/agent_core/subagent_supervisor.ex` | `DynamicSupervisor` for subagent processes. Children are `:temporary`. `start_subagent/1` accepts `registry_key:` option. |

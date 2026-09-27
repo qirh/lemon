@@ -2,6 +2,13 @@
 
 This is the **base app** of the Lemon umbrella. All other apps depend on it. It contains cross-cutting concerns that must be stable and dependency-free (within the umbrella).
 
+**Hex package.** `lemon_core` is one of the five published packages
+(`docs/release/hex-packages.md`). Its `mix.exs` ships verbatim in the tarball, so
+it must stay self-contained: no `Code.require_file`, nothing read outside the app
+directory.
+`scripts/verify_packages` builds a consumer from the tarball; run it after
+touching `mix.exs`. User-visible `lib/` changes need a `CHANGELOG.md` entry.
+
 ## Purpose and Responsibilities
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
@@ -50,13 +57,13 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
 | `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, strict `fetch/3` and `fetch_all/2` reads, serialized `take/2`, and exact-value `compare_and_swap/4`, `compare_and_delete/3`, and multi-snapshot `compare_and_delete_many/1` transitions |
-| `LemonCore.Store.Table` | Declarative table owner and policy metadata; the architecture gate checks owner calls against exact declared tables |
-| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; specialized Store finalization is synchronous, retry-safe, summary-immutable, and invokes hooks at least once |
-| `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
+| `LemonCore.RunStore` | Typed run lifecycle/history wrapper over `:runs` and `:sessions_index`; Store finalization is synchronous, retry-safe via a bounded per-session recent-run window, summary-immutable, and invokes hooks at least once |
+| `LemonCore.ChatStateStore` | Per-scope chat state in `:chat`; stamps a 24h `:expires_at` and treats expired entries as absent |
+| `LemonCore.ProgressStore` | Progress-message → run id mapping in `:progress` |
+| `LemonCore.Store.ReadCache` | ETS read cache for hot tables (`:runs` intrinsically; `:sessions_index`, `:chat`, `:progress` by default, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) with serialized Store-process claims |
-| `LemonCore.Quality.RatchetCheck` | Repository-wide AST/file-shape architecture-debt measurements enforced against lowering-only `.ratchets.exs` baselines |
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
@@ -74,7 +81,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.RunPhaseEvent` | Canonical run phase-change payload builder for bus/event emission |
 | `LemonCore.SessionLifecycle` | Shared operator-facing session list/search/statistics/history/export/delete/prune service over the canonical run/chat/policy stores; statistics keep exact totals while bounding and redacting dimensions |
 | `LemonCore.SessionMetadataStore` | Typed title/pin/archive annotations stored separately from conversation content |
-| `LemonCore.PolicyStore` | Typed agent/channel/session/runtime policy wrapper and declared owner of the four existing policy tables; specialized Store behavior remains authoritative |
+| `LemonCore.PolicyStore` | Agent/channel/session/runtime policies over the `:agent_policies`, `:channel_policies`, `:session_policies`, and `:runtime_policy` tables |
 | `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
@@ -129,27 +136,6 @@ checksums but has no publisher signature, and `:httpc` currently enforces an
 exact post-download rather than exact in-flight byte cutoff; keep both residuals
 explicit in user/release documentation.
 
-Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
-proof commands copy-ready and include the default redacted
-`.lemon/proofs/media-*-smoke-latest.json` proof paths. Local deterministic
-media smoke artifacts do not promote the provider-backed live gate. Image proof
-can be satisfied by either `openai_image` or `vertex_imagen`; TTS proof can be
-satisfied by `openai_tts`, `elevenlabs_tts`, or `google_tts`; video proof can
-be satisfied by `openai_video` or `vertex_veo`. Media job
-failures may expose a bounded provider status/type suffix in `error_kind`, but
-raw provider messages remain hashed-only metadata. Doctor remediation may map
-safe `reason_kind` labels to operator hints for permission, quota/billing,
-payment, request-shape, and generic provider HTTP failures, but it must not
-include raw provider response bodies. When a failed or skipped proof identifies
-a safe provider id for a multi-provider lane, remediation should include the
-matching `--provider` rerun flag instead of sending the operator back to the
-lane default.
-
-Support-bundle `media_diagnostics.json` should mirror those same
-provider-backed media launch lanes with safe status, reason kind, proof path,
-and target-provider rerun command fields. Keep it redacted: no raw prompts,
-provider responses, artifact bytes, API keys, or secret names.
-
 Support-bundle `usage_diagnostics.json` should mirror the shared usage summary
 from `LemonCore.UsageStore` with cost, request, token, provider, daily, and
 quota aggregates only. Keep it redacted: no prompts, responses, message bodies,
@@ -158,17 +144,6 @@ credentials, or secret values.
 Doctor `usage.status` should use `LemonCore.UsageDiagnostics` and report only
 aggregate usage/quota pressure. Do not include prompt text, response text,
 message bodies, credentials, or secret values in check messages/remediation.
-
-Support-bundle `channel_readiness.json` should use
-`LemonChannels.Doctor.Readiness` for the shared channel launch-gate summary.
-Keep gate evidence and next actions redacted and copy-ready, especially
-slash-command client-click wait modes. Do not include bot tokens, secret names,
-chat/channel/guild ids, message bodies, raw proof paths, or raw proof details.
-
-Doctor `channels.readiness` should summarize the same
-`LemonChannels.Doctor.Readiness` launch-gate counts and point at the first
-unresolved gate's safe next action without duplicating or leaking proof
-contents.
 
 Use `LemonCore.Event` constructors for structured run-event contracts when available.
 `engine_action/2` validates tool/status action payloads before broadcast, and
@@ -381,39 +356,37 @@ config :lemon_core, LemonCore.Store,
 
 ```elixir
 defmodule MyApp.WidgetStore do
-  use LemonCore.Store.Table, tables: [widgets: []]
+  @table :widgets
 
-  def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
-  def get(id), do: LemonCore.Store.get(:widgets, id)
+  def put(id, widget), do: LemonCore.Store.put(@table, id, widget)
+  def get(id), do: LemonCore.Store.get(@table, id)
 end
 
 MyApp.WidgetStore.put(id, widget)
 widget = MyApp.WidgetStore.get(id)
 ```
 
+Domain stores are plain modules over the generic table API; `LemonCore.Store`
+itself holds no chat-state, policy, or progress functions.
+
 Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable and a synchronous call exits (timeout/noproc/shutdown), write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]` so callers do not crash.
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.SessionMetadataStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Operator surfaces should use `LemonCore.SessionLifecycle` rather than reimplementing session search, aggregate statistics, export, or prune over those stores. Agent workspace callers should use `LemonAgent.Workspace.HeartbeatStore`, `LemonAgent.Workspace.GoalStore`, and `LemonAgent.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.SessionMetadataStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Operator surfaces should use `LemonCore.SessionLifecycle` rather than reimplementing session search, aggregate statistics, export, or prune over those stores. Agent workspace callers should use `LemonAgent.Workspace.GoalStore` and `LemonAgent.Workspace.KanbanStore`. Heartbeats use automation cron jobs and cron history. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
-`LemonCore.ChatStateStore` owns the cached `:chat` table and declares
-`[expires_at: :expires_at]` retention. Keep its typed API delegated to the
-specialized Store operations, which remain responsible for configured TTL
-stamping, lazy expiry, periodic sweeping, and cache coherence.
+`LemonCore.ChatStateStore` owns the `:chat` table: it stamps `:expires_at`
+(24h) on every write and treats expired entries as absent on read, deleting
+them with `compare_and_delete` so a concurrent refresh is never lost. The
+store's periodic sweep removes expired `:chat` entries nobody reads again.
+`:chat`, `:progress`, and `:sessions_index` are in the store's default
+read-cache set.
 
-`LemonCore.RunStore` owns the cached `:runs` table (`persistence: :ephemeral`)
-and the cached `:sessions_index` table (`persistence: :durable`). Keep
-finalization and retry behavior on the existing specialized Store path until
-that dedicated migration.
-
-New generic-table wrappers must declare ownership with `use LemonCore.Store.Table`.
-The declaration generates no CRUD API and does not yet change backend runtime
-policy. `mix lemon.quality` resolves generic Store calls from the source AST,
-including aliases, module attributes, direct calls, `apply/3`, and
-default/explicit server arities. Multi-entry operations verify every table. An
-owner may access only its declared table names; dynamic table selection and
-cross-table calls fail the architecture gate.
+`LemonCore.RunStore` owns `:runs` and `:sessions_index`. Finalization stays on
+the serialized Store lifecycle path. The session index entry remembers only its
+last 32 indexed run ids (`:__recent_run_ids__`, stripped by
+`RunStore.list_sessions/1`), which keeps a retried finalization from counting
+its run twice without letting the entry grow with the session's lifetime.
 
 ### Specialized APIs
 
@@ -438,9 +411,9 @@ policy = LemonCore.PolicyStore.get_agent(agent_id)
 policy = LemonCore.PolicyStore.get_runtime()
 
 # Progress mapping (scope + transport message ID -> run_id)
-:ok = LemonCore.ProgressStore.put_run(scope, progress_msg_id, run_id)
+:ok = LemonCore.ProgressStore.put(scope, progress_msg_id, run_id)
 run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
-:ok = LemonCore.Store.delete_progress_mapping(scope, progress_msg_id)  # synchronous delete
+:ok = LemonCore.ProgressStore.delete(scope, progress_msg_id)
 
 # Introspection events (canonical envelope + filtered queries)
 :ok =
@@ -455,7 +428,7 @@ run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
 events = LemonCore.Introspection.list(run_id: run_id, limit: 50)
 ```
 
-Per-platform reply/session indices are channels-owned state; `LemonCore.Store.finalize_run/2` does not write them. More generally, `lemon_core` must not name a chat platform at all: `LemonCore.Quality.ArchitectureRulesCheck`'s `:core_vendor_channel_reference` rule fails the quality gate on any such mention under `apps/lemon_core/lib`.
+Per-platform reply/session indices are channels-owned state; `LemonCore.Store.finalize_run/2` does not write them. More generally, `lemon_core` must not name a chat platform anywhere under `apps/lemon_core/lib`.
 
 ## Event Bus Usage Patterns
 
@@ -542,23 +515,11 @@ Onboarding providers live in `apps/lemon_cli`; see `apps/lemon_cli/README.md`.
 
 ### Doctor Channel Checks
 
-Channel diagnostics, launch-gate readiness and the channel doctor check live in
-`lemon_channels` and reach `lemon_core` through `config :lemon_core,
-:doctor_runtime` (`channel_diagnostics:`, `channel_readiness:`,
-`channel_proofs:`) and `config :lemon_core, :doctor_checks`. Core must not name
-a platform: the per-channel proof vocabulary — which smoke-proof check names
-count as a channel media delivery, what evidence each contributes, the
-platform launch gates, the channel-origin cron check names, and the
-failure/setup-error classifications — is supplied by whoever implements
-`LemonCore.Doctor.ChannelProofs`. Unregistered, every one of those degrades to
-its documented generic answer rather than failing.
-
-Shared proof launch-gate summaries still live in
-`LemonCore.Doctor.ProofLaunchGates`, not in a Web or control-plane formatter, so
-support bundles stay aligned on
-provider media, terminal backend and the registered channel gates without raw
-proof details. Everything a bundle or check emits stays redacted: sanitized
-status/reason kinds, never raw ids, message bodies, bot tokens or secret names.
+Channel configuration diagnostics and doctor checks live in `lemon_channels`.
+The channel diagnostics provider is registered through `:doctor_runtime` as
+`:channel_diagnostics`; channel checks are registered through
+`:doctor_checks`. Keep core platform-agnostic. The remaining channel doctor
+checks inspect Telegram and Discord configuration only.
 
 ## How to Add Quality Checks
 
@@ -602,6 +563,7 @@ Edit `lib/mix/tasks/lemon.quality.ex`:
 ```elixir
 checks = [
   {:docs, fn -> DocsCheck.run(root: root) end},
+  {:architecture_docs, fn -> ArchitectureDocs.check(root) end},
   {:architecture, fn -> ArchitectureCheck.run(root: root) end},
   {:my_check, fn -> MyCheck.run(root: root) end}  # Add here
 ]
@@ -657,7 +619,15 @@ Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
 ### Quality Tasks
 
 The architecture check parses the complete `deps/0` body in every umbrella
-`mix.exs`, including dependency lists wrapped by `Lemon.HexPackage.deps/1`.
+`mix.exs`, including dependency lists wrapped by a published package's
+`lemon_deps/1` helper.
+
+The quality modules (`lib/lemon_core/quality/`), the self-updater
+(`lib/lemon_core/update/`) and the repo-only tasks `lemon.quality`,
+`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.update`,
+`lemon.bench` and `lemon.help` are excluded from the Hex tarball by
+`exclude_patterns` in `mix.exs`. Nothing else in `lib/` may reference them:
+`scripts/verify_packages` compiles the tarball without them.
 The direct-dependency policy is exact: both an undeclared edge and a policy
 permission left behind after an edge is removed fail the check. Cross-app source
 references that intentionally avoid a direct Mix dependency live in the
@@ -665,12 +635,9 @@ separate reference-only exception map and are shown separately in the generated
 architecture table.
 
 ```bash
-# Run all quality checks
+# Run all quality checks (docs links, architecture docs, deps/0 policy,
+# duplicate test modules)
 mix lemon.quality
-
-# Inspect or lower architecture-debt baselines
-mix lemon.ratchet
-mix lemon.ratchet --update
 
 # Verify or refresh the generated architecture dependency table
 mix lemon.architecture.docs --check
@@ -683,18 +650,10 @@ mix lemon.quality --validate-config
 mix lemon.quality --root /path/to/repo
 ```
 
-The docs catalog uses a data-only `%{defaults: ..., entries: ...}` structure.
-Keep shared ownership and age policy in `defaults`; entry overrides should only
-describe exceptions. `DocsCatalog` deliberately decodes a bounded AST instead
-of evaluating the file. `DocsCheck` treats the Git index (`git ls-files`) as
-the source of truth for repository coverage and uses a filesystem fallback only
-for synthetic non-Git test roots. Catalog `last_reviewed` is the canonical
-freshness date; do not introduce a second document-footer review date.
-
-Architecture-debt ratchets are also data-only. `mix lemon.ratchet --update`
-may lower current baselines but never raise them; increases require an explicit
-`.ratchets.exs` edit and review justification. The library scan excludes only
-the ratchet check implementation itself, not sibling quality modules.
+`DocsCheck` verifies that local markdown links in tracked `docs/**/*.md` files
+resolve. It treats the Git index (`git ls-files`) as the source of truth and
+uses a filesystem fallback only for synthetic non-Git test roots. Docs carry no
+review dates or catalog registration.
 
 ### Store Tasks
 
@@ -734,14 +693,6 @@ mix lemon.introspection --since 2026-02-23T00:00:00Z
 
 # Combine filters
 mix lemon.introspection --run-id <run_id> --event-type tool_completed --limit 50
-```
-
-### Cleanup Tasks
-
-```bash
-# Cleanup old data
-mix lemon.cleanup --dry-run
-mix lemon.cleanup --older-than 30d
 ```
 
 ## Common Tasks and Examples

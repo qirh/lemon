@@ -1,5 +1,5 @@
 /**
- * Tests for task formatter.
+ * Tests for the task/agent formatter.
  */
 
 import { describe, expect, it } from "bun:test";
@@ -12,16 +12,7 @@ describe("taskFormatter.formatArgs", () => {
 			prompt: "Analyze the codebase and find all security vulnerabilities",
 		});
 
-		expect(result.summary).toContain("run:");
-		expect(result.summary).toContain("Analyze the codebase");
-	});
-
-	it("shows just action when no prompt", () => {
-		const result = taskFormatter.formatArgs({
-			action: "poll",
-		});
-
-		expect(result.summary).toBe("poll");
+		expect(result.summary).toBe("run: Analyze the codebase and find all security vulnerabilities");
 	});
 
 	it("truncates long prompts in summary", () => {
@@ -42,29 +33,7 @@ describe("taskFormatter.formatArgs", () => {
 			description: "Run integration tests",
 		});
 
-		expect(result.summary).toContain("Run integration tests");
-	});
-
-	it("shows task_id in details when present", () => {
-		const result = taskFormatter.formatArgs({
-			action: "poll",
-			task_id: "task-123-abc",
-		});
-
-		expect(result.details).toContain("action: poll");
-		expect(result.details).toContain("task_id: task-123-abc");
-	});
-
-	it("shows full prompt in details", () => {
-		const prompt = "First line\nSecond line\nThird line";
-		const result = taskFormatter.formatArgs({
-			action: "run",
-			prompt,
-		});
-
-		expect(result.details).toContain("action: run");
-		expect(result.details).toContain("First line");
-		expect(result.details).toContain("Second line");
+		expect(result.summary).toBe("run: Run integration tests");
 	});
 
 	it("defaults action to run when not provided", () => {
@@ -74,24 +43,48 @@ describe("taskFormatter.formatArgs", () => {
 		expect(result.details).toContain("action: run");
 	});
 
-	it("handles join action", () => {
-		const result = taskFormatter.formatArgs({
-			action: "join",
-			task_id: "task-456",
-		});
-
-		expect(result.summary).toBe("join");
-		expect(result.details).toContain("action: join");
-		expect(result.details).toContain("task_id: task-456");
-	});
-
 	it("collapses whitespace in prompt preview", () => {
 		const result = taskFormatter.formatArgs({
 			action: "run",
 			prompt: "Multiple\n\n\nline   breaks   and    spaces",
 		});
 
-		expect(result.summary).toContain("Multiple line breaks and spaces");
+		expect(result.summary).toBe("run: Multiple line breaks and spaces");
+	});
+
+	it("names the target agent for agent runs", () => {
+		const result = taskFormatter.formatArgs({
+			agent_id: "reviewer",
+			prompt: "Review the diff",
+			async: true,
+		});
+
+		expect(result.summary).toBe("run reviewer: Review the diff");
+		expect(result.details).toContain("agent_id: reviewer");
+		expect(result.details).toContain("async: true");
+	});
+
+	it("addresses a task id for poll/get", () => {
+		const result = taskFormatter.formatArgs({ action: "poll", task_id: "task-123-abc" });
+
+		expect(result.summary).toBe("poll task-123-abc");
+		expect(result.details).toContain("task_id: task-123-abc");
+	});
+
+	it("counts task ids for join", () => {
+		const result = taskFormatter.formatArgs({
+			action: "join",
+			task_ids: ["t1", "t2", "t3"],
+			mode: "wait_any",
+		});
+
+		expect(result.summary).toBe("join 3 tasks");
+		expect(result.details).toContain("task_ids: t1, t2, t3");
+		expect(result.details).toContain("mode: wait_any");
+	});
+
+	it("shows just the action when nothing is addressed", () => {
+		expect(taskFormatter.formatArgs({ action: "poll" }).summary).toBe("poll");
 	});
 
 	it("truncates prompt lines in details", () => {
@@ -101,382 +94,124 @@ describe("taskFormatter.formatArgs", () => {
 			prompt: manyLines,
 		});
 
-		// Details should be truncated
-		expect(result.details.length).toBeLessThanOrEqual(15);
+		expect(result.details.length).toBeLessThanOrEqual(16);
 	});
 });
 
 describe("taskFormatter.formatResult", () => {
-	it("shows engine and action title in summary", () => {
+	it("summarizes a queued async launch", () => {
 		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude-3-opus",
-				current_action: {
-					title: "Analyzing code",
-				},
-			},
+			content: [{ type: "text", text: "Task queued: task-1" }],
+			details: { task_id: "task-1", status: "queued", description: "Audit auth", run_id: "r1" },
+			is_error: false,
 		});
 
-		expect(result.summary).toBe("claude-3-opus: Analyzing code");
+		expect(result.summary).toBe("queued: Audit auth");
+		expect(result.details).toContain("status: queued");
+		expect(result.details).toContain("task_id: task-1");
+		expect(result.details).toContain("Task queued: task-1");
+		expect(result.isError).toBe(false);
 	});
 
-	it("shows engine info in details", () => {
+	it("shows the answer text of a completed run", () => {
 		const result = taskFormatter.formatResult({
-			details: {
-				engine: "gpt-4",
-				current_action: { title: "Processing" },
-			},
+			content: [{ type: "text", text: "Found 3 issues\n1. SQL injection" }],
+			details: { status: "completed", description: "Audit auth" },
+			is_error: false,
 		});
 
-		expect(result.details).toContain("engine: gpt-4");
+		expect(result.summary).toBe("completed: Audit auth");
+		expect(result.details).toContain("Found 3 issues");
+		expect(result.details).toContain("1. SQL injection");
 	});
 
-	it("shows status when present", () => {
+	it("names the agent of a completed agent run", () => {
 		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				status: "running",
-				current_action: { title: "Working" },
-			},
+			content: [{ type: "text", text: "LGTM" }],
+			details: { status: "completed", run_id: "r1", agent_id: "reviewer" },
+			is_error: false,
 		});
 
-		expect(result.details).toContain("status: running");
+		expect(result.summary).toBe("completed: reviewer");
 	});
 
-	it("shows started phase indicator", () => {
+	it("lists joined tasks", () => {
 		const result = taskFormatter.formatResult({
+			content: [{ type: "text", text: "Joined 2 delegated task(s)." }],
 			details: {
-				engine: "claude",
-				current_action: {
-					title: "Reading files",
-					phase: "started",
-				},
+				status: "completed",
+				mode: "wait_all",
+				task_ids: ["t1", "t2"],
+				tasks: [
+					{ task_id: "t1", status: "completed", description: "lint" },
+					{ task_id: "t2", status: "error", error: "boom" },
+				],
 			},
+			is_error: false,
 		});
 
-		expect(result.details).toContain("\u25b6 Reading files...");
+		expect(result.summary).toBe("completed: 2 tasks");
+		expect(result.details).toContain("t1: completed (lint)");
+		expect(result.details).toContain("t2: error");
 	});
 
-	it("shows completed phase indicator", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Analysis complete",
-					phase: "completed",
-				},
-			},
+	it("marks error status and tool errors", () => {
+		const errored = taskFormatter.formatResult({
+			content: [{ type: "text", text: "Delegated run failed: timeout" }],
+			details: { task_id: "t1", status: "error", error: "timeout" },
+			is_error: false,
 		});
+		expect(errored.isError).toBe(true);
+		expect(errored.details).toContain("error: timeout");
 
-		expect(result.details).toContain("\u2713 Analysis complete");
-		// Should not have trailing "..." for completed
-		expect(result.details).not.toContain("\u2713 Analysis complete...");
-	});
-
-	it("defaults to started indicator for unknown phase", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Working",
-					phase: "unknown",
-				},
-			},
+		const failed = taskFormatter.formatResult({
+			content: [{ type: "text", text: "Prompt is required" }],
+			details: {},
+			is_error: true,
 		});
-
-		expect(result.details).toContain("\u25b6 Working...");
+		expect(failed.isError).toBe(true);
+		expect(failed.summary).toBe("Prompt is required");
 	});
 
-	it("uses kind as fallback for title", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					kind: "tool_use",
-					phase: "started",
-				},
-			},
-		});
-
-		expect(result.summary).toContain("tool_use");
-		expect(result.details).toContain("\u25b6 tool_use...");
-	});
-
-	it("shows nested tool information", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Executing tool",
-					phase: "started",
-					tool: "bash",
-					tool_input: { command: "npm test" },
-				},
-			},
-		});
-
-		expect(result.details.some((d) => d.includes("\u2514\u2500 bash: npm test"))).toBe(true);
-	});
-
-	it("truncates long tool input preview", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Running",
-					tool: "bash",
-					tool_input: {
-						command: "this is a very long command that should be truncated for display purposes",
-					},
-				},
-			},
-		});
-
-		const toolLine = result.details.find((d) => d.includes("\u2514\u2500"));
-		expect(toolLine).toBeDefined();
-		expect(toolLine!.length).toBeLessThan(70);
-	});
-
-	it("handles result with no details", () => {
+	it("falls back to completed for an empty result", () => {
 		const result = taskFormatter.formatResult({});
 
 		expect(result.summary).toBe("completed");
-		expect(result.details).toHaveLength(0);
-	});
-
-	it("handles result with null details", () => {
-		const result = taskFormatter.formatResult({ details: null });
-
-		expect(result.summary).toBe("completed");
-	});
-
-	it("defaults engine to unknown", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				current_action: { title: "Working" },
-			},
-		});
-
-		expect(result.summary).toContain("unknown:");
-		expect(result.details).toContain("engine: unknown");
-	});
-
-	it("defaults action title to idle", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-			},
-		});
-
-		expect(result.summary).toBe("claude: idle");
-	});
-
-	it("shows output when present", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: { title: "Done" },
-				output: "Task completed successfully\nAll tests passed",
-			},
-		});
-
-		expect(result.details).toContain("Task completed successfully");
-		expect(result.details).toContain("All tests passed");
-	});
-
-	it("parses details from content blocks", () => {
-		const result = taskFormatter.formatResult({
-			content: [
-				{
-					type: "text",
-					text: JSON.stringify({
-						details: {
-							engine: "from-content",
-							current_action: { title: "Parsed" },
-						},
-					}),
-				},
-			],
-		});
-
-		expect(result.summary).toBe("from-content: Parsed");
-	});
-
-	it("handles non-object tool_input", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Running",
-					tool: "echo",
-					tool_input: "not an object",
-				},
-			},
-		});
-
-		// Should still show tool but without input preview
-		expect(result.details.some((d) => d.includes("\u2514\u2500 echo"))).toBe(true);
-	});
-
-	it("handles tool without input", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Running",
-					tool: "list_files",
-				},
-			},
-		});
-
-		expect(result.details.some((d) => d.includes("\u2514\u2500 list_files"))).toBe(true);
-	});
-
-	it("skips nested tool display when no tool specified", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Thinking",
-				},
-			},
-		});
-
-		const hasToolLine = result.details.some((d) => d.includes("\u2514\u2500"));
-		expect(hasToolLine).toBe(false);
+		expect(result.details).toEqual([]);
 	});
 });
 
 describe("taskFormatter.formatPartial", () => {
-	it("uses same logic as formatResult", () => {
-		const partialResult = taskFormatter.formatPartial!({
+	it("shows the running subagent's current action", () => {
+		const result = taskFormatter.formatPartial!({
+			content: [],
 			details: {
-				engine: "claude",
-				current_action: {
-					title: "Processing",
-					phase: "started",
-				},
+				description: "Audit auth",
+				status: "running",
+				current_action: { title: "Reading lib/auth.ex", kind: "tool", phase: "started" },
 			},
 		});
 
-		const fullResult = taskFormatter.formatResult({
-			details: {
-				engine: "claude",
-				current_action: {
-					title: "Processing",
-					phase: "started",
-				},
-			},
-		});
-
-		expect(partialResult.summary).toBe(fullResult.summary);
-		expect(partialResult.details).toEqual(fullResult.details);
+		expect(result.summary).toBe("running: Reading lib/auth.ex");
+		expect(result.details).toContain("▶ Reading lib/auth.ex...");
 	});
 
-	it("handles streaming updates", () => {
+	it("marks a completed action without an ellipsis", () => {
 		const result = taskFormatter.formatPartial!({
 			details: {
-				engine: "claude",
-				current_action: {
-					title: "Writing code",
-					phase: "started",
-					tool: "write",
-					tool_input: { path: "/src/index.ts" },
-				},
-			},
-		});
-
-		expect(result.summary).toBe("claude: Writing code");
-		expect(result.details.some((d) => d.includes("\u25b6 Writing code..."))).toBe(true);
-		expect(result.details.some((d) => d.includes("\u2514\u2500 write: /src/index.ts"))).toBe(true);
-	});
-});
-
-describe("taskFormatter metadata", () => {
-	it("includes task in tools array", () => {
-		expect(taskFormatter.tools).toContain("task");
-	});
-
-	it("has formatPartial method", () => {
-		expect(taskFormatter.formatPartial).toBeDefined();
-		expect(typeof taskFormatter.formatPartial).toBe("function");
-	});
-});
-
-describe("realistic scenarios", () => {
-	it("formats a code analysis task start", () => {
-		const argsResult = taskFormatter.formatArgs({
-			action: "run",
-			prompt:
-				"Analyze the authentication module for security vulnerabilities and suggest improvements",
-		});
-
-		expect(argsResult.summary).toContain("run:");
-		expect(argsResult.summary).toContain("Analyze the authentication");
-	});
-
-	it("formats an in-progress task with tool execution", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude-3-opus",
 				status: "running",
-				current_action: {
-					title: "Reading source files",
-					kind: "tool_use",
-					phase: "started",
-					tool: "read_file",
-					tool_input: { path: "/src/auth/login.ts" },
-				},
+				current_action: { title: "Tests passed", phase: "completed" },
 			},
 		});
 
-		expect(result.summary).toBe("claude-3-opus: Reading source files");
-		expect(result.details.some((d) => d.includes("engine: claude-3-opus"))).toBe(true);
-		expect(result.details.some((d) => d.includes("status: running"))).toBe(true);
-		expect(result.details.some((d) => d.includes("\u25b6 Reading source files..."))).toBe(true);
-		expect(
-			result.details.some((d) => d.includes("\u2514\u2500 read_file: /src/auth/login.ts")),
-		).toBe(true);
+		expect(result.details).toContain("✓ Tests passed");
 	});
 
-	it("formats a completed task", () => {
-		const result = taskFormatter.formatResult({
-			details: {
-				engine: "claude-3-opus",
-				status: "completed",
-				current_action: {
-					title: "Analysis complete",
-					phase: "completed",
-				},
-				output:
-					"Found 3 potential security issues:\n1. SQL injection vulnerability\n2. Missing input validation\n3. Hardcoded credentials",
-			},
+	it("falls back to the action kind when there is no title", () => {
+		const result = taskFormatter.formatPartial!({
+			details: { status: "running", current_action: { kind: "thinking", phase: "started" } },
 		});
 
-		expect(result.summary).toBe("claude-3-opus: Analysis complete");
-		expect(result.details).toContain("\u2713 Analysis complete");
-		expect(result.details).toContain("Found 3 potential security issues:");
-	});
-
-	it("formats a poll action for an existing task", () => {
-		const argsResult = taskFormatter.formatArgs({
-			action: "poll",
-			task_id: "task-a1b2c3",
-		});
-
-		expect(argsResult.summary).toBe("poll");
-		expect(argsResult.details).toContain("action: poll");
-		expect(argsResult.details).toContain("task_id: task-a1b2c3");
-	});
-
-	it("formats a join action waiting for task completion", () => {
-		const argsResult = taskFormatter.formatArgs({
-			action: "join",
-			task_id: "task-xyz789",
-		});
-
-		expect(argsResult.summary).toBe("join");
-		expect(argsResult.details).toContain("action: join");
-		expect(argsResult.details).toContain("task_id: task-xyz789");
+		expect(result.summary).toBe("running: thinking");
 	});
 });

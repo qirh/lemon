@@ -21,6 +21,7 @@ A VendingBench run emits:
 - `scorecard.json`
 - `usage.json`
 - `config.json`
+- `inputs.jsonl`
 - `manifest.json`
 - `hashes.json`
 - `prompts/operator.system.md`
@@ -38,6 +39,14 @@ model source files.
 `hashes.json` uses `lemon_sim.hashes.v1` and stores the file hashes that make the
 bundle tamper-evident.
 
+`inputs.jsonl` records every batch of input events the updater folded, one
+`{"events": [...]}` object per ingest, with the exact timestamps and metadata
+that were applied. Together with the seed and setup options in `config.json` it
+makes the run replayable. VendingBench, Werewolf, and Poker bundles all carry
+it; Werewolf and Poker bundles come from `mix lemon.sim.werewolf` /
+`mix lemon.sim.poker` with `--artifact-dir` (keyless with
+`--offline-strategy heuristic`).
+
 ## Verification
 
 ```bash
@@ -46,15 +55,22 @@ LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.verify /tmp/lemon-vb-ci-bas
 
 The verifier checks:
 
+- `manifest.json` and `hashes.json` exist (there is no unhashed fallback)
 - manifest and hash schema
 - required files for the scenario
 - manifest integrity fields against `hashes.json`
 - every hashed file's current SHA-256
+- for VendingBench, Werewolf, and Poker: rebuilds the initial state from
+  `config.json`, re-folds `inputs.jsonl` through the scenario updater, and
+  requires the appended events to reproduce `events.jsonl` line for line and
+  the final world to equal `final_world.json`
 - registered scorecard recomputation from `final_world.json`
 
-For VendingBench, a tampered `scorecard.json`, `events.jsonl`, `usage.json`, or
-other hashed file causes verification to fail. `mix lemon.sim.score` runs the
-same verification before printing the scorecard.
+A tampered `scorecard.json`, `events.jsonl`, `usage.json`, or other hashed file
+fails verification; because hashes are self-attested, the replay step is what
+catches a bundle whose files were edited and re-hashed consistently.
+`mix lemon.sim.score` runs the same verification before printing the
+scorecard, and suite recompute excludes every run that fails it.
 
 ## Suites And Leaderboards
 
@@ -114,7 +130,7 @@ The LiveView app also exposes:
 - `/leaderboards` for verified suite leaderboards
 - `/admin` and `/admin/sims/:sim_id` for private admin surfaces when an access token is configured
 
-The spectator route supports VendingBench, Werewolf, and TCG Shop. For
+The spectator route supports VendingBench, Werewolf, and Poker. For
 artifact-backed VendingBench runs, it can refresh from `final_world.json` and
 render `usage.json` totals.
 

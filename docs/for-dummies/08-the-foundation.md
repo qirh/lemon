@@ -155,7 +155,6 @@ wrapper** that provides a clean API:
 | `IdempotencyStore` | Idempotency entries (24h TTL) |
 | `ProgressStore` | Progress message → run_id mappings |
 | `IntrospectionStore` | Telemetry event log (7-day retention) |
-| `HeartbeatStore` | Heartbeat configs and timestamps |
 | `ExecApprovalStore` | Pending tool-execution approvals |
 
 ### Fail-Soft
