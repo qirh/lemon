@@ -216,8 +216,24 @@ defmodule CodingAgent.SystemPrompt do
 
   defp build_learning_workflow_section(:subagent), do: ""
 
+  # `CodingAgent.Session.EventHandler` keys its missed-learning audit on the
+  # `<learning-workflow>` tag, so the tag is part of the contract.
   defp build_learning_workflow_section(:main) do
-    CodingAgent.PromptBuilder.build_learning_section()
+    """
+    <learning-workflow>
+    Choose the right persistence surface:
+    - Prefer dedicated memory and skill tools over shell commands for memory or skill work; use shell commands for project execution, not for bypassing these tools.
+    - Use `read_skill` before following a relevant installed skill; skill hints are summaries, not the full procedure.
+    - Use `search_memory` before answering prompts that mention prior work, previous decisions, remembered context, or "last time"; this recalls completed run history.
+    - Use `session_search` when a prompt or imported workflow explicitly asks for Hermes-style session search, browse, or scroll behavior.
+    - Use `memory` for compact assistant-home `USER.md` profile facts and curated `MEMORY.md` quick facts.
+    - Use `memory_topic` for longer durable facts, preferences, decisions, people, dates, or project context that should be recalled later but is not a reusable procedure.
+    - Use `skill_manage` when you discover a reusable workflow, recurring command sequence, API integration, debugging playbook, project convention, or verification checklist that will likely help future runs.
+    - Use `todo` for the active run's task list and progress tracking; do not use todos as long-term memory.
+    - At the end of substantial work, before the final answer, decide whether the run produced durable context or a reusable workflow; write the memory topic or skill before finalizing when the lesson is clear.
+    </learning-workflow>
+    """
+    |> String.trim()
   end
 
   # Sections contributed through `LemonAgent.ContextRegistry` are rendered as

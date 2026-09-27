@@ -28,10 +28,6 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
-- `browser_exec`: run a bounded BUA-style program of up to 25 typed browser
-  actions; raw CDP steps require explicit developer mode.
-- `computer_use`: capture and drive native apps through cua-driver with SOM,
-  vision, or AX state and background-first input delivery.
 
 ## Search and extraction providers
 
@@ -86,22 +82,6 @@ uses snapshot refs such as `@e5` as selectors. Hybrid requires
 `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
 backend, public URLs use that configured backend, and provider failure never
 falls back across identities.
-
-`browser_exec` is the provider-neutral Browser Use Agent code-mode equivalent.
-Its program is a bounded typed action list rather than arbitrary Python, so
-Lemon can audit every navigation, input, evaluation, screenshot, and tab step.
-Use `targetId = "$active"` to carry the prior tab result. A `cdp` step requires
-`browser_developer_mode: true`; `Browser.close`, `Target.closeTarget`, and raw
-download-policy mutation remain blocked.
-
-`computer_use` drives native desktop apps through a lazily started private
-`cua-driver` daemon in standard permission mode. Capture supports `som`,
-`vision`, and `ax`; input supports element or coordinates, click variants,
-drag, scroll, type, key/hotkey, value setting, app focus, and optional
-post-action capture. Input defaults to `background`. Foreground focus is an
-explicit escalation, capture artifacts follow browser retention, driver
-session ids are derived hashes, and timeouts/errors are not automatically
-replayed because the external effect may already have happened.
 
 By default the helper launches local Chrome/Chromium and connects over CDP on
 `127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the

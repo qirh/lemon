@@ -30,7 +30,6 @@
 ## Tools and interfaces
 
 - [Web and Browser Tools](https://z80dev.github.io/lemon/tools/web): Web search, fetch, and browser automation tools.
-- [Execute Code (executecode)](https://z80dev.github.io/lemon/tools/execute-code): Persistent Python RPC execution over allowlisted agent tools.
 - [Media Tools](https://z80dev.github.io/lemon/tools/media): Media generation and artifact workflows.
 - [LSP Diagnostics](https://z80dev.github.io/lemon/tools/lsp): Language-server diagnostics.
 - [ACP Preview](https://z80dev.github.io/lemon/tools/acp): ACP-shaped editor integration.

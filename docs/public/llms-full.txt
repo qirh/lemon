@@ -1620,6 +1620,7 @@ A VendingBench run emits:
 - `scorecard.json`
 - `usage.json`
 - `config.json`
+- `inputs.jsonl`
 - `manifest.json`
 - `hashes.json`
 - `prompts/operator.system.md`
@@ -1637,6 +1638,14 @@ model source files.
 `hashes.json` uses `lemon_sim.hashes.v1` and stores the file hashes that make the
 bundle tamper-evident.
 
+`inputs.jsonl` records every batch of input events the updater folded, one
+`{"events": [...]}` object per ingest, with the exact timestamps and metadata
+that were applied. Together with the seed and setup options in `config.json` it
+makes the run replayable. VendingBench, Werewolf, and Poker bundles all carry
+it; Werewolf and Poker bundles come from `mix lemon.sim.werewolf` /
+`mix lemon.sim.poker` with `--artifact-dir` (keyless with
+`--offline-strategy heuristic`).
+
 ## Verification
 
 ```bash
@@ -1645,15 +1654,22 @@ LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.verify /tmp/lemon-vb-ci-bas
 
 The verifier checks:
 
+- `manifest.json` and `hashes.json` exist (there is no unhashed fallback)
 - manifest and hash schema
 - required files for the scenario
 - manifest integrity fields against `hashes.json`
 - every hashed file's current SHA-256
+- for VendingBench, Werewolf, and Poker: rebuilds the initial state from
+  `config.json`, re-folds `inputs.jsonl` through the scenario updater, and
+  requires the appended events to reproduce `events.jsonl` line for line and
+  the final world to equal `final_world.json`
 - registered scorecard recomputation from `final_world.json`
 
-For VendingBench, a tampered `scorecard.json`, `events.jsonl`, `usage.json`, or
-other hashed file causes verification to fail. `mix lemon.sim.score` runs the
-same verification before printing the scorecard.
+A tampered `scorecard.json`, `events.jsonl`, `usage.json`, or other hashed file
+fails verification; because hashes are self-attested, the replay step is what
+catches a bundle whose files were edited and re-hashed consistently.
+`mix lemon.sim.score` runs the same verification before printing the
+scorecard, and suite recompute excludes every run that fails it.
 
 ## Suites And Leaderboards
 
@@ -1851,6 +1867,17 @@ Algorithm: Bradley-Terry MLE with one pseudo draw per active pair.
 | 1 | baseline | 1639.79 | 2 | 2-0-0 | 1 |
 | 2 | pressure | 1360.21 | 2 | 0-2-0 | 1 |
 ```
+
+## Watch A Live Game
+
+```bash
+mix lemon.sim.demo
+```
+
+Also keyless: it boots the `lemon_sim_ui` spectator, starts an offline
+Werewolf game whose seats are played by a seeded heuristic (no model calls),
+and prints the `/watch/<sim_id>` URL. Pass `--seed N` to replay the same game.
+See `apps/lemon_sim/README.md` ("Keyless demo") for options.
 
 ---
 
@@ -2248,22 +2275,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
 
-### Programmatic tool calling (`execute_code`)
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_EXECUTE_CODE_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the execute_code programmatic tool-calling tool is enabled. |
-| `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS` | integer | `1800000` |  | `lemon_core` | Idle time after which a persistent execute_code kernel is reaped, in milliseconds. |
-| `LEMON_EXECUTE_CODE_KERNEL_MODE` | string | `per_call` |  | `lemon_core` | execute_code kernel mode (`per_call` or `session`); any other value resolves to `per_call` and never enables persistence. |
-| `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS` | integer | `16` |  | `lemon_core` | Strict cap on simultaneous persistent execute_code kernels (idle-only LRU eviction). |
-| `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES` | integer | `50000` |  | `lemon_core` | Maximum script stdout bytes returned to the model (larger output is spilled to a file). |
-| `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL` | integer | `8` |  | `lemon_core` | Maximum queued cells waiting behind the one active cell per persistent execute_code kernel. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_CALLS` | integer | `100` |  | `lemon_core` | Maximum tool RPC calls one execute_code script may make. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES` | integer | `5242880` |  | `lemon_core` | Total byte budget for tool RPC results returned to one execute_code script. |
-| `LEMON_EXECUTE_CODE_PYTHON_PATH` | string | `` |  | `lemon_core` | Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH). |
-| `LEMON_EXECUTE_CODE_TIMEOUT_MS` | integer | `120000` |  | `lemon_core` | End-to-end wall-clock cap for one execute_code run, including session queue wait, in milliseconds. |
-| `LEMON_EXECUTE_CODE_TOOLS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist. |
-
 ### WASM tool runtime
 
 | Env Var | Type | Default | Secret | Apps | Description |
@@ -2454,7 +2465,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
-| `LEMON_CUA_DRIVER_CMD` | string | _(none)_ |  | `lemon_browser` | Path or executable name for the cua-driver used by computer_use. |
 
 ### Coding-agent CLI runners
 
@@ -2686,19 +2696,6 @@ cache_compiled = true
 cache_dir = ""
 max_tool_invoke_depth = 4
 
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""
-timeout_ms = 120000
-max_rpc_calls = 100
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000
-tools = []
-kernel_mode = "per_call"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-
 [tui]
 theme = "lemon"
 debug = false
@@ -2911,8 +2908,6 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
-- `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_PYTHON_PATH`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`, `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`, `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`, `LEMON_EXECUTE_CODE_TOOLS`
-- `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -3515,7 +3510,6 @@ environment variables select an existing CDP browser or the opt-in MV3 relay:
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
-| `LEMON_CUA_DRIVER_CMD` | PATH lookup | cua-driver executable for `computer_use` |
 
 For the existing-Chrome relay, set `LEMON_BROWSER_CDP_ENDPOINT` to
 `ws://127.0.0.1:<port>/cdp?token=<token>` and set attach-only mode. Treat that
@@ -3543,48 +3537,6 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
-## Execute Code (`execute_code`)
-
-`execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`). The
-result comes back through `text()` blocks; stdout/stderr is returned as a labeled
-diagnostics tail (a script that never calls `text()` keeps the stdout-only result), and
-`notify()`/`batch()` add streaming updates and parallel helper calls. It is disabled by
-default and **bash-equivalent** — the script runs as host code with the user's
-permissions, not in a sandbox. For the full behavior, security, and lifecycle contract
-see [`docs/tools/execute-code.md`](tools/execute-code.md).
-
-```toml
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""              # empty = find python3 on PATH
-timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
-max_rpc_calls = 100           # helper calls per run
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
-max_text_bytes = 65536        # total text() result-block bytes per run
-max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
-tools = []                    # helper subset; empty = full fixed allowlist
-
-# Persistent-kernel opt-in:
-kernel_mode = "per_call"      # "per_call" (default) | "session"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-```
-
-`kernel_mode = "session"` keeps one supervised python3 interpreter per session/cwd/
-interpreter/helper identity so imports, globals, and objects survive across calls
-(`reset = true` discards them). Kernel state is live process memory only — never durable,
-never in the transcript — and is lost on session close/reset, idle reap
-(`kernel_idle_timeout_ms`), eviction (`max_live_kernels`, idle-only LRU), or node restart.
-Only the literal value `"session"` enables persistence; any other value resolves to
-`"per_call"`. Cells are serialized one at a time per kernel with a bounded queue
-(`max_queued_cells_per_kernel`); a full queue is an error, not a fallback. Session mode
-falls back to an isolated per-call run only before code starts (missing session identity,
-unavailable registry, exhausted capacity, or startup failure) and reports it in result
-details.
-
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -3592,7 +3544,6 @@ details.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
-- `runtime.tools.execute_code`: programmatic tool calling (python3 scripts, helper allowlist, optional persistent kernels).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
@@ -3744,22 +3695,12 @@ voice_max_bytes = 10485760                            # optional (default: 10MB)
 voice_transcription_base_url = "https://api.openai.com/v1"
 ```
 
-Use `voice_transcription_provider = "local_transcript"` for deterministic
-no-credential voice-note proof. It routes a local transcript preview through the
-normal Telegram inbound path and does not require an API key. Use
-`openai_transcribe` for real speech-to-text.
+Use `voice_transcription_provider = "local_transcript"` for local transcript
+handling without an API key. Use `openai_transcribe` for real speech-to-text.
 
-The deterministic local proof runner writes a redacted artifact under
-`.lemon/proofs/`:
-
-```bash
-MIX_ENV=test mix run scripts/live_telegram_voice_local_smoke.exs
-```
-
-When that artifact is present, `mix lemon.doctor --verbose` reports
-`channels.telegram.voice_transcription` as a passing readiness check. If voice
-transcription is enabled with `local_transcript` and the proof is missing,
-doctor tells the operator to run the local smoke.
+`mix lemon.doctor` checks this configuration: when voice transcription is
+disabled the check is skipped, and when the provider requires an API key that
+is missing it warns.
 
 ## Telegram File Transfer
 
@@ -3872,7 +3813,7 @@ an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist
   who finds the bot can then run the agent; doctor reports it as a warning.
 
 In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
-for every `bash`, `execute_code`, `write`, `edit`, `patch`, and `hashline_edit` call,
+for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call,
 because any member can prompt the agent.
 
 ## Trigger Mode (Mentions-Only)
@@ -4211,7 +4152,9 @@ used, and flag anything you could not verify.
 ```
 
 Watch the tool activity and final response. You should be able to connect each
-claim to a file in the repository. Follow up with a narrower question, such as
+claim to a file in the repository. Press `Ctrl+R` to expand the latest tool card
+or thinking block (and again to collapse it), or `Ctrl+T` to cycle detail for the
+whole transcript. Follow up with a narrower question, such as
 “Where would I add a new command?” or “Explain the startup path.”
 
 Use `/status` to inspect the session and `/usage` to see reported usage. With an empty input, press
@@ -4781,104 +4724,6 @@ The validator accepts a manifest path or an extension directory, does not load
 extension code, and fails if required package fields are missing or unsupported
 capability-hosting metadata is declared.
 
-## BEAM Host Proof
-
-The local BEAM extension-host proof exercises the runtime trust boundary without
-starting channel adapters or loading default directories implicitly:
-
-```bash
-mix run --no-start scripts/live_extension_host_smoke.exs
-```
-
-The proof creates a temporary project, confirms the default `.lemon/extensions`
-directory is not executed without trust, loads an explicitly configured
-extension path, executes an extension tool through `CodingAgent.ToolRegistry`,
-verifies redacted extension tool execution telemetry, and confirms built-in
-tools win namespace conflicts. It also proves `[runtime.extensions] enabled =
-false` blocks explicit-path extension execution without loading extension code.
-It writes the redacted artifact
-`.lemon/proofs/extension-host-smoke-latest.json` with aggregate counts only.
-This is BEAM extension-host proof, not public registry, WASM, MCP, or sandbox
-execution proof.
-
-## WASM Host Telemetry Proof
-
-The WASM tool boundary also has a focused telemetry proof for the wrapper that
-invokes discovered WASM tools through the sidecar session:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
-```
-
-The proof exercises successful execution, returned sidecar errors, and a dead
-sidecar exit. It verifies `[:coding_agent, :wasm, :tool, :start]`,
-`[:coding_agent, :wasm, :tool, :stop]`, and
-`[:coding_agent, :wasm, :tool, :exception]` events with hashed WASM paths and
-tool-call ids. The proof artifact is
-`.lemon/proofs/wasm-tool-telemetry-latest.json` and records only aggregate
-counts, host-boundary flags, and redaction booleans.
-`extensions.status` exposes the same proof status, check status,
-host-boundary flags, proof hash, and redaction summary.
-
-This is wrapper telemetry proof for the WASM execution boundary. It is not
-public registry, broad sandbox policy, MCP, or marketplace parity proof.
-
-## WASM Policy Proof
-
-The WASM policy proof exercises the default approval boundary for discovered
-WASM tools:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_policy_smoke.exs
-```
-
-The proof verifies that WASM tools declaring `http`, `tool_invoke`, or `exec`
-capabilities require approval by default, that tools without those risky
-capabilities execute without approval, and that an explicit
-`approvals.<tool> = never` policy can override the default. It writes
-`.lemon/proofs/wasm-policy-latest.json` with aggregate counts, policy-boundary
-flags, and redaction booleans.
-
-This is a policy-wrapper proof. It does not prove full WASM runtime sandboxing,
-public registry review, or marketplace install/update flows.
-
-## WASM Lifecycle Proof
-
-The WASM sidecar lifecycle proof exercises the lower-level supervised sidecar
-session boundary:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
-```
-
-The proof starts a temporary sidecar, discovers a tool, invokes it, reads
-running status, stops the sidecar, and verifies discover/invoke telemetry uses
-hashed session, cwd, and tool metadata. It writes
-`.lemon/proofs/wasm-lifecycle-latest.json` with aggregate counts,
-lifecycle-boundary flags, and redaction booleans.
-
-This is per-session sidecar lifecycle proof. It does not prove full runtime
-sandboxing, public marketplace hosting, or broad WASM tool-package parity.
-
-## Registry Audit Proof
-
-The registry audit proof exercises Lemon's code-free install/update review
-boundary for extension packages:
-
-```bash
-MIX_ENV=test mix run scripts/live_extension_registry_audit_smoke.exs
-```
-
-The proof validates a temporary extension registry index, classifies audited
-packages as installable, blocks unaudited or blocked packages, detects a newer
-audited update candidate, and verifies the registry audit does not execute
-extension code. It writes
-`.lemon/proofs/extension-registry-audit-latest.json` with aggregate counts,
-registry-boundary flags, and redaction booleans.
-
-This proves the registry metadata review workflow, not full marketplace
-distribution, sandboxed non-BEAM execution, or bundled plugin breadth.
-
 ## Example Extension
 
 See `examples/extensions/hello_world_extension.ex` for a complete working example.
@@ -5064,8 +4909,7 @@ through the read-only `extensions.status` control-plane method:
 
 The method loads project/global extensions, reports loaded extension names,
 versions, capabilities, config-schema presence, load/validation error counts,
-tool-conflict resolution, extension-provided provider names, extension-host
-execution telemetry proof shape, WASM wrapper telemetry proof shape, and WASM
+tool-conflict resolution, extension-provided provider names, and WASM
 status shape when available. It redacts raw source paths, load-error messages,
 config schemas, provider modules, and path-like WASM metadata, replacing
 sensitive path fields with hashes. `LemonCore.Doctor.ExtensionDiagnostics`
@@ -5073,41 +4917,7 @@ reports global, project, and configured extension directory existence,
 extension-file counts, manifest counts and aggregate manifest shape, nested
 library-file counts, and file/path hashes without loading plugin code or
 exposing raw source paths, file contents, manifest contents, distribution URLs,
-or load-error messages. When
-`.lemon/proofs/extension-host-smoke-latest.json` exists, the same diagnostics
-surface includes a redacted `execution_telemetry` summary with proof status,
-proof hash, completed/failed counts, telemetry-check status, config/env
-disabled-check status, disabled explicit-path block status, and redaction
-booleans. When `.lemon/proofs/wasm-tool-telemetry-latest.json` exists, the
-diagnostics also include a redacted `wasm_telemetry` summary with proof status,
-proof hash, success/error/exception/redaction check status, host-boundary flags,
-and redaction booleans. When `.lemon/proofs/wasm-policy-latest.json` exists,
-diagnostics include a redacted `wasm_policy` summary with proof status,
-approval-default check status, override status, policy-boundary flags, and
-redaction booleans. When
-`.lemon/proofs/extension-registry-audit-latest.json` exists, diagnostics include
-a redacted `registry_audit` summary with install/update proof status,
-installable/blocked/update counts, no-code-load status, proof hash, and
-redaction booleans. When `.lemon/proofs/wasm-lifecycle-latest.json` exists,
-diagnostics include a redacted `wasm_lifecycle` summary with discover/invoke,
-status, stop, proof hash, lifecycle-boundary flags, and redaction booleans.
-
-`mix lemon.doctor --verbose` includes `extensions.telemetry`,
-`extensions.wasm_telemetry`, `extensions.wasm_policy`, and
-`extensions.registry_audit`, and `extensions.wasm_lifecycle` checks backed by
-these redacted summaries.
-`extensions.telemetry` passes only when the latest extension-host smoke proof
-completed the redacted start/stop/exception telemetry check and the config/env
-disabled-mode execution block checks. `extensions.wasm_telemetry` passes only
-when the latest WASM smoke proof completed success, sidecar-error,
-sidecar-exit, and redaction checks. `extensions.wasm_policy` passes only when
-the latest WASM policy proof completed risky-capability approval-default and
-explicit-override checks. `extensions.registry_audit` passes only when the
-latest registry audit proof validates the code-free index, blocks unaudited
-installs, detects an audited update candidate, avoids code loading, and keeps
-sensitive registry values redacted. `extensions.wasm_lifecycle` passes only
-when the latest lifecycle proof completed discover/invoke telemetry, running
-status, stop termination, and redaction checks.
+or load-error messages.
 
 ## Extension Status Report
 
@@ -6859,8 +6669,7 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 |------|-------------|
 | `read` | Read file contents, optionally a specific line range |
 | `write` | Create or overwrite a file |
-| `edit` | Find-and-replace text in a file (must be a unique match) |
-| `hashline_edit` | Edit by line number when text isn't unique |
+| `edit` | Find-and-replace text in a file (must be a unique match; re-read first if the file changed on disk) |
 | `patch` | Apply a unified diff patch |
 | `multiedit` | Multiple find-and-replace edits in one call |
 | `ls` | List directory contents |
@@ -6870,15 +6679,15 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 | Tool | What It Does |
 |------|-------------|
 | `grep` | Search file contents with regex or literal text (via ripgrep) |
-| `find` | Find files by name pattern |
+| `find` | Find files by name pattern (skips `.gitignore`d files unless `no_ignore` is set) |
 
 ### Execution
 
 | Tool | What It Does |
 |------|-------------|
-| `bash` | Run a shell command (streaming output, abort-aware) |
-| `exec` | Run a long-running background process |
-| `process` | Control background processes (poll output, send input, kill) |
+| `bash` | Run a shell command (streaming output, abort-aware; `timeout` up to 10 minutes, or `run_in_background` for servers and long builds) |
+| `bash_output` | Read new output and the status of a background command |
+| `kill_process` | Stop a background command and its children |
 | `browser` | Control Chrome via Playwright (navigate, click, type, screenshot) |
 
 ### Web
@@ -7430,15 +7239,15 @@ token is persisted back to the secrets store.
 
 ## Context Compaction
 
-When a conversation gets too long for the model's context window, the
-`ContextCompactor` can handle it:
+`lemon_ai` itself does not compact anything: a context-length error is
+classified as `:context_length` by `LemonAi.Error` and surfaced to the caller
+instead of walking the provider fallback chain.
 
-1. **Truncation** — drop the oldest messages (sliding window)
-2. **Summarization** — use the LLM itself to summarize old messages
-3. **Hybrid** — summarize then truncate if still too long
-
-This is triggered automatically by coding_agent when a context-length error
-is detected.
+Coding sessions own the recovery. `CodingAgent.Compaction` finds a safe cut
+point (never between a tool call and its result), asks the model to summarize
+the older messages, and keeps the recent tail. It runs proactively when the
+context nears the window, and `CodingAgent.Session.OverflowRecovery` runs it
+once and retries the turn when a provider reports a context-length error.
 
 ---
 
@@ -8738,7 +8547,7 @@ different answers:
 | Problem | Answer |
 |---|---|
 | The model should remember what was said five minutes ago | The conversation, already in `AgentState.messages` |
-| The conversation is longer than the context window | Compaction — `LemonAi.ContextCompactor`, or a `transform_context` function |
+| The conversation is longer than the context window | Compaction — an `AgentLoopConfig` `transform_context` function (coding sessions use `CodingAgent.Compaction`) |
 | The agent should remember something from last week | This guide |
 
 A memory document is a *summary* of one exchange, not a transcript. Keep them
@@ -9111,7 +8920,7 @@ Pick one path to try next. Advanced background and goal workflows have
 | Run work in the background | Use `/bg start <prompt>`, then `/bg list` and `/bg result <id>` | [Long-running harnesses](../long-running-agent-harnesses.md) |
 | Keep a standing objective | Use `/goal set <objective>`, inspect `/goal status`, and pause or clear it explicitly | [Long-running harnesses](../long-running-agent-harnesses.md) |
 | Browse or fetch the Web | Ask for a bounded search/fetch task and inspect sources before acting on them | [Web and Browser Tools](../tools/web.md) |
-| Add Telegram or Discord | Leave the TUI, run `lemon gateway setup telegram` or `lemon gateway setup discord`, then `lemon channels` | [Setup](../user-guide/setup.md#optional-telegram-or-discord) |
+| Add Telegram or Discord | Leave the TUI, run `lemon gateway setup telegram` or `lemon gateway setup discord`, then inspect redacted configuration with `lemon channels` | [Setup](../user-guide/setup.md#optional-telegram-or-discord) |
 | Migrate from Hermes | Preview the import before writing any Lemon state | [Migrate from Hermes](../user-guide/migrate-from-hermes.md) |
 
 ## Recovery path
@@ -9277,6 +9086,10 @@ lemon gateway setup telegram
 lemon gateway setup discord
 lemon channels
 ```
+
+`lemon channels` inspects redacted Telegram and Discord configuration status,
+including enabled state, configured credentials, binding and allowlist counts,
+and registered transports.
 
 The Telegram and Discord setup adapters store their bot tokens in encrypted
 secrets, write their configuration, and verify the adapter inputs. Follow the
@@ -9617,19 +9430,17 @@ initializes a missing master key itself and does not replace an existing one.
 | `mix lemon.secrets.import_env` | Import env-based secrets into the encrypted store. |
 | `mix lemon.voice.secrets` | Interactively set voice API secrets. |
 
-## Diagnostics & readiness
+## Diagnostics
 
 Read-only, redacted health and configuration reports. Safe to run anywhere.
 
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.doctor` | Run Lemon diagnostics and report health. |
-| `mix lemon.readiness` | Compact redacted launch-readiness summary. |
 | `mix lemon.config` | Validate and inspect Lemon configuration (`--validate`, etc.). |
-| `mix lemon.channels` | Show redacted Telegram and Discord launch readiness. |
+| `mix lemon.channels` | Inspect channel configuration. |
 | `mix lemon.usage` | Show redacted usage, cost, token, and quota diagnostics. |
-| `mix lemon.proofs` | Show redacted local proof artifact status. |
-| `mix lemon.media` | Show redacted generated-media and provider-proof readiness. |
+| `mix lemon.media` | Show redacted generated-media job status. |
 | `mix lemon.models` | List known Lemon AI models (`--provider`, `--vision`, `--thinking`, `--json`). |
 | `mix lemon.introspection` | Query agent introspection events. |
 | `mix lemon.feedback` | Inspect historical routing feedback stats. |
@@ -9711,7 +9522,7 @@ not a video. `tic_tac_toe` has no replay renderer.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle. |
+| `mix lemon.sim.verify PATH` | Verify a run artifact bundle: hashes, event replay (VendingBench, Werewolf, Poker), and scorecard recompute. Exits non-zero on failure. |
 
 ```bash
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
@@ -11728,430 +11539,6 @@ steps.
       release candidate. It covers prior-work memory search, skill capture,
       skill curation, blocked cron tooling for scheduled runs, and parallel
       child delegation before answering.
-- [ ] Rerun the Telegram live matrix for the stable text-first plus
-      document-delivery boundary using the established Telethon credentials and
-      Lemonade Stand group/topics.
-
-      ```bash
-      scripts/live_telegram_matrix.py --timeout 90
-      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
-        --topic-isolation \
-        --isolation-topic-id 35 \
-        --isolation-topic-id 16456 \
-        --timeout 180
-      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
-        --topic-cancel \
-        --cancel-topic-id 35 \
-        --timeout 95
-      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
-        --topic-tool-rendering \
-        --topic-markdown \
-        --timeout 160
-      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
-        --topic-approval \
-        --approval-topic-id 35 \
-        --timeout 180
-      scripts/live_telegram_matrix.py --skip-dm --topic-id 35 \
-        --topic-long-output \
-        --long-output-topic-id 35 \
-        --timeout 120
-      scripts/live_telegram_matrix.py --skip-dm --skip-topic \
-        --topic-file-get \
-        --file-get-topic-id 35 \
-        --timeout 90
-      ```
-
-      Also run the two-step topic restart/dedupe proof after restarting
-      `./bin/lemon`. The proof must cover DM, group forum-topic routing, topic
-      isolation, cancellation, approval buttons, tool success/failure status,
-      markdown/code rendering, long output, document delivery, and duplicate
-      avoidance after restart.
-- [ ] For Hermes-parity readiness, run the external-sender manual Discord matrix and
-      keep the result JSON for the final audit.
-
-      ```bash
-      mix run --no-start scripts/live_discord_dedupe_proof.exs
-      mix run --no-start scripts/live_discord_trigger_mode_proof.exs
-      scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
-        --bot-token-index 0 \
-        --sender-bot-token-index 1 \
-        --manual-matrix \
-        --reset-session-between-checks \
-        --timeout 300 \
-        --result-path tmp/discord-live-proof.json \
-        --proof-path .lemon/proofs/discord-live-matrix-latest.json
-      ```
-
-      The prompts must be sent by a human Discord user or the second Lemonade
-      Stand bot. Bot API smoke, self-authored responder messages, and webhooks
-      do not count as Lemon inbound proof.
-      Use `--reset-session-between-checks` with the second bot sender so each
-      check starts from a clean Discord session.
-      Keep `--result-path` for operator handoff data such as nonces and message
-      ids; use `--proof-path` for the redacted artifact consumed by
-      `proofs.status`, `./bin/lemon proofs`, support bundles, doctor gates,
-      and.
-      The runner stops on the first failed manual check by default; do not use
-      `--continue-on-failure` for release evidence.
-- [ ] Before promoting Discord free-response support, run the unmentioned
-      external-sender matrix and confirm both the Discord Developer Portal
-      Message Content Intent and `channel_diagnostics.json` readiness shape.
-
-      ```bash
-      scripts/live_discord_matrix.py --bot-token-index 0 \
-        --wait-free-response-trigger \
-        --per-check-thread \
-        --sender-bot-token-index 1 \
-        --reset-session-between-checks \
-        --channel-id 1475727417372049419 \
-        --result-path tmp/discord-free-response-proof.json \
-        --proof-path .lemon/proofs/discord-free-response-latest.json \
-        --timeout 120
-      ```
-
-      Do not promote this path from deterministic `/trigger` proof alone. The
-      proof must embed redacted `local_channel_diagnostics`, report
-      `message_content_intent_declared: true`, show trigger mode `all` with
-      cleanup mode `clear`, and complete the unmentioned second-bot round trip.
-      The runner preflights Discord application Message Content Intent flags
-      against Lemon's local declaration; use `--skip-free-response-preflight`
-      only for diagnostic waits. If `mix lemon.doctor` reports Message Content
-      Intent or unmentioned-message delivery drift despite
-      `message_content_intent_declared: true`, verify the privileged intent in
-      the Discord Developer Portal, restart the runtime, and rerun the matrix
-      before debugging lower-level routing. `runtime_requests_message_content_intent`
-      should remain true in `channel_diagnostics.json`; if it does not, treat
-      the local Discord transport startup path as the blocker before chasing
-      portal drift.
-- [ ] Before promoting Discord DM support, run `scripts/live_discord_matrix.py
-      --wait-dm-inbound` against a human/open-DM channel and keep the redacted
-      proof artifact for the final audit.
-
-      ```bash
-      scripts/live_discord_matrix.py --bot-token-index 0 \
-        --wait-dm-inbound \
-        --dm-recipient-id {human-open-dm-discord-user-id} \
-        --result-path tmp/discord-dm-proof.json \
-        --proof-path .lemon/proofs/discord-dm-latest.json \
-        --timeout 120
-      ```
-
-      A Discord API `50007` setup failure must remain classified as
-      `discord_dm_setup_refused` in support-bundle proof diagnostics and must not
-      count as a promoted DM proof.
-- [ ] Before promoting Discord live gateway reconnect support, run the two-phase
-      Discord restart proof: `--restart-seed`, restart the runtime, then
-      `--restart-verify --restart-runtime-confirmed` with the seed nonce and
-      reply id. Include `--proof-path .lemon/proofs/discord-restart-verify-latest.json`
-      on the verify run so doctor/support surfaces consume the redacted result.
-      The seed phase alone is only setup evidence.
-- [ ] Before promoting cron scheduler support beyond preview, run
-      `MIX_ENV=test mix run scripts/live_cron_diagnostics_smoke.exs` and
-      `MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs`.
-      The proofs must show `cron_diagnostics_counts`,
-      `cron_diagnostics_retry_policy`, `cron_diagnostics_redaction`,
-      `cron_support_bundle_entry`, `runtime_booted`, `cron_api_ready`,
-      `pre_restart_scheduled_run_observed`, `runtime_restarted`,
-      `persisted_cron_state_loaded`, and
-      `post_restart_scheduled_run_observed` with `failed_count: 0`.
-- [ ] Before promoting channel-origin cron completion support, run
-      `MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs`.
-      The proof must show `telegram_channel_origin_cron_delivery` and
-      `discord_channel_origin_cron_delivery` with `failed_count: 0`. `mix
-      lemon.doctor --verbose` must report `cron.preview` as `pass` before cron
-      preview claims are promoted. The final audit defaults to
-      `LEMON_CRON_DIAGNOSTICS_PROOF_JSON=.lemon/proofs/cron-diagnostics-latest.json`,
-      `LEMON_CRON_RUNTIME_RESTART_PROOF_JSON=.lemon/proofs/cron-runtime-restart-latest.json`,
-      and
-      `LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON=.lemon/proofs/cron-channel-origin-latest.json`;
-      set them only when release evidence lives at different paths.
-- [ ] Before promoting OpenAI-compatible API preview support, run
-      `MIX_ENV=test mix run scripts/live_openai_compat_smoke.exs` and keep
-      `.lemon/proofs/openai-compat-smoke-latest.json`. `mix lemon.doctor --verbose`
-      must report `openai_compat.api_preview` as `pass`; failed or missing
-      health/capability, Chat Completions, Responses, image metadata,
-      streaming, stored-response, cancellation, external fetch, OpenAI Node SDK,
-      or OpenAI Python SDK rows remain blockers for `/v1` support claims. The
-      proof must not expose raw prompts, API keys, answers, or run events. The
-      final audit defaults to
-      `LEMON_OPENAI_COMPAT_PROOF_JSON=.lemon/proofs/openai-compat-smoke-latest.json`;
-      set it only when release evidence lives at a different path.
-- [ ] Before promoting ACP preview support, run the deterministic stdio smoke,
-      external Node stdio client proof, and official ACP SDK client proof:
-
-      ```bash
-      MIX_ENV=test mix run scripts/live_acp_stdio_smoke.exs
-      node scripts/live_acp_stdio_external_client.mjs
-      node scripts/live_acp_official_sdk_client.mjs
-      ```
-
-      Keep `.lemon/proofs/acp-stdio-smoke-latest.json`,
-      `.lemon/proofs/acp-stdio-external-client-latest.json`, and
-      `.lemon/proofs/acp-official-sdk-client-latest.json`.
-      `mix lemon.doctor --verbose` must report `acp.preview` as `pass`; failed
-      or missing stdio, external client, or official SDK proof rows remain
-      blockers for ACP support claims. The final audit defaults to
-      `LEMON_ACP_STDIO_PROOF_JSON=.lemon/proofs/acp-stdio-smoke-latest.json`,
-      `LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON=.lemon/proofs/acp-stdio-external-client-latest.json`,
-      and
-      `LEMON_ACP_OFFICIAL_SDK_PROOF_JSON=.lemon/proofs/acp-official-sdk-client-latest.json`;
-      set them only when release evidence lives at different paths.
-- [ ] Before promoting MCP preview support, run the stdio, Streamable HTTP, and
-      legacy SSE smoke proofs:
-
-      ```bash
-      MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs
-      MIX_ENV=test mix run scripts/live_mcp_http_smoke.exs
-      MIX_ENV=test mix run scripts/live_mcp_sse_smoke.exs
-      ```
-
-      Keep `.lemon/proofs/mcp-stdio-latest.json`,
-      `.lemon/proofs/mcp-http-latest.json`, and
-      `.lemon/proofs/mcp-sse-latest.json`.
-      `mix lemon.doctor --verbose` must report `mcp.preview` as `pass`; failed
-      or missing stdio, Streamable HTTP, or SSE proof rows remain blockers for
-      MCP support claims. The proof artifacts must not expose raw paths,
-      filenames, prompts, provider responses, tool arguments, tool results, or
-      server IO. The final audit defaults to
-      `LEMON_MCP_STDIO_PROOF_JSON=.lemon/proofs/mcp-stdio-latest.json`,
-      `LEMON_MCP_HTTP_PROOF_JSON=.lemon/proofs/mcp-http-latest.json`, and
-      `LEMON_MCP_SSE_PROOF_JSON=.lemon/proofs/mcp-sse-latest.json`; set them
-      only when release evidence lives at different paths.
-- [ ] Before promoting LSP diagnostics preview support, run the project-fixture
-      and real-repo fixture editor-flow proofs:
-
-      ```bash
-      MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-        --project-fixtures --editor-flow \
-        --out .lemon/proofs/lsp-project-fixtures-latest.json
-      MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-        --real-repo-fixtures --editor-flow \
-        --out .lemon/proofs/lsp-real-repo-fixtures-latest.json
-      ```
-
-      Keep `.lemon/proofs/lsp-project-fixtures-latest.json` and
-      `.lemon/proofs/lsp-real-repo-fixtures-latest.json`.
-      `mix lemon.doctor --verbose` must report `lsp.preview` as `pass`; failed
-      or missing Pyright, gopls, clangd, rust-analyzer, TypeScript Language
-      Server, or ElixirLS editor-flow rows remain blockers for LSP preview
-      support claims. The proof artifacts must not expose raw paths, file
-      contents, diagnostic output, raw session ids, or server IO. The final
-      audit defaults to
-      `LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON=.lemon/proofs/lsp-project-fixtures-latest.json`
-      and
-      `LEMON_LSP_REAL_REPO_PROOF_JSON=.lemon/proofs/lsp-real-repo-fixtures-latest.json`;
-      set them only when release evidence lives at different paths.
-- [ ] Before promoting plugin/extension host preview support, run the BEAM
-      extension host, WASM telemetry, WASM policy, extension registry audit,
-      and WASM lifecycle proofs:
-
-      ```bash
-      MIX_ENV=test mix run scripts/live_extension_host_smoke.exs
-      MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
-      MIX_ENV=test mix run scripts/live_wasm_policy_smoke.exs
-      MIX_ENV=test mix run scripts/live_extension_registry_audit_smoke.exs
-      MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
-      ```
-
-      Keep `.lemon/proofs/extension-host-smoke-latest.json`,
-      `.lemon/proofs/wasm-tool-telemetry-latest.json`,
-      `.lemon/proofs/wasm-policy-latest.json`,
-      `.lemon/proofs/extension-registry-audit-latest.json`, and
-      `.lemon/proofs/wasm-lifecycle-latest.json`.
-      `mix lemon.doctor --verbose` must report `extensions.telemetry`,
-      `extensions.wasm_telemetry`, `extensions.wasm_policy`,
-      `extensions.registry_audit`, and `extensions.wasm_lifecycle` as `pass`;
-      failed or missing rows remain blockers for plugin/extension host preview
-      support claims. Support bundles and `proofs.status` must expose the
-      proof-level `redaction` maps for these artifacts without raw paths, cwd,
-      session ids, params, manifest contents, distribution URLs, or tool
-      payloads. The final audit defaults to
-      `LEMON_EXTENSION_HOST_PROOF_JSON=.lemon/proofs/extension-host-smoke-latest.json`,
-      `LEMON_WASM_TELEMETRY_PROOF_JSON=.lemon/proofs/wasm-tool-telemetry-latest.json`,
-      `LEMON_WASM_POLICY_PROOF_JSON=.lemon/proofs/wasm-policy-latest.json`,
-      `LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON=.lemon/proofs/extension-registry-audit-latest.json`,
-      and `LEMON_WASM_LIFECYCLE_PROOF_JSON=.lemon/proofs/wasm-lifecycle-latest.json`;
-      set them only when release evidence lives at different paths.
-- [ ] Before promoting terminal backend support beyond preview, run
-      `MIX_ENV=test mix run scripts/live_terminal_backend_smoke.exs` and keep
-      `.lemon/proofs/terminal-backend-latest.json`. `mix lemon.doctor --verbose`
-      must report `terminal.backends_live` as `pass`; failed or missing
-      `local`, `local_pty`, `docker`, or `ssh` rows remain blockers unless the
-      release explicitly scopes that backend out. The proof and support
-      surfaces must not expose command text, environment values, process output,
-      raw SSH targets, or raw proof paths.
-      The final audit defaults to
-      `LEMON_TERMINAL_BACKEND_PROOF_JSON=.lemon/proofs/terminal-backend-latest.json`;
-      set it only when release evidence lives at a different path.
-- [ ] Run `mix lemon.doctor --verbose` after collecting Discord proof artifacts.
-      Treat `channels.discord.dm`, `channels.discord.free_response`,
-      `channels.discord.reconnect`, `channels.discord.slash_client_click`, and
-      `media.provider_live` warnings as release blockers for broad Discord and
-      provider-backed media parity until each is promoted to `pass` by live
-      proof. The channel and media doctor checks must remain redacted: no raw
-      Discord IDs, message bodies, bot tokens, secret names, media prompts,
-      provider responses, artifact bytes, or raw transcript text.
-      When Discord DM, free-response, or real slash client-click proof artifacts
-      are present but incomplete, the final readiness audit may print bounded
-      `reason_kind` labels from those artifacts. It must not print Discord IDs,
-      interaction tokens, bot tokens, secret names, or message bodies.
-      When a provider-backed media proof is incomplete, the final readiness
-      audit may print a bounded `reason_kind` label from the proof artifact
-      such as `openai_image_http_error:billing_limit_user_error` or
-      `vertex_imagen_http_error:permission_denied` or
-      `google_tts_http_error:permission_denied` or
-      `elevenlabs_tts_http_error:payment_required`, but must not print
-      provider response bodies, prompts, transcripts, keys, or media bytes. If
-      the incomplete proof identifies a safe provider id for a multi-provider
-      lane, the audit may print a copy-ready rerun command with the matching
-      `--provider` flag.
-- [ ] For provider-backed media readiness, run all live media smoke scripts with
-      usable provider credentials and quota before claiming image, TTS, STT,
-      vision, or video parity.
-
-      Optional local checkpoint, useful before spending provider quota:
-
-      ```bash
-      MIX_ENV=test mix run scripts/live_media_image_smoke.exs --local
-      MIX_ENV=test mix run scripts/live_media_speech_smoke.exs --local
-      MIX_ENV=test mix run scripts/live_media_transcription_smoke.exs --local
-      MIX_ENV=test mix run scripts/live_media_vision_smoke.exs --local
-      MIX_ENV=test mix run scripts/live_media_video_smoke.exs --local
-      ```
-
-      The local lane must complete five `proof_scope: media_local` artifacts
-      for `local_svg`, `local_wav`, `local_transcript`, `local_vision`, and
-      `local_mp4`. These artifacts prove deterministic worker health only. They
-      are not accepted by the final audit and are not a substitute for
-      provider-backed image, TTS, STT, vision, or video proof.
-
-      ```bash
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_image_smoke.exs \
-        --proof-path .lemon/proofs/media-image-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_image_smoke.exs \
-        --provider vertex_imagen \
-        --proof-path .lemon/proofs/media-image-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_speech_smoke.exs \
-        --proof-path .lemon/proofs/media-speech-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_speech_smoke.exs \
-        --provider google_tts \
-        --proof-path .lemon/proofs/media-speech-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_transcription_smoke.exs \
-        --proof-path .lemon/proofs/media-transcription-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_vision_smoke.exs \
-        --proof-path .lemon/proofs/media-vision-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_video_smoke.exs \
-        --proof-path .lemon/proofs/media-video-smoke-latest.json
-      LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start scripts/live_media_video_smoke.exs \
-        --provider vertex_veo \
-        --proof-path .lemon/proofs/media-video-smoke-latest.json
-      ```
-
-      If the provider key is stored in Lemon's encrypted secret store, append
-      `--api-key-secret SECRET_NAME` to the relevant command instead of
-      exporting a raw API key. Provider-prefixed OpenAI-compatible routing is
-      a media vision proof feature; for image, TTS, STT, and video compatible
-      endpoint checks, use `--base-url` with an unprefixed model. TTS proof can
-      use either OpenAI or ElevenLabs evidence; the ElevenLabs proof script uses
-      the ElevenLabs default voice id unless `--voice` is explicitly supplied.
-      TTS proof can also use Google Cloud Text-to-Speech evidence through
-      `google_tts`, backed by the same `providers.google_vertex`
-      service-account credential path.
-      Image proof can use either OpenAI or Vertex Imagen evidence; Vertex uses
-      `providers.google_vertex` project, location, and service-account JSON
-      config/secrets and writes the `media_provider_vertex_imagen` check row.
-      Video proof can use either OpenAI or Vertex Veo evidence; Vertex Veo uses
-      the same `providers.google_vertex` credential path and writes the
-      `media_provider_vertex_veo` check row.
-      STT proof can use either OpenAI or Deepgram evidence, as long as the
-      redacted proof artifact is completed.
-
-      The final audit defaults to the latest redacted proof artifacts:
-      `LEMON_MEDIA_IMAGE_PROOF_JSON=.lemon/proofs/media-image-smoke-latest.json`,
-      `LEMON_MEDIA_SPEECH_PROOF_JSON=.lemon/proofs/media-speech-smoke-latest.json`,
-      `LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON=.lemon/proofs/media-transcription-smoke-latest.json`,
-      `LEMON_MEDIA_VISION_PROOF_JSON=.lemon/proofs/media-vision-smoke-latest.json`,
-      and
-      `LEMON_MEDIA_VIDEO_PROOF_JSON=.lemon/proofs/media-video-smoke-latest.json`.
-      Set those environment variables only when the release evidence lives at a
-      different path. Skipped credential-preflight artifacts for image, TTS, STT,
-      or video are blockers; completed vision proof alone is insufficient for
-      provider-backed media parity.
-- [ ] Before promoting browser automation preview support, run
-      `MIX_ENV=test mix run scripts/live_browser_smoke.exs` and keep
-      `.lemon/proofs/browser-smoke-latest.json`. `mix lemon.doctor --verbose`
-      must report `browser.preview` as `pass`; missing or incomplete local
-      driver, CDP attach, route guardrail, interaction, upload/download,
-      screenshot, cookie/state, progress-redaction, or browser-to-media vision
-      coverage remains a browser preview blocker. The proof artifact must omit
-      raw local paths, URLs, selectors, typed text, cookie values, page text,
-      artifact paths, and screenshot bytes. The final audit defaults to
-      `LEMON_BROWSER_PROOF_JSON=.lemon/proofs/browser-smoke-latest.json`; set
-      it only when release evidence lives at a different path.
-- [ ] For Discord application-command readiness, run the live Discord API
-      schema proofs and keep the result JSON for the final audit.
-
-      ```bash
-      scripts/live_discord_matrix.py --bot-token-index 0 \
-        --check-media-slash-registration \
-        --result-path tmp/discord-media-slash-proof-check.json \
-        --proof-path .lemon/proofs/discord-media-slash-registration-latest.json
-      scripts/live_discord_matrix.py --bot-token-index 0 \
-        --check-rollback-slash-registration \
-        --result-path tmp/discord-rollback-slash-proof-check.json \
-        --proof-path .lemon/proofs/discord-rollback-slash-registration-latest.json
-      scripts/live_discord_matrix.py --bot-token-index 0 \
-        --check-all-slash-registration \
-        --result-path tmp/discord-all-slash-proof-check.json \
-        --proof-path .lemon/proofs/discord-all-slash-registration-latest.json
-      ```
-
-      These prove the live Zeebot application has the in-repo `/media status`
-      slash schema and all expected Lemon command names registered. They do not
-      prove client-click execution. Keep `--result-path` for raw command
-      ids/versions and `--proof-path` for redacted support/status artifacts.
-- [ ] For Hermes-compatible final-answer `MEDIA:<path>` delivery readiness, run
-      the Telegram and Discord live matrix checks and keep the redacted proof
-      artifacts for the final audit.
-
-      ```bash
-      scripts/live_telegram_matrix.py --skip-dm --skip-topic \
-        --topic-media-directive-delivery \
-        --media-directive-topic-id 35 \
-        --timeout 120 \
-        --result-path tmp/telegram-media-directive-proof.json \
-        --proof-path .lemon/proofs/telegram-media-directive-latest.json
-      scripts/live_discord_matrix.py --channel-id 1475727417372049419 \
-        --bot-token-index 0 \
-        --sender-bot-token-index 1 \
-        --wait-media-directive-delivery \
-        --reset-session-between-checks \
-        --timeout 120 \
-        --result-path tmp/discord-media-directive-proof.json \
-        --proof-path .lemon/proofs/discord-media-directive-latest.json
-      ```
-
-      These prove final-answer MEDIA directives are converted into real
-      Telegram documents or Discord attachments and do not leak raw
-      `MEDIA:<path>` lines into channel-facing text.
-- [ ] Before promoting broad Discord slash-command parity, deploy or hot reload
-      the runtime, run the wait-mode handoff, click the requested real Discord
-      slash command such as `/media status` or `/checkpoint status`, then
-      validate the redacted client-click proof artifact.
-
-      ```bash
-      scripts/live_discord_matrix.py --wait-slash-client-click-proof \
-        --channel-id "$DISCORD_PROOF_CHANNEL_ID" \
-        --slash-client-click-proof-path .lemon/proofs/discord-slash-client-click-proof-latest.json \
-        --result-path tmp/discord-slash-client-click-proof-wait.json \
-        --proof-path .lemon/proofs/discord-slash-client-click-check-latest.json
-      ```
-
-      The wait mode rejects stale artifacts generated before the watcher
-      started. Use `--check-slash-client-click-proof` only for an already
-      captured proof artifact.
-      Deterministic slash decoder proof and Discord API registration proof are
-      insufficient for this promotion gate.
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.
@@ -12182,10 +11569,12 @@ steps.
       volume and verify host/player reconnect. Production hosted proof requires
       HTTPS, a 32-byte creation token, private/no-store responses, and protected
       metrics with no credentials or raw provider errors.
-      Min/full bundle inspection still requires `channel_readiness.json`,
-      `readiness_summary.json`, shared readiness proof-gate ids, and
-      `proof_gate_summary.gateCount`.
 - [ ] Run product smoke against the release candidate.
+- [ ] When the release touches a real external integration, run the matching
+      manual smoke: `scripts/live_telegram_matrix.py`,
+      `scripts/live_discord_matrix.py`, `scripts/live_provider_fallback_smoke.exs`,
+      `scripts/live_mcp_stdio_smoke.exs`, or
+      `scripts/live_cron_runtime_restart_smoke.exs`.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
       copy, builds the VitePress site, and
       checks markdown links without leaving generated artifacts in the repo.
@@ -12200,8 +11589,6 @@ steps.
       publish all three `lemon_tui` platform artifacts without publishing a
       separate package.
 - [ ] Run `scripts/test all` from the tagged commit.
-- [ ] Run the applicable provider-backed and external-channel smoke tests, then
-      verify their redacted proof artifacts through the supported diagnostics.
 
 ## Dependency Audit Policy
 
@@ -12327,7 +11714,6 @@ git push origin v2026.08.2
 ```
 
 Do not combine a `main` dispatch with a separate tag push for the same version.
-
 
 ## Rollback Checklist
 
@@ -12655,17 +12041,12 @@ visibility and receipts; packaged `plan`, `apply`, and `rollback` fail closed
 with Git workflow guidance. The same source
 wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
 delegates for the setup and diagnostics Mix tasks, plus
-`./bin/lemon channels ...` for redacted Telegram/Discord launch readiness,
-`./bin/lemon config ...` for config inspection and validation,
+`./bin/lemon channels ...` to inspect redacted Telegram and Discord
+configuration, `./bin/lemon config ...` for config inspection and validation,
 `./bin/lemon models ...` for model catalog discovery,
-`./bin/lemon providers ...` for redacted provider readiness, and
+`./bin/lemon providers ...` for redacted provider configuration, and
 `./bin/lemon policy ...` for route-specific model policy management. It also
-exposes `./bin/lemon proofs ...` for redacted local proof artifact inventory,
-`./bin/lemon media ...` for redacted generated-media job, artifact, and
-provider-proof readiness,
-`./bin/lemon readiness ...` for compact launch-gate readiness summaries and
-`./bin/lemon readiness --strict` for scripts that should fail unless the
-compact readiness status is fully ready,
+exposes `./bin/lemon media ...` for generated-media job status,
 `./bin/lemon secrets ...` as an allowlisted dispatcher for the existing
 secret-store tasks, `./bin/lemon skill ...` for the existing skill lifecycle
 task, and `./bin/lemon usage ...` for redacted usage/cost diagnostics.
@@ -14147,9 +13528,7 @@ MCP tools are discovered through `LemonSkills.McpSource`, cached for performance
 - **Model-facing names**: stdio, Streamable HTTP, and legacy HTTP+SSE tools are exposed as `mcp_<server>_<tool>` so they do not collide with built-in, WASM, or extension tools
 - **Resource/prompt utilities**: capable stdio, Streamable HTTP, and legacy HTTP+SSE servers also expose `resources/list`, `resources/read`, `prompts/list`, and `prompts/get` through model-facing utility tools
 - **Exact filters**: stdio, Streamable HTTP, and legacy HTTP+SSE configs can constrain model-facing tools, resources, and prompts with exact allow/block lists before they enter the registry
-- **Current proof**: `MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs --out .lemon/proofs/mcp-stdio-latest.json` proves stdio startup, discovery, registry exposure, success/error calls, resource/prompt list/read/get utilities, exact allow/block filtering, degraded missing-command startup, `notifications/initialized` compatibility, the opt-in `sampling/createMessage` callback wrapper, the reviewed model-backed sampling policy wrapper, and the `mcp_stdio_sampling_ops_approval_bridge` through redacted pending approvals
-- **HTTP proof**: `MIX_ENV=test mix run scripts/live_mcp_http_smoke.exs --out .lemon/proofs/mcp-http-latest.json` proves 24 Streamable HTTP checks: initialize, JSON and per-request SSE responses, session/protocol headers, OAuth protected-resource and authorization-server metadata discovery, OAuth client-credentials token acquisition, `client_secret_post` and `client_secret_basic` token endpoint auth, protected-request retry, refresh-token grant retry after a later 401, one-shot client-credentials bearer reacquisition when no refresh token is available, authorization-code PKCE callback/token exchange, OAuth token cache resume without another metadata/token request, configured-source loopback OAuth callback capture with `mcp_*_oauth` operator approval routing, tool/resource/prompt discovery, success/error calls, source resource/prompt utility invocation, registry exposure, status capability shape, and exact HTTP filtering
-- **SSE proof**: `MIX_ENV=test mix run scripts/live_mcp_sse_smoke.exs --out .lemon/proofs/mcp-sse-latest.json` proves legacy HTTP+SSE endpoint discovery, tool/resource/prompt discovery, success/error calls, source resource/prompt utility invocation, registry exposure, status capability shape, and exact SSE filtering
+- **Optional manual smoke**: `MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs` exercises the stdio server path against configured services; Lemon does not consume the result file.
 
 ### Disabling MCP
 
@@ -15006,10 +14385,7 @@ Initial stable 1.0 support targets:
 - preview LSP diagnostics through the model-facing `lsp_diagnostics` tool,
   opt-in `write`/`edit`/`patch` baseline/delta checks, redacted
   `lsp.diagnostics.status` checker visibility, and
-  `lsp_diagnostics.json` in support bundles. JSON-RPC
-  `lsp.diagnostics.status` also includes recent redacted LSP proof artifacts
-  and latest LSP proof checks, matching the promotion view without
-  raw proof paths, filenames, file contents, diagnostics output, or server I/O.
+  `lsp_diagnostics.json` in support bundles.
   `LemonLsp.ServerManager` is a
   supervised BEAM status, stdio session, initialize, JSON-RPC framing, and
   diagnostic-notification manager for the known language-server registry.
@@ -15021,10 +14397,6 @@ Initial stable 1.0 support targets:
   URI hashes/counters, and redacted diagnostic batch counts only; support
   bundles omit file paths, executable paths, raw session ids, file contents,
   workspace roots, diagnostic output, and server I/O.
-  `mix lemon.doctor --verbose` reports `lsp.preview` from the redacted
-  project-fixture and real-repo fixture proof artifacts, and final readiness
-  audit blocks LSP preview promotion unless both full registered-server proof
-  artifacts are current.
   See [`docs/tools/lsp.md`](tools/lsp.md) for checker and language-server
   install commands.
 - preview generated-media job observability through `media.status`,
@@ -15036,31 +14408,17 @@ Initial stable 1.0 support targets:
   owns the preview `Task.Supervisor` boundary for queued/running/completed/failed
   media job lifecycle updates and emits redacted PubSub events for operator
   surfaces.
-  JSON-RPC `media.status` also includes redacted provider-backed media proof
-  lane state for image, TTS, STT, vision, and video with safe reason kinds,
-  proof hashes, rerun commands, and bounded next actions but no provider
-  responses, prompts, API keys, or artifact bytes.
+  JSON-RPC `media.status` reports redacted generated-media job state.
 - Telegram/Discord setup diagnostics through `channel_diagnostics.json` in
   support bundles. The bundle reports enabled/configured state, binding counts,
   topic binding counts, file-transfer settings, generated-file auto-send
-  settings, Telegram voice-transcription shape, Discord bot-message policy,
-  Discord DM readiness, Discord free-response readiness, Discord inbound-replay
-  readiness, Discord slash-command readiness, and allowlist counts without raw
-  bot tokens, secret names, chat IDs, channel IDs, guild IDs, or message bodies.
-  The same bundle includes `channel_readiness.json` with shared Telegram and
-  Discord launch-gate status, gate counts, safe reason kinds, and bounded next
-  actions without raw ids, tokens, proof paths, proof details, or message
-  bodies. `readiness_summary.json` adds the compact launch-readiness rollup
-  used by `mix lemon.readiness`: doctor counts, channel gate counts,
-  provider-media state, proof totals, unresolved gates, and cleanup flags
-  without raw ids, prompts, provider responses, proof paths, proof details, or
-  secret values.
+  settings, Telegram voice-transcription configuration, Discord bot-message
+  policy, and allowlist counts without raw tokens, secret names, channel ids, or
+  message bodies.
 - browser operator diagnostics through JSON-RPC `browser.status`. The status
   response exposes driver session timestamps, pending/buffered request counters,
-  safe capability labels, artifact counts, cleanup policy, live browser proof
-  state, latest browser proof checks, and browser proof cleanup booleans without
-  raw proof paths, filenames, page data, screenshots, cookie values, raw driver
-  logs, or provider responses.
+  safe capability labels, artifact counts, cleanup policy, and browser status
+  without raw paths, page data, screenshots, cookie values, or raw driver logs.
 - browser tool progress status. Browser requests emit redacted `current_action`
   updates for Web/TUI/Telegram/Discord status surfaces with method, phase,
   timeout, safe counts, artifact flags, and hashed host metadata only; raw URLs,
@@ -15118,79 +14476,12 @@ Initial stable 1.0 support targets:
   and `agent.targets.list`. These responses include compact agent/session/target
   summaries and cleanup flags without returning message bodies, credentials, or
   secret values.
-- proof-artifact diagnostics through `proof_diagnostics.json` in support
-  bundles and read-only `proofs.status`. The bundle scans
-  `.lemon/proofs/*proof*.json`, `.lemon/proofs/*-latest.json`, and
-  `tmp/*proof*.json` for redacted proof status,
-  pass/fail/skip counts, generated timestamps, provider/model labels when
-  already present in proof metadata, and safe failure reason kinds. Proofs with
-  explicit `status` keep that status; proofs that only expose `ok: true/false`
-  are classified as completed or failed. It reports
-  only reason-kind counts, safe proof-scope counts, safe check-name counts,
-  latest redacted check status with proof-object labels when present, safe
-  proof object/provider-path labels on recent proofs, safe coverage
-  counts/booleans for Discord slash and live-matrix
-  artifacts, media-directive delivery/leak booleans, file/proof
-  hashes, cleanup booleans, and explicit proof-level redaction booleans for
-  proof artifacts that use a `redaction` map instead of a generic `cleanup`
-  map;
-  shared `LemonCore.Doctor.ProofLaunchGates` summary for Discord DM, Discord
-  slash registration, Discord slash client-click, provider media, and terminal
-  backends; `proofs.status`, `readiness_summary.json`, and
-  `readiness.status` consume that same redacted proof-gate view so operators can
-  show bounded launch blockers without raw proof rows;
-  support surfaces omit raw file paths, filenames, proof details, prompts,
-  provider responses, proof file contents, and generated artifacts.
-- channel failure diagnostics join redacted channel
-  diagnostics with safe proof counts so operators can see whether Telegram
-  voice transcription plus Discord DM, free-response, reconnect replay, and
-  slash client-click promotion are blocked, seeded, proven, or still waiting for
-  live proof without exposing chat IDs, channel IDs, guild IDs, message bodies,
-  or raw proof files.
-- channel readiness checks in `mix lemon.doctor`. Doctor reports Telegram and
-  Discord credential shape, Telegram local voice transcription proof status,
-  plus Discord DM, free-response, reconnect, slash registration, deterministic
-  slash, and real slash client-click proof gates from the same redacted
-  diagnostics/proof inventory used by support bundles.
-- media readiness checks in `mix lemon.doctor`. Doctor separates
-  Telegram/Discord generated-media delivery proof from provider-backed
-  image/TTS/STT/vision/video proof. Provider-backed failures surface only safe
-  `reason_kind` labels, such as `provider_http_error`, in doctor summaries and
-  remediation hints so operators can distinguish failed, skipped, missing,
-  permission-denied, billing/quota, and payment-required proof lanes without
-  exposing provider responses, prompts, or raw artifact metadata.
-  image/TTS/STT/vision/video proof, so local channel delivery can be promoted
-  while missing live provider credentials or quota remains an explicit warning.
-- terminal backend readiness checks in `mix lemon.doctor`. Doctor consumes the
-  same redacted terminal backend proof rows as support bundles and `proofs.status`,
-  passes when local, local PTY, Docker, and SSH preview backends have completed
-  rows, warns on failed or missing rows, and never includes command text,
-  environment values, process output, raw SSH targets, or raw proof paths.
-- OpenAI-compatible API preview readiness checks in `mix lemon.doctor`. Doctor
-  consumes the redacted `/v1` smoke proof rows as `openai_compat_*` checks,
-  passes when health/capabilities, Chat Completions, Responses, streaming,
-  stored response, cancellation, image metadata/pass-through/rejection/policy,
-  external fetch, OpenAI Node SDK, and OpenAI Python SDK rows are complete, and
-  never includes raw prompts, answers, API keys, run events, or provider
-  responses.
-- ACP preview readiness checks in `mix lemon.doctor`. Doctor consumes the
-  deterministic stdio, external Node client, and official ACP SDK proof rows as
-  `acp_stdio_*`, `acp_stdio_external_*`, and `acp_official_sdk_*` checks, passes
-  when all three proof artifacts are complete, and never includes raw prompts,
-  answers, API keys, run events, session ids, child stderr, file contents, or
-  file paths.
 - Hermes-compatible final-answer `MEDIA:<project-relative-path>` directives for
   Telegram and Discord. Lemon resolves these at router finalization time into
   the existing `auto_send_files` delivery path only when the target is an
   existing regular file inside the run working directory; symlink escapes,
   missing files, and out-of-project paths are ignored, and the directive line is
-  stripped from the channel-facing text. Live matrix proof harnesses are
-  available through Telegram `--topic-media-directive-delivery` and Discord
-  `--wait-media-directive-delivery`; sanitized proof artifacts expose only
-  coverage, marker/document or attachment status, directive-leak status, and
-  hashed channel/topic identifiers. Doctor, support bundles, `proofs.status`,
-  surface the MEDIA directive coverage and leak-status booleans
-  without exposing the local directive path or raw channel message body.
+  stripped from the channel-facing text.
 - preview durable goal status, one-shot continuation, one supervised judge tick,
   max-continuation budgets, bounded operator-started goal loops, and opt-in
   persisted auto-loop scheduling through
@@ -15227,94 +14518,16 @@ with `/approval approve|once|session|agent|global|deny <approval-id>`; `/approva
 `exec.approval.resolved` notifications with `decision: "timeout"` so terminal
 operators see when a pending request expired.
 
-JSON-RPC `channels.status` combines registered channel-adapter status with the
-same redacted Telegram/Discord diagnostics used by support bundles, including
-binding counts, file-transfer shape, Telegram voice settings,
-Discord DM/free-response/replay/slash-command readiness, bot-message policy,
-and cleanup booleans without bot tokens, secret names, chat ids, channel ids,
-guild ids, or message bodies. It also exposes recent redacted Telegram/Discord
-proof artifacts and latest channel proof checks without raw proof paths,
-filenames, prompts, provider responses, or proof file contents. The top-level
-summary includes compact `launchGateStatuses` and `launchGateReasonKinds` maps so
-operator clients can read specific Telegram/Discord gates without scanning the
-full readiness list.
-
-Discord support is bounded to the live-proven path: mention-triggered text
-prompts in the configured Lemonade Stand channel, markdown/code rendering,
-long-output chunking, tool success/failure status rendering, text-file
-attachment delivery, public-thread prompt/reply, and free-response unmentioned
-thread prompts after `/trigger all`. The DM live matrix now records redacted
-setup failures classified as `discord_dm_setup_refused`, but Discord DMs,
-client-click slash interactions, and voice remain preview until separate live
-matrices promote them. Slash-command diagnostics list the expected Lemon
-commands and proof sources, and the deterministic slash proof covers 34 local
-inventory/decoder/response checks across the 16 in-repo command names. Safe
-coverage counts from that proof are exposed through support bundles and
-`proofs.status`. Doctor now distinguishes all-command
-registration proof from narrower `/media` registration proof, but broad Discord
-slash parity still requires real client-click evidence. The Discord runtime now passively records redacted
-`lemon.discord_slash_client_click` proof artifacts when a real slash-command
-interaction arrives with live Discord fields and Lemon emits a safe interaction
-response, so an operator can promote that gate by clicking a command after the
-runtime is deployed or hot reloaded and then running:
-
-```bash
-scripts/live_discord_matrix.py --wait-slash-client-click-proof --channel-id <channel-id> --proof-path .lemon/proofs/discord-slash-client-click-check-latest.json
-```
-
-The wait mode posts a concrete operator instruction, polls the runtime proof
-artifact, and rejects stale artifacts generated before the watcher started. The validator
-emits stable reason kinds for missing, invalid, and non-promotable artifacts so
-doctor and support bundles can tell operators whether they need to
-capture the first real click, replace a bad artifact, or rerun after a
-non-promotable click response.
-Inbound-replay diagnostics distinguish deterministic transport-restart dedupe
-proof from live gateway reconnect proof. The latest live gateway reconnect
-proof passed after a deliberate runtime restart with no duplicate replay and a
-fresh post-restart response. Live Discord matrix runs can now write a second,
-sanitized proof artifact
-with `--proof-path` for `proofs.status`, support bundles, doctor gates,
-and readiness checks; keep `--result-path` for operator handoff data such as nonces and
-message ids. The sanitized proof preserves only coverage counts/booleans such
-as whether DM, free-response, restart-verify, generated-media, file-delivery,
-or slash-registration checks were present, including
-`contains_rollback_slash_registration`, plus reason kinds and cleanup
-assertions. Free-response Discord support requires the privileged Discord
-Message Content Intent and a passing external-sender proof. The latest live
-unmentioned second-bot matrix passed in a per-check public thread and wrote
-`.lemon/proofs/discord-free-response-latest.json` with
-`message_content_intent_declared: true`, trigger mode `all`, cleanup mode
-`clear`, and redacted proof metadata. The live failure that preceded it exposed
-a thread-shape bug: Discord can deliver thread `MESSAGE_CREATE` events with the
-thread id as `channel_id` and no parent-channel context, so the transport now
-falls back to the stored `{thread, thread}` trigger-mode key. `mix lemon.doctor`
-now reports `channels.discord.free_response` as passing when this proof is
-current. XMTP,
-SMS, voice, and other channel
-adapters are preview or experimental unless a release note explicitly promotes a
-narrower path. Bugs in preview channels can be filed with reproduction steps and
-support bundles, but they do not carry the same release-blocking support promise
-as Telegram, Discord, TUI, Web, and the control
-plane.
-
-Cron support bundles include redacted `cron_diagnostics.json`. Use
-`MIX_ENV=test mix run scripts/live_cron_diagnostics_smoke.exs` to prove the
-diagnostics and support-bundle redaction boundary. Use
-`MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs`
-for the full-runtime restart proof; it boots `:runtime_full` twice against an
-isolated durable store and writes
-`.lemon/proofs/cron-runtime-restart-latest.json` after observing a scheduled run
-before restart, persisted job/run history after restart, and a fresh scheduled
-run after restart.
-Use `MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs` for the
-channel-origin delivery proof; it registers proof-only Telegram and Discord
-plugins, completes channel-peer cron runs through the BEAM manager/outbox path,
-and writes `.lemon/proofs/cron-channel-origin-latest.json` with hashed cron IDs
-and safe channel-shape metadata. `mix lemon.doctor --verbose` reports
-`cron.preview` from those three proof artifacts, and final readiness audit
-blocks cron preview promotion unless all three artifacts are complete and
-redacted.
-
+`lemon channels` inspects redacted Telegram and Discord configuration: enabled
+state, credential configuration, binding counts, allowlist counts, and
+registered transports. Its `--json` output contains the same status map.
+Doctor channel checks are configuration-only: Telegram configuration and voice
+transcription settings, plus Discord configuration and declared Message Content
+Intent. Discord text support includes mention-triggered prompts, rendering,
+long-output chunking, tool status, text-file attachments, and public-thread
+prompt/reply. Optional manual Telegram and Discord live matrices remain
+available for real-service smoke checks; their result files are not read by
+Lemon.
 Active cron runs can be aborted by cron run id through the control-plane
 `cron.abort` method, the model-facing `cron` tool `abort` action, or TUI
 `/cron abort <run-id>`. Abort routes to the underlying Lemon run
@@ -15356,67 +14569,15 @@ prompt-job scoped.
 Stable 1.0 support covers first-party text web search/fetch behavior when the
 run is reproducible on a supported source or release-runtime install. Browser
 automation is now a preview first-party surface through supervised `browser_*`
-coding-agent tools backed by the local Node/Playwright driver. `mix
-lemon.doctor --verbose` reports `browser.preview` from the redacted
-`.lemon/proofs/browser-smoke-latest.json` artifact, and final readiness audit
-blocks browser preview promotion unless the live smoke proves the local driver,
-CDP attach, route guardrails, page interaction, upload/download, screenshots,
-cookies/state reset, progress redaction, and browser-to-media vision boundary.
+coding-agent tools backed by the local Node/Playwright driver.
 Visual generated media, image analysis, and voice or TTS behavior remain preview
-or out of scope unless a release note explicitly promotes a narrower path. The generated-media
-support foundation records redacted media job metadata and artifact summaries
+or out of scope unless a release note explicitly promotes a narrower path. The
+generated-media support reports redacted job metadata and artifact summaries
 through `LemonMedia.MediaJobs`; generated final-answer files that pass through
 the router auto-send path are recorded before channel dispatch. This is
 observability for generated media, not a stable provider-generation claim.
-Telegram `/media status` and Discord `/media status` expose the same redacted
-counts to channel operators without raw prompts, paths, bytes, captions, or
-provider responses. The live Discord API proof confirms Zeebot has the in-repo
-`/media status` application-command schema registered. Live generated-SVG and
-generated-audio delivery are proven for Telegram and Discord through the normal
-generated-file auto-send path; support artifacts record only safe booleans such
-as generated-audio coverage, Telegram document delivery, Discord attachment
-count, marker status, and sender shape. `mix lemon.doctor` reports this channel
-delivery as `media.channel_delivery`, and separately reports
-`media.provider_live` for provider-backed image, TTS, STT, vision, and video
-proof. At this snapshot provider-backed STT and vision are proven, while image,
-TTS, and video remain blocked or skipped until
-`LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1` and usable provider credentials/quota are
-available. Image proof may be satisfied by either `openai_image` or
-`vertex_imagen`; the current Vertex proof reaches Google and fails with the
-safe reason `vertex_imagen_http_error:permission_denied`. TTS proof may be
-satisfied by OpenAI, ElevenLabs, or `google_tts`; the current Google proof
-reaches Cloud Text-to-Speech and fails with the safe reason
-`google_tts_http_error:permission_denied`. Video proof may be satisfied by
-OpenAI or `vertex_veo`; the current Vertex Veo proof reaches Google and fails
-with the safe reason `vertex_veo_create_http_error:permission_denied`. Doctor
-remediation includes copy-ready `MIX_ENV=test mix run --no-start scripts/live_media_*_smoke.exs --proof-path
-.lemon/proofs/media-*-smoke-latest.json` commands for the incomplete providers,
-adds the target `--provider` flag when a failed/skipped multi-provider lane
-identifies the safe provider id, and includes bounded hints for
-permission-denied, billing/quota, payment-required, and request-shape failures,
-matching the provider-media proof rows. The same smoke scripts expose the
-secret-backed variant with `--api-key-secret SECRET_NAME` for release-candidate
-operators who keep provider keys in Lemon's encrypted secret store instead of
-exporting raw API keys. The provider-prefixed OpenAI-compatible routing handoff
-is proven only on the media vision path; image, TTS, STT, and video
-proof scripts report
-`provider_prefixed_model_not_supported_for_media_type` if called with a
-`provider:model` value, and compatible endpoint checks should use `--base-url`
-with an unprefixed model. The final readiness audit also prints
-safe `reason_kind` labels from incomplete provider-media proof artifacts, such
-as `credential_preflight_skipped`,
-`openai_image_http_error:billing_limit_user_error`,
-`vertex_imagen_http_error:permission_denied`,
-`google_tts_http_error:permission_denied`,
-`vertex_veo_create_http_error:permission_denied`,
-`openai_tts_http_error:invalid_request_error`, or
-`elevenlabs_tts_http_error:payment_required`, while continuing to block raw
-provider responses, prompts, keys, transcripts, and media bytes from support
-surfaces. When those incomplete proofs identify a safe provider id for a
-multi-provider lane, the audit also prints a copy-ready rerun command with the
-matching `--provider` flag. Provider-backed STT can be satisfied by the completed
-`deepgram_transcribe` proof as well as OpenAI transcription proof.
-
+Telegram and Discord `/media status` expose redacted job counts to channel
+operators without raw prompts, paths, bytes, captions, or provider responses.
 Lemon 1.0 does not claim OpenAI-compatible API server behavior,
 OpenAI-compatible Chat Completions/Responses API support, ACP editor
 integration, third-party frontend compatibility, autonomous persistent goal
@@ -15438,20 +14599,6 @@ Cron and scheduled automation are preview surfaces for stable 1.0. The supported
 boundary is operator-controlled scheduling through first-party
 control-plane/runtime paths, with reproducible failures covered as
 setup or runtime bugs.
-
-Support bundles include redacted cron diagnostics for those reproducible bugs:
-counts, status/trigger shape, timestamps, hashed job/run/session/agent/prompt
-metadata, retry policy/lineage shape, redacted lifecycle audit shape, and
-cleanup flags. The regression proof is:
-
-```bash
-MIX_ENV=test mix run scripts/live_cron_diagnostics_smoke.exs
-MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs
-```
-
-Passing that smoke means the bundle contains `cron_diagnostics.json` and omits
-raw prompts, outputs, errors, session ids, agent ids, memory paths, and metadata
-values, including retry lineage ids and raw audit ids.
 
 Stable 1.0 does not support presenting cron as an unrestricted model-facing
 tool. Scheduled agent runs are expected to run in isolated forked sessions, carry
@@ -15527,19 +14674,18 @@ These are outside the initial stable support boundary:
   control-plane and TUI diff/restore methods. Chat checkpoint output does not
   expose raw file paths, file contents, raw session ids, or arbitrary file
   browsing.
-- live production proof for persistent `/goal` model judging beyond the preview
-  status/set/pause/resume/continue/loop controls
-- live production proof for real multi-worker kanban execution beyond the
-  deterministic bounded-concurrency/crash/reclaim dispatcher proof
+- persistent `/goal` model-judging beyond the preview status/set/pause/resume/
+  continue/loop controls
+- real multi-worker kanban execution beyond the deterministic bounded-
+  concurrency/crash/reclaim dispatcher behavior
 - stable Hermes-style LSP semantic diagnostics beyond the current preview
   checker/server/session status surface
 - production-grade terminal container fleet parity beyond the current
   Docker/SSH preview boundary. The preview boundary includes local, local PTY,
-  Docker, and SSH execution plus Docker hardening proof for read-only rootfs,
+  Docker, and SSH execution plus Docker hardening for read-only rootfs,
   no-exec `/tmp`, dropped capabilities, no-new-privileges, no-network default,
-  and cgroup-observed CPU/memory/pids policy. Support bundles and
-  `proofs.status` expose these as safe booleans and policy values only, without
-  command text or output.
+  and cgroup-observed CPU/memory/pids policy. Support bundles expose safe
+  booleans and policy values only, without command text or output.
 - provider routing, fallback providers, credential pools, and profile
   distribution parity
 - production support for third-party plugins or unofficial MCP servers
@@ -15587,14 +14733,8 @@ prompts, or tool outputs.
 For generated-media bugs, the bundle includes `media_diagnostics.json` with the
 media job metadata directory, artifact directory, redacted job counts, type and
 status counts, artifact count/byte totals, cleanup policy, and recent job
-metadata. It also includes a redacted `provider_live` summary for the
-image/TTS/STT/vision/video launch lanes with completed count, safe provider
-labels, safe `reason_kind` labels, default proof paths, and copy-ready rerun
-commands. When a failed or skipped multi-provider lane identifies a safe target
-provider, the support bundle includes the same `--provider` rerun flag that
-doctor and the final readiness audit use. It does not include
-prompts, raw artifact paths, generated bytes, provider responses, channel
-message bodies, or API credentials.
+metadata. The bundle does not include prompts, raw artifact paths, generated
+bytes, provider responses, channel message bodies, or API credentials.
 
 For provider setup bugs, the bundle includes `provider_diagnostics.json` with
 the default provider, default-model presence, configured provider count,
@@ -15608,13 +14748,8 @@ fallback routing is disabled, absent, configured without any credential-ready
 fallback, or able to rescue a not-ready default provider through a
 credential-ready fallback. The check only reports provider labels and counts;
 it does not expose key material, secret names, endpoint URLs, prompts, or
-provider responses. It also shows the latest redacted provider fallback proof summary from
-local proof artifacts, including proof status, primary/fallback/final provider
-labels, proof object, proof hash, modified timestamp, next action, and explicit
-cleanup flags. It does not expose prompts, answers, raw API keys, secret names,
-base URLs, env var names, or provider response bodies.
-JSON-RPC `providers.status` exposes the same redacted live fallback proof status
-for non-Web clients alongside credential readiness and route preview.
+provider responses. `providers.status` also reports credential readiness and
+route preview without exposing secret values.
 
 For cron and scheduled-automation bugs, the bundle includes
 `cron_diagnostics.json` with job/run counts, enabled/disabled counts,
@@ -15630,105 +14765,9 @@ ids, audit reasons, or metadata values.
 For Telegram and Discord setup bugs, the bundle includes
 `channel_diagnostics.json` with redacted transport enablement, credential-shape
 booleans, binding counts, file-transfer controls, generated-file auto-send
-shape, Telegram voice-transcription shape, and Discord free-response readiness
-shape including whether Message Content Intent has been operator-declared. It
-also reports Discord bot-message policy: self messages and webhooks are ignored,
-while external bot messages are accepted only when normal trigger policy allows
-them and still require live proof before broad support promotion. It does not
-include bot tokens, secret names, raw chat IDs, raw channel IDs, raw guild IDs,
-or message bodies.
-
-The bundle also includes `channel_readiness.json`, a shared launch-gate summary
-for promoted Telegram and Discord support. It reports total/passed/warning/
-blocked/skipped gate counts, safe reason kinds, cleanup flags, and copy-ready
-next actions for unresolved gates such as Discord DM setup or slash client-click
-wait mode. It does not include bot tokens, secret names, raw chat IDs, raw
-channel IDs, raw guild IDs, message bodies, raw proof paths, or raw proof
-details.
-
-`readiness_summary.json` is the support-bundle version of
-`mix lemon.readiness` and `./bin/lemon readiness`. It consolidates doctor
-summary state, Telegram/Discord launch-gate counts, provider-media proof state,
-proof-artifact totals, unresolved gate labels, safe unresolved-gate reason
-kinds, and cleanup flags into one compact triage document. It does not include
-bot tokens, secret names, raw chat IDs, raw channel IDs, raw guild IDs, message
-bodies, raw proof paths, raw proof details, raw prompts, provider responses, or
-secret values. It also includes the shared proof-gate summary for Discord DM,
-Discord slash registration, Discord slash client-click, provider media, and
-terminal backends from
-`LemonCore.Doctor.ProofLaunchGates`. JSON-RPC `readiness.status` exposes the
-same compact launch-readiness shape for operator clients, using lowerCamelCase
-cleanup keys, top-level summary proof-gate counts/statuses, and a top-level
-summary list of unresolved gate reason kinds. It consumes the shared
-`LemonCore.Doctor.ReadinessSummary` payload too, keeping browser support views,
-CLI output, JSON-RPC clients, and support bundles aligned on the same launch
-gate counts and redaction boundary.
-The human-readable `mix lemon.readiness` output includes the same proof-gate
-status counts and unresolved-gate reason labels so source-install support does
-not require JSON parsing for the main launch blockers. The source-install and
-release-runtime verifiers also inspect support-bundle `readiness_summary.json`
-for the shared proof-gate status/count shape and required launch-gate ids, so
-release artifacts cannot pass while omitting the operator-visible launch-gate
-summary. The provider-media unresolved gate also carries bounded
-`reason_kinds` from the shared proof-gate lanes, and requests enough
-unresolved readiness rows to include that provider-media gate.
-
-`mix lemon.doctor` also includes channel and media readiness checks. Telegram and Discord
-config checks report only whether each enabled transport has a bot token or
-secret reference. Discord proof checks report whether DM, free-response, live
-reconnect, slash registration, deterministic slash, and real slash client-click
-promotion gates are proven, blocked, or waiting for operator action. These
-checks use redacted proof reason kinds, safe proof scopes, and safe coverage counts; they do not include
-Discord IDs, message bodies, raw proof paths, bot tokens, or secret names.
-Current expected pre-promotion warnings include `discord_dm_setup_refused` for
-closed DM targets and missing real slash client-click proof artifacts.
-Free-response should now pass when `.lemon/proofs/discord-free-response-latest.json`
-is current and the local Message Content Intent declaration remains true. The
-final readiness audit echoes bounded reason-kind labels from incomplete Discord
-DM, free-response, and slash client-click proof artifacts without printing
-Discord IDs, interaction tokens, or message bodies.
-Media checks report generated
-Telegram/Discord delivery separately from provider-backed
-image/TTS/STT/vision/video proof; missing or skipped provider proofs remain
-warnings until live credential proofs pass. Doctor shows the
-default redacted provider proof paths for reruns. Restart seed without verify is
-still a warning if only the seed artifact exists, but the latest restart verify
-proof has passed.
-
-`mix lemon.doctor` also includes `terminal.backends_live`. It reports whether
-the latest terminal backend smoke proof has completed rows for the local,
-local PTY, Docker, and SSH preview backends, warns on failed or missing rows,
-and skips when no proof has been generated. The remediation uses
-`MIX_ENV=test mix run scripts/live_terminal_backend_smoke.exs` and the canonical
-`.lemon/proofs/terminal-backend-latest.json` artifact; diagnostics stay limited
-to safe status labels and redacted proof metadata.
-Control-plane `terminal.backends.status` includes the same terminal live-proof
-state plus the redacted Docker hardening summary, so non-Web clients can confirm
-read-only rootfs, no-exec tmpfs, dropped capabilities, no-new-privileges,
-cgroup limits, pull policy, and network mode without reading proof JSON.
-
-`mix lemon.doctor` also includes `openai_compat.api_preview`. It reports whether
-the latest local OpenAI-compatible API smoke has completed the `/v1` preview
-rows for health/capabilities, Chat Completions, Responses, streaming, stored
-response, cancellation, image metadata/pass-through/rejection/policy, external
-fetch, OpenAI Node SDK, and OpenAI Python SDK clients. The remediation uses
-`MIX_ENV=test mix run scripts/live_openai_compat_smoke.exs`; diagnostics stay
-limited to safe status labels, proof hashes, and redacted metadata.
-
-`mix lemon.doctor` also includes `acp.preview`. It reports whether the latest
-ACP deterministic stdio smoke, external Node stdio client proof, and official
-ACP SDK client proof are all complete. The remediation uses
-`MIX_ENV=test mix run scripts/live_acp_stdio_smoke.exs`,
-`node scripts/live_acp_stdio_external_client.mjs`, and
-`node scripts/live_acp_official_sdk_client.mjs`; diagnostics stay limited to
-safe status labels, proof hashes, and redacted metadata.
-
-`mix lemon.doctor` also includes `mcp.preview`. It reports whether the latest
-MCP stdio, Streamable HTTP, and legacy SSE smoke proofs are all complete. The
-remediation uses `MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs`,
-`MIX_ENV=test mix run scripts/live_mcp_http_smoke.exs`, and
-`MIX_ENV=test mix run scripts/live_mcp_sse_smoke.exs`; diagnostics stay limited
-to safe status labels, proof hashes, and redacted metadata.
+shape, Telegram voice-transcription configuration, and Discord Message Content
+Intent declaration. It does not include bot tokens, secret names, raw chat IDs,
+raw channel IDs, raw guild IDs, or message bodies.
 
 For extension/plugin setup bugs, the bundle includes
 `extension_diagnostics.json` with global, project, and configured extension
@@ -15740,17 +14779,6 @@ distribution URLs, plugin names, provider names, or load-error messages.
 
 The same redacted directory shape is available through the control plane. Use read-only `extensions.status` when you need the deeper
 loaded-extension, tool-conflict, provider-registration, or WASM status view.
-Generic proof diagnostics and JSON-RPC `proofs.status` also preserve
-extension/WASM proof-level `redaction` maps on recent proof summaries, so
-support bundles and external clients can show that lifecycle,
-telemetry, policy, host, and registry proof artifacts omit raw paths, cwd,
-session ids, params, manifest contents, distribution URLs, and tool payloads
-without treating those fields as generic cleanup policy.
-The JSON-RPC response formats those redaction keys as lowerCamelCase for API
-clients while keeping support-bundle and Web internal summaries tied to the
-proof artifact vocabulary. The same response includes a lowerCamelCase
-`launchGates` summary for Discord DM, Discord slash registration, Discord slash
-client-click, provider media, and terminal backend promotion gates.
 
 ## Logs
 
@@ -15864,7 +14892,7 @@ event you are attaching to:
 |---|---|
 | `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
-| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]`, `[:coding_agent, :python_repl, ...]` |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
 
 `LemonCore.Telemetry`'s moduledoc records the intended convention for **new** emitters:
@@ -16025,8 +15053,6 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
 | `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
 | `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
-| `[:lemon_ai, :compacting_client, <event>]` | varies by call site | varies | [`compacting_client.ex:233`](../apps/lemon_ai/lib/lemon_ai/compacting_client.ex). Runtime suffix: `:request_started`, `:request_succeeded`, `:request_failed`, `:compaction_retry` |
-| `[:lemon_ai, :context_compactor, <event>]` | `system_time` | varies | [`context_compactor.ex:370`](../apps/lemon_ai/lib/lemon_ai/context_compactor.ex). Runtime suffix: `:compaction_started`, `:compaction_succeeded`, `:compaction_failed` |
 | `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
 ### Memory — `[:lemon, :memory, ...]`
@@ -16078,42 +15104,6 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:408`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 
 Session and cwd identifiers in the WASM events are hashed, not raw.
-
-### Execute code and persistent Python kernels — `[:coding_agent, :execute_code | :python_repl, ...]`
-
-The `execute_code` per-call path emits one event from
-[`execute_code.ex`](../apps/coding_agent/lib/coding_agent/tools/execute_code.ex)
-(`LemonCore.Telemetry.emit/3`):
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:coding_agent, :execute_code, :stop]` | `count: 1`, `duration_us` | `rpc_calls`, `rpc_denied`, `exit_code` (integer or `nil`) |
-
-The persistent-kernel subsystem (`kernel_mode = "session"`; see
-[`docs/tools/execute-code.md`](tools/execute-code.md)) emits the
-`[:coding_agent, :python_repl, ...]` families below. Measurements carry only bounded
-counts, capacities, and durations; metadata is a strict allowlist of categorical atoms.
-These events **never** include code, output, traceback text, bridge tokens, bridge or
-workspace paths, cwd, interpreter paths, PIDs, key digests, or raw errors.
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:coding_agent, :python_repl, :session, :start]` | `count: 1`, `live_kernels`, `capacity` | `%{}` |
-| `[:coding_agent, :python_repl, :session, :stop]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :session, :crash]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :session, :reap]` | `count: 1`, `idle_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :cell, :start]` | `count: 1`, `queue_depth`, `queue_capacity` | `%{}` |
-| `[:coding_agent, :python_repl, :cell, :stop]` | `count: 1`, `duration_ms` | `outcome` |
-| `[:coding_agent, :python_repl, :cell, :cancel]` | `count: 1`, `duration_ms` | `cause` |
-| `[:coding_agent, :python_repl, :fallback]` | `count: 1` | `reason` (`:missing_session_scope` \| `:registry_unavailable` \| `:capacity_exhausted` \| `:startup_failed` \| `:stop_failed`) |
-| `[:coding_agent, :python_repl, :bridge, :deny]` | `count: 1` | `reason: :authentication` |
-
-Each of these is also recorded best-effort through `LemonCore.Introspection` as a redacted
-`:python_repl_lifecycle_observed` summary containing only the event atom plus the same
-bounded measurements and categorical metadata — no run/session/key identity or payload.
-`CodingAgent.PythonRepl.snapshot/0` exposes only aggregate state (live/capacity counts,
-per-phase counts, owner and fork counts, reap settings). There is no control-plane API
-for kernel management.
 
 ### Session recovery — `[:coding_agent, :session, :overflow_recovery, ...]`
 
@@ -16327,11 +15317,10 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Five families build their final segment at runtime**, so they cannot be discovered by
+**Three families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
-advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
-`[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
-`[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
+advance: `[:lemon, :gateway, :scheduler, _]`, `[:coding_agent, :session, :overflow_recovery, _]`,
+and `[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:lemon_agent, :loop, :end]`
 reports `duration: nil` when the process-dictionary start time is missing. The scheduler
@@ -16851,508 +15840,6 @@ Stable ACP support still needs:
   resource prompt capabilities
 - ACP delete/rename compatibility proof against a real editor client
 
-## Proof
-
-Focused tests cover capability negotiation, safe client filesystem capability
-capture on sessions and prompt metadata, session creation, router-backed prompt
-submission, queued prompt submission, unsupported media rejection, session
-list/resume/cancel/close, HTTP bearer-token authentication, NDJSON stdio
-message parsing, store-backed session recovery after ETS cache loss, stdio
-`session/update` notification projection from Lemon run bus events, and stdio
-client request callbacks for `session/request_permission`,
-`fs/read_text_file`, `fs/write_text_file`, `fs/delete_file`, and
-`fs/rename_file` with redacted result summaries, plus the approval-bus bridge
-from `LemonCore.ExecApprovals.request/1` to ACP `session/request_permission`:
-
-```bash
-mix test apps/lemon_control_plane/test/lemon_control_plane/acp_test.exs --seed 1
-```
-
-The model-facing ACP filesystem bridge is covered by the focused coding-agent
-tool lane. It proves `read` line-window routing, `write` remote-only writes,
-`edit` read/modify/write flow, `patch` add/update/delete/move routing,
-capability-based delete/move rejection, and the ACP control-plane reply
-correlation path:
-
-```bash
-MIX_ENV=test mix test apps/coding_agent/test/coding_agent/tools/acp_file_bridge_test.exs \
-  apps/coding_agent/test/coding_agent/tools/read_test.exs \
-  apps/lemon_gateway/test/cli_adapter_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/acp_test.exs --seed 1
-```
-
-The combined control-plane adapter lane also reruns the OpenAI-compatible HTTP
-adapter tests:
-
-```bash
-mix test apps/lemon_control_plane/test/lemon_control_plane/acp_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/http/router_test.exs --seed 1
-```
-
-The stdio bridge has a focused deterministic smoke that exercises the same
-NDJSON handler used by spawned editor-style clients. It verifies
-`initialize`, `session/new`, queued prompts, waiting prompt calls with
-`session/update` notifications, list/resume/close lifecycle, parse-error
-handling, and redacted proof output:
-
-```bash
-LEMON_CONTROL_PLANE_PORT=0 \
-LEMON_WEB_PORT=0 \
-LEMON_SIM_UI_PORT=0 \
-LEMON_GATEWAY_HEALTH_PORT=0 \
-LEMON_ROUTER_HEALTH_PORT=0 \
-mix run scripts/live_acp_stdio_smoke.exs
-```
-
-The smoke writes `.lemon/proofs/acp-stdio-smoke-latest.json` plus a timestamped
-archive proof. It passed locally on 2026-05-17 with `completed_count: 6` and
-`failed_count: 0`.
-
-There is also an external Node client proof that spawns the stdio bridge as a
-child process and talks to it over newline-delimited JSON:
-
-```bash
-node scripts/live_acp_stdio_external_client.mjs
-```
-
-The external client runs with `LEMON_ACP_STDIO_FAKE_RUNTIME=1`, which keeps the
-proof deterministic while still exercising a separate client process, child
-stdio transport, ACP initialize/session lifecycle, safe client filesystem
-capability capture across `initialize` and `session/new`, queued prompt,
-waiting prompt with `session/update` notifications, `session/request_permission`,
-`fs/read_text_file`, `fs/write_text_file`, `fs/delete_file`, `fs/rename_file`,
-approval-bus permission bridging, unsupported-image rejection, parse-error
-handling, and redacted proof output. It writes
-`.lemon/proofs/acp-stdio-external-client-latest.json` plus a timestamped
-archive proof. The latest ACP delete/rename refresh passed at
-`2026-05-17T11:12:43.029Z` with
-`completed_count: 9`, `failed_count: 0`, `update_count: 2`, and
-`client_request_count: 6`.
-
-The official ACP TypeScript SDK compatibility proof uses
-`@zed-industries/agent-client-protocol@0.4.5` and its `ClientSideConnection`
-against Lemon's stdio bridge:
-
-```bash
-node scripts/live_acp_official_sdk_client.mjs
-```
-
-The proof installs the SDK under ignored `tmp/acp-official-sdk-client/`, spawns
-`scripts/lemon_acp_stdio.exs` with a deterministic fake runtime, and exercises
-the official SDK path for `initialize`, `session/new`, queued prompt,
-waited prompt `session/update` notifications, `session/load`, `session/cancel`,
-unsupported-image rejection, spec-compatible `session/request_permission`,
-`fs/read_text_file`, and `fs/write_text_file`. The official SDK does not expose
-delete/rename filesystem callbacks in version `0.4.5`, so Lemon keeps
-delete/rename covered by the separate external Node proof above. The latest
-official SDK proof passed at `2026-05-17T11:12:42.429Z` with
-`completed_count: 8`, `failed_count: 0`, `update_count: 2`, and
-`client_request_count: 4`.
-
-`proofs.status`, support bundles, and `mix lemon.doctor --verbose` consume the
-three ACP proof artifacts as `acp_stdio_*`, `acp_stdio_external_*`, and
-`acp_official_sdk_*` checks. The doctor check is `acp.preview`; rerun the three
-smoke/client commands above if it warns or skips.
-
----
-
-Source: https://z80dev.github.io/lemon/tools/execute-code
-
-# Execute Code (`execute_code`)
-
-`execute_code` is programmatic tool calling: the model submits a python3 script, the
-script calls agent tools through pre-imported helper functions, and the script's result
-comes back through an explicit channel: `text()` blocks are the result, while everything
-printed to stdout/stderr lands in a clearly labeled diagnostics tail. A script can read
-fifty files, grep a whole tree, or fetch a page and then emit a three-line summary via
-`text()`; intermediate tool results travel over a file-based RPC bridge and never enter
-the model transcript.
-
-The tool is **disabled by default** and **bash-equivalent**: scripts run as ordinary host
-code with the user's permissions. This is not a sandbox — see [Security](#security).
-
-## Configuration
-
-`execute_code` is configured under `[runtime.tools.execute_code]`
-(`LemonCore.Config.Tools.resolve_execute_code/1` owns TOML/env resolution):
-
-```toml
-[runtime.tools.execute_code]
-enabled = false                        # default: tool is not registered at all
-python_path = ""                       # explicit interpreter; empty = find python3 on PATH
-timeout_ms = 120000                    # end-to-end wall-time cap per run, including session queue wait
-max_rpc_calls = 100                    # helper calls one run may make
-max_rpc_result_bytes = 5242880         # total helper-result bytes one run may consume (5 MiB)
-max_output_bytes = 50000               # script stdout/stderr bytes returned as diagnostics
-max_text_bytes = 65536                 # total JSON-encoded text() frame bytes one run may emit
-max_parallel_rpc = 4                   # helper calls the pump dispatches concurrently
-tools = []                             # helper subset; empty = full fixed allowlist
-kernel_mode = "per_call"               # "per_call" (default) | "session"
-kernel_idle_timeout_ms = 1800000       # idle kernels reaped after 30 minutes
-max_live_kernels = 16                  # strict live-kernel cap (idle-only LRU eviction)
-max_queued_cells_per_kernel = 8        # FIFO queue depth behind the one active cell
-```
-
-Environment overrides (env wins over TOML):
-
-- `LEMON_EXECUTE_CODE_ENABLED`
-- `LEMON_EXECUTE_CODE_PYTHON_PATH`
-- `LEMON_EXECUTE_CODE_TIMEOUT_MS`
-- `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`
-- `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`
-- `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`
-- `LEMON_EXECUTE_CODE_MAX_TEXT_BYTES`
-- `LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC`
-- `LEMON_EXECUTE_CODE_TOOLS` (comma-separated subset of the allowlist)
-- `LEMON_EXECUTE_CODE_KERNEL_MODE`
-- `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`
-- `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`
-- `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
-
-Only an explicit `"session"` selects session mode. Any other `kernel_mode` value — typos,
-booleans, anything — resolves to `"per_call"`, so a config mistake can never silently
-enable persistence. The numeric bounds are clamped to positive integers.
-
-## Kernel modes
-
-### `per_call` (default)
-
-Every run executes in a fresh python3 process in a fresh private workspace, through the
-same `BashExecutor` machinery as the `bash` tool. Imports, globals, and objects do not
-survive the run. `reset: true` is accepted and validated but redundant
-(`reset_performed: false` in details).
-
-### `session` (opt-in)
-
-Runs execute as **cells** on a persistent python3 interpreter (a *kernel*) supervised by
-`CodingAgent.PythonRepl` (a registry plus a `DynamicSupervisor` of temporary workers under
-`CodingAgent.PythonRepl.Supervisor`, started after `CodingAgent.TaskSupervisor`). Imports,
-globals, objects, the module cache, and `os.environ` survive across calls — see
-[State](#state-retention-and-loss).
-
-**State is live process memory only.** It is never written to disk, never added to the
-session transcript, and there is no checkpoint or restore. An application or node restart
-loses every kernel; the next call simply starts a new one.
-
-#### Keying and subagents
-
-A kernel is keyed by:
-
-- the persisted session ID (stable across turns, compaction, and resume — never `run_id`,
-  tool-call ID, or the caller-overridable `session_key`),
-- the agent/profile ID,
-- the canonical (symlink-resolved) working directory,
-- the canonical (symlink-resolved) interpreter path,
-- the enabled helper set, and
-- the runner protocol version.
-
-The owning `CodingAgent.Session` process is monitored separately. Subagents isolate
-naturally because they have distinct persisted session IDs; a subagent never shares its
-parent's kernel. Changing cwd, interpreter, agent, or helper set selects a *different*
-kernel — state is never migrated between keys. If two live actors resume the same persisted
-session they become co-owners of one kernel; a `reset` from one co-owner forks only the
-requester onto a fresh kernel and leaves siblings on the shared one.
-
-#### Cells, queueing, and timeouts
-
-Each kernel runs **one active cell at a time**; further calls wait in a FIFO queue bounded
-by `max_queued_cells_per_kernel` (default 8). A full queue returns a busy error — it never
-silently falls back, because a fresh process would not see the expected namespace. A queued
-call whose external abort fires or whose deadline expires simply leaves the queue; the active
-cell is undisturbed.
-
-## State retention and loss
-
-| Event | Result | Kernel state |
-|---|---|---|
-| Success | printed output | retained, including all mutations |
-| Ordinary Python exception | filtered traceback (line numbers offset by 1) | retained, including completed and partial mutations |
-| `SystemExit` | cell error | retained |
-| `input()` / stdin read | explicit unsupported-input error | retained |
-| Helper denial / error / budget limit | catchable `ToolError` in the script | retained |
-| Timeout (including queued wait) / abort / caller death | partial output may return, `state_retained: false` | **discarded** when active; a queued caller simply leaves the queue |
-| Interpreter crash, `os._exit`, protocol fault | error, `state_retained: false` | **discarded** |
-
-Cancellation escalates SIGINT → SIGTERM → SIGKILL against the interpreter process group
-with bounded grace periods; the user-visible contract is **state loss**, not
-`KeyboardInterrupt` recovery. A script cannot rely on catching the interrupt to keep its
-namespace. Code that has started executing is never retried and never replayed into a
-replacement kernel, because side effects may already exist.
-
-### `reset`
-
-`reset: true` discards retained state **before** the submitted script runs
-(`reset_performed: true` in details). If the old kernel cannot be confirmed gone
-(`:registry_unavailable` or `:stop_failed`), the call runs isolated per-call instead and
-details report the fallback; other reset failures are returned as errors and nothing runs.
-
-### Session lifecycle
-
-- **Session reset** (`/new`, identity rotation): the session synchronously detaches from
-  its kernels while idle, before the new identity is installed.
-- **Session close/termination**: the session requests detach during shutdown; the registry
-  monitor on the session PID is the crash fallback.
-- **Owner death**: detaching an owner removes its queued cells; if it owned the active
-  cell the kernel is discarded (its state is unsafe). A kernel with no owners stops
-  immediately.
-- **Config switch** back to `per_call` or `enabled = false` takes effect on the next call;
-  kernels retained earlier are detached on session reset/close and otherwise reaped when
-  idle.
-
-### Pre-start fallback only
-
-Session mode may fall back to the isolated per-call path **only before submitted code
-starts**. Details report `persistent: false` and a `fallback_reason`:
-
-| `fallback_reason` | Meaning |
-|---|---|
-| `missing_session_scope` | no stable session identity (e.g. a context without a persisted session ID/PID/agent ID) |
-| `registry_unavailable` | the kernel registry is not running |
-| `capacity_exhausted` | `max_live_kernels` reached and no idle kernel is evictable |
-| `startup_failed` | the kernel failed to start |
-| `stop_failed` | a requested reset could not confirm the old kernel stopped |
-
-Fallback text says the call ran isolated and will not persist. A full queue
-(`:queue_full`), a dead worker, or any failure after code started is **never** retried or
-fallen back.
-
-## Helpers and the tool bridge
-
-Scripts call agent tools through pre-imported helpers from a fixed, compile-time
-allowlist: `read`, `grep`, `find`, `ls`, `webfetch`. The `tools` setting (or
-`LEMON_EXECUTE_CODE_TOOLS`) may only **narrow** this list — no configuration can add
-Every helper call goes through the same `ToolPolicy` and approval handling as a direct
-tool call, in both kernel modes. Each cell gets a **fresh bridge**: a new owner-only
-(`0700`) RPC directory and a new random 256-bit token, validated in constant time; stale
-or cross-cell requests cannot call helpers. Helper failures raise a catchable
-`ToolError`. Per-run budgets: `max_rpc_calls` calls (dispatched `max_parallel_rpc` at a
-time), `max_rpc_result_bytes` total result bytes, and `max_text_bytes` total `text()`
-block bytes; exceeding any of them raises `ToolError`.
-
-`webfetch` results mark the tool result untrusted and wrap printed output as external
-content, exactly like the direct tool.
-
-## Result channels: `text()`, `notify()`, `batch()`
-
-Besides the per-tool helpers, every shim (both kernel modes) defines three
-module-level functions:
-
-- **`text(s)`** — the explicit result channel. Each call atomically flushes a
-  numbered `text-<n>.json` block into the per-run rpc directory (write-through,
-  never deferred to exit), so everything written before a timeout or abort kill
-  still reaches the tool result. Blocks are lock-guarded, so they are safe from
-  `batch()` worker threads, and the total emitted bytes are capped at
-`max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
-— exactly the bytes `json.dump` writes to disk, escaping included — on both
-sides of the bridge: the shim charges what it is about to write and the host
-charges the file body it actually reads, so a NUL-heavy string that six-folds
-under `\u0000` escaping is refused by the same budget on both sides, and an
-in-budget block is always delivered. The payload is normalized first (lone
-surrogates become U+FFFD), so every frame the shim writes is valid JSON the
-host can decode. An over-budget call raises `ToolError` while the blocks
-already flushed stay in the result. Non-strings are `str()`-coerced.
-- **`notify(msg)`** — a fire-and-forget streaming side channel. The pump
-  consumes `notify-<n>.json` frames on every sweep and forwards each message
-  to the tool's streaming update callback as a partial update
-  (`notify: <msg>`), capped at 4 KiB per message and 64 forwarded messages per
-  run — the counter rides the run's stats, so it spans sweeps and the final
-  drain. Anything beyond is silently dropped, malformed frames are consumed
-  without being forwarded or counted, and a run with no callback consumes and
-  discards them so they never accumulate. A `notify()` issued immediately
-  before exit is still forwarded: the per-call pump and the persistent stop
-  path each run one notification-only final drain, and in session mode that
-  drain runs as part of the teardown stats read (`RpcServer.drain_and_stats`)
-  so its count is included in the stats the cell's result reports.
-  Tool requests are never drained after the run — a posthumous request would
-  be tool work nobody is waiting for.
-- **`batch([(tool, params), ...])`** — parallel helper calls. Each element runs
-  the plain blocking call inside a bounded stdlib thread pool (16 workers max);
-  the Elixir pump dispatches claimed requests as supervised tasks in waves of
-  `max_parallel_rpc` (default 4), so independent reads genuinely overlap.
-  Results return in input order; if any call fails, every call is still waited
-  out and then the first failure (in input order) is re-raised as the same
-  `ToolError` a plain call raises.
-
-When a run emitted at least one `text()` block, the tool result is assembled
-as: the headline (if any) → `Script result (text()):` with the blocks verbatim
-in flush order → a `Diagnostics (stdout/stderr, not the result):` tail carrying
-the captured stdout/stderr (still capped at `max_output_bytes`, with the
-spill-to-file marker when truncated). On a timeout or abort the flushed blocks
-are still included — that is the point of write-through. A script that never
-calls `text()` keeps the historic stdout-only result byte-for-byte.
-
-Stderr remains merged into stdout on purpose: the port has no separate stderr
-capture, so un-merging would silently *discard* stderr (python tracebacks
-included) instead of surfacing it in the labeled diagnostics tail.
-
-Accounting under parallel dispatch stays exact because claiming —
-authentication, replay detection, and call-budget reservation — happens
-serially in the pump before any task starts, and the result-byte budget is
-spent by the pump as each task returns. A claimed request always ends
-answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
-in-flight `req-<id>.claim` marker, and **publication is the dispatch gate** —
-the rename must succeed and the published marker must be a regular file (a
-planted object at the marker name, or a symlinked request, is answered with a
-publication-failure error and its tool never runs). But the rpc directory is
-script-writable, so a marker alone is evidence only against crashes, never
-against a hostile script that deletes or replaces it after the gate. In
-session mode the claim therefore has a **second, host-side half**: the
-`RpcServer` records one ledger entry per **spent call slot** in its own
-process memory — via the pump's `:on_claim` hook, first a `:reserved` entry
-the moment a request passes the replay and call-budget gates, fed before
-the sweep-local spend itself so no kill can spend a call the ledger cannot
-prove, then the entry's disposition (`:invalid`/`:unknown_tool`/`:denied`
-for requests answered inside the claim without dispatching, `:claimed` for
-a dispatch-bound request, fed *before* the marker is published, making the
-ledger a superset of the published claims) — where the script cannot reach
-it. A sweep that dies mid-wave is recovered from **both halves** by the
-next sweep (or the server's cancel/abnormal-exit path, where no successor
-runs): its claimed ids are answered in writing and never re-dispatched,
-the replay memory is reconstructed so a replayed id is refused even when
-its marker was destroyed, and real accounting (ok status, result bytes,
-tool usage) is restored from a surviving response file plus the claim's
-tool identity — the ledger's name whenever the ledger recorded the id
-(host-owned beats script-writable, so overwriting the marker body cannot
-forge the recorded tool), and the marker's own body only for ids the
-ledger never saw. Reservation entries settle exactly — one call, one error
-or denial, the replay memory — and a disposition entry (`:invalid`,
-`:unknown_tool`, `:denied`) is answered in the settle: recovery writes the
-kind's error via `ensure_answered` whenever no response survives (a
-sweep-written answer is never overwritten), so a contained fault after an
-answered-but-never-dispatched request (invalid, unknown tool,
-policy-denied) can no longer erase that spend and let later sweeps exceed
-`max_calls`; an entry still bare `:reserved` (death between the feed,
-which precedes the spend, and the fate branch) charges the call exactly
-and counts one error, the conservative split of a branch that never ran —
-and writes no response, leaving the request file to the successor sweep's
-replay refusal (or the abort teardown — the cancel/abnormal-exit path
-where no successor runs). A `:claimed` entry with
-neither marker nor response surviving stamps `rpc_accounting_loss: true`:
-the accounting is then a lower bound and the
-cell's result is forced to `trust: :untrusted`. The same flag is stamped
-whenever a sweep is brutally killed, dies abnormally, or is caught
-raising/throwing mid-sweep — a contained fault is contained only in the
-process sense: its result settles through the same recovery-plus-lower-bound
-path, because work it dispatched and answered without returning its stats
-is unknowable. A successful cancel also settles the sweep's still-queued
-claim-ledger messages through the same deduplicating recovery, so no stale
-ledger entry outlives its sweep. Recovery trusts only regular-file markers
-(planted directories and symlinks at marker names are ignored outright) and
-charges each dead claim **exactly once**; a marker whose deletion fails
-(bounded retries) can never re-charge the budget on a later sweep.
-
-Approvals stay on the existing `ToolExecutor` path inside each task; each
-approval-requiring claim pre-allocates its approval id, and a tiny unlinked
-watcher cancels the pending prompt after the death of the sweep **and** again
-after the death of the dispatch task (it exits once both are gone), so a
-prompt registered in the window between the first cancel and the task's own
-death is still cancelled, and a cancelled prompt can never install policy
-(cancel, resolve, and a waiter's timeout are one atomic single-winner
-transition; the loser is `{:error, :not_pending}` — or a timeout with no
-side effects — and installs nothing). The exact lifetime guarantee: **prompts
-are cancelled when the dispatch task dies.** Dispatch tasks have trap_exit
-forced off at entry so they die with their sweep; the boundary is that tool
-code on the approval path can re-enable trap_exit afterwards and block past
-its task's death — such a task keeps its (cancelled-once) watcher parked
-until some other kill ends it, and until then the prompt outlives the
-script. This is adversarial tool behavior, not a supported mode; the
-boundary is demonstrated by the "a prompt registered after the sweep died
-cannot be orphaned" test in
-`apps/coding_agent/test/coding_agent/tools/execute_code_rpc_test.exs`.
-
-In session mode the kernel stages `lemon_tools.py` once and `_configure`
-installs a fresh bridge for every cell: new rpc dir and token, a full fresh
-`text()` budget (the per-call `max_text_bytes` rides the bridge), and reset
-sequence counters. Threads **inherit the cell generation of the thread that
-created them, captured at construction time** (an untagged creator — the main
-thread — falls back to the currently open cell), and the shim refuses bridge
-calls from threads tagged with an earlier cell, so a thread a finished cell
-left behind — and every thread it later spawns — can neither spend a later
-cell's budget nor write into its rpc directory (its `ToolError` is
-harmless). This is isolation hygiene, not a sandbox.
-
-## Output
-
-Only what the script writes to stdout/stderr is captured — there is no implicit
-final-expression repr. Line-buffered Python output preserves its order relative to child
-processes writing directly to the inherited stdout/stderr descriptors. Output is sanitized,
-capped at `max_output_bytes` keeping the first
-40% plus a rolling last 60% with a truncation marker, and the full combined output spills
-to a `0600` file whose path appears in the result as `full_output_path` and in
-`[Full output saved to: ...]` text. The path remains readable after the cell completes. A
-finished spill becomes eligible for best-effort reaping after 24 hours; an active capture
-owned by a live BEAM process is never reaped.
-
-For a run that used `text()`, this captured output is the **diagnostics tail**
-of the result, not the result itself — see
-[Result channels](#result-channels-text-notify-batch).
-
-## Bounds and reaping
-
-- `max_live_kernels` (default 16) is a strict cap: admission evicts the least-recently-used
-  **idle** kernel, and never evicts starting/running/cancelling/queued work. If nothing is
-  evictable the call falls back per-call (`capacity_exhausted`).
-- `kernel_idle_timeout_ms` (default 30 minutes) reaps idle kernels; running work is never
-  reaped. Ownerless kernels stop immediately.
-- Per-kernel queue: `max_queued_cells_per_kernel` (default 8).
-- Fixed internal constants (not configurable): 10 s startup timeout, 1 s INT/TERM/KILL
-  grace periods, 256 KiB protocol-frame cap, 64 KiB stream chunks.
-- Python memory and child processes inside a kernel are **not** OS-sandboxed; a runaway
-  script can consume host resources until its cell timeout fires.
-
-- Python REPL full-output spill files remain available after cell completion. A node
-  processes one batch of at most 1,000 direct entries per 24-hour reaper window across
-  its current and stale private staging roots, retaining continuations for later windows.
-  The current root is always processed first; one stale root may use its remaining budget.
-  Only expired regular `pi-python-repl-*` files that are no longer live are eligible.
-- Workspace and bridge teardown is bounded: removal visits at most 10,000 entries per
-  tree (no symlink following), so a script that planted a huge tree cannot stall the
-  owning process in `rm_rf`. Any remainder stays owner-only under the private staging
-  root and is eligible for the boot-time stale-root sweep on a later node.
-- Once at node boot, the reaper discovers sibling private staging roots left by prior
-  nodes (or a prior first-root race), but only when their `0600` owner marker identifies a
-  dead OS process. Empty stale roots are removed best-effort; non-empty roots are never
-  removed or traversed recursively.
-
-## Security
-
-`execute_code` runs **local host code with bash-equivalent authority**. It is classified
-with `bash` in `CodingAgent.ToolPolicy`, is default-off, and is approval-wrappable through
-the normal registry path. The helper allowlist bounds the *Lemon tool* surface, not the
-OS: Python can still read files, inspect the environment and network, and spawn processes.
-The per-cell bridge token prevents stale/cross-cell helper requests; it is not secret from
-code running in the same interpreter and is not a sandbox.
-
-**Host requirement (GNU/Linux):** private workspaces are created through GNU `mktemp`
-(coreutils, found on `PATH`) under `TMPDIR` (default `/tmp`) on a **local** filesystem —
-NFS is unsupported. A per-node staging root and every workspace/bridge/spill object
-beneath it are created atomically at exactly `0700` (directories) / `0600` (files) and
-validated; there is no chmod-after-create and no fallback to loosely-permissioned temp
-directories. Finished Python REPL spills become eligible for best-effort reaping after
-24 hours; active captures are excluded. At boot, a node considers a sibling staging root
-only when its validated owner marker names a dead OS PID; missing, malformed, and
-live-owner markers are skipped. OS PID reuse can therefore conservatively defer stale-root
-cleanup until a later boot. The reaper checks only direct regular `pi-python-repl-*` entries
-with `lstat` and never follows symlinks. On platforms without a suitable GNU `mktemp`, or if
-validation fails, the run fails closed **before any script executes** (per-call: a
-workspace-creation error; session mode: `startup_failed` fallback).
-
-## Telemetry and introspection
-
-`execute_code` and the kernel subsystem emit only bounded categorical metadata and
-count/duration measurements — never code, output, tracebacks, tokens, bridge paths, cwd,
-interpreter paths, PIDs, key digests, or raw errors. See
-[`docs/telemetry.md`](../telemetry.md#execute-code-and-persistent-python-kernels) for the
-event catalog (`[:coding_agent, :execute_code, :stop]` and the
-`[:coding_agent, :python_repl, ...]` families).
-
-Operators can read an **aggregate** kernel snapshot via
-`CodingAgent.PythonRepl.snapshot/0` — live/capacity counts, per-phase counts, owner and
-fork counts, and reap settings; it contains no identities or payload. Lifecycle events are
-also recorded through `LemonCore.Introspection` as redacted
-`:python_repl_lifecycle_observed` summaries. There is intentionally **no control-plane
-API** for kernel management.
-
 ---
 
 Source: https://z80dev.github.io/lemon/tools/firecrawl
@@ -17539,126 +16026,6 @@ mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
 
 The latest broader preview lane passed locally on 2026-05-16 with `404 tests,
 0 failures`.
-
-Real language-server smoke:
-
-```bash
-MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs
-```
-
-Use `--out /path/to/proof.json` to change the proof path and `--servers` to
-request a comma-separated server list. Add `--editor-flow` to exercise a
-longer editor-style loop: open a broken document, clear diagnostics, reintroduce
-the broken text, clear diagnostics again, and close the document.
-Add `--project-fixtures` or `--fixture-profile project` to use multi-file
-temporary project fixtures with root markers and companion files instead of the
-single-file compatibility fixtures. Add `--real-repo-fixtures` or
-`--fixture-profile real_repo` to copy selected real Lemon repository source
-files into isolated temporary projects before injecting and repairing syntax
-breakage.
-
-```bash
-MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --timeout-ms 90000 \
-  --project-fixtures \
-  --editor-flow
-```
-
-The default smoke still runs Pyright for backward compatibility. For each
-requested server, the smoke starts a real supervised stdio session, initializes
-it, writes a temporary fixture, opens a broken document, waits for
-`textDocument/publishDiagnostics`, changes the document to valid text, waits
-for the latest diagnostics to clear, then writes redacted proof JSON with
-command basenames, hashes, counters, clean-after-change flags, fixture file
-counts, root-marker counts, companion-file counts, proof scopes, per-server
-check names, and severity counts only.
-When the ElixirLS command is an absolute local launcher, set
-`LEMON_LSP_ELIXIR_LS_COMMAND` to that path; the manager still injects
-`ELS_MODE=language_server`.
-
-The project-fixture proof lane writes
-`.lemon/proofs/lsp-project-fixtures-latest.json`, which is included by
-support bundles, read-only `proofs.status`, and through the
-first-party `.lemon/proofs/*-latest.json` inventory.
-
-The real-repository fixture proof lane writes
-`.lemon/proofs/lsp-real-repo-fixtures-latest.json`. It covers all registered
-servers with isolated temporary projects: Lemon CLI Python, maintained Go and C
-repo fixtures, Lemon WASM runtime Rust, Lemon TUI TypeScript, and LemonCore
-Elixir source excerpts. Proof artifacts store only relative source labels,
-content hashes, counters, and cleanup flags.
-
-The latest local full-fleet run on 2026-05-16 used:
-
-```bash
-LEMON_LSP_ELIXIR_LS_COMMAND=/home/z80/.local/lib/elixir-ls/launch.sh \
-  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --timeout-ms 90000 \
-  --out tmp/lsp-server-smoke-full-fleet-refresh.json
-```
-
-It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
-`typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
-`failed_count: 0`, `clean_after_change: true` for every server, and redacted
-diagnostic counters only. A follow-up cleanup proof intentionally used the
-broken default `elixir-ls` wrapper on this host, produced `:request_timeout`,
-and left no `elixir-ls`, `language_server`, or language-server smoke processes
-running afterward. The latest `--editor-flow` full-fleet run also completed all
-six servers with `final_clean_after_second_change: true`, non-zero
-`reintroduced_diagnostic_count`, and `editor_flow_close_status: "closed"` for
-every server.
-
-The latest project-fixture full-fleet run on 2026-05-17 used:
-
-```bash
-LEMON_LSP_ELIXIR_LS_COMMAND=/home/z80/.local/lib/elixir-ls/launch.sh \
-  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --project-fixtures \
-  --editor-flow \
-  --timeout-ms 90000 \
-  --out .lemon/proofs/lsp-project-fixtures-latest.json
-```
-
-It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
-`typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
-`failed_count: 0`, `fixture_profile: "project"`, one safe proof scope
-`lsp_project_fixtures_smoke`, six per-server completed checks, non-zero
-reintroduced diagnostics for every server, final clean diagnostics, and
-document close status `"closed"` for every server.
-
-The latest real-repository fixture run on 2026-05-17 used:
-
-```bash
-LEMON_LSP_ELIXIR_LS_COMMAND=/home/z80/.local/lib/elixir-ls/launch.sh \
-  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --real-repo-fixtures \
-  --editor-flow \
-  --timeout-ms 90000 \
-  --out .lemon/proofs/lsp-real-repo-fixtures-latest.json
-```
-
-It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
-`typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
-`failed_count: 0`, `fixture_profile: "real_repo"`, safe proof scope
-`lsp_real_repo_fixtures_smoke`, and six completed editor-flow checks. The copied
-or maintained source fixtures included the pyright Python fixture
-(`source_hash: "209e9eb250c87516"`),
-`scripts/fixtures/lsp/real_repo/go/main.go`
-(`source_hash: "6c5dd41c620753d3"`),
-`scripts/fixtures/lsp/real_repo/clangd/main.c`
-(`source_hash: "c82451181bce5e23"`),
-`native/lemon-wasm-runtime/src/protocol.rs`
-(`source_hash: "905becfa4c9066e7"`),
-`clients/tui/src/ui/theme/theme.ts` (`source_hash: "8800a18b5b8e0f84"`), and
-`apps/lemon_core/lib/lemon_core/event.ex`
-(`source_hash: "10c89df1100a6ea9"`). Every server reported diagnostics for the
-injected breakage, cleared after repair, reintroduced diagnostics, cleared
-again, and closed the document. The proof cleanup flags stayed false for raw
-paths, file contents, diagnostics output, raw session ids, and server I/O.
 
 ---
 
@@ -17934,172 +16301,8 @@ mix test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
 
 The latest lane passed locally on 2026-05-16 with `256 tests, 0 failures`.
 
-Deterministic local media proof lane:
-
-```bash
-MIX_ENV=test mix run scripts/live_media_image_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_speech_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_transcription_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_vision_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_video_smoke.exs --local
-```
-
-The local smoke mode exercises the same supervised media worker boundary without
-credentials or provider quota. It writes separate redacted artifacts under
-`.lemon/proofs/`:
-
-- `media-image-local-smoke-latest.json` for `local_svg`
-- `media-speech-local-smoke-latest.json` for `local_wav`
-- `media-transcription-local-smoke-latest.json` for `local_transcript`
-- `media-vision-local-smoke-latest.json` for `local_vision`
-- `media-video-local-smoke-latest.json` for `local_mp4`
-
-Those artifacts use `proof_scope: media_local` and
-`lemon.media_*_local_smoke` proof objects. They are regression proof for the
-deterministic BEAM media path only. They do not satisfy `media.provider_live`,
-the release audit provider-backed gate, or any claim that image, TTS, STT,
-vision, or video provider parity is complete.
-
-Opt-in live provider proof:
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_image_smoke.exs \
-    --proof-path .lemon/proofs/media-image-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_speech_smoke.exs \
-    --proof-path .lemon/proofs/media-speech-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_transcription_smoke.exs \
-    --proof-path .lemon/proofs/media-transcription-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_vision_smoke.exs \
-    --proof-path .lemon/proofs/media-vision-smoke-latest.json \
-    --model openrouter:openai/gpt-4o-mini
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_video_smoke.exs \
-    --proof-path .lemon/proofs/media-video-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-The smokes resolve OpenAI credentials through the same runtime path as the
-tools by default. They accept `--proof-path PATH` for the redacted proof artifact,
-keep `--out PATH` as a backward-compatible alias, and also accept
-`--api-key-env ENV_NAME`, `--api-key-secret SECRET_NAME`, and `--base-url URL`
-for one-off live proof without editing Lemon config or exporting raw keys;
-those override values are passed directly into the tool runtime and are not
-written to the proof JSON. The smokes write redacted proof JSON under
-`.lemon/proofs/` with stable
-`lemon.media_*_smoke` proof objects, `media_provider` proof scope, and
-per-provider check names. `mix lemon.doctor` consumes those artifacts as
-`media.provider_live`, while `media.channel_delivery` is tracked separately
-from Telegram/Discord generated-media, generated-audio, and final-answer
-`MEDIA:<path>` delivery proofs. The provider smokes fail only on
-provider execution errors. Doctor remediation maps safe `reason_kind` labels to
-bounded operator hints for permission-denied, billing/quota, payment-required,
-request-shape, and generic provider HTTP failures without exposing raw provider
-responses. When an incomplete multi-provider lane has a safe failed/skipped
-provider id in the redacted proof, doctor remediation includes the matching
-`--provider` flag, such as `--provider vertex_imagen`,
-`--provider google_tts`, or `--provider vertex_veo`, so reruns target the
-actual blocked lane instead of the default. The vision smoke passed on
-2026-05-16 through
-OpenRouter `openai/gpt-4o-mini` and wrote `tmp/media-vision-live-proof.json`
-with `completed_count: 1` and `failed_count: 0`. Without
-`LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1`, or without a resolvable credential for
-the configured provider from config or `--api-key-env`, they write skipped
-proofs with `failed_count: 0` and `reason_kind: credential_preflight_skipped`.
-Support bundles include the same redacted provider-live lane summary in
-`media_diagnostics.json`, including target-provider rerun commands for failed
-or skipped multi-provider lanes while omitting raw prompts, provider responses,
-artifact bytes, API keys, and secret names.
-
-Opt-in live channel delivery proof:
-
-```bash
-uv run scripts/live_telegram_matrix.py --skip-dm --skip-topic \
-  --topic-generated-media-delivery \
-  --generated-media-topic-id 35 \
-  --timeout 180 \
-  --result-path tmp/telegram-generated-media-proof.json
-```
-
-```bash
-uv run scripts/live_telegram_matrix.py --skip-dm --skip-topic \
-  --topic-generated-audio-delivery \
-  --generated-audio-topic-id 35 \
-  --timeout 120 \
-  --result-path tmp/telegram-generated-audio-proof.json \
-  --proof-path .lemon/proofs/telegram-generated-audio-latest.json
-```
-
-```bash
-uv run scripts/live_discord_matrix.py \
-  --channel-id 1475727417372049419 \
-  --bot-token-index 0 \
-  --sender-bot-token-index -1 \
-  --wait-generated-media-delivery \
-  --reset-session-between-checks \
-  --timeout 180 \
-  --result-path tmp/discord-generated-media-proof.json
-```
-
-```bash
-uv run scripts/live_discord_matrix.py \
-  --channel-id 1475727417372049419 \
-  --bot-token-index 0 \
-  --sender-bot-token-index 1 \
-  --wait-generated-audio-delivery \
-  --reset-session-between-checks \
-  --timeout 120 \
-  --result-path tmp/discord-generated-audio-proof.json \
-  --proof-path .lemon/proofs/discord-generated-audio-latest.json
-```
-
-The generated-media probes ask the channel agent to run `media_generate_image`
-with `provider local_svg` and `sendToChannel: true`, then verify that the
-generated SVG arrives through the normal Telegram/Discord attachment path. The
-generated-audio probes use `media_generate_speech` with `provider local_wav`
-and `sendToChannel: true`, then verify that the generated WAV arrives through
-the normal Telegram/Discord attachment path. They require the channel file
-settings to opt into generated files with `auto_send_generated_files` or the
-legacy `auto_send_generated_images` alias.
-
-The Telegram generated-SVG proof passed on 2026-05-16 in forum topic `35`; SVG
-outputs are uploaded as documents because Telegram rejects SVG photo
-processing. The Telegram generated-audio proof passed on 2026-05-17 in topic
-`35`, with `telegram_has_document: true` and `marker_seen: true` in the
-sanitized proof artifact.
-
-The Discord proof passed on 2026-05-16 in channel `1475727417372049419` after
-`gateway.discord.files` was preserved through core config normalization and
-parsed by the gateway. The proof delivered the generated SVG through the normal
-Discord attachment path. The Discord generated-audio proof passed on
-2026-05-17 in the same channel with one generated WAV attachment; the renderer
-regression fixed in this slice keeps generated-file auto-send working when the
-final answer edits an existing Discord presentation message.
-
-## Remaining Preview Gaps
-
-- successful live image-provider proof under usable OpenAI or Vertex quota
-- successful live speech-provider proof under usable OpenAI, ElevenLabs, or
-  Google TTS quota
-- successful live video-provider proof under usable OpenAI or Vertex Veo quota
+Optional manual real-service channel smokes are available through
+`scripts/live_telegram_matrix.py` and `scripts/live_discord_matrix.py`.
 
 ---
 
@@ -18281,101 +16484,6 @@ remote image host rejection before submission, `supportsVision` model metadata,
 known non-vision model rejection before runtime-image submission, prompt
 normalization, and validation errors without starting a real model run.
 
-The adapter also has a deterministic live HTTP smoke that starts a local Bandit
-router, calls `/v1` through `:httpc`, exercises auth, synchronous wait,
-redacted image-input metadata, data URL image pass-through, allowlisted remote
-image URL fetch, an external Node `fetch` client, an official OpenAI Node SDK
-client, an official OpenAI Python SDK client, single-model retrieval, stored Responses,
-previous-response continuation, streaming tool progress, redacted run status, and cancellation, then writes
-redacted proof JSON:
-
-```bash
-MIX_ENV=test mix run scripts/live_openai_compat_smoke.exs
-```
-
-The latest smoke passed locally on 2026-05-17 with `completed_count: 14` and
-`failed_count: 0`; the nested external `fetch` client completed 7 checks, the
-official OpenAI Node SDK client completed 6 checks, and the official OpenAI
-Python SDK client completed 6 checks. All three external clients verify
-single-model retrieval plus `lemon.supportsVision` consistency, and both SDK
-clients cover Chat Completions and Responses streaming through SDK stream
-interfaces. The
-top-level proof also includes `non_vision_image_rejection`, which posts runtime
-image bytes to `openai:o3-mini`, expects the sanitized 400 response, and verifies
-the stub submitter was not called. The proof is written to
-`.lemon/proofs/openai-compat-smoke-latest.json` plus a timestamped archive.
-`proofs.status`, support bundles, and `mix lemon.doctor --verbose` consume
-those redacted result rows as `openai_compat_*` checks. The doctor check is
-`openai_compat.api_preview`; rerun the smoke if it warns or skips.
-
-There is also an opt-in live provider vision proof over the same `/v1`
-Responses path:
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-LEMON_OPENAI_COMPAT_LIVE_VISION_MODEL=openrouter:openai/gpt-4o-mini \
-MIX_ENV=test mix run scripts/live_openai_compat_vision_smoke.exs
-```
-
-The vision smoke starts a local Bandit router without stubs, submits a data URL
-image through `/v1/responses` with `wait: true`, then runs
-`scripts/live_openai_compat_fetch_client.mjs` in vision-only mode against that
-same local HTTP boundary. It writes redacted proof JSON to
-`.lemon/proofs/openai-compat-vision-smoke-latest.json` and skips without a
-model, live-credential opt-in, or resolvable provider credential. Credential
-preflight uses `LemonAgent.ModelRuntime.Credentials.provider_has_credentials?/3`, the same
-Lemon-owned resolver used by runtime calls, so env keys, encrypted secrets,
-OAuth/default-secret paths, and provider-specific credentials are checked
-consistently. If no model is configured, the script tries credential-ready
-defaults in this order: OpenRouter `openai/gpt-4o-mini`, OpenAI
-`gpt-4o-mini`, then Z.ai `glm-4.6v`. Its proof omits raw API keys, prompts,
-answers, and image bytes.
-On 2026-05-16 the live proof passed through OpenRouter
-`openai/gpt-4o-mini` with `completed_count: 1`, `failed_count: 0`, external
-Node fetch client vision sub-proof `completed_count: 1` /
-`answer_matched_red: true`, and official OpenAI Node SDK vision sub-proof
-`completed_count: 1` / `answer_matched_red: true`. Direct OpenAI returned
-account quota errors in this environment, and Z.ai's coding endpoint accepted
-the text-model credential but rejected image input, so those providers are not
-used as the current proof source.
-
-The external client used by that smoke can also be pointed at a running Lemon
-HTTP server directly. Set `LEMON_OPENAI_COMPAT_CHECKS=vision` plus
-`LEMON_OPENAI_COMPAT_IMAGE_BASE64` to run only the provider-backed vision
-sub-proof in the fetch or SDK client; omit those variables for the default
-deterministic external-client checks.
-
-```bash
-LEMON_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:4000 \
-LEMON_OPENAI_COMPAT_API_TOKEN=... \
-node scripts/live_openai_compat_fetch_client.mjs
-```
-
-The OpenAI SDK client expects the `openai` package in the current Node working
-directory; the live smoke installs it in a temporary directory automatically.
-To point the SDK client at a running Lemon server directly:
-
-```bash
-LEMON_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:4000 \
-LEMON_OPENAI_COMPAT_API_TOKEN=... \
-node scripts/live_openai_compat_openai_sdk_client.mjs
-```
-
-The Python SDK client expects the `openai` package in the Python environment;
-the live smoke runs it with `uv run --with openai` automatically. To point the
-Python SDK client at a running Lemon server directly:
-
-```bash
-LEMON_OPENAI_COMPAT_BASE_URL=http://127.0.0.1:4000 \
-LEMON_OPENAI_COMPAT_API_TOKEN=... \
-uv run --with openai python scripts/live_openai_compat_python_sdk_client.py
-```
-
-Together the clients exercise health, capabilities, synchronous Chat
-Completions, Responses continuation, stored Responses, raw Chat Completions and
-Responses SSE with tool-progress events, and official SDK Chat Completions and
-Responses streaming, returning only hashes and counters in proof JSON.
-
 ---
 
 Source: https://z80dev.github.io/lemon/tools/wasm
@@ -18453,29 +16561,6 @@ CARGO_TARGET_DIR=_build/lemon-wasm-runtime cargo build --release --manifest-path
    - Conflicts are logged and included in `extensions_status`.
 5. If host tool callbacks fail (`tool-invoke` to non-WASM tools), the runtime returns an error to the caller tool.
 
-## Lifecycle Proof
-
-Run the focused sidecar lifecycle proof with:
-
-```bash
-MIX_ENV=test mix run scripts/live_wasm_lifecycle_smoke.exs
-```
-
-The proof writes `.lemon/proofs/wasm-lifecycle-latest.json` and verifies
-redacted discover/invoke start-stop telemetry, running sidecar status, explicit
-stop termination, and omission of raw cwd, session id, tool name, and params
-from lifecycle telemetry. `extensions.status` and
-`mix lemon.doctor --verbose` surface it as `extensions.wasm_lifecycle`.
-
-## Security Model (v1)
-
-- `tool_auth` reads WASM `auth` metadata and helps set up credentials.
-- `secret-exists` checks Lemon secret store first, then environment fallback.
-- `workspace-read` is path-normalized and restricted by allowed prefixes.
-- `http-request` is allowlist/rate-limited by capabilities.
-- `tool-invoke` is alias-based and depth/rate-limited.
-- Direct workspace write imports are intentionally not exposed; write/edit/patch behavior must go through host tool aliases.
-
 ---
 
 Source: https://z80dev.github.io/lemon/tools/web
@@ -18510,10 +16595,6 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
-- `browser_exec`: run a bounded BUA-style program of up to 25 typed browser
-  actions; raw CDP steps require explicit developer mode.
-- `computer_use`: capture and drive native apps through cua-driver with SOM,
-  vision, or AX state and background-first input delivery.
 
 ## Search and extraction providers
 
@@ -18568,22 +16649,6 @@ uses snapshot refs such as `@e5` as selectors. Hybrid requires
 `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
 backend, public URLs use that configured backend, and provider failure never
 falls back across identities.
-
-`browser_exec` is the provider-neutral Browser Use Agent code-mode equivalent.
-Its program is a bounded typed action list rather than arbitrary Python, so
-Lemon can audit every navigation, input, evaluation, screenshot, and tab step.
-Use `targetId = "$active"` to carry the prior tab result. A `cdp` step requires
-`browser_developer_mode: true`; `Browser.close`, `Target.closeTarget`, and raw
-download-policy mutation remain blocked.
-
-`computer_use` drives native desktop apps through a lazily started private
-`cua-driver` daemon in standard permission mode. Capture supports `som`,
-`vision`, and `ax`; input supports element or coordinates, click variants,
-drag, scroll, type, key/hotkey, value setting, app focus, and optional
-post-action capture. Input defaults to `background`. Foreground focus is an
-explicit escalation, capture artifacts follow browser retention, driver
-session ids are derived hashes, and timeouts/errors are not automatically
-replayed because the external effect may already have happened.
 
 By default the helper launches local Chrome/Chromium and connects over CDP on
 `127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the
@@ -18725,65 +16790,6 @@ using the supervised
 `LemonBrowser.LocalServer` boundary, and checks browser progress update
 redaction for URL, selector, upload-path, download-path, filename, and failure
 paths.
-
-The repeatable live local smoke runner is:
-
-```bash
-MIX_ENV=test mix run scripts/live_browser_smoke.exs
-```
-
-It launches the supervised local browser driver against Chrome/Chromium,
-drives a local proof page through navigate, wait, evaluate, hover, select, upload,
-download, snapshot, type, click, screenshot,
-model-visible screenshot capture with `includeImage: true`, local
-`media_analyze_image` analysis of that screenshot, one-step `browser_analyze`
-local vision, route classification, metadata-endpoint blocking, public-route
-guarding, attach-only CDP endpoint mode, content, event reads, cookie set/get,
-and clear-state reset, writes screenshots under
-`.lemon/browser-artifacts/`, and writes redacted proof JSON under
-`.lemon/proofs/`. The proof includes progress update counts, method and phase
-counts, browser child-action count, model-visible image hashes/counts plus local
-vision analysis hashes/counts, `browser_analyze` hashes/counts, navigation route
-and target-kind counts, blocked-navigation assertions, CDP attach completion,
-`browser_upload_file_completed`, `browser_upload_file_count`,
-`browser_download_completed`, `browser_download_bytes`, and redaction cleanup
-assertions. Pass
-`--executable` or set
-`LEMON_BROWSER_EXECUTABLE` when Chrome/Chromium is not on `PATH`. Use
-`LEMON_BROWSER_CDP_ENDPOINT` when the browser is already managed by another
-local service, a container, or a remote CDP provider.
-
-The real MV3/Chrome relay proof is:
-
-```bash
-cd clients/lemon-browser-node
-npm run smoke:extension
-```
-
-It launches a disposable Chrome-for-Testing profile, loads the unpacked
-extension, authenticates the loopback relay, enumerates existing tabs, opens a
-new tab, reads title and DOM content through Playwright, detaches, and verifies
-that the attached Chrome process remains alive. The smoke writes a redacted
-`.lemon/proofs/browser-extension-smoke-latest.json` artifact; it persists no
-relay token, loopback port, raw target ID, URL, or page content. Mocked
-service-worker tests separately exercise the real toolbar-click opt-in/detach
-state and debugger-event filtering.
-
-The opt-in live model acceptance harness is:
-
-```bash
-mix run --no-start scripts/live_search_browser_leadership_smoke.exs
-```
-
-It starts real `CodingAgent.Session` turns on `openai-codex:gpt-5.6-luna` with
-`:xhigh` reasoning, using isolated run-history and memory stores, a disposable
-Chrome profile, and restricted trial-specific tool lists. It asserts ordered
-SearXNG-to-DuckDuckGo fallback and multi-source synthesis, stable target-scoped
-multi-tab reads, stale-target recovery, screenshot analysis, and refusal to
-bypass an unpaired controller's consent/capability boundary. The latest and
-archived results under `.lemon/proofs/search-browser-leadership-*.json` contain
-only model/tool identifiers, counts, booleans, durations, and hashes—not
-credentials, prompts, answers, URLs, target IDs, or tool result bodies.
 
 ## API Key Setup
 
@@ -19484,7 +17490,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `doctor` | Run diagnostics or create a support bundle |
 | `config` | Validate or show resolved configuration |
 | `secrets` | Manage encrypted credentials and inspect external read-only sources |
-| `channels` | Inspect channel launch readiness |
+| `channels` | Inspect channel configuration |
 | `providers` | Inspect provider readiness and manage routing |
 | `blueprints` | Review and exactly confirm cataloged skill automation bundles |
 | `profile` | Manage isolated specialist profiles |
@@ -21234,21 +19240,6 @@ fire-count fields, plus the next scheduled time for an active heartbeat.
 Frozen/ephemeral context sessions reject heartbeat mutations because they have
 no durable session file to restore.
 
-## Verification
-
-Run the deterministic live path from the umbrella root:
-
-```bash
-MIX_ENV=test mix run scripts/live_session_heartbeat_smoke.exs
-```
-
-The smoke starts real Lemon OTP applications, restores an overdue session,
-proves that the logical TUI key resolves a different persisted ID, dispatches
-one recurring user turn through the normal agent/provider stream, exercises the
-control-plane lifecycle, and reloads the JSONL file to prove the clear
-tombstone. Its proof is written under `.lemon/proofs/` and contains hashes and
-status metadata rather than prompts, provider responses, or credentials.
-
 ---
 
 Source: https://z80dev.github.io/lemon/user-guide/setup
@@ -21424,7 +19415,8 @@ file edit or shell command in a group needs an approval. Remote chats run in the
 assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.
 
-See the configured channel state with:
+Inspect redacted channel configuration (enabled state, credentials, binding and
+allowlist counts, registered transports) with:
 
 ```bash
 lemon channels
@@ -21809,14 +19801,6 @@ Use the local `LemonAutomation.Blueprint` service directly
 only for trusted source-checkout administration that genuinely needs a local
 path; normal operators should use `lemon blueprints`, and remote clients should
 use the catalog-scoped RPC.
-
-Run the booted-runtime proof to activate the disabled example, verify
-profile-local discovery and persisted provenance, replay it without a
-duplicate, then clean up the isolated profile and job:
-
-```bash
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
-```
 
 ---
 

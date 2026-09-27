@@ -38,9 +38,6 @@ what in-repo code has been using.
 - `LemonAi.CallDispatcher` queues callers FIFO when a provider is at its in-flight cap
   and only returns `{:error, :max_concurrency}` after a bounded wait
   (`queue_timeout_ms`, default 120s; `0` fails fast).
-- `LemonAi.CompactingClient` and `LemonAi.ContextCompactor` — context-window management
-  that truncates older history (the `:summarization` strategy currently falls back to
-  truncation) rather than failing the call.
 - `LemonAi.Tokens` and `LemonAi.Text` for token accounting and text extraction, and
   `LemonAi.calculate_cost/2` for per-call cost from the model's price table.
 - `LemonAi.Models` catalogue plus `LemonAi.ModelCache`, covering model IDs, context

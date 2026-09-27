@@ -1,69 +1,3 @@
-defmodule LemonMCP.SkillsMcpSourceTest.SSEFixture do
-  use Plug.Router
-
-  alias LemonMCP.Protocol
-  alias LemonMCP.Server.Handler
-
-  plug(:match)
-  plug(:dispatch)
-
-  get "/sse" do
-    session = Integer.to_string(System.unique_integer([:positive]))
-    stream_pid = self()
-    Agent.update(conn.assigns.store, &Map.put(&1, session, stream_pid))
-
-    conn =
-      conn
-      |> put_resp_content_type("text/event-stream")
-      |> send_chunked(200)
-
-    {:ok, conn} = chunk(conn, "event: endpoint\ndata: /messages/#{session}\n\n")
-    stream_loop(conn)
-  end
-
-  post "/messages/:session" do
-    {:ok, body, conn} = Plug.Conn.read_body(conn)
-    {:ok, request_map} = Jason.decode(body)
-    {:ok, request} = Protocol.parse_request(request_map)
-    response = Handler.handle_request(request, conn.assigns.mcp_server)
-    encoded = response |> Map.from_struct() |> Jason.encode!()
-    pid = Agent.get(conn.assigns.store, &Map.fetch!(&1, session))
-    send(pid, {:sse_message, encoded})
-    send_resp(conn, 202, "")
-  end
-
-  match _ do
-    send_resp(conn, 404, "not found")
-  end
-
-  @impl true
-  def init(opts), do: opts
-
-  @impl true
-  def call(conn, opts) do
-    conn
-    |> Plug.Conn.assign(:store, Keyword.fetch!(opts, :store))
-    |> Plug.Conn.assign(:mcp_server, Keyword.fetch!(opts, :mcp_server))
-    |> super(opts)
-  end
-
-  defp stream_loop(conn) do
-    receive do
-      {:sse_message, data} ->
-        case chunk(conn, "event: message\ndata: #{data}\n\n") do
-          {:ok, conn} -> stream_loop(conn)
-          {:error, _reason} -> conn
-        end
-
-      :stop ->
-        conn
-    after
-      30_000 ->
-        conn
-    end
-  end
-end
-
 defmodule LemonMCP.SkillsMcpSourceTest.OAuthTokenFixture do
   use Plug.Router
 
@@ -219,7 +153,6 @@ defmodule LemonMCP.SkillsMcpSourceTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.{Secrets, Store}
-  alias LemonMCP.Protocol
   alias LemonSkills.McpSource
 
   @moduletag :tmp_dir
@@ -1084,153 +1017,27 @@ defmodule LemonMCP.SkillsMcpSourceTest do
     end
   end
 
-  def handle_http_tool("echo", args) do
-    {:ok,
-     %Protocol.ToolCallResult{
-       content: [%{type: "text", text: "echo:" <> Map.get(args, "message", "")}],
-       isError: false
-     }}
-  end
-
-  def handle_http_tool("fail", _args) do
-    {:ok,
-     %Protocol.ToolCallResult{
-       content: [%{type: "text", text: "planned failure"}],
-       isError: true
-     }}
-  end
-
-  def handle_http_tool(_name, _args), do: {:error, :unknown_tool}
-
   defp start_http_transport do
-    port = free_port()
-
-    start_supervised!(
-      {LemonMCP.Transport.HTTP,
-       [
-         port: port,
-         server_name: "HTTP Fixture",
-         server_version: "1.0.0",
-         tools: [
-           %Protocol.Tool{
-             name: "echo",
-             description: "Echo a message",
-             inputSchema: %{
-               "type" => "object",
-               "properties" => %{"message" => %{"type" => "string"}},
-               "required" => ["message"]
-             }
-           },
-           %Protocol.Tool{
-             name: "fail",
-             description: "Return a planned tool error",
-             inputSchema: %{"type" => "object", "properties" => %{}}
-           }
-         ],
-         tool_handler: &__MODULE__.handle_http_tool/2,
-         resources: [%{"uri" => "fixture://status", "name" => "Status"}],
-         resource_handler: fn
-           "fixture://status" ->
-             {:ok, [%{"uri" => "fixture://status", "text" => "status:ok"}]}
-
-           _ ->
-             {:error, :unknown_resource}
-         end,
-         prompts: [%{"name" => "brief", "description" => "Write a brief"}],
-         prompt_handler: fn
-           "brief", args ->
-             {:ok,
-              %{
-                "description" => "Write a brief",
-                "messages" => [
-                  %{
-                    "role" => "user",
-                    "content" => %{
-                      "type" => "text",
-                      "text" => "brief:" <> Map.get(args, "topic", "")
-                    }
-                  }
-                ]
-              }}
-
-           _, _ ->
-             {:error, :unknown_prompt}
-         end
-       ]}
-    )
-
-    port
+    start_fixture_listener({LemonMCP.TestSupport.HTTPFixture, server_name: "HTTP Fixture"})
   end
 
   defp start_sse_transport do
     {:ok, store} = start_supervised({Agent, fn -> %{} end})
 
-    {:ok, server} =
-      start_supervised(
-        {LemonMCP.Server,
-         [
-           server_name: "SSE Fixture",
-           server_version: "1.0.0",
-           tools: [
-             %Protocol.Tool{
-               name: "echo",
-               description: "Echo a message",
-               inputSchema: %{
-                 "type" => "object",
-                 "properties" => %{"message" => %{"type" => "string"}},
-                 "required" => ["message"]
-               }
-             },
-             %Protocol.Tool{
-               name: "fail",
-               description: "Return a planned tool error",
-               inputSchema: %{"type" => "object", "properties" => %{}}
-             }
-           ],
-           tool_handler: &__MODULE__.handle_http_tool/2,
-           resources: [%{"uri" => "fixture://status", "name" => "Status"}],
-           resource_handler: fn
-             "fixture://status" ->
-               {:ok, [%{"uri" => "fixture://status", "text" => "status:ok"}]}
-
-             _ ->
-               {:error, :unknown_resource}
-           end,
-           prompts: [%{"name" => "brief", "description" => "Write a brief"}],
-           prompt_handler: fn
-             "brief", args ->
-               {:ok,
-                %{
-                  "description" => "Write a brief",
-                  "messages" => [
-                    %{
-                      "role" => "user",
-                      "content" => %{
-                        "type" => "text",
-                        "text" => "brief:" <> Map.get(args, "topic", "")
-                      }
-                    }
-                  ]
-                }}
-
-             _, _ ->
-               {:error, :unknown_prompt}
-           end
-         ]}
+    port =
+      start_fixture_listener(
+        {LemonMCP.TestSupport.SSEFixture, store: store, server_name: "SSE Fixture"}
       )
-
-    pid =
-      start_supervised!(
-        {Bandit,
-         plug: {LemonMCP.SkillsMcpSourceTest.SSEFixture, store: store, mcp_server: server},
-         scheme: :http,
-         ip: {127, 0, 0, 1},
-         port: 0}
-      )
-
-    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
 
     {port, store}
+  end
+
+  defp start_fixture_listener(plug) do
+    pid =
+      start_supervised!({Bandit, plug: plug, scheme: :http, ip: {127, 0, 0, 1}, port: 0})
+
+    {:ok, {_ip, port}} = ThousandIsland.listener_info(pid)
+    port
   end
 
   defp start_oauth_http_transport do

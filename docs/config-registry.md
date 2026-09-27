@@ -95,22 +95,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
 
-### Programmatic tool calling (`execute_code`)
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_EXECUTE_CODE_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the execute_code programmatic tool-calling tool is enabled. |
-| `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS` | integer | `1800000` |  | `lemon_core` | Idle time after which a persistent execute_code kernel is reaped, in milliseconds. |
-| `LEMON_EXECUTE_CODE_KERNEL_MODE` | string | `per_call` |  | `lemon_core` | execute_code kernel mode (`per_call` or `session`); any other value resolves to `per_call` and never enables persistence. |
-| `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS` | integer | `16` |  | `lemon_core` | Strict cap on simultaneous persistent execute_code kernels (idle-only LRU eviction). |
-| `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES` | integer | `50000` |  | `lemon_core` | Maximum script stdout bytes returned to the model (larger output is spilled to a file). |
-| `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL` | integer | `8` |  | `lemon_core` | Maximum queued cells waiting behind the one active cell per persistent execute_code kernel. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_CALLS` | integer | `100` |  | `lemon_core` | Maximum tool RPC calls one execute_code script may make. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES` | integer | `5242880` |  | `lemon_core` | Total byte budget for tool RPC results returned to one execute_code script. |
-| `LEMON_EXECUTE_CODE_PYTHON_PATH` | string | `` |  | `lemon_core` | Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH). |
-| `LEMON_EXECUTE_CODE_TIMEOUT_MS` | integer | `120000` |  | `lemon_core` | End-to-end wall-clock cap for one execute_code run, including session queue wait, in milliseconds. |
-| `LEMON_EXECUTE_CODE_TOOLS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist. |
-
 ### WASM tool runtime
 
 | Env Var | Type | Default | Secret | Apps | Description |
@@ -301,7 +285,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
-| `LEMON_CUA_DRIVER_CMD` | string | _(none)_ |  | `lemon_browser` | Path or executable name for the cua-driver used by computer_use. |
 
 ### Coding-agent CLI runners
 

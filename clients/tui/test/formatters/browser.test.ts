@@ -27,19 +27,6 @@ describe("browserFormatter.formatArgs", () => {
 			expect(browserFormatter.formatArgs(args).summary).toBe(summary);
 		}
 	});
-
-	it("summarizes browser_exec programs by their steps", () => {
-		const result = browserFormatter.formatArgs({
-			steps: [
-				{ action: "navigate", args: { url: "https://example.com" } },
-				{ action: "click", args: { selector: "a.more" } },
-			],
-		});
-
-		expect(result.summary).toBe("2 steps: navigate → click");
-		expect(result.details).toContain('1. navigate {"url":"https://example.com"}');
-		expect(result.details).toContain('2. click {"selector":"a.more"}');
-	});
 });
 
 describe("browserFormatter.formatResult", () => {
@@ -99,45 +86,6 @@ describe("browserFormatter.formatResult", () => {
 		expect(result.summary).toBe("x.dev");
 		expect(result.details).toContain("heading Welcome");
 		expect(result.details).toContain("button Sign in");
-	});
-
-	it("summarizes a completed browser_exec program", () => {
-		const result = browserFormatter.formatResult({
-			content: [],
-			details: {
-				ok: true,
-				completedSteps: 2,
-				results: [
-					{ index: 0, action: "navigate", output: {} },
-					{ index: 1, action: "snapshot", output: {} },
-				],
-				tool: "browser_exec",
-			},
-			is_error: false,
-		});
-
-		expect(result.summary).toBe("2 steps completed");
-		expect(result.details).toEqual(["1. ✓ navigate", "2. ✓ snapshot"]);
-		expect(result.isError).toBe(false);
-	});
-
-	it("reports the failing browser_exec step", () => {
-		const result = browserFormatter.formatResult({
-			content: [],
-			details: {
-				ok: false,
-				completedSteps: 1,
-				results: [{ index: 0, action: "navigate", output: {} }],
-				failedStep: 1,
-				failedAction: "click",
-				error: "selector not found",
-				tool: "browser_exec",
-			},
-			is_error: false,
-		});
-
-		expect(result.summary).toBe("failed at step 2 (click): selector not found");
-		expect(result.isError).toBe(true);
 	});
 
 	it("marks tool errors with the error text", () => {

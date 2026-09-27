@@ -259,17 +259,6 @@ defmodule LemonMCP.Protocol do
     defstruct jsonrpc: "2.0", id: nil, result: nil, error: nil
   end
 
-  defmodule JSONRPCRequest do
-    @moduledoc "Generic JSON-RPC 2.0 request for server routing"
-    @type t :: %__MODULE__{
-            jsonrpc: String.t(),
-            id: Protocol.request_id(),
-            method: String.t(),
-            params: map() | nil
-          }
-    defstruct jsonrpc: "2.0", id: nil, method: "", params: nil
-  end
-
   defmodule JSONRPCResponse do
     @moduledoc "Generic JSON-RPC 2.0 response"
     @type t :: %__MODULE__{
@@ -295,27 +284,6 @@ defmodule LemonMCP.Protocol do
     def method_not_found, do: -32_601
     def invalid_params, do: -32_602
     def internal_error, do: -32_603
-    def server_not_initialized, do: -32_002
-    def tool_execution_error, do: -32_600
-  end
-
-  defmodule Tool do
-    @moduledoc "MCP Tool definition"
-    @type t :: %__MODULE__{
-            name: String.t(),
-            description: String.t(),
-            inputSchema: map()
-          }
-    defstruct name: "", description: "", inputSchema: %{}
-  end
-
-  defmodule ToolCallResult do
-    @moduledoc "MCP Tool call result"
-    @type t :: %__MODULE__{
-            content: [Protocol.content_item()],
-            isError: boolean()
-          }
-    defstruct content: [], isError: false
   end
 
   # ============================================================================
@@ -692,36 +660,8 @@ defmodule LemonMCP.Protocol do
   defp decode_error_response(_), do: {:error, :invalid_error_response}
 
   # ============================================================================
-  # Server Helper Functions
+  # Response Helpers
   # ============================================================================
-
-  @doc """
-  Parses a JSON-RPC request from a decoded JSON payload.
-  """
-  @spec parse_request(map()) :: {:ok, JSONRPCRequest.t()} | {:error, term()}
-  def parse_request(%{"jsonrpc" => "2.0", "method" => method} = payload) do
-    request = %JSONRPCRequest{
-      jsonrpc: "2.0",
-      id: Map.get(payload, "id"),
-      method: method,
-      params: Map.get(payload, "params")
-    }
-
-    {:ok, request}
-  end
-
-  def parse_request(%{jsonrpc: "2.0", method: method} = payload) do
-    request = %JSONRPCRequest{
-      jsonrpc: "2.0",
-      id: Map.get(payload, :id),
-      method: method,
-      params: Map.get(payload, :params)
-    }
-
-    {:ok, request}
-  end
-
-  def parse_request(_), do: {:error, :invalid_request}
 
   @doc """
   Creates a JSON-RPC success response.
@@ -732,24 +672,6 @@ defmodule LemonMCP.Protocol do
       jsonrpc: "2.0",
       id: id,
       result: result
-    }
-  end
-
-  @doc """
-  Creates a JSON-RPC error response.
-  """
-  @spec create_error(request_id(), integer(), String.t(), any()) :: JSONRPCResponse.t()
-  def create_error(id, code, message, data \\ nil) do
-    %JSONRPCResponse{
-      jsonrpc: "2.0",
-      id: id,
-      result: %{
-        error: %{
-          code: code,
-          message: message,
-          data: data
-        }
-      }
     }
   end
 
@@ -778,65 +700,5 @@ defmodule LemonMCP.Protocol do
   def error_code(:method_not_found), do: -32_601
   def error_code(:invalid_params), do: -32_602
   def error_code(:internal_error), do: -32_603
-  def error_code(:server_not_initialized), do: -32_002
-  def error_code(:unknown_tool), do: -32_601
-  def error_code(:tool_execution_error), do: -32_600
   def error_code(_), do: -32_603
-
-  @doc """
-  Converts a Tool struct to a plain map for JSON encoding.
-  """
-  @spec tool_to_map(Tool.t()) :: map()
-  def tool_to_map(%Tool{} = tool) do
-    %{
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema
-    }
-  end
-
-  @doc """
-  Converts a ToolCallResult struct to a plain map for JSON encoding.
-  """
-  @spec tool_result_to_map(ToolCallResult.t()) :: map()
-  def tool_result_to_map(%ToolCallResult{} = result) do
-    %{
-      content: result.content,
-      isError: result.isError
-    }
-  end
-
-  @doc """
-  Builds server capabilities for initialize response.
-  """
-  @spec server_capabilities(keyword()) :: map()
-  def server_capabilities(opts \\ []) do
-    caps = %{}
-    caps = if Keyword.get(opts, :tools, false), do: Map.put(caps, "tools", %{}), else: caps
-
-    caps =
-      if Keyword.get(opts, :resources, false), do: Map.put(caps, "resources", %{}), else: caps
-
-    caps = if Keyword.get(opts, :prompts, false), do: Map.put(caps, "prompts", %{}), else: caps
-    caps = if Keyword.get(opts, :logging, false), do: Map.put(caps, "logging", %{}), else: caps
-    caps
-  end
-
-  @doc """
-  Builds an initialize result for the server.
-  """
-  @spec initialize_result(String.t(), map(), String.t(), String.t()) :: InitializeResponse.t()
-  def initialize_result(protocol_version, capabilities, server_name, server_version) do
-    %InitializeResponse{
-      id: nil,
-      result: %{
-        protocolVersion: protocol_version,
-        capabilities: capabilities,
-        serverInfo: %{
-          name: server_name,
-          version: server_version
-        }
-      }
-    }
-  end
 end

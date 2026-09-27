@@ -248,11 +248,6 @@ config :lemon_ai, :provider_retry,
   max_attempts: 4, base_delay_ms: 1_000, max_delay_ms: 30_000, max_retry_after_ms: 60_000
 ```
 
-### Context compaction
-
-`LemonAi.CompactingClient` wraps a call and, on a `ContextLengthExceeded` error,
-automatically compacts the conversation and retries instead of failing outright.
-
 ### Token estimation
 
 `LemonAi.Tokens` gives fast token *estimates* for budgeting and thresholds:

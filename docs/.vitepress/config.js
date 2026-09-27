@@ -111,7 +111,6 @@ export default {
         items: [
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
-          { text: "Execute Code", link: "/tools/execute-code" },
           { text: "Media", link: "/tools/media" },
           { text: "LSP", link: "/tools/lsp" },
           { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },

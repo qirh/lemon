@@ -45,8 +45,6 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
-  @python_repl_terminate_detach_wait_ms 100
-  @execute_code_config_query_timeout_ms 1_000
 
   alias LemonAgent.ContextRegistry
   alias LemonAgent.Types.AgentTool
@@ -69,7 +67,6 @@ defmodule CodingAgent.Session do
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
   alias CodingAgent.Messages.CustomMessage
-  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
 
   # ============================================================================
   # State
@@ -110,9 +107,6 @@ defmodule CodingAgent.Session do
     :session_file,
     :register_session,
     :session_registry,
-    :python_repl_mod,
-    :execute_code_effective,
-    :settings_manager_static,
     :convert_to_llm,
     :transform_context,
     :tool_policy,
@@ -164,9 +158,6 @@ defmodule CodingAgent.Session do
           session_file: String.t() | nil,
           register_session: boolean(),
           session_registry: atom(),
-          python_repl_mod: module() | nil,
-          execute_code_effective: ExecuteCodeConfig.t(),
-          settings_manager_static: boolean(),
           convert_to_llm: (list() -> list()),
           transform_context: (list(), reference() | nil ->
                                 list() | {:ok, list()} | {:error, term()}),
@@ -228,8 +219,6 @@ defmodule CodingAgent.Session do
     * `:context_guardrails` - Optional map/list overrides for built-in context guardrails
       (for example `max_tool_result_bytes`, `max_tool_result_images`, `spill_dir`)
     * `:name` - GenServer name for registration
-    * `:python_repl_mod` - Persistent Python REPL facade to use for owner cleanup
-      (default: `CodingAgent.PythonRepl`; set to `nil` when the subsystem is unavailable)
     * `:max_tool_turns` - Cap on tool-using assistant turns per prompt. Defaults to
       `[runtime] max_tool_turns`, which is unlimited (`:infinity`) unless configured.
 
@@ -414,30 +403,6 @@ defmodule CodingAgent.Session do
   def get_state(session) do
     GenServer.call(session, :get_state)
   end
-
-  @doc """
-  Return the authoritative execute-code config for this session.
-
-  The call is deliberately bounded. Tool closures use it at invocation time so
-  a closure created before a config reload cannot select persistence from its
-  stale settings snapshot.
-  """
-  @spec execute_code_config(GenServer.server(), pos_integer()) ::
-          {:ok, ExecuteCodeConfig.t()} | {:error, :session_unavailable}
-  def execute_code_config(session, timeout_ms \\ @execute_code_config_query_timeout_ms)
-
-  def execute_code_config(session, timeout_ms)
-      when is_integer(timeout_ms) and timeout_ms > 0 do
-    timeout_ms = min(timeout_ms, @execute_code_config_query_timeout_ms)
-
-    try do
-      GenServer.call(session, :execute_code_config, timeout_ms)
-    catch
-      :exit, _reason -> {:error, :session_unavailable}
-    end
-  end
-
-  def execute_code_config(_session, _timeout_ms), do: {:error, :session_unavailable}
 
   @doc """
   Get session statistics including message count, token usage, etc.
@@ -680,7 +645,6 @@ defmodule CodingAgent.Session do
     send(self(), {:publish_extension_status_report, extension_status_report})
 
     maybe_subscribe_exec_approvals(state)
-    subscribe_config_reload()
 
     {:ok, Heartbeat.restore(state)}
   end
@@ -787,10 +751,6 @@ defmodule CodingAgent.Session do
   def handle_call({:subscribe, pid}, _from, state) do
     {unsubscribe, new_state} = Notifier.subscribe_direct(state, pid, self())
     {:reply, unsubscribe, new_state}
-  end
-
-  def handle_call(:execute_code_config, _from, state) do
-    {:reply, {:ok, state.execute_code_effective}, state}
   end
 
   def handle_call(:get_state, _from, state) do
@@ -1314,10 +1274,6 @@ defmodule CodingAgent.Session do
     handle_info({:do_prompt, message, state.system_prompt}, state)
   end
 
-  def handle_info(%LemonCore.Event{type: :config_reloaded}, state) do
-    {:noreply, Lifecycle.apply_execute_code_config_transition(state, self())}
-  end
-
   # Sent by `CodingAgent.Session.ProviderRetry` from the provider stream task
   # just before it waits to retry a transient failure. Subscribers see
   # `{:provider_retry, details}` so a UI can show "retrying in Ns".
@@ -1335,12 +1291,6 @@ defmodule CodingAgent.Session do
   def terminate(_reason, state) do
     _ = Heartbeat.clear_runtime(state)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
-
-    Lifecycle.detach_owner_on_terminate(
-      state.python_repl_mod,
-      self(),
-      @python_repl_terminate_detach_wait_ms
-    )
 
     # Emit introspection event for session end
     Introspection.record(
@@ -1863,8 +1813,6 @@ defmodule CodingAgent.Session do
   end
 
   defp maybe_subscribe_exec_approvals(_state), do: :ok
-
-  defp subscribe_config_reload, do: LemonCore.Bus.subscribe("system")
 
   defp approval_event_payload(payload, state) when is_map(payload) do
     pending = map_value(payload, :pending)
