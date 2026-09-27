@@ -133,7 +133,8 @@ defmodule LemonAgent.Agent do
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
-  - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback
+  - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback, or `:infinity`
+    (default: 25; `CodingAgent.Session` passes `:infinity` unless `[runtime] max_tool_turns` is set)
   - `:tool_timeout_ms` - Optional per-tool task timeout in milliseconds
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name

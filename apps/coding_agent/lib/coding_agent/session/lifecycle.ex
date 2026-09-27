@@ -17,11 +17,14 @@ defmodule CodingAgent.Session.Lifecycle do
     Persistence,
     PromptComposer,
     ProviderFallback,
+    ProviderRetry,
     State,
     WasmBridge
   }
 
   alias CodingAgent.SessionManager
+  alias CodingAgent.SettingsManager
+  alias CodingAgent.SystemPrompt.Environment, as: SystemPromptEnvironment
   alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
   alias CodingAgent.Workspace
 
@@ -69,28 +72,6 @@ defmodule CodingAgent.Session.Lifecycle do
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
     agent_id = Keyword.get(opts, :agent_id, "default")
 
-    system_prompt =
-      case context_snapshot do
-        %{system_prompt: prompt} ->
-          prompt
-
-        nil ->
-          PromptComposer.compose_system_prompt(
-            cwd,
-            explicit_system_prompt,
-            prompt_template,
-            workspace_dir,
-            session_scope,
-            "",
-            %{
-              run_id: run_id,
-              session_key: session_key,
-              session_id: session_manager.header.id,
-              agent_id: agent_id
-            }
-          )
-      end
-
     model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
     tool_policy = Keyword.get(opts, :tool_policy)
@@ -137,6 +118,37 @@ defmodule CodingAgent.Session.Lifecycle do
         approval_context: approval_context
       )
 
+    tool_names = Enum.map(lifecycle.tools, & &1.name)
+
+    # Captured once: the date and git snapshot stay fixed for the session so
+    # every prompt refresh reproduces the same bytes (prompt-cache stable).
+    prompt_environment =
+      if is_nil(context_snapshot), do: SystemPromptEnvironment.capture(cwd), else: nil
+
+    system_prompt =
+      case context_snapshot do
+        %{system_prompt: prompt} ->
+          prompt
+
+        nil ->
+          PromptComposer.compose_system_prompt(
+            cwd,
+            explicit_system_prompt,
+            prompt_template,
+            workspace_dir,
+            session_scope,
+            "",
+            %{
+              run_id: run_id,
+              session_key: session_key,
+              session_id: session_manager.header.id,
+              agent_id: agent_id,
+              tool_names: tool_names,
+              environment: prompt_environment
+            }
+          )
+      end
+
     convert_to_llm = &CodingAgent.Messages.to_llm/1
 
     context_guardrail_opts =
@@ -175,6 +187,10 @@ defmodule CodingAgent.Session.Lifecycle do
       |> ProviderFallback.maybe_wrap(model, settings_manager, cwd,
         session_id: session_manager.header.id
       )
+      |> ProviderRetry.wrap(
+        SettingsManager.get_retry_settings(settings_manager),
+        notify: fn details -> send(session_pid, {:provider_retry, details}) end
+      )
 
     agent_registry_key = {session_manager.header.id, :main, 0}
 
@@ -193,6 +209,10 @@ defmodule CodingAgent.Session.Lifecycle do
         transform_context: transform_context,
         get_api_key: get_api_key,
         session_id: session_manager.header.id,
+        # Coding and assistant turns run until the model stops calling tools
+        # (or the user interrupts); `[runtime] max_tool_turns` or an explicit
+        # `:max_tool_turns` option installs a cap.
+        max_tool_turns: Keyword.get(opts, :max_tool_turns, settings_manager.max_tool_turns),
         name: LemonAgent.AgentRegistry.via(agent_registry_key)
       )
 
@@ -226,6 +246,7 @@ defmodule CodingAgent.Session.Lifecycle do
       model: model,
       thinking_level: thinking_level,
       system_prompt: system_prompt,
+      prompt_environment: prompt_environment,
       explicit_system_prompt: explicit_system_prompt,
       prompt_template: prompt_template,
       workspace_dir: workspace_dir,

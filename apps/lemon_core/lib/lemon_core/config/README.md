@@ -136,7 +136,8 @@ Preferred source sections:
 - `default_model` - Default model identifier
 - `default_thinking_level` - Thinking level (low/medium/high)
 - `compaction` - Context compaction settings
-- `retry` - Retry behavior
+- `retry` - Session retry of transient provider failures (`enabled`, `max_retries`, `base_delay_ms`)
+- `max_tool_turns` - Optional per-prompt cap on tool-using turns; unset or `0` resolves to `:infinity`
 - `shell` - Shell configuration
 - `extension_paths` - Explicitly trusted extension directories
 - `extensions.enabled` - Global switch for extension code execution

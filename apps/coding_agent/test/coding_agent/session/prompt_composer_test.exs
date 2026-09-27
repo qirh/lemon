@@ -57,4 +57,39 @@ defmodule CodingAgent.Session.PromptComposerTest do
     assert String.contains?(github_prompt, "Use `read_skill` with <key>")
     refute String.contains?(github_prompt, "Full body should stay behind read_skill.")
   end
+
+  test "compose_system_prompt/7 puts the environment block after every static section", %{
+    tmp_dir: tmp_dir
+  } do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(tmp_dir, "AGENTS.md"), "project instructions marker")
+
+    environment =
+      CodingAgent.SystemPrompt.Environment.capture(tmp_dir, date: ~D[2026-09-27], shell: "/bin/zsh")
+
+    prompt =
+      PromptComposer.compose_system_prompt(
+        tmp_dir,
+        "explicit prompt marker",
+        nil,
+        workspace_dir,
+        :main,
+        "",
+        %{environment: environment, tool_names: ["read", "edit", "bash"]}
+      )
+
+    assert String.ends_with?(prompt, environment)
+    assert environment =~ "Working directory: #{tmp_dir}"
+    assert environment =~ "Shell: /bin/zsh"
+    assert environment =~ "Today's date: 2026-09-27"
+
+    positions =
+      Enum.map(
+        ["explicit prompt marker", "## Working on code", "project instructions marker", "## Environment"],
+        fn marker -> prompt |> :binary.match(marker) |> elem(0) end
+      )
+
+    assert positions == Enum.sort(positions)
+  end
 end

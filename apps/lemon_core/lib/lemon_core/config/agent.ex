@@ -19,6 +19,10 @@ defmodule LemonCore.Config.Agent do
       [runtime]
       extension_paths = ["./my-extensions"]
       theme = "lemon"
+      # Optional safety cap on tool-using turns per prompt. Unset (the
+      # default) or 0 means unlimited: a turn ends when the model stops
+      # calling tools.
+      max_tool_turns = 0
 
       [runtime.extensions]
       enabled = true
@@ -56,6 +60,7 @@ defmodule LemonCore.Config.Agent do
     :default_thinking_level,
     :compaction,
     :retry,
+    :max_tool_turns,
     :shell,
     :extensions,
     :extension_paths,
@@ -78,6 +83,7 @@ defmodule LemonCore.Config.Agent do
             max_retries: integer(),
             base_delay_ms: integer()
           },
+          max_tool_turns: pos_integer() | :infinity,
           shell: %{
             path: String.t() | nil,
             command_prefix: String.t() | nil
@@ -107,6 +113,7 @@ defmodule LemonCore.Config.Agent do
       default_thinking_level: resolve_thinking_level(agent_settings),
       compaction: resolve_compaction(agent_settings),
       retry: resolve_retry(agent_settings),
+      max_tool_turns: resolve_max_tool_turns(agent_settings),
       shell: resolve_shell(agent_settings),
       extensions: resolve_extensions(agent_settings),
       extension_paths: resolve_extension_paths(agent_settings),
@@ -178,6 +185,24 @@ defmodule LemonCore.Config.Agent do
       base_delay_ms: Env.get(:lemon_base_delay_ms, default: retry["base_delay_ms"] || 1000)
     }
   end
+
+  # Unlimited unless a positive integer is configured: coding and assistant
+  # turns routinely need far more than a few dozen tool calls, and the user can
+  # always interrupt. A cap stays available for deployments that want one.
+  defp resolve_max_tool_turns(settings) do
+    normalize_max_tool_turns(settings["max_tool_turns"])
+  end
+
+  defp normalize_max_tool_turns(value) when is_integer(value) and value > 0, do: value
+
+  defp normalize_max_tool_turns(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {parsed, ""} -> normalize_max_tool_turns(parsed)
+      _ -> :infinity
+    end
+  end
+
+  defp normalize_max_tool_turns(_value), do: :infinity
 
   defp resolve_provider_routing(settings) do
     routing = ensure_map(settings["provider_routing"])
