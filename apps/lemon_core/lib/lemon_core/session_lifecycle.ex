@@ -380,7 +380,7 @@ defmodule LemonCore.SessionLifecycle do
 
       [read(summary, :prompt), read(completed, :answer)]
       |> Enum.filter(&is_binary/1)
-      |> Enum.map_join("\n", &redact_text/1)
+      |> Enum.map_join("\n", &LemonCore.Redact.text(&1, strict: true))
       |> String.downcase()
       |> String.contains?(query)
     end)
