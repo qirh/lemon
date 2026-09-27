@@ -121,7 +121,7 @@ The project is an Elixir umbrella with 22 applications:
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
-| `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
+| `lemon_automation` | CronManager, heartbeats, reminders, daily brief, scheduled-result delivery |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
@@ -239,7 +239,7 @@ Four main paths through the system:
 
 2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
-3. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
+3. **Automation**: CronManager tick → Due jobs → Router → terminalization (heartbeat suppression) → EventBus + CronDelivery → originating or paired owner chat
 
 4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
    `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
@@ -556,7 +556,7 @@ Canonical files:
 - `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md` (bounded profile and preference notes about the human)
-- `HEARTBEAT.md`
+- `HEARTBEAT.md` (checklist the scheduled heartbeat cron job works through; see [Reminders and heartbeats](user-guide/reminders-and-heartbeats.md))
 - `BOOTSTRAP.md`
 - `MEMORY.md` (bounded curated quick facts and topic index, main sessions only)
 
@@ -2707,6 +2707,10 @@ file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
 
+[automation]
+# Optional: opt-in daily brief at this server-local time (HH:MM, 24-hour).
+# daily_brief = "08:00"
+
 [gateway]
 max_concurrent_runs = 2
 auto_resume = false
@@ -2980,6 +2984,7 @@ Use only these top-level sections:
 - `gateway`
 - `tui`
 - `logging`
+- `automation`
 
 Deprecated sections now fail validation and runtime loading:
 
@@ -3551,6 +3556,30 @@ max_tool_invoke_depth = 4
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
+- `automation`: opt-in proactive automation (`daily_brief`).
+
+## Automation
+
+`[automation]` holds opt-in proactive automation. It currently has one key:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+```
+
+- `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
+  `cron_daily_brief`, running every day at that time in the server's local
+  timezone (DST-aware) for the default agent's main session
+  (`agent:default:main`). The agent sends a short brief to your paired owner
+  chat, or replies `HEARTBEAT_OK` and sends nothing.
+- The job is reconciled when Lemon boots: a new or changed time takes effect at
+  the next start, and removing the key removes the job.
+- `lemon setup` offers to write this key (default: off); `lemon setup
+  --daily-brief HH:MM` writes it non-interactively.
+- A value that is not a `HH:MM` 24-hour time fails config validation
+  (`automation.daily_brief: must be a HH:MM 24-hour time`).
+
+See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 
 ## Gateway Projects and Bindings
 
@@ -6799,7 +6828,8 @@ of the prompt:
    - `AGENTS.md` — project-specific agent instructions
    - `TOOLS.md` — tool configuration notes
    - `MEMORY.md` — persistent memory across sessions
-   - `HEARTBEAT.md` — heartbeat task config
+   - `HEARTBEAT.md` — checklist the scheduled heartbeat cron job works
+     through; a reply of exactly `HEARTBEAT_OK` means "nothing to report"
    - `BOOTSTRAP.md` — additional bootstrap content
 8. **Resource walk** — CLAUDE.md/AGENTS.md files found by walking up the
    directory tree from cwd to root
@@ -9885,6 +9915,8 @@ Subscribers:
 | 11 | `LemonAutomation.HeartbeatManager` | `heartbeat_manager.ex:630` | `:run_completed`, `:run_failed` |
 | 12 | webhook transport | `transports/webhook/response.ex:61,100,148` | `:run_completed` |
 | 13 | telegram plugin | `telegram/transport.ex:737` | `:run_completed`, catch-all |
+
+> **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
 
 ### 2.2 `session:<session_key>` — 4 subscribers
 
@@ -14985,7 +15017,6 @@ for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness sig
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :heartbeat, :skipped]` | `count: 1` | `agent_id`, `reason: :overlap` | `LemonAutomation.HeartbeatManager`, when a timer tick arrives while the prior timer heartbeat for that agent is still in flight |
 
 ### Channels — `[:lemon, :channels, ...]`
 
@@ -19062,6 +19093,187 @@ invent APIs for those remaining capabilities.
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/reminders-and-heartbeats
+
+# Reminders, heartbeats, and the daily brief
+
+Lemon can reach out to you instead of waiting to be asked. Every proactive
+feature is an ordinary scheduled (cron) job run by the agent:
+
+- **Reminders** — one-off or recurring messages you set from Telegram with
+  `/remind`, or by asking the agent.
+- **Heartbeats** — a recurring check-in where the agent works through a
+  checklist and only messages you when something needs attention.
+- **Daily brief** — an opt-in morning heartbeat, configured by `lemon setup`.
+
+All of them need Lemon to be running when the job is due, and a paired chat to
+deliver to.
+
+---
+
+## Where results go
+
+When a scheduled job finishes, Lemon sends the result to one chat, chosen in
+this order:
+
+| Job | Delivered to |
+|---|---|
+| `deliver_to = "none"` | Nowhere. The run is still recorded in run history. |
+| `deliver_to = "telegram:<chat_id>[:<topic_id>]"` or `"discord:<channel_id>[:<thread_id>]"` | That chat, topic, or thread. |
+| Created from a Telegram or Discord conversation | The chat (and topic/thread) it was created in. |
+| Created anywhere else (TUI, browser, CLI) | Your **paired owner chat**: the first `gateway.telegram.allowed_chat_ids` entry when Telegram is enabled, otherwise `gateway.discord.default_channel_id` when Discord is enabled. |
+| No owner chat configured | Nowhere. |
+
+The message is the job name followed by the agent's reply. A failed or
+timed-out run sends `<job name> (<status>): <reason>` instead.
+
+Most people only need the owner chat. Pair Telegram once and every reminder,
+heartbeat, and brief reaches your phone:
+
+```bash
+lemon gateway setup telegram
+lemon restart
+```
+
+See [Setup › Optional Telegram or Discord](setup.md#optional-telegram-or-discord)
+for pairing details.
+
+---
+
+## Telegram reminders
+
+In a paired Telegram chat:
+
+```text
+/remind 9am stand-up
+/remind in 20m check oven
+/remind every weekday 8:30 daily brief
+```
+
+Lemon replies with the schedule, the next run time, and the reminder id. When
+the reminder fires, the agent writes the message (doing any lookup the reminder
+asks for) and sends it back to the same chat or forum topic.
+
+Supported `<when>` forms:
+
+| Form | Examples | Repeats |
+|---|---|---|
+| Relative delay | `in 20m`, `in 2h`, `in 1h30m`, `in 3d` (up to 364 days) | once |
+| Time of day | `9am`, `9:30pm`, `21:15`, `at 9am`, `noon`, `midnight` | once — today, or tomorrow if that time has passed |
+| Tomorrow | `tomorrow 9am` | once |
+| Every day | `every day 8:30`, `daily at 8:30` | daily |
+| Weekdays / weekends | `every weekday 8:30`, `every weekend 10am` | weekly pattern |
+| Day of week | `every monday 9am` | weekly |
+| Interval | `every 30m`, `every 2h`, `every hour` | minutes must divide 60, hours must divide 24 |
+
+A bare number is not a time: `/remind 5 things` is rejected. Use `5am` or
+`05:00`. Any unrecognized form replies with the usage text.
+
+Manage reminders for the current chat:
+
+```text
+/reminders          # list this chat's reminders, soonest first
+/unremind <id>      # cancel one (ids come from /remind and /reminders)
+```
+
+`/reminders` and `/unremind` only see reminders created in the same chat or
+topic. One-off reminders are removed automatically after they fire.
+
+**Times are the server's local time** — the clock of the machine running
+Lemon, including daylight-saving changes. If Lemon runs on a server in another
+timezone, write times in that server's zone.
+
+---
+
+## Asking the agent
+
+You can also ask in plain language from any interface: "remind me at 3pm to
+call the bank", "every Friday at 5pm summarise this week's commits". The agent
+uses its `cron` tool, which supports:
+
+- `once: true` — a one-shot job that runs at its next scheduled time and is then
+  removed.
+- `timezone: "local"` — interpret the schedule in the server's local time. The
+  default is `"UTC"`; any other zone name is also evaluated as UTC.
+- `deliverTo` — override the destination (`"none"`, `"telegram:<chat_id>"`,
+  `"discord:<channel_id>"`, or `"auto"` to restore the default).
+
+Jobs created from the TUI or browser are delivered to your paired owner chat.
+Ask the agent to list, pause, or remove its scheduled jobs the same way.
+
+---
+
+## Heartbeats
+
+A heartbeat is a recurring job for an agent's main session: the agent runs the
+prompt you give it and reports back only when something needs attention. Keep
+the checklist in `HEARTBEAT.md` in the assistant workspace
+(`~/.lemon/agent/workspace/HEARTBEAT.md`), one line per thing worth checking —
+failing CI, unanswered messages, tomorrow's calendar — and point the prompt at
+it.
+
+The reply rule (the default `HEARTBEAT.md` template spells it out for the
+agent):
+
+- If nothing needs your attention, the agent replies exactly `HEARTBEAT_OK`.
+  That run is marked **suppressed**, kept in run history, and **not** sent.
+- Any other reply, and any failed run, is delivered like any other job result.
+
+Set a heartbeat from the TUI (`/hb` is an alias):
+
+```text
+/heartbeat every 30m check HEARTBEAT.md and tell me only what needs attention
+/heartbeat status
+/heartbeat pause
+/heartbeat resume
+/heartbeat clear
+```
+
+Setting a heartbeat again updates the agent's existing heartbeat job. It runs
+in the server's local time and is delivered to your paired owner chat.
+
+Intervals must be cron-exact: minutes that divide 60 (`1m` … `30m`), hours that
+divide 24 (`1h`, `2h`, `3h`, `4h`, `6h`, `8h`, `12h`), or `1d` (daily at 09:00).
+Values such as `90m` or `5h` are rejected, and the minimum is `1m`.
+
+---
+
+## Daily brief
+
+The daily brief is a heartbeat that runs once a day in the default agent's main
+session. The agent follows `HEARTBEAT.md` if present, then sends a few bullets:
+today's reminders and scheduled jobs, anything due from memory, and open
+follow-ups. On a day with nothing worth saying it replies `HEARTBEAT_OK`, so
+you get no message.
+
+`lemon setup` offers it (default: off) and asks for a time. For scripted
+installs:
+
+```bash
+lemon setup --non-interactive --daily-brief 07:30
+```
+
+Either way the choice is written to your config:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local time
+```
+
+The brief is reconciled when Lemon boots, so a change takes effect at the next
+start (`lemon restart`). To turn it off, remove the `daily_brief` key and
+restart; the job is removed. See [Configuration](../config.md#automation).
+
+---
+
+## See Also
+
+- [`docs/user-guide/setup.md`](setup.md) — setup wizard and Telegram/Discord pairing
+- [`docs/config.md`](../config.md#automation) — the `[automation]` section
+- [`docs/user-guide/cli.md`](cli.md) — CLI and session commands
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/rollout
 
 # Feature Flag Rollout & Rollback Guide
@@ -19158,90 +19370,6 @@ loop is actually doing:
 
 ---
 
-Source: https://z80dev.github.io/lemon/user-guide/session-heartbeats
-
-# Session heartbeats
-
-A session heartbeat runs one recurring instruction inside an existing Lemon
-conversation. Use it for work that should retain the current transcript and run
-only when that session is otherwise idle—for example, "review the build queue
-and report meaningful changes every ten minutes."
-
-This is not cron. Cron owns independently scheduled jobs and normally launches
-an isolated run. A session heartbeat belongs to one live, durable coding session
-and uses that session's current provider, model, tools, approvals, transcript,
-compaction policy, and provider prompt-cache path.
-
-## TUI commands
-
-```text
-/heartbeat every 10m review CI and open pull requests
-/heartbeat 2h summarize meaningful project changes
-/heartbeat status
-/heartbeat pause
-/heartbeat resume
-/heartbeat clear
-```
-
-`/hb` is an alias. `off` and `stop` are aliases for `clear`. Supported interval
-units are seconds, minutes, hours, and days; the minimum interval is 60 seconds.
-Setting a heartbeat replaces the previous instruction and resets its fire
-count.
-
-## Runtime behavior
-
-- The heartbeat is persisted in the session JSONL file and restored when that
-  exact session is reopened.
-- A due tick waits for the agent to become idle. Real queued user input wins.
-- Multiple elapsed ticks coalesce into one turn rather than flooding the queue.
-- Lemon persists the fire count and timestamp before provider dispatch.
-- Pausing keeps the prompt. Resuming starts a fresh interval from the resume
-  time, so old elapsed time does not fire immediately.
-- Clearing writes a durable tombstone. Reset clears the old heartbeat before
-  rotating to a new session identity, and refuses to rotate if that tombstone
-  cannot be saved.
-- The injected turn explicitly tells the agent not to invent work when nothing
-  meaningful changed.
-
-Heartbeat prompts are ordinary user turns and therefore appear in the session
-history once fired. The admin status API also returns the configured prompt;
-do not put credentials or secret values in it.
-
-## Control-plane API
-
-`sessions.heartbeat` requires the `admin` scope. It accepts the logical session
-key used by the TUI; the runtime also accepts a persisted session ID. If more
-than one live session claims a logical key during handoff or recovery, the call
-fails with a conflict.
-
-```json
-{
-  "sessionKey": "agent:default:project",
-  "action": "set",
-  "intervalSeconds": 600,
-  "prompt": "review CI and report meaningful changes"
-}
-```
-
-Actions are `status`, `set`, `pause`, `resume`, and `clear`. `status` is the
-default. The response includes `configured`, `status`, `prompt`, interval and
-fire-count fields, plus the next scheduled time for an active heartbeat.
-
-## Elixir API
-
-```elixir
-{:ok, status} = CodingAgent.Session.heartbeat_set(session, "review CI", 600)
-{:ok, status} = CodingAgent.Session.heartbeat_status(session)
-{:ok, status} = CodingAgent.Session.heartbeat_pause(session)
-{:ok, status} = CodingAgent.Session.heartbeat_resume(session)
-{:ok, status} = CodingAgent.Session.heartbeat_clear(session)
-```
-
-Frozen/ephemeral context sessions reject heartbeat mutations because they have
-no durable session file to restore.
-
----
-
 Source: https://z80dev.github.io/lemon/user-guide/setup
 
 # Set up Lemon
@@ -19279,8 +19407,9 @@ re-checks the state and performs only pending work:
    an existing key;
 3. onboards a provider, auth credential, and default provider/model;
 4. checks the resulting configuration and credential, including a live provider
-   check when supported; and
-5. offers optional runtime-profile configuration.
+   check when supported;
+5. offers an opt-in daily brief (default: off); and
+6. offers optional runtime-profile configuration.
 
 It does not install source dependencies, configure Telegram or Discord, start
 a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
@@ -19363,6 +19492,24 @@ lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
 
 Append `--skip-verify` to that command to defer only the live check.
 
+### Daily brief
+
+After the provider step, setup asks whether you want a short daily brief on
+your phone each morning (default: no) and, if so, at what time (`HH:MM`,
+24-hour, this machine's local time; default `08:00`). The answer is written as
+`daily_brief` under `[automation]` in your config and takes effect the next time
+Lemon starts. If a brief is already configured, setup only reports its time.
+
+The non-interactive setup skips the question unless you pass the time:
+
+```bash
+lemon setup --non-interactive --daily-brief 07:30
+```
+
+The brief is delivered to your paired chat, so pair Telegram (see below). To
+change or remove it, edit `[automation] daily_brief` and restart Lemon. See
+[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
+
 ## Verify and recover
 
 After setup, inspect the persisted configuration and secret state, then run
@@ -19414,6 +19561,11 @@ to mentions, replies, and commands unless an admin sends `/trigger all`, and eve
 file edit or shell command in a group needs an approval. Remote chats run in the
 assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.
+
+The first paired Telegram chat is also your owner chat: reminders, heartbeats,
+the daily brief, and other scheduled results created outside a chat are sent
+there. In a paired chat, `/remind <when> <what>` sets a reminder. See
+[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
 
 Inspect redacted channel configuration (enabled state, credentials, binding and
 allowlist counts, registered transports) with:

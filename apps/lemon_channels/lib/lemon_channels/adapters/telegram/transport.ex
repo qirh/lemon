@@ -406,6 +406,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       handle_media_auto_put: &handle_media_auto_put/2,
       handle_model_command: &ModelPicker.handle_model_command/2,
       handle_new_session: &handle_new_session/3,
+      handle_remind_command: &handle_remind_command/2,
+      handle_reminders_command: &handle_reminders_command/2,
+      handle_unremind_command: &handle_unremind_command/2,
       handle_portable_command: &handle_portable_command/2,
       handle_reload_command: &handle_reload_command/2,
       handle_resume_command: &handle_resume_command/2,
@@ -1390,6 +1393,52 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             worker_id: agent_id,
             workspace: workspace,
             meta: %{transport: "telegram"}
+          )
+        )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp handle_remind_command(state, inbound) do
+    handle_reminder_command(state, inbound, "remind", fn args, opts ->
+      LemonChannels.Reminders.create(args, opts)
+    end)
+  end
+
+  defp handle_reminders_command(state, inbound) do
+    handle_reminder_command(state, inbound, "reminders", fn _args, opts ->
+      LemonChannels.Reminders.list(opts)
+    end)
+  end
+
+  defp handle_unremind_command(state, inbound) do
+    handle_reminder_command(state, inbound, "unremind", fn args, opts ->
+      LemonChannels.Reminders.cancel(args, opts)
+    end)
+  end
+
+  defp handle_reminder_command(state, inbound, command, reply_fun) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      session_key = build_session_key(state, inbound, scope)
+      args = Commands.telegram_command_args(inbound.message.text || "", command)
+      agent_id = BindingResolver.resolve_agent_id(scope)
+
+      _ =
+        send_system_message(
+          state,
+          chat_id,
+          thread_id,
+          user_msg_id,
+          reply_fun.(args,
+            session_key: session_key,
+            agent_id: agent_id,
+            created_via: "telegram"
           )
         )
     end

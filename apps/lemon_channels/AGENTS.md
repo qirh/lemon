@@ -79,6 +79,8 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
+| `lib/lemon_channels/reminders.ex` | `LemonChannels.Reminders` | Channel-agnostic `/remind`, `/reminders`, `/unremind`. `create/2`, `list/1`, `cancel/2` return reply text. Reminders are cron jobs (`timezone: "local"`, `meta["reminder"] = true`) created via `LemonAutomation.CronManager`, resolved at runtime from `:cron_module` opt or `config :lemon_channels, :reminder_cron_module`. The job's `session_key` is the chat's, so cron delivery replies in the originating chat/topic; list/cancel only see reminders whose session key has the same channel/account/peer/thread. |
+| `lib/lemon_channels/reminders/parser.ex` | `LemonChannels.Reminders.Parser` | Pure, deterministic `<when> <what>` parser (injectable `:now`): `in 20m`/`in 1h30m`/`in 3d`, `9am`/`21:15`/`at 9`/`noon`/`midnight`, `tomorrow 9am` (one-shot, pinned `"M H D Mo *"`), `every day`/`every weekday`/`every weekend`/`every monday 8:30`, `every 30m`/`every 2h` (must divide an hour/day). |
 | `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`; submission, cancel, and keepalive preserve explicit errors, while busy checks return `{:ok, boolean()} | {:error, term()}` without soft-success fallbacks |
 
 ### Outbox Pipeline
@@ -378,6 +380,9 @@ Outbox.stats()
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
 | `/checkpoint` | Preview checkpoint status/events, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
+| `/remind <when> <what>` | Create a reminder via `LemonChannels.Reminders` (server-local time; one-shot or recurring cron job delivered back to this chat/topic) |
+| `/reminders` | List this chat's enabled reminders with ids and next run |
+| `/unremind <id>` | Cancel one of this chat's reminders |
 | `/thinking` | Toggle extended thinking |
 | `/trigger` | Switch `:all` / `:mentions` mode (groups default to `:mentions`) |
 | `/whoami` | Reply with chat/user/topic ids; answered in every chat, before authorization |

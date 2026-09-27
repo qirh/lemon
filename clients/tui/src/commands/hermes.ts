@@ -8,7 +8,15 @@
  */
 
 import { METHOD } from "../protocol/methods.ts";
-import { asArray, asRecord, humanDuration, humanTime, pickNumber, pickString } from "./format.ts";
+import {
+	asArray,
+	asRecord,
+	humanDuration,
+	humanTime,
+	pick,
+	pickNumber,
+	pickString,
+} from "./format.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
 export const commandsCommand: SlashCommand = {
@@ -108,33 +116,60 @@ export const compressCommand: SlashCommand = {
 	},
 };
 
+/**
+ * The per-agent heartbeat is an ordinary cron job flagged `meta.heartbeat`.
+ * Its results are delivered like any cron result, except a reply of exactly
+ * `HEARTBEAT_OK` means "nothing to report" and is suppressed server-side.
+ */
 export const heartbeatCommand: SlashCommand = {
 	name: "heartbeat",
 	aliases: ["hb"],
-	summary: "run one recurring prompt in this session whenever it is idle",
+	summary:
+		"schedule this agent's recurring check-in; results reach your paired Telegram chat and HEARTBEAT_OK replies are suppressed",
 	usage: "[every <interval> <prompt> | status | pause | resume | clear]",
 	group: "sessions",
-	methods: [METHOD.sessionHeartbeat],
+	methods: [
+		METHOD.cronList,
+		METHOD.cronAdd,
+		METHOD.cronUpdate,
+		METHOD.cronPause,
+		METHOD.cronResume,
+		METHOD.cronRemove,
+	],
 	async run(ctx) {
 		const arg = ctx.rest.trim();
 		const lower = arg.toLowerCase();
+		// Profile main sessions carry their agent in the key; every other TUI
+		// session routes to the default agent.
+		const agentId = ctx.session.key.match(/^agent:([^:]+):/)?.[1] ?? "default";
 
 		if (!arg || lower === "status") {
-			const result = await ctx.methods.sessionHeartbeat({
-				sessionKey: ctx.session.key,
-				action: "status",
-			});
-			ctx.ui.noticeBlock(heartbeatStatusLines(result));
+			const job = await findHeartbeatJob(ctx, agentId, true);
+			ctx.ui.noticeBlock(
+				job ? heartbeatJobLines(job) : [`no heartbeat is configured for agent ${agentId}`],
+			);
 			return;
 		}
 
-		if (lower === "pause" || lower === "resume" || ["clear", "stop", "off"].includes(lower)) {
-			const action = lower === "pause" || lower === "resume" ? lower : "clear";
-			const result = await ctx.methods.sessionHeartbeat({
-				sessionKey: ctx.session.key,
-				action,
-			});
-			ctx.ui.noticeBlock(heartbeatStatusLines(result, action));
+		if (["pause", "resume", "clear", "stop", "off"].includes(lower)) {
+			const id = pickString(await findHeartbeatJob(ctx, agentId, false), "id");
+			if (!id) {
+				ctx.ui.notice(`no heartbeat is configured for agent ${agentId}`, "warning");
+				return;
+			}
+			if (lower === "pause") {
+				await ctx.methods.cronPause({ id });
+				ctx.ui.notice(`heartbeat paused · agent ${agentId}`);
+			} else if (lower === "resume") {
+				const result = await ctx.methods.cronResume({ id });
+				const nextRun = humanTime(pickNumber(result, "nextRunAtMs"));
+				ctx.ui.notice(
+					`heartbeat resumed · agent ${agentId}${nextRun ? ` · next run ${nextRun}` : ""}`,
+				);
+			} else {
+				await ctx.methods.cronRemove({ id });
+				ctx.ui.notice(`heartbeat cleared · agent ${agentId}`);
+			}
 			return;
 		}
 
@@ -143,18 +178,35 @@ export const heartbeatCommand: SlashCommand = {
 			ctx.ui.notice(`usage: /heartbeat ${heartbeatCommand.usage}`, "error");
 			return;
 		}
-		if (parsed.intervalSeconds < 60) {
-			ctx.ui.notice("heartbeat interval is too small — minimum is 60s", "error");
+		if ("error" in parsed) {
+			ctx.ui.notice(parsed.error, "error");
 			return;
 		}
 
-		const result = await ctx.methods.sessionHeartbeat({
-			sessionKey: ctx.session.key,
-			action: "set",
-			prompt: parsed.prompt,
-			intervalSeconds: parsed.intervalSeconds,
-		});
-		ctx.ui.noticeBlock(heartbeatStatusLines(result, "set"));
+		const existingId = pickString(await findHeartbeatJob(ctx, agentId, false), "id");
+		const result = existingId
+			? await ctx.methods.cronUpdate({
+					id: existingId,
+					schedule: parsed.schedule,
+					prompt: parsed.prompt,
+					timezone: "local",
+					enabled: true,
+				})
+			: await ctx.methods.cronAdd({
+					name: `heartbeat-${agentId}`,
+					schedule: parsed.schedule,
+					agentId,
+					sessionKey: `agent:${agentId}:main`,
+					prompt: parsed.prompt,
+					timezone: "local",
+					meta: { heartbeat: true, agent_id: agentId },
+				});
+		const nextRun = humanTime(pickNumber(result, "nextRunAtMs"));
+		ctx.ui.noticeBlock([
+			`heartbeat ${existingId ? "updated" : "set"} · ${parsed.schedule} · agent ${agentId}${nextRun ? ` · next run ${nextRun}` : ""}`,
+			parsed.prompt,
+			HEARTBEAT_DELIVERY_NOTE,
+		]);
 	},
 };
 
@@ -399,6 +451,9 @@ function oneLine(text: string, max = 100): string {
 	return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+const HEARTBEAT_DELIVERY_NOTE =
+	"results reach your paired Telegram chat; a reply of exactly HEARTBEAT_OK is suppressed";
+
 const HEARTBEAT_UNIT_SECONDS: Record<string, number> = {
 	s: 1,
 	sec: 1,
@@ -420,49 +475,73 @@ const HEARTBEAT_UNIT_SECONDS: Record<string, number> = {
 	days: 86400,
 };
 
-function parseHeartbeatSet(text: string): { intervalSeconds: number; prompt: string } | undefined {
+/**
+ * Parse `[every] <n><unit> <prompt>` into a cron shorthand the daemon's
+ * scheduler accepts. Heartbeats run on cron-exact intervals only: minutes that
+ * divide an hour, hours that divide a day, or exactly one day.
+ */
+function parseHeartbeatSet(
+	text: string,
+): { schedule: string; prompt: string } | { error: string } | undefined {
 	const match = text.match(
 		/^\s*(?:every\s+)?(\d+(?:\.\d+)?)\s*(s|secs?|seconds?|m|mins?|minutes?|h|hrs?|hours?|d|days?)\s+([\s\S]+)$/i,
 	);
 	if (!match) return undefined;
-	const value = Number.parseFloat(match[1]);
-	const unitSeconds = HEARTBEAT_UNIT_SECONDS[match[2].toLowerCase()];
 	const prompt = match[3].trim();
-	if (!Number.isFinite(value) || value <= 0 || !unitSeconds || !prompt) return undefined;
-	return { intervalSeconds: Math.floor(value * unitSeconds), prompt };
-}
+	const unitSeconds = HEARTBEAT_UNIT_SECONDS[match[2].toLowerCase()];
+	const seconds = Number.parseFloat(match[1]) * unitSeconds;
+	if (!prompt || !Number.isFinite(seconds)) return undefined;
 
-function heartbeatStatusLines(result: unknown, action?: string): string[] {
-	const record = asRecord(result);
-	const heartbeat = asRecord(record?.heartbeat);
-	if (!heartbeat || heartbeat.configured !== true) {
-		return [action === "clear" ? "heartbeat cleared" : "no heartbeat is configured"];
+	const requested = `${match[1]}${match[2].toLowerCase()}`;
+	if (seconds < 60) {
+		return { error: `heartbeat interval ${requested} is too small — minimum is 1m` };
 	}
-
-	const status = pickString(heartbeat, "status") ?? "unknown";
-	const intervalSeconds = pickNumber(heartbeat, "intervalSeconds");
-	const prompt = pickString(heartbeat, "prompt") ?? "";
-	const fireCount = pickNumber(heartbeat, "fireCount") ?? 0;
-	const nextIn = pickNumber(heartbeat, "nextInSeconds");
-	const interval = intervalSeconds ? formatHeartbeatInterval(intervalSeconds) : "?";
-	const title =
-		action === "set"
-			? "heartbeat set"
-			: action === "pause"
-				? "heartbeat paused"
-				: action === "resume"
-					? "heartbeat resumed"
-					: "heartbeat";
-
-	return [
-		`${title} · ${status} · every ${interval}${nextIn !== undefined ? ` · next in ~${nextIn}s` : ""}${fireCount > 0 ? ` · fired ${fireCount}×` : ""}`,
-		prompt,
-	].filter((line) => line.length > 0);
+	if (seconds === 86400) return { schedule: "daily", prompt };
+	const hours = seconds / 3600;
+	if (Number.isInteger(hours) && hours < 24 && 24 % hours === 0) {
+		return { schedule: `every ${hours}h`, prompt };
+	}
+	const minutes = seconds / 60;
+	if (Number.isInteger(minutes) && minutes < 60 && 60 % minutes === 0) {
+		return { schedule: `every ${minutes}m`, prompt };
+	}
+	return {
+		error: `heartbeat interval ${requested} is not cron-exact — use minutes that divide 60, hours that divide 24, or 1d`,
+	};
 }
 
-function formatHeartbeatInterval(seconds: number): string {
-	if (seconds % 86400 === 0) return `${seconds / 86400}d`;
-	if (seconds % 3600 === 0) return `${seconds / 3600}h`;
-	if (seconds % 60 === 0) return `${seconds / 60}m`;
-	return `${seconds}s`;
+/**
+ * The agent's heartbeat job, found by its `meta.heartbeat` flag. The daily
+ * brief is also a heartbeat but is owned by `[automation] daily_brief`, so
+ * `/heartbeat` never edits or removes it.
+ */
+async function findHeartbeatJob(
+	ctx: CommandContext,
+	agentId: string,
+	includeTargetText: boolean,
+): Promise<unknown> {
+	const result = await ctx.methods.cronList({ agentId, includeTargetText });
+	return asArray(result.jobs).find(
+		(job) =>
+			pick(job, "meta.heartbeat") === true &&
+			pick(job, "meta.daily_brief") !== true &&
+			pickString(job, "meta.agent_id", "meta.agentId", "agentId") === agentId,
+	);
+}
+
+function heartbeatJobLines(job: unknown): string[] {
+	const enabled = pick(job, "enabled") === true;
+	const timezone = pickString(job, "timezone") ?? "UTC";
+	const nextRun = enabled ? humanTime(pickNumber(job, "nextRunAtMs")) : undefined;
+	const lastRun = humanTime(pickNumber(job, "lastRunAtMs"));
+	const lastStatus = pickString(job, "lastRunStatus");
+	const lines = [
+		`heartbeat · ${enabled ? "enabled" : "paused"} · ${pickString(job, "schedule") ?? "?"} (${timezone}) · agent ${pickString(job, "agentId") ?? "?"}`,
+	];
+	if (nextRun) lines.push(`next run: ${nextRun}`);
+	if (lastRun) lines.push(`last run: ${lastRun}${lastStatus ? ` · ${lastStatus}` : ""}`);
+	const prompt = pickString(job, "prompt");
+	if (prompt) lines.push(prompt);
+	lines.push(HEARTBEAT_DELIVERY_NOTE);
+	return lines;
 }

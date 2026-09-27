@@ -291,6 +291,12 @@ and performs the provider's live credential check by default. Use
 defer that live check when offline; a failed verification is not reported as a
 completed setup.
 
+After a usable provider, setup offers an opt-in daily brief (default off). It
+writes `[automation] daily_brief = "HH:MM"` (server-local time) to the global
+config; the runtime reconciles the brief job at its next boot. Non-interactive
+runs skip the question unless `--daily-brief HH:MM` is passed. An existing
+`daily_brief` is only reported, never replaced.
+
 The derived state lives in `LemonCore.Setup.Readiness`, so the setup wizard,
 first-run TUI gate, and Web UI agree on exactly what is missing. The browser is
 read-only during setup: it lists pending items and rejects prompts/uploads until

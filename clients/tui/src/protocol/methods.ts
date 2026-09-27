@@ -80,7 +80,6 @@ export const METHOD = {
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
-	sessionHeartbeat: "sessions.heartbeat",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -106,6 +105,12 @@ export const METHOD = {
 	goalPause: "goal.pause",
 	goalResume: "goal.resume",
 	goalClear: "goal.clear",
+	cronList: "cron.list",
+	cronAdd: "cron.add",
+	cronUpdate: "cron.update",
+	cronPause: "cron.pause",
+	cronResume: "cron.resume",
+	cronRemove: "cron.remove",
 	logsTail: "logs.tail",
 	configGet: "config.get",
 	configSet: "config.set",
@@ -290,18 +295,6 @@ export class ControlPlaneMethods {
 		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, options);
 	}
 
-	sessionHeartbeat(
-		params: {
-			sessionKey: string;
-			action?: "status" | "set" | "pause" | "resume" | "clear";
-			prompt?: string;
-			intervalSeconds?: number;
-		},
-		options?: RequestOptions,
-	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.sessionHeartbeat, params, options);
-	}
-
 	sessionDetail(
 		params: { sessionKey: string },
 		options?: RequestOptions,
@@ -458,6 +451,57 @@ export class ControlPlaneMethods {
 
 	goalClear(params?: Record<string, unknown>, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.goalClear, params, options);
+	}
+
+	// -- cron ---------------------------------------------------------------
+
+	cronList(
+		params?: { agentId?: string; includeTargetText?: boolean },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronList, params, options);
+	}
+
+	cronAdd(
+		params: {
+			name: string;
+			schedule: string;
+			agentId: string;
+			sessionKey: string;
+			prompt: string;
+			timezone?: string;
+			enabled?: boolean;
+			meta?: Record<string, unknown>;
+		},
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronAdd, params, options);
+	}
+
+	cronUpdate(
+		params: {
+			id: string;
+			name?: string;
+			schedule?: string;
+			prompt?: string;
+			timezone?: string;
+			enabled?: boolean;
+		},
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronUpdate, params, options);
+	}
+
+	cronPause(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronPause, params, options);
+	}
+
+	cronResume(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronResume, params, options);
+	}
+
+	cronRemove(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronRemove, params, options);
 	}
 
 	// -- misc ---------------------------------------------------------------

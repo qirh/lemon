@@ -111,6 +111,10 @@ file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
 
+[automation]
+# Optional: opt-in daily brief at this server-local time (HH:MM, 24-hour).
+# daily_brief = "08:00"
+
 [gateway]
 max_concurrent_runs = 2
 auto_resume = false
@@ -384,6 +388,7 @@ Use only these top-level sections:
 - `gateway`
 - `tui`
 - `logging`
+- `automation`
 
 Deprecated sections now fail validation and runtime loading:
 
@@ -955,6 +960,30 @@ max_tool_invoke_depth = 4
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
+- `automation`: opt-in proactive automation (`daily_brief`).
+
+## Automation
+
+`[automation]` holds opt-in proactive automation. It currently has one key:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+```
+
+- `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
+  `cron_daily_brief`, running every day at that time in the server's local
+  timezone (DST-aware) for the default agent's main session
+  (`agent:default:main`). The agent sends a short brief to your paired owner
+  chat, or replies `HEARTBEAT_OK` and sends nothing.
+- The job is reconciled when Lemon boots: a new or changed time takes effect at
+  the next start, and removing the key removes the job.
+- `lemon setup` offers to write this key (default: off); `lemon setup
+  --daily-brief HH:MM` writes it non-interactively.
+- A value that is not a `HH:MM` 24-hour time fails config validation
+  (`automation.daily_brief: must be a HH:MM 24-hour time`).
+
+See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 
 ## Gateway Projects and Bindings
 

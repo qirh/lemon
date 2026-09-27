@@ -145,7 +145,6 @@ for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness sig
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :heartbeat, :skipped]` | `count: 1` | `agent_id`, `reason: :overlap` | `LemonAutomation.HeartbeatManager`, when a timer tick arrives while the prior timer heartbeat for that agent is still in flight |
 
 ### Channels — `[:lemon, :channels, ...]`
 

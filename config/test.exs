@@ -97,6 +97,10 @@ config :lemon_automation, :skill_curator, enabled: false
 # from generating drafts (and touching the memory store) during unrelated suites.
 config :lemon_automation, :synthesis_runner, enabled: false
 
+# The daily brief job is reconciled from the developer's config.toml at boot;
+# `LemonAutomation.HeartbeatTest` exercises the sync explicitly instead.
+config :lemon_automation, daily_brief_sync: false
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.
