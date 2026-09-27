@@ -107,8 +107,7 @@ config :lemon_core, :env_registries, [
   LemonSkills.Env,
   LemonWeb.Env,
   # lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5)
-  LemonSimUi.Env,
-  LemonTcg.Env
+  LemonSimUi.Env
 ]
 
 config :lemon_channels,

@@ -1063,7 +1063,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     tmp_dir = tmp_repo!()
 
     try do
-      for app <- ~w(coding_agent coding_agent_ui lemon_mcp lemon_evals) do
+      for app <- ~w(coding_agent lemon_mcp lemon_evals) do
         write_file!(
           tmp_dir,
           "apps/#{app}/lib/#{app}/ok.ex",

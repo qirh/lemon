@@ -286,7 +286,6 @@ defmodule CodingAgent.Tools.Task.Params do
         :stream_fn,
         :stream_options,
         :settings_manager,
-        :ui_context,
         :parent_session,
         :tool_policy,
         :session_key,

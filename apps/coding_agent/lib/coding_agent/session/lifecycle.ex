@@ -36,7 +36,6 @@ defmodule CodingAgent.Session.Lifecycle do
     parent_session = Keyword.get(opts, :parent_session)
     context_snapshot = normalize_context_snapshot(Keyword.get(opts, :context_snapshot))
     initial_messages = normalize_initial_messages(Keyword.get(opts, :initial_messages))
-    ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
     extra_tools = State.normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     workspace_dir = Keyword.get(opts, :workspace_dir, CodingAgent.Config.workspace_dir())
@@ -44,7 +43,6 @@ defmodule CodingAgent.Session.Lifecycle do
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
     python_repl_mod = Keyword.get(opts, :python_repl_mod, CodingAgent.PythonRepl)
 
-    Notifier.maybe_register_ui_tracker(ui_context)
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
     session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
@@ -121,7 +119,6 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:agent_id, agent_id)
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
-      |> Keyword.put(:ui_context, ui_context)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
@@ -224,7 +221,6 @@ defmodule CodingAgent.Session.Lifecycle do
       session_key: session_key,
       agent_id: agent_id,
       settings_manager: settings_manager,
-      ui_context: ui_context,
       cwd: cwd,
       tools: lifecycle.tools,
       model: model,
@@ -286,8 +282,6 @@ defmodule CodingAgent.Session.Lifecycle do
   @spec reload_extensions(Session.t()) ::
           {:ok, Extensions.extension_status_report() | nil, Session.t()}
   def reload_extensions(state) do
-    Notifier.ui_set_working_message(state, "Reloading extensions...")
-
     wasm_reload = WasmBridge.reload_wasm_tools(state)
 
     tool_opts = [
@@ -301,7 +295,6 @@ defmodule CodingAgent.Session.Lifecycle do
       agent_id: state.agent_id,
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
-      ui_context: state.ui_context,
       tool_policy: state.tool_policy,
       approval_context: state.approval_context,
       wasm_tools: wasm_reload.wasm_tools,
@@ -323,14 +316,7 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     :ok = LemonAgent.Agent.set_tools(state.agent, lifecycle.tools)
-    Notifier.ui_set_working_message(state, nil)
     Notifier.broadcast_event(state, {:extension_status_report, lifecycle.extension_status_report})
-
-    Notifier.ui_notify(
-      state,
-      "Extensions reloaded: #{lifecycle.extension_status_report.total_loaded} loaded",
-      :info
-    )
 
     new_state = %{
       state
@@ -397,8 +383,6 @@ defmodule CodingAgent.Session.Lifecycle do
                   state.session_registry,
                   state.session_key
                 )
-
-                Notifier.ui_set_working_message(state, nil)
 
                 {:ok,
                  State.reset_runtime(

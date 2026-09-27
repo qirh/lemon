@@ -138,34 +138,6 @@ defmodule CodingAgent.Session.CompactionManager do
     }
   end
 
-  @spec handle_overflow_recovery_task_down(map(), (map(), String.t(), atom() -> :ok)) :: map()
-  def handle_overflow_recovery_task_down(state, ui_notify_fn) do
-    state = clear_overflow_recovery_task_tracking(state)
-
-    cond do
-      not state.overflow_recovery.in_progress ->
-        state
-
-      true ->
-        failure_reason = :overflow_recovery_task_down
-        failed_state = clear_overflow_recovery_task_state(state)
-
-        ui_notify_fn.(failed_state, "Overflow compaction worker stopped unexpectedly", :error)
-
-        emit_overflow_recovery_telemetry(:failure, failed_state, %{
-          duration_ms: overflow_recovery_duration_ms(state),
-          reason: normalize_overflow_reason(failure_reason)
-        })
-
-        # Return the failed state; the caller should call finalize_overflow_recovery_failure
-        # with the appropriate event handling callbacks
-        %{
-          failed_state
-          | overflow_recovery: %{failed_state.overflow_recovery | error_reason: failure_reason}
-        }
-    end
-  end
-
   @spec clear_overflow_recovery_state_on_terminal(LemonAgent.Types.agent_event(), map()) :: map()
   def clear_overflow_recovery_state_on_terminal(event, state) do
     case event do
@@ -274,9 +246,7 @@ defmodule CodingAgent.Session.CompactionManager do
           {:ok, map()} | {:error, term()},
           String.t() | nil,
           (map() -> [map()]),
-          (map(), LemonAgent.Types.agent_event() -> :ok),
-          (map(), String.t() | nil -> :ok),
-          (map(), String.t(), atom() -> :ok)
+          (map(), LemonAgent.Types.agent_event() -> :ok)
         ) ::
           {:ok, map()} | {:error, term(), map()}
   def apply_compaction_result(
@@ -284,9 +254,7 @@ defmodule CodingAgent.Session.CompactionManager do
         result,
         custom_summary,
         restore_messages_fn,
-        broadcast_event_fn,
-        ui_set_working_message_fn,
-        ui_notify_fn
+        broadcast_event_fn
       ) do
     case result do
       {:ok, compaction_result} ->
@@ -329,19 +297,9 @@ defmodule CodingAgent.Session.CompactionManager do
 
         broadcast_event_fn.(state, compaction_event)
 
-        # Clear working message and notify success
-        ui_set_working_message_fn.(state, nil)
-        ui_notify_fn.(state, "Context compacted", :info)
-
         {:ok, %{state | session_manager: session_manager}}
 
-      {:error, :cannot_compact} ->
-        ui_set_working_message_fn.(state, nil)
-        {:error, :cannot_compact, state}
-
       {:error, reason} ->
-        ui_set_working_message_fn.(state, nil)
-        ui_notify_fn.(state, "Compaction failed: #{inspect(reason)}", :error)
         {:error, reason, state}
     end
   end

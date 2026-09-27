@@ -17,7 +17,6 @@ defmodule LemonControlPlane.Methods.SystemReload do
     :lemon_agent,
     :lemon_ai,
     :coding_agent,
-    :coding_agent_ui,
     :lemon_core,
     :lemon_gateway,
     :lemon_router,

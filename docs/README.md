@@ -110,7 +110,7 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | Diagram | What it shows |
 |---------|--------------|
 | `architecture.excalidraw` / `.svg` | Complete system architecture: clients, control plane, routing, infrastructure, core |
-| `data-flow.excalidraw` / `.svg` | Four data paths: direct, control plane, channel, automation |
+| `data-flow.excalidraw` / `.svg` | Three data paths: control plane, channel, automation |
 | `event-bus.excalidraw` / `.svg` | Event bus topology and pub/sub messaging |
 | `orchestration.excalidraw` / `.svg` | Run orchestration: scheduling, lane queues, engine dispatch |
 | `supervision-tree.excalidraw` / `.svg` | OTP supervision tree (see the current architecture guide for the app inventory) |

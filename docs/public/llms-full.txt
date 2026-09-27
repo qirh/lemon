@@ -118,7 +118,6 @@ The project is an Elixir umbrella with 24 applications:
 | App | Role |
 |---|---|
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
-| `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
@@ -127,7 +126,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
-| `lemon_web` | React web frontend bridge |
+| `lemon_web` | Phoenix LiveView web UI |
 | `lemon_evals` | Eval harness for assistant behavior |
 | `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
@@ -145,12 +144,6 @@ The project is an Elixir umbrella with 24 applications:
 |---|---|
 | `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
 | `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
-
-**Other products:**
-
-| App | Role |
-|---|---|
-| `lemon_tcg` | Live market data and paper execution for an agent-operated on-chain TCG shop — the real-world counterpart of `LemonSim.Examples.TcgShop` |
 
 ### Package dependency graph
 
@@ -190,12 +183,10 @@ graph TD
 
     subgraph products["Products · consume the packages as a third party would"]
         ca["coding_agent"]
-        caui["coding_agent_ui"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
         sim["lemon_sim"]
         simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
     end
 
     %% Published-tier compile edges (full fidelity from mix.exs)
@@ -241,17 +232,15 @@ that no arrow ever runs from `published` into the outer three tiers.
 
 ## Data Flow
 
-Five main paths through the system:
+Four main paths through the system:
 
-1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → LemonAgent → Tools/LemonAi
+1. **Control Plane (TUI)**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
 
-2. **Control Plane**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
+2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
-3. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
+3. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
 
-4. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
-
-5. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
+4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
    `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
    authenticated control-plane WebSocket → destination `CodingAgent.Executor`
 
@@ -416,7 +405,6 @@ silent permissions.
 | App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |
 | --- | --- | --- | --- |
 | `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
-| `coding_agent_ui` | `coding_agent`, `lemon_core` | `coding_agent`, `lemon_core` | *(none)* |
 | `lemon_agent` | `lemon_ai`, `lemon_core` | `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_ai` | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
@@ -437,7 +425,6 @@ silent permissions.
 | `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_tcg` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 <!-- architecture_policy:end -->
 
@@ -2547,22 +2534,11 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | string | _(none)_ | yes | `ai` | Google Gemini CLI OAuth client secret override. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | string | _(none)_ | yes | `ai` | Google Generative AI API key (primary name). |
 | `LEMON_GEMINI_PROJECT_ID` | string | _(none)_ |  | `ai`, `lemon_cli`, `lemon_core` | Lemon-specific override for the Gemini/Vertex project id, checked before the GOOGLE_CLOUD_* names. |
-| `MAGIC_EDEN_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | Magic Eden marketplace API key. |
 | `MISTRAL_API_KEY` | string | _(none)_ | yes | `ai` | Mistral API key. |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `ai` | OpenAI Codex OAuth client id override. |
 | `OPENCODE_API_KEY` | string | _(none)_ | yes | `ai` | OpenCode provider API key. |
-| `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
-| `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
-
-### lemon_tcg wallets
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `EVM_PRIVATE_KEY` | string | _(none)_ | yes | `lemon_tcg` | EVM wallet private key used to sign on-chain transactions. |
-| `SOLANA_KEYPAIR_FILE` | string | _(none)_ | yes | `lemon_tcg` | Path to a Solana keypair JSON file used to sign wallet transactions. |
-| `SOLANA_SECRET_KEY` | string | _(none)_ | yes | `lemon_tcg` | Base58/array-encoded Solana secret key used to sign wallet transactions. |
 
 ### lemon_evals live-model opt-in checks
 
@@ -3167,7 +3143,6 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 Lemon can auto-load a `.env` file at startup:
 
 - `./bin/lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
-- `clients/lemon-web/server` bridge: loads `<cwd>/.env` from `--cwd` (or current directory).
 - `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
 
 By default, existing environment variables are preserved. `.env` values only fill missing variables.
@@ -11027,7 +11002,7 @@ The nine published packages (post-D13) are:
 Everything else in `apps/` is either a **reference-runtime** app (stays in the platform repo,
 unpublished: `lemon_control_plane`, `lemon_cli`, `lemon_web`, `lemon_automation`, `lemon_skills`,
 `lemon_browser`, `lemon_lsp`) or a **product** app slated to leave (`coding_agent`,
-`coding_agent_ui`, `lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`).
+`lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`).
 The former X/Twitter satellite was deleted from the Lemon harness under D17 and
 is no longer an extraction target.
 
@@ -11042,24 +11017,21 @@ and stays an in-repo dep). Any `in_umbrella` dep on a reference-runtime app that
 |---|---|---|---|
 | **lemon-sim** | `lemon_sim` | lemon_core, agent_core, ai | **none** |
 | | `lemon_sim_ui` | ai, lemon_core, **lemon_sim** | none (sim is intra-group) |
-| | `lemon_tcg` | lemon_core, agent_core, ai, **lemon_sim** | none (sim is intra-group) |
 | **coding-agent** | `coding_agent` | agent_core, ai, lemon_core, lemon_gateway, lemon_memory, lemon_platform_test*, **lemon_skills**, **lemon_browser** | **lemon_skills, lemon_browser** |
-| | `coding_agent_ui` | **coding_agent**, lemon_core | none (coding_agent is intra-group) |
 | | `lemon_mcp` | **coding_agent**, lemon_core, agent_core, **lemon_skills** | **lemon_skills** |
 | | `lemon_evals` | agent_core, ai, **coding_agent**, lemon_core, **lemon_skills** | **lemon_skills** |
 
 \* `lemon_platform_test` is a `only: :test, runtime: false` dep — the same test-only dependency
 direction a third-party engine author has; not a runtime blocker.
 
-**lemon-sim is ready now.** Every platform dep it touches is published; the only cross-app deps
-inside the group (`sim_ui → sim`, `tcg → sim`) travel together in the extraction and remain in-repo
-deps afterward. This confirms the D8 premise: sim has the cleanest profile and should be the
+**lemon-sim is ready now.** Every platform dep it touches is published; the only cross-app dep
+inside the group (`sim_ui → sim`) travels with it in the extraction and remains an in-repo
+dep afterward. This confirms the D8 premise: sim has the cleanest profile and should be the
 **first** product extracted — which means the §5 Phase 5 order (`coding-agent` first) is backwards
 and should be flipped (see §5).
 
 **coding-agent is blocked** on two reference-runtime apps, `lemon_skills` and `lemon_browser`.
-`lemon_mcp` and `lemon_evals` inherit the `lemon_skills` blocker; `coding_agent_ui` is clean once
-`coding_agent` itself moves.
+`lemon_mcp` and `lemon_evals` inherit the `lemon_skills` blocker.
 
 ## 3. Anatomy of the blocker
 
@@ -11145,7 +11117,7 @@ the Phase 5 timeline. The umbrella keeps building it against `in_umbrella` deps 
      flagship and nothing on the timeline forces it.
 
 Net: sim extracts on the current Phase 5 tooling now; browser and skills become published packages
-10 & 11 when coding-agent's turn comes; coding-agent, mcp, evals, and coding_agent_ui follow once
+10 & 11 when coding-agent's turn comes; coding-agent, mcp, and evals follow once
 skills' API is release-worthy. This keeps the "publish, don't invert, for shared clean-dep
 infrastructure" principle consistent with D13, and avoids bolting a 20-module behaviour onto the
 product boundary.
@@ -12173,28 +12145,6 @@ Runtime ownership is independent of token origin: every daemon started by
 was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
 the source runtime must remain persistent; already-running runtimes are never
 stopped by the TUI launcher.
-
-### Web client (`lemon-web`)
-
-```bash
-cd clients/lemon-web
-npm start
-```
-
-`npm start` runs the root `prestart` hook first, rebuilding the ignored shared
-and server entrypoints so this works from a clean checkout after dependencies
-are installed.
-
-This source command starts the Node debug bridge on `http://localhost:3939` by
-default. The packaged Phoenix Web endpoint remains `http://localhost:4080`.
-
-The separate browser monitoring client has no delegated browser-session login
-exchange today. It therefore does not receive the server's shared operator
-token and cannot connect to an authenticated control plane. Do not put that
-secret in a `VITE_*` variable or URL, and do not enable tokenless loopback
-behind a reverse proxy. Authenticated browser monitoring requires a future
-short-lived, scoped server-issued browser credential flow.
-
 
 ---
 

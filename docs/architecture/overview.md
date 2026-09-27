@@ -108,7 +108,6 @@ The project is an Elixir umbrella with 24 applications:
 | App | Role |
 |---|---|
 | `coding_agent` | Session management, compaction, JSONL persistence, tools |
-| `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
@@ -117,7 +116,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
-| `lemon_web` | React web frontend bridge |
+| `lemon_web` | Phoenix LiveView web UI |
 | `lemon_evals` | Eval harness for assistant behavior |
 | `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
@@ -135,12 +134,6 @@ The project is an Elixir umbrella with 24 applications:
 |---|---|
 | `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
 | `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
-
-**Other products:**
-
-| App | Role |
-|---|---|
-| `lemon_tcg` | Live market data and paper execution for an agent-operated on-chain TCG shop — the real-world counterpart of `LemonSim.Examples.TcgShop` |
 
 ### Package dependency graph
 
@@ -180,12 +173,10 @@ graph TD
 
     subgraph products["Products · consume the packages as a third party would"]
         ca["coding_agent"]
-        caui["coding_agent_ui"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
         sim["lemon_sim"]
         simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
     end
 
     %% Published-tier compile edges (full fidelity from mix.exs)
@@ -231,17 +222,15 @@ that no arrow ever runs from `published` into the outer three tiers.
 
 ## Data Flow
 
-Five main paths through the system:
+Four main paths through the system:
 
-1. **Direct (TUI/Web)**: JSON-RPC → `debug_agent_rpc` → `coding_agent_ui` → Session → LemonAgent → Tools/LemonAi
+1. **Control Plane (TUI)**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
 
-2. **Control Plane**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
+2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
-3. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
+3. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
 
-4. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
-
-5. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
+4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
    `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
    authenticated control-plane WebSocket → destination `CodingAgent.Executor`
 

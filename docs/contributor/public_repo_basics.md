@@ -6,7 +6,7 @@ working in this repository.
 ## Prerequisites
 
 - Elixir 1.19.5+ and Erlang/OTP 28.5+
-- Node.js 24 LTS+ (for `clients/lemon-web`)
+- Node.js 24 LTS+ (for `clients/lemon-browser-node`)
 - Bun 1.3.14+ (for `clients/tui`)
 - A configured `~/.lemon/config.toml` with at least one provider API key
 
@@ -18,9 +18,6 @@ mix deps.get
 
 # Install TUI dependencies
 cd clients/tui && bun install
-
-# Install web dependencies
-cd clients/lemon-web && npm install
 ```
 
 ## Running locally

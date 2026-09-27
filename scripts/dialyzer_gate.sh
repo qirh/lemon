@@ -42,7 +42,6 @@ GATED_APPS=(
   lemon_cli
   lemon_evals
   lemon_honcho
-  lemon_tcg
   lemon_mcp
 )
 

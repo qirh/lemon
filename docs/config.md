@@ -524,7 +524,6 @@ values. `lemon secrets check` reports a resolved credential only as `present`.
 Lemon can auto-load a `.env` file at startup:
 
 - `./bin/lemon-tui`: loads `<cwd>/.env` where `<cwd>` is the agent working directory (`--cwd`, or current directory).
-- `clients/lemon-web/server` bridge: loads `<cwd>/.env` from `--cwd` (or current directory).
 - `./bin/lemon-gateway`: loads `.env` from the directory where you launch the script.
 
 By default, existing environment variables are preserved. `.env` values only fill missing variables.
