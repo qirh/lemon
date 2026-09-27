@@ -101,12 +101,7 @@ jobs:
           git add CHANGELOG.md mix.exs \
             clients/tui/package.json \
             clients/lemon-browser-node/package.json \
-            clients/lemon-browser-node/package-lock.json \
-            clients/lemon-web/package.json \
-            clients/lemon-web/package-lock.json \
-            clients/lemon-web/shared/package.json \
-            clients/lemon-web/server/package.json \
-            clients/lemon-web/web/package.json
+            clients/lemon-browser-node/package-lock.json
           git diff --cached --check
           git commit -m "release: bump version to ${TAG#v}"
           git tag -a "$TAG" -m "Lemon ${TAG#v}"
@@ -230,9 +225,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            clients/lemon-web/package-lock.json
-            clients/lemon-browser-node/package-lock.json
+          cache-dependency-path: clients/lemon-browser-node/package-lock.json
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -424,7 +417,7 @@ jobs:
           ref: ${{ needs.validate.outputs.tag }}
 
       # clients/tui/.bun-version is the single source of truth for the Bun
-      # toolchain; quality.yml and release-smoke.yml read the same file.
+      # toolchain; ci.yml and release-smoke.yml read the same file.
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:

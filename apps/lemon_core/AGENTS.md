@@ -57,7 +57,6 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) with serialized Store-process claims |
-| `LemonCore.Quality.RatchetCheck` | Repository-wide AST/file-shape architecture-debt measurements enforced against lowering-only `.ratchets.exs` baselines |
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
@@ -455,7 +454,7 @@ run_id = LemonCore.ProgressStore.get_run(scope, progress_msg_id)
 events = LemonCore.Introspection.list(run_id: run_id, limit: 50)
 ```
 
-Per-platform reply/session indices are channels-owned state; `LemonCore.Store.finalize_run/2` does not write them. More generally, `lemon_core` must not name a chat platform at all: `LemonCore.Quality.ArchitectureRulesCheck`'s `:core_vendor_channel_reference` rule fails the quality gate on any such mention under `apps/lemon_core/lib`.
+Per-platform reply/session indices are channels-owned state; `LemonCore.Store.finalize_run/2` does not write them. More generally, `lemon_core` must not name a chat platform anywhere under `apps/lemon_core/lib`.
 
 ## Event Bus Usage Patterns
 
@@ -602,6 +601,7 @@ Edit `lib/mix/tasks/lemon.quality.ex`:
 ```elixir
 checks = [
   {:docs, fn -> DocsCheck.run(root: root) end},
+  {:architecture_docs, fn -> ArchitectureDocs.check(root) end},
   {:architecture, fn -> ArchitectureCheck.run(root: root) end},
   {:my_check, fn -> MyCheck.run(root: root) end}  # Add here
 ]
@@ -665,12 +665,9 @@ separate reference-only exception map and are shown separately in the generated
 architecture table.
 
 ```bash
-# Run all quality checks
+# Run all quality checks (docs links, architecture docs, deps/0 policy,
+# duplicate test modules)
 mix lemon.quality
-
-# Inspect or lower architecture-debt baselines
-mix lemon.ratchet
-mix lemon.ratchet --update
 
 # Verify or refresh the generated architecture dependency table
 mix lemon.architecture.docs --check
@@ -683,18 +680,10 @@ mix lemon.quality --validate-config
 mix lemon.quality --root /path/to/repo
 ```
 
-The docs catalog uses a data-only `%{defaults: ..., entries: ...}` structure.
-Keep shared ownership and age policy in `defaults`; entry overrides should only
-describe exceptions. `DocsCatalog` deliberately decodes a bounded AST instead
-of evaluating the file. `DocsCheck` treats the Git index (`git ls-files`) as
-the source of truth for repository coverage and uses a filesystem fallback only
-for synthetic non-Git test roots. Catalog `last_reviewed` is the canonical
-freshness date; do not introduce a second document-footer review date.
-
-Architecture-debt ratchets are also data-only. `mix lemon.ratchet --update`
-may lower current baselines but never raise them; increases require an explicit
-`.ratchets.exs` edit and review justification. The library scan excludes only
-the ratchet check implementation itself, not sibling quality modules.
+`DocsCheck` verifies that local markdown links in tracked `docs/**/*.md` files
+resolve. It treats the Git index (`git ls-files`) as the source of truth and
+uses a filesystem fallback only for synthetic non-Git test roots. Docs carry no
+review dates or catalog registration.
 
 ### Store Tasks
 
@@ -734,14 +723,6 @@ mix lemon.introspection --since 2026-02-23T00:00:00Z
 
 # Combine filters
 mix lemon.introspection --run-id <run_id> --event-type tool_completed --limit 50
-```
-
-### Cleanup Tasks
-
-```bash
-# Cleanup old data
-mix lemon.cleanup --dry-run
-mix lemon.cleanup --older-than 30d
 ```
 
 ## Common Tasks and Examples

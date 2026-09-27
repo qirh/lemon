@@ -1,0 +1,249 @@
+name: CI
+
+# The required gate for every pull request and every push to main, on
+# GitHub-hosted runners. Each job runs a `scripts/test` lane so local runs and
+# CI execute the same commands:
+#   - check:   scripts/test quality (compile -Werror, format, credo, skip-tag
+#              guard, shellcheck, launcher script tests, skill lint,
+#              mix lemon.quality, focused quality tests)
+#   - test:    scripts/test fast (compile -Werror + ExUnit excluding
+#              integration; coverage runs nightly, see nightly.yml)
+#   - clients: scripts/test clients (tui + lemon-browser-node)
+#   - wasm-runtime: native runtime cargo tests + WASM integration test, only
+#     when WASM paths change (always on push to main)
+#   - history: PR-only guard against unrelated Git history
+# Sim bench, Dialyzer, product smoke, and OSV run in their own workflows.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# ExUnit fixture names and Lemon's Unicode path contracts need a UTF-8 locale.
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-check-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-check-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools shellcheck
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: scripts/test quality
+        run: scripts/test quality
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      # Control-plane wire tests execute the real compiled TUI client.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Install TUI dependencies
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-test-
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install deps
+        run: mix deps.get
+
+      - name: scripts/test fast
+        run: scripts/test fast
+
+  clients:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/lemon-browser-node/package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: scripts/test clients
+        run: scripts/test clients
+
+  detect-changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      wasm: ${{ steps.filter.outputs.wasm }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect WASM-related changes
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            wasm:
+              - 'native/**'
+              - 'apps/coding_agent/lib/coding_agent/wasm/**'
+              - 'apps/coding_agent/test/coding_agent/wasm_integration_test.exs'
+              - '.github/workflows/ci.yml'
+
+  wasm-runtime:
+    needs: detect-changes
+    if: github.ref == 'refs/heads/main' || needs.detect-changes.outputs.wasm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-wasm-runtime-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-wasm-runtime-
+
+      - name: Cache Cargo registry and native runtime target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/lemon-wasm-runtime/target
+          key: ${{ runner.os }}-cargo-wasm-runtime-${{ hashFiles('native/lemon-wasm-runtime/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-runtime-
+
+      - name: Install WASM target
+        run: rustup target add wasm32-wasip2
+
+      - name: Run WASM runtime tests
+        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+
+      - name: Install deps
+        run: mix deps.get
+
+      # The coding_agent test_helper isolates HOME, so pin the rustup/cargo
+      # toolchain homes installed by dtolnay/rust-toolchain explicitly.
+      - name: Run WASM integration tests
+        run: |
+          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+            scripts/test path apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
+
+  history:
+    if: github.event_name == 'pull_request'
+    name: Reject unrelated history
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout PR head with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+
+      - name: Require a common ancestor with base
+        run: |
+          if ! BASE=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+            echo "::error::This PR has no common ancestor with ${GITHUB_BASE_REF}."
+            echo "Merging it would graft an unrelated root into Lemon's main history."
+            echo "Recreate the branch from the current target branch, then"
+            echo "cherry-pick or re-apply the intended changes."
+            exit 1
+          fi
+
+          echo "::notice::Common ancestor with ${GITHUB_BASE_REF}: $BASE"

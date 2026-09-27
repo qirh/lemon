@@ -523,14 +523,14 @@ steps.
       `proof_gate_summary.gateCount`.
 - [ ] Run product smoke against the release candidate.
 - [ ] Run `scripts/verify_docs_site`. It installs docs dependencies in a temp
-      copy, runs `npm audit --audit-level=high`, builds the VitePress site, and
+      copy, builds the VitePress site, and
       checks markdown links without leaving generated artifacts in the repo.
 - [ ] Confirm docs generated artifacts are not left in the repository.
 - [ ] Confirm issue templates and support-bundle docs reference the current artifact names.
 - [ ] Confirm known dependency audit findings are recorded and accepted or fixed.
 - [ ] Confirm the OSV Scanner workflow is present and scoped to the first-party
       Mix, npm, and Bun lockfiles before publishing a release candidate.
-- [ ] Confirm the History Check workflow is present and blocks
+- [ ] Confirm the `history` job in `.github/workflows/ci.yml` blocks
       unrelated-history PRs before merge.
 - [ ] Confirm the Bun TUI package and release lanes validate `clients/tui` and
       publish all three `lemon_tui` platform artifacts without publishing a
@@ -559,7 +559,7 @@ for high or critical runtime findings.
 
 ## Repository History Integrity
 
-`.github/workflows/history-check.yml` protects `main` from unrelated-history
+The `history` job in `.github/workflows/ci.yml` protects `main` from unrelated-history
 pull requests. It checks out the PR head with full history, fetches the target
 base branch, and requires `git merge-base "origin/${GITHUB_BASE_REF}" HEAD` to
 return a non-empty common ancestor.
@@ -771,7 +771,7 @@ Keep these release contracts current:
 - `.github/workflows/product-smoke.yml`
 - `.github/workflows/docs-site.yml`
 - `.github/workflows/live-eval.yml`
-- `.github/workflows/history-check.yml`
+- `.github/workflows/ci.yml`
 - `.github/workflows/osv-scanner.yml`
 - `.github/workflows/release-smoke.yml`
 - `scripts/bump_version.sh`

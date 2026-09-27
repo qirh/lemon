@@ -21,6 +21,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   `LemonCore.ProgressStore`, which now sit on the generic table API. The
   `:chat_state_ttl_ms` store option is gone; chat state always expires after
   24 hours.
+- `LemonCore.Quality.RatchetCheck`, `ArchitectureRulesCheck`,
+  `StoreTableOwnershipCheck`, `DocsCatalog`, and `Cleanup`, plus the
+  `mix lemon.ratchet` and `mix lemon.cleanup` tasks. `mix lemon.quality` now
+  runs only the docs link check, the architecture docs check, the `deps/0`
+  policy check, and the duplicate test module guard. `DocsCheck` no longer
+  reads `docs/catalog.exs` or enforces review dates.
 
 ### Fixed
 
@@ -38,10 +44,6 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   exposes the check used by router startup; optional callbacks remain optional,
   and invalid behaviour metadata returns a structured error instead of escaping
   the validation boundary.
-- `LemonCore.Quality.RatchetCheck` and `mix lemon.ratchet` provide a
-  data-only baseline for a narrow set of parsed architecture-debt metrics.
-  `mix lemon.quality` now fails when those counts increase.
-
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and
@@ -221,12 +223,6 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   - `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN` and `XMTP_WALLET_KEY` left
     `HermeticEnv`'s built-in scrub list for the `:test_credential_env_vars`
     registration described above.
-  - `LemonCore.Quality.ArchitectureRulesCheck` gained
-    `:core_vendor_channel_reference`, which fails the quality gate on any
-    mention of a chat platform under `apps/lemon_core/lib`, and retired
-    `:core_telegram_store_leak` / `:core_telegram_resume_index_leak`, which the
-    broader rule subsumes (`:core_known_target_store_leak` keeps the
-    non-vendor half).
 
 ### Known gaps
 

@@ -1,8 +1,8 @@
 import Config
 
 # Keep Logger defaults in tests: several test suites assert on `:info`/`:warning`
-# messages via `ExUnit.CaptureLog`. If you need quieter output, prefer per-test
-# `capture_log/2` or configure console formatting in CI.
+# messages via `ExUnit.CaptureLog`. Every app's test_helper starts ExUnit with
+# `capture_log: true`, so log output is only printed for failing tests.
 
 # Isolate on-disk poller locks per `mix test` OS process. This prevents cross-process
 # test interference if multiple `mix test` commands run concurrently on the same host.

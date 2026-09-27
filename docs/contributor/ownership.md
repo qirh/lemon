@@ -85,9 +85,7 @@ Concretely:
 - If a file is legitimately cross-cutting, add it explicitly with all
   required owners listed on one line.
 
-## Docs freshness
+## Docs ownership
 
-All files listed in `docs/catalog.exs` use `owner: "@z80"` until a
-broader docs-ownership process is established.  When a docs contributor
-assumes ownership of a file, update both `catalog.exs` and
-`CODEOWNERS` together in a single PR.
+Docs ownership is recorded only in `CODEOWNERS`. When a docs contributor
+assumes ownership of a file, add it there.

@@ -189,14 +189,4 @@ Every published package has an `apps/<pkg>/CHANGELOG.md` in Keep a Changelog
 format. A change to a published package's `lib/` should land with its changelog
 entry in the same PR.
 
-`.github/workflows/changelog-check.yml` checks this on every PR and annotates
-when it is missed. It is **advisory** — it does not fail the build. Run it
-locally with:
-
-```bash
-scripts/check_changelog_entries            # advisory, like CI
-scripts/check_changelog_entries --strict   # exit non-zero on a miss
-```
-
-Once every published package has a changelog and the habit has stuck, add
-`--strict` to the workflow.
+Reviewers check this; there is no CI job for it.

@@ -34,4 +34,4 @@
 Code.require_file("support/integration_config.ex", __DIR__)
 
 ExUnit.configure(exclude: [:integration])
-ExUnit.start()
+ExUnit.start(capture_log: true)

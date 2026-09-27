@@ -21,9 +21,7 @@ defmodule CodingAgent.PythonRepl.RunnerIntegrationTest do
 
   @moduletag :tmp_dir
 
-  if System.find_executable("python3") == nil do
-    @moduletag :skip
-  end
+  @moduletag :python3
 
   @frame_prefix "\x1elemon-python\t"
   @python System.find_executable("python3")

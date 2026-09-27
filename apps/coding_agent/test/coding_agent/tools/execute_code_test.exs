@@ -278,9 +278,7 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
   # The whole module needs python3; there is nothing meaningful to assert about
   # a real run without it. The schema and missing-runtime paths live in
   # `CodingAgent.Tools.ExecuteCodeSchemaTest` above and always run.
-  if System.find_executable("python3") == nil do
-    @moduletag :skip
-  end
+  @moduletag :python3
 
   describe "helper round trips" do
     test "read", %{tmp_dir: cwd} do

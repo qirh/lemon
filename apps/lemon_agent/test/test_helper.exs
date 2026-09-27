@@ -1,6 +1,6 @@
 # By default, exclude integration tests that require external CLIs/services.
 ExUnit.configure(exclude: [:integration])
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 # Compile and load support files
 Code.require_file("support/mocks.ex", __DIR__)

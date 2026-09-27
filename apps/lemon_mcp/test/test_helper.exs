@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 # Isolate HOME so these tests (notably the moved LemonSkills.McpSource suite,
 # which persists OAuth tokens through LemonCore.Secrets) never write into the

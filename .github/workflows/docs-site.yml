@@ -58,10 +58,6 @@ jobs:
         working-directory: docs
         run: npm ci
 
-      - name: Audit docs tooling
-        working-directory: docs
-        run: npm audit --audit-level=high
-
       - name: Verify source links
         working-directory: docs
         run: npm test

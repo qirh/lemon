@@ -487,9 +487,7 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
   describe "runaway scripts" do
     # The only adversarial case that genuinely needs an interpreter: a script
     # cannot decline its own wall-time kill.
-    if System.find_executable("python3") == nil do
-      @describetag :skip
-    end
+    @describetag :python3
 
     test "a script that ignores SIGTERM is still killed on the wall clock", %{tmp_dir: cwd} do
       script = """

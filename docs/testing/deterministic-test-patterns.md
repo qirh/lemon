@@ -4,9 +4,10 @@ This guide captures the patterns Lemon uses to keep CI signal deterministic and 
 
 ## 1) Do not skip tests in-tree
 
-- Avoid `@tag :skip` / `@tag skip: ...` in committed tests.
+- Do not commit `@tag :skip`, `@tag skip: ...`, `@moduletag :skip`, or `@describetag :skip`.
+- Tests that need an optional host tool use a named tag that the app's `test_helper.exs` excludes when the tool is missing (for example `:python3` in `coding_agent`).
 - If a test is flaky, fix determinism first (mocking, synchronization, fixture isolation).
-- CI enforces this with a skip-tag guard in `.github/workflows/quality.yml`.
+- CI enforces this with the skip-tag guard in `scripts/test quality`.
 
 ## 2) Prefer explicit synchronization over `Process.sleep/1`
 

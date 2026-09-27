@@ -178,8 +178,8 @@ mix sim_ui.assets.build
 The generated `priv/static/assets/app.css` and `app.js` are packaged with the
 OTP release. The deployed UI does not load Tailwind, fonts, Phoenix, or
 LiveView from third-party CDNs.
-`mix sim_ui.assets.deploy` also fails on high-severity npm advisories before it
-digests the production assets.
+Dependency advisories for `assets/package-lock.json` are reported by the OSV
+Scanner workflow.
 The release smoke lane runs `npm run smoke:werewolf` against the production
 container with system Chrome. It verifies a connected LiveView WebSocket, a
 server-driven DOM patch, keyboard entry, mobile content order, and horizontal

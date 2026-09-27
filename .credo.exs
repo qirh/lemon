@@ -1,7 +1,7 @@
 # Credo configuration for the lemon umbrella.
 #
 # Philosophy: every enabled check is enforced at zero violations in CI
-# (`mix credo` in quality.yml). Checks listed in `disabled` are deliberate
+# (`mix credo` in `scripts/test quality`, run by ci.yml). Checks listed in `disabled` are deliberate
 # style decisions for this codebase, not postponed cleanups:
 #
 # - Refactor.Nesting / CyclomaticComplexity / FunctionArity: the agent loop,

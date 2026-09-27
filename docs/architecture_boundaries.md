@@ -58,7 +58,8 @@ non-failing migration report.
 
 ## Runtime Ownership Rules
 
-The refactor quality rules also enforce a few concrete ownership boundaries:
+These ownership boundaries are review conventions; `mix lemon.quality` enforces
+the dependency policy above, not these source-level rules:
 
 - `lemon_router` may emit semantic `LemonCore.DeliveryIntent` values, but it may not construct `LemonChannels.OutboundPayload` values or reference Telegram renderer helpers directly.
 - Automation-origin channel notifications may use `LemonRouter.ChannelsDelivery` as a narrow bridge into `LemonChannels`, but this must not become a router-owned rendering path. Router code must continue to avoid `OutboundPayload` construction and platform renderer helpers.
@@ -68,25 +69,6 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via `CodingAgent.Coordinator`); there is no external CLI runner registry. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
-
-Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.
-
-## Architecture-debt ratchets
-
-`mix lemon.quality` also compares a deliberately small set of repository-wide
-counts with `.ratchets.exs`. These ratchets cover parsed uses of dynamic module
-atoms, runtime reflection, broad exception clauses, and sleeps in tests, plus
-oversized library files and `*_store.ex` wrapper files. They do not ratchet
-total source lines, documentation size, synchronous tests, generic Store calls,
-or the number of architecture rules: those figures do not reliably distinguish
-healthy changes from architecture debt.
-The library scan excludes only the ratchet check's own implementation file,
-avoiding self-referential counts without hiding sibling quality modules.
-
-Run `mix lemon.ratchet` to inspect the current values. After reducing a count,
-`mix lemon.ratchet --update` lowers its baseline. The update command never
-raises a baseline; an increase requires an explicit edit and justification in
-code review. `LemonCore.Quality.RatchetCheck` defines each count exactly.
 
 ## Skill Source Taxonomy
 

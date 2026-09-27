@@ -107,16 +107,14 @@ Read-only, redacted health and configuration reports. Safe to run anywhere.
 
 ## Quality & CI
 
-The checks that run in `mix lemon.quality` on every push, plus adjacent guards.
+`mix lemon.quality` runs in CI (`scripts/test quality`) on every PR and push to main; the rest are adjacent guards.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.quality` | Run docs and architecture quality checks (`--root`, `--validate-config`). |
-| `mix lemon.ratchet` | Measure architecture-debt ratchets (`--update` lowers baselines, `--root`). |
+| `mix lemon.quality` | Run the docs link, architecture docs, `deps/0` policy, and duplicate test module checks (`--root`, `--validate-config`). |
 | `mix lemon.architecture.docs` | Generate architecture boundary docs from policy. |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test module names. |
 | `mix lemon.extension.validate` | Validate Lemon extension package manifests. |
-| `mix lemon.cleanup` | Scan or prune stale docs/agent-loop run artifacts. |
 | `mix lemon.eval` | Run the coding-quality eval harness. |
 
 ## Data, stores & messaging

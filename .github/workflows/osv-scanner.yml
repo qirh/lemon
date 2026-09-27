@@ -1,5 +1,8 @@
 name: OSV Scanner
 
+# The single dependency-vulnerability surface for Mix, npm, and Bun lockfiles.
+# Other workflows do not run `npm audit`; add new lockfiles here instead.
+
 on:
   pull_request:
     branches: [main]
@@ -12,6 +15,8 @@ on:
       - "clients/tui/bun.lock"
       - "apps/lemon_channels/priv/package.json"
       - "apps/lemon_channels/priv/package-lock.json"
+      - "apps/lemon_sim_ui/assets/package.json"
+      - "apps/lemon_sim_ui/assets/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
       - "tools/diagrams/package.json"
@@ -28,6 +33,8 @@ on:
       - "clients/tui/bun.lock"
       - "apps/lemon_channels/priv/package.json"
       - "apps/lemon_channels/priv/package-lock.json"
+      - "apps/lemon_sim_ui/assets/package.json"
+      - "apps/lemon_sim_ui/assets/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
       - "tools/diagrams/package.json"
@@ -49,10 +56,10 @@ jobs:
     with:
       scan-args: |-
         --lockfile=mix.lock
-        --lockfile=clients/lemon-web/package-lock.json
         --lockfile=clients/tui/bun.lock
         --lockfile=clients/lemon-browser-node/package-lock.json
         --lockfile=apps/lemon_channels/priv/package-lock.json
+        --lockfile=apps/lemon_sim_ui/assets/package-lock.json
         --lockfile=docs/package-lock.json
         --lockfile=tools/diagrams/package-lock.json
       fail-on-vuln: false
