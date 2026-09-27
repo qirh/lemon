@@ -504,6 +504,7 @@ defmodule LemonAi.Providers.AnthropicTest do
         provider: :anthropic,
         base_url: "https://example.test",
         reasoning: true,
+        adaptive_thinking: true,
         input: [:text],
         cost: %LemonAi.Types.ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
         context_window: 200_000,

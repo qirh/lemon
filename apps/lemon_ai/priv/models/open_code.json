@@ -105,6 +105,13 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen",
     "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -165,6 +172,13 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen",
     "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -340,6 +354,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -360,6 +380,11 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -380,6 +405,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -400,6 +431,11 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -420,6 +456,11 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -440,6 +481,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -460,6 +507,10 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -480,6 +531,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -500,6 +557,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -520,6 +583,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -540,6 +609,12 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -560,6 +635,11 @@
     "provider": "opencode",
     "base_url": "https://opencode.ai/zen/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"

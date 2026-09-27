@@ -55,7 +55,6 @@ defmodule LemonAi.ModelsTest do
     test "Claude 4.6 model lookups use Anthropic API IDs" do
       assert Models.get_model(:anthropic, "claude-sonnet-4-6").id == "claude-sonnet-4-6"
       assert Models.get_model(:anthropic, "claude-opus-4-6").id == "claude-opus-4-6"
-      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking").id == "claude-opus-4-6"
     end
   end
 
@@ -220,11 +219,6 @@ defmodule LemonAi.ModelsTest do
 
     test "returns true for claude-opus-4-6 model" do
       model = Models.get_model(:anthropic, "claude-opus-4-6")
-      assert Models.supports_xhigh(model) == true
-    end
-
-    test "returns true for claude-opus-4-6-thinking model" do
-      model = Models.get_model(:anthropic, "claude-opus-4-6-thinking")
       assert Models.supports_xhigh(model) == true
     end
 

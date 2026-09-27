@@ -402,6 +402,205 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     assert Agent.get(attempts, & &1) == 2
   end
 
+  describe "retry-after handling" do
+    setup do
+      previous = Application.get_env(:lemon_ai, :provider_retry)
+      test_pid = self()
+
+      Application.put_env(:lemon_ai, :provider_retry,
+        sleep_fun: fn ms -> send(test_pid, {:slept, ms}) end
+      )
+
+      on_exit(fn -> Application.put_env(:lemon_ai, :provider_retry, previous || []) end)
+      :ok
+    end
+
+    test "429 with retry-after waits that long, then retries and succeeds" do
+      {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+      body =
+        sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
+          sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}, "usage" => %{}}) <>
+          sse_event("message_stop", %{})
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case Agent.get_and_update(attempts, fn n -> {n + 1, n + 1} end) do
+          1 ->
+            conn
+            |> Plug.Conn.put_resp_header("retry-after", "7")
+            |> Plug.Conn.send_resp(429, ~s({"type":"error","error":{"type":"rate_limit_error"}}))
+
+          _ ->
+            Plug.Conn.send_resp(conn, 200, body)
+        end
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+
+      assert {:ok, result} = EventStream.result(stream, 2_000)
+      assert result.stop_reason == :stop
+      assert Agent.get(attempts, & &1) == 2
+      assert_received {:slept, 7_000}
+      refute_received {:slept, _}
+    end
+
+    test "529 overloaded retries up to the attempt limit and exposes retry_after_ms" do
+      {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Agent.update(attempts, &(&1 + 1))
+
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "2")
+        |> Plug.Conn.send_resp(529, ~s({"type":"error","error":{"type":"overloaded_error"}}))
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+
+      assert {:error, %{stop_reason: :error, retry_after_ms: 2_000}} =
+               EventStream.result(stream, 2_000)
+
+      assert Agent.get(attempts, & &1) == 4
+      for _ <- 1..3, do: assert_received({:slept, 2_000})
+      refute_received {:slept, _}
+    end
+
+    test "does not sleep in-provider when the server asks for longer than the cap" do
+      {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Agent.update(attempts, &(&1 + 1))
+
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "3600")
+        |> Plug.Conn.send_resp(429, "rate limited")
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+
+      assert {:error, %{retry_after_ms: 3_600_000}} = EventStream.result(stream, 2_000)
+      assert Agent.get(attempts, & &1) == 1
+      refute_received {:slept, _}
+    end
+
+    test "backs off exponentially from ~1s when no retry-after is sent" do
+      Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 503, "unavailable") end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+
+      assert {:error, %{retry_after_ms: nil}} = EventStream.result(stream, 2_000)
+
+      delays =
+        for _ <- 1..3 do
+          assert_received {:slept, ms}
+          ms
+        end
+
+      [first, second, third] = delays
+      assert first in 501..1_000
+      assert second in 1_001..2_000
+      assert third in 2_001..4_000
+    end
+  end
+
+  describe "request shape" do
+    test "tool_result images are sent as Anthropic image blocks" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "bad request")
+      end)
+
+      tool_result = %LemonAi.Types.ToolResultMessage{
+        tool_call_id: "toolu_1",
+        tool_name: "read",
+        content: [
+          %TextContent{text: "screenshot.png"},
+          %LemonAi.Types.ImageContent{data: "iVBORw0KGgo=", mime_type: "image/png"}
+        ]
+      }
+
+      assistant = %LemonAi.Types.AssistantMessage{
+        content: [%LemonAi.Types.ToolCall{id: "toolu_1", name: "read", arguments: %{}}]
+      }
+
+      # Context.new keeps the given (chronological) order.
+      context =
+        Context.new(messages: [%UserMessage{content: "Look at it"}, assistant, tool_result])
+
+      vision_model = %{model() | input: [:text, :image]}
+
+      {:ok, stream} =
+        Anthropic.stream(vision_model, context, %StreamOptions{api_key: "test-key"})
+
+      assert_receive {:request_body, body}, 1_000
+      assert {:error, _} = EventStream.result(stream, 1_000)
+
+      [%{"type" => "tool_result", "tool_use_id" => "toolu_1", "content" => content}] =
+        List.last(body["messages"])["content"]
+
+      assert [
+               %{"type" => "text", "text" => "screenshot.png"},
+               %{
+                 "type" => "image",
+                 "source" => %{
+                   "type" => "base64",
+                   "media_type" => "image/png",
+                   "data" => "iVBORw0KGgo="
+                 }
+               }
+             ] = content
+    end
+
+    test "thinking shape follows the adaptive_thinking capability flag, not the model id" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request_body, Jason.decode!(raw)})
+        Plug.Conn.send_resp(conn, 400, "bad request")
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      adaptive = %{
+        model()
+        | reasoning: true,
+          adaptive_thinking: true,
+          reasoning_efforts: [:low, :medium, :high, :xhigh]
+      }
+
+      for {reasoning, effort} <- [minimal: "low", high: "high", xhigh: "max"] do
+        {:ok, stream} =
+          Anthropic.stream(adaptive, context, %StreamOptions{
+            api_key: "test-key",
+            reasoning: reasoning
+          })
+
+        assert_receive {:request_body, body}, 1_000
+        assert body["thinking"] == %{"type" => "adaptive"}
+        assert body["output_config"] == %{"effort" => effort}
+        assert {:error, _} = EventStream.result(stream, 1_000)
+      end
+
+      manual = %{adaptive | adaptive_thinking: false, reasoning_efforts: []}
+
+      {:ok, stream} =
+        Anthropic.stream(manual, context, %StreamOptions{api_key: "test-key", reasoning: :low})
+
+      assert_receive {:request_body, body}, 1_000
+      assert body["thinking"]["type"] == "enabled"
+      refute Map.has_key?(body, "output_config")
+      assert {:error, _} = EventStream.result(stream, 1_000)
+    end
+  end
+
   defp with_env(env_map, fun) when is_map(env_map) and is_function(fun, 0) do
     previous =
       Enum.into(env_map, %{}, fn {name, _value} ->

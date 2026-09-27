@@ -153,7 +153,9 @@ defmodule LemonAi.CallDispatcherEdgeTest do
         nil
       )
 
-      result = CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+      result =
+        CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end, queue_timeout_ms: 0)
+
       assert {:error, :max_concurrency} = result
 
       assert_receive {:telemetry, [:lemon_ai, :dispatcher, :rejected], measurements, metadata},
@@ -623,9 +625,9 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # Active requests should still be 3
       assert CallDispatcher.get_active_requests(provider) == 3
 
-      # New requests should be rejected
+      # New requests are rejected when they opt out of queueing
       assert {:error, :max_concurrency} =
-               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end, queue_timeout_ms: 0)
 
       # Release existing tasks
       for task <- tasks do
@@ -668,9 +670,9 @@ defmodule LemonAi.CallDispatcherEdgeTest do
 
       assert_receive :blocking_started, 1000
 
-      # Cap is 1, so this should fail
+      # Cap is 1, so a fail-fast request is rejected
       assert {:error, :max_concurrency} =
-               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end, queue_timeout_ms: 0)
 
       # Raise cap
       CallDispatcher.set_concurrency_cap(provider, 2)
@@ -686,6 +688,47 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # Clean up
       send(blocking_task.pid, :continue)
       Task.await(blocking_task)
+    end
+
+    test "raising cap grants queued waiters", %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+
+      CallDispatcher.set_concurrency_cap(provider, 1)
+
+      parent = self()
+
+      blocking_task =
+        Task.async(fn ->
+          CallDispatcher.dispatch(provider, fn ->
+            send(parent, :blocking_started)
+
+            receive do
+              :continue -> {:ok, "blocking"}
+            end
+          end)
+        end)
+
+      assert_receive :blocking_started, 1000
+
+      queued_task =
+        Task.async(fn ->
+          CallDispatcher.dispatch(provider, fn -> {:ok, "queued"} end)
+        end)
+
+      wait_until(fn -> Map.get(CallDispatcher.get_state().queued, provider) == 1 end)
+
+      # Raising the cap hands the new slot to the queued waiter
+      CallDispatcher.set_concurrency_cap(provider, 2)
+
+      assert {:ok, "queued"} = Task.await(queued_task, 1000)
+
+      send(blocking_task.pid, :continue)
+      assert {:ok, "blocking"} = Task.await(blocking_task)
+      assert CallDispatcher.get_active_requests(provider) == 0
     end
 
     test "cap changes are atomic with slot acquisition", %{provider: provider} do

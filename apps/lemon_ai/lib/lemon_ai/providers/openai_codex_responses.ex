@@ -49,6 +49,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.OpenAIResponsesShared
+  alias LemonAi.Providers.RetryHelper
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
 
@@ -60,8 +61,6 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   @codex_url "https://chatgpt.com/backend-api/codex/responses"
   @jwt_claim_path "https://api.openai.com/auth"
-  @max_retries 3
-  @base_delay_ms 1000
 
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
@@ -116,7 +115,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       EventStream.push_async(stream, {:start, output})
 
       # Make streaming request with retries
-      case stream_with_retries(body, headers, @max_retries) do
+      case stream_with_retries(body, headers, RetryHelper.policy(), 0) do
         {:ok, event_stream} ->
           # Map codex events to standard OpenAI Responses events
           mapped_events = map_codex_events(event_stream)
@@ -130,8 +129,14 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
               EventStream.error(stream, output)
           end
 
-        {:error, reason} ->
-          output = %{output | stop_reason: :error, error_message: reason}
+        {:error, reason, retry_after_ms} ->
+          output = %{
+            output
+            | stop_reason: :error,
+              error_message: reason,
+              retry_after_ms: retry_after_ms
+          }
+
           EventStream.error(stream, output)
       end
     rescue
@@ -184,7 +189,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     # Add reasoning configuration
     body =
       if opts.reasoning do
-        effort = clamp_reasoning_effort(model.id, opts.reasoning)
+        effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
         summary = Map.get(opts.thinking_budgets || %{}, :summary, "auto")
 
         Map.put(body, "reasoning", %{
@@ -207,23 +212,6 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   end
 
   defp normalize_instructions(_), do: @default_instructions
-
-  defp clamp_reasoning_effort(model_id, effort) do
-    # Extract base model ID
-    id =
-      if String.contains?(model_id, "/") do
-        model_id |> String.split("/") |> List.last()
-      else
-        model_id
-      end
-
-    cond do
-      String.starts_with?(id, "gpt-5.2") && effort == :minimal -> :low
-      id == "gpt-5.1" && effort == :xhigh -> :high
-      id == "gpt-5.1-codex-mini" -> if effort in [:high, :xhigh], do: :high, else: :medium
-      true -> effort
-    end
-  end
 
   defp build_headers(model, opts, account_id, token) do
     # Get OS info for user agent
@@ -338,8 +326,9 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   # HTTP Streaming with Retries
   # ============================================================================
 
-  defp stream_with_retries(body, headers, retries_left) do
+  defp stream_with_retries(body, headers, policy, attempt) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
+    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
 
     case Req.post(@codex_url,
            json: body,
@@ -350,44 +339,46 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       {:ok, %Req.Response{status: status}} when status in 200..299 ->
         {:ok, receive_sse_events()}
 
-      {:ok, %Req.Response{status: status, body: error_body}} when retries_left > 0 ->
+      {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
         error_text = normalize_error_body(error_body)
 
-        if retryable_error?(status, error_text) do
-          delay = retry_delay_with_jitter(@base_delay_ms, @max_retries - retries_left)
-          Process.sleep(delay)
-          stream_with_retries(body, headers, retries_left - 1)
-        else
-          {:error, parse_error_response(status, error_text)}
-        end
+        retry_delay =
+          if retry_allowed? and retryable_error?(status, error_text) do
+            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
+          else
+            :give_up
+          end
 
-      {:ok, %Req.Response{status: status, body: error_body}} ->
-        error_text = normalize_error_body(error_body)
-        {:error, parse_error_response(status, error_text)}
+        case retry_delay do
+          :give_up ->
+            {:error, parse_error_response(status, error_text),
+             RetryHelper.retry_after_ms(response_headers)}
 
-      {:error, reason} when retries_left > 0 ->
-        error_msg = inspect(reason)
-
-        if not String.contains?(error_msg, "usage limit") do
-          delay = retry_delay_with_jitter(@base_delay_ms, @max_retries - retries_left)
-          Process.sleep(delay)
-          stream_with_retries(body, headers, retries_left - 1)
-        else
-          {:error, error_msg}
+          delay_ms ->
+            RetryHelper.sleep(delay_ms)
+            stream_with_retries(body, headers, policy, attempt + 1)
         end
 
       {:error, reason} ->
-        {:error, "Request failed: #{inspect(reason)}"}
+        error_msg = inspect(reason)
+
+        cond do
+          retry_allowed? and String.contains?(error_msg, "usage limit") ->
+            {:error, error_msg, nil}
+
+          retry_allowed? ->
+            RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+            stream_with_retries(body, headers, policy, attempt + 1)
+
+          true ->
+            {:error, "Request failed: #{error_msg}", nil}
+        end
     end
   end
 
-  defp retry_delay_with_jitter(base_ms, attempt) do
-    LemonAi.Providers.RetryHelper.exponential_backoff_with_jitter(base_ms, attempt)
-  end
-
   defp retryable_error?(status, error_text) do
-    LemonAi.Providers.RetryHelper.retryable_http_status?(status, [429, 500, 502, 503, 504]) ||
-      LemonAi.Providers.RetryHelper.retryable_error_text?(error_text)
+    RetryHelper.retryable_http_status?(status, [429, 500, 502, 503, 504]) ||
+      RetryHelper.retryable_error_text?(error_text)
   end
 
   defp parse_error_response(status, raw) do

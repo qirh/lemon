@@ -87,6 +87,7 @@ defmodule LemonAi.Types do
             usage: LemonAi.Types.Usage.t(),
             stop_reason: stop_reason(),
             error_message: String.t() | nil,
+            retry_after_ms: non_neg_integer() | nil,
             timestamp: integer()
           }
     @type stop_reason :: :stop | :length | :tool_use | :error | :aborted | :redirected
@@ -99,6 +100,7 @@ defmodule LemonAi.Types do
               usage: nil,
               stop_reason: nil,
               error_message: nil,
+              retry_after_ms: nil,
               timestamp: 0
   end
 
@@ -242,8 +244,22 @@ defmodule LemonAi.Types do
   end
 
   defmodule Model do
-    @moduledoc "Model definition with capabilities and pricing"
+    @moduledoc """
+    Model definition with capabilities and pricing.
+
+    Reasoning capability flags:
+
+      * `reasoning` - the model accepts a reasoning/thinking request at all.
+      * `adaptive_thinking` - Anthropic Messages models that take
+        `thinking: %{type: "adaptive"}` plus `output_config.effort` instead of a
+        manual `budget_tokens` thinking budget (manual budgets are rejected on
+        Claude Opus 4.7 and later).
+      * `reasoning_efforts` - the Lemon reasoning levels the model accepts
+        natively, in ascending order. An empty list means undeclared: levels
+        pass through unchanged. See `LemonAi.Models.reasoning_effort_for/2`.
+    """
     @type input_type :: :text | :image
+    @type reasoning_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
             id: String.t(),
             name: String.t(),
@@ -251,6 +267,8 @@ defmodule LemonAi.Types do
             provider: atom() | String.t(),
             base_url: String.t(),
             reasoning: boolean(),
+            adaptive_thinking: boolean(),
+            reasoning_efforts: [reasoning_level()],
             input: [input_type()],
             cost: ModelCost.t(),
             context_window: non_neg_integer(),
@@ -264,6 +282,8 @@ defmodule LemonAi.Types do
               provider: nil,
               base_url: "",
               reasoning: false,
+              adaptive_thinking: false,
+              reasoning_efforts: [],
               input: [:text],
               cost: %ModelCost{},
               context_window: 0,

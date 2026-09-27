@@ -967,6 +967,89 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
     assert result.usage.cache_read == 5
   end
 
+  test "prices streamed usage with the model's catalog cost" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      body =
+        sse_body([
+          %{
+            "usage" => %{
+              "prompt_tokens" => 1_500_000,
+              "completion_tokens" => 200_000,
+              "prompt_tokens_details" => %{"cached_tokens" => 500_000}
+            }
+          },
+          :done
+        ])
+
+      Plug.Conn.send_resp(conn, 200, body)
+    end)
+
+    model = %Model{
+      id: "openai/gpt-5.5",
+      name: "GPT-5.5",
+      api: :openai_completions,
+      provider: :openrouter,
+      base_url: "https://example.test",
+      cost: %LemonAi.Types.ModelCost{input: 5.0, output: 30.0, cache_read: 0.5, cache_write: 0.0}
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "test-key"})
+
+    assert {:ok, result} = EventStream.result(stream, 1000)
+    cost = result.usage.cost
+
+    # 1M uncached input * $5 + 0.5M cached * $0.5 + 0.2M output * $30
+    assert_in_delta cost.input, 5.0, 1.0e-9
+    assert_in_delta cost.cache_read, 0.25, 1.0e-9
+    assert_in_delta cost.output, 6.0, 1.0e-9
+    assert_in_delta cost.total, 11.25, 1.0e-9
+  end
+
+  describe "HTTP retries" do
+    setup do
+      previous = Application.get_env(:lemon_ai, :provider_retry)
+      test_pid = self()
+
+      Application.put_env(:lemon_ai, :provider_retry,
+        sleep_fun: fn ms -> send(test_pid, {:slept, ms}) end
+      )
+
+      on_exit(fn -> Application.put_env(:lemon_ai, :provider_retry, previous || []) end)
+      :ok
+    end
+
+    test "surfaces retry_after_ms when the server's wait exceeds the in-provider cap" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, :request)
+
+        conn
+        |> Plug.Conn.put_resp_header("retry-after", "600")
+        |> Plug.Conn.send_resp(429, ~s({"error":{"message":"Rate limit reached"}}))
+      end)
+
+      model = %Model{
+        id: "gpt-4o-mini",
+        name: "GPT-4o mini",
+        api: :openai_completions,
+        provider: :openai,
+        base_url: "https://example.test"
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAICompletions.stream(model, context, %StreamOptions{api_key: "k"})
+
+      assert {:error, %AssistantMessage{stop_reason: :error, retry_after_ms: 600_000}} =
+               EventStream.result(stream, 1000)
+
+      assert_received :request
+      refute_received :request
+      refute_received {:slept, _}
+    end
+  end
+
   test "streams multiple tool calls with indices" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =

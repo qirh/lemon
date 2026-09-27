@@ -91,7 +91,7 @@ api_key_secret = "google_api_key"
 
 [defaults]
 provider = "anthropic"
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-5"
 thinking_level = "medium"
 
 [runtime]

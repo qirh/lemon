@@ -43,6 +43,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
   alias LemonAi.EventStream
   alias LemonAi.Providers.HttpTrace
   alias LemonAi.Providers.OpenAIResponsesShared
+  alias LemonAi.Providers.RetryHelper
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
 
@@ -91,8 +92,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
       EventStream.push_async(stream, {:start, output})
 
-      # Make streaming request
-      case stream_request(url, headers, body, trace_id) do
+      # Make streaming request (retries 429/5xx/transport failures in place)
+      case stream_request(url, headers, body, trace_id, RetryHelper.policy(), 0) do
         {:ok, event_stream} ->
           # Process stream events
           case OpenAIResponsesShared.process_stream(
@@ -120,7 +121,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
               EventStream.error(stream, output)
           end
 
-        {:error, reason} ->
+        {:error, reason, retry_after_ms} ->
           HttpTrace.log_error("openai-responses", "request_error", %{
             trace_id: trace_id,
             error: reason,
@@ -128,7 +129,13 @@ defmodule LemonAi.Providers.OpenAIResponses do
             session_id: opts.session_id
           })
 
-          output = %{output | stop_reason: :error, error_message: reason}
+          output = %{
+            output
+            | stop_reason: :error,
+              error_message: reason,
+              retry_after_ms: retry_after_ms
+          }
+
           EventStream.error(stream, output)
       end
     rescue
@@ -295,8 +302,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
   defp add_reasoning_config(params, model, opts, _messages) do
     if model.reasoning do
-      reasoning_effort = opts.reasoning
-      # Map :xhigh to "xhigh" if supported, otherwise use opts as-is
+      # Clamp to the levels the model declares (e.g. :xhigh -> :high on gpt-5.1).
+      reasoning_effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
       reasoning_summary = Map.get(opts.thinking_budgets || %{}, :summary, "auto")
 
       if reasoning_effort do
@@ -355,12 +362,9 @@ defmodule LemonAi.Providers.OpenAIResponses do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request(url, headers, body, trace_id) do
-    # Use Finch or Req for HTTP streaming
-    # This is a simplified implementation - in production you'd want proper
-    # streaming with backpressure handling
-
+  defp stream_request(url, headers, body, trace_id, policy, attempt) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
+    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
 
     case Req.post(url,
            json: body,
@@ -377,6 +381,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
         HttpTrace.log_error("openai-responses", "http_error", %{
           trace_id: trace_id,
           status: status,
+          attempt: attempt + 1,
           provider_request_id:
             HttpTrace.response_header_value(response_headers, [
               "x-request-id",
@@ -389,18 +394,38 @@ defmodule LemonAi.Providers.OpenAIResponses do
           input_items: count_input_items(Map.get(body, "input"))
         })
 
-        error = LemonAi.Error.parse_http_error(status, response_body, response_headers)
-        {:error, error.message}
+        retry_delay =
+          if retry_allowed? and RetryHelper.retryable_http_status?(status) do
+            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
+          else
+            :give_up
+          end
+
+        case retry_delay do
+          :give_up ->
+            error = LemonAi.Error.parse_http_error(status, response_body, response_headers)
+            {:error, error.message, RetryHelper.retry_after_ms(response_headers)}
+
+          delay_ms ->
+            RetryHelper.sleep(delay_ms)
+            stream_request(url, headers, body, trace_id, policy, attempt + 1)
+        end
 
       {:error, reason} ->
         HttpTrace.log_error("openai-responses", "transport_error", %{
           trace_id: trace_id,
+          attempt: attempt + 1,
           error: inspect(reason, limit: 50, printable_limit: 8_000),
           model: Map.get(body, "model"),
           input_items: count_input_items(Map.get(body, "input"))
         })
 
-        {:error, "Request failed: #{inspect(reason)}"}
+        if retry_allowed? and RetryHelper.retryable_transport_error?(reason) do
+          RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+          stream_request(url, headers, body, trace_id, policy, attempt + 1)
+        else
+          {:error, "Request failed: #{inspect(reason)}", nil}
+        end
     end
   end
 

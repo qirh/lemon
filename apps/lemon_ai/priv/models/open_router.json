@@ -2459,6 +2459,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2479,6 +2485,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2539,6 +2550,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2559,6 +2576,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2579,6 +2602,9 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2599,6 +2625,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2639,6 +2670,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2659,6 +2695,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2679,6 +2721,10 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2699,6 +2745,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2739,6 +2791,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2759,6 +2817,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2799,6 +2862,12 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2819,6 +2888,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2973,6 +3047,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -3071,6 +3150,11 @@
     "provider": "openrouter",
     "base_url": "https://openrouter.ai/api/v1",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
