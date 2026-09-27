@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Lemon.Sim.Demo do
 
   Boots `lemon_sim_ui` with its HTTP endpoint (unless it is already running in
   this VM), starts an offline Werewolf game driven by the deterministic
-  heuristic seat policy (`LemonSimUi.Demo.WerewolfHeuristic`), prints the
+  heuristic seat policy (`LemonSim.Examples.Werewolf.OfflineRunner`), prints the
   spectator URL, and keeps serving until interrupted. No provider API keys or
   model configuration are read.
 

@@ -33,7 +33,7 @@ lemon_sim_ui
 
 A run is finished when its world reaches one of its scenario's terminal statuses (`LemonSim.Examples.terminal?/1`: Tic Tac Toe `won`/`draw`, VendingBench `complete`/`bankrupt`, Werewolf and Poker `game_over`). Finished runs are marked `completed` and non-resumable, are never picked up by crash or boot recovery (`resume_sim/1` returns `{:error, :finished}`), count toward retention pruning, and show as REPLAY in the lobby; arenas, auto-loop restarts, and spectator redirects use the same predicate.
 
-`SimManager.start_sim(:werewolf, offline_strategy: "heuristic", seed: seed)` runs a keyless game: `LemonSimUi.Demo.WerewolfHeuristic` picks each seat's legal action from a `:rand` state seeded from the world seed, so no model or provider key is resolved. `offline_step_delay_ms` paces turns for spectators; the offline strategy is persisted in `start_opts`, so crash recovery resumes with the same decider.
+`SimManager.start_sim(:werewolf, offline_strategy: "heuristic", seed: seed)` runs a keyless game: `LemonSim.Examples.Werewolf.OfflineRunner` (the same heuristic as `mix lemon.sim.werewolf --offline-strategy heuristic`) picks each seat's legal action from a `:rand` state seeded from the world seed, so no model or provider key is resolved. `offline_step_delay_ms` paces turns for spectators; the offline strategy is persisted in `start_opts`, so crash recovery resumes with the same decider.
 
 The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/live/longpoll` transport, and the browser client connects without enabling a long-poll fallback.
 

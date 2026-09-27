@@ -9,6 +9,10 @@ defmodule LemonSim.Examples.Werewolf.OfflineRunner do
   are drawn from a decider RNG seeded from `:seed`, so the same seed always
   produces the same game and the same bundle bytes (given a seed-deterministic
   `Werewolf.initial_state/1` and updater).
+
+  `seed_rng/2` and `decide/2` are the decider contract; `LemonSimUi.SimManager`
+  drives its keyless `offline_strategy: "heuristic"` runs (`mix lemon.sim.demo`)
+  through them.
   """
 
   import LemonSim.Examples.Helpers, only: [get: 2, get: 3]
@@ -51,7 +55,7 @@ defmodule LemonSim.Examples.Werewolf.OfflineRunner do
 
     state = Werewolf.initial_state(initial_opts)
     config = Artifacts.replay_config(state, initial_opts)
-    rng = :rand.seed_s(:exsss, {seed, seed + 7, seed + 13})
+    rng = seed_rng(seed)
 
     max_turns =
       Keyword.get(opts, :driver_max_turns, Keyword.get(opts, :max_turns, @default_max_turns))
@@ -101,6 +105,17 @@ defmodule LemonSim.Examples.Werewolf.OfflineRunner do
           )
         end
     end
+  end
+
+  @doc """
+  Builds the decider RNG (an `:rand.seed_s/2` state) for a game seed. A run
+  resumed after `turns_completed` turns reseeds deterministically from the
+  same seed.
+  """
+  @spec seed_rng(integer(), non_neg_integer()) :: :rand.state()
+  def seed_rng(seed, turns_completed \\ 0)
+      when is_integer(seed) and is_integer(turns_completed) and turns_completed >= 0 do
+    :rand.seed_s(:exsss, {seed, seed + 7, seed + 13 + turns_completed})
   end
 
   @doc """

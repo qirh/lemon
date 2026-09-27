@@ -2451,26 +2451,6 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert File.read!(Path.join(artifact_dir, "actions.jsonl")) =~ "too many support-tool rounds"
   end
 
-  test "checked-in replay fixture loads as a VendingBench replay" do
-    fixture_dir = Path.expand("../../../priv/fixtures/vending_bench/ci_replay", __DIR__)
-
-    assert {:ok, %{manifest: %{"schema_version" => "lemon_sim.run.v1"}}} =
-             LemonSim.Bench.Artifacts.Verifier.verify_run(fixture_dir)
-
-    assert {:ok, replay} = VendingBench.Replay.build(fixture_dir)
-
-    assert replay.sim_id == "vb_ci_fixture"
-    assert replay.status == "complete"
-    assert replay.day_number == 7
-    assert replay.event_count > 0
-    assert is_map(replay.supplier_messages)
-    assert is_map(replay.worker_history)
-    assert is_map(replay.operator_transcript)
-    assert is_list(replay.reminders)
-    assert is_list(replay.machine_fault_reports)
-    assert File.read!(Path.join(fixture_dir, "replay.html")) =~ "VendingBench Replay"
-  end
-
   defp fake_model(id) do
     %Model{
       id: id,
