@@ -416,18 +416,18 @@ export const TOOL_FIXTURES: ToolFixture[] = [
 		name: "unknown",
 		kind: "tool",
 		// A tool nothing has a formatter for: the generic card path.
-		title: "session_search",
-		started: { name: "session_search", args: { query: "render contract", limit: 5 } },
+		title: "custom_search",
+		started: { name: "custom_search", args: { query: "render contract", limit: 5 } },
 		completed: {
-			name: "session_search",
+			name: "custom_search",
 			args: { query: "render contract", limit: 5 },
 			result: "3 sessions matched: tui-1755, tui-1760, tui-1771",
 		},
 		failed: {
-			name: "session_search",
+			name: "custom_search",
 			args: { query: "render contract" },
 			result: "session index unavailable",
-			result_meta: { error_type: "unavailable", tool_name: "session_search" },
+			result_meta: { error_type: "unavailable", tool_name: "custom_search" },
 		},
 	},
 ];
