@@ -77,7 +77,7 @@ new session identity can accept events.
 
 | Category | Tools |
 |----------|-------|
-| **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
+| **File Operations / Skills / Memory** | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
 | **Execution** | `bash`, `bash_output`, `kill_process` |
 | **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
@@ -120,13 +120,20 @@ redacted by default unless `includeValues: true` is explicit. `browser_clear_sta
 clears browser-context cookies, current-page local/session storage, and buffered
 events by default; pass the specific `clear*` flags to narrow the reset.
 
-`memory` is implemented in `LemonSkills.Tools` and is the compact prompt-injected memory surface. It reads, adds,
-replaces, and removes bounded assistant-home `USER.md` profile notes and
-`MEMORY.md` quick facts without relying on project-local file paths. It rejects
-duplicates, requires unique text for replace/remove, enforces compact file
-limits, and screens writes for common secrets, prompt-injection phrases, NUL
-bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
-structured notes under `memory/topics/`.
+`remember` is provided by `LemonSkills.Tools.Remember`. It saves compact
+assistant-home facts to `USER.md` or `MEMORY.md` using `text`, `target`
+(`user` or `memory`), and `replaces`. Duplicate additions are ignored; replace
+and remove require a unique exact passage. File limits and safety screening
+apply before writes.
+
+`recall` is provided by `LemonSkills.Tools.Recall` and searches past conversation
+summaries and longer notes under `memory/`. Conversation search uses OR/BM25
+lexical matching, so paraphrases sharing a keyword may match. Automatic recall
+may attach a bounded **Relevant memory** block to a user message; set
+`[memory] auto_recall = false` to disable it. It is also disabled by
+`[features] session_search = "off"`. Session-message scroll/browse has been
+removed and has no replacement.
+
 
 `websearch` and `webfetch` resolve their backends through
 `CodingAgent.Search.Registry`. Bundled providers include Brave, Exa search and
@@ -138,10 +145,6 @@ registered by trusted extensions with provider type `:search`. Concurrent
 identical requests are coalesced by `CodingAgent.Search.SingleFlight` before
 successful results enter the existing bounded/persistent web cache.
 
-`session_search` is the Hermes-compatible no-LLM recall tool. It infers
-discovery, scroll, or browse mode from the argument shape and reads from Lemon's
-durable memory/run-history stores; `search_memory` remains the native scoped
-memory tool.
 
 The media tools are implemented in `LemonSkills.Tools` and registered by
 `CodingAgent.ToolRegistry` under their existing names. `media_status` gives the model a read-only view of redacted media job summaries,
@@ -932,7 +935,7 @@ apps/coding_agent/
 |   |   |   +-- todo_store.ex, todo_store_owner.ex
 |   |   |   +-- task.ex, agent.ex
 |   |   |   +-- tool_auth.ex, extensions_status.ex
-|   |   |   +-- read_skill.ex, skill_manage.ex, memory_topic.ex
+|   |   |   +-- read_skill.ex, skill_manage.ex
 |   |   |   +-- lsp_formatter.ex, lsp_diagnostics.ex, restart.ex
 |   |   |   +-- feature_requirements.ex
 |   |   +-- budget_tracker.ex, budget_enforcer.ex

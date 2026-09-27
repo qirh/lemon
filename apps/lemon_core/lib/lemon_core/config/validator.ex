@@ -32,7 +32,7 @@ defmodule LemonCore.Config.Validator do
   implementations produce messages in the same shape.
   """
 
-  alias LemonCore.Config.{Features, Modular}
+  alias LemonCore.Config.{Features, Memory, Modular}
   alias LemonCore.Config.Gateway.Channel
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
@@ -65,6 +65,7 @@ defmodule LemonCore.Config.Validator do
     errors = validate_tools(config.tools, errors)
     errors = validate_tui(config.tui, errors)
     errors = validate_features(config.features, errors)
+    errors = validate_memory(config.memory, errors)
     errors = validate_automation(config.automation, errors)
 
     case errors do
@@ -575,6 +576,16 @@ defmodule LemonCore.Config.Validator do
   def validate_features(_, errors) do
     ["features: must be a map" | errors]
   end
+
+  @doc """
+  Validates the `[memory]` section.
+  """
+  @spec validate_memory(Memory.t() | nil, [String.t()]) :: [String.t()]
+  def validate_memory(%Memory{} = memory, errors) do
+    validate_boolean(errors, memory.auto_recall, "memory.auto_recall")
+  end
+
+  def validate_memory(_memory, errors), do: errors
 
   @doc """
   Validates the `[automation]` section.

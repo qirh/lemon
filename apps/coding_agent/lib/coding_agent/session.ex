@@ -1503,6 +1503,7 @@ defmodule CodingAgent.Session do
   defp collect_contributed_sections(state, skill_context) do
     ContextRegistry.collect(%{
       cwd: state.cwd,
+      workspace_dir: state.workspace_dir,
       session_scope: state.session_scope,
       session_key: state.session_key,
       session_id: state.session_manager && state.session_manager.header.id,

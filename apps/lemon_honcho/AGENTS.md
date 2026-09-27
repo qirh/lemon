@@ -368,7 +368,7 @@ above, never by name.
   of the five tools returns a context-only result from its `gate/1` without calling
   Honcho, because in that mode memory reaches the model through the prompt. The
   registrations do not change either way; the tools are always registered, and the
-  memory provider ignores `recall_mode` entirely, so `search_memory` still reaches
+  memory provider ignores `recall_mode` entirely, so `recall` still reaches
   Honcho in both modes.
 * **Subagents get nothing by default.** `inject_in_subagents?` is false; a request with
   `session_scope: :subagent` is gated before any work happens.

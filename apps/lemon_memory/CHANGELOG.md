@@ -19,6 +19,9 @@ where durable memory had been eight modules with no boundary of their own.
 
 ### Added
 
+- Automatic local recall now carries agent-scoped, BM25-ranked conversation
+  matches and the session workspace's USER.md facts in a bounded 2 KiB volatile
+  block. It needs no model call; `[memory] auto_recall = false` disables it.
 - `LemonMemory.Store.put_sync/1,2` for explicit review/confirm workflows that
   must know SQLite accepted a document before reporting success;
   create-if-absent `put_new_sync/1,2`, exact `get_document/1,2`, and exact
@@ -41,8 +44,9 @@ where durable memory had been eight modules with no boundary of their own.
   of failing it.
 - `LemonMemory.Document` as the single record shape every provider reads and
   writes; `LemonMemory.Safety` for redaction and size limits before persistence;
-  `LemonMemory.SessionSearch` for scoped search; `LemonMemory.TaskFingerprint`
-  for recognising repeated work.
+  `LemonMemory.Query` for OR-joined lexical search terms; `LemonMemory.Recall`
+  for bounded local conversation recall; and `LemonMemory.SessionSearch` for
+  the scoped conversation search API.
 - `LemonMemory.Document.new/1` builds a document from fields directly (for
   callers driving `LemonAgent` themselves), applying the same 2,000-byte summary
   truncation and required-field validation as `from_run/4`. Building the struct

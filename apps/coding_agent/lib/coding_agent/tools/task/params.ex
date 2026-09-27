@@ -48,7 +48,8 @@ defmodule CodingAgent.Tools.Task.Params do
     "task",
     "agent",
     "extensions_status",
-    "memory_topic"
+    "remember",
+    "recall"
   ]
   @tool_only_guardrail_regex ~r/\buse\s+([a-z0-9_,\/\-\s]+?)\s+tools?\s+only\b/i
 

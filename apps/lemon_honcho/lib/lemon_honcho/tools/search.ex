@@ -19,10 +19,10 @@ defmodule LemonHoncho.Tools.Search do
   it", which is a wrong answer rather than an empty one. So an unmapped session
   falls back to the workspace search and the result says which one ran.
 
-  ## Distinct from `search_memory`
+  ## Distinct from `recall`
 
-  Both search "memory", and they search different stores: `search_memory` reads
-  the local memory files and session transcripts, and this reads Honcho's
+  Both search "memory", and they search different stores: `recall` reads the
+  local memory notes and past-conversation store, and this reads Honcho's
   server-side record of past conversations and conclusions. The description
   says so, because a model that believes they are the same will use one and
   conclude the other is empty.
@@ -68,8 +68,8 @@ defmodule LemonHoncho.Tools.Search do
   them — returning the matching excerpts verbatim, with no synthesis. Use it to find what was actually said, and \
   prefer it over honcho_reasoning whenever a quote or one specific detail would answer the question, since it \
   costs no server-side reasoning. Searches the current conversation by default; pass scope="workspace" to search \
-  every session Honcho holds for this user. This searches Honcho's own store and is separate from search_memory, \
-  which searches the local memory files — an empty result here says nothing about what is in those.\
+  every session Honcho holds for this user. This searches Honcho's own store and is separate from recall, \
+  which searches the local memory notes and past conversations — an empty result here says nothing about what is in those.\
   """
 
   @doc """

@@ -50,9 +50,8 @@ the `Synthesis` draft internals, `Application`, `Telemetry`) is internal.
 |------|-----------|---------|
 | `lib/lemon_skills/tools/read_skill.ex` | `read_skill` | Fetches skill content/metadata by key |
 | `lib/lemon_skills/tools/skill_manage.ex` | `skill_manage` | Creates, edits, patches, deletes, and audits local skills |
-| `lib/lemon_skills/tools/memory.ex` | `memory` | Reads and updates compact assistant-home USER.md/MEMORY.md notes |
-| `lib/lemon_skills/tools/memory_topic.ex` | `memory_topic` | Scaffolds durable topic memory files |
-| `lib/lemon_skills/tools/search_memory.ex` | `search_memory` | Searches prior run memory by scope |
+| `lib/lemon_skills/tools/remember.ex` | `remember` | Adds, replaces, or removes compact assistant-home USER.md/MEMORY.md notes |
+| `lib/lemon_skills/tools/recall.ex` | `recall` | Searches past conversations and longer workspace notes |
 | `lib/lemon_skills/tools/media_status.ex` | `media_status` | Reports redacted media job status |
 | `lib/lemon_skills/tools/media_generate_image.ex` | `media_generate_image` | Generates managed image artifacts |
 | `lib/lemon_skills/tools/media_generate_speech.ex` | `media_generate_speech` | Generates managed speech artifacts |
@@ -278,9 +277,8 @@ test/lemon_skills/
   tools/
     read_skill_test.exs          # ReadSkill tool
     skill_manage_test.exs        # SkillManage tool
-    memory_test.exs              # Memory tool
-    memory_topic_test.exs        # MemoryTopic tool
-    search_memory_test.exs       # SearchMemory tool
+    remember_test.exs            # Durable fact mutations
+    recall_test.exs              # Scoped conversation and note recall
     kanban_test.exs              # Kanban tool
     media_*_test.exs             # The six media tools
 test/mix/tasks/
@@ -339,7 +337,7 @@ HttpMock.stub("https://skills.lemon.agent/", {:error, :nxdomain})
 | `lemon_core` | `LemonCore.ExecApprovals` for approval gating in Installer, configured stdio MCP sampling review, and configured HTTP MCP OAuth authorization requests; `LemonCore.Secrets` for GitHub token resolution in Discovery and HTTP MCP OAuth client/token secret storage; `LemonCore.OAuth.LocalCallbackListener` for configured HTTP MCP PKCE callback capture; `LemonCore.Telemetry` for skill load/write events |
 | `lemon_agent` | `LemonAgent.Types.AgentTool` and `LemonAgent.Types.AgentToolResult` structs for tool definitions |
 | `lemon_ai` | `LemonAi.Types.TextContent` struct for tool result content; the model call behind the optional LLM audit reviewer |
-| `lemon_memory` | Durable memory behind the `memory`, `memory_topic` and `search_memory` tools |
+| `lemon_memory` | Durable memory behind the `remember` and `recall` tools |
 | `lemon_media` | Media job records and artifacts behind the six media tools |
 
 ### Consumers (other apps use this)

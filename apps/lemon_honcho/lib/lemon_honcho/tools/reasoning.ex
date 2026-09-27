@@ -63,7 +63,7 @@ defmodule LemonHoncho.Tools.Reasoning do
   synthesized answer rather than raw excerpts. Reach for it when the answer has to be inferred across many past \
   sessions — "how do they like changes explained?", "what have they decided about testing?" — and is not in this \
   conversation. Every call spends an LLM call on Honcho's server, so it is slower and more expensive than the \
-  other memory tools: try honcho_search or search_memory first when a stored fact or a quote would settle the \
+  other memory tools: try honcho_search or recall first when a stored fact or a quote would settle the \
   question, and use this when it would not. Returns prose, or a note that Honcho has nothing to say yet.\
   """
 
