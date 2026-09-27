@@ -139,50 +139,13 @@ defmodule CodingAgent.BashExecutor do
   defp collect_output(state) do
     receive do
       {port, {:data, data}} when port == state.port ->
-        # Check abort signal
+        # Buffer the chunk before honoring an abort so output that raced the
+        # abort is still part of the partial result.
+        state = buffer_chunk(state, data)
+
         if state.signal && AbortSignal.aborted?(state.signal) do
           handle_abort(state)
         else
-          sanitized = sanitize_output(data)
-
-          # Call chunk callback if provided
-          if state.on_chunk, do: state.on_chunk.(sanitized)
-
-          new_total = state.total_bytes + byte_size(sanitized)
-
-          state =
-            if new_total > state.temp_file_threshold && is_nil(state.temp_file) do
-              # Start writing to temp file
-              path = generate_temp_path()
-              {:ok, file} = File.open(path, [:write, :binary])
-
-              # Write existing buffer to file
-              existing_content = IO.iodata_to_binary(Enum.reverse(state.output_buffer))
-              IO.binwrite(file, existing_content)
-              IO.binwrite(file, sanitized)
-
-              %{
-                state
-                | temp_file: file,
-                  temp_file_path: path,
-                  output_buffer: [],
-                  total_bytes: new_total
-              }
-            else
-              if state.temp_file do
-                # Continue writing to temp file
-                IO.binwrite(state.temp_file, sanitized)
-                %{state | total_bytes: new_total}
-              else
-                # Buffer in memory
-                %{
-                  state
-                  | output_buffer: [sanitized | state.output_buffer],
-                    total_bytes: new_total
-                }
-              end
-            end
-
           collect_output(state)
         end
 
@@ -205,26 +168,75 @@ defmodule CodingAgent.BashExecutor do
     end
   end
 
+  defp buffer_chunk(state, data) do
+    sanitized = sanitize_output(data)
+
+    # Call chunk callback if provided
+    if state.on_chunk, do: state.on_chunk.(sanitized)
+
+    new_total = state.total_bytes + byte_size(sanitized)
+
+    cond do
+      new_total > state.temp_file_threshold && is_nil(state.temp_file) ->
+        # Start writing to temp file
+        path = generate_temp_path()
+        {:ok, file} = File.open(path, [:write, :binary])
+
+        # Write existing buffer to file
+        existing_content = IO.iodata_to_binary(Enum.reverse(state.output_buffer))
+        IO.binwrite(file, existing_content)
+        IO.binwrite(file, sanitized)
+
+        %{
+          state
+          | temp_file: file,
+            temp_file_path: path,
+            output_buffer: [],
+            total_bytes: new_total
+        }
+
+      state.temp_file ->
+        # Continue writing to temp file
+        IO.binwrite(state.temp_file, sanitized)
+        %{state | total_bytes: new_total}
+
+      true ->
+        # Buffer in memory
+        %{state | output_buffer: [sanitized | state.output_buffer], total_bytes: new_total}
+    end
+  end
+
   defp handle_abort(state) do
-    cleanup_port(state)
+    state = stop_process(state)
     finalize_result(%{state | cancelled: true, exit_code: nil})
   end
 
   defp handle_timeout(state) do
-    cleanup_port(state)
+    state = stop_process(state)
     result = finalize_result(%{state | cancelled: true, exit_code: nil})
     %Result{result | timed_out: true}
   end
 
-  defp cleanup_port(state) do
-    # Kill the process tree
+  # Kill the process tree, keep any output already delivered to the mailbox
+  # (partial output is part of an aborted/timed-out result), then close the port.
+  defp stop_process(state) do
     if state.os_pid, do: kill_process_tree(state.os_pid)
+    state = drain_output(state)
 
-    # Close the port
     try do
       Port.close(state.port)
     catch
       :error, _ -> :ok
+    end
+
+    state
+  end
+
+  defp drain_output(%{port: port} = state) do
+    receive do
+      {^port, {:data, data}} -> drain_output(buffer_chunk(state, data))
+    after
+      0 -> state
     end
   end
 

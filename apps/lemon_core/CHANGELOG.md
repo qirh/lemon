@@ -42,6 +42,9 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Fixed
 
+- `LemonCore.Backup` digests files with `File.stream!(path, bytes)` instead of
+  the deprecated `File.stream!(path, modes, bytes)` order, so Elixir 1.20 no
+  longer prints a deprecation warning into `lemon backup` JSON output.
 - Run finalization is now synchronous and retry-safe. A session-index failure
   is returned to the caller, retrying repairs the index without double-counting
   the run, conflicting summaries fail without exposing the original summary,
