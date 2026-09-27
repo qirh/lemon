@@ -230,6 +230,68 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       assert result["summary"]["cleanup"]["includesCredentials"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end
+
+    test "retains usable OAuth URLs without exposing action credentials" do
+      safe_url =
+        "https://provider.example/authorize?client_id=lemon&response_type=code" <>
+          "&redirect_uri=http%3A%2F%2F127.0.0.1%3A4000%2Fcallback" <>
+          "&scope=read%20write&state=approval-state&code_challenge=challenge"
+
+      unsafe_urls = [
+        "https://user:url-password@provider.example/authorize",
+        "https://provider.example/authorize?access_token=query-credential",
+        "https://provider.example/authorize?api%5Fkey=encoded-credential",
+        "https://provider.example/authorize#token=fragment-credential",
+        "https://provider.example/sk-urlcredential123/authorize"
+      ]
+
+      for {url, index} <- Enum.with_index([safe_url | unsafe_urls]) do
+        approval_id = LemonCore.Id.approval_id()
+
+        LemonCore.Store.put(:exec_approvals_pending, approval_id, %{
+          id: approval_id,
+          action: %{
+            "authorization_url" => url,
+            "authorization_url_token" => "lookalike-credential",
+            "nested" => [
+              %{"Authorization" => "Bearer header-credential"},
+              %{"message" => "continue token=text-credential"}
+            ]
+          },
+          expires_at_ms: nil
+        })
+
+        {:ok, result} = ExecApprovalsGet.handle(%{}, %{})
+        pending = Enum.find(result["pending"], &(&1["id"] == approval_id))
+
+        if index == 0 do
+          assert pending["action"]["authorization_url"] == safe_url
+        else
+          assert pending["action"]["authorization_url"] == %{
+                   "redacted" => true,
+                   "kind" => "secret"
+                 }
+        end
+
+        assert pending["action"]["authorization_url_token"] == %{
+                 "redacted" => true,
+                 "kind" => "secret"
+               }
+
+        for credential <- [
+              "url-password",
+              "query-credential",
+              "encoded-credential",
+              "fragment-credential",
+              "sk-urlcredential123",
+              "lookalike-credential",
+              "header-credential",
+              "text-credential"
+            ] do
+          refute inspect(result) =~ credential
+        end
+      end
+    end
   end
 
   # Helper to hash action the same way as the methods

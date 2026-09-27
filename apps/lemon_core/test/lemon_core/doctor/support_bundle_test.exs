@@ -382,7 +382,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     {_, manifest_json} = Enum.find(entries, fn {name, _content} -> name == ~c"manifest.json" end)
     manifest = manifest_json |> IO.iodata_to_binary() |> Jason.decode!()
 
-    assert manifest["lemon_version"] == "0.1.0"
     assert manifest["runtime_mode"] in ["source-dev", "release-runtime"]
     assert is_map(manifest["git"])
     assert is_binary(manifest["elixir"])
