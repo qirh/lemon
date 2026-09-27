@@ -2,26 +2,29 @@ defmodule LemonSim.Examples.Werewolf.Updaters.VillageEvents do
   @moduledoc false
 
   alias LemonSim.Examples.Werewolf.RulesConfig
+  alias LemonSim.Kernel.Rng
 
-  def maybe_generate_village_event(day_number, world \\ %{}) do
-    if RulesConfig.enabled?(world, :village_events) and day_number > 1 and
-         :rand.uniform() < 0.5 do
-      events = [
-        {"stranger_arrives",
-         "A mysterious stranger was seen passing through the village at dawn. No one recognizes them."},
-        {"supply_raid", "The village storehouse was raided overnight! Supplies are missing."},
-        {"blizzard", "A fierce blizzard is rolling in. The village must make decisions quickly."},
-        {"festival",
-         "Today is the village harvest festival! Spirits are high and people are willing to talk."},
-        {"omen",
-         "A black crow was found dead on the village well this morning. Some say it's a dark omen."},
-        {"missing_livestock",
-         "Several sheep were found dead near the edge of the village. Claw marks cover the fence."}
-      ]
+  @events [
+    {"stranger_arrives",
+     "A mysterious stranger was seen passing through the village at dawn. No one recognizes them."},
+    {"supply_raid", "The village storehouse was raided overnight! Supplies are missing."},
+    {"blizzard", "A fierce blizzard is rolling in. The village must make decisions quickly."},
+    {"festival",
+     "Today is the village harvest festival! Spirits are high and people are willing to talk."},
+    {"omen",
+     "A black crow was found dead on the village well this morning. Some say it's a dark omen."},
+    {"missing_livestock",
+     "Several sheep were found dead near the edge of the village. Claw marks cover the fence."}
+  ]
 
-      Enum.random(events)
+  @spec maybe_generate_village_event(pos_integer(), map(), Rng.t()) ::
+          {{String.t(), String.t()} | nil, Rng.t()}
+  def maybe_generate_village_event(day_number, world, rng) do
+    if RulesConfig.enabled?(world, :village_events) and day_number > 1 do
+      {roll, rng} = Rng.uniform(rng)
+      if roll < 0.5, do: Rng.pick(@events, rng), else: {nil, rng}
     else
-      nil
+      {nil, rng}
     end
   end
 

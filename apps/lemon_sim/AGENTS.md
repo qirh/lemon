@@ -150,6 +150,7 @@ Boundary namespaces:
 | `lib/lemon_sim/kernel/decision_frame.ex` | `LemonSim.Kernel.DecisionFrame` | Snapshot fed to projector |
 | `lib/lemon_sim/kernel/event_coalescer.ex` | `LemonSim.Kernel.EventCoalescer` | Coalescing/filtering behaviour |
 | `lib/lemon_sim/kernel/updater.ex` | `LemonSim.Kernel.Updater` | Event -> state updater behaviour |
+| `lib/lemon_sim/kernel/rng.ex` | `LemonSim.Kernel.Rng` | Serializable seeded RNG state (`world.rng_state`) threaded through updaters |
 | `lib/lemon_sim/kernel/action_space.ex` | `LemonSim.Kernel.ActionSpace` | Turn-scoped tool exposure behaviour |
 | `lib/lemon_sim/kernel/projector.ex` | `LemonSim.Kernel.Projector` | Frame -> AI context behaviour |
 | `lib/lemon_sim/kernel/decider.ex` | `LemonSim.Kernel.Decider` | One-turn decision behaviour |
@@ -187,7 +188,9 @@ Boundary namespaces:
 - Keep `ActionSpace` focused on which tools are exposed this turn.
 - Keep authoritative argument legality in updater logic, not prompt text or `ActionSpace`.
 - Werewolf updaters revalidate actor, phase, role, target, item ownership, and bounded text payloads. Rejected attempts must not write another player's private journal or consume inventory.
-- Keep updater logic deterministic and side-effect free aside from explicit persistence calls.
+- Keep updater logic deterministic and side-effect free aside from explicit persistence calls. Updaters and world bootstrap never touch the process-global `:rand` state (`:rand.uniform/0,1`, `Enum.random/1`, `Enum.shuffle/1`, `Enum.take_random/2`); other `:rand` consumers in the same process must not be able to change a game.
+- Seeded RNG contract: a scenario that needs randomness takes a `:seed` option in `initial_world/1` (generating and recording one when omitted), stores it as `world.seed`, and carries `world.rng_state = LemonSim.Kernel.Rng.new(seed)` advanced past setup draws. Every draw goes through `LemonSim.Kernel.Rng` (`uniform/1,2`, `pick/2`, `shuffle/2`, `take_random/3`, each returning `{value, rng}`), and the updater writes the returned state back to `world.rng_state` in the same world update. `Rng.fetch!/1` raises when a world has no generator instead of falling back to `:rand`. `rng_state` is a two-integer list, so it survives JSON and `term_to_binary` round trips. A replay verifier rebuilds the initial state from the recorded seed (`Werewolf.initial_state(seed: seed, player_count: n, ...)`; add `player_ids:` for hosted rematches), re-folds the recorded events through the updater, and compares final-state hashes.
+- Werewolf follows that contract: roles, names, traits, and connections are drawn at setup, and evidence, wander sightings, village events, and items draw from `world.rng_state` during night resolution and elimination. Poker needs no `rng_state`: hand `k` shuffles `Deck.new()` from `world.base_seed + k - 1`, and `Table.start_hand/2` returns `{:error, :missing_seed}` without a `:seed` or explicit `:deck`. Tic-tac-toe rules are deterministic; only its offline random strategy draws, from its own `:rand.seed_s/2` state.
 - Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
 - Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
 - Put reusable model/provider/tool-loop mechanics under `LemonSim.LLM`.
@@ -245,6 +248,6 @@ Boundary namespaces:
 mix test apps/lemon_sim
 ```
 
-Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the skirmish example's action space/updater/RNG path.
+Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the skirmish example's action space/updater/RNG path. `test/lemon_sim/examples/seeded_determinism_test.exs` plays full Werewolf and Poker games twice per seed with `:rand` perturbed between steps and asserts identical final-state hashes.
 
 Poker coverage also exercises side pots, heads-up blind/button rules, multi-hand progression, rejection fallback auto-folding, and projection privacy boundaries.

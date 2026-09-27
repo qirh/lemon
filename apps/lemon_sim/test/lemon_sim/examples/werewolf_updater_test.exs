@@ -3,7 +3,7 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
 
   alias LemonSim.Examples.Werewolf.{Events, Roles, Updater}
   alias LemonSim.Examples.Werewolf.Updaters.{Meetings, NightResolution, Voting}
-  alias LemonSim.Kernel.State
+  alias LemonSim.Kernel.{Rng, State}
 
   test "day discussion advances to a second round before voting when enough players are alive" do
     players = sample_players()
@@ -303,6 +303,30 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
     assert next_state.world.turn_order == ["Alice", "Dane"]
   end
 
+  test "mutual meeting requests with a player killed overnight are dropped" do
+    players = Map.put(sample_players(), "Bram", %{role: "doctor", status: "dead"})
+
+    state =
+      State.new(
+        sim_id: "werewolf-dead-mutual-meeting",
+        world: %{
+          players: players,
+          phase: "last_words_night",
+          day_number: 1,
+          meeting_requests: %{"Alice" => "Bram", "Bram" => "Alice", "Dane" => "Esme"},
+          meeting_pairs: [],
+          meeting_transcripts: [],
+          current_meeting_messages: [],
+          status: "in_progress"
+        }
+      )
+
+    assert {:ok, next_state, {:decide, "Dane meeting with Esme"}} =
+             Meetings.resolve_requested_meetings_or_discussion(state)
+
+    assert next_state.world.meeting_pairs == [["Dane", "Esme"], ["Alice", "Cora"]]
+  end
+
   test "rejected actions cannot write another player's private journal" do
     state = discussion_state("Alice")
 
@@ -484,6 +508,7 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
         sim_id: "werewolf-night-resolution",
         world: %{
           players: players,
+          rng_state: Rng.new(7),
           phase: "night",
           day_number: 2,
           active_actor_id: "Lena",
@@ -543,6 +568,7 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
         sim_id: "werewolf-seer-no-last-words",
         world: %{
           players: players,
+          rng_state: Rng.new(7),
           phase: "night",
           day_number: 2,
           active_actor_id: "Esme",
@@ -748,6 +774,7 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
       sim_id: "werewolf-item-save",
       world: %{
         players: sample_players(),
+        rng_state: Rng.new(7),
         phase: "night",
         day_number: 1,
         active_actor_id: nil,
@@ -809,6 +836,7 @@ defmodule LemonSim.Examples.WerewolfUpdaterTest do
       sim_id: "werewolf-night-validation",
       world: %{
         players: players,
+        rng_state: Rng.new(7),
         phase: "night",
         day_number: day_number,
         active_actor_id: active_actor,

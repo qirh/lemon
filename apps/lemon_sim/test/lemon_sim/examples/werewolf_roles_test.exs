@@ -2,9 +2,10 @@ defmodule LemonSim.Examples.WerewolfRolesTest do
   use ExUnit.Case, async: true
 
   alias LemonSim.Examples.Werewolf.Roles
+  alias LemonSim.Kernel.Rng
 
   test "5-player setup uses one werewolf so the game survives opening night pressure" do
-    roles = Roles.role_list(5)
+    {roles, _rng} = Roles.role_list(5, Rng.new(1))
 
     assert Enum.count(roles, &(&1 == :werewolf)) == 1
     assert Enum.count(roles, &(&1 == :seer)) == 1

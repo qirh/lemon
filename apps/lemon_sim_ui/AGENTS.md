@@ -100,7 +100,7 @@ self-contained and must not add runtime CDN dependencies.
 
 | File | Module | Purpose |
 |---|---|---|
-| `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; durable start/stop/abandon/resume, RNG and final-usage checkpoints, bounded recovery queue with transient backoff/terminalization, retention, and auto-loop controls |
+| `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; durable start/stop/abandon/resume, lifecycle and final-usage checkpoints, bounded recovery queue with transient backoff/terminalization, retention, and auto-loop controls |
 | `lib/lemon_sim_ui/hosted_game.ex` | `LemonSimUi.HostedGame` | Hosted room coordinator for codes, recovery readiness, active capacity, retention, and feature kill switch |
 | `lib/lemon_sim_ui/hosted_game/room_server.ex` | `LemonSimUi.HostedGame.RoomServer` | One durable serialized room: token auth, safe projections, timers, AI/human commands, pause/replacement, export, and rematch |
 | `lib/lemon_sim_ui/hosted_game/replay.ex` | `LemonSimUi.HostedGame.Replay` | Re-ingests redacted canonical events and checks command/final hashes |
@@ -189,7 +189,7 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 - A hosted host is role-blind. Secret-phase actor IDs, roles, actions, votes, meetings, pack chat, investigations, items, journals, and model thoughts must not enter host/public projections or telemetry. Private rooms remain private after stop/completion.
 - Hosted credentials stay in signed cookies and LiveView `socket.private`, never assigns, lifecycle logs, crash formatting, storage, telemetry, or exported replays. Keep Phoenix parameter filtering and shared LiveView lifecycle logging disabled when adding routes.
 - Hosted commands must carry match and state epochs, accept only server-built legal actions, persist before acknowledgement, and namespace client idempotency IDs away from system timeout/AI IDs.
-- Persisted turn deadlines are authoritative: late human or AI decisions must enqueue the timeout path, never win a mailbox race. Provider/decider randomness must be reset before the authoritative updater so exported replay hashes depend only on the stored game RNG and canonical events.
+- Persisted turn deadlines are authoritative: late human or AI decisions must enqueue the timeout path, never win a mailbox race. Authoritative game randomness lives in `world.rng_state`, seeded from the room config seed; updaters never read the process `:rand` state, so provider/decider randomness cannot change exported replay hashes.
 - Lobby and pre-start cancellation projections expose a sealed waiting state with no phase, day, actor, or role. Runtime terminal failures use a safe reason distinct from host stop/cancel and completed player views reveal the final role roster.
 - Hosted child specs pass only room IDs and reload the latest Store row. Never capture a room snapshot in a restart MFA.
 - Hosted feature disablement is a runtime kill switch: disabled boot must not recover room timers/AI, and API/LiveView operations must fail closed.

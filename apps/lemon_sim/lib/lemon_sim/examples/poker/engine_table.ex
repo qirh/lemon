@@ -234,9 +234,11 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
   @doc """
   Starts a new hand and posts blinds.
 
-  Options:
+  Options (one is required; `:deck` wins when both are given):
   - `:seed` deterministic shuffle seed.
   - `:deck` explicit deck top-order (for deterministic tests).
+
+  Returns `{:error, :missing_seed}` when neither is given.
   """
   @spec start_hand(t(), keyword()) :: {:ok, t()} | {:error, atom()}
   def start_hand(table, opts \\ [])
@@ -1059,11 +1061,14 @@ defmodule LemonSim.Examples.Poker.Engine.Table do
   end
 
   defp resolve_deck(opts) do
-    case Keyword.get(opts, :deck) do
-      nil ->
-        {:ok, Deck.shuffle(Deck.new(), seed: Keyword.get(opts, :seed))}
+    case {Keyword.get(opts, :deck), Keyword.get(opts, :seed)} do
+      {nil, nil} ->
+        {:error, :missing_seed}
 
-      deck when is_list(deck) ->
+      {nil, seed} ->
+        {:ok, Deck.shuffle(Deck.new(), seed)}
+
+      {deck, _seed} when is_list(deck) ->
         if Deck.valid?(deck), do: {:ok, deck}, else: {:error, :invalid_deck}
 
       _ ->
