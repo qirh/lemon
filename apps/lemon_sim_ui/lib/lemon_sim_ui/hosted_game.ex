@@ -12,7 +12,6 @@ defmodule LemonSimUi.HostedGame.Room do
             config: %{},
             seats: %{},
             game_state: nil,
-            rng_state: nil,
             command_seq: 0,
             command_ids: [],
             replay: [],
@@ -431,7 +430,7 @@ defmodule LemonSimUi.HostedGame do
       host_token = random_token()
       join_code = random_join_code()
       now = System.system_time(:millisecond)
-      {game_state, rng_state} = initial_game(room_id, config)
+      game_state = initial_game(room_id, config)
 
       player_ids = game_state.world.players |> Map.keys() |> Enum.sort()
       ai_seats = config.ai_seats
@@ -458,7 +457,6 @@ defmodule LemonSimUi.HostedGame do
         config: Map.from_struct(config),
         seats: seats,
         game_state: game_state,
-        rng_state: rng_state,
         created_at_ms: now,
         updated_at_ms: now,
         phase_started_at_ms: now,
@@ -588,27 +586,20 @@ defmodule LemonSimUi.HostedGame do
   end
 
   defp initial_game(room_id, config) do
-    previous_seed = :rand.export_seed()
-    :rand.seed(:exsss, {config.seed, config.seed + 1, config.seed + 2})
-
     game_state =
       Werewolf.initial_state(
         sim_id: "hosted_#{room_id}",
         player_count: config.player_count,
+        seed: config.seed,
         generate_lore?: false
       )
 
-    game_state =
-      put_in(
-        game_state.world[:rules],
-        config.rules_preset
-        |> RulesConfig.for_preset()
-        |> Map.put(:turn_timeout_seconds, config.turn_timeout_seconds)
-      )
-
-    rng_state = :rand.export_seed()
-    restore_seed(previous_seed)
-    {game_state, rng_state}
+    put_in(
+      game_state.world[:rules],
+      config.rules_preset
+      |> RulesConfig.for_preset()
+      |> Map.put(:turn_timeout_seconds, config.turn_timeout_seconds)
+    )
   end
 
   defp validate_room_ai(room) do
@@ -618,9 +609,6 @@ defmodule LemonSimUi.HostedGame do
       :ok
     end
   end
-
-  defp restore_seed(:undefined), do: :rand.seed(:default)
-  defp restore_seed(seed), do: :rand.seed(seed)
 
   defp enforce_room_limit(reservations) do
     limit = Application.get_env(:lemon_sim_ui, :hosted_room_limit, 100)

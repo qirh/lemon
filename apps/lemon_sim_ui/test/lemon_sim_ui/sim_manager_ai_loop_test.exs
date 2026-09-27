@@ -148,7 +148,6 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
     assert stored.meta.run.status == "failed"
     assert stored.meta.run.failure_reason == "turn_limit_exceeded"
     assert stored.meta.run.turns_completed == 1
-    assert stored.meta.run.rng_state != nil
     refute stored.meta.run.resumable
     assert {:error, {:not_resumable, "failed"}} = SimManager.resume_sim(sim_id)
   end

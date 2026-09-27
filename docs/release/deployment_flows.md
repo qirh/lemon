@@ -225,7 +225,7 @@ invite or placing the service in maintenance mode. Ask hosts to pause active
 matches, then inspect protected `/api/admin/metrics` until no room is `running`
 and hosted recovery reports `ok`. A graceful restart can resume running timers,
 but an offline backup must have no application writer. Hosted room records,
-reconnect-token hashes, RNG checkpoints, replay events, deadlines, and rematch
+reconnect-token hashes, game state (including its seeded RNG), replay events, deadlines, and rematch
 archives are stored inside the same SQLite backup below; raw host/player tokens
 exist only in browser cookies and are never part of a backup.
 

@@ -1,9 +1,15 @@
 defmodule LemonSim.Examples.Werewolf.Roles do
   @moduledoc """
   Role definitions and assignment logic for Werewolf.
+
+  Randomized setup (role order, names, traits, backstory connections) takes an
+  explicit `LemonSim.Kernel.Rng` state and returns `{result, rng}`, so a world
+  built from one seed is always the same world.
   """
 
   import LemonSim.Examples.Helpers
+
+  alias LemonSim.Kernel.Rng
 
   @roles_by_count %{
     5 => [:werewolf, :seer, :doctor, :villager, :villager],
@@ -33,11 +39,11 @@ defmodule LemonSim.Examples.Werewolf.Roles do
   @doc """
   Returns a shuffled role list for the given player count.
   """
-  @spec role_list(pos_integer()) :: [atom()]
-  def role_list(player_count) when player_count >= 5 and player_count <= 8 do
+  @spec role_list(pos_integer(), Rng.t()) :: {[atom()], Rng.t()}
+  def role_list(player_count, rng) when player_count >= 5 and player_count <= 8 do
     @roles_by_count
     |> Map.fetch!(player_count)
-    |> Enum.shuffle()
+    |> Rng.shuffle(rng)
   end
 
   @spec balanced_role_list(pos_integer()) :: [atom()]
@@ -46,23 +52,24 @@ defmodule LemonSim.Examples.Werewolf.Roles do
   end
 
   @doc """
-  Assigns roles to players, using names as canonical keys.
+  Assigns shuffled roles to randomly drawn player names, using names as canonical keys.
   """
-  @spec assign_roles(pos_integer()) :: %{String.t() => map()}
-  def assign_roles(player_count) do
-    roles = role_list(player_count)
-    names = player_names(player_count)
-    build_assignments(names, roles)
+  @spec assign_roles(pos_integer(), Rng.t()) :: {%{String.t() => map()}, Rng.t()}
+  def assign_roles(player_count, rng) do
+    {roles, rng} = role_list(player_count, rng)
+    {names, rng} = player_names(player_count, rng)
+    {build_assignments(names, roles), rng}
   end
 
-  @spec assign_roles(pos_integer(), [String.t()]) :: %{String.t() => map()}
-  def assign_roles(player_count, names)
+  @spec assign_roles(pos_integer(), [String.t()], Rng.t()) :: {%{String.t() => map()}, Rng.t()}
+  def assign_roles(player_count, names, rng)
       when is_list(names) and length(names) == player_count do
     if Enum.uniq(names) != names or Enum.any?(names, &(not is_binary(&1))) do
       raise ArgumentError, "Werewolf player names must be unique strings"
     end
 
-    build_assignments(names, role_list(player_count))
+    {roles, rng} = role_list(player_count, rng)
+    {build_assignments(names, roles), rng}
   end
 
   @spec assign_balanced_roles(pos_integer(), [String.t()]) :: %{String.t() => map()}
@@ -173,13 +180,16 @@ defmodule LemonSim.Examples.Werewolf.Roles do
       "You are DRAMATIC — you love grand speeches, emotional confrontations, and making every moment theatrical."
   }
 
-  @spec assign_traits([String.t()]) :: %{String.t() => [String.t()]}
-  def assign_traits(player_names) do
-    Enum.into(player_names, %{}, fn name ->
-      count = Enum.random(1..2)
-      player_traits = @traits |> Enum.shuffle() |> Enum.take(count)
-      {name, player_traits}
-    end)
+  @spec assign_traits([String.t()], Rng.t()) :: {%{String.t() => [String.t()]}, Rng.t()}
+  def assign_traits(player_names, rng) do
+    {pairs, rng} =
+      Enum.map_reduce(player_names, rng, fn name, rng ->
+        {count, rng} = Rng.uniform(2, rng)
+        {player_traits, rng} = Rng.take_random(@traits, count, rng)
+        {{name, player_traits}, rng}
+      end)
+
+    {Map.new(pairs), rng}
   end
 
   @spec trait_description(String.t()) :: String.t()
@@ -202,25 +212,25 @@ defmodule LemonSim.Examples.Werewolf.Roles do
     "secret_keepers" => " share a dark secret from the past that neither wants revealed."
   }
 
-  @spec generate_connections([String.t()]) :: [map()]
-  def generate_connections(player_names) when length(player_names) < 4, do: []
+  @spec generate_connections([String.t()], Rng.t()) :: {[map()], Rng.t()}
+  def generate_connections(player_names, rng) when length(player_names) < 4, do: {[], rng}
 
-  def generate_connections(player_names) do
+  def generate_connections(player_names, rng) do
     num_connections = min(3, div(length(player_names), 2))
+    {shuffled, rng} = Rng.shuffle(player_names, rng)
 
-    player_names
-    |> Enum.shuffle()
+    shuffled
     |> Enum.chunk_every(2, 2, :discard)
     |> Enum.take(num_connections)
-    |> Enum.map(fn [a, b] ->
-      type = Enum.random(@connection_types)
+    |> Enum.map_reduce(rng, fn [a, b], rng ->
+      {type, rng} = Rng.pick(@connection_types, rng)
       template = Map.get(@connection_templates, type, " have a connection.")
 
-      %{
-        players: [a, b],
-        type: type,
-        description: "#{a} and #{b}" <> template
-      }
+      {%{
+         players: [a, b],
+         type: type,
+         description: "#{a} and #{b}" <> template
+       }, rng}
     end)
   end
 
@@ -294,10 +304,8 @@ defmodule LemonSim.Examples.Werewolf.Roles do
     tail ++ head
   end
 
-  @spec player_names(pos_integer()) :: [String.t()]
-  def player_names(count) do
-    @player_names
-    |> Enum.shuffle()
-    |> Enum.take(count)
+  @spec player_names(pos_integer(), Rng.t()) :: {[String.t()], Rng.t()}
+  def player_names(count, rng) do
+    Rng.take_random(@player_names, count, rng)
   end
 end

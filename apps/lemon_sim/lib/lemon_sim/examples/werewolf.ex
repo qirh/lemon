@@ -33,32 +33,44 @@ defmodule LemonSim.Examples.Werewolf do
   }
 
   alias LemonSim.LLM.Projectors.SectionedProjector
-  alias LemonSim.Kernel.State
+  alias LemonSim.Kernel.{Rng, State}
 
   @default_max_turns 200
   @default_player_count 6
 
+  @doc """
+  Builds the initial world.
+
+  All randomized setup draws from `LemonSim.Kernel.Rng.new(seed)`, where
+  `seed` is the `:seed` option (a fresh seed is generated when omitted). The
+  world records `:seed` and the remaining generator as `:rng_state`; updaters
+  thread `:rng_state` through every later draw, so the world after any event
+  sequence is a pure function of the seed and events.
+  """
   @spec initial_world(keyword()) :: map()
   def initial_world(opts \\ []) do
     player_count = Keyword.get(opts, :player_count, @default_player_count)
+    seed = Keyword.get_lazy(opts, :seed, fn -> :erlang.phash2(:erlang.monotonic_time()) end)
+    rng = Rng.new(seed)
 
-    players =
+    {players, rng} =
       case Keyword.get(opts, :player_ids) do
         player_ids when is_list(player_ids) ->
-          assign_roles(player_count, player_ids, opts)
+          assign_roles(player_count, player_ids, opts, rng)
 
         _ ->
           if Keyword.get(opts, :balanced_roles?, false) do
-            assign_roles(player_count, Roles.player_names(player_count), opts)
+            {names, rng} = Roles.player_names(player_count, rng)
+            assign_roles(player_count, names, opts, rng)
           else
-            Roles.assign_roles(player_count)
+            Roles.assign_roles(player_count, rng)
           end
       end
 
     # Assign personality traits and backstory connections
     player_names = Map.keys(players)
-    traits = Roles.assign_traits(player_names)
-    backstory_connections = Roles.generate_connections(player_names)
+    {traits, rng} = Roles.assign_traits(player_names, rng)
+    {backstory_connections, rng} = Roles.generate_connections(player_names, rng)
 
     # Add traits to player maps (before lore so LLM sees traits)
     players =
@@ -97,6 +109,8 @@ defmodule LemonSim.Examples.Werewolf do
       end
 
     %{
+      seed: seed,
+      rng_state: rng,
       players: players,
       phase: initial_phase,
       day_number: 1,
@@ -149,11 +163,11 @@ defmodule LemonSim.Examples.Werewolf do
     }
   end
 
-  defp assign_roles(player_count, player_ids, opts) do
+  defp assign_roles(player_count, player_ids, opts, rng) do
     if Keyword.get(opts, :balanced_roles?, false) do
-      Roles.assign_balanced_roles(player_count, player_ids)
+      {Roles.assign_balanced_roles(player_count, player_ids), rng}
     else
-      Roles.assign_roles(player_count, player_ids)
+      Roles.assign_roles(player_count, player_ids, rng)
     end
   end
 

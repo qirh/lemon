@@ -835,13 +835,6 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp do_start_sim(domain, opts, state, sim_id, human_player) do
-    # Seeding before world construction makes each domain's randomized
-    # role/seat assignment reproducible for a recorded arena seed.
-    case Keyword.get(opts, :seed) do
-      seed when is_integer(seed) -> :rand.seed(:exsss, {seed, seed + 1, seed + 2})
-      _ -> :ok
-    end
-
     case build_initial_state(domain, sim_id, opts) do
       {:ok, initial_state, modules, run_opts} ->
         run_opts = maybe_override_driver_max_turns(run_opts, opts)
@@ -1197,8 +1190,6 @@ defmodule LemonSimUi.SimManager do
   # teardown) keeps working unchanged.
   defp start_runner(initial_state, modules, run_opts, human_player) do
     fun = fn ->
-      restore_rng(initial_state)
-
       if human_player do
         run_interactive(initial_state, modules, run_opts, human_player)
       else
@@ -1347,7 +1338,6 @@ defmodule LemonSimUi.SimManager do
     if remaining <= 0 do
       report_turn_limit_exceeded(state, max_turns)
     else
-      restore_rng(state)
       after_step_fn = ai_loop_after_step(checkpoint, turns_completed)
 
       call_opts =
@@ -2002,12 +1992,6 @@ defmodule LemonSimUi.SimManager do
     model_spec =
       if match?(%LemonAi.Types.Model{}, model), do: "#{model.provider}/#{model.id}", else: nil
 
-    rng_state =
-      case :rand.export_seed() do
-        :undefined -> nil
-        exported -> exported
-      end
-
     put_run_meta(state, %{
       schema_version: 1,
       domain: to_string(domain),
@@ -2023,7 +2007,6 @@ defmodule LemonSimUi.SimManager do
       max_turns: max_turns,
       seed: Keyword.get(start_opts, :seed),
       model: model_spec,
-      rng_state: rng_state,
       start_opts: sanitize_start_opts(start_opts)
     })
   end
@@ -2059,15 +2042,8 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp checkpoint_run(state, turns_completed) do
-    rng_state =
-      case :rand.export_seed() do
-        :undefined -> nil
-        exported -> exported
-      end
-
     updates = %{
       turns_completed: turns_completed,
-      rng_state: rng_state,
       recovery_attempts: 0
     }
 
@@ -2191,19 +2167,6 @@ defmodule LemonSimUi.SimManager do
 
       nil ->
         {:error, :not_found}
-    end
-  end
-
-  defp restore_rng(state) do
-    case run_meta_value(state, :rng_state) do
-      nil ->
-        case run_meta_value(state, :seed) do
-          seed when is_integer(seed) -> :rand.seed(:exsss, {seed, seed + 1, seed + 2})
-          _ -> :ok
-        end
-
-      exported ->
-        :rand.seed(exported)
     end
   end
 
