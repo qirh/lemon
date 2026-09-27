@@ -13,8 +13,8 @@ defmodule LemonCli.CLI do
   Every command family, its help, and the launcher it is available in come
   from `LemonCli.CommandRegistry`. Lifecycle commands (`tui`, `web`, `start`,
   `daemon`, ...) belong to the launcher shell; reaching them here is a usage
-  error. Mix-backed families (`send`, `media`, `models`, `policy`, `skill`,
-  `usage`) run their Mix task and exist only in source checkouts.
+  error. Every other family runs a Mix-free command implementation shared by
+  source and packaged installs.
   """
 
   alias LemonCore.Backup
@@ -87,15 +87,9 @@ defmodule LemonCli.CLI do
     |> List.wrap()
     |> dispatch()
   rescue
-    error in Error ->
+    error in [Error, LemonCore.CLI.Error, LemonAi.Models.CLI.Error] ->
       IO.puts(:stderr, "Error: #{error.message}")
       error.exit_code
-
-    # Source checkouts still surface Mix errors (e.g. from task-owned code
-    # this CLI delegates to); render them the same user-readable way.
-    error in Mix.Error ->
-      IO.puts(:stderr, "Error: #{Exception.message(error)}")
-      @exit_error
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -159,8 +153,8 @@ defmodule LemonCli.CLI do
 
   defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h", "help"]))
 
-  defp run_command(%{mix_task: task}, args) do
-    Mix.Task.run(task, args)
+  defp run_command(%{handler: handler}, args) do
+    apply(handler, :run, [args])
     @exit_ok
   end
 
@@ -1282,10 +1276,6 @@ defmodule LemonCli.CLI do
       do: IO.write(node_cli.help()),
       else: IO.write(CommandRegistry.help("node"))
   end
-
-  # Mix-backed families are only dispatched from a source checkout, where the
-  # task's own documentation is the authoritative help.
-  defp print_command_usage(%{mix_task: task}), do: Mix.Task.run("help", [task])
 
   defp print_command_usage(%{name: name}), do: IO.write(CommandRegistry.help(name))
 

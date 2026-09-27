@@ -1,11 +1,9 @@
 # Lemon CLI
 
-`lemon_cli` is the user-facing command boundary for packaged Lemon releases.
-`LemonCli.CLI.main/1` is the one process-halting boundary: it receives the
-forwarded argument vector from the release launcher and turns dispatch results
-into exit codes. Its non-halting `run/1` and command handlers are shared by
-tests and source-checkout Mix adapters, so release commands do not depend on
-Mix at runtime.
+`lemon_cli` is the user-facing command boundary for source and packaged Lemon.
+`LemonCli.CLI.main/1` receives the forwarded argument vector from either
+launcher and turns dispatch results into exit codes. Its non-halting `run/1`
+and Mix-free runtime command handlers are shared by both installation paths.
 
 The runtime CLI is included in `lemon_runtime_min` and `lemon_runtime_full`
 artifacts. The `sim_broadcast_platform` artifact intentionally does not bundle
@@ -65,6 +63,8 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Print version | `lemon version` | `./bin/lemon version` |
 | Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) |
 | Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` |
+| Send channel notifications | `lemon send --to telegram:123 "hello"` | `./bin/lemon send --to telegram:123 "hello"` |
+| Inspect media, models, policies, skills, and usage | `lemon media`, `models`, `policy`, `skill`, `usage` | `./bin/lemon media`, `models`, `policy`, `skill`, `usage` |
 
 Blueprint and profile-chat commands start the local runtime through the
 launcher when it is not already healthy, in both source checkouts and packaged
@@ -78,10 +78,10 @@ CLI above.
 ## Command registry and completion
 
 `LemonCli.CommandRegistry` is the single registry for CLI dispatch, top-level
-and command help, and shell completion metadata. It defines the CLI families
-available in source and packaged runtimes, plus source-only Mix-backed
-commands: `send`, `media`, `models`, `policy`, `skill`, and `usage`. These
-source-only commands are omitted from release help and completion.
+and command help, and shell completion metadata. Every CLI family is available
+in source and packaged runtimes, including `send`, `media`, `models`, `policy`,
+`skill`, and `usage`. These commands use Mix-free modules in their owning apps;
+their existing Mix tasks are thin source-development adapters.
 
 Lifecycle commands are registry entries too (for help and completion), but the
 launcher shell executes them: `tui`, `web`, `start`, `run`, `daemon`, `stop`,

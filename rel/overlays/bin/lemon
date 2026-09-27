@@ -344,7 +344,7 @@ case "$COMMAND" in
   remote|eval|rpc) exec "$RELEASE_BIN" "$@" ;;
 
   *)
-    ensure_managed_token || true
+    ensure_managed_token || exit 1
     run_cli "$@"
     ;;
 esac

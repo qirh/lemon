@@ -15,6 +15,8 @@ Verifies Lemon release artifacts beyond checksums:
   - checks control-plane /healthz or sim broadcast /readyz
   - checks `lemon status`, the unified `lemon --help` registry, `lemon version`,
     and the read-only `lemon migrate hermes audit --json` (non-sim profiles)
+  - exercises Mix-free models/media/usage JSON, notification dry-run, policy,
+    and skill commands in the packaged CLI
   - checks Web /healthz for lemon_runtime_full
   - checks `lemon web --no-open` reports the healthy packaged Web URL
   - checks lemon_runtime_full asset-digest artifacts and daemon log
@@ -489,22 +491,47 @@ boot_one_profile() {
 
     local help_output command
     help_output="$(run_launcher --help)"
-    for command in tui web start daemon stop status remote eval rpc setup doctor sessions \
-      migrate node version; do
+    for command in tui web start run daemon stop restart status remote eval rpc setup model \
+      gateway doctor config secrets channels providers blueprints profile backup context \
+      sessions learn update completion migrate node version send media models policy skill usage; do
       if ! printf '%s\n' "$help_output" | grep -Eq "^  $command( |$)"; then
         echo "$profile: packaged 'lemon --help' did not list $command" >&2
         exit 1
       fi
     done
-    if printf '%s\n' "$help_output" | grep -Eq "^  (send|media|models|policy|skill|usage) "; then
-      echo "$profile: packaged 'lemon --help' advertised a source-only command" >&2
-      exit 1
-    fi
 
     if [ -z "$(run_launcher version)" ]; then
       echo "$profile: packaged 'lemon version' printed nothing" >&2
       exit 1
     fi
+
+    run_launcher models --provider anthropic --limit 1 --json > "$profile_dir/models.json"
+    run_launcher usage --json > "$profile_dir/usage.json"
+    run_launcher media --project-dir "$profile_dir" --limit 1 --json > "$profile_dir/media.json"
+    run_launcher send --dry-run --to telegram:123 --json "release dispatch probe" \
+      > "$profile_dir/send.json"
+    run_launcher policy list
+    run_launcher skill list
+    python3 - "$profile_dir" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+def report(name):
+    return json.loads((root / f"{name}.json").read_text(encoding="utf-8"))
+
+models = report("models")
+assert len(models["models"]) == 1
+assert models["models"][0]["provider"] == "anthropic"
+assert models["summary"]["includes_credentials"] is False
+assert report("usage")["cleanup"]["includes_prompts"] is False
+assert report("media")["cleanup"]["includes_prompts"] is False
+sent = report("send")
+assert sent["dry_run"] is True
+assert sent["target"] == "123"
+assert sent["content_bytes"] == len("release dispatch probe")
+PY
 
     mkdir -p "$profile_dir/hermes"
     run_launcher migrate hermes audit --json --source "$profile_dir/hermes" \

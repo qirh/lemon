@@ -233,12 +233,18 @@ defmodule LemonCli.CLITest do
       on_exit(fn -> restore_env("LEMON_CLI_LAUNCHER", previous) end)
     end
 
-    test "packaged installs refuse Mix-backed source commands before running them" do
+    test "packaged installs execute model catalog commands without Mix tasks" do
       System.put_env("LEMON_CLI_LAUNCHER", "release")
 
-      error = capture_io(:stderr, fn -> assert CLI.run(["send", "--to", "telegram:1"]) == 2 end)
+      output =
+        capture_io(fn ->
+          assert CLI.run(["models", "--provider", "anthropic", "--limit", "2", "--json"]) == 0
+        end)
 
-      assert error =~ "`lemon send` is available only from a source checkout."
+      report = Jason.decode!(output)
+      assert report["summary"]["total"] == length(report["models"])
+      assert Enum.all?(report["models"], &(&1["provider"] == "anthropic"))
+      refute output =~ "api_key"
     end
 
     test "source checkouts refuse release-VM commands" do

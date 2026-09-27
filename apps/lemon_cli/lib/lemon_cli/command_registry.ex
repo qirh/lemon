@@ -29,19 +29,15 @@ defmodule LemonCli.CommandRegistry.Metadata do
     end
   end
 
-  defmacro mix_backed(name, task, summary) do
+  defmacro runtime(name, handler, summary, usage, options, commands \\ []) do
     quote do
       %{
         name: unquote(name),
         summary: unquote(summary),
-        usage: "lemon #{unquote(name)} [args]",
-        options: [],
-        subcommands: [],
-        details: [
-          "Source checkouts only: runs `mix #{unquote(task)}`. See `mix help #{unquote(task)}`."
-        ],
-        launchers: [:source],
-        mix_task: unquote(task)
+        usage: unquote(usage),
+        options: unquote(options),
+        subcommands: unquote(commands),
+        handler: unquote(handler)
       }
     end
   end
@@ -54,9 +50,8 @@ defmodule LemonCli.CommandRegistry do
 
   Two kinds of command live here:
 
-    * CLI families (`commands/0`) are dispatched by `LemonCli.CLI`. Most run
-      in both launchers; Mix-backed families carry `launchers: [:source]` and
-      the Mix task they run.
+    * CLI families (`commands/0`) are dispatched by `LemonCli.CLI` through
+      Mix-free runtime modules in both launchers.
     * Lifecycle commands (`lifecycle_commands/1`) are handled by the launcher
       shell itself because they locate, start, stop, or attach to the runtime.
 
@@ -350,7 +345,7 @@ defmodule LemonCli.CommandRegistry do
       subcommands: subcommands(~w(bash zsh fish)),
       options: [],
       details: [
-        "The generated script matches the source or packaged launcher that produced it. Source and release-only commands are never mixed."
+        "The generated script matches the invoking launcher. Release VM tools (remote, eval, rpc) are only advertised by packaged installs."
       ]
     },
     %{
@@ -404,12 +399,89 @@ defmodule LemonCli.CommandRegistry do
       subcommands: [],
       options: []
     },
-    mix_backed("send", "lemon.send", "Send a Telegram or Discord notification"),
-    mix_backed("media", "lemon.media", "Inspect media generation diagnostics"),
-    mix_backed("models", "lemon.models", "List the model catalog"),
-    mix_backed("policy", "lemon.policy", "Manage model policies"),
-    mix_backed("skill", "lemon.skill", "Manage installed skills"),
-    mix_backed("usage", "lemon.usage", "Inspect usage diagnostics")
+    runtime(
+      "send",
+      LemonChannels.ScriptSend.CLI,
+      "Send a Telegram or Discord notification",
+      "lemon send --to TARGET [options] [message]",
+      [
+        option("--to TARGET", ["--to"], "Telegram or Discord target"),
+        option("--account NAME", ["--account"], "Channel account"),
+        option("--subject TEXT", ["--subject"], "Message subject"),
+        option("--file PATH", ["--file"], "Read body from a file, or - for stdin"),
+        option("--attach PATH", ["--attach"], "Attach a local file (repeatable)"),
+        option("--thread ID, --topic ID", ["--thread", "--topic"], "Thread or topic"),
+        option("--reply-to ID", ["--reply-to"], "Reply to a platform message"),
+        option("--list [PLATFORM]", ["--list"], "List known targets"),
+        option("--dry-run", ["--dry-run"], "Validate without sending"),
+        option("--quiet", ["--quiet"], "Suppress normal output"),
+        option("--json", ["--json"], "Emit JSON")
+      ]
+    ),
+    runtime(
+      "media",
+      LemonMedia.CLI,
+      "Inspect media generation diagnostics",
+      "lemon media [options]",
+      [
+        option("--project-dir PATH", ["--project-dir"], "Project root"),
+        option("--limit N", ["--limit"], "Recent jobs to show"),
+        option("--json", ["--json"], "Emit redacted JSON")
+      ]
+    ),
+    runtime(
+      "models",
+      LemonAi.Models.CLI,
+      "List the model catalog",
+      "lemon models [options]",
+      [
+        option("--provider NAME", ["--provider", "-p"], "Filter by provider"),
+        option("--vision", ["--vision"], "Only image-capable models"),
+        option("--thinking", ["--thinking"], "Only reasoning-capable models"),
+        option("--limit N", ["--limit", "-l"], "Maximum rows"),
+        option("--json", ["--json"], "Emit catalog and summary JSON")
+      ]
+    ),
+    runtime(
+      "policy",
+      LemonChannels.ModelPolicy.CLI,
+      "Manage model policies",
+      "lemon policy <list|set|get|clear> [channel] [options]",
+      [
+        option("--account ID", ["--account", "-a"], "Channel account"),
+        option("--peer ID", ["--peer", "-p"], "Peer or chat"),
+        option("--thread ID", ["--thread", "-t"], "Thread or topic"),
+        option("--model MODEL", ["--model", "-m"], "Model override"),
+        option("--thinking LEVEL", ["--thinking"], "Thinking override"),
+        option("--reason TEXT", ["--reason", "-r"], "Policy metadata reason"),
+        option("--all", ["--all"], "Clear all policies for the channel")
+      ],
+      subcommands(~w(list set get clear))
+    ),
+    runtime(
+      "skill",
+      LemonSkills.CLI,
+      "Manage installed skills",
+      "lemon skill <command> [args]",
+      [
+        option("--cwd=PATH", ["--cwd"], "Project workspace"),
+        option("--local", ["--local"], "Install only in the project"),
+        option("--global", ["--global"], "Use global skills"),
+        option("--force", ["--force"], "Confirm overwrite or removal"),
+        option("--no-online", ["--no-online"], "Search only installed skills"),
+        option("--active", ["--active"], "Browse only active skills"),
+        option("--not-ready", ["--not-ready"], "Browse skills missing dependencies"),
+        option("--all", ["--all"], "Include hidden skills when browsing")
+      ],
+      subcommands(~w(list browse search discover hermes install update remove inspect check info draft curator))
+    ),
+    runtime(
+      "usage",
+      LemonCore.Usage.CLI,
+      "Inspect usage diagnostics",
+      "lemon usage [--json]",
+      [option("--json", ["--json"], "Emit redacted usage JSON")]
+    )
   ]
 
   @both_launchers [:source, :release]

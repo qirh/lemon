@@ -97,6 +97,9 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
   # Keeping these exceptions separate prevents them from silently authorizing a
   # future mix.exs edge.
   @reference_only_namespace_exceptions %{
+    # The shared CLI registry invokes these bundled runtime command handlers
+    # dynamically; setup must not start channel services through a Mix edge.
+    lemon_cli: [:lemon_channels, :lemon_media],
     lemon_gateway: [:lemon_ai, :lemon_automation]
   }
 

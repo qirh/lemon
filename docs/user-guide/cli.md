@@ -19,7 +19,7 @@ source checkout.
 
 ### Launcher lifecycle commands
 
-These commands are handled by the launcher, not the CLI registry:
+The registry defines their help and completion; the launcher executes them:
 
 | Command | Source checkout | Packaged release | Purpose |
 | --- | --- | --- | --- |
@@ -53,14 +53,7 @@ packaged releases:
 | `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
 | `node` | Source and release | Includes `node join`. |
 | `version` | Source and release | Print the Lemon version. |
-
-### Source-only CLI commands
-
-These Mix-backed commands are available only from a source checkout and are
-omitted from packaged-release help and completion. In a release they report
-that they are source-only and exit 2:
-
-`send`, `media`, `models`, `policy`, `skill`, and `usage`.
+| `send`, `media`, `models`, `policy`, `skill`, `usage` | Source and release | Mix-free channel notifications, diagnostics, catalog, policies, and skill management; existing Mix tasks remain thin source adapters. |
 
 ## Help and exit codes
 
@@ -69,9 +62,10 @@ Success exits 0, operational failures exit 1, and invalid commands or
 arguments exit 2.
 
 `--help`, `-h`, and `help` print command help without running the command body.
-Commands that support `--json` write one JSON document to stdout on success
-and one redacted JSON error document to stderr on operational failure. Invalid
-arguments remain human-readable usage errors with exit code `2`.
+Commands that document `--json` emit JSON on success. Redacted operational
+error JSON is supported by the profile, session, blueprint, provider, learning,
+and secret-source command families; other commands report errors as text on
+stderr. Invalid arguments remain human-readable usage errors.
 
 ## Update lifecycle
 

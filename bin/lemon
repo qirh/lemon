@@ -351,7 +351,7 @@ case "$COMMAND" in
     ;;
 
   *)
-    ensure_managed_token || true
+    ensure_managed_token || exit 1
     run_cli "$@"
     ;;
 esac

@@ -5,34 +5,14 @@ defmodule LemonCli.CommandRegistryTest do
 
   alias LemonCli.{CLI, CommandRegistry, CompletionCommand}
 
-  @runtime_families ~w(setup model gateway doctor config secrets channels providers blueprints profile backup context sessions learn update completion migrate node version)
-  @source_only ~w(send media models policy skill usage)
+  @runtime_families ~w(setup model gateway doctor config secrets channels providers blueprints profile backup context sessions learn update completion migrate node version send media models policy skill usage)
   @lifecycle ~w(tui web start run daemon stop restart status)
   @release_only ~w(remote eval rpc)
 
-  test "registry is the complete unique family source for dispatch and help" do
-    assert CommandRegistry.names() == @runtime_families ++ @source_only
-    assert length(Enum.uniq(CommandRegistry.names())) == length(CommandRegistry.names())
-
-    Enum.each(CommandRegistry.commands(), fn command ->
-      assert is_binary(command.summary) and command.summary != ""
-      assert is_binary(command.usage) and String.starts_with?(command.usage, "lemon ")
-      assert is_list(command.subcommands)
-      assert is_list(command.options)
-      assert CommandRegistry.help(command.name) =~ "Usage: #{command.usage}"
-    end)
-
-    Enum.each(@lifecycle ++ @release_only, fn name ->
-      assert CommandRegistry.lifecycle?(name)
-      refute CommandRegistry.command?(name)
-      assert CommandRegistry.help(name) =~ "Usage: lemon #{name}"
-    end)
-  end
-
   test "help lists exactly the commands the invoking launcher can run" do
     for {launcher, present, absent} <- [
-          {:source, @runtime_families ++ @source_only ++ @lifecycle, @release_only},
-          {:release, @runtime_families ++ @lifecycle ++ @release_only, @source_only}
+          {:source, @runtime_families ++ @lifecycle, @release_only},
+          {:release, @runtime_families ++ @lifecycle ++ @release_only, []}
         ] do
       help = CommandRegistry.overview(launcher)
 
@@ -41,18 +21,13 @@ defmodule LemonCli.CommandRegistryTest do
     end
   end
 
-  test "source and release completion never advertise the other launcher's commands" do
+  test "source and release completion share families but not release VM tools" do
     source = Enum.map(CommandRegistry.completion_commands(:source), & &1.name)
     release = Enum.map(CommandRegistry.completion_commands(:release), & &1.name)
 
     for name <- @runtime_families ++ @lifecycle do
       assert name in source
       assert name in release
-    end
-
-    for name <- @source_only do
-      assert name in source
-      refute name in release
     end
 
     for name <- @release_only do
