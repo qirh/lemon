@@ -8,7 +8,6 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
 
   alias Mix.Tasks.Lemon.Secrets.Check
   alias LemonCore.Secrets
-  alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Store
 
   setup do
@@ -73,45 +72,6 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
   end
 
-  describe "module attributes" do
-    test "task module exists and is loaded" do
-      assert Code.ensure_loaded?(Check)
-    end
-
-    test "has proper @shortdoc attribute" do
-      shortdoc = Mix.Task.shortdoc(Check)
-      assert shortdoc =~ "Check secret resolution sources"
-    end
-
-    test "moduledoc is present" do
-      {:docs_v1, _, _, _, module_doc, _, _} = Code.fetch_docs(Check)
-
-      case module_doc do
-        :none ->
-          flunk("Module documentation is missing")
-
-        :hidden ->
-          flunk("Module documentation is hidden")
-
-        %{} ->
-          doc = module_doc["en"]
-          assert is_binary(doc)
-          assert doc =~ "resolution source"
-          assert doc =~ "mix lemon.secrets.check"
-      end
-    end
-
-    test "module has run/1 function exported" do
-      assert Code.ensure_loaded?(Check)
-      assert function_exported?(Check, :run, 1)
-    end
-
-    test "known_secrets list is non-empty" do
-      assert Check.known_secrets() == EnvCatalog.names()
-      assert match?([_ | _], Check.known_secrets())
-    end
-  end
-
   describe "check with no secrets available" do
     test "reports all secrets as missing" do
       output =
@@ -127,16 +87,6 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
                "0 from store, 0 from external sources, 0 from env, #{missing_count} missing"
     end
 
-    test "displays header line" do
-      output =
-        capture_io(fn ->
-          Check.run([])
-        end)
-
-      assert output =~ "NAME"
-      assert output =~ "SOURCE"
-      assert output =~ "VALUE"
-    end
   end
 
   describe "check with store secrets" do

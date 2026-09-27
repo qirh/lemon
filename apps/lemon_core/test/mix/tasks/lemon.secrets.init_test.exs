@@ -7,7 +7,6 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Lemon.Secrets.Init
-  alias LemonCore.Secrets.MasterKey
 
   setup do
     # Create a temporary directory for test
@@ -56,41 +55,6 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
   end
 
-  describe "module attributes" do
-    test "task module exists and is loaded" do
-      assert Code.ensure_loaded?(Init)
-    end
-
-    test "has proper @shortdoc attribute" do
-      # Verify shortdoc via task helper
-      shortdoc = Mix.Task.shortdoc(Init)
-      assert shortdoc =~ "Initialize Lemon secrets master key"
-    end
-
-    test "moduledoc is present" do
-      {:docs_v1, _, _, _, module_doc, _, _} = Code.fetch_docs(Init)
-
-      case module_doc do
-        :none ->
-          flunk("Module documentation is missing")
-
-        :hidden ->
-          flunk("Module documentation is hidden")
-
-        %{} ->
-          doc = module_doc["en"]
-          assert is_binary(doc)
-          assert doc =~ "Initializes the encrypted secrets master key"
-          assert doc =~ "mix lemon.secrets.init"
-      end
-    end
-
-    test "module has run/1 function exported" do
-      assert Code.ensure_loaded?(Init)
-      assert function_exported?(Init, :run, 1)
-    end
-  end
-
   describe "run/1 provisioning" do
     test "writes a 0600 key file when no keychain is available", %{mock_home: mock_home} do
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
@@ -134,32 +98,4 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
     end
   end
 
-  describe "Mix.Task integration" do
-    test "task can be retrieved via Mix.Task.get" do
-      assert Mix.Task.get("lemon.secrets.init") == Init
-    end
-
-    test "task is registered with correct name" do
-      task_module = Mix.Task.get("lemon.secrets.init")
-      assert task_module == Init
-    end
-
-    test "task shortdoc is accessible via Mix.Task.shortdoc" do
-      shortdoc = Mix.Task.shortdoc(Init)
-      assert is_binary(shortdoc)
-      assert shortdoc =~ "Initialize"
-    end
-  end
-
-  describe "MasterKey integration" do
-    test "MasterKey.env_var/0 returns correct variable name" do
-      assert MasterKey.env_var() == "LEMON_SECRETS_MASTER_KEY"
-    end
-
-    test "MasterKey module is available" do
-      assert Code.ensure_loaded?(MasterKey)
-      assert function_exported?(MasterKey, :init, 0)
-      assert function_exported?(MasterKey, :init, 1)
-    end
-  end
 end

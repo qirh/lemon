@@ -22,17 +22,6 @@ defmodule LemonChannels.PortBridgeContractTest do
     }
   ]
 
-  test "adapter wrappers preserve their public worker child specs" do
-    Enum.each(@bridges, fn %{module: module} ->
-      opts = [config: %{bridge_script: "/tmp/bridge.mjs"}, notify_pid: self()]
-
-      assert %{id: ^module, start: {^module, :start_link, [^opts]}} = module.child_spec(opts)
-      assert function_exported?(module, :init, 1)
-      assert function_exported?(module, :handle_cast, 2)
-      assert function_exported?(module, :handle_info, 2)
-    end)
-  end
-
   test "adapter wrappers preserve event tags, labels, and configured script paths", %{
     tmp_dir: tmp_dir
   } do

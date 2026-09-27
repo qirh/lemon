@@ -13,22 +13,6 @@ defmodule Mix.Tasks.Lemon.Store.MigrateJsonlToSqliteTest do
     :ok
   end
 
-  describe "module attributes" do
-    test "has correct shortdoc" do
-      assert Mix.Task.shortdoc(MigrateJsonlToSqlite) == "Migrate Lemon store data from JSONL files to SQLite"
-    end
-
-    test "module exists and exports run/1" do
-      assert Code.ensure_loaded?(MigrateJsonlToSqlite)
-      assert function_exported?(MigrateJsonlToSqlite, :run, 1)
-    end
-
-    test "moduledoc is present" do
-      {:docs_v1, _, _, _, %{"en" => doc}, _, _} = Code.fetch_docs(MigrateJsonlToSqlite)
-      assert doc =~ "One-time migration tool"
-    end
-  end
-
   describe "error handling" do
     test "raises error when JSONL path doesn't exist" do
       assert_raise Mix.Error, ~r/JSONL store directory not found/, fn ->

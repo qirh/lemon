@@ -74,28 +74,6 @@ defmodule LemonAgent.LoopTest do
       assert is_pid(stream)
     end
 
-    test "emits agent_start as first event" do
-      context = simple_context()
-      response = Mocks.assistant_message("Hello!")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil)
-      events = EventStream.events(stream) |> Enum.to_list()
-
-      assert {:agent_start} = hd(events)
-    end
-
-    test "emits agent_end as last event" do
-      context = simple_context()
-      response = Mocks.assistant_message("Hello!")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil)
-      events = EventStream.events(stream) |> Enum.to_list()
-
-      assert {:agent_end, _messages} = List.last(events)
-    end
-
     test "returns new messages in agent_end" do
       context = simple_context()
       response = Mocks.assistant_message("Hello back!")
@@ -136,17 +114,6 @@ defmodule LemonAgent.LoopTest do
   # ============================================================================
 
   describe "stream/4" do
-    test "returns an Enumerable of events" do
-      context = simple_context()
-      response = Mocks.assistant_message("Test response")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      events = Loop.stream([user_message("Test")], context, config) |> Enum.to_list()
-
-      assert is_list(events)
-      assert events != []
-    end
-
     test "includes agent lifecycle events" do
       context = simple_context()
       response = Mocks.assistant_message("Response")
@@ -693,38 +660,6 @@ defmodule LemonAgent.LoopTest do
   # ============================================================================
 
   describe "steering messages" do
-    test "injects steering messages mid-run" do
-      echo_tool = Mocks.echo_tool()
-      context = simple_context(tools: [echo_tool])
-
-      # Queue a steering message to be returned
-      steering_message = user_message("Stop and acknowledge this")
-      steering_queue = Agent.start_link(fn -> [steering_message] end) |> elem(1)
-
-      get_steering = fn ->
-        Agent.get_and_update(steering_queue, fn
-          [] -> {[], []}
-          messages -> {messages, []}
-        end)
-      end
-
-      tool_call = Mocks.tool_call("echo", %{"text" => "hi"}, id: "call_steer")
-      tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Acknowledged")
-
-      config =
-        simple_config(
-          get_steering_messages: get_steering,
-          stream_fn: Mocks.mock_stream_fn([tool_response, final_response])
-        )
-
-      events = Loop.stream([user_message("Test steering")], context, config) |> Enum.to_list()
-
-      # Should have events for the steering message
-      # The exact behavior depends on implementation
-      assert events != []
-    end
-
     test "applies queued system prompt to follow-up turns" do
       parent = self()
       context = simple_context(system_prompt: "base prompt")
@@ -854,36 +789,6 @@ defmodule LemonAgent.LoopTest do
   # ============================================================================
 
   describe "transform_context" do
-    test "applies transform before convert_to_llm" do
-      context = simple_context()
-
-      # Transform that adds a prefix to message content
-      transform_fn = fn messages, _signal ->
-        Enum.map(messages, fn msg ->
-          case msg do
-            %UserMessage{content: content} = m when is_binary(content) ->
-              %{m | content: "[TRANSFORMED] " <> content}
-
-            other ->
-              other
-          end
-        end)
-      end
-
-      response = Mocks.assistant_message("Got transformed message")
-
-      config =
-        simple_config(
-          transform_context: transform_fn,
-          stream_fn: Mocks.mock_stream_fn_single(response)
-        )
-
-      events = Loop.stream([user_message("Original")], context, config) |> Enum.to_list()
-
-      # Should complete without error
-      assert {:agent_end, _} = List.last(events)
-    end
-
     test "transform_context can return {:ok, messages}" do
       context = simple_context()
 

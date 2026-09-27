@@ -25,29 +25,9 @@ defmodule LemonWebTest do
     :ok
   end
 
-  test "application starts successfully" do
-    assert Application.started_applications()
-           |> Enum.any?(fn {app, _, _} -> app == :lemon_web end)
-  end
-
-  test "endpoint configuration exists" do
-    config = Application.get_env(:lemon_web, LemonWeb.Endpoint)
-    assert is_list(config)
-    assert config[:url] || config[:http]
-    assert config[:adapter] == Bandit.PhoenixAdapter
-  end
-
-  test "router is configured" do
-    assert Code.ensure_loaded?(LemonWeb.Router)
-  end
-
   test "bundled favicon is served instead of producing a first-load router error" do
     conn = get(build_conn(), "/favicon.svg")
     assert response(conn, 200) =~ ~s|<svg xmlns="http://www.w3.org/2000/svg"|
-  end
-
-  test "session live module exists" do
-    assert Code.ensure_loaded?(LemonWeb.SessionLive)
   end
 
   test "session live ignores coalesced output maps" do

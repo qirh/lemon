@@ -220,11 +220,6 @@ defmodule LemonCore.ConfigCacheTest do
       assert is_map(config.agent)
     end
 
-    test "raises when cache is not available" do
-      # This test would require stopping the cache, which affects other tests
-      # So we just verify the function exists and has proper error handling
-      assert function_exported?(ConfigCache, :get, 2)
-    end
   end
 
   describe "concurrent access" do

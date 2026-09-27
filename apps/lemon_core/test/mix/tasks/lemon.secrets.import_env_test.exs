@@ -8,7 +8,6 @@ defmodule Mix.Tasks.Lemon.Secrets.ImportEnvTest do
 
   alias Mix.Tasks.Lemon.Secrets.ImportEnv
   alias LemonCore.Secrets
-  alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Store
 
   setup do
@@ -71,45 +70,6 @@ defmodule Mix.Tasks.Lemon.Secrets.ImportEnvTest do
     end)
 
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
-  end
-
-  describe "module attributes" do
-    test "task module exists and is loaded" do
-      assert Code.ensure_loaded?(ImportEnv)
-    end
-
-    test "has proper @shortdoc attribute" do
-      shortdoc = Mix.Task.shortdoc(ImportEnv)
-      assert shortdoc =~ "Import env-based secrets"
-    end
-
-    test "moduledoc is present" do
-      {:docs_v1, _, _, _, module_doc, _, _} = Code.fetch_docs(ImportEnv)
-
-      case module_doc do
-        :none ->
-          flunk("Module documentation is missing")
-
-        :hidden ->
-          flunk("Module documentation is hidden")
-
-        %{} ->
-          doc = module_doc["en"]
-          assert is_binary(doc)
-          assert doc =~ "import"
-          assert doc =~ "mix lemon.secrets.import_env"
-      end
-    end
-
-    test "module has run/1 function exported" do
-      assert Code.ensure_loaded?(ImportEnv)
-      assert function_exported?(ImportEnv, :run, 1)
-    end
-
-    test "known_secrets list is non-empty" do
-      assert ImportEnv.known_secrets() == EnvCatalog.names()
-      assert match?([_ | _], ImportEnv.known_secrets())
-    end
   end
 
   describe "import with no env vars set" do

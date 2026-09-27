@@ -1244,17 +1244,6 @@ defmodule LemonGateway.RunSupervisorTest do
   # ============================================================================
 
   describe "module interface verification" do
-    test "start_run/1 is the public interface" do
-      # Verify the function exists and works
-      assert function_exported?(RunSupervisor, :start_run, 1)
-
-      scope = make_scope()
-      execution_request = make_execution_request(scope)
-
-      result = RunSupervisor.start_run(make_request(execution_request))
-      assert {:ok, _pid} = result
-    end
-
     test "start_run/1 rejects input missing execution_request" do
       scope = make_scope()
       execution_request = make_execution_request(scope)
@@ -1267,17 +1256,5 @@ defmodule LemonGateway.RunSupervisorTest do
                })
     end
 
-    test "start_link/1 starts the supervisor" do
-      assert function_exported?(RunSupervisor, :start_link, 1)
-    end
-
-    test "supervisor implements DynamicSupervisor callbacks" do
-      # Verify init/1 callback works (verified by supervisor being alive)
-      assert Process.alive?(Process.whereis(RunSupervisor))
-
-      # Verify DynamicSupervisor functions work
-      children = DynamicSupervisor.count_children(RunSupervisor)
-      assert is_map(children)
-    end
   end
 end

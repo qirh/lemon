@@ -380,7 +380,6 @@ apps/lemon_agent/test/
 |   |-- event_stream_test.exs         EventStream unit tests
 |   |-- event_stream_concurrency_test.exs
 |   |-- event_stream_edge_cases_test.exs
-|   |-- event_stream_improvements_test.exs
 |   |-- event_stream_runner_test.exs
 |   |-- proxy_test.exs                Proxy stream tests
 |   |-- proxy_error_test.exs

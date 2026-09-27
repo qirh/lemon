@@ -83,6 +83,20 @@ Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 Tests that call `System.put_env/2` or `System.delete_env/1` should be
 `async: false` and restore their changes.
 
+## Behavior-focused coverage
+
+Keep one canonical test for each consumer-visible contract. Prefer observable
+results, failure boundaries, precedence, state transitions, and concurrency
+invariants over module-existence checks, source/documentation string matching,
+copied defaults, or assertions that only repeat a mock's reply.
+
+When consolidating overlapping test families, move unique scenarios into the
+remaining suite before deleting a file. Provider request snapshots belong beside
+their protocol tests; keep omission, authentication, streaming, and error cases
+that exercise different branches. Stream and loop coverage must retain terminal
+ordering, cancellation, monitoring, and tool-result accounting—not just a
+successful return or a nonempty event list.
+
 ## Tags
 
 - `:integration` is excluded by default. It is for tests that need a real
