@@ -1,17 +1,10 @@
 defmodule LemonSim.Examples.VendingBench.Runtime do
   @moduledoc false
 
-  def appended_recent_events(before_recent, after_recent) do
-    max_overlap = min(length(before_recent), length(after_recent))
-
-    overlap =
-      max_overlap..0//-1
-      |> Enum.find(0, fn count ->
-        Enum.take(before_recent, -count) == Enum.take(after_recent, count)
-      end)
-
-    Enum.drop(after_recent, overlap)
-  end
+  # Same window diff the replay verifier uses to rebuild events.jsonl.
+  defdelegate appended_recent_events(before_recent, after_recent),
+    to: LemonSim.Bench.Artifacts.Replay,
+    as: :appended_events
 
   def get(map, key, default \\ nil)
 

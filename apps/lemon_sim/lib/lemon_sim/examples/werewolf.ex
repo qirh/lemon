@@ -19,13 +19,16 @@ defmodule LemonSim.Examples.Werewolf do
   import LemonSim.Examples.Helpers
   import LemonSim.Examples.Helpers.EventHelpers
 
+  alias LemonSim.Bench.Artifacts.Replay.Recorder
   alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
 
   alias LemonSim.LLM.Deciders.ToolLoopDecider
 
   alias LemonSim.Examples.Werewolf.{
     ActionSpace,
+    Artifacts,
     Lore,
+    OfflineRunner,
     Performance,
     Roles,
     TranscriptLogger,
@@ -345,10 +348,24 @@ defmodule LemonSim.Examples.Werewolf do
 
   defp stream_options_for_model(_model), do: %{max_tokens: 768, tool_choice: :any}
 
+  @doc """
+  Runs a single-model Werewolf game. With `:artifact_dir`, the run is recorded
+  and written as a replay-verifiable bundle.
+  """
   @spec run(keyword()) :: {:ok, State.t()} | {:error, term()}
   def run(opts \\ []) when is_list(opts) do
     state = initial_state(opts)
 
+    Recorder.with_bundle(
+      state,
+      opts,
+      Artifacts.replay_config(state, opts),
+      &Artifacts.write_run_artifacts/4,
+      &run_state(state, &1)
+    )
+  end
+
+  defp run_state(state, opts) do
     GameRunner.run(state, modules(), &default_opts/1, opts,
       print_setup: fn s ->
         IO.puts("Starting Werewolf game with #{map_size(get(s.world, :players, %{}))} players")
@@ -359,11 +376,22 @@ defmodule LemonSim.Examples.Werewolf do
   end
 
   @doc """
+  Runs a keyless Werewolf game where every seat is played by a deterministic
+  offline strategy (`"heuristic"`), writing a replay-verifiable bundle.
+  """
+  @spec run_offline_strategy(String.t() | atom(), keyword()) ::
+          {:ok, %{state: State.t(), artifacts: map(), steps: non_neg_integer()}}
+          | {:error, term()}
+  def run_offline_strategy(strategy, opts \\ []),
+    do: OfflineRunner.run_strategy(strategy, opts)
+
+  @doc """
   Runs a Werewolf game with different models assigned to different players.
 
   ## Options
     * `:model_assignments` - map of player_name => {%Model{}, api_key_string}
     * `:transcript_path` - path to write JSONL transcript
+    * `:artifact_dir` - record the run and write a replay-verifiable bundle
     * All other opts from `run/1`
   """
   @spec run_multi_model(keyword()) :: {:ok, State.t()} | {:error, term()}
@@ -371,6 +399,16 @@ defmodule LemonSim.Examples.Werewolf do
     model_assignments = Keyword.fetch!(opts, :model_assignments)
     state = initial_state(opts) |> attach_model_assignments(model_assignments)
 
+    Recorder.with_bundle(
+      state,
+      opts,
+      Artifacts.replay_config(state, opts),
+      &Artifacts.write_run_artifacts/4,
+      &run_multi_model_state(state, &1)
+    )
+  end
+
+  defp run_multi_model_state(state, opts) do
     GameRunner.run_multi_model(state, modules(), &default_opts/1, opts,
       print_setup: fn s ->
         IO.puts(

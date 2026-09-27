@@ -12,10 +12,13 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
 
       mix lemon.sim.werewolf
       mix lemon.sim.werewolf --no-persist --max-turns 25
+      mix lemon.sim.werewolf --offline-strategy heuristic --seed 1 --deterministic-artifacts --artifact-dir /tmp/ww
       mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-5.1-codex-mini,kimi:k2p5
 
   Multi-model assignments are applied in sorted Werewolf seat-name order for the
-  seeded run.
+  seeded run. `--offline-strategy heuristic` plays every seat with a
+  deterministic keyless strategy. With `--artifact-dir`, every mode writes a
+  replay-verifiable `lemon_sim.run.v1` bundle there (`mix lemon.sim.verify DIR`).
   """
 
   @switches [
@@ -24,11 +27,13 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
     max_driver_turns: :integer,
     model: :string,
     models: :string,
+    offline_strategy: :string,
     player_count: :integer,
     seed: :integer,
     sim_id: :string,
     transcript_path: :string,
     artifact_dir: :string,
+    deterministic_artifacts: :boolean,
     help: :boolean
   ]
 
@@ -49,6 +54,9 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
       opts[:model] && opts[:models] ->
         Mix.raise("pass either --model or --models, not both")
 
+      opts[:offline_strategy] && (opts[:model] || opts[:models]) ->
+        Mix.raise("--offline-strategy cannot be combined with --model or --models")
+
       true ->
         if Keyword.get(deps, :ensure_runtime?, true), do: Common.ensure_runtime_started!()
         run_simulation(opts, deps)
@@ -57,7 +65,6 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
 
   defp run_simulation(opts, deps) do
     runner = Keyword.get(deps, :runner, &run_werewolf/2)
-    config = load_config(deps)
 
     base_run_opts =
       []
@@ -66,27 +73,36 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
       |> Common.maybe_put(:player_count, opts[:player_count])
       |> Common.maybe_put(:seed, opts[:seed])
       |> Common.maybe_put(:sim_id, opts[:sim_id])
+      |> Common.maybe_put(:artifact_dir, opts[:artifact_dir])
+      |> Common.maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
 
     result =
-      if opts[:models] do
-        {assignments, effective_seed} = build_model_assignments!(opts, config, deps)
-        maybe_seed_random(effective_seed)
+      cond do
+        opts[:offline_strategy] ->
+          base_run_opts
+          |> Keyword.put(:offline_strategy, opts[:offline_strategy])
+          |> then(&runner.(:offline, &1))
 
-        base_run_opts
-        |> Keyword.put(:seed, effective_seed)
-        |> Common.maybe_put(:model_assignments, assignments)
-        |> Common.maybe_put(:transcript_path, transcript_path(opts))
-        |> then(&runner.(:multi, &1))
-      else
-        maybe_seed_random(opts[:seed])
+        opts[:models] ->
+          config = load_config(deps)
+          {assignments, effective_seed} = build_model_assignments!(opts, config, deps)
 
-        base_run_opts
-        |> Common.maybe_put(:model, resolve_model_override(opts[:model], config, deps))
-        |> then(&runner.(:single, &1))
+          base_run_opts
+          |> Keyword.put(:seed, effective_seed)
+          |> Common.maybe_put(:model_assignments, assignments)
+          |> Common.maybe_put(:transcript_path, transcript_path(opts))
+          |> then(&runner.(:multi, &1))
+
+        true ->
+          config = load_config(deps)
+
+          base_run_opts
+          |> Common.maybe_put(:model, resolve_model_override(opts[:model], config, deps))
+          |> then(&runner.(:single, &1))
       end
 
     case result do
-      {:ok, _final_state} -> :ok
+      {:ok, _result} -> :ok
       {:error, reason} -> Mix.raise("werewolf sim failed: #{inspect(reason)}")
     end
   rescue
@@ -96,8 +112,7 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
   defp build_model_assignments!(opts, config, deps) do
     player_count = opts[:player_count] || 6
     seed = opts[:seed] || System.unique_integer([:positive])
-    maybe_seed_random(seed)
-    player_ids = werewolf_player_ids(player_count)
+    player_ids = werewolf_player_ids(player_count, seed)
     specs = parse_model_list!(opts[:models])
 
     if length(specs) != length(player_ids) do
@@ -116,8 +131,8 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
     {assignments, seed}
   end
 
-  defp werewolf_player_ids(player_count) do
-    LemonSim.Examples.Werewolf.initial_world(player_count: player_count)
+  defp werewolf_player_ids(player_count, seed) do
+    LemonSim.Examples.Werewolf.initial_world(player_count: player_count, seed: seed)
     |> Map.fetch!(:players)
     |> Map.keys()
     |> Enum.sort()
@@ -165,6 +180,11 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
     end
   end
 
+  defp run_werewolf(:offline, opts) do
+    {strategy, opts} = Keyword.pop!(opts, :offline_strategy)
+    LemonSim.Examples.Werewolf.run_offline_strategy(strategy, opts)
+  end
+
   defp run_werewolf(:single, opts), do: LemonSim.Examples.Werewolf.run(opts)
   defp run_werewolf(:multi, opts), do: LemonSim.Examples.Werewolf.run_multi_model(opts)
 
@@ -176,28 +196,24 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
     |> then(& &1.())
   end
 
-  defp maybe_seed_random(nil), do: :ok
-
-  defp maybe_seed_random(seed) when is_integer(seed) do
-    :rand.seed(:exsss, {seed, seed + 1, seed + 2})
-    :ok
-  end
-
   defp print_help do
     Mix.shell().info("""
     mix lemon.sim.werewolf [options]
 
     Options:
-      --persist / --no-persist     Persist the final state (default: true)
+      --persist / --no-persist     Persist the final state (live default: true, offline: false)
       --max-turns N                Maximum turns before the sim stops
       --max-driver-turns N         Deprecated alias for --max-turns
       --model PROVIDER:MODEL       Use one model for all seats
       --models A,B,C               Per-seat models in sorted Werewolf seat order
+      --offline-strategy NAME      Keyless self-play for every seat (heuristic)
       --player-count N             Number of players, 5 through 8 (default: 6)
-      --seed N                     Seed role and character randomization
+      --seed N                     Seed roles, characters, and game randomness
       --sim-id ID                  Override generated simulation id
       --transcript-path PATH       JSONL transcript path for multi-model runs
-      --artifact-dir DIR           Directory for a generated multi-model transcript
+      --artifact-dir DIR           Write a replay-verifiable run bundle (plus the
+                                   multi-model transcript) to DIR
+      --deterministic-artifacts    Pin artifact timestamps for byte-reproducible bundles
       --help                       Show this help
     """)
   end

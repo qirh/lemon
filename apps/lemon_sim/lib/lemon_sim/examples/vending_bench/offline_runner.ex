@@ -1,9 +1,10 @@
 defmodule LemonSim.Examples.VendingBench.OfflineRunner do
   @moduledoc false
 
+  alias LemonSim.Bench.Artifacts.Replay, as: BenchReplay
   alias LemonSim.Examples.VendingBench
   alias LemonSim.Examples.VendingBench.{Artifacts, Events, Suppliers, Updater}
-  alias LemonSim.Kernel.{Event, Runner, State}
+  alias LemonSim.Kernel.{Event, State}
 
   @spec run_strategy(String.t() | atom(), keyword()) ::
           {:ok, %{state: State.t(), artifacts: map(), steps: non_neg_integer()}}
@@ -36,24 +37,26 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
 
     max_turns = Keyword.get(opts, :driver_max_turns, Keyword.get(opts, :max_turns, 50))
 
-    with {:ok, final_state, events, actions, steps} <-
-           run_deterministic_loop(state, max_turns, [], [], 0, event_fun),
+    with {:ok, final_state, events, actions, batches, steps} <-
+           run_deterministic_loop(state, max_turns, {[], [], []}, 0, event_fun),
          artifact_opts <-
-           Keyword.put(
-             opts,
+           opts
+           |> Keyword.put(
              :artifact_report_title,
              "VendingBench Offline #{String.capitalize(strategy)} Report"
-           ),
+           )
+           |> Keyword.put(:replay, %{config: nil, batches: batches}),
          {:ok, artifacts} <-
            Artifacts.write_run_artifacts(final_state, events, actions, artifact_opts) do
       {:ok, %{state: final_state, artifacts: artifacts, steps: steps}}
     end
   end
 
-  defp run_deterministic_loop(state, max_turns, events, actions, turn, event_fun) do
+  # Accumulators are kept reversed: {events, actions, input batches}.
+  defp run_deterministic_loop(state, max_turns, {events, actions, batches}, turn, event_fun) do
     cond do
       terminal?(state) ->
-        {:ok, state, events, actions, turn}
+        {:ok, state, Enum.reverse(events), Enum.reverse(actions), Enum.reverse(batches), turn}
 
       turn >= max_turns ->
         {:error, {:offline_turn_limit_exceeded, max_turns}}
@@ -62,13 +65,12 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
         planned_events = event_fun.(state.world)
         action = baseline_action_summary(state.world, planned_events)
 
-        case ingest_collecting_events(state, planned_events, events) do
-          {:ok, next_state, next_events} ->
+        case ingest_collecting_events(state, planned_events, events, batches) do
+          {:ok, next_state, next_events, next_batches} ->
             run_deterministic_loop(
               next_state,
               max_turns,
-              next_events,
-              actions ++ [action],
+              {next_events, [action | actions], next_batches},
               turn + 1,
               event_fun
             )
@@ -420,32 +422,24 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
   defp event_kind(%{"kind" => kind}), do: kind
   defp event_kind(_event), do: nil
 
-  defp ingest_collecting_events(state, events, collected_events) do
-    Enum.reduce_while(events, {:ok, state, collected_events}, fn event,
-                                                                 {:ok, current_state, acc_events} ->
-      before_recent = current_state.recent_events
+  # Applies each planned event as its own replay batch. Input timestamps are
+  # pinned to the batch index so inputs.jsonl stays byte-deterministic.
+  defp ingest_collecting_events(state, events, collected_events, batches) do
+    Enum.reduce_while(events, {:ok, state, collected_events, batches}, fn event,
+                                                                          {:ok, current_state,
+                                                                           acc_events,
+                                                                           acc_batches} ->
+      input = %{Event.new(event) | ts_ms: length(acc_batches)}
 
-      case Runner.ingest_events(current_state, [event], Updater) do
-        {:ok, next_state, _signal} ->
-          appended = appended_recent_events(before_recent, next_state.recent_events)
-          {:cont, {:ok, next_state, acc_events ++ appended}}
+      case BenchReplay.apply_batch(current_state, [input], Updater) do
+        {:ok, next_state, appended} ->
+          {:cont,
+           {:ok, next_state, Enum.reverse(appended, acc_events), [[input] | acc_batches]}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}
       end
     end)
-  end
-
-  defp appended_recent_events(before_recent, after_recent) do
-    max_overlap = min(length(before_recent), length(after_recent))
-
-    overlap =
-      max_overlap..0//-1
-      |> Enum.find(0, fn count ->
-        Enum.take(before_recent, -count) == Enum.take(after_recent, count)
-      end)
-
-    Enum.drop(after_recent, overlap)
   end
 
   defp total_item_units(world, item_id) do

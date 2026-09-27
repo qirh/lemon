@@ -23,6 +23,12 @@ change.
 - `LemonSim.Examples.Werewolf` is the showcase target for a proper watchable
   social-deduction game: readable phases, hidden-information discipline,
   replay/storyboard artifacts, and objective role/model metrics.
+  `mix lemon.sim.werewolf --offline-strategy heuristic` (and
+  `mix lemon.sim.poker --offline-strategy heuristic`) play every seat with a
+  deterministic keyless heuristic (`*/offline_runner.ex`) and write
+  replay-verifiable `lemon_sim.run.v1` bundles; live runs write the same
+  bundle when given `--artifact-dir`. Both have `werewolf`/`poker` suite
+  adapters.
 - `LemonSim.Examples.VendingBench` is the Vending-Bench 1.0 target: a full
   nested-agent business simulation with operator strategy, physical worker
   execution, suppliers, inventory, demand, incidents, UI, replay, and
@@ -145,6 +151,15 @@ Boundary namespaces:
 - Werewolf follows that contract: roles, names, traits, and connections are drawn at setup, and evidence, wander sightings, village events, and items draw from `world.rng_state` during night resolution and elimination. Poker needs no `rng_state`: hand `k` shuffles `Deck.new()` from `world.base_seed + k - 1`, and `Table.start_hand/2` returns `{:error, :missing_seed}` without a `:seed` or explicit `:deck`. Tic-tac-toe rules are deterministic; only its offline random strategy draws, from its own `:rand.seed_s/2` state.
 - Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
 - Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
+- `mix lemon.sim.verify` has no unhashed fallback: bundles without
+  `manifest.json`/`hashes.json` fail. Replay-capable domains (vending_bench,
+  werewolf, poker; `LemonSim.Bench.Artifacts.Replay.@domains`) must record
+  every updater input batch in `inputs.jsonl` plus setup in `config.json`;
+  the verifier rebuilds the initial state from the seed, re-folds the inputs,
+  and requires `events.jsonl` and `final_world.json` to match. Record inputs
+  with `Replay.apply_batch/3` (offline loops), `Replay.Recorder.record/3`, or
+  `Replay.Recorder.wrap_opts/2` / `with_bundle/5` (runner-driven live runs), and
+  keep `:on_after_step` callbacks notify-only in replay-verified games.
 - Put reusable model/provider/tool-loop mechanics under `LemonSim.LLM`.
 - Keep scenario-specific game-log modules focused on domain metadata and their
   existing public APIs. File lifecycle, JSONL reading/writing, timestamps,
