@@ -14,7 +14,7 @@ kill_timeout = "30s"
   # comma-separated list of provider:model specs whose API keys are
   # configured, e.g. LEMON_ARENA_WEREWOLF_MODELS =
   # "anthropic:claude-sonnet-4-6,openai:gpt-5.2,zai:glm-5".
-  # Domains: WEREWOLF, SPACE_STATION, STOCK_MARKET, SURVIVOR, POKER.
+  # Domains: WEREWOLF, POKER.
   LEMON_ARENA_LEAGUE_ROOT = "/app/data/leagues"
   LEMON_STORE_PATH = "/app/data/store"
   LEMON_SIM_UI_HOST = "lemonsim.fly.dev"

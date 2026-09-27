@@ -5,14 +5,14 @@ defmodule LemonSim.Bench.RatingsTest do
 
   test "aggregates overlapping suites into an exact pairwise matrix and ordered ratings" do
     suite_a =
-      write_suite!("ratings_overlap_a", "stock_market", :maximize, [1, 2], [
+      write_suite!("ratings_overlap_a", "poker", :maximize, [1, 2], [
         {"A", %{"1" => 10, "2" => 10}},
         {"B", %{"1" => 5, "2" => 15}},
         {"C", %{"1" => 0}}
       ])
 
     suite_b =
-      write_suite!("ratings_overlap_b", "stock_market", :maximize, [3], [
+      write_suite!("ratings_overlap_b", "poker", :maximize, [3], [
         {"A", %{"3" => 20}},
         {"B", %{"3" => 10}},
         {"C", %{"3" => 30}}
@@ -50,7 +50,7 @@ defmodule LemonSim.Bench.RatingsTest do
 
   test "minimize direction gives the lower value the win" do
     suite =
-      write_suite!("ratings_minimize", "pandemic", :minimize, [1], [
+      write_suite!("ratings_minimize", "fixture_minimize", :minimize, [1], [
         {"lower", %{"1" => 0.1}},
         {"higher", %{"1" => 0.2}}
       ])
@@ -63,7 +63,7 @@ defmodule LemonSim.Bench.RatingsTest do
 
   test "unverified runs omitted from rankings are excluded" do
     suite =
-      write_suite!("ratings_unverified", "stock_market", :maximize, [1, 2], [
+      write_suite!("ratings_unverified", "poker", :maximize, [1, 2], [
         {"A", %{"1" => 10}},
         {"B", %{"1" => 5, "2" => 100}}
       ])
@@ -75,13 +75,13 @@ defmodule LemonSim.Bench.RatingsTest do
 
   test "ratings json is byte deterministic" do
     suite_a =
-      write_suite!("ratings_determinism_a", "stock_market", :maximize, [1], [
+      write_suite!("ratings_determinism_a", "poker", :maximize, [1], [
         {"A", %{"1" => 3}},
         {"B", %{"1" => 2}}
       ])
 
     suite_b =
-      write_suite!("ratings_determinism_b", "stock_market", :maximize, [2], [
+      write_suite!("ratings_determinism_b", "poker", :maximize, [2], [
         {"A", %{"2" => 2}},
         {"B", %{"2" => 2}}
       ])
@@ -98,7 +98,7 @@ defmodule LemonSim.Bench.RatingsTest do
 
   test "zero-comparison competitors are unrated" do
     suite =
-      write_suite!("ratings_zero_comparison", "stock_market", :maximize, [1, 2], [
+      write_suite!("ratings_zero_comparison", "poker", :maximize, [1, 2], [
         {"A", %{"1" => 10}},
         {"B", %{"2" => 20}}
       ])
@@ -112,7 +112,7 @@ defmodule LemonSim.Bench.RatingsTest do
 
   test "transitivity sanity orders A above B above C" do
     suite =
-      write_suite!("ratings_transitivity", "stock_market", :maximize, [1, 2, 3], [
+      write_suite!("ratings_transitivity", "poker", :maximize, [1, 2, 3], [
         {"A", %{"1" => 3, "2" => 3, "3" => 3}},
         {"B", %{"1" => 2, "2" => 2, "3" => 2}},
         {"C", %{"1" => 1, "2" => 1, "3" => 1}}

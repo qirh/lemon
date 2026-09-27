@@ -8,21 +8,14 @@ defmodule LemonSim.Bench.Domains do
   wiring an existing one into the always-on arena league, means adding or
   editing one entry here rather than several.
 
-  ## Fields kept ahead of a `lemon_sim_ui` migration
+  ## `sim_id_prefix`
 
-  `sim_id_prefix` mirrors the values `LemonSimUi.Arena` and
-  `LemonSimUi.SimManager` hardcode today (`"ww_"`, `"pkr_"`, ...). It's set
-  for the five arena domains (also the `LemonSimUi.Arena` prefixes) and for
-  `tcg_shop`/`vending_bench`, which `SimManager.generate_id/1` also assigns a
-  dedicated prefix even though neither has a league adapter. `SimManager`
-  additionally prefixes `skirmish` (`"skm_"`) and `tic_tac_toe` (`"ttt_"`),
-  but those two aren't registered here — neither has a scorecard module, and
+  `sim_id_prefix` is the sim-id prefix `LemonSimUi.Arena` uses for the arena
+  domains (`"ww_"`, `"pkr_"`) and `SimManager.generate_id/1` uses for
+  `vending_bench` (`"vb_"`). `lemon_sim_ui` derives its arena and public
+  spectator domain lists from `arena_domains/0`. `tic_tac_toe` isn't
+  registered here: it has no scorecard module, and
   `id`/`example_module`/`scorecard_module` are required on every descriptor.
-  `lemon_sim_ui` does not consume this module yet — that app currently keeps
-  its own three parallel per-domain lists (`Arena.@domains`, `arena_domains.ex`,
-  the `SimManager` id-prefix clauses). A follow-up phase is expected to make
-  those derive from `all/0`/`arena_domains/0` here instead; until then this
-  field is purely descriptive.
 
   `default_player_count` mirrors the `@default_player_count` module attribute
   the domain's own `LemonSim.Examples.*` module falls back to when no
@@ -33,13 +26,9 @@ defmodule LemonSim.Bench.Domains do
 
   ## Declaration order is the arena display order
 
-  `@domains` isn't declared alphabetically: the five arena (`league_adapter`)
-  entries are interleaved among the non-arena ones so that their *relative*
-  order — werewolf, space_station, stock_market, survivor, poker — matches
-  what `LemonSimUi.Arena.domains/0` and the lobby page have shown since
-  before this registry existed. `arena_domains/0` filters `@domains` and so
-  preserves that relative order; don't alphabetize this list without
-  checking `arena_domains/0`'s output order first (see `domains_test.exs`).
+  `arena_domains/0` filters `@domains` and so preserves declaration order:
+  werewolf, then poker. That is the order `LemonSimUi.Arena.domains/0` and
+  the lobby page show (see `domains_test.exs`).
   """
 
   alias LemonSim.Bench.Domains.Descriptor
@@ -47,84 +36,12 @@ defmodule LemonSim.Bench.Domains do
 
   @domains [
     %Descriptor{
-      id: "courtroom",
-      example_module: Examples.Courtroom,
-      scorecard_module: Examples.Courtroom.Performance
-    },
-    %Descriptor{
-      id: "diplomacy",
-      example_module: Examples.Diplomacy,
-      scorecard_module: Examples.Diplomacy.Performance
-    },
-    %Descriptor{
-      id: "intel_network",
-      example_module: Examples.IntelNetwork,
-      scorecard_module: Examples.IntelNetwork.Performance
-    },
-    %Descriptor{
-      id: "legislature",
-      example_module: Examples.Legislature,
-      scorecard_module: Examples.Legislature.Performance,
-      default_player_count: 5
-    },
-    %Descriptor{
-      id: "murder_mystery",
-      example_module: Examples.MurderMystery,
-      scorecard_module: Examples.MurderMystery.Performance
-    },
-    %Descriptor{
-      id: "pandemic",
-      example_module: Examples.Pandemic,
-      scorecard_module: Examples.Pandemic.Performance,
-      default_player_count: 6
-    },
-    %Descriptor{
       id: "werewolf",
       example_module: Examples.Werewolf,
       scorecard_module: Examples.Werewolf.Performance,
       league_adapter: Examples.Werewolf.League,
       sim_id_prefix: "ww_",
       default_player_count: 6
-    },
-    %Descriptor{
-      id: "space_station",
-      example_module: Examples.SpaceStation,
-      scorecard_module: Examples.SpaceStation.Performance,
-      league_adapter: Examples.SpaceStation.League,
-      sim_id_prefix: "spc_",
-      default_player_count: 6
-    },
-    %Descriptor{
-      id: "startup_incubator",
-      example_module: Examples.StartupIncubator,
-      scorecard_module: Examples.StartupIncubator.Performance
-    },
-    %Descriptor{
-      id: "stock_market",
-      example_module: Examples.StockMarket,
-      scorecard_module: Examples.StockMarket.Performance,
-      league_adapter: Examples.StockMarket.League,
-      sim_id_prefix: "stk_",
-      default_player_count: 4
-    },
-    %Descriptor{
-      id: "supply_chain",
-      example_module: Examples.SupplyChain,
-      scorecard_module: Examples.SupplyChain.Performance
-    },
-    %Descriptor{
-      id: "survivor",
-      example_module: Examples.Survivor,
-      scorecard_module: Examples.Survivor.Performance,
-      league_adapter: Examples.Survivor.League,
-      sim_id_prefix: "srv_",
-      default_player_count: 8
-    },
-    %Descriptor{
-      id: "tcg_shop",
-      example_module: Examples.TcgShop,
-      scorecard_module: Examples.TcgShop.Performance,
-      sim_id_prefix: "tcg_"
     },
     %Descriptor{
       id: "vending_bench",
@@ -170,9 +87,8 @@ defmodule LemonSim.Bench.Domains do
 
   @doc """
   Domains wired into the always-on arena league (those with a `league_adapter`),
-  in the curated order `LemonSimUi.Arena` and the lobby page display them:
-  werewolf, space_station, stock_market, survivor, poker. See the moduledoc
-  section on declaration order.
+  in the order `LemonSimUi.Arena` and the lobby page display them: werewolf,
+  poker. See the moduledoc section on declaration order.
   """
   @spec arena_domains() :: [Descriptor.t()]
   def arena_domains, do: Enum.filter(@domains, & &1.league_adapter)

@@ -3,39 +3,11 @@ defmodule LemonSim.Bench.Scorecard.RegistryTest do
 
   alias LemonSim.Bench.Scorecard.Registry
 
-  alias LemonSim.Examples.{
-    Courtroom,
-    Diplomacy,
-    IntelNetwork,
-    Legislature,
-    MurderMystery,
-    Pandemic,
-    Poker,
-    SpaceStation,
-    StartupIncubator,
-    StockMarket,
-    SupplyChain,
-    Survivor,
-    TcgShop,
-    VendingBench,
-    Werewolf
-  }
+  alias LemonSim.Examples.{Poker, VendingBench, Werewolf}
 
   test "registered scenarios expose scorecard modules and primary metrics" do
     expected = %{
-      "courtroom" => Courtroom.Performance,
-      "diplomacy" => Diplomacy.Performance,
-      "intel_network" => IntelNetwork.Performance,
-      "legislature" => Legislature.Performance,
-      "murder_mystery" => MurderMystery.Performance,
-      "pandemic" => Pandemic.Performance,
       "poker" => Poker.Performance,
-      "space_station" => SpaceStation.Performance,
-      "startup_incubator" => StartupIncubator.Performance,
-      "stock_market" => StockMarket.Performance,
-      "supply_chain" => SupplyChain.Performance,
-      "survivor" => Survivor.Performance,
-      "tcg_shop" => TcgShop.Performance,
       "vending_bench" => VendingBench.Performance,
       "vending_bench_arena" => VendingBench.ArenaScorecard,
       "werewolf" => Werewolf.Performance

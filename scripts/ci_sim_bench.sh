@@ -193,12 +193,10 @@ scrub_model_credentials
 
 VB_SUITE="$SUITE_ROOT/vending_bench"
 ARENA_SUITE="$SUITE_ROOT/vending_bench_arena"
-TCG_SUITE="$SUITE_ROOT/tcg_shop"
 
 run_suite "vending_bench" "ci" "1,2" "baseline,pressure" "$VB_SUITE"
 run_suite "vending_bench_arena" "ci" "1,2" "baseline" "$ARENA_SUITE"
-run_suite "tcg_shop" "ci" "1,2" "baseline,pressure,overextended" "$TCG_SUITE"
-run_ratings "$VB_SUITE,$ARENA_SUITE,$TCG_SUITE"
+run_ratings "$VB_SUITE,$ARENA_SUITE"
 run_determinism_gate
 run_arena_determinism_gate
 

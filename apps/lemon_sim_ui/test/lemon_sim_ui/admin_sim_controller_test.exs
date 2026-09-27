@@ -117,32 +117,6 @@ defmodule LemonSimUi.AdminSimControllerTest do
     assert response == %{"error" => "capacity_exceeded"}
   end
 
-  test "create starts a TCG Shop sim with public watch URL", %{conn: conn} do
-    sim_id = "api_tcg_shop_test"
-
-    on_exit(fn ->
-      _ = LemonSimUi.SimManager.stop_sim(sim_id)
-      Store.delete_state(sim_id)
-    end)
-
-    conn =
-      conn
-      |> put_req_header("authorization", "Bearer test-sim-ui-token")
-      |> post("/api/admin/sims", %{
-        "domain" => "tcg_shop",
-        "sim_id" => sim_id,
-        "max_days" => 2,
-        "max_turns" => 0
-      })
-
-    body = json_response(conn, 201)
-
-    assert body["sim_id"] == sim_id
-    assert body["domain"] == "tcg_shop"
-    assert body["watch_url"] =~ "/watch/#{sim_id}"
-    assert %State{} = Store.get_state(sim_id)
-  end
-
   test "create returns public watch URL for VendingBench", %{conn: conn} do
     sim_id = "api_vending_bench_test"
 

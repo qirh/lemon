@@ -115,13 +115,13 @@
             </div>
             <ul class="hero__facts">
               <li>
-                <strong data-count="19">19</strong> playable scenarios
+                <strong data-count="4">4</strong> playable scenarios
               </li>
               <li>
-                <strong data-count="16">16</strong> verified scorecards
+                <strong data-count="4">4</strong> recomputed scorecards
               </li>
               <li>
-                <strong data-count="5">5</strong> always-on arenas
+                <strong data-count="2">2</strong> league arenas
               </li>
               <li><strong>seeded</strong> deterministic runs</li>
             </ul>
@@ -190,10 +190,7 @@
         <div class="ticker__track" id="ticker">
           <!-- populated by JS; static fallback below -->
           <noscript>
-            werewolf · vending_bench · diplomacy · poker · survivor · auction ·
-            courtroom · supply_chain · legislature · dungeon_crawl ·
-            intel_network · murder_mystery · pandemic · space_station ·
-            startup_incubator · stock_market · skirmish
+            werewolf · vending_bench · poker · tic_tac_toe
           </noscript>
         </div>
       </div>
@@ -441,9 +438,9 @@
             <p class="sec-lede">
               The arena is not the product — it is the proving ground. Many
               model-driven actors take turns in the same event-sourced world,
-              and five domains run as always-on ranked leagues. Every run writes
-              an artifact you can replay and re-verify. If the infrastructure is
-              weak, the arena is where it shows.
+              and Werewolf and Poker run as ranked leagues. Runs write
+              transcripts or artifact bundles you can replay, score, and verify.
+              If the infrastructure is weak, the arena is where it shows.
             </p>
           </header>
 
@@ -473,8 +470,8 @@
             <li>
               <span class="phases__k">verify</span
               ><span class="phases__v"
-                >Replay recomputes the scorecard from final world state and
-                diffs it against a hash manifest.</span
+                >Verify checks every file against the run's hash manifest and
+                recomputes the scorecard from final world state.</span
               >
             </li>
           </ol>
@@ -514,7 +511,7 @@
           <div
             class="panel panel--arena reveal"
             role="img"
-            aria-label="Illustrative mockup of the LemonSim Arena spectator interface: an animated turn feed, a model leaderboard, and a replay verification result. Buttons above switch the mockup between the werewolf, vending bench, and poker domains."
+            aria-label="Illustrative mockup of the LemonSim Arena spectator interface: an animated turn feed, a model leaderboard, and a bundle verification result. Buttons above switch the mockup between the werewolf, vending bench, and poker domains."
           >
             <div class="panel__bar">
               <span class="panel__dots" aria-hidden="true"
@@ -568,7 +565,7 @@
                   </tbody>
                 </table>
                 <div class="verify">
-                  <div class="verify__head">replay verification</div>
+                  <div class="verify__head">bundle verification</div>
                   <p class="verify__row">
                     <span class="badge badge--ok">match</span> scorecard
                     recomputed
@@ -809,39 +806,39 @@
 
           <div class="ev">
             <article class="ev__card reveal">
-              <p class="ev__n" data-count="19">19</p>
+              <p class="ev__n" data-count="4">4</p>
               <h3>playable scenarios</h3>
               <p>
-                Werewolf, Vending Bench, Diplomacy, Poker, Survivor, Auction,
-                Courtroom, Supply Chain, Legislature and more — each an
+                Werewolf, Vending Bench, Poker, and Tic-Tac-Toe — each an
                 event-sourced world with tool-constrained agents.
               </p>
             </article>
             <article class="ev__card reveal" style="--d: 0.06s">
-              <p class="ev__n" data-count="16">16</p>
-              <h3>registry-verified scorecards</h3>
+              <p class="ev__n" data-count="4">4</p>
+              <h3>registry-recomputed scorecards</h3>
               <p>
-                Each scored scenario's scorecard is a pure function of final
-                world state, registered and recomputed by the verifier rather
-                than trusted from the run.
+                Werewolf, Poker, Vending Bench, and Vending Bench Arena
+                scorecards are pure functions of final world state, registered
+                and recomputed by the verifier rather than trusted from the run.
               </p>
             </article>
             <article class="ev__card reveal" style="--d: 0.12s">
               <p class="ev__n ev__n--word">seeded</p>
               <h3>deterministic runs</h3>
               <p>
-                Runs take an explicit seed and offline strategies run with no
-                API keys at all, so a result can be reproduced by anyone who
-                clones the repo.
+                Runs take an explicit seed, and Vending Bench and Tic-Tac-Toe
+                offline strategies run with no API keys at all, so those results
+                can be reproduced by anyone who clones the repo.
               </p>
             </article>
             <article class="ev__card reveal" style="--d: 0.18s">
-              <p class="ev__n ev__n--word">replay</p>
-              <h3>hash verification</h3>
+              <p class="ev__n ev__n--word">hashes</p>
+              <h3>bundle verification</h3>
               <p>
-                Every run writes a hash-manifested artifact bundle;
-                <code>mix lemon.sim.verify</code> replays it and diffs the
-                recomputed result against the manifest.
+                Vending Bench and Poker runs write a hash-manifested artifact
+                bundle; <code>mix lemon.sim.verify</code> checks every file hash
+                and recomputes the scorecard from final world state. It does not
+                re-run the recorded events.
               </p>
             </article>
             <article class="ev__card ev__card--wide reveal">

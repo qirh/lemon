@@ -4,9 +4,7 @@ defmodule LemonSimUi.SimDashboardLive do
 
   Shows a sidebar listing all known simulations with their domain type and
   live/stopped status. Selecting a sim renders the appropriate game board
-  (TicTacToe, Skirmish, Werewolf, StockMarket, Survivor, SpaceStation,
-  Auction, Diplomacy, DungeonCrawl, Courtroom, StartupIncubator,
-  IntelNetwork, Legislature, Pandemic, MurderMystery, or SupplyChain) alongside an event log, agent
+  (TicTacToe, Werewolf, or VendingBench) alongside an event log, agent
   strategy history, and a memory/data-bank viewer.
 
   The overview promotes Werewolf broadcast status, public-preview links,
@@ -19,25 +17,10 @@ defmodule LemonSimUi.SimDashboardLive do
 
   alias LemonSimUi.{Arena, SimHelpers, SimManager, WerewolfPlayback}
   alias LemonSim.Kernel.{Store, Bus}
-  alias LemonSim.Examples.Skirmish
 
   alias LemonSimUi.Live.Components.{
     TicTacToeBoard,
-    SkirmishBoard,
     WerewolfBoard,
-    StockMarketBoard,
-    SurvivorBoard,
-    SpaceStationBoard,
-    AuctionBoard,
-    DiplomacyBoard,
-    DungeonCrawlBoard,
-    CourtroomBoard,
-    StartupIncubatorBoard,
-    IntelNetworkBoard,
-    LegislatureBoard,
-    PandemicBoard,
-    MurderMysteryBoard,
-    SupplyChainBoard,
     VendingBenchBoard,
     EventLog,
     PlanHistory,
@@ -209,20 +192,6 @@ defmodule LemonSimUi.SimDashboardLive do
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
-        :skirmish ->
-          squad = parse_squad(params["squad"])
-
-          [
-            max_turns: parse_int(params["max_turns"], 48),
-            rng_seed: parse_int(params["rng_seed"], :rand.uniform(1000)),
-            map_width: parse_int(params["map_width"], 10),
-            map_height: parse_int(params["map_height"], 10),
-            map_preset: parse_map_preset(params["map_preset"]),
-            squad: squad,
-            human_player: parse_human_player(params["human_player"])
-          ]
-          |> maybe_put_sim_id(params["sim_id"])
-
         :werewolf ->
           player_count = parse_int(params["player_count"], 6)
 
@@ -232,42 +201,12 @@ defmodule LemonSimUi.SimDashboardLive do
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
-        domain when domain in [:stock_market, :survivor, :space_station] ->
-          player_count = parse_int(params["player_count"], default_player_count(domain))
+        :vending_bench ->
+          player_count = parse_int(params["player_count"], default_player_count(:vending_bench))
 
           [
             player_count: player_count,
             model_specs: build_model_specs(params, player_count)
-          ]
-          |> maybe_put_sim_id(params["sim_id"])
-
-        domain
-        when domain in [
-               :auction,
-               :diplomacy,
-               :courtroom,
-               :startup_incubator,
-               :intel_network,
-               :legislature,
-               :pandemic,
-               :murder_mystery,
-               :supply_chain,
-               :tcg_shop,
-               :vending_bench
-             ] ->
-          player_count = parse_int(params["player_count"], default_player_count(domain))
-
-          [
-            player_count: player_count,
-            model_specs: build_model_specs(params, player_count)
-          ]
-          |> maybe_put_sim_id(params["sim_id"])
-
-        :dungeon_crawl ->
-          party_size = parse_int(params["party_size"], 4)
-
-          [
-            party_size: party_size
           ]
           |> maybe_put_sim_id(params["sim_id"])
 
@@ -367,76 +306,6 @@ defmodule LemonSimUi.SimDashboardLive do
           String.to_integer(col)
         )
 
-      SimManager.submit_human_move(state.sim_id, event)
-    end
-
-    {:noreply, socket}
-  end
-
-  # Skirmish human move to position
-  def handle_event("human_move_to", %{"x" => x, "y" => y}, socket) do
-    state = socket.assigns.selected_sim
-
-    if state do
-      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
-      event = Skirmish.Events.move_requested(actor_id, String.to_integer(x), String.to_integer(y))
-      SimManager.submit_human_move(state.sim_id, event)
-    end
-
-    {:noreply, socket}
-  end
-
-  # Skirmish human actions (end_turn, take_cover)
-  def handle_event("human_action", %{"action" => "end_turn"}, socket) do
-    state = socket.assigns.selected_sim
-
-    if state do
-      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
-      event = Skirmish.Events.end_turn_requested(actor_id)
-      SimManager.submit_human_move(state.sim_id, event)
-    end
-
-    {:noreply, socket}
-  end
-
-  def handle_event("human_action", %{"action" => "take_cover"}, socket) do
-    state = socket.assigns.selected_sim
-
-    if state do
-      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
-      event = Skirmish.Events.cover_requested(actor_id)
-      SimManager.submit_human_move(state.sim_id, event)
-    end
-
-    {:noreply, socket}
-  end
-
-  def handle_event("human_action", %{"action" => "heal", "target" => target_id}, socket) do
-    state = socket.assigns.selected_sim
-
-    if state do
-      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
-
-      event =
-        LemonSim.Examples.Skirmish.Events.heal_requested(actor_id, target_id)
-
-      SimManager.submit_human_move(state.sim_id, event)
-    end
-
-    {:noreply, socket}
-  end
-
-  def handle_event("human_action", %{"action" => "sprint"}, socket) do
-    # Sprint mode - next tile click will be a sprint instead of move
-    {:noreply, assign(socket, sprint_mode: true)}
-  end
-
-  def handle_event("human_attack", %{"target" => target_id}, socket) do
-    state = socket.assigns.selected_sim
-
-    if state do
-      actor_id = LemonCore.MapHelpers.get_key(state.world, :active_actor_id)
-      event = Skirmish.Events.attack_requested(actor_id, target_id)
       SimManager.submit_human_move(state.sim_id, event)
     end
 
@@ -690,7 +559,7 @@ defmodule LemonSimUi.SimDashboardLive do
                   name="domain"
                   label="Domain Protocol"
                   value={@new_sim_domain}
-                  options={[{"Tic Tac Toe", "tic_tac_toe"}, {"Skirmish", "skirmish"}, {"Werewolf", "werewolf"}, {"Stock Market", "stock_market"}, {"Survivor", "survivor"}, {"Space Station", "space_station"}, {"Auction", "auction"}, {"Diplomacy", "diplomacy"}, {"Dungeon Crawl", "dungeon_crawl"}, {"Courtroom", "courtroom"}, {"Startup Incubator", "startup_incubator"}, {"Intel Network", "intel_network"}, {"Legislature", "legislature"}, {"Pandemic", "pandemic"}, {"Murder Mystery", "murder_mystery"}, {"Supply Chain", "supply_chain"}, {"Vending Bench", "vending_bench"}, {"TCG Shop", "tcg_shop"}]}
+                  options={[{"Tic Tac Toe", "tic_tac_toe"}, {"Werewolf", "werewolf"}, {"Vending Bench", "vending_bench"}]}
                   class="bg-slate-900/80 border-glass-border focus:border-cyan-500!"
                 />
 
@@ -707,80 +576,33 @@ defmodule LemonSimUi.SimDashboardLive do
                     />
                     <.input name="max_turns" label="Max Turns" type="number" value="20" />
                   <% else %>
-                    <%= if @new_sim_domain == "skirmish" do %>
-                      <.select
-                        name="human_player"
-                        label="Player Mode"
-                        value=""
-                        options={[{"AI vs AI", ""}, {"Play as Red", "red"}, {"Play as Blue", "blue"}]}
-                      />
-                      <.select
-                        name="squad"
-                        label="Squad Composition"
-                        value="soldier,scout,medic"
-                        options={[
-                          {"Balanced (Soldier + Scout + Medic)", "soldier,scout,medic"},
-                          {"Assault (Soldier + Heavy + Scout)", "soldier,heavy,scout"},
-                          {"Sniper Team (Sniper + Soldier + Medic)", "sniper,soldier,medic"},
-                          {"Rush (Scout + Scout + Soldier)", "scout,scout,soldier"},
-                          {"Full Squad (5v5)", "soldier,scout,medic,heavy,sniper"}
-                        ]}
-                      />
-                      <.select
-                        name="map_preset"
-                        label="Map Style"
-                        value=""
-                        options={[
-                          {"Random (Procedural)", ""},
-                          {"Arena (Open)", "arena"},
-                          {"Fortress (Corridors)", "fortress"},
-                          {"Wetlands (Water + Cover)", "wetlands"}
-                        ]}
-                      />
-                      <div class="grid grid-cols-2 gap-3">
-                        <.input name="map_width" label="Map Width" type="number" value="10" />
-                        <.input name="map_height" label="Map Height" type="number" value="10" />
+                    <%= if @new_sim_domain in ~w(werewolf vending_bench) do %>
+                      <.input name="player_count" label={player_count_label(@new_sim_domain)} type="number" value={@new_player_count} min={min_players(@new_sim_domain)} max={max_players(@new_sim_domain)} />
+                      <div class="mt-3 pt-3 border-t border-glass-border/50">
+                        <div class="text-[10px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-2">Model Assignment</div>
+                        <p class="text-[10px] text-slate-500 mb-3">Assign AI models to player seats.</p>
+                        <%= for seat <- 1..@new_player_count do %>
+                          <% seat_provider = Map.get(@seat_providers, seat, default_provider()) %>
+                          <% seat_model = Map.get(@seat_models, seat, default_model_for_provider(seat_provider)) %>
+                          <div class="flex items-center gap-2 mb-1.5">
+                            <span class="text-[10px] text-slate-500 font-mono w-6 shrink-0">P{seat}</span>
+                            <.select
+                              name={"provider_#{seat}"}
+                              label=""
+                              value={to_string(seat_provider)}
+                              options={provider_options()}
+                              class="text-xs! py-1!"
+                            />
+                            <.select
+                              name={"model_#{seat}"}
+                              label=""
+                              value={seat_model}
+                              options={model_options_for_provider(seat_provider)}
+                              class="text-xs! py-1!"
+                            />
+                          </div>
+                        <% end %>
                       </div>
-                      <.input name="max_turns" label="Max Turns" type="number" value="48" />
-                      <.input name="rng_seed" label="RNG Seed" type="number" value="" placeholder="random" />
-                    <% else %>
-                      <%= if @new_sim_domain == "dungeon_crawl" do %>
-                        <.select
-                          name="party_size"
-                          label="Party Size"
-                          value="4"
-                          options={[{"Full Party (4)", "4"}, {"Trio (3)", "3"}, {"Duo (2)", "2"}]}
-                        />
-                      <% else %>
-                      <%= if @new_sim_domain in ~w(werewolf stock_market survivor space_station auction diplomacy courtroom startup_incubator intel_network legislature pandemic murder_mystery supply_chain vending_bench tcg_shop) do %>
-                        <.input name="player_count" label={player_count_label(@new_sim_domain)} type="number" value={@new_player_count} min={min_players(@new_sim_domain)} max={max_players(@new_sim_domain)} />
-                        <div class="mt-3 pt-3 border-t border-glass-border/50">
-                          <div class="text-[10px] font-mono uppercase tracking-widest text-fuchsia-400 font-bold mb-2">Model Assignment</div>
-                          <p class="text-[10px] text-slate-500 mb-3">Assign AI models to player seats.</p>
-                          <%= for seat <- 1..@new_player_count do %>
-                            <% seat_provider = Map.get(@seat_providers, seat, default_provider()) %>
-                            <% seat_model = Map.get(@seat_models, seat, default_model_for_provider(seat_provider)) %>
-                            <div class="flex items-center gap-2 mb-1.5">
-                              <span class="text-[10px] text-slate-500 font-mono w-6 shrink-0">P{seat}</span>
-                              <.select
-                                name={"provider_#{seat}"}
-                                label=""
-                                value={to_string(seat_provider)}
-                                options={provider_options()}
-                                class="text-xs! py-1!"
-                              />
-                              <.select
-                                name={"model_#{seat}"}
-                                label=""
-                                value={seat_model}
-                                options={model_options_for_provider(seat_provider)}
-                                class="text-xs! py-1!"
-                              />
-                            </div>
-                          <% end %>
-                        </div>
-                      <% end %>
-                      <% end %>
                     <% end %>
                   <% end %>
                 </div>
@@ -1097,7 +919,7 @@ defmodule LemonSimUi.SimDashboardLive do
           <!-- Board + details layout -->
           <div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
             <!-- Left: Visual board -->
-            <% full_width_board = @domain_type in [:werewolf, :stock_market, :survivor, :space_station, :auction, :diplomacy, :dungeon_crawl, :courtroom, :startup_incubator, :intel_network, :legislature, :pandemic, :murder_mystery, :supply_chain, :vending_bench, :tcg_shop] %>
+            <% full_width_board = @domain_type in [:werewolf, :vending_bench] %>
             <div class={[
               "glass-card rounded-xl flex flex-col overflow-hidden",
               if(full_width_board, do: "xl:col-span-9 h-[calc(100vh-14rem)]", else: "xl:col-span-7 p-6 min-h-[500px]")
@@ -1119,88 +941,13 @@ defmodule LemonSimUi.SimDashboardLive do
                       world={@selected_sim.world}
                       interactive={@human_player != nil && @selected_sim.sim_id in @running}
                     />
-                  <% :skirmish -> %>
-                    <SkirmishBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
                   <% :werewolf -> %>
                     <WerewolfBoard.render
                       world={@selected_sim.world}
                       interactive={@human_player != nil && @selected_sim.sim_id in @running}
                     />
-                  <% :stock_market -> %>
-                    <StockMarketBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :survivor -> %>
-                    <SurvivorBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :space_station -> %>
-                    <SpaceStationBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :auction -> %>
-                    <AuctionBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :diplomacy -> %>
-                    <DiplomacyBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :dungeon_crawl -> %>
-                    <DungeonCrawlBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :courtroom -> %>
-                    <CourtroomBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :startup_incubator -> %>
-                    <StartupIncubatorBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :intel_network -> %>
-                    <IntelNetworkBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :legislature -> %>
-                    <LegislatureBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :pandemic -> %>
-                    <PandemicBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :murder_mystery -> %>
-                    <MurderMysteryBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :supply_chain -> %>
-                    <SupplyChainBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
                   <% :vending_bench -> %>
                     <VendingBenchBoard.render
-                      world={@selected_sim.world}
-                      interactive={@human_player != nil && @selected_sim.sim_id in @running}
-                    />
-                  <% :tcg_shop -> %>
-                    <LemonSimUi.Live.Components.TcgShopBoard.render
                       world={@selected_sim.world}
                       interactive={@human_player != nil && @selected_sim.sim_id in @running}
                     />
@@ -1319,14 +1066,6 @@ defmodule LemonSimUi.SimDashboardLive do
   defp parse_human_player(""), do: nil
   defp parse_human_player(val), do: val
 
-  defp parse_squad(nil), do: LemonSim.Examples.Skirmish.UnitClasses.default_squad()
-  defp parse_squad(""), do: LemonSim.Examples.Skirmish.UnitClasses.default_squad()
-  defp parse_squad(val) when is_binary(val), do: String.split(val, ",", trim: true)
-
-  defp parse_map_preset(nil), do: nil
-  defp parse_map_preset(""), do: nil
-  defp parse_map_preset(val), do: String.to_existing_atom(val)
-
   defp maybe_put_sim_id(opts, nil), do: opts
   defp maybe_put_sim_id(opts, ""), do: opts
   defp maybe_put_sim_id(opts, sim_id), do: Keyword.put(opts, :sim_id, sim_id)
@@ -1391,68 +1130,16 @@ defmodule LemonSimUi.SimDashboardLive do
   # -- Game-specific form helpers --
 
   defp player_count_label("werewolf"), do: "Number of Players (5-8)"
-  defp player_count_label("stock_market"), do: "Number of Traders (3-6)"
-  defp player_count_label("survivor"), do: "Number of Contestants (6-8)"
-  defp player_count_label("space_station"), do: "Number of Crew (5-7)"
-  defp player_count_label("auction"), do: "Number of Bidders (4-6)"
-  defp player_count_label("diplomacy"), do: "Number of Factions (4-6)"
-  defp player_count_label("courtroom"), do: "Number of Jurors (3-5)"
-  defp player_count_label("startup_incubator"), do: "Number of Founders (2-6)"
-  defp player_count_label("intel_network"), do: "Number of Agents (6-8)"
-  defp player_count_label("legislature"), do: "Number of Legislators (5-7)"
-  defp player_count_label("pandemic"), do: "Number of Governors (4-6)"
-  defp player_count_label("murder_mystery"), do: "Number of Guests (6)"
-  defp player_count_label("supply_chain"), do: "Number of Tiers (4)"
   defp player_count_label("vending_bench"), do: "Operator (1)"
-  defp player_count_label("tcg_shop"), do: "Operator (1)"
   defp player_count_label(_), do: "Number of Players"
 
-  defp min_players("stock_market"), do: 3
-  defp min_players("survivor"), do: 6
-  defp min_players("space_station"), do: 5
-  defp min_players("auction"), do: 4
-  defp min_players("diplomacy"), do: 4
-  defp min_players("courtroom"), do: 3
-  defp min_players("startup_incubator"), do: 2
-  defp min_players("intel_network"), do: 6
-  defp min_players("legislature"), do: 5
-  defp min_players("pandemic"), do: 4
-  defp min_players("murder_mystery"), do: 6
-  defp min_players("supply_chain"), do: 4
   defp min_players("vending_bench"), do: 1
-  defp min_players("tcg_shop"), do: 1
   defp min_players(_), do: 5
 
-  defp max_players("stock_market"), do: 6
-  defp max_players("survivor"), do: 8
-  defp max_players("space_station"), do: 7
-  defp max_players("auction"), do: 6
-  defp max_players("diplomacy"), do: 6
-  defp max_players("courtroom"), do: 5
-  defp max_players("startup_incubator"), do: 6
-  defp max_players("intel_network"), do: 8
-  defp max_players("legislature"), do: 7
-  defp max_players("pandemic"), do: 6
-  defp max_players("murder_mystery"), do: 6
-  defp max_players("supply_chain"), do: 4
   defp max_players("vending_bench"), do: 1
-  defp max_players("tcg_shop"), do: 1
   defp max_players(_), do: 8
 
-  defp default_player_count(:stock_market), do: 4
-  defp default_player_count(:survivor), do: 8
-  defp default_player_count(:space_station), do: 6
-  defp default_player_count(:auction), do: 4
-  defp default_player_count(:diplomacy), do: 4
-  defp default_player_count(:courtroom), do: 3
-  defp default_player_count(:startup_incubator), do: 4
-  defp default_player_count(:intel_network), do: 6
-  defp default_player_count(:legislature), do: 5
-  defp default_player_count(:pandemic), do: 4
-  defp default_player_count(:murder_mystery), do: 6
-  defp default_player_count(:supply_chain), do: 4
   defp default_player_count(:vending_bench), do: 1
-  defp default_player_count(:tcg_shop), do: 1
   defp default_player_count(_), do: 6
 
   # -- Model helpers --

@@ -14,9 +14,9 @@ artifacts that can be replayed, scored, and verified.
 - `LemonSim.Bench` owns benchmark artifacts: manifests, scorecard behaviours,
   registry-driven scorecard recompute verification, hash verification, and
   shared run-bundle helpers.
-- `LemonSim.Examples.*` owns the worlds. The examples are 92.3% of the current
-  Elixir source under `apps/lemon_sim/lib`, because the interesting work is in
-  scenario rules, tools, projections, and scoring.
+- `LemonSim.Examples.*` owns the worlds. The examples are about three quarters
+  of the Elixir source under `apps/lemon_sim/lib`, because the interesting work
+  is in scenario rules, tools, projections, and scoring.
 
 `ToolLoopDecider` is the fairness boundary for heterogeneous models. A scenario
 offers a constrained tool/action surface, the model chooses through that
@@ -24,28 +24,24 @@ surface, and the updater turns accepted actions into authoritative events.
 
 ## Scenarios
 
-There are 19 examples in this app:
+There are four scenarios in this app:
 
-- `TicTacToe` is the smallest self-play scenario.
+- `TicTacToe` is the smallest self-play scenario and the tutorial example. It
+  runs keyless with `--offline-strategy random`.
 - `Werewolf` is the social-deduction showcase with hidden roles, transcripts,
-  and video replay tooling. It is one of five scenarios in the persistent
+  and video replay tooling. It is one of two scenarios in the persistent
   multi-game league system (`LemonSim.Bench.League` + per-scenario adapters,
-  alongside `SpaceStation`, `StockMarket`, `Survivor`, and `Poker`): randomized
-  model-to-seat match planning, per-game records, and per-model/per-role
-  standings with Bradley-Terry ratings. The `lemon_sim_ui` arenas run them
-  around the clock.
+  alongside `Poker`): randomized model-to-seat match planning, per-game
+  records, and per-model/per-role standings with Bradley-Terry ratings. The
+  `lemon_sim_ui` arenas run them around the clock when configured. It needs
+  provider credentials to run.
+- `Poker` is a multi-hand no-limit hold'em session with per-seat model
+  assignment; it is the second league/arena scenario (ranked mode on final
+  chip stacks). It needs provider credentials to run.
 - `VendingBench` is the operator/physical-worker vending business benchmark,
   with deterministic CI, paper, V2, offline Arena, and live multi-agent Arena
-  modes.
-- `TcgShop` is a single-operator local game store benchmark with inventory,
-  suppliers, customers, events, online orders, accounting, and scorecards.
-- `Poker` is a multi-hand no-limit hold'em session with per-seat model
-  assignment; it is the fifth league/arena scenario (ranked mode on final
-  chip stacks).
-- `Diplomacy`, `Skirmish`, `Survivor`, `Pandemic`, `Auction`,
-  `Courtroom`, `SpaceStation`, `StockMarket`, `SupplyChain`, `DungeonCrawl`,
-  `MurderMystery`, `Legislature`, `IntelNetwork`, and `StartupIncubator` cover
-  other state machines and decision surfaces.
+  modes. It is the only scenario with keyless suites and a CI byte-determinism
+  gate.
 
 ## Run
 
@@ -61,14 +57,6 @@ Deterministic benchmark run with artifacts, also keyless:
 mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
 mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
-```
-
-TCG Shop deterministic lanes:
-
-```bash
-mix lemon.sim.tcg_shop --preset ci --offline-strategy baseline --sim-id tcg_ci_baseline
-mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure --sim-id tcg_ci_pressure
-mix lemon.sim.tcg_shop --preset stress --offline-strategy overextended --sim-id tcg_stress_bad_operator
 ```
 
 Live model runs require configured providers and credentials:
@@ -94,8 +82,8 @@ Provider-qualified model specs accept registered provider names plus the
 existing `gemini`, `gemini-cli`, `gemini_cli`, and `openai_codex` aliases;
 unknown provider strings are rejected without creating atoms.
 
-A single `mix lemon.sim.replay <scenario> <log>` task renders JSONL transcripts
-for every scenario. For example, a Werewolf transcript produced by
+`mix lemon.sim.replay <scenario> <log>` renders Poker and Werewolf JSONL
+transcripts to video. For example, a Werewolf transcript produced by
 `mix lemon.sim.werewolf --models ... --transcript-path path.jsonl`:
 
 Scenario log modules keep their domain-specific step and terminal metadata,
@@ -104,22 +92,22 @@ envelopes, event normalization, timestamps, and JSON-safe encoding.
 
 ```bash
 mix lemon.sim.replay werewolf apps/lemon_sim/priv/game_logs/werewolf_4model.jsonl
-mix lemon.sim.replay skirmish priv/game_logs/abc123.jsonl --output replay.mp4 --fps 4
+mix lemon.sim.replay poker priv/game_logs/poker/abc123.jsonl --output replay.mp4 --fps 4
 ```
 
-A single positional argument is treated as a `skirmish` log for backwards
-compatibility. Run `mix lemon.sim.replay --help` for the full scenario list.
-The replay task requires `rsvg-convert` and `ffmpeg` on `PATH`. (VendingBench
-uses `mix lemon.sim.vending_bench_replay`, which builds a static HTML browser.)
+Both the scenario and the log path are required; run `mix lemon.sim.replay --help`
+for options. The replay task requires `rsvg-convert` and `ffmpeg` on `PATH`.
+(VendingBench uses `mix lemon.sim.vending_bench_replay`, which builds a static
+HTML browser.)
 
 ## Artifacts
 
 Benchmark runs write bundles under `apps/lemon_sim/priv/game_logs/...` unless
-`--artifact-dir` is provided. Vending Bench and TCG Shop write rich bundles with
-scenario-specific replay/transcript files. Poker, Stock Market, and Pandemic
-write verified scorecard bundles with `manifest.json`, `hashes.json`,
-`final_world.json`, `events.jsonl`, `actions.jsonl`, `scorecard.json`, and
-`usage.json`.
+`--artifact-dir` is provided. VendingBench writes a rich bundle with replay and
+transcript files. Poker writes a scorecard bundle with `manifest.json`,
+`hashes.json`, `final_world.json`, `events.jsonl`, `actions.jsonl`,
+`scorecard.json`, and `usage.json`. Werewolf does not write a bundle; its
+`--artifact-dir` holds a JSONL transcript.
 
 Use:
 
@@ -130,27 +118,24 @@ mix lemon.sim.score path/to/run
 
 ### Determinism
 
-The kernel ([`kernel/runner.ex`](lib/lemon_sim/kernel/runner.ex)) is a pure
-reducer: a run is a fold of an event sequence through `apply_event`, so the same
-seed produces a byte-identical run. This is verified, not just asserted —
-[`test/lemon_sim/determinism_test.exs`](test/lemon_sim/determinism_test.exs) runs
-the offline VendingBench strategy (a scripted decider, no LLM) twice with one
-seed and asserts both the in-memory final world state and every artifact's
+[`test/lemon_sim/determinism_test.exs`](test/lemon_sim/determinism_test.exs)
+runs the offline VendingBench strategy (a scripted decider, no LLM) twice with
+one seed and asserts both the in-memory final world state and every artifact's
 sha256 in `hashes.json` are identical. It is fast (~0.2s) and fully offline, so
-it belongs in the CI lane. The `deterministic_artifacts?: true` option pins the
-two knobs that are nondeterministic by design (a unique run id and the wall-clock
-timestamp); everything else falls out of the reducer.
+it belongs in the CI lane, and `scripts/ci_sim_bench.sh` repeats the check on
+the CLI with a double-run `diff -r`. The `deterministic_artifacts?: true` option
+pins the two knobs that are nondeterministic by design (a unique run id and the
+wall-clock timestamp).
 
 `verify` checks the manifest, hash schema, required benchmark files, manifest
 integrity hashes, and hashed file contents. For scenarios registered in
-`LemonSim.Bench.Scorecard.Registry`, it also recomputes `scorecard.json` from
-`final_world.json` and compares canonical JSON. Registered verified scenarios:
-`courtroom`, `diplomacy`, `intel_network`, `legislature`, `murder_mystery`,
-`pandemic`, `poker`, `space_station`, `startup_incubator`, `stock_market`,
-`supply_chain`, `survivor`, `tcg_shop`, `vending_bench`,
-`vending_bench_arena`, and `werewolf`. Unregistered scenarios still get
-manifest/hash verification and skip scorecard recompute. `score` verifies first,
-then prints the scorecard.
+`LemonSim.Bench.Scorecard.Registry` (`poker`, `vending_bench`,
+`vending_bench_arena`, and `werewolf`), it also recomputes `scorecard.json` from
+`final_world.json` and compares canonical JSON. It does not re-fold
+`events.jsonl` to rebuild `final_world.json`, so it proves the bundle is
+internally consistent with its own hashes and scorecard, not that the recorded
+run was replayed. Unregistered scenarios still get manifest/hash verification
+and skip scorecard recompute. `score` verifies first, then prints the scorecard.
 
 Regenerate local demo bundles with:
 
@@ -182,9 +167,9 @@ Competitor specs accept exactly one execution mode:
 | `{"id":"model","model":"provider:model-id"}` | Live adapters | Provider pricing or unknown |
 | `{"id":"my-agent","external_cmd":"python3 my_agent.py"}` | `vending_bench` | Unknown |
 
-Suite run adapters are currently available for `vending_bench`, `tcg_shop`, and
-`vending_bench_arena`. Other registered scorecards can be recompute-verified from
-artifact bundles but do not yet have suite runners.
+Suite run adapters are currently available for `vending_bench` and
+`vending_bench_arena`. Other registered scorecards can be recompute-verified
+from artifact bundles but do not yet have suite runners.
 
 The keyless CI smoke lane is:
 
@@ -192,10 +177,10 @@ The keyless CI smoke lane is:
 scripts/ci_sim_bench.sh
 ```
 
-It runs deterministic offline suites for VendingBench, VendingBench Arena, and
-TCG Shop under `$RUNNER_TEMP` or `tmp/`, verifies and scores every produced run
-bundle, writes cross-suite ratings, and checks VendingBench byte-reproducible
-artifact output with a double-run `diff -r` gate.
+It runs deterministic offline suites for VendingBench and VendingBench Arena
+under `$RUNNER_TEMP` or `tmp/`, verifies and scores every produced run bundle,
+writes cross-suite ratings, and checks VendingBench byte-reproducible artifact
+output with a double-run `diff -r` gate.
 
 That writes `/tmp/vending-suite/suite.json`, one verified bundle per
 competitor/seed under `/tmp/vending-suite/runs/`, and

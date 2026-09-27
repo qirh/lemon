@@ -1744,7 +1744,7 @@ The LiveView app also exposes:
 - `/leaderboards` for verified suite leaderboards
 - `/admin` and `/admin/sims/:sim_id` for private admin surfaces when an access token is configured
 
-The spectator route supports VendingBench, Werewolf, and TCG Shop. For
+The spectator route supports VendingBench, Werewolf, and Poker. For
 artifact-backed VendingBench runs, it can refresh from `final_world.json` and
 render `usage.json` totals.
 
@@ -2585,21 +2585,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
 | `LEMON_ARENA_POKER_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the poker arena. |
 | `LEMON_ARENA_POKER_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the poker arena. |
-| `LEMON_ARENA_SPACE_STATION_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the space_station arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SPACE_STATION_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the space_station arena. |
-| `LEMON_ARENA_STOCK_MARKET_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the stock_market arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_STOCK_MARKET_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the stock_market arena. |
-| `LEMON_ARENA_SURVIVOR_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the survivor arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SURVIVOR_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the survivor arena. |
 | `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
 | `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
 | `LEMON_ARENA_WEREWOLF_MAX_GAME_RECORDS`<br>_(alias: `WEREWOLF_ARENA_MAX_GAME_RECORDS`)_ | integer | `1000` |  | `lemon_sim_ui` | Rolling number of Werewolf league game records retained on disk and included in standings. |
@@ -9676,7 +9661,7 @@ Durable state and outbound notifications.
 
 ## Sim & arena
 
-`lemon_sim` contributes **26** tasks. They fall into four sub-groups.
+`lemon_sim` contributes **10** tasks. They fall into four sub-groups.
 
 ### Scenario runners (self-play)
 
@@ -9684,10 +9669,7 @@ Each runs one scenario's self-play example. All share the common flags
 `--seed`, `--max-turns`, `--offline-strategy`, `--no-persist`, and `--sim-id`
 (run `mix help lemon.sim.<scenario>` for scenario-specific options).
 
-`auction`, `courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`,
-`legislature`, `murder_mystery`, `pandemic`, `poker`, `skirmish`,
-`space_station`, `startup_incubator`, `stock_market`, `supply_chain`,
-`survivor`, `tcg_shop`, `tic_tac_toe`, `vending_bench`, `werewolf` (19).
+`poker`, `tic_tac_toe`, `vending_bench`, `werewolf` (4).
 
 ```bash
 mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
@@ -9702,11 +9684,8 @@ mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_
 | `mix lemon.sim.vending_bench_replay DIR` | Build a static HTML replay browser from a VendingBench artifact directory (not a video). |
 
 `mix lemon.sim.replay` handles every video scenario through one task, backed by
-each scenario's shared `VideoGenerator`. Scenarios: `skirmish`, `auction`,
-`courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`, `legislature`,
-`murder_mystery`, `pandemic`, `poker`, `space_station`, `startup_incubator`,
-`stock_market`, `supply_chain`, `survivor`, `werewolf`. A single positional
-argument is treated as a `skirmish` log for backwards compatibility.
+each scenario's shared `VideoGenerator`. Scenarios: `poker`, `werewolf`. Both
+the scenario and the log path are required.
 
 ```bash
 mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
@@ -9714,7 +9693,7 @@ mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
 ```
 
 VendingBench keeps a separate task because its replay is a static HTML browser,
-not a video. `tic_tac_toe` and `tcg_shop` have no replay renderer.
+not a video. `tic_tac_toe` has no replay renderer.
 
 ### Scoring & verification
 
@@ -10153,7 +10132,6 @@ the only listener silently discards them.
 | `sim:lobby` | `lemon_sim_ui/sim_manager.ex:1739` | 4 LiveViews + `arena.ex:179` | empty payload |
 | `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
 | hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
-| philosopher-chat topic | `philosopher_chat/thread_server.ex:844` | `philosopher_chat_api_controller.ex:172` | `%{type, event_seq, …}` |
 | `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
 | `logs` | **none** | **none** | documented in the Bus contract; dead |
 

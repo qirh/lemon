@@ -11,8 +11,7 @@ defmodule LemonSimUi.Application do
         {DynamicSupervisor, name: LemonSimUi.SimRunnerSupervisor, strategy: :one_for_one},
         {Task.Supervisor, name: LemonSimUi.TaskSupervisor},
         LemonSimUi.SimManager,
-        LemonSimUi.HostedGame.Supervisor,
-        LemonSimUi.PhilosopherChat.Supervisor
+        LemonSimUi.HostedGame.Supervisor
       ] ++
         arena_children() ++
         [LemonSimUi.Endpoint]

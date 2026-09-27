@@ -3,8 +3,8 @@ defmodule LemonSimUi.Arena do
   Always-on arena for one simulation domain: keeps a league game running at
   all times and records every finished game into persistent standings.
 
-  One `Arena` process runs per enabled domain (werewolf, space_station,
-  stock_market, survivor, poker — see `@domains`). Each game samples a randomized
+  One `Arena` process runs per enabled domain (werewolf, poker — see
+  `@domains`). Each game samples a randomized
   model lineup from the domain's configured pool
   (`LemonSim.Bench.League.plan_match/2`); the recorded seed reproduces both
   the lineup and the scenario's own role/seat randomization.

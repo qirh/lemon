@@ -8,8 +8,8 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
   `-`, `.`) giving the competitor a short leaderboard id; without it the
   command string itself is the id.
 
-  Suite run adapters are currently available for `vending_bench`, `tcg_shop`,
-  and `vending_bench_arena`. Other registered scorecards can be verified from
+  Suite run adapters are currently available for `vending_bench` and
+  `vending_bench_arena`. Other registered scorecards can be verified from
   artifact bundles, but do not yet have suite runners.
   """
 
