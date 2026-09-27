@@ -223,7 +223,7 @@ defmodule LemonSkills.PromptRegressionTest do
                "Progressive disclosure may be broken."
     end
 
-    test "section view is smaller than full view and larger than summary", %{tmp_dir: tmp_dir} do
+    test "section view excludes unrequested section bodies", %{tmp_dir: tmp_dir} do
       write_skill!(tmp_dir, "section-size-skill", """
       ---
       name: Section Size Skill
@@ -245,21 +245,11 @@ defmodule LemonSkills.PromptRegressionTest do
 
       LemonSkills.refresh(cwd: tmp_dir)
 
-      summary_len = read_skill_text(tmp_dir, "section-size-skill", "summary") |> String.length()
+      section = read_skill_text(tmp_dir, "section-size-skill", "section", "Usage")
 
-      section_len =
-        read_skill_text(tmp_dir, "section-size-skill", "section", "Usage") |> String.length()
-
-      full_len = read_skill_text(tmp_dir, "section-size-skill", "full") |> String.length()
-
-      assert summary_len < full_len,
-             "summary (#{summary_len}) should be < full (#{full_len})"
-
-      assert section_len < full_len,
-             "section (#{section_len}) should be < full (#{full_len})"
-
-      assert section_len > summary_len,
-             "section (#{section_len}) should be > summary (#{summary_len})"
+      assert section =~ "Usage instruction."
+      refute section =~ "Setup instruction."
+      refute section =~ "Troubleshooting step."
     end
 
     test "summary size is body-independent — large body doesn't inflate summary", %{

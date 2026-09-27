@@ -184,13 +184,8 @@ defmodule LemonPlatformTest.BackendCase do
       setup context do
         opts = LemonPlatformTest.resolve(@backend_opts_spec, context)
 
-        case @backend.init(opts) do
-          {:ok, state} ->
-            {:ok, state: state, backend_opts: opts}
-
-          other ->
-            flunk("#{inspect(@backend)}.init/1 must return {:ok, state}, got: #{inspect(other)}")
-        end
+        assert {:ok, state} = @backend.init(opts)
+        {:ok, state: state, backend_opts: opts}
       end
 
       # Reads have to return usable state too, so the state-threading test

@@ -24,7 +24,7 @@ defmodule LemonGatewayTest do
     Elixir.LemonGateway.Scheduler.submit_execution(request)
   end
 
-  defp request(session_key, prompt, scenario, meta \\ %{}) do
+  defp request(session_key, prompt, scenario, meta) do
     %ExecutionRequest{
       run_id: nil,
       session_key: session_key,

@@ -319,7 +319,6 @@ defmodule LemonPlatformTest.PluginCase do
           spec = @adapter.child_spec([])
 
           assert %{id: _, start: {module, function, args}} = spec
-          assert is_atom(module) and is_atom(function) and is_list(args)
           assert Code.ensure_loaded?(module), "#{inspect(module)} is not loadable"
 
           assert function_exported?(module, function, length(args)),

@@ -191,6 +191,15 @@ defmodule LemonPlatformTest.ProviderCase do
     struct!(LemonMemory.Document, fields)
   end
 
+  @doc false
+  @spec assert_put_result!(term()) :: :ok
+  def assert_put_result!(result) do
+    assert result == :ok or match?({:error, _}, result),
+           "put/2 must return :ok or {:error, reason}, got: #{inspect(result)}"
+
+    :ok
+  end
+
   using opts do
     LemonPlatformTest.require_dep!("ProviderCase", LemonMemory.Provider, :lemon_memory)
 
@@ -288,8 +297,7 @@ defmodule LemonPlatformTest.ProviderCase do
                 """)
             end
 
-          assert result == :ok or match?({:error, _}, result),
-                 "put/2 must return :ok or {:error, reason}, got: #{inspect(result)}"
+          LemonPlatformTest.ProviderCase.assert_put_result!(result)
         end
       end
 
