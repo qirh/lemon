@@ -46,10 +46,26 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
              version: 7,
              domain_type: :werewolf,
              status: "in_progress",
+             finished?: false,
              event_count: 2,
              last_activity: 250,
              world_summary: "Day 2 - Phase: night"
            }
+  end
+
+  test "summaries mark every scenario's terminal status as finished" do
+    for world <- [
+          %{board: [], status: "won", winner: "X"},
+          %{board: [], status: "draw"},
+          %{machine: %{}, day_number: 6, status: "bankrupt"},
+          %{machine: %{}, day_number: 30, status: "complete"},
+          %{players: %{}, status: "game_over", winner: "villagers"},
+          %{table: %{}, player_stats: %{}, players: %{}, status: "game_over"}
+        ] do
+      assert SimHelpers.sim_summary(state(world)).finished?, inspect(world)
+    end
+
+    refute SimHelpers.sim_summary(state(%{board: [], status: "in_progress"})).finished?
   end
 
   test "labels, status colors, and timestamps have deterministic fallbacks" do

@@ -156,7 +156,13 @@ defmodule LemonSim.Examples.TicTacToe do
     OfflineRunner.run_strategy(strategy, opts)
   end
 
-  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in ["won", "draw"]
+  @terminal_statuses ["won", "draw"]
+
+  @doc "World `:status` values that end a Tic Tac Toe game."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in @terminal_statuses
 
   defp announce_turn(turn, state) do
     IO.puts("Turn #{turn} | player=#{MapHelpers.get_key(state.world, :current_player)}")

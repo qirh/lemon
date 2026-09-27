@@ -1,18 +1,22 @@
 defmodule LemonSimUi.SimManagerAiLoopTest do
   @moduledoc """
   Durable run-lifecycle coverage for the real, already-running
-  `LemonSimUi.SimManager` GenServer: turn-budget exhaustion in the delegated
-  `run_ai_only/3` loop (driven through a Tic Tac Toe game with a scripted
-  `complete_fn`, no network calls), recovery and turn-budget limits, transient
-  recovery persistence failures, the recovery queue, final usage persistence
-  on runner teardown, operator stop, and terminal snapshot retention.
+  `LemonSimUi.SimManager` GenServer. The delegated `run_ai_only/3` loop is
+  driven end to end through Tic Tac Toe games with a scripted `complete_fn`
+  (no network calls): natural completion, retry after a crashed step, and
+  turn-budget exhaustion. Also covers scenario-specific terminal statuses
+  (`won`, `bankrupt`) never being recovered, recovery and turn-budget limits,
+  transient recovery persistence failures, the recovery queue, final usage
+  persistence on runner teardown, operator stop, and terminal snapshot
+  retention.
   """
 
   use ExUnit.Case, async: false
 
   alias LemonAi.Types.{AssistantMessage, Model, ToolCall}
-  alias LemonSim.Examples.Poker
-  alias LemonSim.Kernel.Store
+  alias LemonCore.MapHelpers
+  alias LemonSim.Examples.{Poker, TicTacToe}
+  alias LemonSim.Kernel.{State, Store}
   alias LemonSim.LLM.Usage, as: SimUsage
   alias LemonSimUi.SimManager
 
@@ -24,6 +28,145 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
       SimManager.stop_sim(sim_id)
       Store.delete_state(sim_id)
     end)
+  end
+
+  test "the delegated loop persists every turn and marks a naturally won game completed" do
+    sim_id = "ttt_natural_#{System.unique_integer([:positive])}"
+    cleanup_sim(sim_id)
+
+    LemonSim.Kernel.Bus.subscribe(sim_id)
+
+    assert {:ok, ^sim_id} =
+             SimManager.start_sim(:tic_tac_toe,
+               sim_id: sim_id,
+               model: fake_model(),
+               stream_options: %{},
+               complete_fn: scripted_moves()
+             )
+
+    states = collect_states_until_terminal(sim_id)
+
+    # One plan_history entry per completed turn, never going backwards: the
+    # traced state returned by the after-step hook is what the loop keeps
+    # feeding into the next turn.
+    plan_history_lengths = Enum.map(states, &length(&1.plan_history))
+    assert plan_history_lengths == Enum.sort(plan_history_lengths)
+
+    final = List.last(states)
+    assert MapHelpers.get_key(final.world, :status) == "won"
+    assert MapHelpers.get_key(final.world, :winner) == "X"
+
+    # Natural completion: the runner exits on its own and SimManager's :DOWN
+    # bookkeeping records a finished, non-resumable run.
+    wait_until(fn -> sim_id not in SimManager.list_running() end, 250)
+
+    stored = Store.get_state(sim_id)
+    assert MapHelpers.get_key(stored.world, :status) == "won"
+    assert stored.meta.run.status == "completed"
+    assert is_integer(stored.meta.run.finished_at_ms)
+    refute stored.meta.run.resumable
+    assert stored.meta.run.turns_completed == 7
+    assert length(stored.plan_history) == 7
+    assert {:error, :finished} = SimManager.resume_sim(sim_id)
+  end
+
+  test "a crashed step is retried from the last good state and the game still finishes" do
+    sim_id = "ttt_retry_#{System.unique_integer([:positive])}"
+    cleanup_sim(sim_id)
+
+    {:ok, calls} = Agent.start_link(fn -> 0 end)
+    moves = scripted_moves()
+
+    # The third model call crashes without consuming a move; the retry must
+    # resume from the two-move checkpoint rather than skip or replay a turn.
+    complete_fn = fn model, context, stream_opts ->
+      if Agent.get_and_update(calls, &{&1 + 1, &1 + 1}) == 3 do
+        raise "boom (simulated transient failure)"
+      else
+        moves.(model, context, stream_opts)
+      end
+    end
+
+    LemonSim.Kernel.Bus.subscribe(sim_id)
+
+    assert {:ok, ^sim_id} =
+             SimManager.start_sim(:tic_tac_toe,
+               sim_id: sim_id,
+               model: fake_model(),
+               stream_options: %{},
+               complete_fn: complete_fn
+             )
+
+    states = collect_states_until_terminal(sim_id, 30_000)
+    plan_history_lengths = Enum.map(states, &length(&1.plan_history))
+    assert plan_history_lengths == Enum.sort(plan_history_lengths)
+
+    final = List.last(states)
+    assert MapHelpers.get_key(final.world, :status) == "won"
+
+    errors = MapHelpers.get_key(final.world, :runner_errors) || []
+    assert Enum.any?(errors, &(MapHelpers.get_key(&1, :kind) == :step_crash))
+    refute Enum.any?(errors, &(MapHelpers.get_key(&1, :kind) == :retry_limit_exceeded))
+
+    wait_until(fn -> sim_id not in SimManager.list_running() end, 250)
+
+    stored = Store.get_state(sim_id)
+    assert stored.meta.run.status == "completed"
+    assert stored.meta.run.turns_completed == 7
+    refute stored.meta.run.resumable
+  end
+
+  test "scenario-specific terminal statuses are finished and never recovered" do
+    suffix = System.unique_integer([:positive])
+    won_id = "ttt_won_legacy_#{suffix}"
+    bankrupt_id = "vb_bankrupt_legacy_#{suffix}"
+
+    on_exit(fn -> Enum.each([won_id, bankrupt_id], &Store.delete_state/1) end)
+
+    # Rows persisted before terminal statuses were recognized: the world has
+    # ended but the lifecycle still says running/resumable.
+    legacy_run = %{
+      status: "running",
+      resumable: true,
+      recovery_attempts: 0,
+      max_turns: 50,
+      turns_completed: 7
+    }
+
+    won_state =
+      %{TicTacToe.initial_state(sim_id: won_id) | world: %{status: "won", winner: "X", board: []}}
+      |> with_run_metadata(Map.put(legacy_run, :domain, "tic_tac_toe"))
+
+    bankrupt_state =
+      State.new(sim_id: bankrupt_id, world: %{status: "bankrupt", machine: %{}})
+      |> with_run_metadata(Map.put(legacy_run, :domain, "vending_bench"))
+
+    assert :ok = Store.put_state(won_state)
+    assert :ok = Store.put_state(bankrupt_state)
+
+    base_state =
+      SimManager
+      |> :sys.get_state()
+      |> Map.merge(%{runners: %{}, recovery_queue: [], recovery_failures: %{}})
+
+    # Boot recovery never queues them (capacity 0 keeps other stored rows
+    # from being resumed by this test).
+    assert {:noreply, booted} =
+             SimManager.handle_info(
+               {:recover_persisted, 0},
+               %{base_state | max_concurrent_runners: 0}
+             )
+
+    refute won_id in booted.recovery_queue
+    refute bankrupt_id in booted.recovery_queue
+
+    # A crash-recovery attempt treats them as finished, not as a failure to retry.
+    for sim_id <- [won_id, bankrupt_id] do
+      assert {:noreply, recovered} = SimManager.handle_info({:recover_runner, sim_id}, base_state)
+      refute Map.has_key?(recovered.runners, sim_id)
+      refute Map.has_key?(recovered.recovery_failures, sim_id)
+      assert {:error, :finished} = SimManager.resume_sim(sim_id)
+    end
   end
 
   test "turn budget exhaustion is durable and non-resumable" do
@@ -362,6 +505,25 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
     assert Store.get_state(target_id).meta.run.status == "stopped"
     assert Store.get_state(old_id) == nil
     assert Store.get_state(newer_id) == nil
+  end
+
+  # Collects every broadcast state for `sim_id` up to and including the first
+  # terminal one.
+  defp collect_states_until_terminal(sim_id, timeout \\ 20_000, acc \\ []) do
+    assert_receive %LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: ^sim_id}} = event,
+                   timeout
+
+    acc =
+      case event.payload do
+        %{state: %State{} = state} -> acc ++ [state]
+        _ -> acc
+      end
+
+    if acc != [] and LemonSim.Examples.terminal?(List.last(acc)) do
+      acc
+    else
+      collect_states_until_terminal(sim_id, timeout, acc)
+    end
   end
 
   # Scripted Tic Tac Toe player: every call claims the next free cell in 0..8,
