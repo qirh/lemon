@@ -57,8 +57,6 @@ change.
   steps use the same missed-turn fallback after the outer step timeout, which
   the CLI can tune with `--live-step-timeout-ms` for stalled provider proof
   runs.
-  A checked-in deterministic replay fixture lives under
-  `priv/fixtures/vending_bench/ci_replay/`.
   Supplier discovery now includes deterministic `research_suppliers` support,
   `research_market` demand/price/risk notes, and terminal
   `send_supplier_message` / `send_supplier_email` actions with inbox/outbox

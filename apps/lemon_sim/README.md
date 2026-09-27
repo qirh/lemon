@@ -74,9 +74,10 @@ The task (in `apps/lemon_sim_ui`) starts `lemon_sim_ui` with its HTTP endpoint
 unless it is already running in the same VM, starts the game through
 `LemonSimUi.SimManager` with `offline_strategy: "heuristic"`, prints the
 spectator URL (`http://localhost:4090/watch/<sim_id>` by default), and keeps
-serving until interrupted. Every seat is played by
-`LemonSimUi.Demo.WerewolfHeuristic`: it picks a legal action from
-`Werewolf.ActionSpace` with a `:rand` state seeded from the world seed, and
+serving until interrupted. Every seat is played by the same heuristic as
+`mix lemon.sim.werewolf --offline-strategy heuristic`
+(`LemonSim.Examples.Werewolf.OfflineRunner.decide/2`): it picks a legal action
+from `Werewolf.ActionSpace` with a `:rand` state seeded from the world seed, and
 builds the event through `ActionSpace.execute_action/4`, so the same seed replays
 the same game. `--step-delay-ms` (default 1200) paces turns for watching; the run
 is persisted, resumable, and marked completed when the game ends. If another node

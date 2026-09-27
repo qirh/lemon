@@ -3,7 +3,7 @@ defmodule LemonSimUi.Demo do
   Keyless LemonSim demo behind `mix lemon.sim.demo`.
 
   `start_werewolf/1` starts an offline Werewolf game through `SimManager`
-  with the `"heuristic"` offline strategy (`LemonSimUi.Demo.WerewolfHeuristic`),
+  with the `"heuristic"` offline strategy (`LemonSim.Examples.Werewolf.OfflineRunner`),
   so no provider API key or model config is read. The run is an ordinary
   persisted, resumable SimManager run: spectators watch it at
   `watch_path/1`, and it is marked completed when the game ends.

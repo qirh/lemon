@@ -1892,7 +1892,7 @@ defmodule LemonSimUi.SimManager do
   # keyed by domain and then by `:offline_strategy` name. A decider exposes
   # `seed_rng(seed, turns_completed)` and `decide(state, rng)` returning
   # `{:ok, event, rng}` (see `run_offline/3`).
-  @offline_deciders %{werewolf: %{"heuristic" => LemonSimUi.Demo.WerewolfHeuristic}}
+  @offline_deciders %{werewolf: %{"heuristic" => LemonSim.Examples.Werewolf.OfflineRunner}}
   @offline_default_max_turns 1_000
 
   defp offline_run_opts(domain, strategy, opts) do

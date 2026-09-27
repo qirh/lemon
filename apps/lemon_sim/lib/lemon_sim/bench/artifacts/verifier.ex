@@ -10,7 +10,7 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
   bundles without a manifest or hashes fail.
   """
 
-  alias LemonSim.Bench.Artifacts.Replay
+  alias LemonSim.Bench.Artifacts.{Bundle, Replay}
   alias LemonSim.Bench.Scorecard.Registry
 
   def verify_run(artifact_dir) when is_binary(artifact_dir) do
@@ -228,8 +228,13 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
     end
   end
 
+  # Encode through `Bundle.jsonable/1`, the same key/value normalization every
+  # bundle writer applies before `Jason.encode!/1`. Plain `Jason.encode!/1`
+  # diverges on e.g. a `nil` map key (`"nil"` vs the writer's `""`), which a
+  # scorecard grouping model-less seats under `nil` produces.
   defp canonical_json(value) do
     value
+    |> Bundle.jsonable()
     |> Jason.encode!()
     |> Jason.decode!()
   end
