@@ -244,65 +244,6 @@ using the supervised
 redaction for URL, selector, upload-path, download-path, filename, and failure
 paths.
 
-The repeatable live local smoke runner is:
-
-```bash
-MIX_ENV=test mix run scripts/live_browser_smoke.exs
-```
-
-It launches the supervised local browser driver against Chrome/Chromium,
-drives a local proof page through navigate, wait, evaluate, hover, select, upload,
-download, snapshot, type, click, screenshot,
-model-visible screenshot capture with `includeImage: true`, local
-`media_analyze_image` analysis of that screenshot, one-step `browser_analyze`
-local vision, route classification, metadata-endpoint blocking, public-route
-guarding, attach-only CDP endpoint mode, content, event reads, cookie set/get,
-and clear-state reset, writes screenshots under
-`.lemon/browser-artifacts/`, and writes redacted proof JSON under
-`.lemon/proofs/`. The proof includes progress update counts, method and phase
-counts, browser child-action count, model-visible image hashes/counts plus local
-vision analysis hashes/counts, `browser_analyze` hashes/counts, navigation route
-and target-kind counts, blocked-navigation assertions, CDP attach completion,
-`browser_upload_file_completed`, `browser_upload_file_count`,
-`browser_download_completed`, `browser_download_bytes`, and redaction cleanup
-assertions. Pass
-`--executable` or set
-`LEMON_BROWSER_EXECUTABLE` when Chrome/Chromium is not on `PATH`. Use
-`LEMON_BROWSER_CDP_ENDPOINT` when the browser is already managed by another
-local service, a container, or a remote CDP provider.
-
-The real MV3/Chrome relay proof is:
-
-```bash
-cd clients/lemon-browser-node
-npm run smoke:extension
-```
-
-It launches a disposable Chrome-for-Testing profile, loads the unpacked
-extension, authenticates the loopback relay, enumerates existing tabs, opens a
-new tab, reads title and DOM content through Playwright, detaches, and verifies
-that the attached Chrome process remains alive. The smoke writes a redacted
-`.lemon/proofs/browser-extension-smoke-latest.json` artifact; it persists no
-relay token, loopback port, raw target ID, URL, or page content. Mocked
-service-worker tests separately exercise the real toolbar-click opt-in/detach
-state and debugger-event filtering.
-
-The opt-in live model acceptance harness is:
-
-```bash
-mix run --no-start scripts/live_search_browser_leadership_smoke.exs
-```
-
-It starts real `CodingAgent.Session` turns on `openai-codex:gpt-5.6-luna` with
-`:xhigh` reasoning, using isolated run-history and memory stores, a disposable
-Chrome profile, and restricted trial-specific tool lists. It asserts ordered
-SearXNG-to-DuckDuckGo fallback and multi-source synthesis, stable target-scoped
-multi-tab reads, stale-target recovery, screenshot analysis, and refusal to
-bypass an unpaired controller's consent/capability boundary. The latest and
-archived results under `.lemon/proofs/search-browser-leadership-*.json` contain
-only model/tool identifiers, counts, booleans, durations, and hashes—not
-credentials, prompts, answers, URLs, target IDs, or tool result bodies.
-
 ## API Key Setup
 
 Set keys in your shell or `.env` (autoloaded by Lemon startup scripts):

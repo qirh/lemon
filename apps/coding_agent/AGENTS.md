@@ -392,10 +392,6 @@ variable names.
 risky shell command is detected and filesystem checkpoints are enabled, those
 paths are snapshotted through `LemonCore.Checkpoint` before process start and
 the result details include checkpoint metadata for restore.
-`scripts/live_terminal_backend_smoke.exs` is the opt-in live proof lane for this
-boundary: it runs a fixed command through every available registered backend,
-records hashed proof JSON, skips unavailable backends, and fails the smoke on
-backend errors or missing expected output.
 
 Child sessions launched through `CodingAgent.Tools.Task` can receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. `Session.deliver_parent_question/2` starts an idle parent turn and queues the same visible question for a streaming parent; task/agent joins observe matching open questions and yield with `needs_parent_answer` so parent and child cannot deadlock. The parent answers through the default `parent_question` tool with exact matching session and agent identity. `ParentQuestionStoreServer` serializes one-open-per-child-scope creation and first-writer-wins answer/timeout/cancel/error transitions, so exactly one terminal lifecycle event is broadcast (`:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, or `:parent_question_error`). Native task sessions preserve async `task_id`, status, latest `current_action`, and tool-reported metadata so router/channel layers can keep later `task action=poll` updates and failed command summaries attached to the original task status surface.
 When compacted history is restored, `SessionManager` preserves older async followup entries as

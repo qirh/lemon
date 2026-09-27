@@ -88,19 +88,17 @@ initializes a missing master key itself and does not replace an existing one.
 | `mix lemon.secrets.import_env` | Import env-based secrets into the encrypted store. |
 | `mix lemon.voice.secrets` | Interactively set voice API secrets. |
 
-## Diagnostics & readiness
+## Diagnostics
 
 Read-only, redacted health and configuration reports. Safe to run anywhere.
 
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.doctor` | Run Lemon diagnostics and report health. |
-| `mix lemon.readiness` | Compact redacted launch-readiness summary. |
 | `mix lemon.config` | Validate and inspect Lemon configuration (`--validate`, etc.). |
-| `mix lemon.channels` | Show redacted Telegram and Discord launch readiness. |
+| `mix lemon.channels` | Inspect channel configuration. |
 | `mix lemon.usage` | Show redacted usage, cost, token, and quota diagnostics. |
-| `mix lemon.proofs` | Show redacted local proof artifact status. |
-| `mix lemon.media` | Show redacted generated-media and provider-proof readiness. |
+| `mix lemon.media` | Show redacted generated-media job status. |
 | `mix lemon.models` | List known Lemon AI models (`--provider`, `--vision`, `--thinking`, `--json`). |
 | `mix lemon.introspection` | Query agent introspection events. |
 | `mix lemon.feedback` | Inspect historical routing feedback stats. |

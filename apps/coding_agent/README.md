@@ -403,17 +403,6 @@ only with filesystem checkpoints enabled. Risky shell checkpoints snapshot the
 configured file paths through `LemonCore.Checkpoint` before backend launch and
 return `checkpoint_id`, `checkpoint_kind`, and `checkpoint_trigger` in result
 details.
-`scripts/live_terminal_backend_smoke.exs` provides the opt-in live proof lane:
-it runs a fixed command through every available registered backend via
-`ProcessManager.exec_sync/1`, writes hashed command/cwd/output proof JSON, and
-exits nonzero on any backend failure or missing expected output. When no SSH
-target is configured and local `sshd` plus `ssh-keygen` are available, the
-smoke starts an ephemeral loopback `sshd` with generated host/client keys and
-temporary known-hosts storage instead of touching `~/.ssh`.
-`scripts/live_terminal_process_smoke.exs` separately proves process metadata and
-manual restart behavior: it completes a local process, validates backend/log
-metadata, restarts it as a fresh supervised child, verifies restart lineage, and
-writes a redacted proof without raw commands, logs, or process ids.
 
 ### Subagents and Commands
 

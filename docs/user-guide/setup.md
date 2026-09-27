@@ -149,7 +149,9 @@ lemon gateway setup discord
 
 Each adapter guides its required bot token and allowed conversation scope,
 stores the token in encrypted secrets, and verifies the adapter configuration.
-See the configured channel state with:
+Inspect redacted channel configuration with `lemon channels`. It reports
+enabled state, whether credentials are configured, binding and allowlist counts,
+and registered transports; it does not report launch readiness or proof state.
 
 ```bash
 lemon channels

@@ -20,7 +20,6 @@ from pathlib import Path
 DEFAULT_CREDENTIALS = Path.home() / ".zeebot/api_keys/discord.txt"
 DEFAULT_GUILD_ID = "1475727416549969980"
 DEFAULT_CONTROL_PLANE_WS_URL = "ws://127.0.0.1:4040/ws"
-DEFAULT_SLASH_CLIENT_CLICK_PROOF = Path(".lemon/proofs/discord-slash-client-click-proof-latest.json")
 API_BASE = "https://discord.com/api/v10"
 BOT_TOKEN_KEYS = {"bot_token", "discord_bot_token", "discord_bot", "bot", "token"}
 GATEWAY_MESSAGE_CONTENT = 1 << 18
@@ -206,194 +205,6 @@ def local_command_schema(name):
     )
 
 
-def run_slash_client_click_proof_check(path):
-    proof_path = Path(path)
-
-    check = {
-        "name": "discord_slash_client_click_proof_artifact",
-        "ok": False,
-        "proof_scope": "Discord slash client-click proof artifact",
-        "proof_object": "lemon.discord_slash_client_click",
-        "proof_path_exists": proof_path.exists(),
-        "file_hash": safe_hash(str(proof_path.resolve())),
-    }
-
-    if not proof_path.exists():
-        check["reason_kind"] = "discord_slash_client_click_missing"
-        check["failure_hint"] = (
-            "No Discord slash client-click proof artifact found. Deploy or hot reload "
-            "the runtime, click a real slash command in Discord, then rerun this check."
-        )
-        return check
-
-    try:
-        proof = json.loads(proof_path.read_text())
-    except Exception:
-        check["reason_kind"] = "discord_slash_client_click_invalid_artifact"
-        check["failure_hint"] = "Discord slash client-click proof artifact is not valid JSON."
-        return check
-
-    coverage = proof.get("coverage") if isinstance(proof.get("coverage"), dict) else {}
-    checks = proof.get("checks") if isinstance(proof.get("checks"), list) else []
-    check_names = [row.get("name") for row in checks if isinstance(row, dict)]
-    cleanup = proof.get("cleanup") if isinstance(proof.get("cleanup"), dict) else {}
-    status = proof.get("status")
-
-    required_cleanup = [
-        "includes_raw_bot_tokens",
-        "includes_raw_interaction_tokens",
-        "includes_raw_application_ids",
-        "includes_raw_channel_ids",
-        "includes_raw_user_ids",
-        "includes_raw_message_bodies",
-    ]
-
-    missing_cleanup = [key for key in required_cleanup if cleanup.get(key) is not False]
-    real_client_click = coverage.get("real_client_click_proof") is True
-    observed = "discord_slash_client_click_observed" in check_names
-    safe_mentions = "discord_slash_client_click_safe_mentions" in check_names
-
-    check.update(
-        {
-            "status": status,
-            "proof_hash": safe_hash(json.dumps(proof, sort_keys=True)),
-            "generated_at": proof.get("generated_at"),
-            "coverage": {
-                "registered_command_count": coverage.get("registered_command_count"),
-                "client_click_command_count": coverage.get("client_click_command_count"),
-                "real_client_click_proof": coverage.get("real_client_click_proof"),
-            },
-            "observed_check_present": observed,
-            "safe_mentions_check_present": safe_mentions,
-            "cleanup_ok": missing_cleanup == [],
-        }
-    )
-
-    check["ok"] = (
-        proof.get("proof_object") == "lemon.discord_slash_client_click"
-        and status == "completed"
-        and real_client_click
-        and observed
-        and safe_mentions
-        and missing_cleanup == []
-    )
-
-    if not check["ok"]:
-        check["reason_kind"] = "discord_slash_client_click_not_promotable"
-        check["failure_hint"] = (
-            "Discord slash client-click proof exists but is not promotable. "
-            "Expected completed lemon.discord_slash_client_click proof with "
-            "real_client_click_proof=true, observed/safe-mention checks, and redaction cleanup flags."
-        )
-
-    return check
-
-
-def run_slash_client_click_proof_wait(args, token, identity):
-    started_at = datetime.now(timezone.utc)
-    started_iso = started_at.isoformat().replace("+00:00", "Z")
-    nonce = f"lemon-discord-slash-click-{int(time.time())}"
-    instruction = (
-        f"Operator proof request {nonce}: click `{args.slash_client_click_command}` "
-        "in Discord, then wait for Lemon to respond. The proof watcher will only "
-        "accept a redacted client-click artifact generated after this request started."
-    )
-
-    if not args.skip_slash_client_click_instruction and args.channel_id:
-        sent = send_message(token, args.channel_id, instruction)
-        print(
-            json.dumps(
-                {
-                    "action": "sent_slash_client_click_instruction",
-                    "channel_id": args.channel_id,
-                    "message_id": sent.get("id"),
-                    "nonce": nonce,
-                    "expected_operator_action": args.slash_client_click_command,
-                },
-                indent=2,
-            ),
-            flush=True,
-        )
-    else:
-        print(
-            json.dumps(
-                {
-                    "action_required": "click_discord_slash_command",
-                    "channel_id": args.channel_id,
-                    "nonce": nonce,
-                    "expected_operator_action": args.slash_client_click_command,
-                },
-                indent=2,
-            ),
-            flush=True,
-        )
-
-    deadline = time.time() + args.timeout
-    last_check = None
-
-    while time.time() < deadline:
-        check = run_slash_client_click_proof_check(args.slash_client_click_proof_path)
-        check["name"] = "discord_slash_client_click_proof_wait"
-        check["proof_scope"] = "Discord slash client-click proof wait"
-        check["wait_started_at"] = started_iso
-        check["recommended_command"] = args.slash_client_click_command
-        check["nonce"] = nonce
-
-        if check.get("ok") and proof_generated_after(check.get("generated_at"), started_at):
-            check["fresh_after_wait_started"] = True
-            return check
-
-        if check.get("ok"):
-            check["ok"] = False
-            check["reason_kind"] = "discord_slash_client_click_stale"
-            check["failure_hint"] = (
-                "A promotable Discord slash client-click proof exists, but it was "
-                "generated before this wait started. Click a real slash command again "
-                "while this watcher is running."
-            )
-
-        last_check = check
-        time.sleep(2)
-
-    if last_check is None:
-        last_check = {
-            "name": "discord_slash_client_click_proof_wait",
-            "ok": False,
-            "proof_scope": "Discord slash client-click proof wait",
-        }
-
-    last_check["ok"] = False
-    last_check.setdefault("reason_kind", "discord_slash_client_click_missing")
-    last_check["failure_hint"] = (
-        "Timed out waiting for a fresh Discord slash client-click proof. "
-        "Click a real slash command in Discord while this watcher is running, "
-        "then rerun the watcher or the one-shot proof check."
-    )
-    last_check["wait_started_at"] = started_iso
-    last_check["recommended_command"] = args.slash_client_click_command
-    last_check["nonce"] = nonce
-    return last_check
-
-
-def proof_generated_after(generated_at, started_at):
-    generated = parse_iso8601(generated_at)
-
-    if generated is None:
-        return False
-
-    return generated >= started_at
-
-
-def parse_iso8601(value):
-    if not isinstance(value, str):
-        return None
-
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        return None
-
-
 def safe_hash(value):
     import hashlib
 
@@ -468,10 +279,6 @@ def sanitized_coverage(result, checks):
         in names,
         "contains_media_slash_registration": "discord_media_slash_registration" in names,
         "contains_all_slash_registration": "discord_all_slash_registration" in names,
-        "contains_slash_client_click": any(
-            name in {"discord_slash_client_click_proof_artifact", "discord_slash_client_click_proof_wait"}
-            for name in names
-        ),
     }
 
 
@@ -803,7 +610,6 @@ def run_all_slash_registration_check(token):
         "missing_commands": missing,
         "schema_source": "LemonChannels.Adapters.Discord.Transport.slash_commands/0",
         "proof_scope": "Discord application command registration only",
-        "real_client_click_proof_required_for_broad_parity": True,
     }
 
 
@@ -1942,11 +1748,6 @@ def parser():
     root.add_argument("--check-media-slash-registration", action="store_true")
     root.add_argument("--register-media-slash-command", action="store_true")
     root.add_argument("--check-all-slash-registration", action="store_true")
-    root.add_argument("--check-slash-client-click-proof", action="store_true")
-    root.add_argument("--wait-slash-client-click-proof", action="store_true")
-    root.add_argument("--slash-client-click-proof-path", type=Path, default=DEFAULT_SLASH_CLIENT_CLICK_PROOF)
-    root.add_argument("--slash-client-click-command", default="/media status")
-    root.add_argument("--skip-slash-client-click-instruction", action="store_true")
     root.add_argument("--continue-on-failure", action="store_true")
     root.add_argument("--result-path", type=Path)
     root.add_argument("--proof-path", type=Path)
@@ -2125,31 +1926,9 @@ def write_dm_setup_failure(args, identity, sender, reason):
 def main():
     args = parser().parse_args()
 
-    if args.check_slash_client_click_proof:
-        check = run_slash_client_click_proof_check(args.slash_client_click_proof_path)
-        result = {
-            "ok": check["ok"],
-            "checks": [check],
-        }
-
-        write_result(args, result)
-        raise SystemExit(0 if result["ok"] else 1)
-
     token = select_token(args)
     identity = bot_identity(token)
     sender = resolve_sender(args, identity)
-
-    if args.wait_slash_client_click_proof:
-        check = run_slash_client_click_proof_wait(args, token, identity)
-        result = {
-            "ok": check["ok"],
-            "bot": identity,
-            "channel_id": args.channel_id,
-            "checks": [check],
-        }
-
-        write_result(args, result)
-        raise SystemExit(0 if result["ok"] else 1)
 
     if args.wait_free_response_trigger and not args.skip_free_response_preflight:
         check = run_free_response_message_content_preflight(token)
@@ -2304,7 +2083,7 @@ def main():
 
     if not selected:
         raise SystemExit(
-            "Select at least one check: --bot-api-smoke, --wait-user-inbound, --restart-seed, --restart-verify, --wait-dm-inbound, --wait-thread-inbound, --wait-free-response-trigger, --wait-markdown, --wait-long-output, --wait-tool-rendering, --wait-file-delivery, --wait-generated-media-delivery, --wait-generated-audio-delivery, --wait-media-directive-delivery, --manual-matrix, --check-kanban-slash-registration, --register-kanban-slash-command, --check-checkpoint-slash-registration, --register-checkpoint-slash-command, --check-rollback-slash-registration, --register-rollback-slash-command, --check-media-slash-registration, --register-media-slash-command, --check-all-slash-registration, --check-slash-client-click-proof, or --wait-slash-client-click-proof"
+            "Select at least one check: --bot-api-smoke, --wait-user-inbound, --restart-seed, --restart-verify, --wait-dm-inbound, --wait-thread-inbound, --wait-free-response-trigger, --wait-markdown, --wait-long-output, --wait-tool-rendering, --wait-file-delivery, --wait-generated-media-delivery, --wait-generated-audio-delivery, --wait-media-directive-delivery, --manual-matrix, --check-kanban-slash-registration, --register-kanban-slash-command, --check-checkpoint-slash-registration, --register-checkpoint-slash-command, --check-rollback-slash-registration, --register-rollback-slash-command, --check-media-slash-registration, --register-media-slash-command, or --check-all-slash-registration"
         )
 
     checks = []

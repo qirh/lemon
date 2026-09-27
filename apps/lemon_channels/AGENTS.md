@@ -466,33 +466,16 @@ LemonChannels.Telegram.TriggerMode.set(scope, account_id, :mentions)
 
 ## Doctor Diagnostics
 
-`LemonChannels.Doctor.Diagnostics` (config diagnostics), `Doctor.Readiness`
-(launch-gate summary), `Doctor.Checks.Channels` (the doctor check) and
-`Doctor.ProofSpec` (the per-channel smoke-proof vocabulary) live here rather
-than in `lemon_core`, which must not name a chat platform. They reach the
-doctor framework through the reference runtime's registrations in
-`config/config.exs`: `:doctor_runtime` keys `channel_diagnostics:`,
-`channel_readiness:` and `channel_proofs:`, plus the `:doctor_checks` list.
-`ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
-or proof check name means editing `ProofSpec`, not core.
+`LemonChannels.Doctor.Diagnostics` provides channel configuration diagnostics,
+and `Doctor.Checks.Channels` registers the Telegram and Discord configuration
+checks with the doctor framework through `:doctor_checks`.
 
-Discord diagnostics also publish a redacted `compatibility_commands` map for
-the generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas.
-Keep those booleans derived from `SlashCommands.slash_commands/0`; the static
-names are release-readiness sentinels, not a second command registry.
+Discord diagnostics publish a redacted `compatibility_commands` map for the
+generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas. Keep
+those booleans derived from `SlashCommands.slash_commands/0`; the static names
+are release-readiness sentinels, not a second command registry.
 
-All of it must stay redacted. Discord DM, free-response, reconnect, slash
-registration, deterministic slash and real client-click gates use
-`Doctor.Diagnostics` plus sanitized `LemonCore.Doctor.ProofDiagnostics`
-status/reason kinds, never raw Discord IDs, message bodies, bot tokens or
-secret names. Free-response checks distinguish a missing local Message Content
-Intent declaration from proof artifacts that still report Message Content
-Intent or unmentioned-message delivery drift after declaration. Slash
-client-click checks preserve stable reason kinds for missing, invalid,
-non-promotable and stale proof artifacts, so doctor and support bundles can
-point operators at the exact wait-mode proof step.
-
-`mix lemon.channels` prints the same redacted readiness summary from the CLI.
+`mix lemon.channels` inspects redacted Telegram and Discord configuration.
 
 ## Gateway Config Sections
 

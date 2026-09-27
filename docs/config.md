@@ -1145,22 +1145,12 @@ voice_max_bytes = 10485760                            # optional (default: 10MB)
 voice_transcription_base_url = "https://api.openai.com/v1"
 ```
 
-Use `voice_transcription_provider = "local_transcript"` for deterministic
-no-credential voice-note proof. It routes a local transcript preview through the
-normal Telegram inbound path and does not require an API key. Use
-`openai_transcribe` for real speech-to-text.
+Use `voice_transcription_provider = "local_transcript"` for local transcript
+handling without an API key. Use `openai_transcribe` for real speech-to-text.
 
-The deterministic local proof runner writes a redacted artifact under
-`.lemon/proofs/`:
-
-```bash
-MIX_ENV=test mix run scripts/live_telegram_voice_local_smoke.exs
-```
-
-When that artifact is present, `mix lemon.doctor --verbose` reports
-`channels.telegram.voice_transcription` as a passing readiness check. If voice
-transcription is enabled with `local_transcript` and the proof is missing,
-doctor tells the operator to run the local smoke.
+`mix lemon.doctor` checks this configuration: when voice transcription is
+disabled the check is skipped, and when the provider requires an API key that
+is missing it warns.
 
 ## Telegram File Transfer
 

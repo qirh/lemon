@@ -267,15 +267,6 @@ elixir --sname "probe_$$" --cookie "$COOKIE" --rpc-eval "$TESTNODE@$(hostname -s
   'LemonChannels.Telegram.FakeAPI.await_send(:send_message, 10_000) |> inspect() |> IO.puts()'
 ```
 
-The house smoke proves the whole loop (string-config api_mod resolution,
-inbound round trip, offset advance, callback answer, outbound delivery) and
-writes a proof artifact:
-
-```bash
-MIX_ENV=test mix run scripts/live_fake_telegram_smoke.exs
-# -> .lemon/proofs/fake-telegram-smoke-latest.json, exit 1 on any failed check
-```
-
 ## Tier 3 — LIVE TELEGRAM
 
 Only when the claim is about the real wire or real chat UX (Bot API behavior,

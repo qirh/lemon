@@ -26,7 +26,6 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "defaultModel" => default_agent_value(config, :default_model),
       "routingConfig" => LemonAgent.ModelRuntime.ProviderConfiguration.snapshot(config),
       "routing" => LemonAgent.ModelRuntime.ProviderRouting.preview(params, config, statuses),
-      "liveProofs" => live_proofs(cwd),
       "cleanup" => %{
         "includesRawApiKeys" => false,
         "includesSecretNames" => false,
@@ -161,101 +160,6 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "ambient" => %{"envConfigured" => false}
     }
   end
-
-  defp live_proofs(cwd) do
-    status = LemonCore.Doctor.ProofDiagnostics.status(project_dir: cwd, limit: 1_000)
-    proofs = Map.get(status, :recent_proofs, [])
-
-    fallback = fallback_proof(proofs)
-
-    %{
-      "fallback" => fallback_summary(fallback),
-      "proofScopeCounts" => Map.get(status, :proof_scope_counts, %{}),
-      "cleanup" => %{
-        "includesRawApiKeys" => false,
-        "includesRawPrompts" => false,
-        "includesProviderAnswers" => false,
-        "includesProviderResponses" => false
-      }
-    }
-  rescue
-    _ ->
-      %{
-        "fallback" => fallback_summary(nil),
-        "proofScopeCounts" => %{},
-        "cleanup" => %{
-          "includesRawApiKeys" => false,
-          "includesRawPrompts" => false,
-          "includesProviderAnswers" => false,
-          "includesProviderResponses" => false
-        }
-      }
-  end
-
-  defp fallback_proof(proofs) do
-    proofs
-    |> Enum.filter(&fallback_proof?/1)
-    |> Enum.sort_by(
-      fn proof ->
-        {proof_rank(Map.get(proof, :status)), Map.get(proof, :modified_at) || ""}
-      end,
-      fn {rank_a, modified_a}, {rank_b, modified_b} ->
-        rank_a < rank_b or (rank_a == rank_b and modified_a >= modified_b)
-      end
-    )
-    |> List.first()
-  end
-
-  defp fallback_proof?(proof) do
-    "provider_fallback" in List.wrap(Map.get(proof, :proof_scopes, [])) or
-      present?(Map.get(proof, :fallback_provider)) or
-      present?(Map.get(proof, :final_provider))
-  end
-
-  defp fallback_summary(nil) do
-    %{
-      "status" => "missing",
-      "proofStatus" => nil,
-      "proofObject" => nil,
-      "primaryProvider" => nil,
-      "fallbackProvider" => nil,
-      "finalProvider" => nil,
-      "modifiedAt" => nil,
-      "proofHash" => nil,
-      "nextAction" => "run scripts/live_provider_fallback_smoke.exs"
-    }
-  end
-
-  defp fallback_summary(proof) do
-    proof_status = Map.get(proof, :status)
-
-    %{
-      "status" => proof_status_label(proof_status),
-      "proofStatus" => proof_status,
-      "proofObject" => Map.get(proof, :proof_object),
-      "primaryProvider" => Map.get(proof, :primary_provider),
-      "fallbackProvider" => Map.get(proof, :fallback_provider),
-      "finalProvider" => Map.get(proof, :final_provider),
-      "modifiedAt" => Map.get(proof, :modified_at),
-      "proofHash" => Map.get(proof, :proof_hash),
-      "nextAction" => proof_next_action(proof_status)
-    }
-  end
-
-  defp proof_status_label("completed"), do: "proven"
-  defp proof_status_label("skipped"), do: "skipped"
-  defp proof_status_label("failed"), do: "blocked"
-  defp proof_status_label(_), do: "unknown"
-
-  defp proof_rank("completed"), do: 0
-  defp proof_rank("failed"), do: 1
-  defp proof_rank("skipped"), do: 2
-  defp proof_rank(_), do: 3
-
-  defp proof_next_action("completed"), do: "keep live fallback proof current"
-  defp proof_next_action("skipped"), do: "enable live credentials and rerun fallback proof"
-  defp proof_next_action("failed"), do: "inspect provider diagnostics and rerun proof"
-  defp proof_next_action(_), do: "run scripts/live_provider_fallback_smoke.exs"
 
   defp provider_config_value(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, to_string(key))

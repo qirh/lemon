@@ -56,17 +56,9 @@ slot preserve the first persisted run instead of overwriting it. Active runs
 older than the job's `timeout_ms` are recovered through the normal terminalizer
 as `:timeout`, including monitor suppression, forwarding, audit, and retry
 policy, so a crashed runtime cannot leave the job locked forever. On
-`CronManager` restart, persisted
-jobs are reloaded and the same active-run recovery path runs during
-initialization, so a manager crash cannot immediately double-submit a scheduled
-job that already has a pending/running persisted run. The opt-in
-`scripts/live_cron_runtime_restart_smoke.exs` proof boots the full runtime twice
-against the same durable store and verifies that scheduled run history survives
-the restart and a fresh scheduled run fires after restart.
-`scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and
-Discord plugins, completes channel-peer cron runs through `CronManager`, and
-proves forwarded run history plus outbox delivery without exposing raw channel,
-peer, session, or cron IDs in the proof artifact.
+`CronManager` restart, persisted jobs are reloaded and the same active-run
+recovery path runs during initialization, so a manager crash cannot immediately
+double-submit a scheduled job that already has a pending/running persisted run.
 Scheduled failures and timeouts can retry when `max_retries` is greater than
 zero. The terminal source run persists retry due time, attempt, and root/source
 lineage. Restart rebuilds the wake timer from that state, while a deterministic
@@ -567,17 +559,8 @@ MIX_ENV=test mix test \
   apps/lemon_gateway/test/tools/cron_test.exs \
   --seed 1
 
-# Redacted cron support-bundle smoke
-MIX_ENV=test mix run scripts/live_cron_diagnostics_smoke.exs
-
-# Telegram/Discord channel-origin cron delivery proof
-MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs
-
-# Full-runtime cron restart smoke (boots runtime_full twice; minute-granularity)
+# Optional manual full-runtime restart smoke (boots runtime_full twice)
 MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs
-
-# Booted control-plane bundle activation and duplicate-safe replay
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
 
 # Provider-backed goal-judge proof
 ZAI_API_KEY="$(MIX_ENV=dev mix run --no-start -e 'Logger.configure(level: :emergency); Logger.remove_backend(:console); {:ok, _} = Application.ensure_all_started(:lemon_core); IO.write(LemonCore.Secrets.fetch_value("llm_zai_api_key") || "")')" \

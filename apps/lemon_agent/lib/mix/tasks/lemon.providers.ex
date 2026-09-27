@@ -67,8 +67,6 @@ defmodule Mix.Tasks.Lemon.Providers do
   defp render(status) do
     cleanup = Map.get(status, "cleanup", %{})
     routing = Map.get(status, "routing", %{})
-    live_proofs = Map.get(status, "liveProofs", %{})
-    fallback = Map.get(live_proofs, "fallback", %{})
 
     Mix.shell().info("Lemon Providers")
     Mix.shell().info("Providers: #{Map.get(status, "count", 0)}")
@@ -81,7 +79,6 @@ defmodule Mix.Tasks.Lemon.Providers do
     Mix.shell().info("Default model configured: #{present?(Map.get(status, "defaultModel"))}")
     Mix.shell().info("Routing decision: #{Map.get(routing, "decision") || "(none)"}")
     Mix.shell().info("Selected provider: #{Map.get(routing, "selectedProvider") || "(none)"}")
-    Mix.shell().info("Fallback proof status: #{Map.get(fallback, "status") || "missing"}")
     Mix.shell().info("Includes raw API keys: #{Map.get(cleanup, "includesRawApiKeys") == true}")
     Mix.shell().info("Includes secret names: #{Map.get(cleanup, "includesSecretNames") == true}")
     Mix.shell().info("Includes raw base URLs: #{Map.get(cleanup, "includesRawBaseUrls") == true}")

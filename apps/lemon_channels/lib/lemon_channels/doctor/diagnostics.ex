@@ -35,6 +35,57 @@ defmodule LemonChannels.Doctor.Diagnostics do
     }
   end
 
+  @doc """
+  Renders a `status/1` map as the human-readable lines shared by
+  `mix lemon.channels` and `lemon channels`.
+  """
+  @spec format_text(map()) :: [String.t()]
+  def format_text(status) do
+    registered =
+      case Map.get(status, :registered_transports, []) do
+        [] -> "none"
+        ids -> Enum.join(ids, ", ")
+      end
+
+    [
+      "Lemon Channels",
+      "Registered transports: #{registered}",
+      "Bindings: #{Map.get(status, :binding_count, 0)} (unsupported: #{Map.get(status, :unsupported_binding_count, 0)})"
+      | Enum.map(Map.get(status, :transports, []), &format_transport/1)
+    ]
+  end
+
+  defp format_transport(%{transport: "telegram"} = t) do
+    "telegram: " <>
+      format_fields([
+        {"enabled", t.enabled},
+        {"credentials", credentials_label(t)},
+        {"bindings", t.binding_count},
+        {"allowed_peers", t.allowed_peer_count},
+        {"deny_unbound", t.deny_unbound_peers},
+        {"voice_transcription", get_in(t, [:voice_transcription, :enabled])}
+      ])
+  end
+
+  defp format_transport(%{transport: "discord"} = t) do
+    "discord: " <>
+      format_fields([
+        {"enabled", t.enabled},
+        {"credentials", credentials_label(t)},
+        {"bindings", t.binding_count},
+        {"allowed_guilds", t.allowed_guild_count},
+        {"allowed_channels", t.allowed_channel_count},
+        {"deny_unbound", t.deny_unbound_channels},
+        {"message_content_intent", get_in(t, [:free_response, :message_content_intent_declared])}
+      ])
+  end
+
+  defp format_fields(fields), do: Enum.map_join(fields, " ", fn {k, v} -> "#{k}=#{v}" end)
+
+  defp credentials_label(t) do
+    if t.token_configured or t.token_secret_configured, do: "configured", else: "missing"
+  end
+
   defp transport_status(:telegram, gateway, bindings), do: telegram_status(gateway, bindings)
   defp transport_status(:discord, gateway, bindings), do: discord_status(gateway, bindings)
 
@@ -114,8 +165,7 @@ defmodule LemonChannels.Doctor.Diagnostics do
       ignores_self_messages: true,
       ignores_webhooks: true,
       external_bot_messages_allowed: true,
-      external_bot_messages_stable: false,
-      external_bot_messages_live_proof_required: true
+      external_bot_messages_stable: false
     }
   end
 
@@ -123,10 +173,7 @@ defmodule LemonChannels.Doctor.Diagnostics do
     %{
       prompt_round_trip_supported: true,
       requires_reachable_dm_channel: true,
-      bot_to_bot_dm_stable: false,
-      setup_refusal_reason_kind: "discord_dm_setup_refused",
-      live_external_sender_proof_required: true,
-      live_external_sender_proof_source: "proof_diagnostics"
+      bot_to_bot_dm_stable: false
     }
   end
 
@@ -139,19 +186,14 @@ defmodule LemonChannels.Doctor.Diagnostics do
       runtime_requests_message_content_intent: true,
       message_content_intent_declared:
         truthy?(map_value(discord, :message_content_intent_enabled, false)) or
-          truthy?(map_value(discord, :message_content_intent, false)),
-      live_external_sender_proof_required: true,
-      live_external_sender_proof_source: "proof_diagnostics"
+          truthy?(map_value(discord, :message_content_intent, false))
     }
   end
 
   defp discord_inbound_replay_status do
     %{
       duplicate_message_suppression_supported: true,
-      persisted_idempotency_supported: true,
-      transport_restart_dedupe_proof_source: "discord_dedupe_proof",
-      live_gateway_reconnect_proof_required: true,
-      live_gateway_reconnect_proof_source: "live_discord_matrix"
+      persisted_idempotency_supported: true
     }
   end
 
@@ -169,11 +211,7 @@ defmodule LemonChannels.Doctor.Diagnostics do
         rollback: "rollback" in commands,
         kanban: "kanban" in commands,
         media: "media" in commands
-      },
-      live_registration_proof_required: true,
-      live_registration_proof_source: "live_discord_matrix",
-      deterministic_runtime_decoder_proof_source: "discord_slash_interaction_proof",
-      real_client_click_proof_required_for_broad_parity: true
+      }
     }
   end
 

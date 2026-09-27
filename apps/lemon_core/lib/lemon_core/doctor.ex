@@ -5,7 +5,7 @@ defmodule LemonCore.Doctor do
   ## Registering checks
 
   The built-in checks cover what lemon_core itself owns (config, secrets,
-  runtime, providers, and the proof artifacts other apps write). Apps that own
+  runtime, providers, usage, memory, node tools, and skills). Apps that own
   their own domain register additional check modules, which run after the
   built-ins:
 
@@ -16,22 +16,13 @@ defmodule LemonCore.Doctor do
   so a registration left behind by a removed dependency is not fatal.
   """
   alias LemonCore.Doctor.Checks.{
-    ACP,
-    Browser,
     Config,
-    Cron,
-    Extensions,
-    LSP,
-    Media,
     Memory,
-    MCP,
     NodeTools,
-    OpenAICompat,
     Providers,
     Runtime,
     Secrets,
     Skills,
-    TerminalBackends,
     Usage
   }
 
@@ -43,16 +34,7 @@ defmodule LemonCore.Doctor do
     Runtime,
     Providers,
     Usage,
-    Media,
     Memory,
-    Browser,
-    Cron,
-    TerminalBackends,
-    OpenAICompat,
-    ACP,
-    MCP,
-    LSP,
-    Extensions,
     NodeTools,
     Skills
   ]
