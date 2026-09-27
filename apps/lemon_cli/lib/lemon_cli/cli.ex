@@ -90,6 +90,11 @@ defmodule LemonCli.CLI do
     error in [Error, LemonCore.CLI.Error, LemonAi.Models.CLI.Error] ->
       IO.puts(:stderr, "Error: #{error.message}")
       error.exit_code
+
+    # Onboarding retains Mix's error type when invoked inside a source VM.
+    error in Mix.Error ->
+      IO.puts(:stderr, "Error: #{Exception.message(error)}")
+      @exit_error
   end
 
   # ──────────────────────────────────────────────────────────────────────────

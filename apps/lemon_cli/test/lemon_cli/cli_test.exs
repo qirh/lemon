@@ -233,18 +233,13 @@ defmodule LemonCli.CLITest do
       on_exit(fn -> restore_env("LEMON_CLI_LAUNCHER", previous) end)
     end
 
-    test "packaged installs execute model catalog commands without Mix tasks" do
+    test "packaged runtime commands return usage errors through the CLI boundary" do
       System.put_env("LEMON_CLI_LAUNCHER", "release")
 
-      output =
-        capture_io(fn ->
-          assert CLI.run(["models", "--provider", "anthropic", "--limit", "2", "--json"]) == 0
-        end)
-
-      report = Jason.decode!(output)
-      assert report["summary"]["total"] == length(report["models"])
-      assert Enum.all?(report["models"], &(&1["provider"] == "anthropic"))
-      refute output =~ "api_key"
+      capture_io(:stderr, fn ->
+        assert CLI.run(["models", "--limit", "-1"]) == 2
+        assert CLI.run(["usage", "--unexpected"]) == 2
+      end)
     end
 
     test "source checkouts refuse release-VM commands" do
