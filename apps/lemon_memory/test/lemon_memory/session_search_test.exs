@@ -102,13 +102,24 @@ defmodule LemonMemory.SessionSearchTest do
       session = "agent:order:main"
 
       seed(store, [
-        doc(session_key: session, ingested_at_ms: now - 30_000, prompt_summary: "deploy the api"),
-        doc(session_key: session, ingested_at_ms: now, prompt_summary: "rotate the docs")
+        doc(
+          session_key: session,
+          ingested_at_ms: now - 30_000,
+          prompt_summary: "deploy the api",
+          answer_summary: "completed"
+        ),
+        doc(
+          session_key: session,
+          ingested_at_ms: now,
+          prompt_summary: "rotate the docs",
+          answer_summary: "completed"
+        )
       ])
 
       results = search(store, "deploy api docs", scope: :session, scope_key: session, limit: 10)
 
-      # Both match one or more terms; the older one matches two and ranks first.
+      # Both indexed columns matter: keep answers neutral so only the older
+      # document matches two query terms, with equal document lengths.
       assert Enum.map(results, & &1.ingested_at_ms) == [now - 30_000, now]
     end
 
