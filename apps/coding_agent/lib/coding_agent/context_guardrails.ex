@@ -6,6 +6,11 @@ defmodule CodingAgent.ContextGuardrails do
   - Cap tool outputs / images / tool-call args deterministically (cache-friendly)
   - Optionally spill large blobs to disk and replace with stable references
   - Drop or clamp thinking blocks
+
+  `max_tool_result_images` (default 3) is a budget for the whole context: the
+  most recent N images across all tool results are sent as images, and older
+  ones are replaced by spill placeholders. Screenshots and image reads reach
+  the model without every historical image riding along on each request.
   """
 
   require Logger
@@ -27,7 +32,7 @@ defmodule CodingAgent.ContextGuardrails do
     enabled: true,
     mode: :trim,
     max_tool_result_bytes: 60_000,
-    max_tool_result_images: 0,
+    max_tool_result_images: 3,
     max_thinking_bytes: 0,
     max_tool_call_arg_string_bytes: 12_000,
     spill_dir: nil
@@ -47,9 +52,14 @@ defmodule CodingAgent.ContextGuardrails do
     opts = normalize_opts(opts)
 
     if opts.enabled do
+      budgets = image_budgets(messages, opts.max_tool_result_images)
+
       transformed =
         messages
-        |> Enum.map(&guard_message(&1, opts))
+        |> Enum.with_index()
+        |> Enum.map(fn {message, index} ->
+          guard_message(message, Map.put(opts, :image_budget, Map.get(budgets, index, 0)))
+        end)
 
       {:ok, transformed}
     else
@@ -62,6 +72,27 @@ defmodule CodingAgent.ContextGuardrails do
 
   defp normalize_opts(opts) when is_map(opts),
     do: Map.merge(@default_opts, opts)
+
+  # Assign the image budget newest-first: message index => images it may keep.
+  defp image_budgets(messages, max_images) when is_integer(max_images) and max_images > 0 do
+    {budgets, _left} =
+      messages
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.reduce({%{}, max_images}, fn
+        {%ToolResultMessage{content: content}, index}, {acc, left}
+        when is_list(content) and left > 0 ->
+          keep = min(Enum.count(content, &match?(%ImageContent{}, &1)), left)
+          {Map.put(acc, index, keep), left - keep}
+
+        _message, acc ->
+          acc
+      end)
+
+    budgets
+  end
+
+  defp image_budgets(_messages, _max_images), do: %{}
 
   # ----------------------------------------------------------------------------
   # Message guards
@@ -254,12 +285,11 @@ defmodule CodingAgent.ContextGuardrails do
   end
 
   defp spill_or_keep_images(images, opts, tname) do
-    # Keep at most N images as actual ImageContent; spill the rest to text placeholders.
-    max_images = opts[:max_tool_result_images] || 0
+    # Keep this message's share of the context image budget (its newest
+    # images); spill the rest to text placeholders.
+    keep_count = opts[:image_budget] || 0
 
-    {keep, spill} = Enum.split(images, max_images)
-
-    kept_images = keep
+    {spill, kept_images} = Enum.split(images, max(length(images) - keep_count, 0))
 
     placeholders =
       spill

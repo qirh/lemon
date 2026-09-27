@@ -110,7 +110,8 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "skill_manage")
       refute ToolPolicy.allowed?(policy, "memory")
       refute ToolPolicy.allowed?(policy, "bash")
-      refute ToolPolicy.allowed?(policy, "exec")
+      refute ToolPolicy.allowed?(policy, "kill_process")
+      refute ToolPolicy.allowed?(policy, "lsp_diagnostics")
       refute ToolPolicy.allowed?(policy, "execute_code")
     end
 

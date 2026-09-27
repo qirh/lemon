@@ -36,7 +36,6 @@ defmodule LemonMCP.ToolAdapter do
     "read" => CodingAgent.Tools.Read,
     "write" => CodingAgent.Tools.Write,
     "edit" => CodingAgent.Tools.Edit,
-    "hashline_edit" => CodingAgent.Tools.HashlineEdit,
     "patch" => CodingAgent.Tools.Patch,
     "bash" => CodingAgent.Tools.Bash,
     "grep" => CodingAgent.Tools.Grep,

@@ -50,6 +50,8 @@ defmodule CodingAgent.ProcessStore do
           max_log_lines: @max_log_lines,
           timeout_ms: nil,
           log_line_count: 0,
+          total_lines: 0,
+          read_cursor: 0,
           restarted_from: nil,
           restart_generation: 0,
           owner: nil,
@@ -84,16 +86,29 @@ defmodule CodingAgent.ProcessStore do
   """
   @spec append_log(process_id(), String.t()) :: :ok
   def append_log(process_id, line) when is_binary(process_id) and is_binary(line) do
+    append_logs(process_id, [line])
+  end
+
+  @doc """
+  Append log lines (oldest first) to a process's log buffer (bounded) in one
+  write. `:total_lines` counts every line ever appended, including lines that
+  have since scrolled out of the buffer.
+  """
+  @spec append_logs(process_id(), [String.t()]) :: :ok
+  def append_logs(_process_id, []), do: :ok
+
+  def append_logs(process_id, lines) when is_binary(process_id) and is_list(lines) do
     ensure_table()
 
     case :ets.lookup(@table, process_id) do
       [{^process_id, record, logs}] ->
-        logs = [line | logs] |> Enum.take(@max_log_lines)
+        logs = Enum.reverse(lines, logs) |> Enum.take(@max_log_lines)
 
         record =
           record
           |> Map.put(:updated_at, System.system_time(:second))
           |> Map.put(:log_line_count, length(logs))
+          |> Map.put(:total_lines, Map.get(record, :total_lines, 0) + length(lines))
 
         insert_record(process_id, record, logs)
         :ok
@@ -101,6 +116,15 @@ defmodule CodingAgent.ProcessStore do
       _ ->
         :ok
     end
+  end
+
+  @doc """
+  Record how many output lines (by `:total_lines` position) have been read.
+  """
+  @spec put_read_cursor(process_id(), non_neg_integer()) :: :ok
+  def put_read_cursor(process_id, cursor)
+      when is_binary(process_id) and is_integer(cursor) and cursor >= 0 do
+    update_record(process_id, &Map.put(&1, :read_cursor, cursor))
   end
 
   @doc """

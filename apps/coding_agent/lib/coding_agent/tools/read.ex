@@ -12,6 +12,7 @@ defmodule CodingAgent.Tools.Read do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.{TextContent, ImageContent}
+  alias CodingAgent.FileReadTracker
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
@@ -322,6 +323,7 @@ defmodule CodingAgent.Tools.Read do
   defp read_text_file(path, _stat, offset, limit, opts) do
     case File.read(path) do
       {:ok, content} ->
+        FileReadTracker.record(opts, path, content)
         text_file_result(path, content, offset, limit, opts, %{})
 
       {:error, reason} ->

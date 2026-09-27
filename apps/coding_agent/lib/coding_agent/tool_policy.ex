@@ -51,6 +51,8 @@ defmodule CodingAgent.ToolPolicy do
     "edit",
     "patch",
     "bash",
+    "bash_output",
+    "kill_process",
     "execute_code",
     "grep",
     "find",
@@ -128,18 +130,19 @@ defmodule CodingAgent.ToolPolicy do
   @dangerous_tools [
     "write",
     "edit",
-    "hashline_edit",
     "patch",
     "checkpoint",
     "skill_manage",
     "memory",
     "memory_topic",
     "bash",
+    # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
+    # which execute project code.
+    "lsp_diagnostics",
     # Bash-equivalent: the script runs with host permissions, and the RPC
     # allowlist bounds the Lemon tool surface only, not the OS.
     "execute_code",
-    "exec",
-    "process",
+    "kill_process",
     "agent",
     "task",
     "browser_click",

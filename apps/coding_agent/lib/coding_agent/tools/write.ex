@@ -9,6 +9,8 @@ defmodule CodingAgent.Tools.Write do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias CodingAgent.FileReadTracker
+  alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileValidation
@@ -178,6 +180,12 @@ defmodule CodingAgent.Tools.Write do
   defp write_file_local(path, content, signal, format?, diagnostics?, cwd, opts) do
     path = Path.expand(path)
 
+    MutationLock.with_lock(MutationLock.path_key(path), fn ->
+      write_file_local_locked(path, content, signal, format?, diagnostics?, cwd, opts)
+    end)
+  end
+
+  defp write_file_local_locked(path, content, signal, format?, diagnostics?, cwd, opts) do
     try do
       with :ok <-
              FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
@@ -233,6 +241,10 @@ defmodule CodingAgent.Tools.Write do
 
       byte_count = byte_size(content)
       {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+
+      if formatted,
+        do: FileReadTracker.refresh(opts, [path]),
+        else: FileReadTracker.record(opts, path, content)
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(path, cwd, baseline, diagnostics?, opts)

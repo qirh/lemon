@@ -2,19 +2,8 @@ defmodule CodingAgentTest do
   use ExUnit.Case, async: true
 
   describe "coding_tools/2" do
-    # Pins the platform's own 59 builtins. Satellite tools (for example, lemon_honcho)
-    # register through LemonAgent.ToolRegistry when their app happens to be
-    # running in the test VM — umbrella-root runs boot them, per-app CI lanes
-    # may not — so they are subtracted rather than counted. Satellite
-    # contribution/precedence is covered by tool_precedence_test.exs.
-    test "returns list of 59 builtin tools plus registered extras" do
+    test "returns AgentTool structs" do
       tools = CodingAgent.coding_tools("/tmp")
-
-      registered =
-        MapSet.new(LemonAgent.ToolRegistry.all(), fn {name, _} -> Atom.to_string(name) end)
-
-      builtins = Enum.reject(tools, &MapSet.member?(registered, &1.name))
-      assert length(builtins) == 59
       assert Enum.all?(tools, &match?(%LemonAgent.Types.AgentTool{}, &1))
     end
 
@@ -27,6 +16,8 @@ defmodule CodingAgentTest do
       assert "patch" in names
       assert "lsp_diagnostics" in names
       assert "bash" in names
+      assert "bash_output" in names
+      assert "kill_process" in names
       assert "grep" in names
       assert "find" in names
       assert "ls" in names

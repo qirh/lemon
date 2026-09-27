@@ -1548,3 +1548,51 @@ defmodule CodingAgent.Tools.FindTest do
     end
   end
 end
+
+defmodule CodingAgent.Tools.FindIgnoreTest do
+  use ExUnit.Case, async: true
+
+  alias CodingAgent.Tools.Find
+  alias LemonAgent.Types.AgentToolResult
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp_dir} do
+    # A nested repository makes the fixture independent of the checkout's own
+    # .gitignore (test tmp dirs live under an ignored path).
+    {_, 0} = System.cmd("git", ["init", "-q"], cd: tmp_dir)
+    File.write!(Path.join(tmp_dir, ".gitignore"), "build/\n*.log\n")
+    File.mkdir_p!(Path.join(tmp_dir, "build"))
+    File.mkdir_p!(Path.join(tmp_dir, "lib"))
+    File.write!(Path.join([tmp_dir, "build", "artifact.txt"]), "")
+    File.write!(Path.join(tmp_dir, "debug.log"), "")
+    File.write!(Path.join([tmp_dir, "lib", "code.txt"]), "")
+    :ok
+  end
+
+  for {label, opts} <- [{"default finder", []}, {"elixir fallback", [fd_available?: false]}] do
+    test "#{label} skips gitignored files by default", %{tmp_dir: tmp_dir} do
+      assert %AgentToolResult{details: %{files: files}} =
+               Find.execute("c1", %{"pattern" => "*"}, nil, nil, tmp_dir, unquote(opts))
+
+      assert "lib/code.txt" in files
+      refute "build/artifact.txt" in files
+      refute "debug.log" in files
+    end
+
+    test "#{label} includes ignored files with no_ignore", %{tmp_dir: tmp_dir} do
+      assert %AgentToolResult{details: %{files: files}} =
+               Find.execute(
+                 "c1",
+                 %{"pattern" => "*.txt", "no_ignore" => true},
+                 nil,
+                 nil,
+                 tmp_dir,
+                 unquote(opts)
+               )
+
+      assert "lib/code.txt" in files
+      assert "build/artifact.txt" in files
+    end
+  end
+end

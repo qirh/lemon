@@ -11,6 +11,10 @@ defmodule CodingAgent.ToolExecutor do
   failures are not included in tool results or logs. The failure boundary
   covers only the approval request, not the approved tool's execution.
 
+  Denials, approval timeouts, and approval failures return an
+  `AgentToolResult` with `is_error: true`, so the model sees an error tool
+  result rather than a successful one.
+
   ## Usage
 
       # Wrap a tool with approval enforcement
@@ -181,7 +185,8 @@ defmodule CodingAgent.ToolExecutor do
       details: %{
         denied: true,
         reason: :approval_denied
-      }
+      },
+      is_error: true
     }
   end
 
@@ -202,7 +207,8 @@ defmodule CodingAgent.ToolExecutor do
         timeout: true,
         timeout_ms: timeout_ms,
         reason: :approval_timeout
-      }
+      },
+      is_error: true
     }
   end
 
@@ -219,7 +225,8 @@ defmodule CodingAgent.ToolExecutor do
       details: %{
         approval_error: reason,
         reason: :approval_error
-      }
+      },
+      is_error: true
     }
   end
 end

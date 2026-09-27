@@ -14,7 +14,7 @@ defmodule CodingAgent.Tools.EditTest do
 
       assert tool.name == "edit"
       assert tool.label == "Edit File"
-      assert tool.description =~ "Replace exact text"
+      assert tool.description =~ "Replace text in a file"
       assert tool.parameters["type"] == "object"
       assert tool.parameters["required"] == ["path", "old_text", "new_text"]
       assert is_function(tool.execute, 4)
@@ -584,5 +584,151 @@ defmodule CodingAgent.Tools.EditTest do
       assert %AgentToolResult{} = result
       assert File.read!(path) == "modified content"
     end
+  end
+
+  describe "execute/6 - line-based matching" do
+    test "replaces the right span after multibyte text", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "cafe.ex")
+
+      File.write!(path, """
+      defmodule Café do
+        # © 2026 — naïve résumé
+        def greet(name) do
+          "héllo " <> name
+        end
+
+        def other, do: :ok
+      end
+      """)
+
+      result =
+        edit(path, tmp_dir,
+          old_text: "def greet(name)  do\n  \"héllo \" <> name\nend",
+          new_text: "def greet(name) do\n    \"bonjour \" <> name\n  end"
+        )
+
+      assert %AgentToolResult{} = result
+
+      assert File.read!(path) == """
+             defmodule Café do
+               # © 2026 — naïve résumé
+               def greet(name) do
+                 "bonjour " <> name
+               end
+
+               def other, do: :ok
+             end
+             """
+    end
+
+    test "matches near the end of a long indented file", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "long.ex")
+      lines = for i <- 1..800, do: "    value_#{i} = compute(#{i})"
+      File.write!(path, Enum.join(lines, "\n") <> "\n")
+
+      result =
+        edit(path, tmp_dir,
+          old_text: "value_799 =  compute(799)\nvalue_800 = compute(800)",
+          new_text: "value_799 = 0\n    value_800 = 0"
+        )
+
+      assert %AgentToolResult{} = result
+      new_lines = path |> File.read!() |> String.split("\n")
+      assert Enum.at(new_lines, 797) == "    value_798 = compute(798)"
+      assert Enum.at(new_lines, 798) == "    value_799 = 0"
+      assert Enum.at(new_lines, 799) == "    value_800 = 0"
+      assert List.last(new_lines) == ""
+    end
+
+    test "an ambiguous whitespace-insensitive match is an error naming the lines", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "ambiguous.txt")
+      original = "  call  a\nother\n\tcall   a\n"
+      File.write!(path, original)
+
+      assert {:error, message} = edit(path, tmp_dir, old_text: "call a", new_text: "call b")
+      assert message =~ "2 occurrences"
+      assert message =~ "lines 1, 3"
+      assert File.read!(path) == original
+    end
+
+    test "preserves CRLF line endings and the trailing newline", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "crlf_fuzzy.txt")
+      File.write!(path, "a\r\n    b  c\r\nd\r\n")
+
+      assert %AgentToolResult{} = edit(path, tmp_dir, old_text: "b c", new_text: "x")
+      assert File.read!(path) == "a\r\n    x\r\nd\r\n"
+    end
+
+    test "rejects an empty old_text", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "empty_old.txt")
+      File.write!(path, "content")
+
+      assert {:error, message} = edit(path, tmp_dir, old_text: "", new_text: "x")
+      assert message =~ "must not be empty"
+    end
+  end
+
+  describe "execute/6 - concurrency and staleness" do
+    test "concurrent edits of one file all apply", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "concurrent.txt")
+      File.write!(path, Enum.map_join(1..20, "", &"line #{&1}\n"))
+
+      1..20
+      |> Enum.map(fn i ->
+        Task.async(fn ->
+          edit(path, tmp_dir, old_text: "line #{i}\n", new_text: "edited #{i}\n")
+        end)
+      end)
+      |> Task.await_many(10_000)
+      |> Enum.each(&assert(%AgentToolResult{} = &1))
+
+      assert File.read!(path) == Enum.map_join(1..20, "", &"edited #{&1}\n")
+    end
+
+    test "an edit is rejected when the file changed on disk since it was read", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "stale.txt")
+      File.write!(path, "alpha\nbeta\n")
+      opts = [session_id: "stale-#{System.unique_integer([:positive])}"]
+
+      assert %AgentToolResult{} =
+               CodingAgent.Tools.Read.execute("r1", %{"path" => path}, nil, nil, tmp_dir, opts)
+
+      File.write!(path, "alpha\nbeta\ngamma\n")
+
+      assert {:error, message} =
+               edit(path, tmp_dir, [old_text: "alpha", new_text: "ALPHA"], opts)
+
+      assert message =~ "Re-read the file"
+      assert File.read!(path) == "alpha\nbeta\ngamma\n"
+
+      assert %AgentToolResult{} =
+               CodingAgent.Tools.Read.execute("r2", %{"path" => path}, nil, nil, tmp_dir, opts)
+
+      assert %AgentToolResult{} =
+               edit(path, tmp_dir, [old_text: "alpha", new_text: "ALPHA"], opts)
+
+      # The session's own edit refreshes its view: a follow-up edit needs no re-read.
+      assert %AgentToolResult{} = edit(path, tmp_dir, [old_text: "beta", new_text: "BETA"], opts)
+      assert File.read!(path) == "ALPHA\nBETA\ngamma\n"
+    end
+  end
+
+  defp edit(path, cwd, params, opts \\ []) do
+    Edit.execute(
+      "call_edit",
+      %{
+        "path" => path,
+        "old_text" => Keyword.fetch!(params, :old_text),
+        "new_text" => Keyword.fetch!(params, :new_text)
+      },
+      nil,
+      nil,
+      cwd,
+      opts
+    )
   end
 end
