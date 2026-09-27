@@ -1,8 +1,8 @@
 /**
- * Formatter for the browser tools (browser_* and browser_exec).
+ * Formatter for the browser tools (browser_*).
  *
  * Arguments summarize by each tool's key argument (url, selector, key, tab id,
- * expression, steps...). Results carry the browser payload in `details` (the
+ * expression...). Results carry the browser payload in `details` (the
  * text content is the same payload as JSON) and summarize by what the call
  * produced: page title/url, saved artifact path, tab/event/cookie counts, or
  * page text.
@@ -20,9 +20,6 @@ const DETAIL_LINE_MAX_LENGTH = 120;
 
 /** Maximum lines of page text to show in details */
 const TEXT_MAX_LINES = 8;
-
-/** Maximum browser_exec step lines to show in details */
-const STEPS_MAX_LINES = 10;
 
 /** Argument keys shown as `key: value` detail lines, in display order */
 const ARG_DETAIL_KEYS = [
@@ -67,19 +64,6 @@ function preview(value: string, maxLength = SUMMARY_VALUE_MAX_LENGTH): string {
  * @returns Summary text (empty for argument-less tools)
  */
 function summarizeArgs(args: Record<string, unknown>): string {
-	if (Array.isArray(args.steps)) {
-		const actions = args.steps
-			.map((step) =>
-				step && typeof step === "object"
-					? nonEmptyString((step as Record<string, unknown>).action)
-					: undefined,
-			)
-			.filter((action): action is string => action !== undefined);
-		const count = args.steps.length;
-		const label = `${count} step${count === 1 ? "" : "s"}`;
-		return actions.length > 0 ? `${label}: ${preview(actions.join(" → "))}` : label;
-	}
-
 	const url = nonEmptyString(args.url);
 	if (url) {
 		return shortenUrl(url);
@@ -182,53 +166,6 @@ function listCount(payload: Record<string, unknown>, key: string): number | unde
 }
 
 /**
- * Formats a browser_exec program result.
- *
- * @param payload - The browser_exec payload
- * @param details - The details array to append step lines to
- * @returns Summary text and error flag
- */
-function summarizeProgram(
-	payload: Record<string, unknown>,
-	details: string[],
-): { summary: string; isError: boolean } {
-	const steps = Array.isArray(payload.results) ? payload.results : [];
-	const stepLines: string[] = [];
-	for (const step of steps) {
-		if (!step || typeof step !== "object") {
-			continue;
-		}
-		const entry = step as Record<string, unknown>;
-		const index = typeof entry.index === "number" ? `${entry.index + 1}. ` : "";
-		stepLines.push(`${index}✓ ${nonEmptyString(entry.action) ?? "step"}`);
-	}
-	details.push(...truncateLines(stepLines, STEPS_MAX_LINES));
-
-	const completed =
-		typeof payload.completedSteps === "number" ? payload.completedSteps : stepLines.length;
-	const error = nonEmptyString(payload.error);
-
-	if (payload.ok === false || error) {
-		const failedStep =
-			typeof payload.failedStep === "number" ? ` at step ${payload.failedStep + 1}` : "";
-		const failedAction = nonEmptyString(payload.failedAction);
-		const where = failedAction ? `${failedStep} (${failedAction})` : failedStep;
-		if (error) {
-			details.push(`error: ${truncateText(error, DETAIL_LINE_MAX_LENGTH)}`);
-		}
-		return {
-			summary: `failed${where}${error ? `: ${preview(error)}` : ""}`,
-			isError: true,
-		};
-	}
-
-	return {
-		summary: `${completed} step${completed === 1 ? "" : "s"} completed`,
-		isError: false,
-	};
-}
-
-/**
  * Formatter for every browser tool.
  */
 export const browserFormatter: ToolFormatter = {
@@ -257,7 +194,6 @@ export const browserFormatter: ToolFormatter = {
 		"browser_clear_state",
 		"browser_screenshot",
 		"browser_analyze",
-		"browser_exec",
 	],
 
 	formatArgs(args: Record<string, unknown>): FormattedOutput {
@@ -268,21 +204,10 @@ export const browserFormatter: ToolFormatter = {
 				details.push(truncateText(`${key}: ${value}`, DETAIL_LINE_MAX_LENGTH));
 			}
 		}
-		if (Array.isArray(args.steps)) {
-			for (const [index, step] of args.steps.entries()) {
-				if (step && typeof step === "object") {
-					const entry = step as Record<string, unknown>;
-					const action = nonEmptyString(entry.action) ?? "step";
-					const stepArgs =
-						entry.args && typeof entry.args === "object" ? ` ${safeStringify(entry.args)}` : "";
-					details.push(truncateText(`${index + 1}. ${action}${stepArgs}`, DETAIL_LINE_MAX_LENGTH));
-				}
-			}
-		}
 
 		return {
 			summary: summarizeArgs(args),
-			details: truncateLines(details, STEPS_MAX_LINES + ARG_DETAIL_KEYS.length),
+			details,
 		};
 	},
 
@@ -303,11 +228,6 @@ export const browserFormatter: ToolFormatter = {
 				details: truncateLines(lines, TEXT_MAX_LINES),
 				isError: true,
 			};
-		}
-
-		if (payload.tool === "browser_exec" || Array.isArray(payload.results)) {
-			const { summary, isError } = summarizeProgram(payload, details);
-			return { summary, details, isError };
 		}
 
 		const parts: string[] = [];

@@ -48,7 +48,6 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         "Tools and interfaces",
         (
             ("tools/web.md", "Web search, fetch, and browser automation tools."),
-            ("tools/execute-code.md", "Persistent Python RPC execution over allowlisted agent tools."),
             ("tools/media.md", "Media generation and artifact workflows."),
             ("tools/lsp.md", "Language-server diagnostics."),
             ("tools/acp.md", "ACP-shaped editor integration."),

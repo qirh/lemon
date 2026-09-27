@@ -212,30 +212,6 @@ defmodule CodingAgent.CommandsTest do
     end
   end
 
-  describe "format_for_description/1" do
-    test "returns empty string when no commands", %{tmp_dir: tmp_dir} do
-      assert Commands.format_for_description(tmp_dir) == ""
-    end
-
-    test "formats commands as list", %{tmp_dir: tmp_dir} do
-      cmd_dir = Path.join([tmp_dir, ".lemon", "command"])
-      File.mkdir_p!(cmd_dir)
-
-      content = """
-      ---
-      description: Commit changes
-      ---
-
-      Template.
-      """
-
-      File.write!(Path.join(cmd_dir, "commit.md"), content)
-
-      result = Commands.format_for_description(tmp_dir)
-      assert result == "- /commit: Commit changes"
-    end
-  end
-
   # ==========================================================================
   # Special Characters and Unicode Handling Tests
   # ==========================================================================
@@ -890,44 +866,6 @@ defmodule CodingAgent.CommandsTest do
 
     test "handles glob pattern in arguments" do
       assert Commands.parse_input("/find *.ex **/*.exs") == {"find", ["*.ex", "**/*.exs"]}
-    end
-  end
-
-  describe "format_for_description/1 with unicode" do
-    test "formats commands with unicode descriptions", %{tmp_dir: tmp_dir} do
-      cmd_dir = Path.join([tmp_dir, ".lemon", "command"])
-      File.mkdir_p!(cmd_dir)
-
-      content = """
-      ---
-      description: 部署到生产环境 🚀
-      ---
-
-      Deploy.
-      """
-
-      File.write!(Path.join(cmd_dir, "deploy.md"), content)
-
-      result = Commands.format_for_description(tmp_dir)
-      assert result == "- /deploy: 部署到生产环境 🚀"
-    end
-
-    test "formats commands with emoji names", %{tmp_dir: tmp_dir} do
-      cmd_dir = Path.join([tmp_dir, ".lemon", "command"])
-      File.mkdir_p!(cmd_dir)
-
-      content = """
-      ---
-      description: Fire it up
-      ---
-
-      Launch.
-      """
-
-      File.write!(Path.join(cmd_dir, "🔥launch.md"), content)
-
-      result = Commands.format_for_description(tmp_dir)
-      assert result == "- /🔥launch: Fire it up"
     end
   end
 

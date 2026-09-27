@@ -55,6 +55,10 @@ defmodule CodingAgent.ToolRegistry do
     {:ls, Tools.Ls},
     {:webfetch, Tools.WebFetch},
     {:websearch, Tools.WebSearch},
+    {:browser_tabs, Tools.BrowserTabs},
+    {:browser_tab_open, Tools.BrowserTabOpen},
+    {:browser_tab_activate, Tools.BrowserTabActivate},
+    {:browser_tab_close, Tools.BrowserTabClose},
     {:browser_navigate, Tools.BrowserNavigate},
     {:browser_snapshot, Tools.BrowserSnapshot},
     {:browser_get_content, Tools.BrowserGetContent},
@@ -88,11 +92,7 @@ defmodule CodingAgent.ToolRegistry do
     {:agent, Tools.Agent},
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
-    {:extensions_status, Tools.ExtensionsStatus},
-    # Appended last on purpose: `execute_code` is config-gated, so keeping it at
-    # the tail leaves the tool-order prefix identical whether or not it is
-    # enabled, which is what prompt caching needs.
-    {:execute_code, Tools.ExecuteCode}
+    {:extensions_status, Tools.ExtensionsStatus}
   ]
 
   @doc """
@@ -220,15 +220,10 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   # Built-ins plus whatever satellite apps registered at boot (see
-  # `LemonAgent.ToolRegistry`). Built-ins win on name collisions. Satellite
-  # tools slot in BEFORE the config-gated `execute_code`: it must stay the
-  # absolute tail so toggling it changes nothing but the last entry — the
-  # prompt-cache prefix stability its @builtin_tools comment promises.
+  # `LemonAgent.ToolRegistry`), appended after the built-ins so the tool-order
+  # prefix stays stable for prompt caching. Built-ins win on name collisions.
   defp builtin_tools do
-    {gated, stable} = Enum.split_with(@builtin_tools, fn {name, _} -> name == :execute_code end)
-
-    stable ++
-      LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0))) ++ gated
+    @builtin_tools ++ LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
   end
 
   @doc """
@@ -367,12 +362,6 @@ defmodule CodingAgent.ToolRegistry do
 
   defp builtin_tool_tuples(cwd, opts) do
     builtin_tools()
-    # A disabled per-tool runtime capability must not reach the prompt at all --
-    # its schema costs tokens and offering a tool that always errors confuses
-    # the model. `builtin_tool_names/0` still reports the compile-time set.
-    |> Enum.reject(fn {name, _module} ->
-      name == :execute_code and not Tools.ExecuteCode.enabled?(cwd, opts)
-    end)
     |> Enum.map(fn {name, module} ->
       name = Atom.to_string(name)
       {name, module.tool(cwd, opts) |> maybe_serialize_mutation(name, cwd, opts), :builtin}

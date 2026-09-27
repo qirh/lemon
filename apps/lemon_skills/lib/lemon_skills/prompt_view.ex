@@ -93,10 +93,11 @@ defmodule LemonSkills.PromptView do
   @doc """
   Render a `<relevant-skills>` XML block for context-filtered skills.
 
-  Used by `CodingAgent.PromptBuilder` when only a relevance-selected subset of
-  skills should appear (e.g. based on the current user message). Unlike the
-  full `<available_skills>` list in the system prompt, this block shows only
-  the skills that match the current context, with a `read_skill` reminder.
+  `CodingAgent.Session` renders the relevance-selected subset of skills for the
+  current user message through this function (for skill-prompt telemetry).
+  Unlike the full `<available_skills>` list in the system prompt, this block
+  shows only the skills that match the current context, with a `read_skill`
+  reminder.
 
   Returns an empty string when `views` is empty.
   """

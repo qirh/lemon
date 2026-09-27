@@ -12,6 +12,7 @@ defmodule LemonMCP.MixProject do
       test_pattern: "*_test.exs",
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       # Advisory: `threshold: 0` prints the coverage summary but never gates
       # (summary: true would apply Elixir's default 90% threshold). The legacy
       # HTTP+SSE client_test is timing-flaky under load, so it is tagged
@@ -29,16 +30,18 @@ defmodule LemonMCP.MixProject do
     [extra_applications: [:logger]]
   end
 
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:bandit, "~> 1.0"},
-      {:plug, "~> 1.14"},
+      # Local HTTP/SSE MCP server fixtures for the client tests
+      {:bandit, "~> 1.0", only: :test},
+      {:plug, "~> 1.14", only: :test},
       # Umbrella dependencies
-      {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
-      {:lemon_skills, in_umbrella: true},
-      {:lemon_agent, in_umbrella: true}
+      {:lemon_skills, in_umbrella: true}
     ]
   end
 end

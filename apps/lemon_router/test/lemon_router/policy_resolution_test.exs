@@ -200,7 +200,7 @@ defmodule LemonRouter.PolicyResolutionTest do
           }
         })
 
-      for tool <- ~w(bash execute_code write edit patch hashline_edit) do
+      for tool <- ~w(bash write edit patch hashline_edit) do
         assert Policy.approval_required?(result, tool) == :always
       end
 

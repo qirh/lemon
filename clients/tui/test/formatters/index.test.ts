@@ -561,7 +561,6 @@ describe("FormatterRegistry", () => {
 				"browser_download",
 				"browser_evaluate",
 				"browser_events",
-				"browser_exec",
 				"browser_get_content",
 				"browser_get_cookies",
 				"browser_hover",

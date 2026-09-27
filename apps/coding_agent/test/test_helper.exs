@@ -1,8 +1,4 @@
-# Tests tagged `:python3` need a python3 interpreter; they are excluded (not
-# silently skipped) on hosts without one. Skip tags are banned by the CI skip guard.
-python_exclude = if System.find_executable("python3"), do: [], else: [:python3]
-
-ExUnit.configure(exclude: [:integration | python_exclude])
+ExUnit.configure(exclude: [:integration])
 ExUnit.start(capture_log: true)
 
 # Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.

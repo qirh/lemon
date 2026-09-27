@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaGenerateVideo do
   @moduledoc """
   Supervised video-generation preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local MP4 previews,
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local MP4 previews,
   OpenAI video jobs (OpenAI credentials) and Vertex AI Veo long-running
   prediction (Google service-account credentials).
   """

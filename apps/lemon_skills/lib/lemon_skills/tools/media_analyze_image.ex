@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   @moduledoc """
   Supervised image-analysis preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local vision previews
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local vision previews
   and OpenAI vision analysis; OpenAI jobs require OpenAI vision credentials.
   """
 

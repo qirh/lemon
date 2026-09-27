@@ -50,7 +50,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
   test "a Telegram group message requires approval for every mutating tool" do
     tool_policy = build_submission(peer_kind: :group, peer_id: "-100123").tool_policy
 
-    for tool <- ~w(bash execute_code write edit patch hashline_edit) do
+    for tool <- ~w(bash write edit patch hashline_edit) do
       assert get_in(tool_policy, [:approvals, tool]) == :always,
              "expected #{tool} to require approval in a group, got #{inspect(tool_policy)}"
     end
