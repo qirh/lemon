@@ -131,46 +131,6 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "filters custom subscribers before mailbox fanout" do
-      conn_id = "conn_#{System.unique_integer()}"
-      subscribed_run = "run_subscribed_#{System.unique_integer()}"
-      other_run = "run_other_#{System.unique_integer()}"
-
-      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
-
-      assert :ok =
-               Presence.update_subscriptions(
-                 conn_id,
-                 :custom,
-                 MapSet.new(["run:#{subscribed_run}"])
-               )
-
-      flush_events()
-
-      send(
-        Process.whereis(EventBridge),
-        LemonCore.Event.new(
-          :delta,
-          %{run_id: other_run, seq: 1, text: "ignored"},
-          %{run_id: other_run}
-        )
-      )
-
-      refute_receive {:event, "chat", %{"runId" => ^other_run}, _}, 200
-
-      send(
-        Process.whereis(EventBridge),
-        LemonCore.Event.new(
-          :delta,
-          %{run_id: subscribed_run, seq: 1, text: "delivered"},
-          %{run_id: subscribed_run}
-        )
-      )
-
-      assert_receive {:event, "chat", %{"runId" => ^subscribed_run}, _}, 500
-
-      Presence.unregister(conn_id)
-    end
   end
 
   describe "event forwarding" do
@@ -186,18 +146,14 @@ defmodule LemonControlPlane.EventBridgeTest do
                Presence.register(operator_conn_id, %{
                  role: :operator,
                  client_id: "operator",
-                 pid: operator_pid,
-                 subscription_mode: :all,
-                 subscriptions: MapSet.new()
+                 pid: operator_pid
                })
 
       assert :ok =
                Presence.register(node_conn_id, %{
                  role: :node,
                  client_id: "node-1",
-                 pid: node_pid,
-                 subscription_mode: :all,
-                 subscriptions: MapSet.new(["all"])
+                 pid: node_pid
                })
 
       bridge = Process.whereis(EventBridge)
@@ -280,8 +236,6 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
 
-      # Subscribe the way events.subscribe does: custom mode, "channels" topic only.
-      assert :ok = Presence.update_subscriptions(conn_id, :custom, MapSet.new(["channels"]))
       flush_events()
 
       intent_id = "intent_#{System.unique_integer()}"
@@ -632,7 +586,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "maps ingested metrics, log, and custom events with target fields" do
+    test "maps ingested metrics and log events with target fields" do
       run_id = "run_#{System.unique_integer()}"
       session_key = "session:event-bridge-ingest"
       conn_id = "conn_#{System.unique_integer()}"
@@ -671,19 +625,6 @@ defmodule LemonControlPlane.EventBridgeTest do
                      1_000
 
       assert byte_size(message) < 700
-
-      send(
-        Process.whereis(EventBridge),
-        LemonCore.Event.new(
-          :custom_event,
-          %{custom_event_type: "custom_widget", ok: true},
-          %{target: "run:#{run_id}", original_event_type: "custom_widget"}
-        )
-      )
-
-      assert_receive {:event, "custom", %{"type" => "custom_widget", "runId" => ^run_id},
-                      _state_version},
-                     1_000
 
       Presence.unregister(conn_id)
     end
@@ -906,7 +847,6 @@ defmodule LemonControlPlane.EventBridgeTest do
       run_id = "run_model_#{System.unique_integer([:positive])}"
 
       :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
-      :ok = Presence.update_subscriptions(conn_id, :custom, MapSet.new(["run:#{run_id}"]))
       flush_events()
 
       # Presence is stopped by the file-level teardown, which can win this race when the

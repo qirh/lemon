@@ -153,7 +153,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert Authorize.required_scopes("config.get") == [:admin]
       assert Authorize.required_scopes("exec.approvals.list") == [:approvals]
       assert Authorize.required_scopes("node.pair.start") == [:pairing]
-      assert Authorize.required_scopes("node.event") == [:invoke, :event]
+      assert Authorize.required_scopes("node.invoke.result") == [:invoke, :event]
       assert Authorize.required_scopes("chat.send") == [:write]
       assert Authorize.required_scopes("sessions.list") == [:read]
     end

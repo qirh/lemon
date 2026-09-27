@@ -257,9 +257,6 @@ export interface ProtocolEventMap {
 	"exec.approval.requested": ApprovalRequestedEvent;
 	"exec.approval.resolved": ApprovalResolvedEvent;
 	"channel.delivery": ChannelDeliveryEvent;
-	"talk.mode": { sessionKey: Nullable<string>; mode: string };
-	"voicewake.changed": Record<string, unknown>;
-	custom: Record<string, unknown>;
 }
 
 export type ProtocolEventName = keyof ProtocolEventMap & string;

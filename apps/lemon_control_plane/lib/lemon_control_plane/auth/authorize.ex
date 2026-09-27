@@ -14,9 +14,9 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   ## Operator Scopes
 
-  - `operator.admin` - Administrative operations (config, wizard, install, etc.)
+  - `operator.admin` - Administrative operations (config, install, cron, etc.)
   - `operator.read` - Read-only operations (status, list, get, etc.)
-  - `operator.write` - Write operations (send, agent, chat, etc.)
+  - `operator.write` - Write operations (agent, chat, etc.)
   - `operator.approvals` - Approval management (exec.approvals.*, exec.approval.*)
   - `operator.pairing` - Node/device pairing (node.pair.*)
 
@@ -242,9 +242,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   def node_only_method?(method) do
     method in [
       "node.invoke.result",
-      "node.invoke.control.result",
-      "node.event",
-      "skills.bins"
+      "node.invoke.control.result"
     ]
   end
 
@@ -293,11 +291,8 @@ defmodule LemonControlPlane.Auth.Authorize do
   # Admin methods - require operator.admin
   defp admin_method?(method) do
     String.starts_with?(method, "config.") or
-      String.starts_with?(method, "wizard.") or
       method in [
-        "channels.logout",
         "skills.install",
-        "skills.update",
         "cron.add",
         "cron.update",
         "cron.pause",
@@ -311,8 +306,7 @@ defmodule LemonControlPlane.Auth.Authorize do
         "sessions.reset",
         "sessions.delete",
         "sessions.compact",
-        "sessions.heartbeat",
-        "update.run"
+        "sessions.heartbeat"
       ]
   end
 
@@ -324,31 +318,22 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   # Pairing methods - require operator.pairing
   defp pairing_method?(method) do
-    String.starts_with?(method, "node.pair.") or
-      String.starts_with?(method, "device.pair.")
+    String.starts_with?(method, "node.pair.")
   end
 
   # Node-only methods
   defp node_method?(method) do
-    method in ["node.invoke.result", "node.invoke.control.result", "node.event"]
+    method in ["node.invoke.result", "node.invoke.control.result"]
   end
 
   # Write methods - require operator.write
   defp write_method?(method) do
     method in [
-      "send",
       "agent",
       "agent.wait",
-      "agent.inbox.send",
-      "agent.endpoints.set",
-      "agent.endpoints.delete",
       "chat.send",
       "chat.abort",
-      "wake",
-      "set-heartbeats",
-      "talk.mode",
-      "node.invoke",
-      "browser.request"
+      "node.invoke"
     ]
   end
 

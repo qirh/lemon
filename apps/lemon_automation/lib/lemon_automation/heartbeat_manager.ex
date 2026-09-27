@@ -129,8 +129,6 @@ defmodule LemonAutomation.HeartbeatManager do
 
   @doc """
   Update heartbeat configuration for an agent.
-
-  Called by set-heartbeats control plane method to update config.
   """
   @spec update_config(String.t(), map()) :: :ok | {:error, term()}
   def update_config(agent_id, config) do
@@ -244,7 +242,7 @@ defmodule LemonAutomation.HeartbeatManager do
       # Parity: use exact match only
       suppressed = healthy_response?(response)
 
-      # Persist heartbeat_last for last-heartbeat method to read
+      # Persist the latest heartbeat result (LemonAgent.Workspace.HeartbeatStore)
       agent_id = job.agent_id || "default"
 
       last_result = %{

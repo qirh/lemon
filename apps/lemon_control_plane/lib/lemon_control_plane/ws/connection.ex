@@ -33,9 +33,7 @@ defmodule LemonControlPlane.WS.Connection do
     :connected,
     :event_seq,
     :local?,
-    :state_version,
-    :subscription_mode,
-    :subscriptions
+    :state_version
   ]
 
   @type t :: %__MODULE__{
@@ -44,9 +42,7 @@ defmodule LemonControlPlane.WS.Connection do
           connected: boolean(),
           event_seq: non_neg_integer(),
           local?: boolean(),
-          state_version: map(),
-          subscription_mode: :all | :custom | nil,
-          subscriptions: MapSet.t()
+          state_version: map()
         }
 
   ## WebSock Callbacks
@@ -69,9 +65,7 @@ defmodule LemonControlPlane.WS.Connection do
       connected: false,
       event_seq: 0,
       local?: local?,
-      state_version: %{},
-      subscription_mode: :all,
-      subscriptions: MapSet.new()
+      state_version: %{}
     }
 
     Logger.debug("WebSocket connection initialized: #{conn_id}")
@@ -129,29 +123,17 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   def handle_info({:event, event_name, payload}, state) do
-    if subscribed_to_event?(state, event_name, payload) do
-      state = increment_event_seq(state)
-      frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
-      {:push, {:text, frame}, state}
-    else
-      {:ok, state}
-    end
-  end
-
-  def handle_info({:browser_controller_command, payload}, state) do
-    handle_info({:event, "browser.controller.command", payload}, state)
+    state = increment_event_seq(state)
+    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
+    {:push, {:text, frame}, state}
   end
 
   def handle_info({:event, event_name, payload, new_state_version}, state)
       when is_map(new_state_version) do
-    if subscribed_to_event?(state, event_name, payload) do
-      state = increment_event_seq(state)
-      state = %{state | state_version: Map.merge(state.state_version, new_state_version)}
-      frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
-      {:push, {:text, frame}, state}
-    else
-      {:ok, state}
-    end
+    state = increment_event_seq(state)
+    state = %{state | state_version: Map.merge(state.state_version, new_state_version)}
+    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
+    {:push, {:text, frame}, state}
   end
 
   def handle_info({:push_frame, frame}, state) when is_binary(frame) do
@@ -168,36 +150,6 @@ defmodule LemonControlPlane.WS.Connection do
     )
 
     {:stop, :normal, state}
-  end
-
-  def handle_info({:subscribe_topics, topics}, state) do
-    subscriptions =
-      topics
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
-      |> Enum.reduce(state.subscriptions, &MapSet.put(&2, &1))
-
-    state = %{state | subscription_mode: :custom, subscriptions: subscriptions}
-    update_presence_subscriptions(state)
-    {:ok, state}
-  end
-
-  def handle_info({:unsubscribe_topics, :all}, state) do
-    state = %{state | subscription_mode: :custom, subscriptions: MapSet.new()}
-    update_presence_subscriptions(state)
-    {:ok, state}
-  end
-
-  def handle_info({:unsubscribe_topics, topics}, state) do
-    subscriptions =
-      topics
-      |> List.wrap()
-      |> Enum.filter(&is_binary/1)
-      |> Enum.reduce(state.subscriptions, &MapSet.delete(&2, &1))
-
-    state = %{state | subscription_mode: :custom, subscriptions: subscriptions}
-    update_presence_subscriptions(state)
-    {:ok, state}
   end
 
   def handle_info(msg, state) do
@@ -290,9 +242,7 @@ defmodule LemonControlPlane.WS.Connection do
     ctx = %{
       auth: state.auth,
       conn_id: state.conn_id,
-      conn_pid: self(),
-      subscription_mode: state.subscription_mode,
-      subscriptions: state.subscriptions
+      conn_pid: self()
     }
 
     case Registry.dispatch_mode(method) do
@@ -335,67 +285,6 @@ defmodule LemonControlPlane.WS.Connection do
   defp increment_event_seq(state) do
     %{state | event_seq: state.event_seq + 1}
   end
-
-  defp subscribed_to_event?(%{subscription_mode: :all}, _event_name, _payload), do: true
-  defp subscribed_to_event?(%{subscription_mode: nil}, _event_name, _payload), do: true
-
-  defp subscribed_to_event?(state, event_name, payload) do
-    subscriptions = state.subscriptions || MapSet.new()
-
-    MapSet.member?(subscriptions, "all") ||
-      event_topics(event_name, payload)
-      |> Enum.any?(&MapSet.member?(subscriptions, &1))
-  end
-
-  defp event_topics(event_name, payload) do
-    topic_for_event(event_name) ++ run_topics(payload) ++ session_topics(payload)
-  end
-
-  defp topic_for_event(event_name) when event_name in ["cron", "cron.job", "cron.audit"],
-    do: ["cron"]
-
-  defp topic_for_event("goal"), do: ["goals"]
-  defp topic_for_event("tick"), do: ["cron", "system"]
-  defp topic_for_event("presence"), do: ["presence"]
-  defp topic_for_event("health"), do: ["system"]
-  defp topic_for_event("shutdown"), do: ["system"]
-  defp topic_for_event("talk.mode"), do: ["system"]
-  defp topic_for_event("heartbeat"), do: ["system"]
-  defp topic_for_event("metrics"), do: ["system"]
-  defp topic_for_event("log"), do: ["system"]
-  defp topic_for_event("voicewake.changed"), do: ["system"]
-  defp topic_for_event("custom"), do: ["system"]
-
-  defp topic_for_event(event_name) when is_binary(event_name) do
-    cond do
-      String.starts_with?(event_name, "exec.approval.") -> ["exec_approvals"]
-      String.starts_with?(event_name, "node.") -> ["nodes"]
-      String.starts_with?(event_name, "device.") -> ["nodes"]
-      true -> []
-    end
-  end
-
-  defp topic_for_event(_), do: []
-
-  defp run_topics(payload) do
-    case get_event_field(payload, "runId") do
-      run_id when is_binary(run_id) and run_id != "" -> ["run:#{run_id}"]
-      _ -> []
-    end
-  end
-
-  defp session_topics(payload) do
-    case get_event_field(payload, "sessionKey") do
-      session_key when is_binary(session_key) and session_key != "" -> ["session:#{session_key}"]
-      _ -> []
-    end
-  end
-
-  defp get_event_field(payload, key) when is_map(payload) do
-    Map.get(payload, key) || Map.get(payload, Macro.underscore(key))
-  end
-
-  defp get_event_field(_payload, _key), do: nil
 
   defp build_snapshot(_state) do
     # Return initial snapshot data
@@ -538,24 +427,8 @@ defmodule LemonControlPlane.WS.Connection do
         LemonControlPlane.Presence.register(state.conn_id, %{
           role: state.auth.role,
           client_id: state.auth.client_id,
-          pid: self(),
-          subscription_mode: state.subscription_mode,
-          subscriptions: state.subscriptions
+          pid: self()
         })
-    end
-  end
-
-  defp update_presence_subscriptions(state) do
-    case Process.whereis(LemonControlPlane.Presence) do
-      nil ->
-        :ok
-
-      pid when is_pid(pid) ->
-        LemonControlPlane.Presence.update_subscriptions(
-          state.conn_id,
-          state.subscription_mode,
-          state.subscriptions
-        )
     end
   end
 
