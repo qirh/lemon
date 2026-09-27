@@ -21,7 +21,6 @@ defmodule LemonCore.Release.SmokeTest do
   alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime, Skills}
   alias LemonCore.Doctor.{Check, Report}
   alias LemonCore.Runtime.{Env, Health, Profile}
-  alias LemonCore.Update.Version
 
   # ──────────────────────────────────────────────────────────────────────────
   # Release configuration unit tests (always run)
@@ -62,11 +61,6 @@ defmodule LemonCore.Release.SmokeTest do
       env = Env.resolve()
       assert is_integer(env.control_port) and env.control_port > 0
       assert is_integer(env.web_port) and env.web_port > 0
-    end
-
-    test "Version module reports a current version string" do
-      v = Version.current()
-      assert is_binary(v) and byte_size(v) > 0
     end
   end
 

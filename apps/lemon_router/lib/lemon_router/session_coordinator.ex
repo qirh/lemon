@@ -939,11 +939,17 @@ defmodule LemonRouter.SessionCoordinator do
     end
   rescue
     error in ArgumentError ->
-      # Only Registry's missing-registry failure means the target is unavailable.
-      # An ArgumentError raised by the runtime callback itself must still surface.
+      # Registry metadata can disappear or be incomplete during a restart.
+      # ArgumentErrors from the runtime callback itself must still surface.
       case __STACKTRACE__ do
-        [{Registry, :key_info!, _, _} | _] -> nil
-        stacktrace -> reraise error, stacktrace
+        [{Registry, :key_info!, _, _} | _] ->
+          nil
+
+        [{:ets, :lookup_element, [_registry, 0, 2], _}, {Registry, :key_ets!, _, _} | _] ->
+          nil
+
+        stacktrace ->
+          reraise error, stacktrace
       end
   catch
     :exit, {:noproc, {GenServer, :call, _}} -> nil

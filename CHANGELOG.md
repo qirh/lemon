@@ -32,6 +32,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Standalone packaging is limited to `lemon_ai`, `lemon_core`, `lemon_agent`,
   `lemon_memory`, and `lemon_platform_test`. Version 0.2.0 tarballs are locally
   installable; these packages have not been published by this change.
+- Consolidated contributor and architecture guides; removed duplicate
+  walkthroughs and generate machine-readable documentation during site builds
+  instead of committing copies.
 
 - Refreshed the public website, README, and onboarding docs with a shared Lemon
   visual identity, clearer task navigation, and current feature guidance.
@@ -84,6 +87,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   batches; seeded randomness makes retained offline arenas reproducible.
 - Removed unreachable and unused Elixir paths rather than suppressing
   compiler diagnostics.
+- Hermes migration now treats omitted confirmation/overwrite flags as false:
+  declining confirmation writes nothing, and conflicts fail closed rather
+  than raising.
+- Source and packaged `--json` commands keep application-startup logs out of
+  machine-readable stdout. The duplicate-test checker resolves nested module
+  names, avoiding false collisions between independently scoped helpers.
 - Updated locked Bandit, Mint, LiveView, LazyHTML, Gun, and Cowlib releases
   after Hex reported upstream security advisories; refreshed the vendored
   LiveView browser client to match. Cowlib's

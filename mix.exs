@@ -73,7 +73,7 @@ defmodule Lemon.MixProject do
   # lemon_mcp is different again: it is a library with no application callback.
   # Both runtimes load it explicitly so LemonSkills.McpSource can discover the
   # client modules dynamically, while callers remain responsible for supervising
-  # every MCP client, server, and transport process they start.
+  # every MCP client and transport process they start.
   defp releases do
     [
       lemon_runtime_min: [
