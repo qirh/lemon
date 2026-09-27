@@ -15,7 +15,7 @@ ENV LEMON_GIT_SHA=$LEMON_GIT_SHA
 
 RUN mix local.hex --force && mix local.rebar --force
 
-COPY mix.exs mix.lock hex_package.exs ./
+COPY mix.exs mix.lock ./
 COPY config config
 COPY apps/lemon_ai apps/lemon_ai
 COPY apps/lemon_agent apps/lemon_agent

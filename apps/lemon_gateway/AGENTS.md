@@ -4,8 +4,8 @@ LemonGateway is Lemon's execution runtime. It handles concurrency-slot schedulin
 per-conversation launch isolation, run lifecycle, streaming bus events, cancellation,
 and session resumption. Gateway-owned transport, SMS, voice, and command startup is
 off by default and starts only when `:gateway_ingress_enabled` is set for
-`:lemon_gateway`. Those ingress surfaces are gateway-owned by design; see
-`docs/platform/transport-unification.md`.
+`:lemon_gateway`. Those ingress surfaces are gateway-owned by design; see the
+"Transports" section of `README.md` and decision D2 in `docs/platform-split.md`.
 
 ## Executor Contract
 

@@ -98,9 +98,9 @@ if is_binary(access_token) and access_token != "" do
   config :lemon_web, :access_token, access_token
 end
 
-# ── lemon-sim product block (1 of 3) — moves to the lemon-sim repo (docs/platform-split.md
-# Phase 5). `sim_ui_endpoint_enabled?` defined here is read again by block 3, so the two
-# must move together and keep this order. ──
+# ── lemon-sim product block (1 of 3) — sim wiring outside apps/lemon_sim*
+# (docs/platform-split.md). `sim_ui_endpoint_enabled?` defined here is read again by
+# block 3, so the two must stay together and keep this order. ──
 sim_ui_access_token = normalized_env.("LEMON_SIM_UI_ACCESS_TOKEN")
 
 if is_binary(sim_ui_access_token) and byte_size(sim_ui_access_token) < 32 do
@@ -250,7 +250,7 @@ if is_binary(goal_judge_model) do
 end
 
 # ── lemon-sim product block (2 of 3) — arenas, hosted rooms and the sim
-# auto-loop; moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# auto-loop (docs/platform-split.md) ──
 #
 # Always-on model arenas: each configured domain continuously runs league
 # games with a randomized model lineup per game and records standings under

@@ -11,8 +11,23 @@ extension behaviours, add it as a test-only dependency and the platform's own
 compliance suite runs against your module.
 
 ```elixir
-{:lemon_platform_test, "~> 0.1", only: :test}
+{:lemon_platform_test, "~> 0.2", only: :test}
 ```
+
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained, and requires its optional
+  sibling packages as `~> 0.2`.
+
+### Changed
+
+- `lemon_channels` is not a dependency of the Hex package: it is not published.
+  `PluginCase` still works inside the lemon repository; elsewhere it needs a path
+  dependency on `apps/lemon_channels` in a lemon checkout, and its missing-dep
+  error says so.
 
 ### Added
 

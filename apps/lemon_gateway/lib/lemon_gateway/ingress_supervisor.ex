@@ -10,11 +10,11 @@ defmodule LemonGateway.IngressSupervisor do
   an OTP-code inbox exposed as agent tools with no reply path; webhook is a
   synchronous automation trigger that must answer in the request cycle that
   called it; voice holds a live bidirectional media session. None of the three
-  fit `LemonChannels.Plugin`, whose `deliver/1` is fire-and-forget. Email is the
-  one surface slated to move to `lemon_channels`.
+  fit `LemonChannels.Plugin`, whose `deliver/1` is fire-and-forget. Email was the
+  one surface that moved to `lemon_channels`.
 
-  See `docs/platform/transport-unification.md` for the disposition of each
-  surface and the plugin-contract gaps behind it.
+  See the "Transports" section of `apps/lemon_gateway/README.md` and decision D2
+  in `docs/platform-split.md`.
   """
 
   use Supervisor

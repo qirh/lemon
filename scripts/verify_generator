@@ -16,12 +16,18 @@
 #
 # It is the check that catches the failure mode the unit tests cannot — a
 # template that parses but no longer matches the platform's API. Run it after
-# any change to a public surface the generated project touches: AgentCore's
-# agent/tool/registry API, Ai.Models, LemonChannels.Plugin, LemonMemory.Store.
+# any change to a public surface the generated project touches: LemonAgent's
+# agent/tool/registry API, LemonAi.Models, LemonChannels.Plugin,
+# LemonMemory.Store. CI runs it in .github/workflows/packaging.yml, next to
+# scripts/verify_packages, which does the same against the unpacked Hex
+# tarballs instead of this checkout.
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Physical path: the generated project's path deps and the umbrella children's
+# in_umbrella deps must spell the checkout identically, or Mix reports them as
+# diverged (a symlinked /tmp on macOS is enough to trigger it).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 KEEP=0
 TMP=""
 

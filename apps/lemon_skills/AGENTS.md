@@ -8,15 +8,12 @@ LemonSkills is the skill management system for the Lemon agent platform. It prov
 
 **Entry point**: `LemonSkills` (the facade module) delegates everything to sub-modules. Start reading there.
 
-**Published package**: `lemon_skills` ships to hex. Two consequences for any
-change under `lib/`: it needs a `## [Unreleased]` entry in `CHANGELOG.md`, and
-the public/internal split is load-bearing. A module with a real `@moduledoc` is
-public API — renaming it, or changing what one of its `@doc`-ed functions
-returns, is a breaking change. A module with `@moduledoc false` (`Bundle`,
+**Not a Hex package**: `lemon_skills` is an in-repo app of the reference runtime
+(see `docs/platform-split.md`); `coding_agent`, `lemon_control_plane` and
+`lemon_automation` consume it directly. A module with a real `@moduledoc` is still
+the surface those apps rely on; a module with `@moduledoc false` (`Bundle`,
 `Lockfile`, `InstallPlan`, `PathBoundary`, `Audit.State`, `Audit.SkillLint`,
-the `Synthesis` draft internals, `Application`, `Telemetry`) is free to change.
-Known API warts, and what we would like to fix in 0.2, are listed at the bottom
-of `CHANGELOG.md`.
+the `Synthesis` draft internals, `Application`, `Telemetry`) is internal.
 
 ## Key Files and Purposes
 

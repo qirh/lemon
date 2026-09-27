@@ -11,6 +11,13 @@ umbrella, where it lives as the `:lemon_ai` application; the OTP application nam
 every `LemonAi.*` module name are unchanged, so only the `mix.exs` line differs from
 what in-repo code has been using.
 
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained.
+
 ### Added
 
 - `LemonAi.stream/3` and `LemonAi.complete/3` — one API over eighteen provider modules

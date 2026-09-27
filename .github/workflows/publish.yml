@@ -1,18 +1,20 @@
 name: Publish package
 
-# Publishes ONE umbrella app to hex.pm from a per-package tag.
+# Publishes ONE of the five Hex packages (scripts/verify_packages --list) from a
+# per-package tag.
 #
 # Triggers:
-#   - push a tag matching `<package>-v<version>` (e.g. ai-v0.1.0)
+#   - push a tag matching `<package>-v<version>` (e.g. lemon_ai-v0.2.0)
 #   - manually dispatch with a package + version, optionally verify-only
 #
 # Steps:
 #   1. Parse the tag into package + version.
-#   2. `scripts/release_package --verify`: mix.exs matches the tag, the
-#      changelog has that version's section, hex metadata builds, and every
-#      in-umbrella dep is already on hex.pm in the right order.
-#   3. Publish package + docs to hex.pm — skipped when HEX_API_KEY is absent,
-#      so the whole workflow is exercisable before the key exists.
+#   2. `scripts/release_package --verify`: mix.exs is at the tagged version, the
+#      package CHANGELOG has that version's section, every sibling Lemon
+#      package it depends on is already on hex.pm, and scripts/verify_packages
+#      passes against the unpacked tarballs.
+#   3. `scripts/release_package --publish-tagged`: publish package + docs from
+#      the unpacked tarball — skipped when HEX_API_KEY is absent.
 #
 # The umbrella's own CalVer binary release is release.yml; its `v*.*.*` tag
 # pattern and this one cannot collide.
@@ -26,10 +28,10 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Umbrella app to publish (e.g. ai, lemon_core)"
+        description: "Package to publish (lemon_ai, lemon_core, lemon_agent, lemon_memory, lemon_platform_test)"
         required: true
       version:
-        description: "Version to publish (e.g. 0.1.0). Must match mix.exs."
+        description: "Version to publish (e.g. 0.2.0). Must match mix.exs."
         required: true
       verify_only:
         description: "Run the checks but do not publish"
@@ -40,11 +42,15 @@ on:
 permissions:
   contents: read
 
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
 jobs:
   verify:
     name: Verify release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     outputs:
       package: ${{ steps.parse.outputs.package }}
       version: ${{ steps.parse.outputs.version }}
@@ -61,16 +67,6 @@ jobs:
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
-      - name: Cache Mix deps and build
-        uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-publish-${{ hashFiles('mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-publish-
-
       - name: Parse package and version
         id: parse
         env:
@@ -82,8 +78,8 @@ jobs:
             PACKAGE="$INPUT_PACKAGE"
             VERSION="$INPUT_VERSION"
           else
-            # Tags are `<package>-v<version>`. App names are snake_case with
-            # no hyphens, so the first `-v` is the separator; taking the
+            # Tags are `<package>-v<version>`. Package names are snake_case
+            # with no hyphens, so the first `-v` is the separator; taking the
             # version from the last one keeps hyphenated prereleases intact
             # (lemon_platform_test-v1.2.3-rc.1).
             PACKAGE="${REF_NAME%-v*}"
@@ -99,21 +95,12 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Package: $PACKAGE  Version: $VERSION"
 
-      - name: Install deps
-        run: mix deps.get
-
-      - name: Compile
-        run: mix compile --warnings-as-errors
-
       - name: Verify the tagged release
         run: |
           scripts/release_package \
             "${{ steps.parse.outputs.package }}" \
             "${{ steps.parse.outputs.version }}" \
-            --verify --skip-quality
-
-      - name: Run quality lane
-        run: mix lemon.quality
+            --verify
 
   publish:
     name: Publish to hex.pm
@@ -121,10 +108,6 @@ jobs:
     needs: verify
     timeout-minutes: 30
     if: github.event_name == 'push' || github.event.inputs.verify_only != 'true'
-
-    env:
-      PACKAGE: ${{ needs.verify.outputs.package }}
-      VERSION: ${{ needs.verify.outputs.version }}
 
     steps:
       - name: Checkout
@@ -136,32 +119,15 @@ jobs:
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
-      - name: Cache Mix deps and build
-        uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-publish-${{ hashFiles('mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-publish-
-
-      - name: Install deps
-        run: mix deps.get
-
       - name: Publish package and docs
-        working-directory: apps/${{ needs.verify.outputs.package }}
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-          # hex_package.exs only rewrites in_umbrella deps into published
-          # requirements when this is set; without it hex silently drops them.
-          LEMON_HEX_PUBLISH: "1"
+          PACKAGE: ${{ needs.verify.outputs.package }}
+          VERSION: ${{ needs.verify.outputs.version }}
         run: |
           if [ -z "${HEX_API_KEY:-}" ]; then
             echo "::notice::HEX_API_KEY is not configured — skipping publish of $PACKAGE $VERSION."
-            echo "Everything up to this point passed, so the release is publishable"
-            echo "once the secret exists. Re-run this workflow to publish."
             exit 0
           fi
 
-          mix hex.publish --yes
+          scripts/release_package "$PACKAGE" "$VERSION" --publish-tagged

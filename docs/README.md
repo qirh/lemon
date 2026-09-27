@@ -74,6 +74,8 @@ it before your first chat.
 | [user-guide/updates.md](user-guide/updates.md) | Non-mutating update plans, exact-confirm apply, receipts, and receipt-bound rollback |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
 | [release/release_checklist_and_support_policy.md](release/release_checklist_and_support_policy.md) | 1.0 release-candidate checklist, rollback checklist, and support boundaries |
+| [release/hex-packages.md](release/hex-packages.md) | Publishing the five Hex packages, proving their tarballs (`scripts/verify_packages`), retiring 0.1.0 |
+| [platform-split.md](platform-split.md) | Which packages are published, what stays in-repo, the decision log, and known gaps |
 | [security/safety.md](security/safety.md) | Plain-language Lemon safety model, recommended defaults, and support-bundle guidance |
 | [security/agent-safety-contract.md](security/agent-safety-contract.md) | Agent safety layers: tool policies, approvals, memory screening, skill audits, telemetry |
 

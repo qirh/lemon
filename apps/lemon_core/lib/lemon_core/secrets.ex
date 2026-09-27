@@ -19,8 +19,8 @@ defmodule LemonCore.Secrets do
   ## Key rotation
 
   Rotation is **not supported yet**: there is no re-encryption path, so
-  replacing the master key makes every stored secret undecryptable. Tracked as
-  item 1.5 in `docs/platform-split.md`.
+  replacing the master key makes every stored secret undecryptable. Listed
+  under "Known gaps" in `docs/platform-split.md`.
 
   The workaround is export/import — with the *old* key still in place, read the
   plaintext values out, swap the key, then write them back:
