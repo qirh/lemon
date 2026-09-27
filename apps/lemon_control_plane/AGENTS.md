@@ -724,7 +724,7 @@ State-versioned events include a `stateVersion` map for client reconciliation (`
 
 | Event | Trigger |
 |-------|---------|
-| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`; tool-use events preserve nested `action.detail`, including `result_meta` failure fields such as `error_type` and `exit_code`) |
+| `agent` | Run started/completed, tool use (`type`: `started`, `completed`, `tool_use`; tool-use events preserve nested `action.detail`, including `result_meta` failure fields such as `error_type` and `exit_code`. For operators, `detail.result` is the bounded full result (`result_full`, ≤32 KB) rather than the 500-char channel preview, `detail.details` carries the tool's structured details (edit `diff`/`first_changed_line`, `exit_code`, …), and reasoning `detail.reasoning.text` is the bounded full thought (≤16 KB)) |
 | `chat` | Chat delta/streaming content |
 | `presence` | Connection count changed |
 | `tick` | Heartbeat tick (from `:tick` or `:cron_tick` bus events) |

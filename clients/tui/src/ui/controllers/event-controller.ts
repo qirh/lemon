@@ -35,9 +35,15 @@ import {
 	type ToolBlock,
 	toToolPhase,
 } from "../../store/transcript-model.ts";
+import {
+	type AccordionState,
+	accordionSettings,
+	resolveAccordionState,
+} from "../components/accordion.ts";
 import { ApprovalRecordComponent } from "../components/approval-panel.ts";
 import { AssistantMessageComponent } from "../components/assistant-message.ts";
 import { NoticeComponent } from "../components/notice-message.ts";
+import { ReasoningComponent } from "../components/reasoning-block.ts";
 import { ToolShelfComponent } from "../components/tool-shelf.ts";
 import type { TranscriptContainer } from "../components/transcript-container.ts";
 import { UserMessageComponent } from "../components/user-message.ts";
@@ -162,10 +168,53 @@ export class EventController {
 		if (revealing) this.#reveal.finish();
 		session.markInterrupted(runId);
 		if (component instanceof AssistantMessageComponent) this.#sealAssistant(block, component);
+		this.#refreshReasoning(session, runId);
 		if (revealing) this.#reveal.stop();
 		if (session === this.#store.focused) this.#sealOpenShelf();
 		this.#scheduleRender();
 		this.#onStatusChanged?.();
+	}
+
+	/**
+	 * The expand key: toggle the most recent tool card or reasoning block in the
+	 * focused session. False when the transcript has neither.
+	 */
+	toggleLatestBlock(): boolean {
+		const blocks = this.#store.focused.blocks;
+		for (let index = blocks.length - 1; index >= 0; index--) {
+			const block = blocks[index];
+			if (block?.kind === "tool") {
+				const toggled = this.#shelves.get(block.id)?.toggle(block.id);
+				if (toggled === undefined) return false;
+				this.#scheduleRender();
+				return true;
+			}
+			if (block?.kind === "reasoning") {
+				const component = this.#components.get(block.id);
+				if (!(component instanceof ReasoningComponent)) return false;
+				component.toggleAccordion();
+				this.#scheduleRender();
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The detail key: cycle the global accordion override (collapsed → expanded
+	 * → per-kind default) and apply it to every card and reasoning block already
+	 * on screen, not just to the ones built afterwards.
+	 */
+	cycleAccordionOverride(): AccordionState | undefined {
+		const override = accordionSettings.cycleOverride();
+		for (const shelf of new Set(this.#shelves.values())) shelf.applyAccordionOverride();
+		for (const component of this.#components.values()) {
+			if (component instanceof ReasoningComponent) {
+				component.setAccordionState(resolveAccordionState("reasoning"));
+			}
+		}
+		this.#scheduleRender();
+		return override;
 	}
 
 	/**
@@ -238,6 +287,16 @@ export class EventController {
 			case "tool_use": {
 				const tool = event as AgentToolUseEvent;
 				const session = this.#sessionFor(tool.sessionKey);
+				if (tool.action?.kind === "reasoning") {
+					const block = session.upsertReasoning(tool.action, toToolPhase(tool.phase), {
+						runId: tool.runId,
+					});
+					this.#sync(session);
+					const component = this.#components.get(block.id);
+					if (component instanceof ReasoningComponent) component.update(block);
+					this.#scheduleRender();
+					return;
+				}
 				const block = session.upsertTool(tool.action, toToolPhase(tool.phase), {
 					runId: tool.runId,
 					ok: tool.ok,
@@ -276,6 +335,7 @@ export class EventController {
 				// finalizeRun may have created the block (completed outran started),
 				// so resolve its component only after the tree is in step.
 				this.#sync(session);
+				if (focused) this.#refreshReasoning(session, completed.runId);
 				if (block && focused) {
 					const component = this.#componentFor(block.id);
 					if (component instanceof AssistantMessageComponent) this.#sealAssistant(block, component);
@@ -334,6 +394,16 @@ export class EventController {
 
 	#componentFor(blockId: string): Component | undefined {
 		return this.#components.get(blockId);
+	}
+
+	/** Repaint a run's reasoning blocks after the store closed them. */
+	#refreshReasoning(session: SessionStore, runId: string): void {
+		if (session !== this.#store.focused) return;
+		for (const block of session.reasoningByActionId.values()) {
+			if (block.runId !== runId) continue;
+			const component = this.#components.get(block.id);
+			if (component instanceof ReasoningComponent) component.update(block);
+		}
 	}
 
 	/**
@@ -430,6 +500,8 @@ export class EventController {
 				return undefined;
 			case "notice":
 				return new NoticeComponent(block.text, block.level);
+			case "reasoning":
+				return new ReasoningComponent(block);
 			case "approval":
 				// The decision itself belongs to the panel below the transcript; this
 				// is only the history line, sealed once an answer exists.

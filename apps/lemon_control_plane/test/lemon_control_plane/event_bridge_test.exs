@@ -471,6 +471,84 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
+    test "sends operator clients the full tool result and structured details instead of the channel preview" do
+      run_id = "run_#{System.unique_integer()}"
+      session_key = "session:event-bridge-operator-result"
+      conn_id = "conn_#{System.unique_integer()}"
+      full = Enum.map_join(1..200, "\n", &"line #{&1}")
+      preview = String.slice(full, 0, 500) <> "..."
+
+      assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      flush_events()
+      EventBridge.subscribe_run(run_id)
+      Process.sleep(10)
+
+      event =
+        LemonCore.Event.engine_action(
+          %{
+            engine: "lemon",
+            action: %{
+              id: "tool_edit_1",
+              kind: "file_change",
+              title: "edit: `lib/a.ex`",
+              detail: %{
+                name: "edit",
+                args: %{"path" => "lib/a.ex"},
+                result: preview,
+                result_full: full,
+                details: %{diff: "-120\told\n+120\tnew", first_changed_line: 120}
+              }
+            },
+            phase: :completed,
+            ok: true
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      LemonCore.Bus.broadcast("run:#{run_id}", event)
+
+      assert_receive {:event, "agent",
+                      %{"type" => "tool_use", "action" => %{"detail" => detail}},
+                      _state_version},
+                     1_000
+
+      assert detail.result == full
+      refute Map.has_key?(detail, :result_full)
+      assert detail.details == %{diff: "-120\told\n+120\tnew", first_changed_line: 120}
+
+      reasoning_event =
+        LemonCore.Event.engine_action(
+          %{
+            engine: "lemon",
+            action: %{
+              id: "lemon.reasoning.0.1",
+              kind: "reasoning",
+              title: "thinking",
+              detail: %{
+                reasoning: %{text: "...tail", full_text: "head and tail", source: "lemon"}
+              }
+            },
+            phase: :completed,
+            ok: true
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+
+      LemonCore.Bus.broadcast("run:#{run_id}", reasoning_event)
+
+      assert_receive {:event, "agent",
+                      %{
+                        "type" => "tool_use",
+                        "action" => %{"detail" => %{reasoning: reasoning}}
+                      }, _state_version},
+                     1_000
+
+      assert reasoning == %{text: "head and tail", source: "lemon"}
+
+      EventBridge.unsubscribe_run(run_id)
+      Presence.unregister(conn_id)
+    end
+
     test "maps checkpoint events to agent events" do
       run_id = "run_#{System.unique_integer()}"
       session_key = "session:event-bridge-checkpoint"

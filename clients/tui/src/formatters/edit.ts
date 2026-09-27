@@ -1,5 +1,5 @@
 /**
- * Formatter for edit and multiedit tools.
+ * Formatter for the edit tool.
  *
  * Displays file edit operations with diff-style output showing
  * additions, deletions, and context lines.
@@ -78,65 +78,17 @@ interface EditArgs {
 }
 
 /**
- * Multiedit tool arguments interface.
- */
-interface MultiEditArgs {
-	path?: string;
-	edits?: Array<{ old_text?: string; new_text?: string }>;
-}
-
-/**
- * Tool result with content blocks.
- */
-interface ToolResult {
-	content?: Array<{ type?: string; text?: string }>;
-	details?: {
-		matched?: boolean;
-		[key: string]: unknown;
-	};
-}
-
-/**
- * Formatter for edit and multiedit tools.
+ * Formatter for the edit tool.
  *
- * Handles formatting of file edit operations, displaying diffs
- * with syntax highlighting for additions and removals.
+ * Handles formatting of file edit operations: the target path and match
+ * preview for arguments, and the applied diff for results.
  */
 export const editFormatter: ToolFormatter = {
-	tools: ["edit", "multiedit"],
+	tools: ["edit"],
 
 	formatArgs(args: Record<string, unknown>): FormattedOutput {
-		const path = args.path as string | undefined;
-		const formattedPath = path ? formatPath(path) : "unknown";
-
-		// Check if this is a multiedit (has edits array)
-		if (Array.isArray(args.edits)) {
-			const multiArgs = args as unknown as MultiEditArgs;
-			const editCount = multiArgs.edits?.length ?? 0;
-
-			const details: string[] = [`Path: ${formattedPath}`];
-
-			if (editCount > 0 && multiArgs.edits) {
-				details.push(`Edits: ${editCount}`);
-				// Show preview of first edit's old_text
-				const firstEdit = multiArgs.edits[0];
-				if (firstEdit?.old_text) {
-					const preview = truncateText(
-						firstEdit.old_text.replace(/\n/g, "\\n"),
-						MAX_PREVIEW_LENGTH,
-					);
-					details.push(`First match: "${preview}"`);
-				}
-			}
-
-			return {
-				summary: `${formattedPath} (${editCount} edit${editCount === 1 ? "" : "s"})`,
-				details,
-			};
-		}
-
-		// Single edit
 		const editArgs = args as unknown as EditArgs;
+		const formattedPath = editArgs.path ? formatPath(editArgs.path) : "unknown";
 		const details: string[] = [`Path: ${formattedPath}`];
 
 		if (editArgs.old_text) {
@@ -153,102 +105,40 @@ export const editFormatter: ToolFormatter = {
 	formatResult(result: unknown, args?: Record<string, unknown>): FormattedOutput {
 		const path = args?.path as string | undefined;
 		const formattedPath = path ? formatPath(path) : "";
+		const obj: Record<string, unknown> =
+			result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+		const details: Record<string, unknown> =
+			obj.details && typeof obj.details === "object"
+				? (obj.details as Record<string, unknown>)
+				: {};
+		const isError = obj.is_error === true;
 
-		// Check if result indicates an error or no match
-		const isError = checkIsError(result);
-
-		// Extract diff text from result
-		const diffText = extractText(result);
-
-		// Determine if the edit was successful
-		const matched = checkMatched(result);
-
-		// Build summary
-		let summary: string;
 		if (isError) {
-			summary = formattedPath ? `\u2717 Failed: ${formattedPath}` : "\u2717 Failed";
-		} else if (matched === false) {
-			summary = formattedPath
-				? `\u2717 No match found in ${formattedPath}`
-				: "\u2717 No match found";
-		} else {
-			// Check if multiedit
-			if (args && Array.isArray(args.edits)) {
-				const editCount = (args.edits as unknown[]).length;
-				summary = formattedPath
-					? `\u2713 Applied ${editCount} edit${editCount === 1 ? "" : "s"} to ${formattedPath}`
-					: `\u2713 Applied ${editCount} edit${editCount === 1 ? "" : "s"}`;
-			} else {
-				summary = formattedPath ? `\u2713 Applied to ${formattedPath}` : "\u2713 Applied";
-			}
+			const errorLines = extractText(result)
+				.split(/\r?\n/)
+				.filter((line) => line.trim().length > 0);
+			return {
+				summary: formattedPath ? `\u2717 Failed: ${formattedPath}` : "\u2717 Failed",
+				details: truncateLines(errorLines, MAX_DIFF_LINES),
+				isError: true,
+			};
 		}
 
-		// Format diff for details
-		const details = diffText ? formatDiff(diffText) : [];
+		// Point at the first changed line when the tool reports it.
+		const firstChangedLine = details.first_changed_line;
+		const location =
+			formattedPath && typeof firstChangedLine === "number"
+				? `${formattedPath}:${firstChangedLine}`
+				: formattedPath;
+
+		// Prefer the structured diff; the text also carries a status line and
+		// any diagnostics.
+		const diffText = typeof details.diff === "string" ? details.diff : extractText(result);
 
 		return {
-			summary,
-			details,
-			isError: isError || matched === false,
+			summary: location ? `\u2713 Applied to ${location}` : "\u2713 Applied",
+			details: formatDiff(diffText),
+			isError: false,
 		};
 	},
 };
-
-/**
- * Checks if the result indicates an error.
- *
- * @param result - The tool result
- * @returns True if the result indicates an error
- */
-function checkIsError(result: unknown): boolean {
-	if (!result || typeof result !== "object") {
-		return false;
-	}
-
-	const obj = result as Record<string, unknown>;
-
-	if (obj.is_error === true || obj.isError === true || obj.error === true) {
-		return true;
-	}
-
-	if (typeof obj.error === "string" && obj.error.length > 0) {
-		return true;
-	}
-
-	return false;
-}
-
-/**
- * Checks if the result indicates a successful match.
- *
- * @param result - The tool result
- * @returns True if matched, false if not matched, undefined if unknown
- */
-function checkMatched(result: unknown): boolean | undefined {
-	if (!result || typeof result !== "object") {
-		return undefined;
-	}
-
-	const obj = result as ToolResult;
-
-	// Check details.matched field
-	if (obj.details && typeof obj.details.matched === "boolean") {
-		return obj.details.matched;
-	}
-
-	// Check for "no match" in text content
-	const text = extractText(result);
-	if (text) {
-		const lowerText = text.toLowerCase();
-		if (lowerText.includes("no match") || lowerText.includes("not found")) {
-			return false;
-		}
-	}
-
-	// Assume success if we have content and no error indicators
-	if (obj.content && Array.isArray(obj.content) && obj.content.length > 0) {
-		return true;
-	}
-
-	return undefined;
-}

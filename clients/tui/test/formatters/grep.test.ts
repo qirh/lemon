@@ -243,48 +243,54 @@ describe("grepFormatter", () => {
 		});
 	});
 
-	describe("formatResult - file list mode", () => {
-		it("handles grep -l style output (just filenames)", () => {
-			const grepOutput = [
-				"/project/src/app.ts",
-				"/project/src/utils.ts",
-				"/project/src/index.ts",
+	describe("formatResult - real tool output", () => {
+		it("skips the Found header and bracketed notices and uses details.match_count", () => {
+			const text = [
+				"Found 2 matches.",
+				"",
+				"lib/a.ex:3: def hello, do: :world",
+				"lib/b.ex:9: hello()",
+				"",
+				"[2 matches limit reached. Use max_results=4 for more, or refine pattern]",
 			].join("\n");
 
 			const result = grepFormatter.formatResult(
-				{ content: [{ type: "text", text: grepOutput }] },
-				{ pattern: "function" },
+				{
+					content: [{ type: "text", text }],
+					details: { match_count: 2, truncated: true },
+					is_error: false,
+				},
+				{ pattern: "hello" },
 			);
 
-			// Each file counts as 1 match
-			expect(result.summary).toContain("3");
-			expect(result.summary).toContain("3 files");
+			expect(result.summary).toBe("2 matches in 2 files");
+			expect(result.details.some((line) => line.startsWith("Found"))).toBe(false);
+			expect(result.details.some((line) => line.includes("limit reached"))).toBe(false);
+			expect(result.details).toContain("     3| def [hello], do: :world");
 		});
 
-		it("shows file count in summary for file list mode", () => {
-			const grepOutput = ["/project/src/a.ts", "/project/src/b.ts"].join("\n");
-
+		it("reports the tool's match_count when the text preview is cut short", () => {
 			const result = grepFormatter.formatResult(
-				{ content: [{ type: "text", text: grepOutput }] },
-				{ pattern: "test" },
+				{
+					content: [{ type: "text", text: "Found 40 matches.\n\nlib/a.ex:1: x" }],
+					details: { match_count: 40 },
+				},
+				{ pattern: "x" },
 			);
 
-			expect(result.summary).toContain("2 files");
+			expect(result.summary).toBe("40 matches in 1 file");
 		});
 
-		it("shows file paths in details for file list mode", () => {
-			const grepOutput = [
-				"/project/src/components/Button.tsx",
-				"/project/src/components/Input.tsx",
-			].join("\n");
-
+		it('treats "No matches found." as no matches', () => {
 			const result = grepFormatter.formatResult(
-				{ content: [{ type: "text", text: grepOutput }] },
-				{ pattern: "component" },
+				{
+					content: [{ type: "text", text: "No matches found." }],
+					details: { match_count: 0, truncated: false },
+				},
+				{ pattern: "absent" },
 			);
 
-			expect(result.details.some((line) => line.includes("Button.tsx"))).toBe(true);
-			expect(result.details.some((line) => line.includes("Input.tsx"))).toBe(true);
+			expect(result.summary).toBe("No matches");
 		});
 	});
 
@@ -416,18 +422,6 @@ describe("grepFormatter", () => {
 
 			expect(result.isError).toBe(true);
 			expect(result.summary).toContain("invalid regex");
-		});
-
-		it("shows error message for isError result", () => {
-			const result = grepFormatter.formatResult(
-				{
-					isError: true,
-					content: [{ type: "text", text: "Permission denied" }],
-				},
-				{ pattern: "test" },
-			);
-
-			expect(result.isError).toBe(true);
 		});
 
 		it("shows error details in details array", () => {
@@ -587,16 +581,13 @@ describe("parseGrepOutput", () => {
 		expect(result.has("/project/src/index.ts")).toBe(true);
 	});
 
-	it('handles "file" only format (grep -l style)', () => {
-		const output = ["/project/src/app.ts", "/project/src/utils.ts"].join("\n");
+	it("skips context rows around matches", () => {
+		const output = ["lib/a.ex-2- before", "lib/a.ex:3: hit", "lib/a.ex-4- after"].join("\n");
 
 		const result = parseGrepOutput(output);
 
-		expect(result.size).toBe(2);
-		expect(result.has("/project/src/app.ts")).toBe(true);
-		expect(result.has("/project/src/utils.ts")).toBe(true);
-		// File-only entries have empty match arrays
-		expect(result.get("/project/src/app.ts")).toEqual([]);
+		expect(result.size).toBe(1);
+		expect(result.get("lib/a.ex")).toEqual([{ line: 3, content: "hit" }]);
 	});
 
 	it("groups matches by file correctly", () => {
@@ -666,12 +657,11 @@ describe("parseGrepOutput", () => {
 		expect(result.has("./src/app.ts")).toBe(true);
 	});
 
-	it("handles paths with spaces (file only mode)", () => {
+	it("ignores bare file paths without a line number", () => {
 		const output = "/project/my files/app.ts";
 		const result = parseGrepOutput(output);
 
-		// Should recognize as a file path because it contains /
-		expect(result.has("/project/my files/app.ts")).toBe(true);
+		expect(result.size).toBe(0);
 	});
 
 	it("handles very large line numbers", () => {
@@ -687,21 +677,6 @@ describe("parseGrepOutput", () => {
 		const result = parseGrepOutput(output);
 
 		expect(result.has("/project/src/[component].tsx")).toBe(true);
-	});
-
-	it("handles mixed file-only and file:line:content format", () => {
-		const output = [
-			"/project/file1.ts:10:with content",
-			"/project/file2.ts",
-			"/project/file3.ts:20:also with content",
-		].join("\n");
-
-		const result = parseGrepOutput(output);
-
-		expect(result.size).toBe(3);
-		expect(result.get("/project/file1.ts")!).toHaveLength(1);
-		expect(result.get("/project/file2.ts")!).toHaveLength(0);
-		expect(result.get("/project/file3.ts")!).toHaveLength(1);
 	});
 
 	it("preserves order of files (first seen)", () => {

@@ -1,8 +1,11 @@
 /**
- * Formatter for bash/exec tool results.
+ * Formatters for the shell tools: bash, bash_output, and kill_process.
  *
- * Handles formatting of command execution arguments and results,
- * including exit codes, stdout, and stderr output.
+ * `bash` runs a command in the foreground (exit code badge plus output) or,
+ * with `run_in_background`, starts a process and returns its id.
+ * `bash_output` reports a background process's status, exit code, and output;
+ * `kill_process` reports the outcome of stopping one. The two process tools
+ * take the same `{process_id}` arguments, so each has its own formatter.
  */
 
 import { extractText, truncateLines, truncateText } from "./base.js";
@@ -11,53 +14,41 @@ import type { FormattedOutput, ToolFormatter } from "./types.js";
 /** Maximum length for command in summary */
 const COMMAND_SUMMARY_MAX_LENGTH = 80;
 
+/** Maximum length for an output line in a summary */
+const OUTPUT_SUMMARY_MAX_LENGTH = 70;
+
 /** Maximum lines of output to show in details */
 const OUTPUT_MAX_LINES = 10;
 
+/** Background process statuses that mean the process did not finish cleanly */
+const FAILED_PROCESS_STATUSES: Record<string, true> = {
+	error: true,
+	killed: true,
+	lost: true,
+};
+
 /**
- * Arguments structure for bash/exec tools.
+ * Normalized view of a shell tool result. Every field is optional on the wire.
  */
-interface BashArgs {
-	command: string;
-	timeout?: number;
-	cwd?: string;
+interface ParsedShellResult {
+	/** Exit code, when the result reports one */
+	exitCode: number | undefined;
+	stdout: string;
+	stderr: string;
+	processId: string | undefined;
+	status: string | undefined;
+	/** Whether the tool call itself failed */
+	toolError: boolean;
 }
 
 /**
- * Detailed result structure from bash execution.
- */
-interface BashDetails {
-	exit_code: number;
-	stdout?: string;
-	stderr?: string;
-}
-
-/**
- * Result structure from bash/exec tools.
- */
-interface BashResult {
-	content?: Array<{ type: string; text: string }>;
-	details?: BashDetails;
-}
-
-/**
- * Formats the exit code as a badge string.
+ * Returns the value when it is a non-empty string.
  *
- * @param exitCode - The exit code to format
- * @returns Formatted badge like "[0]" or "[1]"
+ * @param value - The value to check
+ * @returns The string, or undefined
  */
-function formatExitCodeBadge(exitCode: number): string {
-	return `[${exitCode}]`;
-}
-
-/**
- * Determines if an exit code represents success.
- *
- * @param exitCode - The exit code to check
- * @returns True if exit code indicates success (0)
- */
-function isSuccess(exitCode: number): boolean {
-	return exitCode === 0;
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /**
@@ -67,8 +58,7 @@ function isSuccess(exitCode: number): boolean {
  * @returns The first non-empty line, or empty string
  */
 function getFirstLine(text: string): string {
-	const lines = text.split(/\r?\n/);
-	for (const line of lines) {
+	for (const line of text.split(/\r?\n/)) {
 		const trimmed = line.trim();
 		if (trimmed) {
 			return trimmed;
@@ -78,71 +68,197 @@ function getFirstLine(text: string): string {
 }
 
 /**
- * Parses the result to extract exit code, stdout, and stderr.
+ * Splits output into its non-empty lines.
  *
- * @param result - The raw result from bash tool
- * @returns Parsed details with exit_code, stdout, stderr
+ * @param text - The output text
+ * @returns Non-empty lines
  */
-function parseResult(result: unknown): { exitCode: number; stdout: string; stderr: string } {
-	// Default values
-	let exitCode = 0;
-	let stdout = "";
-	let stderr = "";
-
-	// Handle string result
-	if (typeof result === "string") {
-		stdout = result;
-		return { exitCode, stdout, stderr };
-	}
-
-	// Handle object result
-	if (result && typeof result === "object") {
-		const obj = result as BashResult;
-
-		// Extract details if present
-		if (obj.details) {
-			exitCode = obj.details.exit_code ?? 0;
-			stdout = obj.details.stdout ?? "";
-			stderr = obj.details.stderr ?? "";
-		}
-
-		// If no details, try to extract text from content
-		if (!obj.details && obj.content) {
-			stdout = extractText(result);
-		}
-	}
-
-	return { exitCode, stdout, stderr };
+function outputLines(text: string): string[] {
+	return text.split(/\r?\n/).filter((line) => line.length > 0);
 }
 
 /**
- * Formatter for bash and exec tools.
+ * Parses a shell tool result into exit code, output streams, and process info.
  *
- * Provides formatted output for command execution, showing:
- * - Command summary with truncation
- * - Exit code badges (green for success, red for failure)
- * - Stdout and stderr output
+ * Output comes from `details.stdout`/`details.stderr` when present, otherwise
+ * from the result's text content.
+ *
+ * @param result - The raw tool result
+ * @returns Parsed result
+ */
+function parseResult(result: unknown): ParsedShellResult {
+	const parsed: ParsedShellResult = {
+		exitCode: undefined,
+		stdout: "",
+		stderr: "",
+		processId: undefined,
+		status: undefined,
+		toolError: false,
+	};
+
+	if (typeof result === "string") {
+		parsed.stdout = result;
+		return parsed;
+	}
+
+	if (!result || typeof result !== "object") {
+		return parsed;
+	}
+
+	const obj = result as { details?: unknown; is_error?: unknown };
+	parsed.toolError = obj.is_error === true;
+
+	if (obj.details && typeof obj.details === "object") {
+		const details = obj.details as Record<string, unknown>;
+		if (typeof details.exit_code === "number") {
+			parsed.exitCode = details.exit_code;
+		}
+		parsed.stdout = nonEmptyString(details.stdout) ?? "";
+		parsed.stderr = nonEmptyString(details.stderr) ?? "";
+		parsed.processId = nonEmptyString(details.process_id);
+		parsed.status = nonEmptyString(details.status);
+	}
+
+	if (!parsed.stdout && !parsed.stderr) {
+		const text = extractText(result);
+		if (parsed.toolError) {
+			parsed.stderr = text;
+		} else {
+			parsed.stdout = text;
+		}
+	}
+
+	return parsed;
+}
+
+/**
+ * Appends stdout lines and a labelled stderr section to details.
+ *
+ * @param details - The details array to append to
+ * @param parsed - The parsed result
+ */
+function pushOutput(details: string[], parsed: ParsedShellResult): void {
+	if (parsed.stdout) {
+		details.push(...truncateLines(outputLines(parsed.stdout), OUTPUT_MAX_LINES));
+	}
+
+	const stderrLines = parsed.stderr ? outputLines(parsed.stderr) : [];
+	if (stderrLines.length > 0) {
+		if (details.length > 0) {
+			details.push(""); // Empty line separator
+		}
+		details.push("stderr:");
+		details.push(...truncateLines(stderrLines, OUTPUT_MAX_LINES));
+	}
+}
+
+/**
+ * Formats the arguments of a process tool (`{process_id}`).
+ *
+ * @param args - The tool arguments
+ * @returns Formatted output
+ */
+function formatProcessArgs(args: Record<string, unknown>): FormattedOutput {
+	const processId = nonEmptyString(args.process_id) ?? "";
+	return {
+		summary: processId,
+		details: processId ? [`process_id: ${processId}`] : [],
+	};
+}
+
+/**
+ * Formats a foreground `bash` result: exit code badge plus output.
+ *
+ * @param parsed - The parsed result
+ * @returns Formatted output
+ */
+function formatForegroundResult(parsed: ParsedShellResult): FormattedOutput {
+	const failed = parsed.exitCode !== undefined ? parsed.exitCode !== 0 : parsed.toolError;
+	const statusLabel = failed ? "Failed" : "Success";
+	const firstLine = getFirstLine(parsed.stdout || parsed.stderr);
+	const shownLine = firstLine ? truncateText(firstLine, OUTPUT_SUMMARY_MAX_LENGTH) : "";
+
+	let summary: string;
+	let statusLine: string;
+	if (parsed.exitCode !== undefined) {
+		const badge = `[${parsed.exitCode}]`;
+		summary = shownLine ? `${badge} ${shownLine}` : badge;
+		statusLine = `${badge} ${statusLabel}`;
+	} else {
+		summary = shownLine || statusLabel.toLowerCase();
+		statusLine = statusLabel;
+	}
+
+	const details: string[] = [statusLine];
+	pushOutput(details, parsed);
+
+	return {
+		summary,
+		details,
+		isError: failed,
+	};
+}
+
+/**
+ * Formats a `bash` result for a command started with `run_in_background`.
+ *
+ * @param parsed - The parsed result
+ * @returns Formatted output
+ */
+function formatBackgroundStart(parsed: ParsedShellResult): FormattedOutput {
+	const details: string[] = [];
+
+	if (parsed.toolError) {
+		const firstLine = getFirstLine(parsed.stderr || parsed.stdout);
+		pushOutput(details, parsed);
+		return {
+			summary: firstLine
+				? `background start failed: ${truncateText(firstLine, OUTPUT_SUMMARY_MAX_LENGTH)}`
+				: "background start failed",
+			details,
+			isError: true,
+		};
+	}
+
+	if (parsed.processId) {
+		details.push(`process_id: ${parsed.processId}`);
+	}
+	if (parsed.status) {
+		details.push(`status: ${parsed.status}`);
+	}
+	pushOutput(details, parsed);
+
+	return {
+		summary: parsed.processId
+			? `started in background: ${parsed.processId}`
+			: "started in background",
+		details,
+		isError: false,
+	};
+}
+
+/**
+ * Formatter for the `bash` tool.
  */
 export const bashFormatter: ToolFormatter = {
-	tools: ["bash", "exec"],
+	tools: ["bash"],
 
 	formatArgs(args: Record<string, unknown>): FormattedOutput {
-		const bashArgs = args as unknown as BashArgs;
-		const command = bashArgs.command || "";
+		const command = typeof args.command === "string" ? args.command : "";
+		const background = args.run_in_background === true;
 
-		// Summary: truncated command
-		const summary = truncateText(command, COMMAND_SUMMARY_MAX_LENGTH);
+		const shownCommand = truncateText(command, COMMAND_SUMMARY_MAX_LENGTH);
+		const summary = background ? `${shownCommand} (background)` : shownCommand;
 
-		// Details: full command and optional metadata
-		const details: string[] = [];
-		details.push(command);
-
-		if (bashArgs.timeout !== undefined) {
-			details.push(`timeout: ${bashArgs.timeout}ms`);
+		const details: string[] = [command];
+		if (background) {
+			details.push("background: true");
 		}
-
-		if (bashArgs.cwd) {
-			details.push(`cwd: ${bashArgs.cwd}`);
+		if (typeof args.timeout === "number") {
+			details.push(`timeout: ${args.timeout}ms`);
+		}
+		if (args.pty === true) {
+			details.push("pty: true");
 		}
 
 		return {
@@ -151,48 +267,124 @@ export const bashFormatter: ToolFormatter = {
 		};
 	},
 
-	formatResult(result: unknown, _args?: Record<string, unknown>): FormattedOutput {
-		const { exitCode, stdout, stderr } = parseResult(result);
-		const badge = formatExitCodeBadge(exitCode);
-		const success = isSuccess(exitCode);
+	formatResult(result: unknown, args?: Record<string, unknown>): FormattedOutput {
+		const parsed = parseResult(result);
 
-		// Get first line of output for summary
-		const outputText = stdout || stderr || "";
-		const firstLine = getFirstLine(outputText);
+		// A background start reports a process id instead of an exit code.
+		const background =
+			args?.run_in_background === true ||
+			(parsed.processId !== undefined && parsed.exitCode === undefined);
 
-		// Summary: badge + first line of output
-		const summary = firstLine ? `${badge} ${truncateText(firstLine, 70)}` : badge;
+		return background ? formatBackgroundStart(parsed) : formatForegroundResult(parsed);
+	},
 
-		// Details: badge with status, then output lines
-		const details: string[] = [];
-
-		// Line 1: Exit code with status
-		details.push(`${badge} ${success ? "Success" : "Failed"}`);
-
-		// Add stdout lines
-		if (stdout) {
-			const stdoutLines = stdout.split(/\r?\n/).filter((line) => line.length > 0);
-			const truncatedStdout = truncateLines(stdoutLines, OUTPUT_MAX_LINES);
-			details.push(...truncatedStdout);
-		}
-
-		// Add stderr in warning style if present
-		if (stderr) {
-			const stderrLines = stderr.split(/\r?\n/).filter((line) => line.length > 0);
-			if (stderrLines.length > 0) {
-				details.push(""); // Empty line separator
-				details.push("stderr:");
-				const truncatedStderr = truncateLines(stderrLines, OUTPUT_MAX_LINES);
-				details.push(...truncatedStderr);
-			}
-		}
+	formatPartial(partial: unknown, _args?: Record<string, unknown>): FormattedOutput {
+		// Streaming updates carry a rolling output preview and no exit code yet.
+		const lines = outputLines(extractText(partial));
+		const lastLine = lines.length > 0 ? lines[lines.length - 1].trim() : "";
 
 		return {
-			summary,
-			details,
-			isError: !success,
+			summary: lastLine ? truncateText(lastLine, OUTPUT_SUMMARY_MAX_LENGTH) : "running",
+			details: lines.slice(-OUTPUT_MAX_LINES),
 		};
 	},
 };
 
-export default bashFormatter;
+/**
+ * Formatter for the `bash_output` tool: status, exit code, and output of a
+ * background process.
+ */
+export const bashOutputFormatter: ToolFormatter = {
+	tools: ["bash_output"],
+
+	formatArgs: formatProcessArgs,
+
+	formatResult(result: unknown, args?: Record<string, unknown>): FormattedOutput {
+		const parsed = parseResult(result);
+		const processId = parsed.processId ?? nonEmptyString(args?.process_id);
+
+		const failed =
+			parsed.toolError ||
+			(parsed.status !== undefined && FAILED_PROCESS_STATUSES[parsed.status] === true) ||
+			(parsed.exitCode !== undefined && parsed.exitCode !== 0);
+
+		const head: string[] = [];
+		if (parsed.status) {
+			head.push(parsed.status);
+		}
+		if (parsed.exitCode !== undefined) {
+			head.push(`[${parsed.exitCode}]`);
+		}
+		const firstLine = getFirstLine(parsed.stdout || parsed.stderr);
+		if (firstLine) {
+			head.push(truncateText(firstLine, OUTPUT_SUMMARY_MAX_LENGTH));
+		}
+
+		const details: string[] = [];
+		if (processId) {
+			details.push(`process_id: ${processId}`);
+		}
+		if (parsed.status) {
+			details.push(`status: ${parsed.status}`);
+		}
+		if (parsed.exitCode !== undefined) {
+			details.push(`exit code: ${parsed.exitCode}`);
+		}
+		pushOutput(details, parsed);
+
+		return {
+			summary: head.length > 0 ? head.join(" ") : failed ? "failed" : "no output",
+			details,
+			isError: failed,
+		};
+	},
+};
+
+/**
+ * Formatter for the `kill_process` tool.
+ */
+export const killProcessFormatter: ToolFormatter = {
+	tools: ["kill_process"],
+
+	formatArgs: formatProcessArgs,
+
+	formatResult(result: unknown, args?: Record<string, unknown>): FormattedOutput {
+		const parsed = parseResult(result);
+		const processId = parsed.processId ?? nonEmptyString(args?.process_id);
+
+		const details: string[] = [];
+		if (processId) {
+			details.push(`process_id: ${processId}`);
+		}
+		if (parsed.status) {
+			details.push(`status: ${parsed.status}`);
+		}
+		pushOutput(details, parsed);
+
+		if (parsed.toolError) {
+			const firstLine = getFirstLine(parsed.stderr || parsed.stdout);
+			return {
+				summary: firstLine
+					? `kill failed: ${truncateText(firstLine, OUTPUT_SUMMARY_MAX_LENGTH)}`
+					: "kill failed",
+				details,
+				isError: true,
+			};
+		}
+
+		let summary: string;
+		if (parsed.status === undefined || parsed.status === "killed") {
+			summary = processId ? `killed ${processId}` : "killed";
+		} else {
+			summary = processId ? `${processId}: ${parsed.status}` : parsed.status;
+		}
+
+		return {
+			summary,
+			details,
+			isError: false,
+		};
+	},
+};
+
+export default [bashFormatter, bashOutputFormatter, killProcessFormatter];

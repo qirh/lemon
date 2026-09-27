@@ -6,10 +6,11 @@
  *   expanded   every line
  *
  * Defaults are per action kind — tools expand (their output is the point),
- * reasoning collapses (it is context, not the answer) — and a global override
- * lets a future `/verbose`-style command flip everything at once without any
- * component knowing about it: components read {@link resolveAccordionState} at
- * construction, and {@link accordionSettings} carries the override.
+ * reasoning collapses (it is context, not the answer). Ctrl+R toggles the latest
+ * card or reasoning block ({@link nextAccordionState}); Ctrl+T cycles a global
+ * override carried by {@link accordionSettings}: components read
+ * {@link resolveAccordionState} at construction, and the event controller
+ * re-applies it to the ones already on screen when the override changes.
  *
  * Render discipline: `render()` returns the identical array reference until
  * something actually changes, and every emitted row is truncated to the render
@@ -18,7 +19,7 @@
  */
 
 import type { Component } from "@oh-my-pi/pi-tui/tui";
-import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { getTheme } from "../theme/theme.ts";
 
 export type AccordionState = "hidden" | "collapsed" | "expanded";
@@ -35,10 +36,10 @@ const KIND_DEFAULTS: Record<string, AccordionState> = {
 };
 
 /**
- * Process-wide accordion preferences. Plain and mutable on purpose: the command
- * layer sets `override` from a slash command and calls `bump()`; components
- * built afterwards pick the new default up. Existing components are left alone
- * (their user may have toggled them by hand).
+ * Process-wide accordion preferences. Plain and mutable on purpose: Ctrl+T calls
+ * {@link accordionSettings.cycleOverride}; components built afterwards pick the
+ * new default up, and `EventController.cycleAccordionOverride` re-applies it to
+ * the existing ones.
  */
 export const accordionSettings = {
 	/** When set, wins over every per-kind default. */
@@ -74,9 +75,12 @@ export function resolveAccordionState(kind: string | undefined): AccordionState 
 	return accordionSettings.override ?? KIND_DEFAULTS[kind ?? ""] ?? "expanded";
 }
 
-/** Cycle a single accordion: expanded → collapsed → hidden → expanded. */
+/**
+ * Toggle a single accordion: expanded ↔ collapsed. A hidden body (only ever set
+ * by the global override) opens fully — the keypress asked to see it.
+ */
 export function nextAccordionState(state: AccordionState): AccordionState {
-	return state === "expanded" ? "collapsed" : state === "collapsed" ? "hidden" : "expanded";
+	return state === "expanded" ? "collapsed" : "expanded";
 }
 
 export interface AccordionOptions {
@@ -84,6 +88,8 @@ export interface AccordionOptions {
 	indent?: number;
 	/** Shown after the collapsed summary when there is more to see. */
 	moreHint?: (hidden: number) => string;
+	/** Word-wrap expanded lines at the render width instead of truncating them. */
+	wrap?: boolean;
 }
 
 /**
@@ -98,6 +104,7 @@ export class AccordionComponent implements Component {
 	#state: AccordionState;
 	#indent: number;
 	#moreHint: (hidden: number) => string;
+	#wrap: boolean;
 
 	#version = 0;
 	#cachedVersion = -1;
@@ -109,6 +116,7 @@ export class AccordionComponent implements Component {
 		this.#state = state;
 		this.#indent = Math.max(0, options.indent ?? 2);
 		this.#moreHint = options.moreHint ?? ((hidden) => `+${hidden} more`);
+		this.#wrap = options.wrap ?? false;
 	}
 
 	get state(): AccordionState {
@@ -190,9 +198,13 @@ export class AccordionComponent implements Component {
 			const room = fits ? inner - hintWidth : inner;
 			return [`${pad}${truncateToWidth(summary, room)}${fits ? hint : ""}`];
 		}
-		const out: string[] = new Array(this.#lines.length);
-		for (let i = 0; i < this.#lines.length; i++) {
-			out[i] = `${pad}${truncateToWidth(this.#lines[i] ?? "", inner)}`;
+		const out: string[] = [];
+		for (const line of this.#lines) {
+			if (this.#wrap) {
+				for (const row of wrapTextWithAnsi(line, inner)) out.push(`${pad}${row}`);
+			} else {
+				out.push(`${pad}${truncateToWidth(line, inner)}`);
+			}
 		}
 		return out;
 	}

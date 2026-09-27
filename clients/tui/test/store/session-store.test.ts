@@ -224,6 +224,47 @@ describe("SessionStore tools", () => {
 	});
 });
 
+describe("SessionStore reasoning", () => {
+	const thought = (text: string) => ({
+		id: "lemon.reasoning.0.1",
+		kind: "reasoning",
+		title: "reasoning",
+		detail: { reasoning: { text, source: "lemon_reasoning" } },
+	});
+
+	test("each phase replaces the block's text in place", () => {
+		const session = new SessionStore("s");
+		const first = session.upsertReasoning(thought("checking"), "updated", { runId: "r" });
+		const second = session.upsertReasoning(thought("checking the seam"), "completed", {
+			runId: "r",
+		});
+		expect(second).toBe(first);
+		expect(second.text).toBe("checking the seam");
+		expect(session.blocks.filter((block) => block.kind === "reasoning")).toHaveLength(1);
+	});
+
+	test("a replayed update cannot reopen a completed thought", () => {
+		const session = new SessionStore("s");
+		session.upsertReasoning(thought("done thinking"), "completed", { runId: "r" });
+		const replay = session.upsertReasoning(thought("half"), "updated", { runId: "r" });
+		expect(replay.phase).toBe("completed");
+		expect(replay.text).toBe("done thinking");
+	});
+
+	test("finalizing the run completes its open thoughts, and only its own", () => {
+		const session = new SessionStore("s");
+		const mine = session.upsertReasoning(thought("mine"), "updated", { runId: "r1" });
+		const other = session.upsertReasoning(
+			{ ...thought("other"), id: "lemon.reasoning.0.2" },
+			"updated",
+			{ runId: "r2" },
+		);
+		session.finalizeRun("r1", { ok: true });
+		expect(mine.phase).toBe("completed");
+		expect(other.phase).toBe("updated");
+	});
+});
+
 describe("SessionStore unread", () => {
 	test("counts blocks arriving while unfocused, except the user's own", () => {
 		const session = new SessionStore("s");

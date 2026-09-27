@@ -79,7 +79,7 @@ describe("scripted conversation", () => {
 			type: "started",
 			runId: RUN,
 			sessionKey: SESSION,
-			engine: "claude",
+			engine: "lemon",
 		});
 		for (const [index, text] of DELTAS.entries()) {
 			server.pushEvent("chat", {
@@ -95,7 +95,12 @@ describe("scripted conversation", () => {
 			runId: RUN,
 			sessionKey: SESSION,
 			phase: "started",
-			action: { id: "act-1", kind: "command", title: "bash: ls -la", detail: { args: "ls -la" } },
+			action: {
+				id: "act-1",
+				kind: "command",
+				title: "bash: ls -la",
+				detail: { name: "bash", args: { command: "ls -la" } },
+			},
 		});
 
 		const session = app.store.focused;
@@ -112,8 +117,17 @@ describe("scripted conversation", () => {
 			sessionKey: SESSION,
 			phase: "completed",
 			ok: true,
-			message: "12 entries",
-			action: { id: "act-1", kind: "command", title: "bash: ls -la", detail: null },
+			action: {
+				id: "act-1",
+				kind: "command",
+				title: "bash: ls -la",
+				detail: {
+					name: "bash",
+					args: { command: "ls -la" },
+					result: "12 entries",
+					details: { exit_code: 0 },
+				},
+			},
 		});
 		server.pushEvent("agent", {
 			type: "completed",

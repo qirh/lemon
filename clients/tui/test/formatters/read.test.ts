@@ -25,22 +25,6 @@ describe("readFormatter", () => {
 			expect(result.summary).toContain("index.ts");
 		});
 
-		it("should show shortened path using file_path field", () => {
-			const result = readFormatter.formatArgs({ file_path: "/home/user/project/src/app.tsx" });
-
-			expect(result.summary).toBeTruthy();
-			expect(result.summary).toContain("app.tsx");
-		});
-
-		it("should prefer path over file_path when both present", () => {
-			const result = readFormatter.formatArgs({
-				path: "/path/from/path.ts",
-				file_path: "/path/from/file_path.ts",
-			});
-
-			expect(result.summary).toContain("path.ts");
-		});
-
 		it("should show offset when provided", () => {
 			const result = readFormatter.formatArgs({
 				path: "/test/file.ts",

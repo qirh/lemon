@@ -1,18 +1,14 @@
 /**
  * Recorded-shape `tool_use` payloads, one per tool the gallery renders.
  *
- * These are written by hand against the shapes `event_bridge.ex` actually emits
- * — which is to say, against the shapes each *engine adapter* puts into
- * `action.detail`, because nothing in the Elixir pipeline normalises that map.
- * The `engine` field on each fixture records which adapter's dialect it mimics,
- * so the set as a whole is a regression net for {@link buildToolView}'s
- * translation table:
+ * Every `detail` here is what the native engine's
+ * `CodingAgent.Session.RunTranslator` emits and the control plane's event
+ * bridge forwards to operator clients:
  *
- *   claude    `detail.name` (capitalised) · `detail.input` · `result_preview`
- *   codex     no tool name for shell · empty started detail · `exit_code`
- *   opencode  string keys · `detail.name` · `output_preview` · `changes`
- *   pi        `detail.tool_name` · `detail.args` · raw `result`
- *   lemon     `detail.name` (lowercase) · `detail.args` · `result` + `result_meta`
+ *   started    `{name, args}`
+ *   updated    `{name, args, partial_result: {content, details}}`
+ *   completed  `{name, args, result, details?, result_meta?}` — `result` is the
+ *              bounded full text, `details` the tool's structured details
  *
  * Blocks are produced by replaying the fixture's phases through a real
  * {@link SessionStore}, so the gallery exercises the same upsert path the live
@@ -21,22 +17,20 @@
 
 import type { AgentAction } from "../../protocol/types.ts";
 import { SessionStore } from "../../store/session-store.ts";
-import type { ToolBlock } from "../../store/transcript-model.ts";
+import type { ReasoningBlock, ToolBlock } from "../../store/transcript-model.ts";
 import { toToolPhase } from "../../store/transcript-model.ts";
 import type { ToolCardState } from "../../ui/tool-view.ts";
 
 export interface ToolFixture {
 	/** Gallery key, matched by `--tool`. */
 	name: string;
-	/** Which engine adapter's `detail` dialect this fixture reproduces. */
-	engine: "claude" | "codex" | "opencode" | "pi" | "lemon";
 	kind: string;
 	title: string;
-	/** `detail` at `started`. Undefined reproduces codex's detail-less open. */
-	started?: Record<string, unknown>;
-	/** `detail` at `updated`, when the engine streams progress. */
+	/** `detail` at `started`. */
+	started: Record<string, unknown>;
+	/** `detail` at `updated`, when the tool streams progress. */
 	updated?: Record<string, unknown>;
-	/** `detail` at a successful `completed` (engines send the merged map). */
+	/** `detail` at a successful `completed`. */
 	completed: Record<string, unknown>;
 	/** `detail` at a failed `completed`. */
 	failed: Record<string, unknown>;
@@ -44,157 +38,196 @@ export interface ToolFixture {
 	failedMessage?: string;
 }
 
-const EDIT_OLD = `export function toolTitle(action) {
-	const title = action?.title?.trim();
-	if (title) return title;
-	return "tool";
-}`;
+const EDIT_PATH = "clients/tui/src/store/transcript-model.ts";
 
-const EDIT_NEW = `export function toolTitle(action: AgentAction | undefined): string {
-	const title = action?.title?.trim();
+const EDIT_OLD = `	const title = action?.title?.trim();
+	if (title) return title;
+	return "tool";`;
+
+const EDIT_NEW = `	const title = action?.title?.trim();
 	if (title) return title;
 	const kind = action?.kind?.trim();
 	if (kind) return kind;
-	return "tool";
-}`;
+	return "tool";`;
 
-const PATCH_TEXT = `--- a/lib/lemon/run.ex
-+++ b/lib/lemon/run.ex
-@@ -12,7 +12,7 @@
+/** The edit tool's own diff: real line numbers, tab-separated, `...` between hunks. */
+const EDIT_DIFF = [
+	" 118\texport function toolTitle(action: AgentAction | undefined): string {",
+	" 119\t\tconst title = action?.title?.trim();",
+	" 120\t\tif (title) return title;",
+	"+121\t\tconst kind = action?.kind?.trim();",
+	"+122\t\tif (kind) return kind;",
+	" 121\t\treturn \"tool\";",
+	" 122\t}",
+].join("\n");
+
+const PATCH_TEXT = `*** Begin Patch
+*** Update File: apps/lemon_gateway/lib/lemon_gateway/run.ex
+@@
    def start(job) do
 -    {:ok, pid} = Runner.start_link(job)
 +    {:ok, pid} = Runner.start_link(job, timeout: :infinity)
      Registry.register(job.id, pid)
-   end`;
+   end
+*** End Patch`;
+
+const TODOS = [
+	{ id: "1", content: "port the formatters", status: "completed", priority: "high" },
+	{ id: "2", content: "render server diffs", status: "in_progress", priority: "high" },
+	{ id: "3", content: "wire the expand key", status: "pending", priority: "medium" },
+];
 
 export const TOOL_FIXTURES: ToolFixture[] = [
 	{
 		name: "bash",
-		engine: "lemon",
 		kind: "command",
 		title: "`ls -la clients/tui`",
-		started: { name: "bash", args: { command: "ls -la clients/tui", cwd: "/home/z80/dev/lemon" } },
+		started: { name: "bash", args: { command: "ls -la clients/tui" } },
+		updated: {
+			name: "bash",
+			args: { command: "ls -la clients/tui" },
+			partial_result: { content: [{ type: "text", text: "total 96\n" }], details: {} },
+		},
 		completed: {
 			name: "bash",
-			args: { command: "ls -la clients/tui", cwd: "/home/z80/dev/lemon" },
+			args: { command: "ls -la clients/tui" },
 			result:
 				"total 96\ndrwxr-xr-x 6 z80 z80  4096 Aug 17 00:57 .\ndrwxr-xr-x 9 z80 z80  4096 Aug 16 23:04 ..\n-rw-r--r-- 1 z80 z80   451 Aug 16 23:04 biome.json\n-rw-r--r-- 1 z80 z80  5642 Aug 16 23:04 bun.lock\ndrwxr-xr-x 8 z80 z80  4096 Aug 17 00:57 src",
-			result_meta: { exit_code: 0 },
+			details: { exit_code: 0, truncated: false },
 		},
 		failed: {
 			name: "bash",
-			args: { command: "ls -la clients/tui", cwd: "/home/z80/dev/lemon" },
+			args: { command: "ls -la clients/tui" },
 			result: "ls: cannot access 'clients/tui': No such file or directory",
-			result_meta: { exit_code: 2, error_type: "exit_status" },
+			details: { exit_code: 2, truncated: false },
+			result_meta: {
+				error_type: "command_exit",
+				tool_name: "bash",
+				exit_code: 2,
+				message: "Command exited with code 2",
+			},
 		},
-		failedMessage: "command exited with status 2",
+		failedMessage: "Command exited with code 2",
+	},
+	{
+		name: "bash-background",
+		kind: "command",
+		title: "`bun test --watch` (background)",
+		started: { name: "bash", args: { command: "bun test --watch", run_in_background: true } },
+		completed: {
+			name: "bash",
+			args: { command: "bun test --watch", run_in_background: true },
+			result: "Started background process proc_7f2",
+			details: { process_id: "proc_7f2", status: "running" },
+		},
+		failed: {
+			name: "bash",
+			args: { command: "bun test --watch", run_in_background: true },
+			result: "too many background processes",
+			result_meta: { error_type: "limit", tool_name: "bash" },
+		},
+	},
+	{
+		name: "bash_output",
+		kind: "command",
+		title: "bash output: proc_7f2",
+		started: { name: "bash_output", args: { process_id: "proc_7f2" } },
+		completed: {
+			name: "bash_output",
+			args: { process_id: "proc_7f2" },
+			result: "bun test v1.3.14\n 212 pass\n 0 fail",
+			details: { process_id: "proc_7f2", status: "completed", exit_code: 0 },
+		},
+		failed: {
+			name: "bash_output",
+			args: { process_id: "proc_99" },
+			result: "unknown process proc_99",
+			result_meta: { error_type: "not_found", tool_name: "bash_output" },
+		},
 	},
 	{
 		name: "read",
-		engine: "claude",
 		kind: "tool",
-		title: "read: `clients/tui/src/app.ts`",
-		started: {
-			name: "Read",
-			input: { file_path: "/home/z80/dev/lemon/clients/tui/src/app.ts", limit: 120 },
-			parent_tool_use_id: null,
-		},
+		title: "read: `src/app.ts`",
+		started: { name: "read", args: { path: "clients/tui/src/app.ts", limit: 4 } },
 		completed: {
-			name: "Read",
-			input: { file_path: "/home/z80/dev/lemon/clients/tui/src/app.ts", limit: 120 },
-			tool_use_id: "toolu_01H8s",
-			result_preview:
+			name: "read",
+			args: { path: "clients/tui/src/app.ts", limit: 4 },
+			result:
 				'     1\timport { Editor } from "@oh-my-pi/pi-tui/components/editor";\n     2\timport { Text } from "@oh-my-pi/pi-tui/components/text";\n     3\t\n     4\texport class AppShell {',
-			is_error: false,
+			details: {
+				path: "clients/tui/src/app.ts",
+				total_lines: 982,
+				start_line: 1,
+				lines_shown: 4,
+				truncation: null,
+			},
 		},
 		failed: {
-			name: "Read",
-			input: { file_path: "/home/z80/dev/lemon/clients/tui/src/missing.ts" },
-			tool_use_id: "toolu_01H8s",
-			result_preview: "Error: ENOENT: no such file or directory",
-			is_error: true,
+			name: "read",
+			args: { path: "clients/tui/src/missing.ts" },
+			result: "File not found: clients/tui/src/missing.ts",
+			result_meta: { error_type: "enoent", tool_name: "read" },
 		},
 		failedMessage: "file not found",
 	},
 	{
 		name: "edit",
-		engine: "claude",
 		kind: "file_change",
-		title: "clients/tui/src/store/transcript-model.ts",
-		started: {
-			name: "Edit",
-			input: {
-				file_path: "/home/z80/dev/lemon/clients/tui/src/store/transcript-model.ts",
-				old_string: EDIT_OLD,
-				new_string: EDIT_NEW,
-			},
-			parent_tool_use_id: null,
-		},
+		title: "edit: `store/transcript-model.ts`",
+		started: { name: "edit", args: { path: EDIT_PATH, old_text: EDIT_OLD, new_text: EDIT_NEW } },
 		completed: {
-			name: "Edit",
-			input: {
-				file_path: "/home/z80/dev/lemon/clients/tui/src/store/transcript-model.ts",
-				old_string: EDIT_OLD,
-				new_string: EDIT_NEW,
-			},
-			tool_use_id: "toolu_01K2p",
-			result_preview: "The file has been updated.",
-			is_error: false,
+			name: "edit",
+			args: { path: EDIT_PATH, old_text: EDIT_OLD, new_text: EDIT_NEW },
+			result: `Successfully replaced text in ${EDIT_PATH}.\n\n${EDIT_DIFF}`,
+			details: { diff: EDIT_DIFF, first_changed_line: 121 },
 		},
 		failed: {
-			name: "Edit",
-			input: {
-				file_path: "/home/z80/dev/lemon/clients/tui/src/store/transcript-model.ts",
-				old_string: EDIT_OLD,
-				new_string: EDIT_NEW,
-			},
-			tool_use_id: "toolu_01K2p",
-			result_preview: "Error: old_string not found in file",
-			is_error: true,
+			name: "edit",
+			args: { path: EDIT_PATH, old_text: EDIT_OLD, new_text: EDIT_NEW },
+			result: "Could not find the exact text to replace. The text must match exactly.",
+			result_meta: { error_type: "tool_error", tool_name: "edit" },
 		},
 		failedMessage: "no match",
 	},
 	{
 		name: "write",
-		engine: "opencode",
 		kind: "file_change",
-		title: "clients/tui/src/ui/components/accordion.ts",
+		title: "write: `components/accordion.ts`",
 		started: {
 			name: "write",
-			input: {
-				filePath: "/home/z80/dev/lemon/clients/tui/src/ui/components/accordion.ts",
+			args: {
+				path: "clients/tui/src/ui/components/accordion.ts",
 				content:
 					'export type AccordionState = "hidden" | "collapsed" | "expanded";\n\nexport function resolveAccordionState(kind) {\n\treturn KIND_DEFAULTS[kind] ?? "expanded";\n}\n',
 			},
-			callID: "call_9f1c",
-			changes: [{ path: "clients/tui/src/ui/components/accordion.ts", kind: "update" }],
 		},
 		completed: {
 			name: "write",
-			input: {
-				filePath: "/home/z80/dev/lemon/clients/tui/src/ui/components/accordion.ts",
+			args: {
+				path: "clients/tui/src/ui/components/accordion.ts",
 				content:
 					'export type AccordionState = "hidden" | "collapsed" | "expanded";\n\nexport function resolveAccordionState(kind) {\n\treturn KIND_DEFAULTS[kind] ?? "expanded";\n}\n',
 			},
-			callID: "call_9f1c",
-			changes: [{ path: "clients/tui/src/ui/components/accordion.ts", kind: "update" }],
-			output_preview: "Wrote 148 bytes to accordion.ts",
-			exit_code: 0,
+			result: "Successfully wrote 148 bytes to clients/tui/src/ui/components/accordion.ts",
+			details: {
+				path: "clients/tui/src/ui/components/accordion.ts",
+				bytes_written: 148,
+				formatted: false,
+			},
 		},
 		failed: {
 			name: "write",
-			input: { filePath: "/read-only/accordion.ts", content: "x" },
-			callID: "call_9f1c",
-			error: "EACCES: permission denied",
-			exit_code: 1,
+			args: { path: "/read-only/accordion.ts", content: "x" },
+			result: "Permission denied: /read-only/accordion.ts",
+			result_meta: { error_type: "eacces", tool_name: "write" },
 		},
 		failedMessage: "permission denied",
 	},
 	{
 		name: "grep",
-		engine: "lemon",
 		kind: "tool",
-		title: "grep: upsertTool",
+		title: "grep: `upsertTool` in clients/tui/src",
 		started: {
 			name: "grep",
 			args: { pattern: "upsertTool", path: "clients/tui/src", context_lines: 1 },
@@ -203,146 +236,136 @@ export const TOOL_FIXTURES: ToolFixture[] = [
 			name: "grep",
 			args: { pattern: "upsertTool", path: "clients/tui/src", context_lines: 1 },
 			result:
-				"clients/tui/src/store/session-store.ts:159:\tupsertTool(\nclients/tui/src/ui/controllers/event-controller.ts:215:\t\t\t\tconst block = session.upsertTool(tool.action, toToolPhase(tool.phase), {\n\n2 matches in 2 files",
-			result_meta: { match_count: 2 },
+				"Found 2 matches.\n\nclients/tui/src/store/session-store.ts:292:\tupsertTool(\nclients/tui/src/ui/controllers/event-controller.ts:300:\t\t\t\tconst block = session.upsertTool(tool.action, toToolPhase(tool.phase), {",
+			details: { match_count: 2, truncated: false },
 		},
 		failed: {
 			name: "grep",
 			args: { pattern: "upsertTool(", path: "clients/tui/src" },
 			result: "regex parse error: unclosed group",
-			result_meta: { error_type: "invalid_pattern" },
+			result_meta: { error_type: "invalid_pattern", tool_name: "grep" },
 		},
 		failedMessage: "invalid regular expression",
 	},
 	{
 		name: "patch",
-		engine: "pi",
 		kind: "file_change",
-		title: "apps/lemon_gateway/lib/lemon_gateway/run.ex",
-		started: { tool_name: "patch", args: { patch_text: PATCH_TEXT } },
+		title: "patch",
+		started: { name: "patch", args: { patch_text: PATCH_TEXT } },
 		completed: {
-			tool_name: "patch",
+			name: "patch",
 			args: { patch_text: PATCH_TEXT },
-			result: "1 file changed, 1 insertion(+), 1 deletion(-)",
-			is_error: false,
+			result: "Patch applied successfully. 1 files changed, 1 additions, 1 removals",
+			details: {
+				changed: ["apps/lemon_gateway/lib/lemon_gateway/run.ex"],
+				additions: 1,
+				removals: 1,
+			},
 		},
 		failed: {
-			tool_name: "patch",
+			name: "patch",
 			args: { patch_text: PATCH_TEXT },
-			result: "error: patch does not apply",
-			is_error: true,
+			result: "Hunk did not match apps/lemon_gateway/lib/lemon_gateway/run.ex",
+			result_meta: { error_type: "tool_error", tool_name: "patch" },
 		},
 		failedMessage: "patch does not apply",
 	},
 	{
 		name: "find",
-		engine: "lemon",
 		kind: "tool",
-		title: "find: *.test.ts",
-		started: { name: "find", args: { pattern: "*.test.ts", path: "clients/tui/test", type: "f" } },
+		title: "find: `*.test.ts`",
+		started: { name: "find", args: { pattern: "*.test.ts", path: "clients/tui/test", type: "file" } },
 		completed: {
 			name: "find",
-			args: { pattern: "*.test.ts", path: "clients/tui/test", type: "f" },
+			args: { pattern: "*.test.ts", path: "clients/tui/test", type: "file" },
 			result:
 				"clients/tui/test/ui/transcript-blocks.test.ts\nclients/tui/test/ui/tool-card.test.ts\nclients/tui/test/store/session-store.test.ts\nclients/tui/test/protocol/client.test.ts",
-			result_meta: { count: 4 },
+			details: {
+				count: 4,
+				truncated: false,
+				max_results: 1000,
+				files: [
+					"clients/tui/test/ui/transcript-blocks.test.ts",
+					"clients/tui/test/ui/tool-card.test.ts",
+					"clients/tui/test/store/session-store.test.ts",
+					"clients/tui/test/protocol/client.test.ts",
+				],
+			},
 		},
 		failed: {
 			name: "find",
 			args: { pattern: "*.test.ts", path: "/nope" },
-			result: "no such directory: /nope",
-			result_meta: { error_type: "enoent" },
+			result: "Directory not found: /nope",
+			result_meta: { error_type: "enoent", tool_name: "find" },
 		},
 	},
 	{
 		name: "websearch",
-		engine: "codex",
 		kind: "web_search",
-		title: "pi-tui differential rendering",
-		started: { query: "pi-tui differential rendering" },
+		title: "search: pi-tui differential rendering",
+		started: { name: "websearch", args: { query: "pi-tui differential rendering" } },
 		completed: {
-			query: "pi-tui differential rendering",
-			result_preview:
+			name: "websearch",
+			args: { query: "pi-tui differential rendering" },
+			result:
 				"1. oh-my-pi/pi-tui — differential terminal renderer (github.com)\n2. Terminal UI rendering strategies (blog.example.com)",
-			result_summary: "2 results",
 		},
 		failed: {
-			query: "pi-tui differential rendering",
-			error_message: "search provider returned 429",
+			name: "websearch",
+			args: { query: "pi-tui differential rendering" },
+			result: "search provider returned 429",
+			result_meta: { error_type: "rate_limited", tool_name: "websearch" },
 		},
 		failedMessage: "rate limited",
 	},
 	{
 		name: "webfetch",
-		engine: "lemon",
 		kind: "web_search",
-		title: "https://omp.sh/docs/tui",
+		title: "fetch: https://omp.sh/docs/tui",
 		started: { name: "webfetch", args: { url: "https://omp.sh/docs/tui", format: "markdown" } },
 		completed: {
 			name: "webfetch",
 			args: { url: "https://omp.sh/docs/tui", format: "markdown" },
 			result: "# pi-tui\n\nA differential-rendering terminal UI library for Bun.",
-			result_meta: { status: 200 },
 		},
 		failed: {
 			name: "webfetch",
 			args: { url: "https://omp.sh/docs/tui" },
 			result: "request timed out after 30000ms",
-			result_meta: { error_type: "timeout", timeout_ms: 30000 },
+			result_meta: { error_type: "timeout", timeout_ms: 30000, tool_name: "webfetch" },
 		},
 	},
 	{
 		name: "todo",
-		engine: "claude",
 		kind: "tool",
-		title: "TodoWrite",
-		started: {
-			name: "TodoWrite",
-			input: {
-				todos: [
-					{ text: "port the formatters", done: true },
-					{ text: "build the tool card", done: true },
-					{ text: "wire the shelf into the controller", done: false },
-					{ text: "write the gallery", done: false },
-				],
-			},
-		},
+		title: "todo",
+		started: { name: "todo", args: { action: "write", todos: TODOS } },
 		completed: {
-			name: "TodoWrite",
-			input: {
-				todos: [
-					{ text: "port the formatters", done: true },
-					{ text: "build the tool card", done: true },
-					{ text: "wire the shelf into the controller", done: false },
-					{ text: "write the gallery", done: false },
-				],
-			},
-			result_preview: "Todos updated",
-			is_error: false,
+			name: "todo",
+			args: { action: "write", todos: TODOS },
+			result: JSON.stringify(TODOS, null, 2),
 		},
 		failed: {
-			name: "TodoWrite",
-			input: { todos: [] },
-			result_preview: "Error: todos must not be empty",
-			is_error: true,
+			name: "todo",
+			args: { action: "write", todos: [] },
+			result: "todos must be a non-empty list",
+			result_meta: { error_type: "tool_error", tool_name: "todo" },
 		},
 	},
 	{
 		name: "task",
-		engine: "lemon",
 		kind: "subagent",
-		title: "task(codex): audit the render contract",
+		title: "task: audit the render contract",
 		started: {
 			name: "task",
 			args: {
-				action: "run",
 				description: "audit the render contract",
 				prompt: "Check every component against the settled-rows rules.",
 			},
 		},
 		updated: {
 			name: "task",
-			args: { action: "run", description: "audit the render contract" },
+			args: { description: "audit the render contract" },
 			partial_result: {
 				content: [{ type: "text", text: "reading transcript-container.ts" }],
 				details: {
@@ -356,103 +379,53 @@ export const TOOL_FIXTURES: ToolFixture[] = [
 		},
 		completed: {
 			name: "task",
-			args: { action: "run", description: "audit the render contract" },
+			args: { description: "audit the render contract" },
 			result: "No over-declared settled rows found. One risk noted in tool-shelf.ts.",
-			result_meta: {
-				task_id: "task_7f2",
-				engine: "codex",
-				status: "completed",
-				current_action: { title: "audit complete", kind: "note", phase: "completed" },
-			},
+			details: { task_id: "task_7f2", status: "completed" },
+			result_meta: { task_id: "task_7f2", status: "completed" },
 		},
 		failed: {
 			name: "task",
-			args: { action: "run", description: "audit the render contract" },
+			args: { description: "audit the render contract" },
 			result: "subagent aborted",
-			result_meta: { task_id: "task_7f2", error_type: "aborted", engine: "codex" },
+			result_meta: { task_id: "task_7f2", error_type: "aborted", tool_name: "task" },
 		},
 		failedMessage: "subagent aborted",
 	},
 	{
-		name: "process",
-		engine: "lemon",
+		name: "browser_navigate",
 		kind: "tool",
-		title: "process: list",
-		started: { name: "process", args: { action: "list" } },
+		title: "browser: https://omp.sh",
+		started: { name: "browser_navigate", args: { url: "https://omp.sh" } },
 		completed: {
-			name: "process",
-			args: { action: "list" },
-			result: "proc_01  running  bun test --watch\nproc_02  exited   mix compile",
-			result_meta: { count: 2 },
+			name: "browser_navigate",
+			args: { url: "https://omp.sh" },
+			result: "Navigated to https://omp.sh (title: oh-my-pi)",
 		},
 		failed: {
-			name: "process",
-			args: { action: "kill", process_id: "proc_99" },
-			result: "unknown process proc_99",
-			result_meta: { error_type: "not_found" },
-		},
-	},
-	{
-		name: "codex-command",
-		engine: "codex",
-		kind: "command",
-		// Codex reports shell calls with an empty detail on `started` and puts the
-		// command only in the (already truncated) title.
-		title: "cd ~/dev/lemon && mix test apps/lemon_core",
-		started: undefined,
-		completed: { exit_code: 0, status: "completed" },
-		failed: { exit_code: 1, status: "completed" },
-		failedMessage: "exit status 1",
-	},
-	{
-		name: "reasoning",
-		engine: "lemon",
-		kind: "reasoning",
-		title: "The shelf has to stay unsealed while its shape can still change…",
-		started: {
-			reasoning: {
-				text: "The shelf has to stay unsealed while its shape can still change, because a row that reached native scrollback can never be rewritten.",
-				source: "lemon_reasoning",
-			},
-		},
-		completed: {
-			reasoning: {
-				text: "The shelf has to stay unsealed while its shape can still change, because a row that reached native scrollback can never be rewritten.\n\nSo: pin the live region until the barrier, then seal once.",
-				source: "lemon_reasoning",
-			},
-		},
-		failed: {
-			reasoning: { text: "…", source: "lemon_reasoning" },
+			name: "browser_navigate",
+			args: { url: "https://omp.sh" },
+			result: "browser driver not running",
+			result_meta: { error_type: "unavailable", tool_name: "browser_navigate" },
 		},
 	},
 	{
 		name: "unknown",
-		engine: "codex",
 		kind: "tool",
-		// An MCP tool nothing has a formatter for: the generic card path.
-		title: "sentry.list_issues",
-		started: {
-			server: "sentry",
-			tool: "list_issues",
-			status: "in_progress",
-			arguments: { project: "lemon", limit: 5, query: "is:unresolved" },
-		},
+		// A tool nothing has a formatter for: the generic card path.
+		title: "session_search",
+		started: { name: "session_search", args: { query: "render contract", limit: 5 } },
 		completed: {
-			server: "sentry",
-			tool: "list_issues",
-			status: "completed",
-			arguments: { project: "lemon", limit: 5, query: "is:unresolved" },
-			result_preview: "3 unresolved issues: LEMON-91, LEMON-88, LEMON-71",
-			result_summary: "3 unresolved issues: LEMON-91, LEMON-88, LEMON-71",
+			name: "session_search",
+			args: { query: "render contract", limit: 5 },
+			result: "3 sessions matched: tui-1755, tui-1760, tui-1771",
 		},
 		failed: {
-			server: "sentry",
-			tool: "list_issues",
-			status: "failed",
-			arguments: { project: "lemon", limit: 5 },
-			error_message: "MCP server 'sentry' is not connected",
+			name: "session_search",
+			args: { query: "render contract" },
+			result: "session index unavailable",
+			result_meta: { error_type: "unavailable", tool_name: "session_search" },
 		},
-		failedMessage: "MCP server unavailable",
 	},
 ];
 
@@ -476,12 +449,7 @@ export function fixturePhases(fixture: ToolFixture, state: ToolCardState): Fixtu
 			// between the tool being announced and its arguments arriving.
 			return [{ detail: undefined, phase: "started" }];
 		case "running":
-			if (fixture.updated) return [started, { detail: fixture.updated, phase: "updated" }];
-			// An engine that opens with no detail at all (codex shell calls) only
-			// leaves the streaming window on its first `updated`.
-			return fixture.started === undefined
-				? [started, { detail: undefined, phase: "updated" }]
-				: [started];
+			return fixture.updated ? [started, { detail: fixture.updated, phase: "updated" }] : [started];
 		case "success":
 			return [started, { detail: fixture.completed, phase: "completed", ok: true }];
 		case "error":
@@ -521,6 +489,28 @@ export function fixtureBlock(
 	}
 	if (!block) throw new Error(`fixture ${fixture.name} produced no block`);
 	// A deterministic start time keeps the gallery's elapsed readings stable.
+	if (options.at !== undefined) block.at = options.at;
+	return block;
+}
+
+/** A completed `kind: "reasoning"` action, as the event bridge forwards it. */
+export const REASONING_ACTION: AgentAction = {
+	id: "lemon.reasoning.0.1",
+	kind: "reasoning",
+	title: "The shelf has to stay unsealed while its shape can still change",
+	detail: {
+		reasoning: {
+			text: "The shelf has to stay unsealed while its shape can still change, because a row that reached native scrollback can never be rewritten.\n\nSo: pin the live region until the barrier, then seal once.",
+			source: "lemon_reasoning",
+		},
+	},
+};
+
+/** Replay {@link REASONING_ACTION} through a real SessionStore. */
+export function reasoningFixtureBlock(options: { at?: number } = {}): ReasoningBlock {
+	const block = new SessionStore("gallery").upsertReasoning(REASONING_ACTION, "completed", {
+		runId: "run-gallery",
+	});
 	if (options.at !== undefined) block.at = options.at;
 	return block;
 }

@@ -28,6 +28,7 @@
 
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import type { Block, ToolBlock } from "../../store/transcript-model.ts";
+import { type AccordionState, accordionSettings, resolveAccordionState } from "./accordion.ts";
 import { ToolCardComponent, type ToolCardOptions } from "./tool-card.ts";
 
 /** Entries a shelf needs before it starts merging them into single lines. */
@@ -58,6 +59,8 @@ export function planToolShelves(blocks: readonly Block[]): ToolBlock[][] {
 export class ToolShelfComponent implements Component {
 	readonly #entries: ToolCardComponent[] = [];
 	readonly #byBlockId = new Map<string, ToolCardComponent>();
+	/** Finished cards the user expanded out of their one-line shelf form. */
+	readonly #pinnedOpen = new Set<ToolCardComponent>();
 	readonly #cardOptions: ToolCardOptions;
 
 	#sealed = false;
@@ -120,6 +123,35 @@ export class ToolShelfComponent implements Component {
 		const card = this.#byBlockId.get(block.id);
 		if (!card) return;
 		card.update(block);
+		this.#recompute();
+	}
+
+	/**
+	 * The expand key, for one card. A card merged into a shelf line opens as a
+	 * full, expanded card; an open card toggles expanded ↔ collapsed, and a card
+	 * the user had opened out of its shelf line folds back into it.
+	 */
+	toggle(blockId: string): AccordionState | undefined {
+		const card = this.#byBlockId.get(blockId);
+		if (!card) return undefined;
+		if (card.compact) {
+			this.#pinnedOpen.add(card);
+			card.setAccordionState("expanded");
+			this.#recompute();
+			return "expanded";
+		}
+		const state = card.toggleAccordion();
+		if (state === "collapsed" && this.#pinnedOpen.delete(card)) this.#recompute();
+		return state;
+	}
+
+	/**
+	 * Re-apply the global accordion override (Ctrl+T) to every card. `expanded`
+	 * also opens merged shelf lines into full cards; `default` merges them again.
+	 */
+	applyAccordionOverride(): void {
+		this.#pinnedOpen.clear();
+		for (const card of this.#entries) card.setAccordionState(resolveAccordionState(card.view.kind));
 		this.#recompute();
 	}
 
@@ -195,10 +227,11 @@ export class ToolShelfComponent implements Component {
 	 * readable.
 	 */
 	#recompute(): void {
-		const merge = this.#entries.length >= SHELF_MERGE_THRESHOLD;
+		const merge =
+			this.#entries.length >= SHELF_MERGE_THRESHOLD && accordionSettings.override !== "expanded";
 		let changed = false;
 		for (const card of this.#entries) {
-			const compact = merge && card.isTranscriptBlockFinalized();
+			const compact = merge && card.isTranscriptBlockFinalized() && !this.#pinnedOpen.has(card);
 			if (card.compact !== compact) changed = true;
 			card.setCompact(compact);
 		}

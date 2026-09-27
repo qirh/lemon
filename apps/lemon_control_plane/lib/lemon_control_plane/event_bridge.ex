@@ -493,7 +493,7 @@ defmodule LemonControlPlane.EventBridge do
          "id" => get_field(action, :id),
          "kind" => get_field(action, :kind),
          "title" => get_field(action, :title),
-         "detail" => get_field(action, :detail)
+         "detail" => operator_action_detail(get_field(action, :detail))
        },
        "phase" => payload.phase,
        "ok" => payload.ok,
@@ -951,6 +951,52 @@ defmodule LemonControlPlane.EventBridge do
   defp map_event_type(type, payload, _meta) do
     if Events.registered?(type), do: warn_unmapped_once(type, payload)
     nil
+  end
+
+  # Operator clients get the full-fidelity copies `CodingAgent.Session.Presentation`
+  # attaches next to the channel previews: `result_full` replaces the 500-char
+  # `result`, and reasoning `full_text` replaces the preview `text`. Structured
+  # tool `details` pass through as-is.
+  defp operator_action_detail(detail) when is_map(detail) and not is_struct(detail) do
+    detail
+    |> promote_detail_field([:result_full, "result_full"], :result, "result")
+    |> promote_reasoning_full_text()
+  end
+
+  defp operator_action_detail(detail), do: detail
+
+  defp promote_reasoning_full_text(detail) do
+    case take_detail_field(detail, [:reasoning, "reasoning"]) do
+      {key, reasoning, _rest} when is_map(reasoning) and not is_struct(reasoning) ->
+        Map.put(
+          detail,
+          key,
+          promote_detail_field(reasoning, [:full_text, "full_text"], :text, "text")
+        )
+
+      _ ->
+        detail
+    end
+  end
+
+  defp promote_detail_field(map, source_keys, atom_target, string_target) do
+    case take_detail_field(map, source_keys) do
+      {source_key, value, rest} when is_binary(value) ->
+        target = if is_atom(source_key), do: atom_target, else: string_target
+        rest |> Map.delete(atom_target) |> Map.delete(string_target) |> Map.put(target, value)
+
+      {_source_key, _value, rest} ->
+        rest
+
+      nil ->
+        map
+    end
+  end
+
+  defp take_detail_field(map, keys) do
+    Enum.find_value(keys, fn key ->
+      if Map.has_key?(map, key), do: {key, Map.get(map, key), Map.delete(map, key)}
+    end)
   end
 
   defp warn_unmapped_once(type, payload) do

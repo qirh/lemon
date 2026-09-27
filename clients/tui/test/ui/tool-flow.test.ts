@@ -14,6 +14,7 @@ import { AppShell } from "../../src/app.ts";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
+import { accordionSettings } from "../../src/ui/components/accordion.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
@@ -29,9 +30,13 @@ beforeEach(() => {
 
 afterEach(() => {
 	while (teardown.length > 0) teardown.pop()?.();
+	accordionSettings.reset();
 	resetTheme();
 	invalidateThemeAdapters();
 });
+
+const CTRL_R = "\x12";
+const CTRL_T = "\x14";
 
 async function boot() {
 	const server = await FakeControlPlane.start();
@@ -40,16 +45,17 @@ async function boot() {
 		url: server.url,
 		socketOptions: { minBackoffMs: 10, maxBackoffMs: 20, jitter: 0 },
 	});
+	const terminal = new MemoryTerminal();
 	const app = new AppShell({
 		url: server.url,
 		sessionKey: SESSION,
 		version: "test",
 		client,
-		terminal: new MemoryTerminal(),
+		terminal,
 	});
 	teardown.push(() => app.stop());
 	await app.start();
-	return { app, server };
+	return { app, server, terminal };
 }
 
 interface ToolFrame {
@@ -139,6 +145,37 @@ describe("tool cards in the transcript", () => {
 		});
 		await waitFor(() => transcript(app).includes("✗ `false`"), { what: "the failed card" });
 		expect(transcript(app)).toContain("command exited with status 1");
+	});
+});
+
+describe("reasoning at the end of a run", () => {
+	test("a run that ends mid-thought still closes the commit seam", async () => {
+		const { app, server } = await boot();
+		server.pushEvent("agent", { type: "started", runId: "run-1", sessionKey: SESSION });
+		tool(server, {
+			id: "r1",
+			kind: "reasoning",
+			title: "reasoning",
+			detail: { reasoning: { text: "half a thought", source: "lemon_reasoning" } },
+			phase: "updated",
+		});
+		await waitFor(() => transcript(app).includes("half a thought"), { what: "the thought" });
+
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "run-1",
+			sessionKey: SESSION,
+			ok: false,
+			answer: "",
+		});
+		await waitFor(
+			() => {
+				app.chatContainer.render(100);
+				return app.chatContainer.getNativeScrollbackLiveRegionStart() === undefined;
+			},
+			{ what: "the seam to close" },
+		);
+		expect(transcript(app)).not.toContain("thinking…");
 	});
 });
 
@@ -298,7 +335,7 @@ describe("replayed frames", () => {
 });
 
 describe("action kinds", () => {
-	test("reasoning collapses to a summary line, subagents get their own glyph", async () => {
+	test("reasoning is its own collapsed transcript block, not a tool card", async () => {
 		const { app, server } = await boot();
 		tool(server, {
 			id: "r1",
@@ -311,40 +348,133 @@ describe("action kinds", () => {
 			ok: true,
 		});
 		await waitFor(() => transcript(app).includes("weighing the options"), { what: "the thought" });
+		expect(toolBlocks(app).length).toBe(0);
+		expect(app.store.focused.blocks.map((block) => block.kind)).toContain("reasoning");
 		const text = transcript(app);
-		expect(text).toContain("✻");
-		// Collapsed: the body's extra lines are behind the "+N more" hint.
-		expect(text).toContain("+2 more");
+		expect(text).toContain("✻ thinking");
+		// Collapsed: the body's extra lines are behind the "+N more lines" hint.
+		expect(text).toContain("+2 more lines");
 		expect(text).not.toContain("second option");
+	});
 
-		app.events.notice("barrier");
+	test("streamed reasoning updates one block in place until it completes", async () => {
+		const { app, server } = await boot();
+		const frame = (text: string, phase: string) =>
+			tool(server, {
+				id: "r1",
+				kind: "reasoning",
+				title: "reasoning",
+				detail: { reasoning: { text, source: "lemon_reasoning" } },
+				phase,
+			});
+		frame("", "started");
+		frame("checking the shelf", "updated");
+		await waitFor(() => transcript(app).includes("checking the shelf"), { what: "the update" });
+		expect(transcript(app)).toContain("thinking…");
+		frame("checking the shelf, then the seam", "completed");
+		await waitFor(() => transcript(app).includes("then the seam"), { what: "the final text" });
+		expect(transcript(app)).not.toContain("thinking…");
+		expect(app.store.focused.blocks.filter((block) => block.kind === "reasoning").length).toBe(1);
+	});
+
+	test("subagents get their own glyph", async () => {
+		const { app, server } = await boot();
 		tool(server, {
 			id: "s1",
 			kind: "subagent",
-			title: "task(codex): audit",
-			detail: { name: "task", args: { action: "run" }, result: "audit done" },
+			title: "task: audit",
+			detail: { name: "task", args: { description: "audit" }, result: "audit done" },
 			phase: "completed",
 			ok: true,
 		});
-		await waitFor(() => transcript(app).includes("task(codex): audit"), { what: "the subagent" });
-		expect(transcript(app)).toContain("◈ task(codex): audit");
+		await waitFor(() => transcript(app).includes("task: audit"), { what: "the subagent" });
+		expect(transcript(app)).toContain("◈ task: audit");
 	});
 
 	test("an unknown tool renders a generic card rather than nothing", async () => {
 		const { app, server } = await boot();
 		tool(server, {
 			id: "m1",
-			title: "sentry.list_issues",
+			title: "session_search",
+			detail: { name: "session_search", args: { query: "x" }, result: "3 sessions matched" },
+			phase: "completed",
+			ok: true,
+		});
+		await waitFor(() => transcript(app).includes("session_search"), { what: "the card" });
+		expect(transcript(app)).toContain("3 sessions matched");
+	});
+});
+
+describe("expand/collapse keys", () => {
+	test("ctrl+r expands the latest reasoning block and collapses it again", async () => {
+		const { app, server, terminal } = await boot();
+		tool(server, {
+			id: "r1",
+			kind: "reasoning",
+			title: "weighing",
+			detail: { reasoning: { text: "weighing\nfirst option\nsecond option", source: "lemon" } },
+			phase: "completed",
+			ok: true,
+		});
+		await waitFor(() => transcript(app).includes("weighing"), { what: "the thought" });
+		expect(transcript(app)).not.toContain("second option");
+
+		terminal.sendInput(CTRL_R);
+		await waitFor(() => transcript(app).includes("second option"), { what: "the expanded thought" });
+
+		terminal.sendInput(CTRL_R);
+		await waitFor(() => !transcript(app).includes("second option"), { what: "the collapse" });
+	});
+
+	test("ctrl+r opens the latest merged shelf line into a full card", async () => {
+		const { app, server, terminal } = await boot();
+		for (const [id, command, output] of [
+			["t1", "ls", "biome.json"],
+			["t2", "pwd", "/home/z80/dev/lemon"],
+		]) {
+			tool(server, {
+				id,
+				kind: "command",
+				title: `\`${command}\``,
+				detail: { name: "bash", args: { command }, result: output, details: { exit_code: 0 } },
+				phase: "completed",
+				ok: true,
+			});
+		}
+		await waitFor(() => toolBlocks(app).length === 2, { what: "both tools" });
+		// Two finished tools merge into one line each: the output is not shown.
+		await waitFor(() => transcript(app).includes("`pwd`"), { what: "the shelf" });
+		const merged = transcript(app).split("\n").length;
+
+		terminal.sendInput(CTRL_R);
+		await waitFor(() => transcript(app).split("\n").length > merged, { what: "the open card" });
+		expect(transcript(app)).toContain("/home/z80/dev/lemon");
+	});
+
+	test("ctrl+t cycles detail for cards already on screen", async () => {
+		const { app, server, terminal } = await boot();
+		tool(server, {
+			id: "t1",
+			kind: "command",
+			title: "`ls`",
 			detail: {
-				server: "sentry",
-				tool: "list_issues",
-				arguments: { project: "lemon" },
-				result_preview: "3 unresolved issues",
+				name: "bash",
+				args: { command: "ls" },
+				result: "biome.json\nbun.lock\nsrc",
+				details: { exit_code: 0 },
 			},
 			phase: "completed",
 			ok: true,
 		});
-		await waitFor(() => transcript(app).includes("sentry.list_issues"), { what: "the card" });
-		expect(transcript(app)).toContain("3 unresolved issues");
+		await waitFor(() => transcript(app).includes("bun.lock"), { what: "the expanded card" });
+
+		// default → collapsed: the card folds to its summary line.
+		terminal.sendInput(CTRL_T);
+		await waitFor(() => !transcript(app).includes("bun.lock"), { what: "the collapse" });
+		// collapsed → expanded.
+		terminal.sendInput(CTRL_T);
+		await waitFor(() => transcript(app).includes("bun.lock"), { what: "the expansion" });
+		// expanded → default; reset for the other tests either way.
+		terminal.sendInput(CTRL_T);
 	});
 });

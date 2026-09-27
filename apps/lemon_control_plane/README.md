@@ -768,7 +768,7 @@ The EventBridge subscribes to `LemonCore.Bus` topics and maps internal bus event
 
 | Event | Trigger |
 |-------|---------|
-| `agent` | Run started/completed, tool use; tool-use events preserve nested `action.detail` metadata, including `result_meta` failure fields such as `error_type` and `exit_code` |
+| `agent` | Run started/completed, tool use; tool-use events preserve nested `action.detail` metadata, including `result_meta` failure fields such as `error_type` and `exit_code`. `detail.result` is the bounded full tool result (≤32 KB, not the 500-char channel preview), `detail.details` carries structured tool details such as an edit's `diff` and `first_changed_line`, and reasoning `detail.reasoning.text` is the bounded full thought (≤16 KB) |
 | `chat` | Chat delta/streaming content |
 | `goal` | Durable goal set/pause/resume/complete/clear, supervised continuation, or loop verdict |
 | `presence` | Connection count changed |

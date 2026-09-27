@@ -267,6 +267,8 @@ export class AppShell {
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
 			focusQueue: () => this.focusQueue(),
+			toggleLatest: () => this.events.toggleLatestBlock(),
+			cycleDetail: () => this.events.cycleAccordionOverride(),
 			notice: (text) => this.events.notice(text),
 		});
 	}
@@ -965,6 +967,7 @@ export class AppShell {
 		const session = this.store.focused;
 		session.blocks.length = 0;
 		session.byActionId.clear();
+		session.reasoningByActionId.clear();
 		this.events.rebuildFocused();
 		this.tui.requestRender(true, { clearScrollback: true });
 	}
