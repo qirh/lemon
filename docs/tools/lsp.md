@@ -67,8 +67,10 @@ executable path. Public status redacts absolute paths to command basenames.
 
 ## Supervised Session API
 
-The [LSP app guide](../../apps/lemon_lsp/README.md) describes the in-process
-session API. These sessions are not exposed as control-plane RPC methods.
+The in-process session API is defined by
+[`LemonLsp.ServerManager`](../../apps/lemon_lsp/lib/lemon_lsp/server_manager.ex):
+start/initialize a session, open/change/close documents, send requests or
+notifications, and stop the session. It is not exposed as control-plane RPCs.
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,
