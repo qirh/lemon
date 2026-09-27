@@ -186,8 +186,6 @@ inspection, validation, preview, and activation semantics to `Blueprint`.
 - For cron jobs created from `agent:*:main`, completion summaries are mirrored back into the base main session as synthetic `run_completed` entries (`meta.cron_forwarded_summary = true`)
 - Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover through the same monitor/delivery/retry terminalizer as normal completions.
 - Scheduled runs use deterministic slot ids and `CronStore.claim_scheduled_run/3`, backed by `LemonCore.Store.put_new/3`, so competing dispatchers preserve the first claimant instead of overwriting a run.
-- `scripts/live_cron_runtime_restart_smoke.exs` boots `:runtime_full` twice against one isolated durable store, then proves a scheduled run before restart, persisted job/run history after restart, and a fresh scheduled run after restart.
-- `scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and Discord plugins, completes channel-peer cron runs through `CronManager`, and proves forwarded run history plus `LemonRouter.ChannelsDelivery` -> `LemonChannels` outbox delivery with redacted proof metadata.
 - Scheduled failures/timeouts persist retry due time, attempt, source, and root lineage on the terminal source run. Restart reconstructs the timer, while a deterministic `{root, attempt}` retry-run ID and atomic claim prevent duplicate attempts. Manual and wake runs stay single-shot by default.
 - Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
@@ -742,12 +740,6 @@ mix test --cover apps/lemon_automation
 # Portable bundle policy, rollback, exact confirmation, and replay
 mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
 
-# Booted control-plane activation proof (disabled job; cleans up after itself)
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
-
-# Source and assembled minimal-runtime CLI proof uses an isolated catalog,
-# profile, control-plane port, and store, then replays activation once.
-scripts/live_blueprint_cli_smoke
 ```
 
 ### Key Testing Patterns

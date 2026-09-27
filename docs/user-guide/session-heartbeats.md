@@ -77,18 +77,3 @@ fire-count fields, plus the next scheduled time for an active heartbeat.
 
 Frozen/ephemeral context sessions reject heartbeat mutations because they have
 no durable session file to restore.
-
-## Verification
-
-Run the deterministic live path from the umbrella root:
-
-```bash
-MIX_ENV=test mix run scripts/live_session_heartbeat_smoke.exs
-```
-
-The smoke starts real Lemon OTP applications, restores an overdue session,
-proves that the logical TUI key resolves a different persisted ID, dispatches
-one recurring user turn through the normal agent/provider stream, exercises the
-control-plane lifecycle, and reloads the JSONL file to prove the clear
-tombstone. Its proof is written under `.lemon/proofs/` and contains hashes and
-status metadata rather than prompts, provider responses, or credentials.

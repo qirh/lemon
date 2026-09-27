@@ -1,6 +1,6 @@
 defmodule LemonCore.Doctor.SupportBundle do
   @moduledoc """
-  Builds sanitized support bundle archives from doctor reports, runtime diagnostics, proof metadata, and selected configuration files.
+  Builds sanitized support bundle archives from doctor reports, runtime diagnostics, and selected configuration files.
   """
   alias LemonCore.Config.Modular
   alias LemonCore.Doctor.Report
@@ -37,39 +37,6 @@ defmodule LemonCore.Doctor.SupportBundle do
     TERM
   )
 
-  @media_provider_specs [
-    %{
-      providers: ["openai_image", "vertex_imagen"],
-      label: "image",
-      script: "scripts/live_media_image_smoke.exs",
-      proof_path: ".lemon/proofs/media-image-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_tts", "elevenlabs_tts", "google_tts"],
-      label: "TTS",
-      script: "scripts/live_media_speech_smoke.exs",
-      proof_path: ".lemon/proofs/media-speech-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_transcribe", "deepgram_transcribe"],
-      label: "STT",
-      script: "scripts/live_media_transcription_smoke.exs",
-      proof_path: ".lemon/proofs/media-transcription-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_vision"],
-      label: "vision",
-      script: "scripts/live_media_vision_smoke.exs",
-      proof_path: ".lemon/proofs/media-vision-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_video", "vertex_veo"],
-      label: "video",
-      script: "scripts/live_media_video_smoke.exs",
-      proof_path: ".lemon/proofs/media-video-smoke-latest.json"
-    }
-  ]
-
   @spec write(Report.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def write(%Report{} = report, opts \\ []) do
     path = bundle_path(opts)
@@ -82,8 +49,6 @@ defmodule LemonCore.Doctor.SupportBundle do
       {~c"environment.json", json(environment())},
       {~c"browser_diagnostics.json", json(browser_diagnostics(opts))},
       {~c"channel_diagnostics.json", json(channel_diagnostics(opts))},
-      {~c"channel_readiness.json", json(channel_readiness(opts))},
-      {~c"readiness_summary.json", json(readiness_summary(report, opts))},
       {~c"checkpoint_diagnostics.json", json(checkpoint_diagnostics(opts))},
       {~c"cron_diagnostics.json", json(cron_diagnostics(opts))},
       {~c"extension_diagnostics.json", json(extension_diagnostics(opts))},
@@ -92,7 +57,6 @@ defmodule LemonCore.Doctor.SupportBundle do
       {~c"lsp_diagnostics.json", json(lsp_diagnostics())},
       {~c"media_diagnostics.json", json(media_diagnostics(opts))},
       {~c"memory_diagnostics.json", json(memory_diagnostics())},
-      {~c"proof_diagnostics.json", json(proof_diagnostics(opts))},
       {~c"provider_diagnostics.json", json(provider_diagnostics(opts))},
       {~c"terminal_diagnostics.json", json(terminal_diagnostics())},
       {~c"usage_diagnostics.json", json(usage_diagnostics())}
@@ -203,42 +167,6 @@ defmodule LemonCore.Doctor.SupportBundle do
     )
   end
 
-  defp channel_readiness(opts) do
-    probe(
-      runtime_module(:channel_readiness),
-      :status,
-      [[project_dir: Keyword.get(opts, :project_dir, File.cwd!())]],
-      %{
-        status: "unknown",
-        promoted_platforms: [],
-        gates: [],
-        gate_count: 0,
-        passed_count: 0,
-        blocked_count: 0,
-        warning_count: 0,
-        skipped_count: 0,
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_secret_names: false,
-          includes_chat_ids: false,
-          includes_channel_ids: false,
-          includes_guild_ids: false,
-          includes_message_bodies: false,
-          includes_raw_proof_paths: false,
-          includes_raw_proof_details: false
-        }
-      }
-    )
-  end
-
-  defp readiness_summary(report, opts) do
-    LemonCore.Doctor.ReadinessSummary.status(
-      report: report,
-      project_dir: Keyword.get(opts, :project_dir, File.cwd!()),
-      limit: Keyword.get(opts, :readiness_limit, 20)
-    )
-  end
-
   defp checkpoint_diagnostics(opts) do
     LemonCore.Doctor.CheckpointDiagnostics.summary(
       checkpoint_dir: Keyword.get(opts, :checkpoint_dir),
@@ -307,76 +235,9 @@ defmodule LemonCore.Doctor.SupportBundle do
           available: false,
           error: "media runtime not available"
         }),
-      provider_live: media_provider_live(project_dir),
       recent_jobs:
         probe(runtime_module(:media_jobs), :recent, [[project_dir: project_dir, limit: 20]], [])
     }
-  end
-
-  defp media_provider_live(project_dir) do
-    proofs = LemonCore.Doctor.ProofDiagnostics.status(project_dir: project_dir, limit: 1_000)
-
-    providers =
-      Enum.map(@media_provider_specs, fn spec ->
-        media_provider_summary(spec, Map.get(proofs, :recent_proofs, []))
-      end)
-
-    completed_count = Enum.count(providers, &(&1.status == "completed"))
-
-    %{
-      status:
-        if(completed_count == length(@media_provider_specs), do: "complete", else: "incomplete"),
-      completed_count: completed_count,
-      required_count: length(@media_provider_specs),
-      providers: providers,
-      cleanup: %{
-        includes_raw_api_keys: false,
-        includes_raw_prompts: false,
-        includes_raw_provider_responses: false,
-        includes_raw_media_bytes: false
-      }
-    }
-  end
-
-  defp media_provider_summary(spec, proofs) do
-    matching = Enum.filter(proofs, &(get_in(&1, [:media_proof, :provider]) in spec.providers))
-    status = best_media_provider_status(Enum.map(matching, &Map.get(&1, :status)))
-    incomplete_proof = Enum.find(matching, &(Map.get(&1, :status) in ["failed", "skipped"]))
-    target_provider = get_in(incomplete_proof || %{}, [:media_proof, :provider])
-    reason_kind = Map.get(incomplete_proof || %{}, :reason_kind)
-
-    %{
-      label: spec.label,
-      status: status,
-      providers: spec.providers,
-      target_provider: target_provider,
-      reason_kind: reason_kind,
-      proof_path: spec.proof_path,
-      command: media_provider_command(spec, status, target_provider),
-      secret_command:
-        "#{media_provider_command(spec, status, target_provider)} --api-key-secret SECRET_NAME"
-    }
-  end
-
-  defp best_media_provider_status(statuses) do
-    cond do
-      "completed" in statuses -> "completed"
-      "failed" in statuses -> "failed"
-      "skipped" in statuses -> "skipped"
-      true -> "missing"
-    end
-  end
-
-  defp media_provider_command(spec, status, target_provider) do
-    command =
-      "LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start #{spec.script} --proof-path #{spec.proof_path}"
-
-    if status in ["failed", "skipped"] and target_provider in spec.providers and
-         length(spec.providers) > 1 do
-      "#{command} --provider #{target_provider}"
-    else
-      command
-    end
   end
 
   defp memory_diagnostics do
@@ -384,12 +245,6 @@ defmodule LemonCore.Doctor.SupportBundle do
       available: false,
       error: "memory runtime not available"
     })
-  end
-
-  defp proof_diagnostics(opts) do
-    LemonCore.Doctor.ProofDiagnostics.status(
-      project_dir: Keyword.get(opts, :project_dir, File.cwd!())
-    )
   end
 
   defp terminal_diagnostics do
@@ -435,12 +290,12 @@ defmodule LemonCore.Doctor.SupportBundle do
     support-bundle command.
     It includes the doctor report, runtime metadata, selected environment shape,
     redacted Lemon config files, and redacted diagnostics for browser, channels,
-    channel readiness, compact launch readiness, checkpoints, cron, extensions,
-    goals, kanban, LSP, media, memory, proofs, providers, terminals, and usage.
+    checkpoints, cron, extensions, goals, kanban, LSP, media, memory, providers,
+    terminals, and usage.
 
     Review before sharing. It should not contain provider keys, tokens, passwords,
     secret names, chat/channel/guild ids, private prompts, message bodies,
-    memory contents, proof file contents, media bytes, or tool outputs.
+    memory contents, media bytes, or tool outputs.
     """
   end
 

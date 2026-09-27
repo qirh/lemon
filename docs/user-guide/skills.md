@@ -320,14 +320,6 @@ only for trusted source-checkout administration that genuinely needs a local
 path; normal operators should use `lemon blueprints`, and remote clients should
 use the catalog-scoped RPC.
 
-Run the booted-runtime proof to activate the disabled example, verify
-profile-local discovery and persisted provenance, replay it without a
-duplicate, then clean up the isolated profile and job:
-
-```bash
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
-```
-
 ---
 
 ## Skill Drafts (Synthesized Skills)

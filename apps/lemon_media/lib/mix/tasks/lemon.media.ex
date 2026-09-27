@@ -1,6 +1,6 @@
 defmodule Mix.Tasks.Lemon.Media do
   @moduledoc """
-  Show redacted generated-media and provider-proof readiness.
+  Show redacted generated-media job diagnostics.
 
   ## Usage
 
@@ -18,42 +18,8 @@ defmodule Mix.Tasks.Lemon.Media do
   use Mix.Task
 
   alias LemonMedia.{MediaJobs, MediaJobSupervisor}
-  alias LemonCore.Doctor.ProofDiagnostics
 
   @default_limit 20
-
-  @provider_specs [
-    %{
-      providers: ["openai_image", "vertex_imagen"],
-      label: "image",
-      script: "scripts/live_media_image_smoke.exs",
-      proof_path: ".lemon/proofs/media-image-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_tts", "elevenlabs_tts", "google_tts"],
-      label: "TTS",
-      script: "scripts/live_media_speech_smoke.exs",
-      proof_path: ".lemon/proofs/media-speech-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_transcribe", "deepgram_transcribe"],
-      label: "STT",
-      script: "scripts/live_media_transcription_smoke.exs",
-      proof_path: ".lemon/proofs/media-transcription-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_vision"],
-      label: "vision",
-      script: "scripts/live_media_vision_smoke.exs",
-      proof_path: ".lemon/proofs/media-vision-smoke-latest.json"
-    },
-    %{
-      providers: ["openai_video", "vertex_veo"],
-      label: "video",
-      script: "scripts/live_media_video_smoke.exs",
-      proof_path: ".lemon/proofs/media-video-smoke-latest.json"
-    }
-  ]
 
   @impl true
   def run(args) do
@@ -90,137 +56,17 @@ defmodule Mix.Tasks.Lemon.Media do
     summary =
       MediaJobs.summary(project_dir: project_dir, dir: jobs_dir, artifacts_dir: artifacts_dir)
 
-    providers = provider_proofs(project_dir)
-
     %{
       jobs_dir_hash: hash(jobs_dir),
       artifacts_dir_hash: hash(artifacts_dir),
       worker_status: safe_worker_status(MediaJobSupervisor.status()),
       summary: safe_summary(summary),
-      provider_proofs: providers,
       recent_jobs:
         MediaJobs.recent(project_dir: project_dir, dir: jobs_dir, limit: limit)
         |> Enum.map(&safe_job/1),
-      cleanup: cleanup(summary, providers)
+      cleanup: Map.get(summary, :cleanup, %{})
     }
   end
-
-  defp provider_proofs(project_dir) do
-    proofs =
-      ProofDiagnostics.status(project_dir: project_dir, limit: 1_000)
-      |> Map.get(:recent_proofs, [])
-
-    providers = Enum.map(@provider_specs, &provider_summary(&1, proofs))
-    completed_count = Enum.count(providers, &(&1.status == "proven"))
-
-    %{
-      status: if(completed_count == length(@provider_specs), do: "proven", else: "incomplete"),
-      completed_count: completed_count,
-      required_count: length(@provider_specs),
-      providers: providers,
-      next_action: provider_next_action(providers),
-      cleanup: provider_cleanup()
-    }
-  end
-
-  defp provider_summary(spec, proofs) do
-    proof =
-      proofs
-      |> Enum.filter(&(get_in(&1, [:media_proof, :provider]) in spec.providers))
-      |> Enum.sort_by(
-        fn proof ->
-          {proof_rank(Map.get(proof, :status)), Map.get(proof, :modified_at) || ""}
-        end,
-        fn {rank_a, modified_a}, {rank_b, modified_b} ->
-          rank_a < rank_b or (rank_a == rank_b and modified_a >= modified_b)
-        end
-      )
-      |> List.first()
-
-    proof_status = Map.get(proof || %{}, :status)
-    provider = get_in(proof || %{}, [:media_proof, :provider]) || hd(spec.providers)
-
-    %{
-      label: spec.label,
-      provider: provider,
-      providers: spec.providers,
-      status: provider_status(proof_status),
-      proof_status: proof_status,
-      reason_kind: Map.get(proof || %{}, :reason_kind),
-      model: get_in(proof || %{}, [:media_proof, :model]),
-      proof_hash: Map.get(proof || %{}, :proof_hash),
-      modified_at: Map.get(proof || %{}, :modified_at),
-      command: provider_command(spec.script, spec.proof_path, provider),
-      secret_command:
-        "#{provider_command(spec.script, spec.proof_path, provider)} --api-key-secret SECRET_NAME",
-      next_action:
-        provider_next_action(
-          proof_status,
-          spec.script,
-          Map.get(proof || %{}, :reason_kind),
-          spec.label
-        )
-    }
-  end
-
-  defp provider_command(script, proof_path, provider) do
-    command =
-      "LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 MIX_ENV=test mix run --no-start #{script} --proof-path #{proof_path}"
-
-    if provider, do: "#{command} --provider #{provider}", else: command
-  end
-
-  defp proof_rank("completed"), do: 0
-  defp proof_rank("failed"), do: 1
-  defp proof_rank("skipped"), do: 2
-  defp proof_rank(_), do: 3
-
-  defp provider_status("completed"), do: "proven"
-  defp provider_status("failed"), do: "blocked"
-  defp provider_status("skipped"), do: "missing"
-  defp provider_status(_), do: "missing"
-
-  defp provider_next_action(providers) when is_list(providers) do
-    providers
-    |> Enum.reject(&(&1.status == "proven"))
-    |> List.first()
-    |> case do
-      nil -> "keep provider-backed media proofs current"
-      provider -> provider.next_action
-    end
-  end
-
-  defp provider_next_action("completed", _script, _reason, _label), do: "keep proof current"
-
-  defp provider_next_action("failed", script, reason, label) do
-    case provider_reason_action(reason, label) do
-      nil -> "inspect provider diagnostics and rerun #{script}"
-      action -> "#{action}; rerun #{script}"
-    end
-  end
-
-  defp provider_next_action("skipped", script, _reason, _label),
-    do: "enable live credentials and rerun #{script}"
-
-  defp provider_next_action(_status, script, _reason, _label), do: "run #{script}"
-
-  defp provider_reason_action(reason, label) when is_binary(reason) do
-    cond do
-      String.contains?(reason, "permission_denied") ->
-        "#{label}: enable provider API/IAM/billing permissions for the configured account"
-
-      String.contains?(reason, "billing_limit") ->
-        "#{label}: use a funded account or raise the provider quota"
-
-      String.contains?(reason, "payment_required") ->
-        "#{label}: fund or upgrade the provider account"
-
-      true ->
-        nil
-    end
-  end
-
-  defp provider_reason_action(_reason, _label), do: nil
 
   defp safe_summary(summary) do
     %{
@@ -272,38 +118,14 @@ defmodule Mix.Tasks.Lemon.Media do
     }
   end
 
-  defp cleanup(summary, provider_proofs) do
-    summary_cleanup = Map.get(summary, :cleanup, %{})
-    provider_cleanup = get_in(provider_proofs, [:cleanup]) || %{}
-
-    Map.merge(summary_cleanup, provider_cleanup)
-  end
-
-  defp provider_cleanup do
-    %{
-      includes_prompts: false,
-      includes_raw_artifact_paths: false,
-      includes_generated_bytes: false,
-      includes_provider_responses: false,
-      includes_channel_message_bodies: false,
-      includes_raw_proof_paths: false,
-      includes_secret_values: false
-    }
-  end
-
   defp print_text(status) do
     summary = status.summary
-    providers = status.provider_proofs
     cleanup = status.cleanup
 
     Mix.shell().info("Lemon Media")
     Mix.shell().info("Jobs: #{summary.count}")
     Mix.shell().info("Artifacts: #{summary.artifact_count}")
     Mix.shell().info("Artifact bytes: #{summary.artifact_total_bytes}")
-
-    Mix.shell().info(
-      "Provider proofs: #{providers.completed_count}/#{providers.required_count} #{providers.status}"
-    )
 
     Mix.shell().info("Includes prompts: #{truthy?(cleanup[:includes_prompts])}")
 
@@ -321,11 +143,8 @@ defmodule Mix.Tasks.Lemon.Media do
       "Includes channel message bodies: #{truthy?(cleanup[:includes_channel_message_bodies])}"
     )
 
-    Mix.shell().info("Includes raw proof paths: #{truthy?(cleanup[:includes_raw_proof_paths])}")
-    Mix.shell().info("Includes secret values: #{truthy?(cleanup[:includes_secret_values])}")
     print_counts("Job Statuses", summary.status_counts)
     print_counts("Job Types", summary.type_counts)
-    print_provider_proofs(providers.providers)
     print_recent_jobs(status.recent_jobs)
   end
 
@@ -339,18 +158,6 @@ defmodule Mix.Tasks.Lemon.Media do
     counts
     |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
     |> Enum.each(fn {key, value} -> Mix.shell().info("  #{key}: #{value}") end)
-  end
-
-  defp print_provider_proofs(providers) do
-    Mix.shell().info("Provider Proofs:")
-
-    Enum.each(providers, fn provider ->
-      reason = if provider.reason_kind, do: " reason=#{provider.reason_kind}", else: ""
-
-      Mix.shell().info(
-        "  #{provider.label}: #{provider.status} provider=#{provider.provider}#{reason}"
-      )
-    end)
   end
 
   defp print_recent_jobs([]), do: Mix.shell().info("Recent Jobs: none")

@@ -39,7 +39,7 @@ arguments remain human-readable usage errors with exit code `2`.
 | `doctor` | Run diagnostics or create a support bundle |
 | `config` | Validate or show resolved configuration |
 | `secrets` | Manage encrypted credentials and inspect external read-only sources |
-| `channels` | Inspect channel launch readiness |
+| `channels` | Inspect channel configuration |
 | `providers` | Inspect provider readiness and manage routing |
 | `blueprints` | Review and exactly confirm cataloged skill automation bundles |
 | `profile` | Manage isolated specialist profiles |

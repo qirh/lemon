@@ -29,9 +29,9 @@ defmodule Mix.Tasks.Lemon.Help do
         lemon.workspace lemon.update lemon.hermes.audit lemon.hermes.migrate)},
     {"Secrets", ~w(lemon.secrets.init lemon.secrets.set lemon.secrets.list lemon.secrets.status
         lemon.secrets.check lemon.secrets.delete lemon.secrets.import_env lemon.voice.secrets)},
-    {"Diagnostics & readiness",
-     ~w(lemon.doctor lemon.readiness lemon.config lemon.channels lemon.usage lemon.proofs
-        lemon.media lemon.models lemon.introspection lemon.feedback)},
+    {"Diagnostics",
+     ~w(lemon.doctor lemon.config lemon.channels lemon.usage lemon.media lemon.models
+        lemon.introspection lemon.feedback)},
     {"Quality & CI", ~w(lemon.quality lemon.architecture.docs lemon.check_duplicate_tests
         lemon.extension.validate lemon.eval lemon.help)},
     {"Data, stores & messaging",
@@ -52,12 +52,10 @@ defmodule Mix.Tasks.Lemon.Help do
   @fallback %{
     "lemon.new" => "Scaffold a new Lemon agent project (installer archive)",
     "lemon.policy" => "Manage per-route model policies (channel/account/peer/thread)",
-    "lemon.channels" => "Show redacted channel launch readiness",
+    "lemon.channels" => "Show redacted Telegram/Discord configuration status",
     "lemon.config" => "Validate and inspect Lemon configuration",
-    "lemon.proofs" => "Show redacted local proof artifact status",
-    "lemon.readiness" => "Show a compact redacted launch-readiness summary",
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
-    "lemon.media" => "Show redacted generated-media and provider-proof readiness",
+    "lemon.media" => "Show redacted generated-media job diagnostics",
     "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)",
     # ── lemon-sim product block — leaves with the lemon-sim repo ──
     "lemon.sim.leaderboard" => "Print and rewrite a suite leaderboard",

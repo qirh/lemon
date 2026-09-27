@@ -148,12 +148,12 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "channels",
-      summary: "Inspect channel launch readiness",
+      summary: "Inspect channel configuration",
       usage: "lemon channels [options]",
       subcommands: [],
       options: [
-        option("--project-dir PATH", ["--project-dir"], "Project root to scan"),
-        option("--json", ["--json"], "Emit redacted readiness JSON")
+        option("--project-dir PATH", ["--project-dir"], "Project root to read config from"),
+        option("--json", ["--json"], "Emit redacted channel diagnostics JSON")
       ]
     },
     %{
@@ -330,8 +330,6 @@ defmodule LemonCli.CommandRegistry do
     launcher("media", "Inspect media capabilities"),
     launcher("models", "List available models"),
     launcher("policy", "Manage model policy"),
-    launcher("proofs", "Inspect proof artifacts"),
-    launcher("readiness", "Inspect launch readiness"),
     launcher("skill", "Manage skills"),
     launcher("usage", "Inspect usage diagnostics")
   ]

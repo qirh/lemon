@@ -50,7 +50,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
 | Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` | Use the same Mix-free command boundary |
-| Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
+| Inspect channel configuration | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
 | Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
 | Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` | Use the same control-plane command boundary |
 | Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |

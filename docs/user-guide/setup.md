@@ -169,7 +169,8 @@ file edit or shell command in a group needs an approval. Remote chats run in the
 assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.
 
-See the configured channel state with:
+Inspect redacted channel configuration (enabled state, credentials, binding and
+allowlist counts, registered transports) with:
 
 ```bash
 lemon channels

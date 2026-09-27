@@ -129,27 +129,6 @@ checksums but has no publisher signature, and `:httpc` currently enforces an
 exact post-download rather than exact in-flight byte cutoff; keep both residuals
 explicit in user/release documentation.
 
-Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
-proof commands copy-ready and include the default redacted
-`.lemon/proofs/media-*-smoke-latest.json` proof paths. Local deterministic
-media smoke artifacts do not promote the provider-backed live gate. Image proof
-can be satisfied by either `openai_image` or `vertex_imagen`; TTS proof can be
-satisfied by `openai_tts`, `elevenlabs_tts`, or `google_tts`; video proof can
-be satisfied by `openai_video` or `vertex_veo`. Media job
-failures may expose a bounded provider status/type suffix in `error_kind`, but
-raw provider messages remain hashed-only metadata. Doctor remediation may map
-safe `reason_kind` labels to operator hints for permission, quota/billing,
-payment, request-shape, and generic provider HTTP failures, but it must not
-include raw provider response bodies. When a failed or skipped proof identifies
-a safe provider id for a multi-provider lane, remediation should include the
-matching `--provider` rerun flag instead of sending the operator back to the
-lane default.
-
-Support-bundle `media_diagnostics.json` should mirror those same
-provider-backed media launch lanes with safe status, reason kind, proof path,
-and target-provider rerun command fields. Keep it redacted: no raw prompts,
-provider responses, artifact bytes, API keys, or secret names.
-
 Support-bundle `usage_diagnostics.json` should mirror the shared usage summary
 from `LemonCore.UsageStore` with cost, request, token, provider, daily, and
 quota aggregates only. Keep it redacted: no prompts, responses, message bodies,
@@ -158,18 +137,6 @@ credentials, or secret values.
 Doctor `usage.status` should use `LemonCore.UsageDiagnostics` and report only
 aggregate usage/quota pressure. Do not include prompt text, response text,
 message bodies, credentials, or secret values in check messages/remediation.
-
-Support-bundle `channel_readiness.json` and control-plane `channels.status`
-should use `LemonChannels.Doctor.Readiness` for the shared channel
-launch-gate summary. Keep gate evidence and next actions redacted and
-copy-ready, especially slash-command client-click wait modes. Do not include bot
-tokens, secret names, chat/channel/guild ids, message bodies, raw proof paths,
-or raw proof details.
-
-Doctor `channels.readiness` should summarize the same
-`LemonChannels.Doctor.Readiness` launch-gate counts and point at the first
-unresolved gate's safe next action without duplicating or leaking proof
-contents.
 
 Use `LemonCore.Event` constructors for structured run-event contracts when available.
 `engine_action/2` validates tool/status action payloads before broadcast, and
@@ -541,23 +508,11 @@ Onboarding providers live in `apps/lemon_cli`; see `apps/lemon_cli/README.md`.
 
 ### Doctor Channel Checks
 
-Channel diagnostics, launch-gate readiness and the channel doctor check live in
-`lemon_channels` and reach `lemon_core` through `config :lemon_core,
-:doctor_runtime` (`channel_diagnostics:`, `channel_readiness:`,
-`channel_proofs:`) and `config :lemon_core, :doctor_checks`. Core must not name
-a platform: the per-channel proof vocabulary — which smoke-proof check names
-count as a channel media delivery, what evidence each contributes, the
-platform launch gates, the channel-origin cron check names, and the
-failure/setup-error classifications — is supplied by whoever implements
-`LemonCore.Doctor.ChannelProofs`. Unregistered, every one of those degrades to
-its documented generic answer rather than failing.
-
-Shared proof launch-gate summaries still live in
-`LemonCore.Doctor.ProofLaunchGates`, not in a Web or control-plane formatter, so
-support bundles, `proofs.status`, and `readiness.status` stay aligned on
-provider media, terminal backend and the registered channel gates without raw
-proof details. Everything a bundle or check emits stays redacted: sanitized
-status/reason kinds, never raw ids, message bodies, bot tokens or secret names.
+Channel configuration diagnostics and doctor checks live in `lemon_channels`.
+The channel diagnostics provider is registered through `:doctor_runtime` as
+`:channel_diagnostics`; channel checks are registered through
+`:doctor_checks`. Keep core platform-agnostic. The remaining channel doctor
+checks inspect Telegram and Discord configuration only.
 
 ## How to Add Quality Checks
 

@@ -623,63 +623,6 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert content != ""
   end
 
-  test "real slash interactions write redacted client-click proof" do
-    proof_dir = tmp_dir()
-    on_exit(fn -> File.rm_rf!(proof_dir) end)
-
-    Application.put_env(:lemon_channels, :discord_client_click_proof_dir, proof_dir)
-
-    on_exit(fn ->
-      Application.delete_env(:lemon_channels, :discord_client_click_proof_dir)
-    end)
-
-    with_interaction_responder(fn ->
-      synthetic = interaction("media", subcommand("status"))
-
-      assert {:noreply, %{}} =
-               Transport.handle_info(
-                 {:discord_event, {:INTERACTION_CREATE, synthetic, nil}},
-                 %{}
-               )
-
-      refute File.exists?(Path.join(proof_dir, "discord-slash-client-click-proof-latest.json"))
-
-      clicked =
-        interaction("media", subcommand("status"), %{
-          application_id: "1500000000000000000",
-          token: "private-interaction-token"
-        })
-
-      assert {:noreply, %{}} =
-               Transport.handle_info(
-                 {:discord_event, {:INTERACTION_CREATE, clicked, nil}},
-                 %{}
-               )
-
-      proof_path = Path.join(proof_dir, "discord-slash-client-click-proof-latest.json")
-      assert File.exists?(proof_path)
-
-      proof = proof_path |> File.read!() |> Jason.decode!()
-      assert proof["proof_object"] == "lemon.discord_slash_client_click"
-      assert proof["proof_scope"] == "discord_slash_client_click_observed"
-      assert proof["status"] == "completed"
-      assert proof["coverage"]["registered_command_count"] == length(Transport.slash_commands())
-      assert proof["coverage"]["client_click_command_count"] == 1
-      assert proof["coverage"]["real_client_click_proof"] == true
-      assert proof["details"]["command"] == "media"
-      assert proof["details"]["live_fields"]["application_id_present"] == true
-      assert proof["details"]["live_fields"]["token_present"] == true
-      assert proof["details"]["safe_mentions_disabled"] == true
-      assert Enum.any?(proof["checks"], &(&1["name"] == "discord_slash_client_click_observed"))
-
-      proof_text = inspect(proof)
-      refute proof_text =~ "private-interaction-token"
-      refute proof_text =~ "1500000000000000000"
-      refute proof_text =~ "1475727417372049419"
-      refute proof_text =~ "1476753643834183691"
-    end)
-  end
-
   test "approval component resolves a pending approval through the runtime path" do
     parent = self()
 
@@ -1505,13 +1448,6 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       restore_env(:lemon_core, :config_test_mode, previous_test_mode)
       restore_env(:lemon_gateway, @gateway_config_key, previous)
     end
-  end
-
-  defp tmp_dir do
-    Path.join(
-      System.tmp_dir!(),
-      "lemon_discord_transport_test_#{System.unique_integer([:positive])}"
-    )
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

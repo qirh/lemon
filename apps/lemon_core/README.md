@@ -113,37 +113,11 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 |--------|---------|
 | `LemonCore.Doctor.SupportBundle` | Redacted doctor report, runtime metadata, config, and diagnostics ZIP writer |
 | `LemonCore.Doctor.ProviderDiagnostics` | Provider setup/routing diagnostics for support bundles without raw API keys, secret names, base URLs, env var names, prompts, or provider responses |
-| `LemonChannels.Doctor.Readiness` | Redacted channel launch-gate readiness summary shared by support bundles and `channels.status` (lives in `lemon_channels`; reached through `config :lemon_core, :doctor_runtime`) |
-| `LemonChannels.Doctor.Checks.Channels` | Channel readiness checks built from redacted channel diagnostics, shared launch-gate readiness and proof reason kinds (lives in `lemon_channels`; registers through `config :lemon_core, :doctor_checks`) |
-| `LemonCore.Doctor.Checks.Media` | Media readiness checks for provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
 | `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
-
-`media_diagnostics.json` in support bundles mirrors the provider-backed media
-launch lanes with redacted image/TTS/STT/vision/video status, safe reason
-kinds, proof paths, and target-provider rerun commands. It must not include raw
-prompts, provider responses, artifact bytes, API keys, or secret names.
-
-`usage_diagnostics.json` in support bundles mirrors the shared usage summary
-used by control-plane usage methods: current cost, request and token totals,
-provider rows, today totals, configured quota limits, and cleanup flags. It
-must not include raw prompts, responses, channel message bodies, credentials,
-or secret values.
-
-`channel_readiness.json` in support bundles mirrors the shared channel
-launch-gate summary used by `channels.status`: promoted platform list, gate
-counts, redacted gate evidence, safe reason kinds, and copy-ready next actions
-for live proof gates such as slash client-click wait mode. It must not
-include bot tokens, secret names, chat/channel/guild ids, message bodies, raw
-proof paths, or raw proof details.
 
 `mix lemon.doctor` includes `usage.status`, which reads the same redacted
 aggregate usage diagnostics and warns when configured run, token, or cost
 limits are exceeded.
-
-`mix lemon.doctor` includes `channels.readiness`, which summarizes the shared
-Channel launch-gate counts from `LemonChannels.Doctor.Readiness`
-and points remediation at the first unresolved gate without exposing channel
-ids, message bodies, proof details, credentials, or secret names.
 
 ### Secrets
 
@@ -736,8 +710,8 @@ config :lemon_core, :paths,
 ```
 
 Renaming `:state_dir` moves everything derived from it: both config files, the
-config reloader's watched paths, the default run-history store directory, the
-doctor's skills and extension directories, and proof artifacts. Two locations
+config reloader's watched paths, the default run-history store directory, and the
+doctor's skills and extension directories. Two locations
 are configured separately because they are not part of that layout: the secrets
 master key (`config :lemon_core, LemonCore.Secrets, key_file: ...`) and the
 store backend path (`config :lemon_core, LemonCore.Store, backend_opts: [path: ...]`).

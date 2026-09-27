@@ -46,7 +46,7 @@ defmodule LemonCore.Doctor.RegistrationTest do
       assert Enum.all?(registered, &Code.ensure_loaded?/1)
       assert registered -- Doctor.builtin_checks() == registered
 
-      assert Doctor.builtin_checks() |> length() == 17
+      assert Doctor.builtin_checks() |> length() == 8
       assert LemonCore.Doctor.Checks.Secrets in Doctor.builtin_checks()
     end
 
