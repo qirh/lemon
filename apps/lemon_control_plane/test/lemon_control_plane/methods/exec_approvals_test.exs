@@ -293,13 +293,4 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
       end
     end
   end
-
-  # Helper to hash action the same way as the methods
-  defp hash_action(action) when is_map(action) and map_size(action) == 0, do: :any
-
-  defp hash_action(action) when is_map(action) do
-    :crypto.hash(:sha256, :erlang.term_to_binary(action))
-    |> Base.encode16(case: :lower)
-    |> String.slice(0, 16)
-  end
 end
