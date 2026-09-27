@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 Code.require_file("support/manifest_stub.ex", __DIR__)
 

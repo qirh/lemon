@@ -1,5 +1,5 @@
 ExUnit.configure(exclude: [:integration])
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 Code.require_file(
   Path.join([__DIR__, "..", "..", "coding_agent", "test", "support", "test_store.ex"])

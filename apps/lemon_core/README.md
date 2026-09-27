@@ -231,11 +231,9 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 
 | Module | Purpose |
 |--------|---------|
-| `LemonCore.Quality.Cleanup` | Data cleanup utilities |
-| `LemonCore.Quality.DocsCatalog` | Documentation catalog checks |
-| `LemonCore.Quality.DocsCheck` | Documentation completeness validation |
-| `LemonCore.Quality.ArchitectureCheck` | Architecture boundary validation |
-| `LemonCore.Quality.StoreTableOwnershipCheck` | AST ownership analysis used by the architecture guardrail |
+| `LemonCore.Quality.DocsCheck` | Local markdown link check for tracked `docs/**/*.md` |
+| `LemonCore.Quality.ArchitectureCheck` | `deps/0` direct-dependency policy check |
+| `LemonCore.Quality.ArchitectureDocs` | Generated dependency-policy section in `docs/architecture_boundaries.md` |
 
 ### Mix Tasks
 
@@ -260,7 +258,6 @@ default suggestions just because the upstream provider documents them.
 | `mix lemon.onboard.codex` | OpenAI Codex provider setup with OAuth and localhost callback capture |
 | `mix lemon.onboard.copilot` | GitHub Copilot provider setup with OAuth |
 | `mix lemon.quality` | Run all quality checks |
-| `mix lemon.cleanup` | Clean up old data |
 | `mix lemon.store.migrate_jsonl_to_sqlite` | Migrate JSONL to SQLite |
 | `mix lemon.introspection` | Query introspection events |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test names |

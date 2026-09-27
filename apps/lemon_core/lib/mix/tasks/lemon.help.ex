@@ -33,7 +33,7 @@ defmodule Mix.Tasks.Lemon.Help do
      ~w(lemon.doctor lemon.readiness lemon.config lemon.channels lemon.usage lemon.proofs
         lemon.media lemon.models lemon.introspection lemon.feedback)},
     {"Quality & CI", ~w(lemon.quality lemon.architecture.docs lemon.check_duplicate_tests
-        lemon.extension.validate lemon.cleanup lemon.eval lemon.help)},
+        lemon.extension.validate lemon.eval lemon.help)},
     {"Data, stores & messaging",
      ~w(lemon.store.migrate_jsonl_to_sqlite lemon.memory lemon.policy lemon.send)},
     {"Skills", ~w(lemon.skill lemon.skill.lint)},

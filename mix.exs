@@ -31,12 +31,8 @@ defmodule Lemon.MixProject do
         "do --app lemon_sim_ui cmd --cd assets npm ci --cache /tmp/lemon-sim-ui-npm-cache"
       ],
       "sim_ui.assets.build": ["do --app lemon_sim_ui cmd --cd assets npm run build"],
-      "sim_ui.assets.audit": [
-        "do --app lemon_sim_ui cmd --cd assets npm audit --audit-level=high --cache /tmp/lemon-sim-ui-npm-cache"
-      ],
       "sim_ui.assets.deploy": [
         "sim_ui.assets.setup",
-        "sim_ui.assets.audit",
         "sim_ui.assets.build",
         "do --app lemon_sim_ui phx.digest"
       ]

@@ -26,7 +26,7 @@ _ = Application.stop(:lemon_router)
 {:ok, _} = Application.ensure_all_started(:lemon_router)
 {:ok, _} = Application.ensure_all_started(:coding_agent)
 
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)

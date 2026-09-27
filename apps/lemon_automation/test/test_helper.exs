@@ -14,7 +14,7 @@ _ = Application.stop(:lemon_gateway)
 Application.put_env(:lemon_automation, :cron_preflight, enabled: false)
 Application.put_env(:lemon_automation, :cron_drift_guard, enabled: false)
 
-ExUnit.start()
+ExUnit.start(capture_log: true)
 
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)

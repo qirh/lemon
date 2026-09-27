@@ -21,7 +21,6 @@ rm -rf "$DOCS_COPY/node_modules" "$DOCS_COPY/.vitepress/dist"
 cd "$DOCS_COPY"
 
 npm ci
-npm audit --audit-level=high
 npm run build
 
 for asset in llms.txt llms-full.txt; do

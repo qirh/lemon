@@ -179,13 +179,13 @@ and nothing in the runtime draws that line for you.
 
 The claims above are checkable, which is the point of publishing them:
 
-- **Boundaries are enforced, not asserted.** `@grandfathered` in
-  [`architecture_rules_check.ex:584`](../apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex)
-  is an empty list. It held 29 authorized cross-boundary references when the check was
-  added, and the policy was shrink-only: entries could be retired, never added. Now that it
-  is empty, any cross-boundary reference at all fails CI. A companion test also rejects
-  entries whose underlying reference no longer exists, so the list cannot rot into
-  decoration.
+- **Boundaries are enforced, not asserted.**
+  [`architecture_check.ex`](../apps/lemon_core/lib/lemon_core/quality/architecture_check.ex)
+  fails CI when an app's `deps/0` leaves the policy in
+  [`architecture_policy.ex`](../apps/lemon_core/lib/lemon_core/quality/architecture_policy.ex)
+  or when library code references another app's namespace without a declared
+  dependency. The only exemptions are the reference-only exceptions listed in that policy,
+  and they can never authorize a new `mix.exs` edge.
 - **Extension points ship with compliance suites.**
   [`lemon_platform_test`](../apps/lemon_platform_test) provides `ExUnit` case templates for
   the channel, engine, store-backend, and memory-provider behaviours, so a third party can

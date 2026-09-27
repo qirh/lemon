@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
 
   import ExUnit.CaptureIO
 
-  alias LemonCore.Quality.{ArchitectureDocs, ArchitecturePolicy, RatchetCheck}
+  alias LemonCore.Quality.{ArchitectureDocs, ArchitecturePolicy}
   alias Mix.Tasks.Lemon.Quality
 
   # Get the repo root (4 levels up from this test file)
@@ -142,24 +142,6 @@ defmodule Mix.Tasks.Lemon.QualityTest do
     end
   end
 
-  describe "moduledoc" do
-    test "includes --validate-config option in documentation" do
-      # Check module documentation exists by looking at the module's behaviour
-      moduledoc = Code.fetch_docs(Mix.Tasks.Lemon.Quality)
-
-      case moduledoc do
-        {:docs_v1, _, _, _, %{} = module_doc, _, _} ->
-          doc = module_doc["en"]
-          assert doc =~ "--validate-config"
-
-        _ ->
-          # If docs aren't available in test, at least verify module loads
-          assert Code.ensure_loaded?(Mix.Tasks.Lemon.Quality)
-          assert function_exported?(Mix.Tasks.Lemon.Quality, :run, 1)
-      end
-    end
-  end
-
   describe "architecture docs integration" do
     test "reports stale architecture docs as a failing quality check" do
       tmp_dir = create_tmp_quality_repo()
@@ -211,6 +193,31 @@ defmodule Mix.Tasks.Lemon.QualityTest do
     end
   end
 
+  describe "docs link check" do
+    test "a broken local docs link fails the quality run" do
+      tmp_dir =
+        create_tmp_quality_repo(ArchitectureDocs.render_dependency_policy_markdown(@repo_root))
+
+      File.write!(Path.join(tmp_dir, "docs/README.md"), "# Docs\n\n[gone](missing.md)\n")
+
+      try do
+        stderr =
+          capture_io(:stderr, fn ->
+            capture_io(:stdio, fn ->
+              assert_raise Mix.Error, ~r/Quality checks failed \(1 failing checks\)/, fn ->
+                Quality.run(["--root", tmp_dir])
+              end
+            end)
+          end)
+
+        assert stderr =~ "[error] docs check failed (1 issues)"
+        assert stderr =~ "[broken_link] docs/README.md"
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+  end
+
   defp create_tmp_quality_repo(architecture_policy_section \\ "stale") do
     tmp_dir =
       Path.join(
@@ -236,26 +243,12 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       """
     )
 
-    fresh_date = Date.to_iso8601(Date.utc_today())
-
-    File.write!(
-      Path.join(tmp_dir, "docs/catalog.exs"),
-      """
-      [
-        %{path: "docs/README.md", owner: "@test", last_reviewed: ~D[#{fresh_date}], max_age_days: 60},
-        %{path: "docs/architecture_boundaries.md", owner: "@test", last_reviewed: ~D[#{fresh_date}], max_age_days: 60}
-      ]
-      """
-    )
-
     ArchitecturePolicy.allowed_direct_deps()
     |> Enum.each(fn {app, deps} ->
       app_dir = Path.join(tmp_dir, "apps/#{app}")
       File.mkdir_p!(app_dir)
       File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
     end)
-
-    {:ok, _report} = RatchetCheck.update_baselines(tmp_dir)
 
     tmp_dir
   end

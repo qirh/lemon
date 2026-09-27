@@ -133,35 +133,13 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 
 - **Start here** if you need to understand how Lemon works at a system level.
 - **Per-app docs** live in each app's own `README.md` and `AGENTS.md` (see `apps/*/`).
-- **Every tracked Markdown file in `docs/`** must be registered in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs). Run `mix lemon.quality` to enforce coverage, metadata, freshness, and links.
-
-### Catalog Metadata
-
-`docs/catalog.exs` is a data-only map with shared `defaults` and an `entries`
-list. Each normalized entry has:
-
-- `path`, `owner`, `last_reviewed`, and `max_age_days` for ownership and freshness
-- `kind`: `guide`, `plan`, `proof`, `reference`, or `review`
-- `status`: `current`, `historical`, or `superseded`
-- `public`: whether a current document is eligible for future public navigation
-
-The defaults are intentionally conservative: entries are current references
-but are not public unless opted in. Historical and superseded entries cannot be
-public. Override a default only on the entry that differs.
-
-The catalog's `last_reviewed` value is the sole freshness authority. Do not add
-or update a second `Last reviewed` footer in a document; dates in document prose
-should identify the snapshot or event they describe. Coverage uses `git
-ls-files`, so local drafts and other untracked Markdown do not create quality
-failures.
+- **Run `mix lemon.quality`** after docs edits: it checks that local markdown links in tracked `docs/**/*.md` files resolve.
 
 ---
 
 ## Maintenance Rules
 
-1. **Register every tracked Markdown doc** in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs); rely on catalog defaults and override only differing metadata.
-2. **Run `mix lemon.quality`** after any docs edit or app dependency change.
-3. **Keep `AGENTS.md` short and operational** — place durable implementation details in `docs/` files.
-4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
-5. **Review cycle**: docs are checked for staleness based on the catalog's canonical `last_reviewed` and `max_age_days` values.
-6. **Regenerate machine-readable docs** with `scripts/generate_docs_llms.py`; `scripts/generate_docs_llms.py --check` verifies `docs/public/llms.txt` and `llms-full.txt` are current.
+1. **Run `mix lemon.quality`** after any docs edit or app dependency change.
+2. **Keep `AGENTS.md` short and operational** — place durable implementation details in `docs/` files.
+3. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
+4. **Regenerate machine-readable docs** with `scripts/generate_docs_llms.py`; `scripts/generate_docs_llms.py --check` verifies `docs/public/llms.txt` and `llms-full.txt` are current.
