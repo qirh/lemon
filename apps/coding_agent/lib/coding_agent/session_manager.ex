@@ -1081,7 +1081,6 @@ defmodule CodingAgent.SessionManager do
 
   defp json_safe(term) when is_list(term), do: Enum.map(term, &json_safe/1)
   defp json_safe(term) when is_tuple(term), do: term |> Tuple.to_list() |> json_safe()
-  defp json_safe(%MapSet{} = term), do: term |> MapSet.to_list() |> json_safe()
 
   defp json_safe(term)
        when is_pid(term) or is_port(term) or is_reference(term) or is_function(term),

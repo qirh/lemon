@@ -69,16 +69,6 @@ executable path. Public status redacts absolute paths to command basenames.
 
 Operator/editor surfaces can use:
 
-| Method | Purpose |
-| --- | --- |
-| `lsp.diagnostics.status` | Inspect redacted checker and language-server capability metadata. |
-| `lsp.server.start` | Start a supervised stdio language-server session. |
-| `lsp.server.initialize` | Send `initialize`, wait for the response, then send `initialized`. |
-| `lsp.document.open` | Send `textDocument/didOpen`. |
-| `lsp.document.change` | Send `textDocument/didChange` with full text content. |
-| `lsp.document.close` | Send `textDocument/didClose`. |
-| `lsp.server.request` | Send a JSON-RPC request and correlate the response by id. |
-| `lsp.server.stop` | Stop the supervised session. |
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,

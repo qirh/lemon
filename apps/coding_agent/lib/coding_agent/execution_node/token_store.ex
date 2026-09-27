@@ -6,6 +6,9 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
   rename cannot strand the local credential. The launch name remains a local
   alias used to discover the record. Name-keyed legacy files are migrated
   atomically when they contain a node ID.
+
+  Writes report file write and close failures before replacing the credential;
+  a failed write is not treated as a successful atomic replacement.
   """
 
   @dir_mode 0o700
@@ -237,7 +240,7 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
   end
 
   defp write_and_close(io, contents) do
-    write_result = IO.binwrite(io, contents)
+    write_result = :file.write(io, contents)
     close_result = File.close(io)
 
     case {write_result, close_result} do

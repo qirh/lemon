@@ -82,5 +82,3 @@ draft.
 - Learning uses only the deterministic skill audit. It never sends selected
   source content to the optional LLM audit reviewer.
 
-The authenticated control plane exposes the same service as `learn.review`
-(read scope) and `learn.confirm` (admin scope).

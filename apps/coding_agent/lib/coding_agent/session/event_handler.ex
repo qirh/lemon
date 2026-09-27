@@ -268,9 +268,9 @@ defmodule CodingAgent.Session.EventHandler do
   defp recommended_learning_tools(triggers) do
     triggers
     |> Enum.flat_map(fn
-      :prior_memory -> ["search_memory"]
+      :prior_memory -> ["recall"]
       :reusable_skill -> ["skill_manage"]
-      :durable_memory -> ["memory_topic"]
+      :durable_memory -> ["remember"]
     end)
     |> Enum.uniq()
   end
@@ -291,7 +291,7 @@ defmodule CodingAgent.Session.EventHandler do
   defp tool_result_name(%{"tool_name" => name}) when is_binary(name), do: name
   defp tool_result_name(_message), do: nil
 
-  defp learning_tool_names, do: ["search_memory", "skill_manage", "memory_topic", "memory"]
+  defp learning_tool_names, do: ["recall", "skill_manage", "remember"]
 
   defp message_text(%LemonAi.Types.UserMessage{content: content}), do: content_text(content)
   defp message_text(%LemonAi.Types.AssistantMessage{content: content}), do: content_text(content)

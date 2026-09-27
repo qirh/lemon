@@ -138,7 +138,6 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
   defp payload_error_kind(_reason), do: :invalid
 
   defp arg_key_count(args) when is_map(args), do: map_size(args)
-  defp arg_key_count(_), do: 0
 
   defp payload_summary(stats) do
     %{

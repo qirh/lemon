@@ -766,10 +766,6 @@ defmodule LemonSkills.CLI do
 
         LemonCore.CLI.info("Re-enable with: features.skill_synthesis_drafts = \"default-on\"")
         LemonCore.CLI.fail!("Feature disabled")
-
-      {:error, reason} ->
-        LemonCore.CLI.error("Generation failed: #{inspect(reason)}")
-        LemonCore.CLI.fail!("Draft generation failed")
     end
   end
 

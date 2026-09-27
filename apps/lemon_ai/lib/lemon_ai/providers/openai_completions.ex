@@ -355,12 +355,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
   defp maybe_add_reasoning(params, %{reasoning: false}, _opts, _compat), do: params
   defp maybe_add_reasoning(params, _model, %{reasoning: nil}, _compat), do: params
 
-  defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{thinking_format: "zai"}) do
-    cond do
-      not model.reasoning -> params
-      reasoning == false -> Map.put(params, "thinking", %{"type" => "disabled"})
-      true -> Map.put(params, "thinking", %{"type" => "enabled"})
-    end
+  defp maybe_add_reasoning(params, _model, %{reasoning: reasoning}, %{thinking_format: "zai"}) do
+    type = if reasoning == false, do: "disabled", else: "enabled"
+    Map.put(params, "thinking", %{"type" => type})
   end
 
   defp maybe_add_reasoning(params, model, %{reasoning: reasoning}, %{
@@ -996,28 +993,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
     end
   end
 
+  defp extract_stream_ref(%Req.Response{body: %Req.Response.Async{pid: pid, ref: ref}})
+       when is_pid(pid) and not is_nil(ref),
+       do: {pid, ref}
+
   defp extract_stream_ref(%Req.Response{} = response) do
-    pid = Map.get(response, :pid)
-    ref = Map.get(response, :ref)
-
-    cond do
-      is_pid(pid) and not is_nil(ref) ->
-        {pid, ref}
-
-      match?(%Req.Response.Async{}, response.body) ->
-        body = response.body
-        body_pid = Map.get(body, :pid)
-        body_ref = Map.get(body, :ref)
-
-        if is_pid(body_pid) and not is_nil(body_ref) do
-          {body_pid, body_ref}
-        else
-          raise "Stream response missing pid/ref: #{inspect(response)}"
-        end
-
-      true ->
-        raise "Stream response missing pid/ref: #{inspect(response)}"
-    end
+    raise "Stream response missing pid/ref: #{inspect(response)}"
   end
 
   defp receive_sse_chunks(stream, state, pid, ref) do

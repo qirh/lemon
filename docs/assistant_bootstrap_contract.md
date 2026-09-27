@@ -74,10 +74,9 @@ Subagent scope is inferred from `:parent_session` when present, or can be set ex
 
 Main-session prompt policy requires the assistant to:
 
-- Inspect `USER.md`, `MEMORY.md`, and relevant daily memory files before answering memory-dependent questions.
-- Use `memory` for bounded `USER.md` and `MEMORY.md` read/add/replace/remove operations.
-- Use `memory_topic` for longer structured notes under `memory/topics/`.
-- Use `read` / `grep` for recall and `write` for new daily files.
+- Use `remember` to add, replace, or remove compact facts in `USER.md` and `MEMORY.md`.
+- Use `recall` to search past conversations and longer notes under `memory/`.
+- Automatic recall may attach a bounded **Relevant memory** block to the user message.
 - Persist user-requested memories to durable files, not ephemeral reasoning.
 
 Subagent prompt policy forbids reading/updating `MEMORY.md` unless explicitly requested by the parent task.

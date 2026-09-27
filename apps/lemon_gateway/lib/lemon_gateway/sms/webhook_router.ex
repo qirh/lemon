@@ -9,8 +9,6 @@ defmodule LemonGateway.Sms.WebhookRouter do
 
   use Plug.Router
 
-  require Logger
-
   alias LemonGateway.Sms.Config
   alias LemonGateway.Sms.Inbox
   alias LemonGateway.Sms.TwilioSignature
@@ -35,10 +33,6 @@ defmodule LemonGateway.Sms.WebhookRouter do
         send_twiml(conn, 200, "<Response></Response>")
 
       {:error, :unauthorized} ->
-        send_resp(conn, 401, "unauthorized")
-
-      {:error, reason} ->
-        Logger.warning("Twilio webhook validation failed: #{inspect(reason)}")
         send_resp(conn, 401, "unauthorized")
     end
   end

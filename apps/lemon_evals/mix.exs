@@ -30,6 +30,7 @@ defmodule LemonEvals.MixProject do
       {:coding_agent, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},
+      {:lemon_memory, in_umbrella: true},
       {:jason, "~> 1.4"}
     ]
   end

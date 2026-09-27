@@ -1,7 +1,5 @@
 ExUnit.start(capture_log: true)
 
-Code.require_file("support/manifest_stub.ex", __DIR__)
-
 # In umbrella `mix test`, other apps may have started/stopped lemon_gateway,
 # lemon_channels, or lemon_control_plane earlier in the same BEAM. Many control
 # plane methods assume the runtime services and the control plane's own supervised

@@ -34,8 +34,7 @@ when adding new files.
 /apps/lemon_core/lib/lemon_core/store.ex    memory
 /apps/lemon_core/lib/lemon_core/run_store.ex     memory
 /apps/lemon_core/lib/lemon_core/run_history_store.ex  memory
-/apps/lemon_core/lib/lemon_core/memory*     memory
-/apps/lemon_core/lib/lemon_core/session_search*  memory
+/apps/lemon_memory/**                         memory
 /apps/lemon_core/lib/lemon_core/outcome*    memory
 /apps/lemon_core/lib/lemon_core/routing_feedback*  memory
 /apps/lemon_skills/**                       skills

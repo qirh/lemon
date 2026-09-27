@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
+  `recall` (past conversations and longer workspace notes); remove the former
+  search, topic, and session-browse tool surfaces.
+
 ### Fixed
 
 - `BashExecutor` keeps output that races an abort or timeout: a chunk that
@@ -14,8 +20,8 @@
   Explicit supported approvals still execute exactly once; errors raised by
   the approved tool remain outside the approval failure boundary.
 - Approval timeout results no longer raise when the configured wait is infinite.
-- Restricted tool profiles now deny `hashline_edit`, `memory_topic`, and `task`,
-  closing alternate editor, topic-memory mutation, and child-delegation gaps.
+- Restricted tool profiles deny `hashline_edit`, `remember`, and `task`,
+  closing alternate editor, memory mutation, and child-delegation gaps.
   Full-access and orchestrator profiles are unchanged. These remain tool-name
   restrictions, not a sandbox or classification of arbitrary extension tools.
 - Bash streaming previews now retain only the most recent 50,000 output bytes

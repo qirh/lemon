@@ -334,6 +334,7 @@ defmodule LemonSimUi.SpectatorLive do
         bg_class="bg-slate-950/70"
         hover_class="hover:text-emerald-400"
         running={@running}
+        completed={LemonSim.Examples.terminal?(@state)}
       >
         <:meta>
           <SpectatorChrome.meta_line
@@ -380,7 +381,6 @@ defmodule LemonSimUi.SpectatorLive do
       assigns
       |> assign(:hand_label, hand_label)
       |> assign(:street, street)
-      |> assign(:game_status, status)
       |> assign(:winner, winner)
 
     ~H"""
@@ -393,7 +393,7 @@ defmodule LemonSimUi.SpectatorLive do
         league_path="/arena/poker/leaderboard"
         winner={@winner}
         running={@running}
-        show_stopped={not LemonSim.Examples.terminal_status?(@game_status)}
+        completed={LemonSim.Examples.terminal?(@state)}
       >
         <:meta>
           <SpectatorChrome.meta_line label="Poker" label_class="text-emerald-400" progress={@hand_label}>
@@ -517,6 +517,7 @@ defmodule LemonSimUi.SpectatorLive do
               <%= cond do %>
                 <% @runner_running -> %> LIVE
                 <% @running -> %> PLAYBACK
+                <% LemonSim.Examples.terminal?(@state) -> %> COMPLETED
                 <% true -> %> STOPPED
               <% end %>
               <span class="font-normal text-current/70">

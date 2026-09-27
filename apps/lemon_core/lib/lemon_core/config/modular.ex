@@ -35,6 +35,7 @@ defmodule LemonCore.Config.Modular do
   - `LemonCore.Config.Logging` - Log file and rotation settings
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
   - `LemonCore.Config.Providers` - LLM provider configurations
+  - `LemonCore.Config.Memory` - Memory behaviour (`[memory]`)
   - `LemonCore.Config.Automation` - Opt-in proactive automation (daily brief)
 
   See `LemonCore.Config` for the legacy configuration interface.
@@ -46,6 +47,7 @@ defmodule LemonCore.Config.Modular do
     Features,
     Gateway,
     Logging,
+    Memory,
     Providers,
     Secrets,
     Tools,
@@ -63,6 +65,7 @@ defmodule LemonCore.Config.Modular do
     :providers,
     :secrets,
     :features,
+    :memory,
     :automation
   ]
 
@@ -75,6 +78,7 @@ defmodule LemonCore.Config.Modular do
           providers: Providers.t(),
           secrets: Secrets.t(),
           features: Features.t(),
+          memory: Memory.t(),
           automation: Automation.t()
         }
 
@@ -250,6 +254,7 @@ defmodule LemonCore.Config.Modular do
       providers: Providers.resolve(settings),
       secrets: Secrets.resolve(settings),
       features: Features.resolve(settings),
+      memory: Memory.resolve(settings),
       automation: Automation.resolve(settings)
     }
   end

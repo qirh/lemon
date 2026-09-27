@@ -6,6 +6,9 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   - each app's direct `in_umbrella: true` dependencies exactly match policy
   - stale dependency permissions are removed when a `mix.exs` edge disappears
   - each app's source files reference only dependency or explicit exception namespaces
+
+  Dependency extraction handles both two-element dependency literals and quoted
+  tuples with explicit versions and options.
   """
 
   alias LemonCore.Quality.ArchitecturePolicy
@@ -200,12 +203,14 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     if keyword_true?(opts, :in_umbrella), do: [dep], else: []
   end
 
-  defp extract_umbrella_dep_atom({dep, _version, opts}) when is_atom(dep) and is_list(opts) do
-    if keyword_true?(opts, :in_umbrella), do: [dep], else: []
-  end
-
+  # Quoted tuples are themselves three-element AST nodes; match them before
+  # treating a three-element tuple as a dependency literal.
   defp extract_umbrella_dep_atom({:{}, _meta, [dep | tuple_elements]}) when is_atom(dep) do
     if umbrella_dependency_tuple?(tuple_elements), do: [dep], else: []
+  end
+
+  defp extract_umbrella_dep_atom({dep, _version, opts}) when is_atom(dep) and is_list(opts) do
+    if keyword_true?(opts, :in_umbrella), do: [dep], else: []
   end
 
   defp extract_umbrella_dep_atom(_entry), do: []

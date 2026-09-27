@@ -3246,8 +3246,7 @@ Provider onboarding flows:
 - Support `--set-default`, `--model`, and `--config-path`
 
 Provider readiness is visible through the source and packaged
-`lemon providers status` command and the read-only control-plane
-`providers.status` method. They use the same
+`lemon providers status` command. It uses the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -3255,6 +3254,7 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
+
 
 Fallbacks and credential-pool references can be edited through the same
 packaged/source command boundary:
@@ -3281,28 +3281,12 @@ lemon providers fallback remove zai --dry-run --json
 lemon providers fallback remove zai --confirm zai
 ```
 
-The admin-scoped `providers.configure` control-plane method exposes the same
-actions (`fallback.add`, `fallback.remove`, `fallback.clear`, `pool.upsert`,
-`pool.delete`, `pool.credential.add`, `pool.credential.remove`, and
-`pool.credential.clear`). RPC mutations are preview-only unless `apply: true`
-is explicit. Remote callers may select `global` or `project` scope but cannot
-provide an arbitrary config path. Results expose provider and pool names plus
-counts; they never include raw keys, secret names, credential references, base
-URLs, or environment-variable names.
 
-Preview results include an opaque `configRevision`. A caller that passes it
-back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
-service compares the revision while holding its target-config lock and rejects
-the mutation if any config content changed after preview. `/manage/providers`
-uses this contract for all Web mutations, then adds exact confirmation for
-destructive actions and requires credential-reference values to be re-entered
-instead of retaining them in LiveView state.
-
-Memory-provider readiness is visible through read-only `memory.status` and
-support-bundle `memory_diagnostics.json`. These surfaces expose
-provider ids, enabled state, source labels, scopes, timeout shape, and module
-load state without memory document contents, raw provider config, secret values,
-prompts, tool output, or provider error payloads.
+Memory-provider readiness is included in support-bundle
+`memory_diagnostics.json`. These surfaces expose provider ids, enabled state,
+source labels, scopes, timeout shape, and module load state without memory
+document contents, raw provider config, secret values, prompts, tool output,
+or provider error payloads.
 
 Doctor support bundles include a core-owned `provider_diagnostics.json` snapshot
 for offline support. That snapshot reports provider setup shape, credential
@@ -3331,9 +3315,8 @@ credential_pool = "burst"
 distribution = { openai = 70, zai = 20, anthropic = 10 }
 ```
 
-`providers.status` and `lemon providers status` include a redacted
-`routingConfig` block for effective fallback/pool configuration and a `routing`
-block with the requested
+`lemon providers status` includes a redacted `routingConfig` block for effective
+fallback/pool configuration and a `routing` block with the requested
 provider/model, selected provider/model, fallback candidates, candidate
 readiness booleans, selected routing profile, selected credential pool,
 profile distribution weights, pool provider names, pool strategy, and
@@ -4672,7 +4655,7 @@ Memory provider `config` supports:
 
 `LemonMemory.Providers` always keeps local SQLite as the built-in provider,
 isolates provider failures, deduplicates search results by document id, and
-reports only redacted provider shape through `memory.status` and
+reports only redacted provider shape in
 support bundles.
 
 ## Extension Discovery
@@ -4921,31 +4904,6 @@ WASM tool wrappers emit the matching redacted host telemetry through
 host label, tool name, hashed WASM path, hashed tool-call id, status, duration,
 and redacted exception type.
 
-## Control-Plane Status
-
-Operators can inspect extension/plugin health without entering an agent session
-through the read-only `extensions.status` control-plane method:
-
-```json
-{
-  "method": "extensions.status",
-  "params": {
-    "cwd": "/path/to/project"
-  }
-}
-```
-
-The method loads project/global extensions, reports loaded extension names,
-versions, capabilities, config-schema presence, load/validation error counts,
-tool-conflict resolution, extension-provided provider names, and WASM
-status shape when available. It redacts raw source paths, load-error messages,
-config schemas, provider modules, and path-like WASM metadata, replacing
-sensitive path fields with hashes. `LemonCore.Doctor.ExtensionDiagnostics`
-reports global, project, and configured extension directory existence,
-extension-file counts, manifest counts and aggregate manifest shape, nested
-library-file counts, and file/path hashes without loading plugin code or
-exposing raw source paths, file contents, manifest contents, distribution URLs,
-or load-error messages.
 
 ## Extension Status Report
 
@@ -7461,7 +7419,6 @@ wrapper** that provides a clean API:
 | `IdempotencyStore` | Idempotency entries (24h TTL) |
 | `ProgressStore` | Progress message → run_id mappings |
 | `IntrospectionStore` | Telemetry event log (7-day retention) |
-| `HeartbeatStore` | Heartbeat configs and timestamps |
 | `ExecApprovalStore` | Pending tool-execution approvals |
 
 ### Fail-Soft
@@ -9276,9 +9233,6 @@ Long-running implementation tasks can drift when the agent has no durable task m
 - feature requirement files (`FEATURE_REQUIREMENTS.json`)
 - todo dependency/progress tracking
 - checkpoint/resume snapshots plus preview filesystem rollback snapshots
-- unified progress snapshots
-- durable isolated background-command lifecycle and bounded no-tools side queries
-- control-plane introspection via `agent.progress`
 
 ## Core modules
 
@@ -9292,8 +9246,6 @@ Long-running implementation tasks can drift when the agent has no durable task m
   - Create/list/resume/delete checkpoint files under `System.tmp_dir()/lemon_checkpoints`
   - Store filesystem snapshots for file-tool rollback
   - Preview diff and restore all or selected paths from filesystem checkpoints
-- `CodingAgent.Progress`
-  - Aggregates todo + requirements + checkpoint stats into one snapshot payload
 - `CodingAgent.BackgroundRun`
   - Starts an isolated native full-tool session and immediately returns a durable id
   - Lists, inspects, retrieves, and cooperatively cancels background work
@@ -9323,45 +9275,12 @@ set `tools: []`, and run under their own `side_query:*` session key.
 Failures are reported with stable bounded codes rather than provider messages,
 paths, or credential-bearing details.
 
-## Progress snapshot API
-
-`CodingAgent.Progress.snapshot/2`:
-
-- input: `session_id`, optional `cwd` (default `.`)
-- output includes:
-  - `todos` progress stats
-  - `features` progress stats (or `nil` if no requirements file)
-  - `checkpoints` stats
-  - `overall_percentage`
-  - `next_actions` (`todos` + `features`)
-
-## Control-plane method: `agent.progress`
-
-JSON-RPC method exposed in `lemon_control_plane`.
-
-### Params
-
-- required: `sessionId`
-- optional: `cwd`, `runId`, `sessionKey`, `agentId`
-
-### Behavior
-
-- returns current `CodingAgent.Progress.snapshot/2` payload
-- includes a compact `summary` with todo/feature/checkpoint counts,
-  next-action counts, overall percentage, and cleanup flags that avoid echoing
-  next-action content, prompts, message bodies, credentials, or secrets
-- emits introspection event `:agent_progress_snapshot`
-- attaches optional run/session/agent metadata to introspection records when provided
-
 ## Validation commands
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs \
   apps/coding_agent/test/coding_agent/tools/todo_store_test.exs \
-  apps/coding_agent/test/coding_agent/checkpoint_test.exs \
-  apps/coding_agent/test/coding_agent/progress_test.exs
-
-mix test apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs
+  apps/coding_agent/test/coding_agent/checkpoint_test.exs
 ```
 
 ---
@@ -9680,7 +9599,6 @@ affect a product run's executor.
 ### 4) API/tool surface updates
 
 - `agent` control-plane method accepts `model`.
-- `agent.inbox.send` accepts `model`.
 - `CodingAgent.Tools.Agent` accepts `model` and forwards it through
   `RunRequest.model`.
 - `CodingAgent.Tools.Task` accepts `model` and `thinking_level` for
@@ -9854,12 +9772,9 @@ every subscriber inside a single app (or a single matched app pair). They should
 shapes in their owning app, not `LemonCore.Events.*` structs. Putting sim or kanban payload types
 in `lemon_core` would re-domain the package that Phase 1 just spent ten items de-domaining. See §3.
 
-**R4 — Two control-plane methods make typed payloads unenforceable until they are narrowed.**
-`events.ingest` and `system-event` accept an arbitrary JSON object and broadcast it, under a
-caller-chosen event type from a 20-atom allowlist, to a caller-chosen `run:<id>` / `session:<key>`
-/ `system` / `cron` / `exec_approvals` / `goals` / `nodes` / `presence` topic. A remote client can
-inject `%{"foo" => 1}` as a `:delta` into any live run. Restrict both to `:custom_event`, or
-validate against the Events registry, *before* the first struct ships. See §6.8.
+**R4 — Keep event payload validation at the publisher boundary.**
+The control plane no longer exposes arbitrary event injection; registered
+payloads are validated before the bus broadcasts them. See §6.8.
 
 **R5 — Fix the three real bugs the catalog surfaced as their own commits, before typing.**
 They are independent of this phase and each is a few lines: the raw-map `:run_failed` (§6.1), the
@@ -9963,9 +9878,6 @@ not a subscription.)
 | `:config_reloaded` | `lemon_core/config_reloader.ex:260` | `%{reload_id, reason, changed_sources, changed_paths, diff}` | E |
 | `:config_reload_failed` | `lemon_core/config_reloader.ex:316` | `%{reload_id, reason, error}` | E |
 | `:secret_changed` | `lemon_core/secrets.ex:432` | `%{owner, name, action}` | E |
-| `:talk_mode_changed` | `control_plane/methods/talk_mode.ex:66` | `%{session_key, mode}` | E |
-| `:voicewake_changed` | `control_plane/methods/voicewake_set.ex:40` | voicewake settings | E |
-| `:device_pair_requested` / `_resolved` | `device_pair_request.ex:51`, `_approve.ex:82`, `_reject.ex:51` | pairing record | E |
 
 Subscriber: `EventBridge` only — and it has **no mapping clause for the first three**, so
 `:config_reloaded`, `:config_reload_failed` and `:secret_changed` are published into a topic where
@@ -10181,8 +10093,7 @@ Compatibility for one release cycle rests on two mechanisms:
 
 1. **`from_map/1` on every struct.** A consumer that receives a legacy map coerces it:
    `payload = Events.RunCompleted.from_map(payload)`. This is how a *new* consumer tolerates an
-   *old* publisher — needed because publishers migrate one at a time and because
-   `events.ingest` can inject a bare map at any moment.
+   *old* publisher while publishers migrate one at a time.
 
 2. **`Access` implemented on every Events struct** (`fetch/2`, `get_and_update/3`, `pop/2`,
    delegating to `Map`). This is how an *old* consumer tolerates a *new* publisher, and it is what
@@ -10256,7 +10167,6 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 - **P2.** Fix `extract_heartbeat_output/1` (§6.13) — 1 file.
 - **P3.** Replace the four `Process.whereis(LemonCore.PubSub)` gates with `Bus.pubsub?/0`-agnostic
   publishing (§6.6) — `checkpoint.ex`, `goal_store.ex`, `kanban_store.ex`, `stream_coalescer.ex`.
-- **P4.** Narrow `events.ingest` and `system-event` (R4/§6.8) — **blocks everything after S3.**
 - **P5.** Fold `heartbeat_manager`'s four hand-built cron events into `LemonAutomation.Events`
   (§6.10) — **blocks S5.**
 - **P6.** Delete the `kanban`/`kanban:<id>` publishes, and `channels`/`logs` from the Bus
@@ -10269,7 +10179,7 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 | S1 | `LemonCore.Events` scaffold + `registry/0` + `Access` shim + `from_map/1` contract | — | No behaviour change; the kit lands with it |
 | S2 | `routing_feedback` | 1 | **The pilot.** The consumer already destructures exact keys; this proves the mechanism end-to-end in ~40 lines |
 | S3 | `goals` | 1 | Cross-app, one `EventBridge` clause |
-| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed`) | 1 | Decide drop-vs-map for the first three (§6.5) as part of it |
+| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`) | 1 | Decide drop-vs-map for the first three (§6.5) as part of it |
 | S5 | `cron` (7 types) | 2 | After P5. Largest *publisher* count (13 sites), small consumer count |
 | S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | 6 | First multi-app consumer set; `pending` is shared with `ExecApprovalStore`, so the store's read path migrates with it |
 | S7 | `run:*` — `:run_phase_changed` | **0** | Free: published twice per transition and consumed by nobody (§6.4). Retires `LemonCore.RunPhaseEvent` |
@@ -10374,17 +10284,9 @@ requester) is unchanged; only the delivery of the request moved off the bus. Fai
 hanging for the full timeout), `{:error, :client_down}` (handler died mid-request, caught via
 monitor), `{:error, :timeout}`.
 
-**6.8 The control plane can inject arbitrary payloads under real event types.**
-`events.ingest` (scope `:write`) accepts any JSON object and broadcasts it to `system`, `channels`,
-`cron`, `exec_approvals`, `goals`, `nodes`, `presence`, or **any** `run:<id>` / `session:<key>`
-topic, typed as `:custom_event`, `:heartbeat`, `:metrics` or `:log`. `system-event` (scope
-`:admin`) does the same across a **20-atom allowlist that includes `:delta`, `:run_completed`,
-`:approval_requested`, `:approval_resolved`, `:cron_run_started` and `:cron_run_completed`**. A
-client with admin scope can therefore inject a malformed `:run_completed` into any live run, and
-`run_process` will forward it to the session topic and every channel subscriber. Typed payloads
-are advisory until this is narrowed — `events.ingest` to `:custom_event` only, and `system-event`
-either to `:custom_event` or to payloads validated through `Events.registry/0`. This is why P4
-blocks the run-topic work.
+**6.8 Control-plane event injection is not supported.**
+Event payloads are validated at the publisher boundary before the bus broadcasts
+registered typed events.
 
 **6.9 A second wire shape exists behind an optional-dependency check.**
 `DependencyManager.build_event/3` (`dependency_manager.ex:84`) returns `{event_type, payload}` —
@@ -10461,7 +10363,7 @@ Landed 2026-08-10, after the design above was reviewed.
 | S1 | `LemonCore.Events` registry, `Events.Payload` macro, `Access` shim, `Bus.broadcast_event/4` | done |
 | S2 | `routing_feedback` | done — publisher and consumer both typed, consumer keeps a legacy-map clause |
 | S3 | `goals` | done |
-| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed`) | done |
+| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`) | done |
 | S5 | `cron` (7 types) | done |
 | S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | done — also aligned the control-plane publisher, which used `created_at_ms` where core uses `requested_at_ms` and omitted the top-level `approval_id` |
 | S7 | `:run_phase_changed` | done — `LemonCore.RunPhaseEvent` now delegates to `Events.RunPhaseChanged` and is deprecated |
@@ -10494,7 +10396,6 @@ platform's own registry at
 
 | Item | What changed |
 |---|---|
-| P4 (§6.8) | **Validate, don't ban.** Both injectors keep their full allowlist, but a type registered in `LemonCore.Events` must now supply a payload that coerces into its struct or the call is refused with `{:invalid_request, ...}` naming the coercion failure. A well-formed injection still works and is indistinguishable from a real event — which is the point — while a malformed `run_completed` never reaches a subscriber. Unregistered types (`shutdown`, `tick`, node/device pairing, `custom_*`) have no declared shape and keep their pass-through behaviour. Implemented with a new `LemonCore.Events.cast/2`, the strict counterpart to `coerce/2`. |
 | P6 (§6.11) | The `kanban` and `kanban:<board_id>` broadcasts are deleted — zero subscribers repo-wide, and the durable record was always the `Introspection.record/3` call beside them, which stays. The `LemonCore.Bus` moduledoc's topic contract is rewritten: it now separates the seven typed contract topics from the app-internal ones, and says plainly that `channels` and `logs` never had a publisher. |
 | §6.4 | The gateway no longer publishes `:run_phase_changed`; `LemonRouter.PhasePublisher` is the single publisher, since the router owns the phase graph. The gateway keeps tracking and validating its own transitions (`maybe_track_phase/2`) because that is what surfaces an out-of-order phase in its logs — it just no longer broadcasts a duplicate. |
 | §6.2 | `LemonGateway.DependencyManager.build_event/3`'s unreachable `{event_type, payload}` tuple fallback is gone, and with it the tuple receive clauses in `RunCompletionWaiter` and `webhook/response.ex` that existed only to catch it. `RunCompletionWaiter` also loses its two envelope-less `%{completed: ...}` clauses and its two pre-P1 `:run_failed` shapes, going from seven receive clauses to four. The remaining bare-map clauses (`%{type: ..., payload: ...}`) are kept deliberately: an envelope-less map is the documented legacy shape and stays accepted for one cycle, whereas a tuple never was. |
@@ -10654,8 +10555,9 @@ real send. It gates on `Bus.running?/0` per §6.6, and emits a
 `[:lemon, :channels, :dispatch]` telemetry twin (see `docs/telemetry.md`).
 
 **Fanout.** `EventBridge` maps `:channel_delivery` → `channel.delivery`
-(`topic_for_event("channel.delivery") → ["channels"]`), `Frames.supported_events/0` lists the
-name, and `events.subscribe` already allowed the `channels` topic.
+(`topic_for_event("channel.delivery") → ["channels"]`), and
+`Frames.supported_events/0` lists the event. All non-node clients receive
+events without topic subscriptions.
 
 **Kit.** `LemonPlatformTest.EventsFixtures.channel_delivery/1` builds the payload; the
 compliance suite covers the module through the registry as with every other typed payload.
@@ -12123,81 +12025,8 @@ Source: https://z80dev.github.io/lemon/runtime-hot-reload
 
 # Runtime Hot-Reload
 
-This document covers Lemon's runtime code reload path for BEAM modules, extension
-source files, and targeted OTP `code_change/3` callbacks.
-
-## Components
-
-- `Lemon.Reload` (`apps/lemon_core/lib/lemon_core/reload.ex`)
-  - `reload_module/2`
-  - `reload_app/2`
-  - `reload_extension/2`
-  - `reload_system/1`
-- `LemonControlPlane.Methods.SystemReload`
-  (`apps/lemon_control_plane/lib/lemon_control_plane/methods/system_reload.ex`)
-  - JSON-RPC method: `system.reload`
-
-## Locking Model
-
-All reload operations run under a distributed lock:
-
-- lock key: `{Lemon.Reload, :reload_lock}`
-- implementation: `:global.trans/4`
-
-This prevents overlapping reload operations from racing against each other.
-
-## Reload Scopes
-
-`system.reload` supports these scopes:
-
-- `module` - reload one loaded module
-- `app` - reload all modules declared in one OTP app
-- `extension` - compile and load one `.ex` / `.exs` extension file
-- `all` (default) - orchestrated reload path (apps + extensions + code_change)
-
-When `compile: true` is passed on source-based runtimes, Lemon first runs `mix compile` inside the live node and then reloads the requested modules/apps from the newly built BEAM files.
-
-### Example Requests
-
-```json
-{"jsonrpc":"2.0","id":1,"method":"system.reload","params":{"scope":"module","module":"LemonCore.Clock"}}
-```
-
-```json
-{"jsonrpc":"2.0","id":2,"method":"system.reload","params":{"scope":"all","apps":["lemon_core"],"extensions":["/tmp/my_extension.ex"],"compile":true}}
-```
-
-## Result Shape
-
-Reload APIs return a normalized structure:
-
-- `kind` (`module|app|extension|code_change|system`)
-- `target`
-- `status` (`ok|partial|error`)
-- `reloaded` (list)
-- `skipped` (list of `%{target, reason}`)
-- `errors` (list of `%{target, reason}`)
-- `duration_ms`
-- `metadata` (scope-specific fields)
-
-For `scope=all`, `metadata.results` includes child results for each app,
-extension, and code-change target.
-
-## Telemetry
-
-Each operation emits telemetry events:
-
-- `[:lemon, :reload, :start]`
-- `[:lemon, :reload, :stop]`
-- `[:lemon, :reload, :exception]`
-
-## Tests
-
-- `apps/lemon_core/test/lemon_core/reload_test.exs`
-- `apps/lemon_control_plane/test/lemon_control_plane/methods/system_reload_test.exs`
-
-These cover module/app/extension reload behavior, orchestration, lock behavior,
-and response validation.
+The control-plane runtime hot-reload interface has been removed. This page is
+retained for existing links; it does not document a replacement command.
 
 ---
 
@@ -12500,7 +12329,6 @@ Additional nuance:
 
 - `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
-- `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
 - `lemon secrets sources status|test` returns only source readiness,
   provenance, counts, byte counts, duration, and stable error kinds. Combined
   stdout/stderr and resolved values are never included.
@@ -14399,56 +14227,41 @@ Initial stable 1.0 support targets:
 - first-party text web tools such as web search/fetch when used from supported
   agent runs
 - doctor diagnostics and redacted support bundles
-- preview checkpoint diagnostics through `checkpoint.status`,
-  Telegram/Discord `/checkpoint` status/events/diff/restore controls with
-  redacted lifecycle event counts/history and pushed active-run event notices,
-  checkpoint lifecycle events, redacted support-bundle metadata, rollback
-  command guidance and direct diff/restore controls, and
-  operator-only `checkpoint.diff` / `checkpoint.restore` control-plane methods
-  plus TUI `/checkpoint diff` and `/checkpoint restore`; shared checkpoint
-  storage and filesystem rollback are owned by `LemonCore.Checkpoint`.
-  JSON-RPC `checkpoint.status` also exposes redacted checkpoint lifecycle event
-  counts and recent event summaries filtered by run, session, and agent without
-  raw checkpoint paths, file contents, raw event payloads, or raw session ids.
-  Channel checkpoint output is redacted and restore requires an explicit
-  confirmation token or slash-command boolean.
+- preview checkpoint diagnostics through Telegram/Discord `/checkpoint`
+  status/events/diff/restore controls and TUI `/checkpoint diff` and
+  `/checkpoint restore`, with redacted lifecycle event counts/history, pushed
+  active-run event notices, support-bundle metadata, and rollback command
+  guidance. Shared checkpoint storage and filesystem rollback are owned by
+  `LemonCore.Checkpoint`; channel restore requires an explicit confirmation
+  token or slash-command boolean.
+
 - preview LSP diagnostics through the model-facing `lsp_diagnostics` tool,
-  opt-in `write`/`edit`/`patch` baseline/delta checks, redacted
-  `lsp.diagnostics.status` checker visibility, and
+  opt-in `write`/`edit`/`patch` baseline/delta checks, and
   `lsp_diagnostics.json` in support bundles.
   `LemonLsp.ServerManager` is a
   supervised BEAM status, stdio session, initialize, JSON-RPC framing, and
   diagnostic-notification manager for the known language-server registry.
-  `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,
-  `lsp.document.change`, `lsp.document.close`, `lsp.server.request`, and
-  `lsp.server.stop` expose operator session lifecycle, document-sync
-  notifications, and request controls through the control plane. The preview
-  reports checker/server capability, redacted session health, redacted document
+  The preview reports checker/server capability, redacted session health, redacted document
   URI hashes/counters, and redacted diagnostic batch counts only; support
   bundles omit file paths, executable paths, raw session ids, file contents,
   workspace roots, diagnostic output, and server I/O.
   See [`docs/tools/lsp.md`](tools/lsp.md) for checker and language-server
   install commands.
-- preview generated-media job observability through `media.status`,
-  Telegram/Discord `/media status`, and `media_diagnostics.json` in support
-  bundles. The preview reports job type/status counts, artifact counts/bytes,
+- preview generated-media job observability through Telegram/Discord
+  `/media status` and `media_diagnostics.json` in support bundles.
+  The preview reports job type/status counts, artifact counts/bytes,
   cleanup policy, prompt hashes, and artifact path hashes only; support surfaces
   omit prompts, raw artifact paths, generated bytes, provider responses,
   channel message bodies, and API credentials. `LemonMedia.MediaJobSupervisor`
   owns the preview `Task.Supervisor` boundary for queued/running/completed/failed
   media job lifecycle updates and emits redacted PubSub events for operator
   surfaces.
-  JSON-RPC `media.status` reports redacted generated-media job state.
 - Telegram/Discord setup diagnostics through `channel_diagnostics.json` in
   support bundles. The bundle reports enabled/configured state, binding counts,
   topic binding counts, file-transfer settings, generated-file auto-send
   settings, Telegram voice-transcription configuration, Discord bot-message
   policy, and allowlist counts without raw tokens, secret names, channel ids, or
   message bodies.
-- browser operator diagnostics through JSON-RPC `browser.status`. The status
-  response exposes driver session timestamps, pending/buffered request counters,
-  safe capability labels, artifact counts, cleanup policy, and browser status
-  without raw paths, page data, screenshots, cookie values, or raw driver logs.
 - browser tool progress status. Browser requests emit redacted `current_action`
   updates for Web/TUI/Telegram/Discord status surfaces with method, phase,
   timeout, safe counts, artifact flags, and hashed host metadata only; raw URLs,
@@ -14458,43 +14271,16 @@ Initial stable 1.0 support targets:
   bundles. The bundle reports provider count, enabled provider count, provider
   ids, source labels, supported scopes, timeout shape, and module-load state
   without memory document contents, raw provider config, secret values, prompts,
-  tool output, or provider error payloads. The same provider shape is visible to
-  operators through read-only `memory.status`. JSON-RPC
-  `memory.status` also summarizes provider health, enabled/disabled counts,
-  loaded/missing module counts, searchable scopes, and per-scope provider
-  counts without reading or returning memory contents.
-- skill readiness diagnostics through read-only `skills.status`. The response
-  preserves each skill's activation state, readiness boolean, platform
-  compatibility, missing binary/config/env/tool names, disabled flag, and error
-  string, then summarizes activation states, sources, ready/not-ready counts,
-  and missing-requirement counts without returning skill file paths or secret
-  values.
-- secrets-store diagnostics through read-only `secrets.status`. The response
-  reports whether the encrypted store is configured and healthy, safe source and
-  fallback booleans, safe keychain error kind, owner, count, and cleanup flags
-  without returning secret values, raw key material, or raw keychain error text.
+  tool output, or provider error payloads.
 - BEAM runtime capacity diagnostics through root `status`. The response includes
   process, port, atom, and run-queue counters plus limits so operators can
   distinguish Lemon runtime pressure from provider or channel issues; missing
   optional supervisors fail closed to zero counts instead of crashing status.
-- legacy transport diagnostics through read-only `transports.status`. The
-  response reports registry loaded/running state, configured/enabled/disabled
-  counts, module load counts, and cleanup flags without returning credential
-  values, raw config, or secret names.
-- TTS control-plane diagnostics through read-only `tts.status`. The response
-  preserves explicit stored configuration values, reports active-provider
-  known/available booleans, summarizes provider readiness counts, and includes
-  cleanup flags without returning secret values, raw key material, or raw
-  provider errors.
 - usage diagnostics through read-only `usage.status`. The response reads the
   same current summary maintained by `usage.cost`, reports run/token/cost
   counts, per-provider request/token/cost rows, quota status, remaining quota
   estimates, and cleanup flags without returning prompts, responses, or secret
   values.
-- voicewake diagnostics through read-only `voicewake.get`. The response
-  preserves explicit stored configuration values, reports configured/enabled
-  status and backend summary, and includes cleanup flags without returning audio
-  samples or secret values.
 - config diagnostics through `config.get` and `config.set`. Stored config keys
   that look like API keys, tokens, passwords, secrets, credentials, or private
   keys are returned as bounded redaction objects in single-key and full-config
@@ -14502,10 +14288,9 @@ Initial stable 1.0 support targets:
 - model catalog diagnostics through read-only `models.list`. The response
   includes provider/capability counts, source metadata, and cleanup flags while
   omitting credential and secret values.
-- agent directory diagnostics through `agent.directory.list`, `agents.list`,
-  and `agent.targets.list`. These responses include compact agent/session/target
-  summaries and cleanup flags without returning message bodies, credentials, or
-  secret values.
+- agent directory diagnostics through `agent.directory.list` and `agents.list`.
+  These responses include compact agent/session summaries and cleanup flags
+  without returning message bodies, credentials, or secret values.
 - Hermes-compatible final-answer `MEDIA:<project-relative-path>` directives for
   Telegram and Discord. Lemon resolves these at router finalization time into
   the existing `auto_send_files` delivery path only when the target is an
@@ -14513,17 +14298,13 @@ Initial stable 1.0 support targets:
   missing files, and out-of-project paths are ignored, and the directive line is
   stripped from the channel-facing text.
 - preview durable goal status, one-shot continuation, one supervised judge tick,
-  max-continuation budgets, bounded operator-started goal loops, and opt-in
-  persisted auto-loop scheduling through
-  `goal.set`, `goal.status`, `goal.pause`, `goal.resume`, `goal.continue`,
-  `goal.loop.once`, `goal.loop.start`, `goal.loop.status`, `goal.loop.stop`,
-  `goal.clear`, TUI `/goal`, Telegram/Discord `/goal` status/set/continue/loop
-  controls, goal lifecycle events, and redacted support-bundle
-  metadata. This is bounded supervised loop plumbing with a dev/prod
-  router-backed judge default, deterministic proof through the real router run
-  process, persisted-auto scheduler proof through the same path, and
-  provider-backed live model-judge proof. Richer channel-visible loop behavior
-  remains preview before full persistent-goal parity.
+  max-continuation budgets, and persisted auto-loop scheduling exposed through
+  TUI `/goal` and Telegram/Discord `/goal` controls, goal lifecycle events, and
+  redacted support-bundle metadata. This is bounded supervised loop plumbing
+  with a dev/prod router-backed judge default, deterministic proof through the
+  real router run process, persisted-auto scheduler proof through the same path,
+  and provider-backed live model-judge proof. Richer channel-visible loop
+  behavior remains preview before full persistent-goal parity.
 - preview durable kanban board/task state, JSON-RPC board/task/archive/dispatcher
   methods, model-facing `kanban` tool, supervised dispatcher leases, per-task
   git worktree worker cwd for git-backed boards, redacted control-plane board
@@ -14778,8 +14559,7 @@ fallback routing is disabled, absent, configured without any credential-ready
 fallback, or able to rescue a not-ready default provider through a
 credential-ready fallback. The check only reports provider labels and counts;
 it does not expose key material, secret names, endpoint URLs, prompts, or
-provider responses. `providers.status` also reports credential readiness and
-route preview without exposing secret values.
+provider responses.
 
 For cron and scheduled-automation bugs, the bundle includes
 `cron_diagnostics.json` with job/run counts, enabled/disabled counts,
@@ -14806,9 +14586,6 @@ counts, aggregate manifest capability/provider/host/distribution/audit shape,
 nested library-file counts, and file/path hashes. It does not load extension
 code and does not include raw source paths, file contents, manifest contents,
 distribution URLs, plugin names, provider names, or load-error messages.
-
-The same redacted directory shape is available through the control plane. Use read-only `extensions.status` when you need the deeper
-loaded-extension, tool-conflict, provider-registration, or WASM status view.
 
 ## Logs
 
@@ -15990,16 +15767,6 @@ executable path. Public status redacts absolute paths to command basenames.
 
 Operator/editor surfaces can use:
 
-| Method | Purpose |
-| --- | --- |
-| `lsp.diagnostics.status` | Inspect redacted checker and language-server capability metadata. |
-| `lsp.server.start` | Start a supervised stdio language-server session. |
-| `lsp.server.initialize` | Send `initialize`, wait for the response, then send `initialized`. |
-| `lsp.document.open` | Send `textDocument/didOpen`. |
-| `lsp.document.change` | Send `textDocument/didChange` with full text content. |
-| `lsp.document.close` | Send `textDocument/didClose`. |
-| `lsp.server.request` | Send a JSON-RPC request and correlate the response by id. |
-| `lsp.server.stop` | Stop the supervised session. |
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,
@@ -16287,8 +16054,8 @@ Public surfaces return:
 - redacted `media_job` metadata
 
 Public surfaces do not return raw prompts, raw provider responses, raw generated
-bytes, API keys, or channel message bodies. Support bundles and `media.status`
-reuse the same redacted metadata. Provider proof readiness is grouped by launch
+bytes, API keys, or channel message bodies. Support bundles reuse the same
+redacted metadata. Provider proof readiness is grouped by launch
 lane, so alternate providers such as `vertex_imagen`, `google_tts`, and
 `deepgram_transcribe` can satisfy the image, TTS, and STT lanes while exposing
 copy-ready per-provider rerun commands.
@@ -16715,15 +16482,6 @@ than forwards `Browser.close`. The extension displays connection state in its
 badge and reconnects with bounded backoff. See
 [`clients/lemon-browser-node/README.md`](../../clients/lemon-browser-node/README.md).
 
-Remote controllers use `browser.controller.ticket`, `register`, `heartbeat`,
-`result`, and `status`. Tickets are strong, short-lived, hashed at rest, and
-single-use. Registration binds the authenticated principal, exact controller,
-browser profile, Lemon session/run, and allowlisted capabilities. Each command
-has bounded completion, and results are accepted only from the exact registered
-WebSocket process. Controller-backend requests must supply the exact controller,
-profile, and session binding; omitted identities never select the only available
-controller implicitly. Offline, expired, replayed, mismatched, incomplete, or
-under-capability requests fail closed.
 
 Screenshots default to `.lemon/browser-artifacts/` under the active working
 directory unless a `path` is provided.
@@ -16746,13 +16504,10 @@ raw screenshot pixels as an image block.
 classifies each target as public, private, or local-document before forwarding
 to the browser worker. `public` rejects local/private/data/file targets, `local`
 rejects public web targets, and cloud metadata endpoints are blocked before the
-supervised worker in every route. The same `LemonBrowser.RoutePolicy`
-guard is enforced by the control-plane `browser.request` proxy before it
-dispatches `browser.navigate` to a paired node or local fallback; already
-prefixed methods such as `browser.navigate` are passed through without
-double-prefixing, and policy-only `route` args are stripped before node
-dispatch. Progress updates include only safe route classification metadata plus
-hashed host data, never the raw URL.
+supervised worker in every route. The `LemonBrowser.RoutePolicy` guard applies
+before navigation dispatch; `route` arguments are stripped before node dispatch.
+Progress updates include only safe route classification metadata plus hashed
+host data, never the raw URL.
 
 `browser_evaluate` is page-scoped JavaScript only. The evaluated value is
 returned as untrusted tool output, while progress updates omit the expression
@@ -16785,18 +16540,15 @@ clears cookies, current-page `localStorage`/`sessionStorage`, and buffered
 events by default; pass `clearCookies`, `clearStorage`, or `clearEvents` as
 `false` to leave a specific state surface intact.
 
-Control-plane operators can inspect the same BEAM-owned browser surface with
-`browser.status`, including local driver status, request counters, the last
-worker error, the artifact directory, and recent artifact cleanup metadata. The
-status surfaces include a redacted driver config
-summary showing local-CDP vs remote-CDP mode, attach-only state, launch behavior,
-local CDP port, and an endpoint hash when a managed endpoint is configured.
-`browser.status` also reports paired browser nodes.
-Doctor support bundles include the same redacted metadata in
-`browser_diagnostics.json`; screenshot bytes are not embedded in the bundle.
-Browser artifacts are local files and screenshot writes now enforce managed
-retention for the artifact directory: keep 14 days or the newest 100 files,
-whichever retains fewer old artifacts.
+Doctor support bundles include redacted browser metadata in
+`browser_diagnostics.json`, including local driver status, request counters, the
+last worker error, artifact directory, and recent artifact cleanup metadata.
+The metadata includes a redacted driver config summary showing local-CDP vs
+remote-CDP mode, attach-only state, launch behavior, local CDP port, and an
+endpoint hash when a managed endpoint is configured. Screenshot bytes are not
+embedded in the bundle. Browser artifacts are local files and screenshot writes
+now enforce managed retention for the artifact directory: keep 14 days or the
+newest 100 files, whichever retains fewer old artifacts.
 
 Browser tools emit channel-safe partial progress updates into Lemon's normal
 tool-status pipeline. The updates carry the browser method, phase, timeout,
@@ -16922,8 +16674,6 @@ Config knobs:
   `clients/lemon-browser-node`.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set
   `LEMON_CHROME_EXECUTABLE`.
-- `browser.status` shows `last_error`: inspect that message first, then rerun
-  `mix lemon.doctor --bundle` if you need a support artifact.
 
 For Firecrawl-specific behavior, see [`docs/tools/firecrawl.md`](firecrawl.md).
 
@@ -18607,9 +18357,6 @@ draft.
 - Learning uses only the deterministic skill audit. It never sends selected
   source content to the optional LLM audit reviewer.
 
-The authenticated control plane exposes the same service as `learn.review`
-(read scope) and `learn.confirm` (admin scope).
-
 ---
 
 Source: https://z80dev.github.io/lemon/user-guide/memory
@@ -18828,8 +18575,8 @@ and [`docs/user-guide/skills.md`](skills.md#skill-drafts-synthesized-skills).
 
 Support bundles include `memory_diagnostics.json`. It reports provider count,
 enabled provider count, provider ids, sources, scopes, timeout shape, and module
-load state. The same provider shape is available through read-only
-`memory.status` and. These surfaces do not include memory document
+load state. These details are available in
+support bundles. They do not include memory document
 contents, raw provider config, secret values, prompts, tool output, or provider
 error payloads.
 

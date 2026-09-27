@@ -81,15 +81,6 @@ defmodule LemonAutomation.GoalLoop do
            goal: result.goal
          }}
 
-      {:ok, result} ->
-        {:ok,
-         %{
-           status: :finished,
-           tick_count: tick_count + 1,
-           last_result: result,
-           goal: result.goal
-         }}
-
       error ->
         error
     end
@@ -196,7 +187,6 @@ defmodule LemonAutomation.GoalLoop do
   defp terminal_status(:done), do: :finished
   defp terminal_status(:blocked), do: :blocked
   defp terminal_status(:needs_input), do: :needs_input
-  defp terminal_status(_), do: :finished
 
   defp verdict_map(verdict) do
     %{

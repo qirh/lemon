@@ -67,9 +67,9 @@ state, redacts confirmed content again at the durable boundary, and writes a
 memory document plus an audited skill draft. This path does not rely on the
 run-ingest feature flag.
 
-`search_memory` is read-only recall. `memory_topic` creates explicit topic files
-under `memory/topics/` for durable project context. Procedural workflows belong
-in audited skills, not memory topics.
+`recall` is read-only search over past conversation summaries and longer notes.
+`remember` explicitly adds, replaces, or removes compact facts in `USER.md` or
+`MEMORY.md`. Procedural workflows belong in audited skills.
 
 ## Skills
 

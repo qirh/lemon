@@ -38,9 +38,6 @@ defmodule LemonControlPlane.Methods.SessionsPrune do
         {:error,
          {:internal_error, "Some session deletions could not be verified",
           safe_failure_summary(result)}}
-
-      {:error, _reason} ->
-        {:error, {:internal_error, "Failed to prune sessions", nil}}
     end
   end
 

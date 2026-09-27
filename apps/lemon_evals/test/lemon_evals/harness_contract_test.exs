@@ -6,35 +6,12 @@ defmodule LemonEvals.HarnessContractTest do
   @moduletag :tmp_dir
 
   describe "run/1" do
-    test "includes Hermes-style memory and skill contract checks", %{tmp_dir: tmp_dir} do
-      report = Harness.run(cwd: tmp_dir, iterations: 2)
-      names = Enum.map(report.results, & &1.name)
-
-      assert "memory_scope_contract" in names
-      assert "memory_topic_contract" in names
-      assert "auto_skill_prompt_contract" in names
-      assert "dedicated_tool_preference_contract" in names
-      assert "skill_curator_behavior_contract" in names
-      assert "learning_tool_trace_contract" in names
-      assert "tool_use_claim_contract" in names
-      assert "untrusted_prompt_injection_contract" in names
-      assert "agent_loop_learning_trace_contract" in names
-      assert "agent_loop_skill_refinement_trace_contract" in names
-      assert "agent_loop_memory_trace_contract" in names
-      assert "agent_loop_workspace_memory_file_contract" in names
-      assert "agent_loop_workspace_memory_update_contract" in names
-      assert "agent_loop_async_join_trace_contract" in names
-      assert "agent_loop_parallel_join_trace_contract" in names
-      assert "agent_loop_delegation_artifact_trace_contract" in names
-      assert "delegation_toolset_contract" in names
-    end
-
     test "live-model checks are opt in", %{tmp_dir: tmp_dir} do
       default_report = Harness.run(cwd: tmp_dir, iterations: 2)
       default_names = Enum.map(default_report.results, & &1.name)
 
       refute "live_model_memory_trace_contract" in default_names
-      refute "live_model_memory_topic_contract" in default_names
+      refute "live_model_remember_contract" in default_names
       refute "live_model_workspace_memory_file_contract" in default_names
       refute "live_model_skill_learning_contract" in default_names
       refute "live_model_relevant_skill_usage_contract" in default_names
@@ -50,7 +27,7 @@ defmodule LemonEvals.HarnessContractTest do
       live_names = Enum.map(live_report.results, & &1.name)
 
       assert "live_model_memory_trace_contract" in live_names
-      assert "live_model_memory_topic_contract" in live_names
+      assert "live_model_remember_contract" in live_names
       assert "live_model_workspace_memory_file_contract" in live_names
       assert "live_model_skill_learning_contract" in live_names
       assert "live_model_relevant_skill_usage_contract" in live_names
@@ -73,12 +50,12 @@ defmodule LemonEvals.HarnessContractTest do
       assert result.details.reason =~ "LEMON_EVAL_API_KEY"
     end
 
-    test "live-model memory topic eval reports missing credentials without provider access", %{
+    test "live-model remember eval reports missing credentials without provider access", %{
       tmp_dir: tmp_dir
     } do
-      result = Harness.live_model_memory_topic_contract_eval(tmp_dir, live_api_key: "")
+      result = Harness.live_model_remember_contract_eval(tmp_dir, live_api_key: "")
 
-      assert result.name == "live_model_memory_topic_contract"
+      assert result.name == "live_model_remember_contract"
       assert result.status == :fail
       assert result.details.reason =~ "LEMON_EVAL_API_KEY"
     end

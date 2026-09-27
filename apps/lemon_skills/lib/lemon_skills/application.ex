@@ -12,6 +12,9 @@ defmodule LemonSkills.Application do
     # Back-fill lockfile provenance for any pre-existing installs.
     LemonSkills.Migrator.migrate()
     LemonSkills.Telemetry.attach_introspection_bridge()
+    # Automatic per-turn memory recall. Registered once at boot; the contributor
+    # itself skips turns when `[memory] auto_recall = false`.
+    LemonAgent.ContextRegistry.register(:memory_recall, LemonSkills.MemoryRecall)
 
     children = [
       LemonSkills.Registry,

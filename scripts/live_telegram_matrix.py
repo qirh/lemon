@@ -943,7 +943,7 @@ async def run_topic_checkpoint(client, group, topic_id, timeout_s, workdir):
         )
         expected_diff = (
             f"Checkpoint Diff\n{checkpoint_id}\nChanged paths: 1\n"
-            "Output is redacted in chat. Use TUI /checkpoint diff or control-plane checkpoint.diff for full content."
+            "Output is redacted in chat."
         )
         diff_reply = await wait_for_reply(
             client,

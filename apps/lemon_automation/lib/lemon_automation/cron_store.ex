@@ -579,6 +579,5 @@ defmodule LemonAutomation.CronStore do
   defp normalize_audit_value(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_audit_value(value) when is_binary(value), do: value
   defp normalize_audit_value(value) when is_integer(value), do: Integer.to_string(value)
-  defp normalize_audit_value(value) when is_boolean(value), do: to_string(value)
   defp normalize_audit_value(_), do: ""
 end

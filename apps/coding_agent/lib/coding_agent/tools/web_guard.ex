@@ -268,10 +268,6 @@ defmodule CodingAgent.Tools.WebGuard do
     {:ok, ip_to_string(address)}
   end
 
-  defp pick_pinned_host([]) do
-    {:error, {:network_error, "Unable to resolve hostname"}}
-  end
-
   defp build_pinned_request_url(uri, pinned_host) do
     try do
       uri

@@ -136,7 +136,7 @@ defmodule LemonAutomation.Wake do
     # Add wake context to metadata
     run =
       if map_size(context) > 0 do
-        %{run | meta: Map.merge(run.meta || %{}, %{wake_context: context})}
+        %{run | meta: %{wake_context: context}}
       else
         run
       end

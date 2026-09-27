@@ -436,8 +436,6 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
     _ -> nil
   end
 
-  defp wait_for_os_pid_exit(nil, _timeout_ms), do: :ok
-
   defp wait_for_os_pid_exit(os_pid, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     wait_for_os_pid_exit_until(os_pid, deadline)
@@ -467,8 +465,6 @@ defmodule LemonSim.LLM.Deciders.ExternalDecider do
   rescue
     _ -> false
   end
-
-  defp terminate_os_pid(nil, _signal), do: :ok
 
   defp terminate_os_pid(os_pid, signal) when is_integer(os_pid) do
     if os_pid_alive?(os_pid) do

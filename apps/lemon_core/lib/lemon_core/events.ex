@@ -24,9 +24,9 @@ defmodule LemonCore.Events do
 
   Payload structs do **not** implement `Access`: `payload[:key]` raises, and a consumer reads
   a field or pattern-matches the struct. A consumer that may still be handed a legacy map —
-  one relaying events from another node, or reading an event injected through the control
-  plane's `events.ingest` — coerces once at its entry point with `coerce/2`, rather than
-  carrying key-probing downstream into the code that reads the payload:
+  such as one relaying events from another node — coerces once at its entry point with
+  `coerce/2`, rather than carrying key-probing downstream into the code that reads the
+  payload:
 
       def handle_info(%LemonCore.Event{type: :run_completed, payload: payload}, state) do
         %Events.RunCompleted{completed: completed} = coerce(:run_completed, payload)

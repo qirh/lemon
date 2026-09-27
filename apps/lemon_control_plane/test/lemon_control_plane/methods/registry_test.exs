@@ -116,6 +116,23 @@ defmodule LemonControlPlane.Methods.RegistryTest do
              Registry.dispatch(unknown_method, %{}, ctx)
   end
 
+  test "removed uncalled method families answer method_not_found while client methods stay registered" do
+    ctx = ctx_with_scopes([:admin, :read, :write, :approvals, :pairing])
+
+    for removed <- ~w(kanban.board.list tts.status wizard.start device.pair.request
+                      lsp.server.start checkpoint.diff secrets.list proofs.status send) do
+      assert {:error, {:method_not_found, "Unknown method: " <> ^removed}} =
+               Registry.dispatch(removed, %{}, ctx)
+    end
+
+    methods = Registry.list_methods()
+
+    for kept <- ~w(chat.send sessions.list profile.chat blueprints.list connect.challenge
+                   node.pair.request node.invoke.result exec.approval.resolve usage.status) do
+      assert kept in methods
+    end
+  end
+
   defp ensure_registry_started do
     case Process.whereis(Registry) do
       nil -> start_supervised!(Registry)

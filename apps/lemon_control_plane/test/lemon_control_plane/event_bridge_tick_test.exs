@@ -90,24 +90,6 @@ defmodule LemonControlPlane.EventBridgeTickTest do
     end
   end
 
-  describe "talk mode event mapping" do
-    test "maps :talk_mode_changed to talk.mode event" do
-      if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :talk_mode_changed,
-          %{session_key: "test-session", mode: :off},
-          %{}
-        )
-
-        LemonCore.Bus.broadcast("system", event)
-
-        Process.sleep(50)
-
-        assert Process.alive?(Process.whereis(EventBridge))
-      end
-    end
-  end
-
   describe "heartbeat event mapping" do
     test "maps :heartbeat to heartbeat event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do

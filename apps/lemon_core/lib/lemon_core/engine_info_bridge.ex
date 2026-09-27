@@ -125,8 +125,7 @@ defmodule LemonCore.EngineInfoBridge do
   defp call(capability, function, args, fallback) do
     module = impl(capability)
 
-    if is_atom(module) and Code.ensure_loaded?(module) and
-         function_exported?(module, function, length(args)) do
+    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args)) do
       apply(module, function, args)
     else
       fallback

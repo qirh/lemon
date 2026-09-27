@@ -22,14 +22,9 @@ defmodule CodingAgent.ControlPlaneProvider do
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
 
   def todo_progress(session_key) do
-    case CodingAgent.Tools.TodoStore.get_progress(session_key) do
-      progress when is_map(progress) ->
-        actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
-        Map.put(progress, :actionable_count, actionable_count)
-
-      _ ->
-        nil
-    end
+    progress = CodingAgent.Tools.TodoStore.get_progress(session_key)
+    actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
+    Map.put(progress, :actionable_count, actionable_count)
   end
 
   def feature_progress(cwd), do: CodingAgent.Tools.FeatureRequirements.get_progress(cwd)

@@ -4,7 +4,7 @@ defmodule LemonControlPlane.Presence do
 
   Tracks all connected WebSocket clients and provides:
   - Connection registration/unregistration
-  - Role-based counting (operators, nodes, devices)
+  - Role-based counting (operators, nodes)
   - Client lookup by connection ID
   - Broadcasting events to all connected clients
   """
@@ -54,14 +54,6 @@ defmodule LemonControlPlane.Presence do
   end
 
   @doc """
-  Updates event subscription metadata for a connection.
-  """
-  @spec update_subscriptions(String.t(), atom(), MapSet.t()) :: :ok
-  def update_subscriptions(conn_id, mode, subscriptions) do
-    GenServer.call(__MODULE__, {:update_subscriptions, conn_id, mode, subscriptions})
-  end
-
-  @doc """
   Lists all connected clients.
   """
   @spec list() :: [{String.t(), client_info()}]
@@ -72,7 +64,7 @@ defmodule LemonControlPlane.Presence do
   @doc """
   Returns counts by role.
   """
-  @spec counts() :: %{total: integer(), operators: integer(), nodes: integer(), devices: integer()}
+  @spec counts() :: %{total: integer(), operators: integer(), nodes: integer()}
   def counts do
     GenServer.call(__MODULE__, :counts)
   end
@@ -142,24 +134,6 @@ defmodule LemonControlPlane.Presence do
   end
 
   @impl true
-  def handle_call({:update_subscriptions, conn_id, mode, subscriptions}, _from, state) do
-    case :ets.lookup(state.table, conn_id) do
-      [{^conn_id, info}] ->
-        info =
-          info
-          |> Map.put(:subscription_mode, mode)
-          |> Map.put(:subscriptions, subscriptions)
-
-        :ets.insert(state.table, {conn_id, info})
-
-      [] ->
-        :ok
-    end
-
-    {:reply, :ok, state}
-  end
-
-  @impl true
   def handle_call(:list, _from, state) do
     clients = :ets.tab2list(state.table)
     {:reply, clients, state}
@@ -170,13 +144,12 @@ defmodule LemonControlPlane.Presence do
     clients = :ets.tab2list(state.table)
 
     counts =
-      Enum.reduce(clients, %{total: 0, operators: 0, nodes: 0, devices: 0}, fn {_id, info}, acc ->
+      Enum.reduce(clients, %{total: 0, operators: 0, nodes: 0}, fn {_id, info}, acc ->
         acc = %{acc | total: acc.total + 1}
 
         case info.role do
           :operator -> %{acc | operators: acc.operators + 1}
           :node -> %{acc | nodes: acc.nodes + 1}
-          :device -> %{acc | devices: acc.devices + 1}
           _ -> acc
         end
       end)

@@ -98,7 +98,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
       "Recent: #{recent_line(summary.recent)}",
       "Events: #{event_counts_line(opts)}",
       "Recent events: #{recent_events_line(opts)}",
-      "Actions: /checkpoint diff <id>; /checkpoint restore <id> confirm. Chat output is redacted; use TUI/control-plane for full diffs."
+      "Actions: /checkpoint diff <id>; /checkpoint restore <id> confirm. Chat output is redacted."
     ]
 
     Enum.join(lines, "\n")
@@ -132,7 +132,7 @@ defmodule LemonChannels.CheckpointStatusMessage do
           "Checkpoint Diff",
           id,
           "Changed paths: #{length(changed)}",
-          "Output is redacted in chat. Use TUI /checkpoint diff or control-plane checkpoint.diff for full content."
+          "Output is redacted in chat."
         ]
         |> Enum.join("\n")
 

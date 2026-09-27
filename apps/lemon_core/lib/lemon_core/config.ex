@@ -23,6 +23,7 @@ defmodule LemonCore.Config do
             logging: %{},
             gateway: %{},
             agents: %{},
+            memory: %{auto_recall: true},
             secrets: %LemonCore.Config.Secrets{}
 
   @type provider_config :: %{
@@ -42,6 +43,7 @@ defmodule LemonCore.Config do
           logging: map(),
           gateway: map(),
           agents: map(),
+          memory: %{auto_recall: boolean()},
           secrets: LemonCore.Config.Secrets.t()
         }
 
@@ -161,6 +163,7 @@ defmodule LemonCore.Config do
       logging: config.logging,
       gateway: config.gateway,
       agents: config.agents,
+      memory: config.memory,
       secrets: secrets_to_map(config.secrets)
     }
   end
@@ -179,7 +182,20 @@ defmodule LemonCore.Config do
       logging: convert_logging(modular.logging),
       gateway: convert_gateway(modular.gateway),
       agents: convert_agents(profiles, defaults),
+      memory: convert_memory(modular.memory, modular.features),
       secrets: modular.secrets
+    }
+  end
+
+  # `auto_recall` here is the effective switch hot paths read per turn: it is
+  # off when `[memory] auto_recall = false` *or* when durable memory itself is
+  # killed (`[features] session_search = "off"`), since the kill switch promises
+  # that memory search is inactive.
+  defp convert_memory(memory, features) do
+    %{
+      auto_recall:
+        LemonCore.Config.Memory.auto_recall?(memory) and
+          LemonCore.Config.Features.enabled?(features, :session_search)
     }
   end
 
@@ -288,7 +304,7 @@ defmodule LemonCore.Config do
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
     |> Map.put(:rate_limit, cfg["rate_limit"])
-    |> Map.put(:status, cfg["status"] || base.status || "active")
+    |> Map.put(:status, cfg["status"] || base.status)
   end
 
   defp default_agent_profile(id, _cfg, defaults) do
@@ -427,6 +443,7 @@ defmodule LemonCore.Config do
       logging: deep_merge_values(config.logging, overrides["logging"]),
       gateway: deep_merge_values(config.gateway, overrides["gateway"]),
       agents: deep_merge_values(config.agents, overrides["agents"]),
+      memory: deep_merge_values(config.memory, overrides["memory"]),
       secrets: config.secrets
     }
   end

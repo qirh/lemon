@@ -258,7 +258,7 @@ text reach it, and nothing else does:
 3. **Whatever a tool call passes.** `honcho_search` and `honcho_reasoning` send the
    model's query; `honcho_conclude` sends the conclusion text it was asked to record or
    the query it was asked to search; `honcho_profile` sends the peer-card lines it was
-   asked to store. A `search_memory` call reaches Honcho the same way, through
+   asked to store. A `recall` call reaches Honcho the same way, through
    `LemonHoncho.MemoryProvider`, and sends its query. This material is the model's own
    words — often a verbatim paste of what the user just said — and is sent only when the
    model calls the tool. `LEMON_HONCHO_SAVE_MESSAGES=false` stops the two that write.
@@ -293,7 +293,7 @@ The budget belongs to the call site, and so does what withholding means there:
 | `honcho_conclude` `conclusion` | the fact to record | 2,000 characters (anything longer is rejected outright, so the clip never fires) | the call is **refused**; nothing is recorded |
 | `honcho_conclude` `query` | the model's query | 1,500 characters | the call is **refused**; no search runs |
 | `honcho_profile` `card` | each card line | 500 characters per line, at most 50 lines (over-long lines are rejected outright) | the **whole write** is refused; the stored card is untouched |
-| `search_memory` via `LemonHoncho.MemoryProvider` | whatever the search was given | 2,000 characters | the search returns no Honcho results, with no explanation |
+| `recall` via `LemonHoncho.MemoryProvider` | whatever the search was given | 2,000 characters | the search returns no Honcho results, with no explanation |
 
 A refusal is an ordinary tool result, not an error: the turn continues, the model is
 told which parameter tripped the screen and that nothing was sent, stored, or logged,

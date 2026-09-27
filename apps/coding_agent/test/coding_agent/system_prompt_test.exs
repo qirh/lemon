@@ -23,37 +23,16 @@ defmodule CodingAgent.SystemPromptTest do
     assert String.contains?(prompt, "SOUL content here")
   end
 
-  @tag :tmp_dir
-  test "includes memory workflow guidance for main sessions", %{tmp_dir: tmp_dir} do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
+  @removed_memory_tools ~w(search_memory session_search memory_topic memory)
 
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :main
-      })
-
-    assert String.contains?(prompt, "## Memory Workflow")
-    assert String.contains?(prompt, "Prefer the dedicated memory and skill tools")
-    assert String.contains?(prompt, "not for bypassing `search_memory`, `session_search`")
-    assert String.contains?(prompt, "Use `search_memory` to recall completed run history")
-    assert String.contains?(prompt, "Use `session_search` when a prompt or imported workflow")
-    assert String.contains?(prompt, "Use `memory` for compact assistant-home")
-    assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes")
-    assert String.contains?(prompt, "memory/topics/*.md")
-    assert String.contains?(prompt, "Use `grep` with `path: \"memory\"`")
-    assert String.contains?(prompt, "memory/topics/<topic-slug>.md")
-    assert String.contains?(prompt, "Use `memory_topic` to scaffold durable topic notes")
-    assert String.contains?(prompt, "memory/topics/TEMPLATE.md")
-    assert String.contains?(prompt, "Use `skill_manage` to create or update a skill")
-    assert String.contains?(prompt, "Use `todo` only for the active run")
-    assert String.contains?(prompt, "Use `edit` to keep `MEMORY.md` concise")
+  # The `## Memory` section, up to the next top-level section.
+  defp memory_section(prompt) do
+    [_before, rest] = String.split(prompt, "## Memory\n", parts: 2)
+    rest |> String.split(~r/\n\n(?=## |<)/, parts: 2) |> hd()
   end
 
   @tag :tmp_dir
-  test "includes learning trigger guidance for main sessions", %{tmp_dir: tmp_dir} do
+  test "main-session memory guidance names only remember and recall", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)
     File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
@@ -64,19 +43,40 @@ defmodule CodingAgent.SystemPromptTest do
         session_scope: :main
       })
 
-    assert String.contains?(prompt, "<learning-workflow>")
-    assert String.contains?(prompt, "Choose the right persistence surface")
-    assert String.contains?(prompt, "Prefer dedicated memory and skill tools")
-    assert String.contains?(prompt, "Use `read_skill`")
-    assert String.contains?(prompt, "reusable workflow, recurring command sequence")
-    assert String.contains?(prompt, "project convention")
-    assert String.contains?(prompt, "Use `skill_manage`")
-    assert String.contains?(prompt, "Use `memory`")
-    assert String.contains?(prompt, "Use `memory_topic`")
-    assert String.contains?(prompt, "Use `search_memory`")
-    assert String.contains?(prompt, "Use `session_search`")
-    assert String.contains?(prompt, "Use `todo`")
-    assert String.contains?(prompt, "At the end of substantial work")
+    section = memory_section(prompt)
+
+    referenced = section |> SystemPrompt.referenced_tool_names() |> Enum.sort()
+    assert referenced == ["recall", "remember"]
+
+    for removed <- @removed_memory_tools do
+      refute removed in SystemPrompt.referenced_tool_names(prompt)
+    end
+
+    refute prompt =~ "Hermes"
+  end
+
+  @tag :tmp_dir
+  test "memory guidance leaves out a tool the session lacks", %{tmp_dir: tmp_dir} do
+    workspace_dir = Path.join(tmp_dir, "workspace")
+    File.mkdir_p!(workspace_dir)
+
+    recall_only =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main,
+        tool_names: ~w(read recall)
+      })
+
+    assert recall_only |> memory_section() |> SystemPrompt.referenced_tool_names() == ["recall"]
+
+    neither =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main,
+        tool_names: ~w(read)
+      })
+
+    refute neither =~ "## Memory\n"
   end
 
   @tag :tmp_dir
@@ -101,8 +101,8 @@ defmodule CodingAgent.SystemPromptTest do
       |> MapSet.new()
 
     assert "read_skill" in referenced_tools
-    assert "search_memory" in referenced_tools
-    assert "session_search" in referenced_tools
+    assert "remember" in referenced_tools
+    assert "recall" in referenced_tools
     assert "skill_manage" in referenced_tools
 
     missing_tools = Enum.reject(referenced_tools, &MapSet.member?(default_tool_names, &1))
@@ -294,7 +294,7 @@ defmodule CodingAgent.SystemPromptTest do
              "Expected scope: main for invalid input #{inspect(invalid_scope)}"
 
       # Main sessions get the full memory workflow, not the subagent restriction
-      assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes"),
+      assert String.contains?(prompt, "use `recall`"),
              "Expected main memory workflow for invalid input #{inspect(invalid_scope)}"
 
       refute String.contains?(prompt, "This is a subagent session."),

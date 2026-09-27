@@ -107,6 +107,19 @@ file = "./logs/lemon.log"
 level = "debug"
 ```
 
+### Config.Memory
+
+The `[memory]` section controls automatic recall:
+
+- `auto_recall` - Boolean, defaults to `true`; attaches a bounded **Relevant memory**
+  block to user messages. Set to `false` to disable it. Automatic recall is also
+  disabled when `[features] session_search = "off"`.
+
+```toml
+[memory]
+auto_recall = true
+```
+
 ## Module Documentation
 
 ### Config.Helpers

@@ -38,9 +38,6 @@ defmodule CodingAgent.Tools.Task.Runner do
 
       {:error, {status, error}} ->
         {:error, "Task #{status}: #{inspect(error)}"}
-
-      {:error, reason} ->
-        {:error, "Coordinator error: #{inspect(reason)}"}
     end
   end
 

@@ -93,8 +93,6 @@ defmodule LemonSim.LLM.GameHelpers.ProviderThrottle do
     end)
   end
 
-  defp normalize_provider_intervals(_), do: %{}
-
   defp wait(throttle_agent, provider, default_interval_ms, provider_min_interval_ms) do
     provider_key = normalize_provider_key(provider)
 

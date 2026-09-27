@@ -154,7 +154,6 @@ defmodule LemonSim.Examples.TicTacToe.Updater do
   defp rejection_reason(:invalid_coords), do: "invalid coordinates"
   defp rejection_reason(:invalid_payload), do: "invalid payload"
   defp rejection_reason(:game_over), do: "game already over"
-  defp rejection_reason(other), do: "rejected: #{inspect(other)}"
 
   defp rejection_message(reason, player, row, col) do
     "Move rejected (#{reason}): #{player} at (#{inspect(row)}, #{inspect(col)})"

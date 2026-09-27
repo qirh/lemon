@@ -371,8 +371,6 @@ defmodule LemonSim.Examples.Poker.Updater do
     end
   end
 
-  defp update_player_action_stats(world, _table, _seat, _action), do: world
-
   defp increment_action_counter(stats, :fold), do: Map.update!(stats, :fold_count, &(&1 + 1))
   defp increment_action_counter(stats, :check), do: Map.update!(stats, :check_count, &(&1 + 1))
   defp increment_action_counter(stats, :call), do: Map.update!(stats, :call_count, &(&1 + 1))
@@ -468,8 +466,6 @@ defmodule LemonSim.Examples.Poker.Updater do
 
     %{event | payload: payload}
   end
-
-  defp enrich_action_event(event, _table, _engine_action), do: event
 
   defp maybe_put_amount(payload, hand, :call) do
     seat = Map.get(payload, "seat", Map.get(payload, :seat))
