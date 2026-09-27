@@ -832,7 +832,7 @@ defmodule LemonSimUi.HostedGame.RoomServer do
        ) do
     room = state.room
     now = now_ms()
-    terminal? = MapHelpers.get_key(game_state.world, :status) == "game_over"
+    terminal? = LemonSim.Examples.terminal?(game_state)
     previous_phase = MapHelpers.get_key(room.game_state.world, :phase)
     next_phase = MapHelpers.get_key(game_state.world, :phase)
     phase_changed? = previous_phase != next_phase

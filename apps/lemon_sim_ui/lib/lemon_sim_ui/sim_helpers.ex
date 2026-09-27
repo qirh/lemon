@@ -52,6 +52,7 @@ defmodule LemonSimUi.SimHelpers do
       version: state.version,
       domain_type: infer_domain_type(state),
       status: MapHelpers.get_key(state.world, :status) || "unknown",
+      finished?: LemonSim.Examples.terminal?(state),
       event_count: length(state.recent_events),
       last_activity: last_event_time(state),
       world_summary: world_summary(state)
@@ -106,9 +107,8 @@ defmodule LemonSimUi.SimHelpers do
         completed_hands = MapHelpers.get_key(state.world, :completed_hands) || 0
         max_hands = MapHelpers.get_key(state.world, :max_hands) || 1
         winner = MapHelpers.get_key(state.world, :winner)
-        status = MapHelpers.get_key(state.world, :status)
 
-        if status == "game_over" do
+        if LemonSim.Examples.terminal?(state) do
           "Winner: #{winner || "unknown"}"
         else
           "Hand #{completed_hands + 1}/#{max_hands}"
@@ -154,6 +154,8 @@ defmodule LemonSimUi.SimHelpers do
   def status_color("draw"), do: "text-amber-400"
   def status_color("lost"), do: "text-red-400"
   def status_color("game_over"), do: "text-emerald-400"
+  def status_color("complete"), do: "text-emerald-400"
+  def status_color("bankrupt"), do: "text-red-400"
   def status_color("finished"), do: "text-gray-400"
   def status_color(_), do: "text-gray-500"
 

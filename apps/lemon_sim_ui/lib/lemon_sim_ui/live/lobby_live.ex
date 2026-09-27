@@ -172,9 +172,9 @@ defmodule LemonSimUi.LobbyLive do
                   </div>
                   <span class={[
                     "rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em]",
-                    status_badge_class(@featured_werewolf.status)
+                    status_badge_class(@featured_werewolf.finished?)
                   ]}>
-                    {status_badge_label(@featured_werewolf.status)}
+                    {status_badge_label(@featured_werewolf.finished?)}
                   </span>
                 </div>
 
@@ -286,13 +286,13 @@ defmodule LemonSimUi.LobbyLive do
                   </span>
                   <span class={[
                     "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em]",
-                    status_badge_class(sim.status)
+                    status_badge_class(sim.finished?)
                   ]}>
                     <span class={[
                       "h-1.5 w-1.5 rounded-full",
-                      if(sim.status == "complete", do: "bg-emerald-300", else: "animate-pulse bg-red-400")
+                      if(sim.finished?, do: "bg-emerald-300", else: "animate-pulse bg-red-400")
                     ]}></span>
-                    {status_badge_label(sim.status)}
+                    {status_badge_label(sim.finished?)}
                   </span>
                 </div>
                 <h3 class="mt-6 truncate font-display text-2xl font-semibold text-white transition group-hover:text-amber-100">
@@ -518,8 +518,9 @@ defmodule LemonSimUi.LobbyLive do
   defp load_artifact_state(sim_id, artifact_dir) when is_binary(artifact_dir) do
     with {:ok, body} <- File.read(Path.join(artifact_dir, "final_world.json")),
          {:ok, world} when is_map(world) <- Jason.decode(body),
-         status when status in ["in_progress", "complete"] <-
-           LemonCore.MapHelpers.get_key(world, :status) do
+         true <-
+           LemonCore.MapHelpers.get_key(world, :status) == "in_progress" or
+             LemonSim.Examples.terminal?(world) do
       State.new(
         sim_id: sim_id,
         world: world,
@@ -575,12 +576,12 @@ defmodule LemonSimUi.LobbyLive do
 
   defp format_phase(_phase), do: "Waiting"
 
-  defp status_badge_label("complete"), do: "REPLAY"
-  defp status_badge_label(_status), do: "LIVE"
+  defp status_badge_label(true), do: "REPLAY"
+  defp status_badge_label(_finished?), do: "LIVE"
 
-  defp status_badge_class("complete"),
+  defp status_badge_class(true),
     do: "border-emerald-300/20 bg-emerald-950/40 text-emerald-200"
 
-  defp status_badge_class(_status),
+  defp status_badge_class(_finished?),
     do: "border-red-300/25 bg-red-950/40 text-red-100"
 end

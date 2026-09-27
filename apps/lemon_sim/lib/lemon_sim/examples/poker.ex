@@ -369,7 +369,13 @@ defmodule LemonSim.Examples.Poker do
     end
   end
 
-  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) == "game_over"
+  @terminal_statuses ["game_over"]
+
+  @doc "World `:status` values that end a Poker session."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in @terminal_statuses
 
   defp announce_turn(turn, state) do
     table = MapHelpers.get_key(state.world, :table)

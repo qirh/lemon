@@ -1104,7 +1104,13 @@ defmodule LemonSim.Examples.Werewolf do
 
   # -- Callbacks --
 
-  defp terminal?(state), do: get(state.world, :status) in ["game_over"]
+  @terminal_statuses ["game_over"]
+
+  @doc "World `:status` values that end a Werewolf game."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: get(state.world, :status) in @terminal_statuses
 
   defp announce_turn(turn, state) do
     actor_id = get(state.world, :active_actor_id)

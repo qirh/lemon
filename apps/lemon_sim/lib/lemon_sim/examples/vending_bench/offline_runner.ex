@@ -475,10 +475,7 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
     storage_count + machine_count + pending_count
   end
 
-  defp terminal?(state) do
-    status = get(state.world, :status)
-    status in ["complete", "bankrupt"]
-  end
+  defp terminal?(state), do: get(state.world, :status) in VendingBench.terminal_statuses()
 
   defp format_price(price) when is_float(price),
     do: :erlang.float_to_binary(price, decimals: 2)

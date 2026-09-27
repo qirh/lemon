@@ -387,10 +387,13 @@ defmodule LemonSim.Examples.VendingBench do
 
   # -- Callbacks --
 
-  defp terminal?(state) do
-    status = MapHelpers.get_key(state.world, :status)
-    status in ["complete", "bankrupt"]
-  end
+  @terminal_statuses ["complete", "bankrupt"]
+
+  @doc "World `:status` values that end a VendingBench run (single-operator or Arena)."
+  @spec terminal_statuses() :: [String.t()]
+  def terminal_statuses, do: @terminal_statuses
+
+  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in @terminal_statuses
 
   def stamp_runtime_models(%State{} = state, run_opts) do
     external? = external_run?(run_opts)
