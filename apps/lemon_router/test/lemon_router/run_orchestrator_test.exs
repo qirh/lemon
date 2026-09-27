@@ -1656,7 +1656,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.Store.delete_session_policy(session_key)
+        LemonCore.PolicyStore.delete_session(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -1720,7 +1720,7 @@ defmodule LemonRouter.RunOrchestratorTest do
     test "request model takes precedence over session and profile models" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       session_key = unique_oracle_session_key()
-      LemonCore.Store.put_session_policy(session_key, %{model: "session-model"})
+      LemonCore.PolicyStore.put_session(session_key, %{model: "session-model"})
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -1732,7 +1732,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.Store.delete_session_policy(session_key)
+        LemonCore.PolicyStore.delete_session(session_key)
       end)
 
       :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
@@ -1759,7 +1759,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       session_key = unique_oracle_session_key()
       session_policy = %{model: "session-model"}
-      LemonCore.Store.put_session_policy(session_key, session_policy)
+      LemonCore.PolicyStore.put_session(session_key, session_policy)
 
       {:ok, orchestrator_pid} =
         GenServer.start_link(
@@ -1771,7 +1771,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       on_exit(fn ->
         if Process.alive?(orchestrator_pid), do: GenServer.stop(orchestrator_pid)
-        LemonCore.Store.delete_session_policy(session_key)
+        LemonCore.PolicyStore.delete_session(session_key)
       end)
 
       assert {:ok, _run_id} =
@@ -1786,7 +1786,7 @@ defmodule LemonRouter.RunOrchestratorTest do
                )
 
       assert_receive {:captured_job, job}, 500
-      assert LemonCore.Store.get_session_policy(session_key) == session_policy
+      assert LemonCore.PolicyStore.get_session(session_key) == session_policy
     end
   end
 

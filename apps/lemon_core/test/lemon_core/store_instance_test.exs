@@ -9,7 +9,7 @@ defmodule LemonCore.StoreInstanceTest do
   import ExUnit.CaptureLog
 
   alias Exqlite.Sqlite3
-  alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, ProgressStore, Store}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
   alias LemonCore.Store.SqliteBackend
@@ -92,21 +92,21 @@ defmodule LemonCore.StoreInstanceTest do
     test "chat state and its read cache are isolated", %{alpha: alpha, beta: beta} do
       scope = {:store_instance_test, :chat}
 
-      assert :ok = Store.put_chat_state(alpha, scope, %{msg: "alpha"})
+      assert :ok = ChatStateStore.put(alpha, scope, %{msg: "alpha"})
 
-      assert %{msg: "alpha"} = Store.get_chat_state(alpha, scope)
-      assert Store.get_chat_state(beta, scope) == nil
+      assert %{msg: "alpha"} = ChatStateStore.get(alpha, scope)
+      assert ChatStateStore.get(beta, scope) == nil
 
-      assert :ok = Store.delete_chat_state(alpha, scope)
-      assert Store.get_chat_state(alpha, scope) == nil
+      assert :ok = ChatStateStore.delete(alpha, scope)
+      assert ChatStateStore.get(alpha, scope) == nil
     end
 
     test "progress mappings and runs are isolated", %{alpha: alpha, beta: beta} do
       scope = {:store_instance_test, :progress}
 
-      assert :ok = Store.put_progress_mapping(alpha, scope, 42, "run_alpha")
-      assert Store.get_run_by_progress(alpha, scope, 42) == "run_alpha"
-      assert Store.get_run_by_progress(beta, scope, 42) == nil
+      assert :ok = ProgressStore.put(alpha, scope, 42, "run_alpha")
+      assert ProgressStore.get_run(alpha, scope, 42) == "run_alpha"
+      assert ProgressStore.get_run(beta, scope, 42) == nil
 
       assert :ok = Store.append_run_event(alpha, "run_alpha", %{type: :started})
       # Casts are async; wait for the write to land in the backend.
