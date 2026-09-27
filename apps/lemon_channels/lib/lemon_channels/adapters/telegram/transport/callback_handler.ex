@@ -71,7 +71,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
           session_key =
             lookup_session_key_for_reply(state, scope, message_id) ||
               SessionKey.channel_peer(%{
-                agent_id: BindingResolver.resolve_agent_id(scope) || "default",
+                agent_id: BindingResolver.resolve_agent_id(scope),
                 channel_id: "telegram",
                 account_id: state.account_id || "default",
                 peer_kind: peer_kind,
@@ -198,7 +198,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
               session_key =
                 SessionKey.channel_peer(%{
-                  agent_id: BindingResolver.resolve_agent_id(chat_scope) || "default",
+                  agent_id: BindingResolver.resolve_agent_id(chat_scope),
                   channel_id: "telegram",
                   account_id: state.account_id || "default",
                   peer_kind: peer_kind_from_chat_type(get_in(msg, ["chat", "type"])),

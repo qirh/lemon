@@ -76,8 +76,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       alias LemonChannels.ModelPolicy
       alias LemonChannels.ModelPolicy.Route
 
-      require Logger
-
       import LemonChannels.Adapters.ModelPolicyShared,
         only: [
           normalize_thinking_level: 1,
@@ -100,8 +98,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
           model when is_binary(model) and model != "" -> model
           _ -> nil
         end
-      rescue
-        _ -> nil
       end
 
       def session_model_override(_session_key), do: nil
@@ -109,10 +105,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       @spec put_session_model_override(term(), term()) :: :ok
       def put_session_model_override(session_key, model)
           when is_binary(session_key) and is_binary(model) do
-        session_put(session_key, model)
+        :ok = session_put(session_key, model)
         :ok
-      rescue
-        _ -> :ok
       end
 
       def put_session_model_override(_session_key, _model), do: :ok
@@ -135,8 +129,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
               _ -> {nil, nil}
             end
         end
-      rescue
-        _ -> {nil, nil}
       end
 
       def resolve_model_hint(_account_id, _session_key, _chat_id, _thread_id), do: {nil, nil}
@@ -167,8 +159,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
           is_binary(inherited_level) and inherited_level != "" -> {inherited_level, nil}
           true -> {nil, nil}
         end
-      rescue
-        _ -> {nil, nil}
       end
 
       @spec format_thinking_line(term(), term()) :: binary()
@@ -206,8 +196,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
           model_id ->
             model_id
         end
-      rescue
-        _ -> nil
       end
 
       @spec put_default_model_preference(binary() | nil, term(), term(), term()) :: :ok
@@ -232,10 +220,8 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
           end
 
         policy = ModelPolicy.new_policy(model, policy_opts)
-        ModelPolicy.set(route, policy)
+        :ok = ModelPolicy.set(route, policy)
         :ok
-      rescue
-        _ -> :ok
       end
 
       def put_default_model_preference(_account_id, _chat_id, _thread_id, _model), do: :ok
@@ -260,8 +246,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
           level ->
             level
         end
-      rescue
-        _ -> nil
       end
 
       def default_thinking_preference(_account_id, _chat_id, _thread_id), do: nil
@@ -295,12 +279,10 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
                 Map.put(policy, :thinking_level, thinking_atom)
             end
 
-          ModelPolicy.set(route, policy)
+          :ok = ModelPolicy.set(route, policy)
         end
 
         :ok
-      rescue
-        _ -> :ok
       end
 
       def put_default_thinking_preference(_account_id, _chat_id, _thread_id, _level), do: :ok
@@ -312,7 +294,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       @spec clear_default_thinking_preference(binary() | nil, term(), term()) :: boolean()
       def clear_default_thinking_preference(account_id, chat_id, thread_id)
           when is_binary(account_id) do
-        account_id = account_id || "default"
         had_override? = is_binary(default_thinking_preference(account_id, chat_id, thread_id))
 
         route = build_route(account_id, chat_id, thread_id)
@@ -325,9 +306,9 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
             updated = Map.delete(policy, :thinking_level)
 
             if placeholder_only_policy?(updated) do
-              ModelPolicy.clear(route)
+              :ok = ModelPolicy.clear(route)
             else
-              ModelPolicy.set(route, updated)
+              :ok = ModelPolicy.set(route, updated)
             end
 
           _ ->
@@ -339,8 +320,6 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
         end
 
         had_override?
-      rescue
-        _ -> false
       end
 
       def clear_default_thinking_preference(_account_id, _chat_id, _thread_id), do: false

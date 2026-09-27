@@ -111,8 +111,6 @@ defmodule LemonChannels.Telegram.ResumeIndexStore do
 
   defp current_generation(account_id, chat_id, thread_id) do
     StateStore.get_thread_generation({account_id, chat_id, thread_id}) |> normalize_generation()
-  rescue
-    _ -> 0
   end
 
   defp generation_match?(_generation, :all), do: true

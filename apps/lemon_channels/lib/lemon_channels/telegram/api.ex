@@ -334,8 +334,6 @@ defmodule LemonChannels.Telegram.API do
     end
   end
 
-  defp normalize_media_group_files(_), do: {:error, :invalid_media_group}
-
   defp normalize_media_group_file(%{} = file) do
     path = Map.get(file, :path) || Map.get(file, "path")
     caption = Map.get(file, :caption) || Map.get(file, "caption")

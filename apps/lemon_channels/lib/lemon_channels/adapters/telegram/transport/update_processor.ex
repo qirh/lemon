@@ -226,8 +226,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
       get_in(message, ["reply_to_message", "forum_topic_edited", "name"])
   end
 
-  defp extract_topic_name_from_message(_), do: nil
-
   defp chat_display_name(%{"type" => "private"} = chat) do
     [chat["first_name"], chat["last_name"]]
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
@@ -241,8 +239,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   defp chat_display_name(chat) when is_map(chat) do
     chat["title"] || chat["username"]
   end
-
-  defp chat_display_name(_), do: nil
 
   defp coalesce_text(value, existing, key) do
     normalize_blank(value) || normalize_blank(map_get(existing, key))
@@ -258,8 +254,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     else
       inbound
     end
-  rescue
-    _ -> inbound
   end
 
   defp extract_reply_to_text(update) when is_map(update) do

@@ -7,25 +7,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
 
   @spec safe_delete_chat_state(term()) :: :ok
   def safe_delete_chat_state(key) do
-    ChatStateStore.delete(key)
+    :ok = ChatStateStore.delete(key)
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec safe_get_chat_state(term()) :: ChatState.t() | map() | nil
   def safe_get_chat_state(key) do
     ChatStateStore.get(key)
-  rescue
-    _ -> nil
   end
 
   @spec safe_delete_session_model(term()) :: :ok
   def safe_delete_session_model(session_key) when is_binary(session_key) do
-    _ = StateStore.delete_session_model(session_key)
+    :ok = StateStore.delete_session_model(session_key)
     :ok
-  rescue
-    _ -> :ok
   end
 
   def safe_delete_session_model(_session_key), do: :ok
@@ -45,10 +39,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
   @spec safe_delete_selected_resume(binary() | nil, integer(), integer() | nil) :: :ok
   def safe_delete_selected_resume(account_id, chat_id, thread_id) when is_integer(chat_id) do
     key = {account_id || "default", chat_id, thread_id}
-    _ = StateStore.delete_selected_resume(key)
+    :ok = StateStore.delete_selected_resume(key)
     :ok
-  rescue
-    _ -> :ok
   end
 
   def safe_delete_selected_resume(_account_id, _chat_id, _thread_id), do: :ok
@@ -58,8 +50,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
       when is_integer(chat_id) do
     _ = safe_sweep_thread_message_indices(account_id, chat_id, thread_id, :all)
     :ok
-  rescue
-    _ -> :ok
   end
 
   def safe_clear_thread_message_indices(_account_id, _chat_id, _thread_id), do: :ok
@@ -74,8 +64,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
       )
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   def safe_sweep_thread_message_indices(_account_id, _chat_id, _thread_id, _max_generation),
@@ -85,8 +73,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
   def current_thread_generation(account_id, chat_id, thread_id) when is_integer(chat_id) do
     key = {account_id || "default", chat_id, thread_id}
     key |> StateStore.get_thread_generation() |> normalize_generation()
-  rescue
-    _ -> 0
   end
 
   def current_thread_generation(_account_id, _chat_id, _thread_id), do: 0
@@ -98,10 +84,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
     key = {account_id, chat_id, thread_id}
     previous = current_thread_generation(account_id, chat_id, thread_id)
     next = previous + 1
-    _ = StateStore.put_thread_generation(key, next)
+    :ok = StateStore.put_thread_generation(key, next)
     {previous, next}
-  rescue
-    _ -> {0, 0}
   end
 
   def bump_thread_generation(_account_id, _chat_id, _thread_id), do: {0, 0}
@@ -111,17 +95,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
       when is_binary(session_key) do
     now = System.system_time(:millisecond)
 
-    ChatStateStore.put(session_key, %{
-      last_engine: "lemon",
-      last_resume_token: resume.value,
-      updated_at: now
-    })
+    :ok =
+      ChatStateStore.put(session_key, %{
+        last_engine: "lemon",
+        last_resume_token: resume.value,
+        updated_at: now
+      })
 
     account_id = state_account_id_from_session_key(session_key)
-    _ = StateStore.put_selected_resume({account_id, scope.chat_id, scope.topic_id}, resume)
+    :ok = StateStore.put_selected_resume({account_id, scope.chat_id, scope.topic_id}, resume)
     :ok
-  rescue
-    _ -> :ok
   end
 
   def set_chat_resume(_scope, _session_key, _resume), do: :ok
@@ -132,8 +115,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
       %{account_id: account_id} when is_binary(account_id) -> account_id
       _ -> "default"
     end
-  rescue
-    _ -> "default"
   end
 
   def state_account_id_from_session_key(_), do: "default"

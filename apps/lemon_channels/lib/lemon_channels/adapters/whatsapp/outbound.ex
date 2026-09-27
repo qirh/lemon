@@ -247,7 +247,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
   end
 
   defp normalize_file_batch([]), do: {:error, :invalid_file_payload}
-  defp normalize_file_batch(_), do: {:error, :invalid_file_payload}
 
   defp normalize_batch_file_entry(%{} = content) do
     path = Map.get(content, :path) || Map.get(content, "path")
@@ -281,7 +280,5 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
           :error -> true
         end
     end
-  rescue
-    _ -> true
   end
 end

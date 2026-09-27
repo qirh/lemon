@@ -275,8 +275,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       end
 
     Truncate.split_messages(text)
-  rescue
-    _ -> [text]
   end
 
   defp normalize_text(%DeliveryIntent{kind: kind}, text)
@@ -287,14 +285,10 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     # longer messages. Truncate to a single message instead; the finalize
     # intent will split properly.
     [Truncate.truncate_for_telegram(text)]
-  rescue
-    _ -> [text]
   end
 
   defp normalize_text(_intent, text) do
     Truncate.split_messages(text)
-  rescue
-    _ -> [text]
   end
 
   defp extract_text(%DeliveryIntent{body: body}) when is_map(body) do
@@ -310,8 +304,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     seq = body[:seq] || body["seq"]
     if is_integer(seq) and seq >= 0, do: seq, else: 0
   end
-
-  defp extract_seq(_), do: 0
 
   defp surface_for(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
@@ -428,8 +420,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp pending_resume(%DeliveryIntent{} = intent) do
@@ -468,8 +458,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
     explicit ++ generated
   end
 
-  defp filter_auto_send_files(_files, _cfg), do: []
-
   defp attachment_source(%{source: source}) when source in [:explicit, :generated], do: source
   defp attachment_source(%{source: "explicit"}), do: :explicit
   defp attachment_source(%{source: "generated"}), do: :generated
@@ -484,8 +472,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       {:ok, %File.Stat{type: :regular, size: size}} -> size <= max_bytes
       _ -> false
     end
-  rescue
-    _ -> false
   end
 
   defp file_size_within_limit?(_path, _max_bytes), do: false
@@ -495,8 +481,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
       %{} = cfg -> cfg[:show_resume_line] || cfg["show_resume_line"] || false
       _ -> false
     end
-  rescue
-    _ -> false
   end
 
   defp maybe_append_resume_line(text, nil), do: text
@@ -520,8 +504,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
           end
         end
     end
-  rescue
-    _ -> text
   end
 
   defp normalize_resume(%ResumeToken{} = resume), do: resume
@@ -540,8 +522,6 @@ defmodule LemonChannels.Adapters.Telegram.Renderer do
 
   defp format_resume_line(%ResumeToken{} = resume) do
     ResumeToken.format_plain(resume)
-  rescue
-    _ -> "#{resume.engine} resume #{resume.value}"
   end
 
   defp duplicate?(state, kind, seq, text_hash) do

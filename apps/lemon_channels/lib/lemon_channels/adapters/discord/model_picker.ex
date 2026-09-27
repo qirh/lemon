@@ -44,11 +44,7 @@ defmodule LemonChannels.Adapters.Discord.ModelPicker do
       ])
     ]
 
-    if nav_buttons != [] do
-      components ++ [StatusRenderer.action_row(nav_buttons)]
-    else
-      components
-    end
+    components ++ [StatusRenderer.action_row(nav_buttons)]
   end
 
   def model_list_components(provider, models, page) when is_list(models) do

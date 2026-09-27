@@ -3,8 +3,6 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriber do
   Voice transcription client for Telegram voice notes.
   """
 
-  require Logger
-
   @spec transcribe(map() | keyword()) :: {:ok, binary()} | {:error, term()}
   def transcribe(opts) when is_list(opts) or is_map(opts) do
     opts = if is_map(opts), do: opts, else: Enum.into(opts, %{})

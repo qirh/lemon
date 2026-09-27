@@ -162,8 +162,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   def handle_info({:media_group_flush, group_key, debounce_ref}, state) do
     {:noreply, dispatch_transport_event({:media_group_flush, group_key, debounce_ref}, state)}
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
@@ -181,8 +179,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, :all)
     {:noreply, state}
-  rescue
-    _ -> {:noreply, state}
   end
 
   # /new triggers an internal "memory reflection" run; only clear auto-resume after it completes.
@@ -281,8 +277,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       end
 
     {:noreply, state}
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -316,10 +310,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       ActionRunner.run(state, actions, pipeline_callbacks())
     else
       {:error, _reason} -> state
-      {:skip, new_state} -> new_state
     end
-  rescue
-    _ -> state
   end
 
   defp pipeline_callbacks do
@@ -376,8 +367,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp send_unpaired_notice(state, inbound) do
@@ -507,8 +496,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp extract_explicit_resume_and_strip(text),
@@ -553,8 +540,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   # handle_media_auto_put wraps FileOperations but needs access to
@@ -588,8 +573,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       {:error, _} ->
         state
     end
-  rescue
-    _ -> state
   end
 
   defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
@@ -599,7 +582,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp resolve_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
-    sel = String.trim(selector || "")
+    sel = String.trim(selector)
 
     cond do
       sel == "" ->
@@ -643,8 +626,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             {:error, "Unknown project: #{id}"}
         end
     end
-  rescue
-    _ -> {:error, "Failed to select project."}
   end
 
   defp persist_project_for_scope(%ChatScope{} = scope, project) when is_map(project) do
@@ -657,8 +638,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
     ProjectBindingStore.put_override(scope, id)
     {:ok, %{id: id, root: root}}
-  rescue
-    _ -> {:error, "Failed to select project."}
   end
 
   defp looks_like_path?(s) when is_binary(s) do
@@ -719,8 +698,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           )
       end
     end
-  rescue
-    _ -> state
   end
 
   defp normalize_selector(raw_selector) when is_binary(raw_selector) do
@@ -836,8 +813,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
     _ = safe_sweep_thread_message_indices(state, chat_id, thread_id, previous_generation)
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
@@ -900,8 +875,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     ]
     |> maybe_append_project_line(project)
     |> Enum.join("\n")
-  rescue
-    _ -> base_msg
   end
 
   defp started_new_session_message(_state, _scope, _session_key, project, base_msg)
@@ -947,11 +920,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           _ -> "(not configured)"
         end
     end
-  rescue
-    _ -> "(not configured)"
   end
-
-  defp resolve_new_session_cwd(_), do: "(not configured)"
 
   defp maybe_append_project_line(lines, %{id: id, root: root})
        when is_list(lines) and is_binary(id) and is_binary(root) do
@@ -987,8 +956,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         maybe_put: &maybe_put/3
       }
     )
-  rescue
-    _ -> :skip
   end
 
   defp submit_memory_reflection_before_new(
@@ -1028,8 +995,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp cancel_failure_message(error) do
@@ -1160,17 +1125,18 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       :ok ->
         :ok
 
-      {:error, _reason} ->
+      {:error, reason} when reason in [:channels_outbox_unavailable, :queue_full] ->
         opts =
           %{}
           |> maybe_put("reply_to_message_id", reply_to_message_id)
           |> maybe_put("message_thread_id", thread_id)
 
-        _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-        :ok
+        state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+
+      {:error, _} = error ->
+        Logger.warning("Telegram feedback was not confirmed by the outbox")
+        error
     end
-  rescue
-    _ -> :ok
   end
 
   defp send_critical_feedback(state, chat_id, thread_id, reply_to_message_id, text)
@@ -1180,10 +1146,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       |> maybe_put("reply_to_message_id", reply_to_message_id)
       |> maybe_put("message_thread_id", thread_id)
 
-    _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-    :ok
-  rescue
-    _ -> :ok
+    state.api_mod.send_message(state.token, chat_id, text, opts, nil)
   end
 
   defp resolve_bot_identity(bot_id, bot_username, api_mod, token) do
@@ -1303,8 +1266,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       state
     end
-  rescue
-    _ -> state
   end
 
   defp handle_checkpoint_command(state, inbound) do
@@ -1398,8 +1359,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp handle_remind_command(state, inbound) do
@@ -1444,8 +1403,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp handle_media_command(state, inbound) do
@@ -1465,8 +1422,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp handle_portable_command(state, inbound) do
@@ -1505,8 +1460,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp handle_cwd_command(state, inbound) do
@@ -1588,14 +1541,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp resolve_openai_provider do
-    provider =
-      try do
-        cfg = LemonCore.Config.load()
-        providers = cfg.providers || %{}
-        Map.get(providers, "openai") || Map.get(providers, :openai) || %{}
-      rescue
-        _ -> %{}
-      end
+    cfg = LemonCore.Config.load()
+    providers = cfg.providers || %{}
+    provider = Map.get(providers, "openai") || Map.get(providers, :openai) || %{}
 
     {map_get(provider, :api_key), map_get(provider, :base_url)}
   end
@@ -1629,7 +1577,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
       module
     rescue
-      _ ->
+      ArgumentError ->
         Logger.warning(
           "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
             "falling back to the real Telegram API"
@@ -1672,24 +1620,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     supervisor = async_supervisor_name()
 
     if is_pid(Process.whereis(supervisor)) do
-      Task.Supervisor.start_child(supervisor, fn -> run_async_task(fun) end)
+      Task.Supervisor.start_child(supervisor, fun)
     else
-      Task.start(fn -> run_async_task(fun) end)
+      Task.start(fun)
     end
-  rescue
-    _ -> :ok
   end
 
   defp start_async_task(_state, _fun), do: :ok
-
-  defp run_async_task(fun) when is_function(fun, 0) do
-    fun.()
-    :ok
-  rescue
-    _ -> :ok
-  catch
-    _kind, _reason -> :ok
-  end
 
   defp async_supervisor_name, do: LemonChannels.Adapters.Telegram.AsyncSupervisor
 

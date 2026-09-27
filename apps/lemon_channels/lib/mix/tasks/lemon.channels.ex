@@ -38,7 +38,7 @@ defmodule Mix.Tasks.Lemon.Channels do
     if opts[:json] do
       Mix.shell().info(Jason.encode!(status, pretty: true))
     else
-      status |> Diagnostics.format_text() |> Enum.each(&Mix.shell().info/1)
+      status |> Diagnostics.format_text() |> Enum.each(fn line -> Mix.shell().info(line) end)
     end
   end
 end

@@ -38,15 +38,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       _ ->
         false
     end
-  rescue
-    _ -> false
   end
 
   @spec handle_trigger_command(map(), map(), callbacks()) :: map()
   def handle_trigger_command(state, inbound, callbacks) do
     {chat_id, thread_id, user_msg_id} = callbacks.extract_message_ids.(inbound)
     args = Commands.telegram_command_args(inbound.message.text, "trigger") || ""
-    arg = String.downcase(String.trim(args || ""))
+    arg = String.downcase(String.trim(args))
     account_id = state.account_id || "default"
 
     if not is_integer(chat_id) do
@@ -89,8 +87,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
           state
       end
     end
-  rescue
-    _ -> state
   end
 
   @spec handle_thinking_command(map(), map(), callbacks()) :: map()
@@ -158,8 +154,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
           state
       end
     end
-  rescue
-    _ -> state
   end
 
   @spec handle_cwd_command(map(), map(), callbacks()) :: map()
@@ -232,8 +226,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
           end
       end
     end
-  rescue
-    _ -> state
   end
 
   defp trigger_mode_for(state, inbound, callbacks) do
@@ -245,16 +237,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
     else
       %{mode: :mentions, chat_mode: nil, topic_mode: nil, source: :default}
     end
-  rescue
-    _ -> %{mode: :mentions, chat_mode: nil, topic_mode: nil, source: :default}
   end
 
   defp explicit_invocation?(state, inbound, text) do
     Commands.command_message_for_bot?(text, state.bot_username) or
       mention_of_bot?(state, inbound) or
       reply_to_bot?(state, inbound)
-  rescue
-    _ -> false
   end
 
   defp mention_of_bot?(state, inbound) do
@@ -265,7 +253,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
 
     mention_by_username =
       if is_binary(bot_username) and bot_username != "" do
-        Regex.match?(~r/(?:^|\W)@#{Regex.escape(bot_username)}(?:\b|$)/i, text || "")
+        Regex.match?(~r/(?:^|\W)@#{Regex.escape(bot_username)}(?:\b|$)/i, text)
       else
         false
       end
@@ -288,8 +276,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       end
 
     mention_by_username or mention_by_id
-  rescue
-    _ -> false
   end
 
   defp reply_to_bot?(state, inbound) do
@@ -316,8 +302,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       true ->
         false
     end
-  rescue
-    _ -> false
   end
 
   defp inbound_message_from_update(update) when is_map(update) do
@@ -536,8 +520,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
 
     [effective_line, chat_line, topic_line, thinking_usage()]
     |> Enum.join("\n")
-  rescue
-    _ -> thinking_usage()
   end
 
   defp render_thinking_set(%ChatScope{topic_id: topic_id}, level)
@@ -559,9 +541,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
     |> Enum.join("\n")
   end
 
-  defp render_thinking_set(_scope, level) when is_binary(level),
-    do: "Thinking level set to #{level}."
-
   defp render_thinking_cleared(%ChatScope{topic_id: topic_id}, had_override?)
        when is_integer(topic_id) do
     if had_override? do
@@ -578,8 +557,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       "No /thinking override was set for this chat."
     end
   end
-
-  defp render_thinking_cleared(_scope, _had_override?), do: "Thinking level override cleared."
 
   defp thinking_scope_label(%ChatScope{topic_id: topic_id}) when is_integer(topic_id),
     do: "this topic"
@@ -619,8 +596,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
         ]
         |> Enum.join("\n")
     end
-  rescue
-    _ -> cwd_usage()
   end
 
   defp render_cwd_set(scope, root) do
@@ -653,20 +628,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
       override when is_binary(override) and override != "" -> true
       _ -> false
     end
-  rescue
-    _ -> false
   end
-
-  defp scope_has_cwd_override?(_), do: false
 
   defp clear_cwd_override(%ChatScope{} = scope) do
     _ = ProjectBindingStore.delete_override(scope)
     :ok
-  rescue
-    _ -> :ok
   end
-
-  defp clear_cwd_override(_), do: :ok
 
   defp cwd_usage, do: "Usage: /cwd [project_id|path|clear]"
 
