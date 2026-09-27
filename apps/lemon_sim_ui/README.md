@@ -121,7 +121,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `LemonSimUi.HostedGame` | `lib/lemon_sim_ui/hosted_game.ex` | Hosted-room creation, join-code reservation, recovery/readiness, capacity, retention, and kill-switch coordinator |
 | `LemonSimUi.HostedGame.Supervisor` | `lib/lemon_sim_ui/hosted_game/supervisor.ex` | One-for-all boundary for room registry, room supervisor, bounded AI tasks, and recovery coordinator |
 | `LemonSimUi.HostedGame.RoomServer` | `lib/lemon_sim_ui/hosted_game/room_server.ex` | Durable serialized room lifecycle, authorization, timers, AI/human commands, projections, reconnects, replay, and rematches |
-| `LemonSimUi.HostedGame.Replay` | `lib/lemon_sim_ui/hosted_game/replay.ex` | Replays canonical redacted events and verifies per-command/final state hashes |
+| `LemonSimUi.HostedGame.Replay` | `lib/lemon_sim_ui/hosted_game/replay.ex` | Replays canonical redacted events from the room seed via `LemonSim.Bench.Artifacts.Replay.fold/4` and verifies per-command/final state hashes |
 | `LemonSimUi.HostedLobbyLive`, `HostedJoinLive`, `HostedHostLive`, `HostedPlayerLive`, `HostedWatchLive` | `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | Responsive hosted room creation, joining, role-blind host control, private player action, and public-safe viewing |
 | `LemonSimUi.HostedGameSessionController` | `lib/lemon_sim_ui/controllers/hosted_game_session_controller.ex` | Validates hosted forms, exchanges tokens into bounded signed sessions, and downloads replay exports |
 | `LemonSimUi.AdminSessionController` | `lib/lemon_sim_ui/controllers/admin_session_controller.ex` | CSRF-protected admin login/logout, safe return-to handling, and signed-session renewal |

@@ -190,7 +190,7 @@ not a video. `tic_tac_toe` and `tcg_shop` have no replay renderer.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle. |
+| `mix lemon.sim.verify PATH` | Verify a run artifact bundle: hashes, event replay (VendingBench, Werewolf, Poker), and scorecard recompute. Exits non-zero on failure. |
 
 ```bash
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci

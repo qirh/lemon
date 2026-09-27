@@ -188,6 +188,30 @@ run_arena_determinism_gate() {
   log "Arena byte-determinism gate passed"
 }
 
+# Keyless Werewolf/Poker heuristic self-play: the same seed twice must produce
+# byte-identical, replay-verifiable bundles.
+run_arena_game_determinism_gate() {
+  local game="$1"
+  local dir_a="$REPRO_ROOT/${game}_heuristic_a"
+  local dir_b="$REPRO_ROOT/${game}_heuristic_b"
+  local dir
+
+  log "Running $game heuristic byte-determinism gate"
+  for dir in "$dir_a" "$dir_b"; do
+    mix "lemon.sim.$game" \
+      --offline-strategy heuristic \
+      --seed 1 \
+      --sim-id "${game}_ci_repro" \
+      --deterministic-artifacts \
+      --no-persist \
+      --artifact-dir "$dir"
+  done
+
+  diff -r "$dir_a" "$dir_b"
+  mix lemon.sim.verify "$dir_a"
+  log "$game byte-determinism gate passed"
+}
+
 clean_work_dir
 scrub_model_credentials
 
@@ -201,5 +225,13 @@ run_suite "tcg_shop" "ci" "1,2" "baseline,pressure,overextended" "$TCG_SUITE"
 run_ratings "$VB_SUITE,$ARENA_SUITE,$TCG_SUITE"
 run_determinism_gate
 run_arena_determinism_gate
+
+WEREWOLF_SUITE="$SUITE_ROOT/werewolf"
+POKER_SUITE="$SUITE_ROOT/poker"
+
+run_suite "werewolf" "ci" "1,2" "heuristic" "$WEREWOLF_SUITE"
+run_suite "poker" "ci" "1,2" "heuristic" "$POKER_SUITE"
+run_arena_game_determinism_gate "werewolf"
+run_arena_game_determinism_gate "poker"
 
 log "Simulation benchmark artifacts written to $WORK_DIR"
