@@ -342,7 +342,8 @@ defmodule LemonCore.Backup do
         {:error, {:read_failed, reason}}
 
       bytes when is_binary(bytes) ->
-        case IO.binwrite(output, bytes) do
+        # Unlike IO.binwrite/2, :file.write/2 returns device errors for this contract.
+        case :file.write(output, bytes) do
           :ok -> copy_chunks(input, output, :crypto.hash_update(hash, bytes))
           {:error, reason} -> {:error, {:write_failed, reason}}
         end

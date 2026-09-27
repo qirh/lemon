@@ -778,10 +778,6 @@ defmodule Mix.Tasks.Lemon.Skill do
 
         Mix.shell().info("Re-enable with: features.skill_synthesis_drafts = \"default-on\"")
         Mix.raise("Feature disabled")
-
-      {:error, reason} ->
-        Mix.shell().error("Generation failed: #{inspect(reason)}")
-        Mix.raise("Draft generation failed")
     end
   end
 

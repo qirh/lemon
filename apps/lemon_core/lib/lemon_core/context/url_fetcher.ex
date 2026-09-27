@@ -559,19 +559,15 @@ defmodule LemonCore.Context.URLFetcher do
     do: %URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string()
 
   defp normalize_url(url) do
-    case URI.parse(url) do
-      %URI{} = uri ->
-        %URI{
-          uri
-          | scheme: if(uri.scheme, do: String.downcase(uri.scheme)),
-            host: if(uri.host, do: String.downcase(uri.host)),
-            fragment: nil
-        }
-        |> URI.to_string()
+    uri = URI.parse(url)
 
-      _ ->
-        url
-    end
+    %URI{
+      uri
+      | scheme: if(uri.scheme, do: String.downcase(uri.scheme)),
+        host: if(uri.host, do: String.downcase(uri.host)),
+        fragment: nil
+    }
+    |> URI.to_string()
   end
 
   defp public_ip?({a, b, _c, _d}) do

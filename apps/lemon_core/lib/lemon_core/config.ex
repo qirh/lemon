@@ -288,7 +288,7 @@ defmodule LemonCore.Config do
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
     |> Map.put(:rate_limit, cfg["rate_limit"])
-    |> Map.put(:status, cfg["status"] || base.status || "active")
+    |> Map.put(:status, cfg["status"] || base.status)
   end
 
   defp default_agent_profile(id, _cfg, defaults) do

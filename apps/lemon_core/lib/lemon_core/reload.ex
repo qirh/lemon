@@ -571,18 +571,6 @@ defmodule Lemon.Reload do
 
   defp unwrap({:ok, result}), do: result
 
-  defp unwrap(other),
-    do: %{
-      kind: :system,
-      target: :unknown,
-      status: :error,
-      reloaded: [],
-      skipped: [],
-      errors: [%{target: :unknown, reason: other}],
-      duration_ms: 0,
-      metadata: %{}
-    }
-
   defp normalize_atom_list(values) do
     values
     |> List.wrap()

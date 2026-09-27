@@ -80,5 +80,5 @@ defmodule LemonSkills.Sources.Local do
   end
 
   @impl true
-  def trust_level, do: :trusted
+  def trust_for_ref(_id), do: :trusted
 end

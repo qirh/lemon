@@ -830,8 +830,6 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
 
   defp optional_string(_value), do: nil
 
-  defp provider_config_value(nil, _key), do: nil
-
   defp provider_config_value(cfg, key) when is_map(cfg) do
     Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
   end

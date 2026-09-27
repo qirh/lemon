@@ -107,7 +107,7 @@ defmodule LemonSkills.Sources.Hermes do
   end
 
   @impl true
-  def trust_level, do: :official
+  def trust_for_ref(_id), do: :official
 
   @doc false
   def parse_id("hermes:" <> ref) do

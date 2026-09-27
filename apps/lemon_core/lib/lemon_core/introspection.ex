@@ -146,7 +146,6 @@ defmodule LemonCore.Introspection do
   defp normalize_identifier(_), do: nil
 
   defp sanitize_payload(payload, opts) when is_map(payload), do: sanitize_value(payload, opts)
-  defp sanitize_payload(_payload, _opts), do: %{}
 
   defp sanitize_value(%{__struct__: _} = struct, opts) do
     struct

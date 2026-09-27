@@ -440,13 +440,8 @@ defmodule LemonCore.Context do
   defp redact_reference(reference, "url") do
     case parse_reference(reference) do
       {:url, url} ->
-        case URI.parse(url) do
-          %URI{} = uri ->
-            "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
-
-          _ ->
-            "@url:[invalid]"
-        end
+        uri = URI.parse(url)
+        "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
 
       _ ->
         "@url:[invalid]"
@@ -495,13 +490,8 @@ defmodule LemonCore.Context do
     do: {:omit, %{reference: safe_omission_reference(reference), reason: reason}}
 
   defp safe_omission_reference("@url:" <> url) do
-    case URI.parse(url) do
-      %URI{} = uri ->
-        "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
-
-      _ ->
-        "@url:[invalid]"
-    end
+    uri = URI.parse(url)
+    "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
   end
 
   defp safe_omission_reference("@session:" <> key), do: "@session:sha256:#{short_hash(key)}"

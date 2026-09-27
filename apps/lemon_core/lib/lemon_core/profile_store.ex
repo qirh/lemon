@@ -281,7 +281,6 @@ defmodule LemonCore.ProfileStore do
     else
       {:ok, _existing} -> {:error, :already_exists}
       {:error, _} = error -> error
-      other -> {:error, other}
     end
   end
 

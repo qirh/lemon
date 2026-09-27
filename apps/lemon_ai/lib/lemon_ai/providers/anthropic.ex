@@ -764,8 +764,6 @@ defmodule LemonAi.Providers.Anthropic do
     end)
   end
 
-  defp summarize_messages(_), do: []
-
   defp trace_header(headers, key) when is_map(headers), do: Map.get(headers, key)
 
   defp trace_header(headers, key) when is_list(headers) do
@@ -1079,7 +1077,7 @@ defmodule LemonAi.Providers.Anthropic do
 
   defp limit_history_for_provider(messages, %Model{provider: :kimi} = model)
        when is_list(messages) do
-    max_messages = request_history_limit(model) || @kimi_default_history_limit
+    max_messages = request_history_limit(model)
     trimmed = Enum.take(messages, -max_messages)
     dropped_by_limit = max(length(messages) - length(trimmed), 0)
     {trimmed, dropped_orphans} = drop_leading_tool_result_messages(trimmed)
