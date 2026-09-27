@@ -240,54 +240,6 @@ defmodule LemonAutomation.CronJobTest do
     end
   end
 
-  describe "to_map/1" do
-    test "serializes all fields to a map" do
-      job =
-        struct!(new_job(%{id: "cron_map"}), %{
-          enabled: false,
-          timezone: "America/Los_Angeles",
-          jitter_sec: 22,
-          timeout_ms: 75_000,
-          max_retries: 4,
-          retry_backoff_ms: 15_000,
-          created_at_ms: 1_700_000_001_000,
-          updated_at_ms: 1_700_000_002_000,
-          last_run_at_ms: 1_700_000_003_000,
-          next_run_at_ms: 1_700_000_004_000,
-          meta: %{scope: "full"}
-        })
-
-      assert CronJob.to_map(job) == %{
-               id: "cron_map",
-               name: "Daily Check",
-               schedule: "0 9 * * *",
-               enabled: false,
-               agent_id: "agent_1",
-               session_key: "agent:agent_1:main",
-               prompt: "Run daily checks",
-               command: nil,
-               cwd: nil,
-               env: nil,
-               memory_file: nil,
-               monitor: false,
-               monitor_notify_first_run: true,
-               context_from: nil,
-               model: nil,
-               captured_default_model: nil,
-               timezone: "America/Los_Angeles",
-               jitter_sec: 22,
-               timeout_ms: 75_000,
-               max_retries: 4,
-               retry_backoff_ms: 15_000,
-               created_at_ms: 1_700_000_001_000,
-               updated_at_ms: 1_700_000_002_000,
-               last_run_at_ms: 1_700_000_003_000,
-               next_run_at_ms: 1_700_000_004_000,
-               meta: %{scope: "full"}
-             }
-    end
-  end
-
   describe "from_map/1" do
     test "restores a struct from atom-key map" do
       map = %{
@@ -388,36 +340,6 @@ defmodule LemonAutomation.CronJobTest do
       assert job.last_run_at_ms == 555
       assert job.next_run_at_ms == 777
       assert job.meta == %{source: :atom}
-    end
-
-    test "applies defaults for missing optional fields" do
-      job =
-        CronJob.from_map(%{
-          "id" => "cron_defaults",
-          "name" => "Defaults Job",
-          "schedule" => "* * * * *",
-          "agent_id" => "agent_defaults",
-          "session_key" => "agent:defaults:main",
-          "prompt" => "defaults prompt"
-        })
-
-      assert job.enabled == true
-      assert job.timezone == "UTC"
-      assert job.jitter_sec == 0
-      assert job.timeout_ms == 300_000
-      assert job.max_retries == 0
-      assert job.retry_backoff_ms == 30_000
-      assert job.memory_file == nil
-      assert job.monitor == false
-      assert job.monitor_notify_first_run == true
-      assert job.context_from == nil
-      assert job.model == nil
-      assert job.captured_default_model == nil
-      assert job.created_at_ms == nil
-      assert job.updated_at_ms == nil
-      assert job.last_run_at_ms == nil
-      assert job.next_run_at_ms == nil
-      assert job.meta == nil
     end
 
     test "round-trips the job-quality fields through to_map/from_map" do

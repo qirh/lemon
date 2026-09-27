@@ -78,10 +78,8 @@ defmodule CodingAgent.ControlPlaneProviderTest do
     end
 
     test "todo_progress carries the actionable count for the control plane to rename" do
-      case ControlPlaneProvider.todo_progress("no-such-session-#{System.unique_integer()}") do
-        nil -> :ok
-        progress -> assert Map.has_key?(progress, :actionable_count)
-      end
+      progress = ControlPlaneProvider.todo_progress("no-such-session-#{System.unique_integer()}")
+      assert progress.actionable_count == 0
     end
 
     test "wasm_sidecar_running? is a boolean" do

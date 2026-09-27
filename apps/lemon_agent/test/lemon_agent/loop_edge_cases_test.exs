@@ -14,7 +14,6 @@ defmodule LemonAgent.LoopEdgeCasesTest do
   alias LemonAgent.Test.Mocks
 
   alias LemonAi.Types.{
-    AssistantMessage,
     TextContent,
     UserMessage,
     StreamOptions

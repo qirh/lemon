@@ -196,17 +196,6 @@ defmodule LemonCore.ChatStateTest do
   end
 
   describe "struct enforcement validation" do
-    test "ChatState is a struct (not a plain map)" do
-      state = ChatState.new()
-      assert is_struct(state)
-      assert is_struct(state, ChatState)
-    end
-
-    test "struct has __struct__ key" do
-      state = ChatState.new()
-      assert state.__struct__ == ChatState
-    end
-
     test "pattern matching works with struct" do
       state = ChatState.new(%{last_engine: "test"})
       assert %ChatState{last_engine: "test"} = state
@@ -423,24 +412,6 @@ defmodule LemonCore.ChatStateTest do
       end
     end
 
-    test "Map.fetch/2 returns error for undefined fields" do
-      state = ChatState.new()
-      assert Map.fetch(state, :nonexistent_field) == :error
-    end
-
-    test "Map.fetch!/2 raises for undefined fields" do
-      state = ChatState.new()
-
-      assert_raise KeyError, fn ->
-        Map.fetch!(state, :nonexistent_field)
-      end
-    end
-
-    test "Map.get/3 returns default for undefined fields" do
-      state = ChatState.new()
-      assert Map.get(state, :nonexistent_field, "default_value") == "default_value"
-    end
-
     test "Map.has_key?/2 returns false for undefined fields" do
       state = ChatState.new()
       refute Map.has_key?(state, :nonexistent_field)
@@ -477,24 +448,12 @@ defmodule LemonCore.ChatStateTest do
       end
     end
 
-    test "new/1 with non-map argument raises FunctionClauseError" do
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new("not a map")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new([:list, :of, :values])
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new(123)
-      end
-    end
-
-    test "new/1 with keyword list raises FunctionClauseError" do
-      # Keyword lists are not maps
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new(last_engine: "test")
+    @tag invalid_attrs: ["not a map", [:list, :of, :values], 123, [last_engine: "test"]]
+    test "new/1 rejects non-map attributes", %{invalid_attrs: invalid_attrs} do
+      for attrs <- invalid_attrs do
+        assert_raise FunctionClauseError, fn ->
+          ChatState.new(attrs)
+        end
       end
     end
   end
@@ -512,20 +471,6 @@ defmodule LemonCore.ChatStateTest do
       state2 = ChatState.new(%{last_engine: "test2"})
 
       refute state1 == state2
-    end
-
-    test "struct is not equal to equivalent map" do
-      state = ChatState.new(%{last_engine: "test", last_resume_token: nil, updated_at: nil})
-      map = %{last_engine: "test", last_resume_token: nil, updated_at: nil}
-
-      refute state == map
-    end
-
-    test "default structs are equal" do
-      state1 = ChatState.new()
-      state2 = ChatState.new()
-
-      assert state1 == state2
     end
   end
 

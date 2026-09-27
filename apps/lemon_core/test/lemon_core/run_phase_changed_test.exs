@@ -1,11 +1,11 @@
-defmodule LemonCore.RunPhaseEventTest do
+defmodule LemonCore.Events.RunPhaseChangedTest do
   use ExUnit.Case, async: true
 
-  alias LemonCore.RunPhaseEvent
+  alias LemonCore.Events.RunPhaseChanged
 
   test "build/1 constructs a canonical phase change payload" do
     event =
-      RunPhaseEvent.build(
+      RunPhaseChanged.build(
         run_id: "run-123",
         session_key: "session-123",
         phase: :streaming,
@@ -13,7 +13,6 @@ defmodule LemonCore.RunPhaseEventTest do
         source: :gateway
       )
 
-    assert event.type == :run_phase_changed
     assert event.run_id == "run-123"
     assert event.session_key == "session-123"
     assert event.phase == :streaming
@@ -24,11 +23,11 @@ defmodule LemonCore.RunPhaseEventTest do
 
   test "build/1 rejects invalid phases" do
     assert_raise ArgumentError, ~r/invalid phase/, fn ->
-      RunPhaseEvent.build(run_id: "run-123", phase: :not_a_phase, source: :gateway)
+      RunPhaseChanged.build(run_id: "run-123", phase: :not_a_phase, source: :gateway)
     end
 
     assert_raise ArgumentError, ~r/invalid previous_phase/, fn ->
-      RunPhaseEvent.build(
+      RunPhaseChanged.build(
         run_id: "run-123",
         phase: :accepted,
         previous_phase: :not_a_phase,

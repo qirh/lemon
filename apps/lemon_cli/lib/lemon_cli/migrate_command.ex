@@ -8,6 +8,8 @@ defmodule LemonCli.MigrateCommand do
   Audit is read-only. Migration always builds a preview first, refuses
   conflicts unless `--overwrite` is set, asks before writing unless `--yes`
   is set, and backs up the Lemon home first unless `--no-backup` is set.
+  Omitted `--overwrite` and `--yes` flags are false: conflicts still fail
+  closed, and declining confirmation leaves the destination untouched.
   """
 
   alias LemonCli.CommandRegistry
@@ -113,7 +115,7 @@ defmodule LemonCli.MigrateCommand do
       parsed[:dry_run] ->
         0
 
-      HermesMigration.has_conflicts?(preview) and not parsed[:overwrite] ->
+      HermesMigration.has_conflicts?(preview) and not Keyword.get(parsed, :overwrite, false) ->
         IO.puts(
           :stderr,
           "Migration has conflicts. Re-run with --overwrite or resolve them first."
@@ -121,7 +123,7 @@ defmodule LemonCli.MigrateCommand do
 
         1
 
-      not parsed[:yes] and not confirm.("Proceed with migration?") ->
+      not Keyword.get(parsed, :yes, false) and not confirm.("Proceed with migration?") ->
         IO.puts("Migration cancelled.")
         0
 

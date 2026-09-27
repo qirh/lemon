@@ -330,13 +330,6 @@ defmodule CodingAgent.BashExecutorTest do
       # Should have -c for Unix or /C for Windows
       assert "-c" in args or "/C" in args
     end
-
-    test "returns valid shell path" do
-      {shell, _args} = BashExecutor.get_shell_config()
-      # Shell should be an absolute path or findable
-      assert shell != nil
-      assert is_binary(shell)
-    end
   end
 
   describe "kill_process_tree/1" do

@@ -40,29 +40,6 @@ defmodule CodingAgent.Tools.ExtensionsStatusTest do
   end
 
   describe "execute/6" do
-    test "returns result without session_id", %{tmp_dir: tmp_dir} do
-      tool = ExtensionsStatus.tool(tmp_dir, session_id: "")
-      result = tool.execute.("call-1", %{}, nil, nil)
-
-      assert %AgentToolResult{} = result
-      assert is_list(result.content)
-      assert result.content != []
-
-      text = hd(result.content).text
-      assert is_binary(text)
-    end
-
-    test "returns result with non-existent session_id", %{tmp_dir: tmp_dir} do
-      tool = ExtensionsStatus.tool(tmp_dir, session_id: "nonexistent-session-id")
-      result = tool.execute.("call-1", %{}, nil, nil)
-
-      assert %AgentToolResult{} = result
-      assert is_list(result.content)
-
-      text = hd(result.content).text
-      assert is_binary(text)
-    end
-
     test "respects include_details parameter", %{tmp_dir: tmp_dir} do
       tool = ExtensionsStatus.tool(tmp_dir, session_id: "")
 

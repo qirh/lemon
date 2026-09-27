@@ -345,9 +345,13 @@ defmodule LemonCore.StoreInstanceTest do
              "the default store must not be collateral damage from a caller's mistake"
     end
 
-    test "a store name where a session key belongs raises at the caller", %{store: store} do
+    @tag invalid_opts: "not-opts"
+    test "a store name where a session key belongs raises at the caller", %{
+      store: store,
+      invalid_opts: opts
+    } do
       assert_raise FunctionClauseError, fn ->
-        Store.get_run_history(store, "not-opts")
+        Store.get_run_history(store, opts)
       end
 
       assert_raise FunctionClauseError, fn ->

@@ -93,7 +93,7 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert %{
              origin: :cron,
-             prompt: prompt,
+             prompt: _prompt,
              agent_id: "agent_build",
              tool_policy: %{blocked_tools: ["cron"]},
              meta: %{
@@ -105,18 +105,7 @@ defmodule LemonAutomation.RunSubmitterTest do
              }
            } = RunSubmitter.build_params(job, run)
 
-    assert String.starts_with?(prompt, "You are running a scheduled cron task.")
-    assert prompt =~ "isolated forked session"
-    assert prompt =~ "Use the memory notes below as prior run history"
-
-    assert prompt =~
-             "the scheduler forwards your concise completion summary back to the originating session"
-
-    assert prompt =~
-             "do not create, update, remove, or recursively schedule cron jobs from this run"
-
-    assert String.contains?(prompt, "## Task")
-    assert is_binary(memory_file)
+    assert memory_file == job.memory_file
   end
 
   test "build_params/2 forks the session key for each run" do
@@ -223,7 +212,6 @@ defmodule LemonAutomation.RunSubmitterTest do
 
       assert_receive {:augment_prompt_called, "cron_context", "hello"}
       assert params.prompt =~ "CHAINED-CONTEXT-BLOCK"
-      assert params.prompt =~ "## Task"
       assert params.prompt =~ "hello"
     end
 

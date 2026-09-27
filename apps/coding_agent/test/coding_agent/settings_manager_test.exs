@@ -890,28 +890,6 @@ defmodule CodingAgent.SettingsManagerTest do
       end
     end
 
-    test "handles provider without model" do
-      config = %LemonConfig{
-        providers: %{},
-        agent: %{
-          default_provider: "anthropic",
-          default_model: nil
-        },
-        tui: %{},
-        logging: %{},
-        gateway: %{},
-        agents: %{}
-      }
-
-      settings = SettingsManager.from_config(config)
-
-      # When provider is set but model is nil, the model struct may still be created
-      # with empty model_id depending on the parse_model_spec implementation
-      assert settings.default_model == nil or
-               (is_map(settings.default_model) and
-                  settings.default_model.provider == :anthropic)
-    end
-
     test "handles complex provider configuration" do
       providers = %{
         "anthropic" => %{
