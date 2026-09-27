@@ -205,8 +205,7 @@ The schema follows JSON Schema conventions with optional extensions:
 Extensions can register custom providers that integrate with the core system.
 Model providers add AI model backends. Memory providers implement
 `LemonMemory.Provider` and can participate in safety-screened memory ingest
-and scoped `search_memory` fan-out through `LemonMemory.Providers`. Search
-providers implement `CodingAgent.Search.Provider` and declare web `search`
+and scoped `recall` search through `LemonMemory.Providers`. Search
 and/or `extract` capabilities.
 
 ```elixir

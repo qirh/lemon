@@ -140,7 +140,7 @@ CodingAgent.Supervisor (one_for_one)
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
+| File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
 | Execution | `bash`, `bash_output`, `kill_process` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
@@ -192,19 +192,20 @@ default unless `includeValues: true` is explicit. `browser_clear_state` clears
 browser-context cookies, current-page local/session storage, and buffered events
 by default; pass `clearCookies`, `clearStorage`, or `clearEvents` to narrow it.
 
-`memory` is implemented in `LemonSkills.Tools` and provides the compact prompt-injected memory surface for assistant-home
-`USER.md` and `MEMORY.md`. It supports read/add/replace/remove, rejects
-duplicates, requires unique text for replace/remove, enforces bounded file
-limits, and screens writes for common secrets, prompt-injection phrases, NUL
-bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
-structured notes under `memory/topics/`.
+`remember` is implemented as `LemonSkills.Tools.Remember`. It saves compact
+assistant-home facts to `USER.md` or `MEMORY.md` using `text`, `target`
+(`user` or `memory`), and `replaces`; exact replacement text is required for
+replace/remove. Duplicate additions are ignored, file limits are enforced, and
+writes are screened for secrets and unsafe content.
 
-`session_search` is the Hermes-compatible no-LLM recall surface. It infers
-discovery, scroll, or browse mode from arguments: pass `query` to search durable
-Lemon memory across sessions, pass `session_id` plus `around_message_id` to
-scroll a bounded window in run history, or pass no args to browse recent runs in
-the current session. `search_memory` remains Lemon's native scoped memory-recall
-tool.
+`recall` is the read-only search tool, implemented as `LemonSkills.Tools.Recall`.
+It searches past conversation summaries and longer workspace notes under
+`memory/`. Conversation results use OR/BM25 lexical search, so paraphrases that
+share a keyword can match. Lemon may also attach a bounded **Relevant memory**
+block to each user message automatically; `[memory] auto_recall = false`
+disables it, as does `[features] session_search = "off"`. The old scroll/browse
+interface for session messages is removed and has no replacement.
+
 
 The media tools are implemented in `LemonSkills.Tools` and registered by
 `CodingAgent.ToolRegistry` under their existing names. `media_status` returns redacted media job summaries, recent jobs, cleanup
@@ -282,7 +283,8 @@ that should outlive one session. Kanban-dispatched worker runs block the
 |------|--------|-------|
 | `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `skill_manage` | `Tools.SkillManage` | Create, patch, delete, and maintain audited Lemon skills |
-| `memory_topic` | `LemonSkills.Tools.MemoryTopic` | Persistent memory topics for cross-session knowledge |
+| `remember` | `LemonSkills.Tools.Remember` | Save compact assistant-home facts |
+| `recall` | `LemonSkills.Tools.Recall` | Search past conversations and longer workspace notes |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
@@ -426,9 +428,9 @@ details.
 |--------|-------------|
 | `CodingAgent.Checkpoint` | Compatibility wrapper over `LemonCore.Checkpoint` with coding-agent todo/requirement resume state |
 | `CodingAgent.Tools.FeatureRequirements` | Persists `FEATURE_REQUIREMENTS.json` with dependency-aware progress tracking |
-| `LemonEvals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, memory scope/topic checks, and relevant-skill prompt progressive-disclosure checks |
+| `LemonEvals.Harness` | Evaluation harness for automated agent testing; includes deterministic tool contracts, read/edit workflow checks, remember/recall contracts, and relevant-skill prompt progressive-disclosure checks |
 
-The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, `search_memory` current-scope resolution, `memory_topic` scaffold behavior, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.
+The eval harness is intentionally lightweight and deterministic. It should catch harness-contract drift before behavioral/LLM evals run: default tool registry coverage, stable builtin tool ordering, basic file workflow viability, memory recall scope, and skill prompt guidance that points agents to `read_skill` and `skill_manage` without inlining full skill bodies.
 
 ### Security
 

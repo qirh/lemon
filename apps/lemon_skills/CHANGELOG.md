@@ -72,10 +72,8 @@ modules nothing outside the package touches are marked internal.
   through `LEMON_MCP_SERVERS` / `config :lemon_skills, :mcp_servers`, with
   stdio, HTTP and SSE transports and a five-minute tool cache.
 - `LemonSkills.Tools.*` — the thirteen assistant-facing tools an agent loop can
-  mount: `read_skill`, `skill_manage`, `memory`, `memory_topic`,
-  `search_memory`, `kanban`, `peer`, `media_status`, `media_generate_image`,
-  `media_generate_speech`, `media_generate_video`, `media_analyze_image`,
-  `media_transcribe_audio`.
+  mount, including `remember` and `recall` for memory write and search, alongside
+  `read_skill`, `skill_manage`, `kanban`, `peer`, and the media tools.
 - `LemonSkills.Curator` and `LemonSkills.Synthesis.Pipeline` — usage-driven
   curation of installed skills, and drafting of new ones from an agent's own
   history.

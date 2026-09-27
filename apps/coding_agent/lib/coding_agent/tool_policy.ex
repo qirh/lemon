@@ -6,7 +6,7 @@ defmodule CodingAgent.ToolPolicy do
   approval gates for dangerous operations, and NO_REPLY support.
 
   `:safe_mode` and `:subagent_restricted` deny all built-in file editors,
-  topic-memory mutation, and task delegation as well as the other operations
+  memory mutation (`remember`), and task delegation as well as the other operations
   listed in `@dangerous_tools`. Delegation must not bypass a parent's restricted
   surface by creating a child with a broader default toolset. These profiles
   are tool-name policies, not operating-system sandboxes or a guarantee about
@@ -36,17 +36,15 @@ defmodule CodingAgent.ToolPolicy do
           | :no_external
           | :custom
 
-  @read_tools ["read", "read_skill", "search_memory", "session_search", "grep", "find", "ls"]
+  @read_tools ["read", "read_skill", "recall", "grep", "find", "ls"]
 
   @minimal_core_tools [
     "read",
     "read_skill",
-    "search_memory",
     "skill_manage",
-    "memory_topic",
-    "memory",
+    "remember",
+    "recall",
     "checkpoint",
-    "session_search",
     "write",
     "edit",
     "patch",
@@ -133,8 +131,7 @@ defmodule CodingAgent.ToolPolicy do
     "patch",
     "checkpoint",
     "skill_manage",
-    "memory",
-    "memory_topic",
+    "remember",
     "bash",
     # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
     # which execute project code.

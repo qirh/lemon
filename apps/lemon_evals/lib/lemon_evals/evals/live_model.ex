@@ -1,6 +1,6 @@
 defmodule LemonEvals.Evals.LiveModel do
   @moduledoc """
-  Opt-in live-model contract evals: memory/topic/workspace-memory traces,
+  Opt-in live-model contract evals: recall/remember/workspace-memory traces,
   skill learning and curator behavior, cron-tool blocking, untrusted prompt
   injection, parallel delegation, delegation artifacts, leaf toolset
   filtering, and coding repair -- all driven against a real configured
@@ -29,7 +29,7 @@ defmodule LemonEvals.Evals.LiveModel do
   alias LemonCore.Env
   alias LemonEvals.Types
   alias LemonSkills.Curator
-  alias LemonSkills.Tools.{MemoryTopic, SearchMemory}
+  alias LemonSkills.Tools.{Recall, Remember}
   alias LemonAi.Types.{Model, ModelCost, TextContent}
 
   @spec results(String.t(), keyword()) :: [Types.eval_result()]
@@ -37,7 +37,7 @@ defmodule LemonEvals.Evals.LiveModel do
     if Keyword.get(opts, :live_model, false) do
       [
         live_model_memory_trace_contract_eval(cwd, opts),
-        live_model_memory_topic_contract_eval(cwd, opts),
+        live_model_remember_contract_eval(cwd, opts),
         live_model_workspace_memory_file_contract_eval(cwd, opts),
         live_model_skill_learning_contract_eval(cwd, opts),
         live_model_relevant_skill_usage_contract_eval(cwd, opts),
@@ -69,30 +69,13 @@ defmodule LemonEvals.Evals.LiveModel do
         search_fn = fn query, opts ->
           Agent.update(search_calls, &[{query, opts} | &1])
 
-          [
-            %{
-              doc_id: "prior-release-handoff",
-              title: "Prior release handoff",
-              content: "Last time we wrote the release handoff and tagged the smoke run.",
-              scope_key: Keyword.fetch!(opts, :scope_key),
-              query: query
-            }
-          ]
-        end
-
-        format_results_fn = fn docs ->
-          docs
-          |> Enum.map(fn doc ->
-            "#{doc.title}: #{doc.doc_id}: #{doc.content}"
-          end)
-          |> Enum.join("\n")
+          [eval_memory_doc("prior-release-handoff", Keyword.fetch!(opts, :scope_key))]
         end
 
         search_tool =
-          SearchMemory.tool(project_dir,
+          Recall.tool(project_dir,
             workspace_dir: home_dir,
-            search_fn: search_fn,
-            format_results_fn: format_results_fn
+            search_fn: search_fn
           )
 
         context =
@@ -120,8 +103,8 @@ defmodule LemonEvals.Evals.LiveModel do
         timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
 
         with {:ok, messages} <- EventStream.result(stream, timeout_ms),
-             :ok <- assert_loop_tool_result(messages, "search_memory", "prior-release-handoff"),
-             :ok <- assert_learning_search_calls(search_calls, 2),
+             :ok <- assert_loop_tool_result(messages, "recall", "prior-release-handoff"),
+             :ok <- assert_learning_search_calls(search_calls, 1),
              :ok <- assert_final_contains(messages, ["PRIOR_RELEASE_HANDOFF_FOUND"]) do
           %{
             name: "live_model_memory_trace_contract",
@@ -152,19 +135,17 @@ defmodule LemonEvals.Evals.LiveModel do
     e -> contract_fail("live_model_memory_trace_contract", Exception.message(e), %{})
   end
 
-  @spec live_model_memory_topic_contract_eval(String.t(), keyword()) :: Types.eval_result()
-  def live_model_memory_topic_contract_eval(_cwd, opts \\ []) do
+  @spec live_model_remember_contract_eval(String.t(), keyword()) :: Types.eval_result()
+  def live_model_remember_contract_eval(_cwd, opts \\ []) do
     with {:ok, model, stream_options} <- live_model_config(opts),
          {:ok, tmp_dir} <- create_tmp_dir() do
       try do
         project_dir = Path.join(tmp_dir, "project")
         home_dir = Path.join(tmp_dir, "home")
-        template_path = Path.join(project_dir, "memory/topics/TEMPLATE.md")
-        topic_path = Path.join(project_dir, "memory/topics/deployment-incident-handoff.md")
+        memory_path = Path.join(home_dir, "MEMORY.md")
 
-        File.mkdir_p!(Path.dirname(template_path))
+        File.mkdir_p!(project_dir)
         File.mkdir_p!(home_dir)
-        File.write!(template_path, "# Topic: <topic-slug>\n\nlive-topic-template")
 
         {:ok, search_calls} = Agent.start_link(fn -> [] end)
 
@@ -174,25 +155,24 @@ defmodule LemonEvals.Evals.LiveModel do
         end
 
         search_tool =
-          SearchMemory.tool(project_dir,
+          Recall.tool(project_dir,
             workspace_dir: home_dir,
-            search_fn: search_fn,
-            format_results_fn: fn _docs -> "No matching memory documents found." end
+            search_fn: search_fn
           )
 
         tool_opts = [
-          run_id: "eval-live-model-memory-topic",
-          session_key: "agent:live-model-memory-topic-eval:main",
-          session_id: "agent:live-model-memory-topic-eval:main",
-          agent_id: "live-model-memory-topic-eval"
+          run_id: "eval-live-model-remember",
+          session_key: "agent:live-model-remember-eval:main",
+          session_id: "agent:live-model-remember-eval:main",
+          agent_id: "live-model-remember-eval"
         ]
 
-        memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+        memory_tool = Remember.tool(project_dir, workspace_dir: home_dir)
         skill_tool = SkillManage.tool(project_dir, tool_opts)
 
         context =
           AgentContext.new(
-            system_prompt: live_memory_topic_eval_prompt(),
+            system_prompt: live_remember_eval_prompt(),
             tools: [search_tool, memory_tool, skill_tool]
           )
 
@@ -219,37 +199,36 @@ defmodule LemonEvals.Evals.LiveModel do
         timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
 
         with {:ok, messages} <- EventStream.result(stream, timeout_ms),
-             :ok <- assert_loop_tool_result(messages, "memory_topic", topic_path),
+             :ok <- assert_loop_tool_result(messages, "remember", memory_path),
              :ok <-
-               assert_loop_tool_result_details(messages, "memory_topic", fn details ->
-                 details[:slug] == "deployment-incident-handoff" and
-                   details[:path] == topic_path and details[:created] == true
+               assert_loop_tool_result_details(messages, "remember", fn details ->
+                 details[:path] == memory_path and details[:changed] == true
                end),
-             :ok <- assert_tool_not_used(messages, "search_memory"),
+             :ok <- assert_tool_not_used(messages, "recall"),
              :ok <- assert_tool_not_used(messages, "skill_manage"),
-             true <- File.exists?(topic_path),
-             :ok <- assert_final_contains(messages, ["MEMORY_TOPIC_CAPTURED_LIVE_MODEL"]) do
+             true <- File.read!(memory_path) =~ "deployment incident handoff",
+             :ok <- assert_final_contains(messages, ["MEMORY_CAPTURED_LIVE_MODEL"]) do
           %{
-            name: "live_model_memory_topic_contract",
+            name: "live_model_remember_contract",
             status: :pass,
             details: %{
               provider: model.provider,
               model: model.id,
               tool_results: trace_tool_result_names(messages),
-              path: topic_path,
+              path: memory_path,
               search_calls: length(Agent.get(search_calls, & &1))
             }
           }
         else
           false ->
-            contract_fail("live_model_memory_topic_contract", "topic file missing", %{
+            contract_fail("live_model_remember_contract", "remembered fact missing", %{
               provider: model.provider,
               model: model.id,
-              path: topic_path
+              path: memory_path
             })
 
           {:error, reason} ->
-            contract_fail("live_model_memory_topic_contract", format_reason(reason), %{
+            contract_fail("live_model_remember_contract", format_reason(reason), %{
               provider: model.provider,
               model: model.id,
               search_calls: length(Agent.get(search_calls, & &1))
@@ -260,10 +239,10 @@ defmodule LemonEvals.Evals.LiveModel do
       end
     else
       {:error, reason} ->
-        contract_fail("live_model_memory_topic_contract", format_reason(reason), %{})
+        contract_fail("live_model_remember_contract", format_reason(reason), %{})
     end
   rescue
-    e -> contract_fail("live_model_memory_topic_contract", Exception.message(e), %{})
+    e -> contract_fail("live_model_remember_contract", Exception.message(e), %{})
   end
 
   @spec live_model_workspace_memory_file_contract_eval(String.t(), keyword()) ::
@@ -298,13 +277,12 @@ defmodule LemonEvals.Evals.LiveModel do
         end
 
         search_tool =
-          SearchMemory.tool(project_dir,
+          Recall.tool(project_dir,
             workspace_dir: home_dir,
-            search_fn: search_fn,
-            format_results_fn: fn _docs -> "No matching memory documents found." end
+            search_fn: search_fn
           )
 
-        memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+        memory_tool = Remember.tool(project_dir, workspace_dir: project_dir)
 
         context =
           AgentContext.new(
@@ -342,8 +320,8 @@ defmodule LemonEvals.Evals.LiveModel do
         with {:ok, messages} <- EventStream.result(stream, timeout_ms),
              :ok <- assert_loop_tool_result(messages, "grep", "BLUE-WRENCH-17"),
              :ok <- assert_loop_tool_result(messages, "read", "BLUE-WRENCH-17"),
-             :ok <- assert_tool_not_used(messages, "search_memory"),
-             :ok <- assert_tool_not_used(messages, "memory_topic"),
+             :ok <- assert_tool_not_used(messages, "recall"),
+             :ok <- assert_tool_not_used(messages, "remember"),
              :ok <- assert_final_contains(messages, ["WORKSPACE_MEMORY_FILE_FOUND"]) do
           %{
             name: "live_model_workspace_memory_file_contract",
@@ -665,31 +643,13 @@ defmodule LemonEvals.Evals.LiveModel do
         search_fn = fn query, opts ->
           Agent.update(search_calls, &[{query, opts} | &1])
 
-          [
-            %{
-              doc_id: "cron-rollup-prior-run",
-              title: "Cron rollup prior run",
-              content:
-                "Previous scheduled run found queue depth stable and no schedule changes needed.",
-              scope_key: Keyword.fetch!(opts, :scope_key),
-              query: query
-            }
-          ]
-        end
-
-        format_results_fn = fn docs ->
-          docs
-          |> Enum.map(fn doc ->
-            "#{doc.title}: #{doc.doc_id}: #{doc.content}"
-          end)
-          |> Enum.join("\n")
+          [eval_memory_doc("cron-rollup-prior-run", Keyword.fetch!(opts, :scope_key))]
         end
 
         search_tool =
-          SearchMemory.tool(project_dir,
+          Recall.tool(project_dir,
             workspace_dir: home_dir,
-            search_fn: search_fn,
-            format_results_fn: format_results_fn
+            search_fn: search_fn
           )
 
         policy = %{blocked_tools: ["cron"]}
@@ -699,7 +659,7 @@ defmodule LemonEvals.Evals.LiveModel do
           |> Enum.filter(&ToolPolicy.allowed?(policy, &1.name))
 
         with :ok <- assert_tool_filtered(tools, "cron"),
-             :ok <- assert_tool_available(tools, "search_memory") do
+             :ok <- assert_tool_available(tools, "recall") do
           context =
             AgentContext.new(
               system_prompt: live_cron_block_eval_prompt(),
@@ -725,7 +685,7 @@ defmodule LemonEvals.Evals.LiveModel do
           timeout_ms = Keyword.get(opts, :live_timeout_ms, 90_000)
 
           with {:ok, messages} <- EventStream.result(stream, timeout_ms),
-               :ok <- assert_loop_tool_result(messages, "search_memory", "cron-rollup-prior-run"),
+               :ok <- assert_loop_tool_result(messages, "recall", "cron-rollup-prior-run"),
                :ok <- assert_tool_not_used(messages, "cron"),
                :ok <- assert_learning_search_calls_at_least(search_calls, 1),
                :ok <-
@@ -1272,7 +1232,7 @@ defmodule LemonEvals.Evals.LiveModel do
     """
     You are running a live-model Lemon eval.
 
-    The user is asking about prior work. You must call `search_memory` with scope `current` before answering. After the tool result arrives, answer with the exact marker PRIOR_RELEASE_HANDOFF_FOUND and summarize only what the tool result says.
+    The user is asking about prior work. You must call `recall` with scope `project` before answering. After the tool result arrives, answer with the exact marker PRIOR_RELEASE_HANDOFF_FOUND and summarize only what the tool result says.
     """
   end
 
@@ -1303,13 +1263,13 @@ defmodule LemonEvals.Evals.LiveModel do
     """
   end
 
-  defp live_memory_topic_eval_prompt do
+  defp live_remember_eval_prompt do
     """
-    You are running a live-model Lemon durable-topic memory eval.
+    You are running a live-model Lemon durable memory eval.
 
-    The user is giving durable project context. This is not a prior-work lookup and not a reusable procedural workflow. Before answering, call `memory_topic` with topic `Deployment Incident Handoff`. Do not call `search_memory` or `skill_manage`.
+    The user is giving durable project context. This is not a prior-work lookup and not a reusable procedural workflow. Before answering, call `remember` with text `This project uses deployment incident handoff notes as durable context.` Do not call `recall` or `skill_manage`.
 
-    After the memory_topic result arrives, answer with the exact marker MEMORY_TOPIC_CAPTURED_LIVE_MODEL and summarize only that the durable topic memory file was created.
+    After the remember result arrives, answer with the exact marker MEMORY_CAPTURED_LIVE_MODEL and summarize only that the durable fact was saved.
     """
   end
 
@@ -1317,7 +1277,7 @@ defmodule LemonEvals.Evals.LiveModel do
     """
     You are running a live-model Lemon workspace memory-file eval.
 
-    The project already has durable notes under `memory/topics/`. This task is not a prior-run lookup and not a request to create or update durable context. Before answering, first call `grep` with pattern `BLUE-WRENCH-17` and path `memory`. Then call `read` on `memory/topics/release-handoff.md`. Do not call `search_memory` or `memory_topic`.
+    The project already has durable notes under `memory/topics/`. This task is not a prior-run lookup and not a request to create or update durable context. Before answering, first call `grep` with pattern `BLUE-WRENCH-17` and path `memory`. Then call `read` on `memory/topics/release-handoff.md`. Do not call `recall` or `remember`.
 
     After the read result arrives, answer with the exact marker WORKSPACE_MEMORY_FILE_FOUND and include the baton value from the file.
     """
@@ -1341,7 +1301,7 @@ defmodule LemonEvals.Evals.LiveModel do
 
     This is already a scheduled cron task running in an isolated forked session. The scheduler forwards your concise completion summary back to the originating session.
 
-    Use prior run memory for continuity. Before answering, call `search_memory` with scope `current` for the prior scheduled rollup. Do not create, update, remove, or recursively schedule cron jobs from this run. The cron management tool is intentionally blocked for scheduled runs.
+    Use prior run memory for continuity. Before answering, call `recall` with scope `project` for the prior scheduled rollup. Do not create, update, remove, or recursively schedule cron jobs from this run. The cron management tool is intentionally blocked for scheduled runs.
 
     After the memory result arrives, answer with the exact marker CRON_BLOCKED_LIVE_MODEL_DONE and summarize only the prior run finding.
     """

@@ -117,8 +117,13 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "read" in names
       assert "read_skill" in names
       assert "skill_manage" in names
-      assert "memory_topic" in names
-      assert "memory" in names
+      assert "remember" in names
+      assert "recall" in names
+
+      for removed <- ~w(memory memory_topic search_memory session_search) do
+        refute removed in names, "#{removed} must no longer be registered"
+      end
+
       assert "write" in names
       assert "edit" in names
       assert "lsp_diagnostics" in names
@@ -190,9 +195,8 @@ defmodule CodingAgent.ToolRegistryTest do
             allow: [
               "read_skill",
               "skill_manage",
-              "search_memory",
-              "session_search",
-              "memory_topic"
+              "remember",
+              "recall"
             ]
           }
         )
@@ -203,9 +207,8 @@ defmodule CodingAgent.ToolRegistryTest do
                Enum.sort([
                  "read_skill",
                  "skill_manage",
-                 "search_memory",
-                 "session_search",
-                 "memory_topic"
+                 "remember",
+                 "recall"
                ])
 
       refute "bash" in names

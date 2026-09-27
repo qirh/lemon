@@ -3,8 +3,8 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, patch, lsp_diagnostics, bash, bash_output, kill_process, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
-  - `read_only_tools/2` - Exploration tools (read, read_skill, search_memory, session_search, grep, find, ls)
+  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, remember, recall, checkpoint, write, edit, patch, lsp_diagnostics, bash, bash_output, kill_process, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
+  - `read_only_tools/2` - Exploration tools (read, read_skill, recall, grep, find, ls)
   - `all_tools/2` - All available tools as a map
   """
 
@@ -13,7 +13,6 @@ defmodule CodingAgent.Tools do
     Read,
     ReadSkill,
     SkillManage,
-    SessionSearch,
     Checkpoint,
     Write,
     Edit,
@@ -62,9 +61,8 @@ defmodule CodingAgent.Tools do
   }
 
   alias LemonSkills.Tools.{
-    MemoryTopic,
-    Memory,
-    SearchMemory,
+    Remember,
+    Recall,
     MediaStatus,
     MediaGenerateImage,
     MediaGenerateSpeech,
@@ -76,7 +74,7 @@ defmodule CodingAgent.Tools do
   }
 
   @doc """
-  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, patch, lsp_diagnostics, bash, bash_output, kill_process, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
+  Get the default coding tools (read, read_skill, skill_manage, remember, recall, checkpoint, write, edit, patch, lsp_diagnostics, bash, bash_output, kill_process, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
 
   ## Options
   - Any options are passed through to individual tools
@@ -87,10 +85,8 @@ defmodule CodingAgent.Tools do
       Read.tool(cwd, opts),
       ReadSkill.tool(cwd, opts),
       SkillManage.tool(cwd, opts),
-      MemoryTopic.tool(cwd, opts),
-      Memory.tool(cwd, opts),
-      SearchMemory.tool(cwd, opts),
-      SessionSearch.tool(cwd, opts),
+      Remember.tool(cwd, opts),
+      Recall.tool(cwd, opts),
       Checkpoint.tool(cwd, opts),
       Write.tool(cwd, opts),
       Edit.tool(cwd, opts),
@@ -160,15 +156,14 @@ defmodule CodingAgent.Tools do
   end
 
   @doc """
-  Get read-only tools for exploration (read, read_skill, search_memory, session_search, grep, find, ls).
+  Get read-only tools for exploration (read, read_skill, recall, grep, find, ls).
   """
   @spec read_only_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
   def read_only_tools(cwd, opts \\ []) do
     [
       Read.tool(cwd, opts),
       ReadSkill.tool(cwd, opts),
-      SearchMemory.tool(cwd, opts),
-      SessionSearch.tool(cwd, opts),
+      Recall.tool(cwd, opts),
       Grep.tool(cwd, opts),
       Find.tool(cwd, opts),
       Ls.tool(cwd, opts)
@@ -184,10 +179,8 @@ defmodule CodingAgent.Tools do
       "read" => Read.tool(cwd, opts),
       "read_skill" => ReadSkill.tool(cwd, opts),
       "skill_manage" => SkillManage.tool(cwd, opts),
-      "memory_topic" => MemoryTopic.tool(cwd, opts),
-      "memory" => Memory.tool(cwd, opts),
-      "search_memory" => SearchMemory.tool(cwd, opts),
-      "session_search" => SessionSearch.tool(cwd, opts),
+      "remember" => Remember.tool(cwd, opts),
+      "recall" => Recall.tool(cwd, opts),
       "checkpoint" => Checkpoint.tool(cwd, opts),
       "write" => Write.tool(cwd, opts),
       "edit" => Edit.tool(cwd, opts),

@@ -171,10 +171,9 @@ been idle long enough and the persisted curator interval gate is due. It asks
 transitions, then submits the generated review prompt to `LemonRouter` only when
 agent-authored skills require a consolidation pass. Curator review runs default
 to a learning-only tool policy that exposes `read_skill`, `skill_manage`,
-`search_memory`, and `memory_topic`; override it with `tool_policy` in the
-curator config when an operator needs a narrower or broader surface. When a
-review is submitted, the curator report is updated with the router run id so the
-automatic pass and model review can be audited together.
+`remember`, and `recall`; override it with `tool_policy` in the curator config
+when an operator needs a narrower or broader surface. A submitted review updates
+the curator report with the router run id for auditability.
 
 ### Session Isolation
 
@@ -253,7 +252,7 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 - **Memory file location**: Defaults to `~/.lemon/cron_memory/{job_id}.md`, overridable via `memory_file` field on the job or in `meta`
 - **Goal judge runner**: dev/prod default to `LemonAutomation.GoalJudge.RouterRunner`; set `LEMON_GOAL_JUDGE_MODEL` or pass `judge_model` from the control plane/TUI to choose a specific judge model
 - **Goal loop scheduler**: `goal.loop.start` with `auto: true` persists per-goal auto scheduling; `goal.loop.stop` disables it. `:goal_loop_scheduler_interval_ms` defaults to 30,000 and `:goal_loop_scan_limit` defaults to 50.
-- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}`
+- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "remember", "recall"]}`
 
 ## Usage
 

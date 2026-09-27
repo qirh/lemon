@@ -5,9 +5,9 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @restricted_profiles [:read_only, :safe_mode, :subagent_restricted]
-  @restricted_tools ["write", "edit", "patch", "memory_topic", "task", "agent", "kill_process"]
+  @restricted_tools ["write", "edit", "patch", "remember", "task", "agent", "kill_process"]
 
-  test "restricted profiles deny every built-in editor, topic writer, and delegation tool" do
+  test "restricted profiles deny every built-in editor, memory writer, and delegation tool" do
     for profile <- @restricted_profiles, name <- @restricted_tools do
       policy = ToolPolicy.from_profile(profile)
 
@@ -34,7 +34,7 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
   end
 
   test "read-only exploration remains available in restricted profiles" do
-    for profile <- @restricted_profiles, name <- ~w(read read_skill search_memory grep find ls) do
+    for profile <- @restricted_profiles, name <- ~w(read read_skill recall grep find ls) do
       assert ToolPolicy.allowed?(ToolPolicy.from_profile(profile), name)
     end
   end

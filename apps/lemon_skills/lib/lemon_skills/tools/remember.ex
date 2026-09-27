@@ -1,12 +1,25 @@
-defmodule LemonSkills.Tools.Memory do
+defmodule LemonSkills.Tools.Remember do
   @moduledoc """
-  Manage compact assistant-home USER.md and MEMORY.md notes.
+  The `remember` tool: persist, correct, or delete a durable fact in the
+  assistant-home `USER.md` (who the user is, their preferences) or `MEMORY.md`
+  (curated long-term facts).
 
-  Agents read, add, replace, or remove durable notes in the assistant-home
-  `USER.md` (user profile) and `MEMORY.md` (long-term memory) files, guarded
-  against secrets, invisible characters, and prompt injection. Requires no
-  external service. Registered as a builtin tool in `CodingAgent.ToolRegistry`
-  and exposed through the `CodingAgent.Tools` factories.
+  Both files are loaded into every main-session system prompt as workspace
+  bootstrap files, so a remembered fact is in front of the model on the next
+  turn without any further tool call. Writes are guarded against secrets,
+  invisible or bidirectional control characters, and prompt-injection text, and
+  each file is kept compact (`USER.md` 1,375 and `MEMORY.md` 2,200 characters).
+
+  One call shape per intent:
+
+    * `text` alone appends `- text` under the file's heading (a no-op when the
+      file already contains it);
+    * `text` with `replaces` swaps one exact existing passage for `text`;
+    * `replaces` alone deletes one exact existing passage.
+
+  Its read-side counterpart is `LemonSkills.Tools.Recall`. Registered as a
+  builtin tool in `CodingAgent.ToolRegistry` and exposed through the
+  `CodingAgent.Tools` factories.
   """
 
   alias LemonAgent.AbortSignal
@@ -58,7 +71,7 @@ defmodule LemonSkills.Tools.Memory do
   @max_text_bytes 4_096
 
   @doc """
-  Returns the `memory` tool definition wired to `execute/5`.
+  Returns the `remember` tool definition wired to `execute/5`.
 
   `cwd` is unused. `opts` may carry:
 
@@ -70,38 +83,35 @@ defmodule LemonSkills.Tools.Memory do
     workspace_dir = Keyword.get(opts, :workspace_dir)
 
     %AgentTool{
-      name: "memory",
+      name: "remember",
       description:
-        "Read, add, replace, or remove compact durable notes in assistant-home USER.md or MEMORY.md.",
-      label: "Memory",
+        "Save a durable fact or preference so it is in your context in every future session: " <>
+          "target \"user\" writes USER.md (who the user is, how they like to work), " <>
+          "\"memory\" writes MEMORY.md (other long-term facts and decisions). " <>
+          "Pass text to save it, text plus replaces to correct an existing note, " <>
+          "or replaces alone to delete one.",
+      label: "Remember",
       parameters: %{
         "type" => "object",
         "properties" => %{
+          "text" => %{
+            "type" => "string",
+            "description" => "The fact to save, as one short self-contained sentence."
+          },
           "target" => %{
             "type" => "string",
             "enum" => ["user", "memory"],
             "description" =>
-              "user updates USER.md profile/preferences; memory updates compact MEMORY.md facts/index."
+              "user: USER.md (profile, preferences). memory: MEMORY.md (everything else). " <>
+                "Default memory."
           },
-          "action" => %{
+          "replaces" => %{
             "type" => "string",
-            "enum" => ["read", "add", "replace", "remove"],
-            "description" => "Memory operation to perform."
-          },
-          "text" => %{
-            "type" => "string",
-            "description" => "Text to add or uniquely remove."
-          },
-          "old_text" => %{
-            "type" => "string",
-            "description" => "Unique existing text to replace."
-          },
-          "new_text" => %{
-            "type" => "string",
-            "description" => "Replacement text for replace."
+            "description" =>
+              "Exact existing text in the file: replaced by text, or deleted if text is omitted."
           }
         },
-        "required" => ["target", "action"]
+        "required" => []
       },
       execute: &execute(&1, &2, &3, &4, workspace_dir)
     }
@@ -113,22 +123,20 @@ defmodule LemonSkills.Tools.Memory do
 
   Reads from `params`:
 
-  - `"target"` (required) - `"user"` or `"memory"`
-  - `"action"` (required) - `"read"`, `"add"`, `"replace"`, or `"remove"`
-  - `"text"` (add/remove) - note text; `remove` falls back to `"old_text"`
-  - `"old_text"` (replace, remove fallback) - exact existing text
-  - `"new_text"` (replace) - replacement text
+  - `"text"` - the note to save (add) or the replacement (with `"replaces"`)
+  - `"target"` (default `"memory"`) - `"user"` or `"memory"`
+  - `"replaces"` - exact existing text, matched exactly once, to replace or delete
 
   Text values must be non-empty strings of at most 4096 bytes without NUL bytes;
-  added/replaced text is additionally screened against secrets, invisible or
+  saved text is additionally screened against secrets, invisible or
   bidirectional control characters, and prompt-injection patterns.
 
   Returns `%LemonAgent.Types.AgentToolResult{}` on success: `content` is a single
   `TextContent` with the status message and resulting file content, and `details`
-  merges action-specific fields (e.g. `exists`, `changed`, `duplicate`) with
-  `target`, `action`, `path`, `bytes`, and `chars`. Errors (invalid/missing
-  params, refused content, size overflow, file I/O) surface as
-  `{:error, String.t()}` tuples; an aborted signal returns
+  merges operation fields (`changed`, and `duplicate` for an add) with `target`,
+  `action` (`"add"`, `"replace"`, or `"remove"`), `path`, `bytes`, and `chars`.
+  Errors (invalid/missing params, refused content, size overflow, file I/O)
+  surface as `{:error, String.t()}` tuples; an aborted signal returns
   `{:error, "Operation aborted"}`.
   """
   @spec execute(
@@ -155,9 +163,6 @@ defmodule LemonSkills.Tools.Memory do
     path = Path.join(workspace_dir, spec.file)
 
     case action do
-      "read" ->
-        read_file(path, target, spec)
-
       "add" ->
         with {:ok, text} <- get_text(params, "text"),
              :ok <- screen_text(text),
@@ -166,15 +171,15 @@ defmodule LemonSkills.Tools.Memory do
         end
 
       "replace" ->
-        with {:ok, old_text} <- get_text(params, "old_text"),
-             {:ok, new_text} <- get_text(params, "new_text"),
+        with {:ok, old_text} <- get_text(params, "replaces"),
+             {:ok, new_text} <- get_text(params, "text"),
              :ok <- screen_text(new_text),
              {:ok, content} <- load_or_init(path, target, spec) do
           replace_note(path, target, spec, content, old_text, new_text)
         end
 
       "remove" ->
-        with {:ok, text} <- get_text(params, "text", Map.get(params, "old_text")),
+        with {:ok, text} <- get_text(params, "replaces"),
              {:ok, content} <- load_or_init(path, target, spec) do
           remove_note(path, target, spec, content, text)
         end
@@ -183,28 +188,36 @@ defmodule LemonSkills.Tools.Memory do
 
   defp validate_workspace_dir(workspace_dir) when is_binary(workspace_dir) do
     if String.trim(workspace_dir) == "" do
-      {:error, "workspace_dir is required for memory"}
+      {:error, "workspace_dir is required for remember"}
     else
       :ok
     end
   end
 
-  defp validate_workspace_dir(_), do: {:error, "workspace_dir is required for memory"}
+  defp validate_workspace_dir(_), do: {:error, "workspace_dir is required for remember"}
 
-  defp get_target(%{"target" => target}) when is_map_key(@targets, target), do: {:ok, target}
-  defp get_target(%{"target" => _}), do: {:error, "target must be either user or memory"}
-  defp get_target(_), do: {:error, "missing required parameter: target"}
+  defp get_target(params) do
+    case Map.get(params, "target", "memory") do
+      target when is_map_key(@targets, target) -> {:ok, target}
+      _ -> {:error, "target must be either user or memory"}
+    end
+  end
 
-  defp get_action(%{"action" => action}) when action in ["read", "add", "replace", "remove"],
-    do: {:ok, action}
+  # The operation follows from which of `text` and `replaces` are present, so
+  # the model states what it wants rather than naming an action.
+  defp get_action(params) do
+    case {present?(Map.get(params, "text")), present?(Map.get(params, "replaces"))} do
+      {true, false} -> {:ok, "add"}
+      {true, true} -> {:ok, "replace"}
+      {false, true} -> {:ok, "remove"}
+      {false, false} -> {:error, "remember needs text to save, or replaces to delete a note"}
+    end
+  end
 
-  defp get_action(%{"action" => _}), do: {:error, "action must be read, add, replace, or remove"}
-  defp get_action(_), do: {:error, "missing required parameter: action"}
+  defp present?(value), do: is_binary(value) and String.trim(value) != ""
 
-  defp get_text(params, key, fallback \\ nil)
-
-  defp get_text(params, key, fallback) do
-    value = Map.get(params, key, fallback)
+  defp get_text(params, key) do
+    value = Map.get(params, key)
 
     cond do
       not is_binary(value) ->
@@ -244,23 +257,6 @@ defmodule LemonSkills.Tools.Memory do
     Enum.any?(@invisible_chars, &String.contains?(text, &1))
   end
 
-  defp read_file(path, target, spec) do
-    case File.read(path) do
-      {:ok, content} ->
-        result("#{spec.label} loaded from #{path}", path, target, "read", content, %{
-          exists: true
-        })
-
-      {:error, :enoent} ->
-        result("#{spec.label} file does not exist yet at #{path}", path, target, "read", "", %{
-          exists: false
-        })
-
-      {:error, reason} ->
-        {:error, "Unable to read #{spec.file}: #{reason}"}
-    end
-  end
-
   defp add_note(path, target, spec, content, text) do
     if String.contains?(content, text) do
       result("#{spec.file} already contains that note.", path, target, "add", content, %{
@@ -274,14 +270,14 @@ defmodule LemonSkills.Tools.Memory do
   end
 
   defp replace_note(path, target, spec, content, old_text, new_text) do
-    with :ok <- ensure_unique(content, old_text, "old_text") do
+    with :ok <- ensure_unique(content, old_text, "replaces") do
       updated = String.replace(content, old_text, new_text)
       write_checked(path, target, spec, updated, "replace", %{changed: true})
     end
   end
 
   defp remove_note(path, target, spec, content, text) do
-    with :ok <- ensure_unique(content, text, "text") do
+    with :ok <- ensure_unique(content, text, "replaces") do
       updated =
         content
         |> String.replace("- #{text}\n", "")

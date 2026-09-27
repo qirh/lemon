@@ -30,10 +30,8 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "read_skill",
         "skill_manage",
-        "memory_topic",
-        "memory",
-        "search_memory",
-        "session_search",
+        "remember",
+        "recall",
         "checkpoint",
         "write",
         "edit",
@@ -128,8 +126,7 @@ defmodule CodingAgent.ToolsTest do
       expected_tools = [
         "read",
         "read_skill",
-        "search_memory",
-        "session_search",
+        "recall",
         "grep",
         "find",
         "ls"
@@ -140,7 +137,7 @@ defmodule CodingAgent.ToolsTest do
 
     test "returns exactly 6 tools" do
       tools = Tools.read_only_tools(@test_cwd)
-      assert length(tools) == 7
+      assert length(tools) == 6
     end
 
     test "does not include write/edit tools" do
@@ -179,10 +176,8 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "read_skill",
         "skill_manage",
-        "memory_topic",
-        "memory",
-        "search_memory",
-        "session_search",
+        "remember",
+        "recall",
         "write",
         "edit",
         "bash_output",
@@ -288,10 +283,8 @@ defmodule CodingAgent.ToolsTest do
         "read",
         "read_skill",
         "skill_manage",
-        "memory_topic",
-        "memory",
-        "search_memory",
-        "session_search",
+        "remember",
+        "recall",
         "write",
         "edit",
         "bash_output",

@@ -65,8 +65,8 @@ and should be flipped (see §5).
   commit to semver on a 19k-LOC surface.
 - **coding_agent's coupling is deep and wide:** 24 references across 8 files, ~20 distinct
   `LemonSkills.*` modules — including live agent tools (`Tools.MediaAnalyzeImage`,
-  `MediaGenerateImage/Speech/Video`, `MediaStatus`, `MediaTranscribeAudio`, `Memory`,
-  `MemoryTopic`, `SearchMemory`, `Kanban`, `ReadSkill`, `SkillManage`) and prompt/relevance
+  `MediaGenerateImage/Speech/Video`, `MediaStatus`, `MediaTranscribeAudio`,
+  `Tools.Remember`, `Tools.Recall`, `Kanban`, `ReadSkill`, `SkillManage`) and prompt/relevance
   surfaces (`Config`, `find_relevant`, `PromptView.render_relevant_skills`, `SkillView.from_entry`,
   `McpSource.discover_tools`). This is load-bearing, not incidental.
 - **It is shared infrastructure, not product code.** Besides the coding-agent group

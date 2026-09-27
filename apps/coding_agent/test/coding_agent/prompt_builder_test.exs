@@ -88,9 +88,6 @@ defmodule CodingAgent.PromptBuilderTest do
       assert String.contains?(result, "Use `read_skill`")
       assert String.contains?(result, "Use `skill_manage`")
       assert String.contains?(result, "recurring command sequence")
-      assert String.contains?(result, "Use `memory_topic`")
-      assert String.contains?(result, "Use `search_memory`")
-      assert String.contains?(result, "Use `session_search`")
       assert String.contains?(result, "Use `todo`")
       assert String.contains?(result, "At the end of substantial work")
     end

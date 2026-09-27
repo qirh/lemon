@@ -23,10 +23,8 @@ defmodule CodingAgentTest do
       assert "ls" in names
       assert "read_skill" in names
       assert "skill_manage" in names
-      assert "memory_topic" in names
-      assert "memory" in names
-      assert "search_memory" in names
-      assert "session_search" in names
+      assert "remember" in names
+      assert "recall" in names
       assert "checkpoint" in names
       assert "webfetch" in names
       assert "websearch" in names
@@ -69,12 +67,11 @@ defmodule CodingAgentTest do
   describe "read_only_tools/2" do
     test "returns list with exploration tools" do
       tools = CodingAgent.read_only_tools("/tmp")
-      assert length(tools) == 7
+      assert length(tools) == 6
       names = Enum.map(tools, & &1.name)
       assert "read" in names
       assert "read_skill" in names
-      assert "search_memory" in names
-      assert "session_search" in names
+      assert "recall" in names
       assert "grep" in names
       assert "find" in names
       assert "ls" in names

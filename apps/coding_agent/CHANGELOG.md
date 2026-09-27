@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Consolidate memory tools as `remember` (compact USER.md/MEMORY.md facts) and
+  `recall` (past conversations and longer workspace notes); remove the former
+  search, topic, and session-browse tool surfaces.
+
 ### Fixed
 
 - Tool approval requests now fail closed on exceptions, exits, throws,

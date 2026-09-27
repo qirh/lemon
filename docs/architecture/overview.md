@@ -348,6 +348,9 @@ Current flags: `session_search` (default `"default-on"`; disable with
 `skill_synthesis_drafts` (both default `"default-on"`; disable with
 `LEMON_FEATURE_ROUTING_FEEDBACK=off` / `LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off`).
 
+Automatic recall is controlled by `[memory] auto_recall` (default `true`), and
+is disabled when `session_search` is off.
+
 ---
 
 ## Why BEAM?

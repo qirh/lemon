@@ -350,6 +350,18 @@ completions are currently umbrella app config, not TOML. The default lives in
 `config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :steer_backlog`.
 Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_queue_mode`.
 
+## Memory
+
+The `[memory]` section controls per-turn automatic recall. Its `auto_recall`
+setting is a boolean that defaults to `true`; set it to `false` to disable the
+bounded **Relevant memory** block attached to user messages. Automatic recall
+also stays off when `[features] session_search = "off"`.
+
+```toml
+[memory]
+auto_recall = true
+```
+
 ## Feature Flags
 
 Feature flags gate in-progress behaviour changes so they can be shipped incrementally
@@ -357,7 +369,7 @@ without ad-hoc environment variables.
 
 ```toml
 [features]
-session_search               = "default-on" # SessionSearch API + search_memory tool (default)
+session_search               = "default-on" # durable memory ingest and search (default)
 routing_feedback             = "default-on" # task fingerprinting + routing feedback (default)
 skill_synthesis_drafts       = "default-on" # skill synthesis draft pipeline (default)
 ```

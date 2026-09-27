@@ -124,9 +124,8 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.HttpClient.Httpc` | `lib/lemon_skills/http_client/httpc.ex` | Default HTTP client using Erlang `:httpc` |
 | `LemonSkills.Tools.ReadSkill` | `lib/lemon_skills/tools/read_skill.ex` | Agent tool for fetching skill content and metadata |
 | `LemonSkills.Tools.SkillManage` | `lib/lemon_skills/tools/skill_manage.ex` | Agent tool for creating, editing, patching, deleting, and auditing local skills |
-| `LemonSkills.Tools.Memory` | `lib/lemon_skills/tools/memory.ex` | Agent tool for compact assistant-home USER.md/MEMORY.md notes |
-| `LemonSkills.Tools.MemoryTopic` | `lib/lemon_skills/tools/memory_topic.ex` | Agent tool for durable topic memory scaffolding |
-| `LemonSkills.Tools.SearchMemory` | `lib/lemon_skills/tools/search_memory.ex` | Agent tool for scoped prior-run memory search |
+| `LemonSkills.Tools.Remember` | `lib/lemon_skills/tools/remember.ex` | Agent tool for compact assistant-home USER.md/MEMORY.md notes |
+| `LemonSkills.Tools.Recall` | `lib/lemon_skills/tools/recall.ex` | Agent tool for scoped search across past conversations and memory notes |
 | `LemonSkills.Tools.MediaStatus` | `lib/lemon_skills/tools/media_status.ex` | Agent tool for redacted media job status |
 | `LemonSkills.Tools.MediaGenerateImage` | `lib/lemon_skills/tools/media_generate_image.ex` | Agent tool for managed image generation artifacts |
 | `LemonSkills.Tools.MediaGenerateSpeech` | `lib/lemon_skills/tools/media_generate_speech.ex` | Agent tool for managed speech generation artifacts |
@@ -480,10 +479,11 @@ verdict rejects.
 LemonSkills.Tools.SkillManage.tool(cwd: "/project/path")
 ```
 
-### memory, memory_topic, search_memory
+### remember and recall
 
-Assistant-home notes (`USER.md`/`MEMORY.md`), durable topic memory, and scoped
-search over prior runs. These are backed by `lemon_memory`.
+`remember` updates compact assistant-home notes (`USER.md`/`MEMORY.md`).
+`recall` searches past conversations and longer workspace notes. These use
+`lemon_memory`.
 
 ### kanban
 
@@ -584,7 +584,7 @@ Project configuration is deep-merged on top of global configuration.
 | `lemon_core` | umbrella | Shared primitives; `LemonCore.ExecApprovals` for approval gating, `LemonCore.Secrets` for secret resolution |
 | `lemon_agent` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
 | `lemon_ai` | umbrella | AI types (`TextContent`) used in tool results; the model call behind the optional LLM audit |
-| `lemon_memory` | umbrella | Durable memory behind the memory, memory_topic and search_memory tools |
+| `lemon_memory` | umbrella | Durable memory behind the `remember` and `recall` tools |
 | `lemon_media` | umbrella | Media job records and artifacts behind the media tools |
 | `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
 | `phoenix_pubsub` | hex | Broadcasts skill and media lifecycle events on `LemonCore.PubSub` |

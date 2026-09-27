@@ -241,7 +241,7 @@ reply_timeout_ms = 300000
 rate_limit_per_minute = 60
 max_context_turns = 100
 # Inbound peer runs receive this conservative tool set unless a peer overrides it.
-default_allow_tools = ["read", "read_skill", "search_memory", "session_search", "grep", "find", "ls", "webfetch", "websearch", "kanban", "peer"]
+default_allow_tools = ["read", "read_skill", "recall", "grep", "find", "ls", "webfetch", "websearch", "kanban", "peer"]
 
 [gateway.a2a.peers.hermes]
 url = "http://127.0.0.1:9900"
@@ -353,6 +353,12 @@ name = "Default Agent"
 # system_prompt = "Cite primary sources and state uncertainty."
 # node = "local" # or the name of an authenticated execution node
 
+# --- Automatic Memory Recall ---
+# Adds a bounded Relevant memory block to user messages (default: enabled).
+# Also disabled when [features] session_search = "off".
+# [memory]
+# auto_recall = true
+
 # --- Feature Flags ---
 # Each flag is an operator kill switch for a subsystem; all ship enabled.
 # Valid states: "off" | "opt-in" | "default-on"
@@ -362,6 +368,6 @@ name = "Default Agent"
 # Environment variable override: LEMON_FEATURE_<FLAG_NAME> (SCREAMING_SNAKE_CASE)
 
 # [features]
-# session_search         = "default-on" # memory ingest + SessionSearch API + search_memory tool
+# session_search         = "default-on" # durable memory ingest/search kill switch
 # routing_feedback       = "default-on" # task fingerprinting + routing feedback recording
 # skill_synthesis_drafts = "default-on" # scheduled skill-synthesis draft pipeline

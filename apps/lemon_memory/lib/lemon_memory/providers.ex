@@ -136,6 +136,11 @@ defmodule LemonMemory.Providers do
 
   @doc """
   Search enabled providers and return merged memory documents.
+
+  Each provider returns its documents best-first, and that order is kept: the
+  merged list takes each provider's first document in registration order (the
+  local store first), then each provider's second, and so on, dropping any
+  `doc_id` already taken. Relevance is never re-sorted by recency.
   """
   @spec search(binary(), keyword()) :: [Document.t()]
   def search(query, opts \\ []) when is_binary(query) do
@@ -146,7 +151,7 @@ defmodule LemonMemory.Providers do
     specs
     |> Enum.filter(&provider_enabled_for_scope?(&1, scope))
     |> run_providers(&call_provider(&1, query, opts))
-    |> Enum.flat_map(&search_docs/1)
+    |> Enum.map(&search_docs/1)
     |> merge_results(limit)
   end
 
@@ -339,11 +344,25 @@ defmodule LemonMemory.Providers do
     kind, reason -> {:error, {kind, reason}}
   end
 
-  defp merge_results(docs, limit) do
-    docs
+  # Round-robin across the per-provider ranked lists, so no provider's order is
+  # disturbed and none can crowd the others out of a small `limit`.
+  defp merge_results(ranked_lists, limit) do
+    ranked_lists
+    |> interleave([])
     |> Enum.uniq_by(& &1.doc_id)
-    |> Enum.sort_by(&(&1.ingested_at_ms || 0), :desc)
     |> Enum.take(limit)
+  end
+
+  defp interleave(lists, acc) do
+    case Enum.reject(lists, &(&1 == [])) do
+      [] ->
+        Enum.reverse(acc)
+
+      active ->
+        heads = Enum.map(active, &hd/1)
+        tails = Enum.map(active, &tl/1)
+        interleave(tails, Enum.reverse(heads, acc))
+    end
   end
 
   defp provider_enabled_for_scope?(spec, scope) do

@@ -11,14 +11,15 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | Module | Purpose |
 |---|---|
 | `LemonMemory.Document` | The record every provider reads and writes: content, scope, metadata, timestamps |
-| `LemonMemory.Store` | SQLite-backed store with full-text search; the built-in durable backend |
-| `LemonMemory.Provider` | Behaviour for a searchable memory backend |
+| `LemonMemory.Store` | SQLite-backed store with OR/BM25 lexical search; the built-in durable backend |
+| `LemonMemory.Query` | Builds sanitized OR-joined FTS5 search terms |
+| `LemonMemory.Recall` | Bounded local lexical search used for automatic conversation recall |
 | `LemonMemory.Providers` | Fan-out registry — queries every registered provider, isolates failures and timeouts |
 | `LemonMemory.Providers.Local` | The built-in provider over `LemonMemory.Store` |
 | `LemonMemory.Ingest` | Writes finished runs into memory, invoked from the store's finalize-run hook |
 | `LemonMemory.Safety` | Redaction and size limits applied before anything is persisted |
 | `LemonMemory.Lifecycle` | Bounded/redacted browse, provenance inspection, and exact revision-bound delete for operator clients |
-| `LemonMemory.SessionSearch` | Scoped search across sessions, agents and workspaces |
+| `LemonMemory.SessionSearch` | Session-scoped conversation search API used by `recall` |
 | `LemonMemory.TaskFingerprint` | Stable fingerprints for recognising repeated work |
 
 Explicit review/confirm workflows can use `LemonMemory.Store.put_sync/1` when

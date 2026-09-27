@@ -108,7 +108,7 @@ defmodule LemonAutomation.SkillCuratorTest do
     assert params.prompt == "review demo"
 
     assert params.tool_policy == %{
-             allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]
+             allow: ["read_skill", "skill_manage", "recall", "remember"]
            }
 
     assert params.meta.skill_curator == true

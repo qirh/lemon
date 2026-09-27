@@ -352,6 +352,74 @@ defmodule LemonMemory.StoreTest do
     assert results == []
   end
 
+  describe "lexical recall" do
+    setup %{store_pid: pid} do
+      session = "agent:lexical_#{System.unique_integer([:positive])}:main"
+
+      put = fn prompt, answer ->
+        doc = make_doc(session_key: session, prompt: prompt, answer: answer)
+        :ok = Store.put_sync(pid, doc)
+        doc
+      end
+
+      %{session: session, put: put}
+    end
+
+    test "a paraphrase sharing one keyword finds the document", %{
+      store_pid: pid,
+      session: session,
+      put: put
+    } do
+      doc = put.("My sister's name is Priya.", "Noted, your sister is Priya.")
+
+      # Only "priya" is shared; the old AND-join also required "call" and "sibling".
+      results =
+        Store.search(pid, "what should I call my sibling Priya?",
+          scope: :session,
+          scope_key: session,
+          limit: 5
+        )
+
+      assert Enum.map(results, & &1.doc_id) == [doc.doc_id]
+    end
+
+    test "longer terms match as prefixes", %{store_pid: pid, session: session, put: put} do
+      doc = put.("How did the deployment go?", "The deployment finished cleanly.")
+
+      results = Store.search(pid, "deploy", scope: :session, scope_key: session, limit: 5)
+
+      assert Enum.map(results, & &1.doc_id) == [doc.doc_id]
+    end
+
+    test "results are ordered by BM25, so matching more terms ranks higher", %{
+      store_pid: pid,
+      session: session,
+      put: put
+    } do
+      one = put.("Rotate the staging certificates.", "Done.")
+      both = put.("Rotate the staging database password.", "Rotated the database password.")
+
+      results =
+        Store.search(pid, "staging database password",
+          scope: :session,
+          scope_key: session,
+          limit: 5
+        )
+
+      assert Enum.map(results, & &1.doc_id) == [both.doc_id, one.doc_id]
+    end
+
+    test "a query made only of stopwords returns nothing instead of failing", %{
+      store_pid: pid,
+      session: session,
+      put: put
+    } do
+      put.("What is it?", "It is what it is.")
+
+      assert Store.search(pid, "what is it", scope: :session, scope_key: session, limit: 5) == []
+    end
+  end
+
   describe "J4: search scope must not broaden to :all when scope_key is nil" do
     test "scoped :session search with nil scope_key returns empty list", %{store_pid: pid} do
       session_a = "agent:scope_a_#{:rand.uniform(9999)}:main"

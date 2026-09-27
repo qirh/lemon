@@ -174,12 +174,10 @@ def ask_with_context(session_key, prompt) do
 end
 ```
 
-Prepending to the user message is the simplest thing that works and is easy to
-inspect. The alternatives, in rough order of effort: put recalled context in the
-system prompt instead (better cache behaviour, but it changes per run); use
-`AgentLoopConfig`'s `transform_context` to inject it on every turn rather than
-only the first; or expose a `search_memory` tool and let the model decide when
-to look — see [Add a tool](add-a-tool.md).
+Automatic recall may attach a bounded **Relevant memory** block to each user
+message. In a Lemon coding-agent session, the read-only `recall` tool is also
+available to search past conversations and workspace notes; `remember` saves
+compact facts to `USER.md` or `MEMORY.md`.
 
 ## 5. Test it
 
@@ -253,5 +251,5 @@ mix test
 
 - [Add a channel](add-a-channel.md) — reach the agent from somewhere other than
   a terminal.
-- [Add a tool](add-a-tool.md) — including a `search_memory` tool, so the model
-  can look things up itself.
+- [Add a tool](add-a-tool.md) — including a `recall` tool, so the model can
+  look things up itself.

@@ -16,7 +16,7 @@ defmodule LemonEvals.Evals.AgentLoop do
   alias CodingAgent.Tools.{Grep, Patch, Read, ReadSkill, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonEvals.Types
-  alias LemonSkills.Tools.SearchMemory
+  alias LemonSkills.Tools.Recall
   alias LemonAi.Types.TextContent
 
   @spec agent_loop_learning_trace_contract_eval(String.t()) :: Types.eval_result()
@@ -249,27 +249,13 @@ defmodule LemonEvals.Evals.AgentLoop do
           search_fn = fn query, opts ->
             Agent.update(search_calls, &[{query, opts} | &1])
 
-            [
-              %{
-                doc_id: "prior-release-handoff",
-                title: "Prior release handoff",
-                scope_key: Keyword.fetch!(opts, :scope_key),
-                query: query
-              }
-            ]
+            [eval_memory_doc("prior-release-handoff", Keyword.fetch!(opts, :scope_key))]
           end
 
-          format_results_fn = fn docs ->
-            docs
-            |> Enum.map(&Map.fetch!(&1, :doc_id))
-            |> Enum.join(",")
-          end
-
-          search_tool =
-            SearchMemory.tool(project_dir,
+          recall_tool =
+            Recall.tool(project_dir,
               workspace_dir: home_dir,
-              search_fn: search_fn,
-              format_results_fn: format_results_fn
+              search_fn: search_fn
             )
 
           prompt =
@@ -284,13 +270,13 @@ defmodule LemonEvals.Evals.AgentLoop do
           responses = [
             trace_tool_response([
               trace_tool_call(
-                "search_memory",
+                "recall",
                 %{
                   "query" => "last time release handoff",
-                  "scope" => "current",
-                  "limit" => "3"
+                  "scope" => "project",
+                  "limit" => 3
                 },
-                id: "call-search-memory"
+                id: "call-recall"
               )
             ]),
             trace_final_response("I found the prior release handoff.")
@@ -299,7 +285,7 @@ defmodule LemonEvals.Evals.AgentLoop do
           context =
             AgentContext.new(
               system_prompt: prompt,
-              tools: [search_tool]
+              tools: [recall_tool]
             )
 
           config = %AgentLoopConfig{
@@ -318,12 +304,13 @@ defmodule LemonEvals.Evals.AgentLoop do
             )
 
           with {:ok, messages} <- EventStream.result(stream, 5_000),
-               :ok <- assert_loop_tool_result(messages, "search_memory", "prior-release-handoff"),
+               :ok <- assert_loop_tool_result(messages, "recall", "prior-release-handoff"),
                :ok <-
-                 assert_loop_tool_result_details(messages, "search_memory", fn details ->
-                   details[:scope] == :current and details[:resolved_scopes] == [:project, :home]
+                 assert_loop_tool_result_details(messages, "recall", fn details ->
+                   details[:scope] in ["project", :project] and
+                     details[:conversations] == 1
                  end),
-               :ok <- assert_learning_search_calls(search_calls, 2) do
+               :ok <- assert_learning_search_calls(search_calls, 1) do
             %{
               name: "agent_loop_memory_trace_contract",
               status: :pass,

@@ -39,7 +39,7 @@ defmodule LemonEvals.Harness do
         Foundational.statistical_stability_eval(cwd, iterations),
         Foundational.read_edit_workflow_eval(cwd),
         MemoryAndSkills.memory_scope_contract_eval(cwd),
-        MemoryAndSkills.memory_topic_contract_eval(cwd),
+        MemoryAndSkills.remember_contract_eval(cwd),
         MemoryAndSkills.auto_skill_prompt_contract_eval(cwd),
         MemoryAndSkills.dedicated_tool_preference_contract_eval(cwd),
         MemoryAndSkills.skill_curator_behavior_contract_eval(cwd),
@@ -82,8 +82,8 @@ defmodule LemonEvals.Harness do
   @spec memory_scope_contract_eval(String.t()) :: eval_result()
   defdelegate memory_scope_contract_eval(cwd), to: MemoryAndSkills
 
-  @spec memory_topic_contract_eval(String.t()) :: eval_result()
-  defdelegate memory_topic_contract_eval(cwd), to: MemoryAndSkills
+  @spec remember_contract_eval(String.t()) :: eval_result()
+  defdelegate remember_contract_eval(cwd), to: MemoryAndSkills
 
   @spec auto_skill_prompt_contract_eval(String.t()) :: eval_result()
   defdelegate auto_skill_prompt_contract_eval(cwd), to: MemoryAndSkills
@@ -137,8 +137,8 @@ defmodule LemonEvals.Harness do
   @spec live_model_memory_trace_contract_eval(String.t(), keyword()) :: eval_result()
   defdelegate live_model_memory_trace_contract_eval(cwd, opts \\ []), to: LiveModel
 
-  @spec live_model_memory_topic_contract_eval(String.t(), keyword()) :: eval_result()
-  defdelegate live_model_memory_topic_contract_eval(cwd, opts \\ []), to: LiveModel
+  @spec live_model_remember_contract_eval(String.t(), keyword()) :: eval_result()
+  defdelegate live_model_remember_contract_eval(cwd, opts \\ []), to: LiveModel
 
   @spec live_model_workspace_memory_file_contract_eval(String.t(), keyword()) :: eval_result()
   defdelegate live_model_workspace_memory_file_contract_eval(cwd, opts \\ []), to: LiveModel
