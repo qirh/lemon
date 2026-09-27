@@ -67,7 +67,7 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
   end
 
   describe "Outbox graceful degradation" do
-    test "enqueue returns {:error, :enqueue_timeout} when process is unavailable" do
+    test "enqueue distinguishes an unavailable queue from an unacknowledged enqueue" do
       payload = %OutboundPayload{
         channel_id: "test-channel",
         kind: :text,
@@ -77,9 +77,9 @@ defmodule LemonChannels.OutboxGracefulDegradationTest do
       }
 
       with_process_unavailable(Outbox, fn ->
-        # The catch :exit clause returns :enqueue_timeout to signal
-        # delivery status is ambiguous (message may still be processed).
-        assert Outbox.enqueue(payload) == {:error, :enqueue_timeout}
+        # No server received this request, unlike a timed-out call that may
+        # still be processed after the caller stops waiting.
+        assert Outbox.enqueue(payload) == {:error, :channels_outbox_unavailable}
       end)
     end
   end

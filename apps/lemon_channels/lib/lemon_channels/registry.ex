@@ -257,8 +257,8 @@ defmodule LemonChannels.Registry do
     children =
       try do
         DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
-      rescue
-        _ -> []
+      catch
+        :exit, {:noproc, _} -> []
       end
 
     Enum.any?(children, fn
@@ -294,9 +294,6 @@ defmodule LemonChannels.Registry do
       pid when is_pid(pid) -> Process.alive?(pid)
       _ -> false
     end
-  rescue
-    _ -> false
   end
 
-  defp named_process_running?(_), do: false
 end

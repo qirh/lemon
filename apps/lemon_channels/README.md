@@ -72,6 +72,25 @@ session, run, or raw error data and never retries an ambiguous submit.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
 
+Delivery workers are temporary supervised tasks. Adapter exceptions, malformed
+adapter results, worker exits, and explicitly unknown outcomes report a terminal
+failure to the notifier, release the delivery group, and do not replay the
+external write. A later message in that group can still proceed; unrelated
+groups are unaffected. Platform rejections remain explicit errors, and known
+transient failures such as rate limits still use the configured retry policy.
+
+An enqueue acknowledgement means queued, not delivered. A timeout may occur
+after the queue accepted the write, so Telegram's direct-send fallback runs only
+when the Outbox is unavailable or definitely rejected a full queue. WhatsApp
+command acknowledgement timeouts are likewise outcome-unknown rather than
+safe-to-retry failures.
+
+Telegram isolates unexpected failures per fetched update, retaining provisional
+dedupe and advancing through the remaining batch rather than replaying earlier
+side effects. Internal routing, rendering, and state-write failures are not
+converted into successful deliveries or permissive authorization decisions.
+Pairing, binding, group/admin, and file-access checks remain fail-closed.
+
 **Script send**: `LemonChannels.ScriptSend` gives shell scripts, cron jobs, and CI a Hermes-style notification path for the promoted Telegram and Discord platforms. It builds direct text or file `OutboundPayload` structs and calls the platform outbound adapter directly without starting inbound transports.
 
 **Command discovery**: `LemonChannels.CommandCatalog` is the portable,

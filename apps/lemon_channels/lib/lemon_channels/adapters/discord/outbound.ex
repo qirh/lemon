@@ -144,7 +144,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    _ -> :ok
+    error -> {:error, {:discord_reaction_crashed, error}}
   end
 
   @doc "Send a message with components (buttons, select menus)."

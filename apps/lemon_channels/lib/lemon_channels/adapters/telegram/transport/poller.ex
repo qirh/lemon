@@ -60,10 +60,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
       other ->
         maybe_log_poll_error(state, other)
     end
-  rescue
-    e ->
-      Logger.warning("Telegram poll error: #{inspect(e)}")
-      state
   end
 
   defp handle_updates(state, updates, callbacks) do
@@ -90,6 +86,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
         end
       {:error, _reason} -> state
     end
+  rescue
+    error ->
+      # Isolate one update, not the entire fetched batch. Retain its provisional
+      # dedupe marker: an action may have mutated before raising.
+      Logger.error("Telegram update failed: #{inspect(error.__struct__)}")
+      state
   end
 
   # Transcription costs money and replies in-chat, so it only runs for chats
@@ -148,8 +150,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     end
 
     %{state | last_poll_error: reason, last_poll_error_log_ts: now}
-  rescue
-    _ -> state
   end
 
   defp maybe_attempt_webhook_clear(state, {:http_error, 409, _body}) do
@@ -197,8 +197,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
         {:error, {:exit, reason}}
     end
   end
-
-  defp max_update_id([], current_offset), do: current_offset - 1
 
   defp max_update_id(updates, fallback),
     do: Enum.reduce(updates, fallback, &max(&1["update_id"] || fallback, &2))

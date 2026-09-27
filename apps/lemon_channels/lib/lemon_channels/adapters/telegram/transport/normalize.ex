@@ -88,7 +88,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Normalize do
            media_group_id: inbound.meta[:media_group_id],
            raw_update: update,
            inbound: inbound,
-           meta: inbound.meta || %{}
+           meta: inbound.meta
          }}
       {:error, reason} -> {:error, reason}
     end

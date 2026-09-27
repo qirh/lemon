@@ -164,14 +164,10 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
   defp normalize_text(%DeliveryIntent{kind: kind}, text)
        when kind in [:stream_snapshot, :tool_status_snapshot] do
     [truncate_text(text)]
-  rescue
-    _ -> [text]
   end
 
   defp normalize_text(_intent, text) do
     Chunker.chunk(text, chunk_size: text_chunk_size())
-  rescue
-    _ -> [text]
   end
 
   defp truncate_text(text) do
@@ -243,8 +239,6 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
     seq = body[:seq] || body["seq"]
     if is_integer(seq) and seq >= 0, do: seq, else: 0
   end
-
-  defp extract_seq(_), do: 0
 
   defp surface_for(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
@@ -384,8 +378,6 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
     explicit ++ generated
   end
 
-  defp filter_auto_send_files(_files, _cfg), do: []
-
   defp attachment_source(%{source: source}) when source in [:explicit, :generated], do: source
   defp attachment_source(%{source: "explicit"}), do: :explicit
   defp attachment_source(%{source: "generated"}), do: :generated
@@ -400,8 +392,6 @@ defmodule LemonChannels.Adapters.Discord.Renderer do
       {:ok, %File.Stat{type: :regular, size: size}} -> size <= max_bytes
       _ -> false
     end
-  rescue
-    _ -> false
   end
 
   defp file_size_within_limit?(_path, _max_bytes), do: false

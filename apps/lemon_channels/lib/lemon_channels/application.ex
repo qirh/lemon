@@ -148,7 +148,7 @@ defmodule LemonChannels.Application do
     Enum.find_value(children, fn
       {_id, pid, _type, modules} when is_pid(pid) and is_list(modules) ->
         if Enum.member?(modules, adapter_module) or
-             (is_atom(expected_child_module) and Enum.member?(modules, expected_child_module)) do
+             (not is_nil(expected_child_module) and Enum.member?(modules, expected_child_module)) do
           pid
         else
           nil

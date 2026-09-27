@@ -50,6 +50,9 @@ defmodule LemonChannels.Adapters.WhatsApp.ModelPolicyAdapter do
 
     :ok
   rescue
-    _ -> :ok
+    error in ArgumentError ->
+      # Another process may have created this named table after the lookup.
+      if :ets.whereis(@session_table) == :undefined, do: reraise(error, __STACKTRACE__)
+      :ok
   end
 end

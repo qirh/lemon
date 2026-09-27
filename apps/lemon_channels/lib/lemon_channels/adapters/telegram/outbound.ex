@@ -249,8 +249,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   defp extract_reply_markup(meta) when is_map(meta) do
     meta[:reply_markup] || meta["reply_markup"]
-  rescue
-    _ -> nil
   end
 
   defp extract_reply_markup(_), do: nil
@@ -343,8 +341,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  defp normalize_file_batch_content(_), do: {:error, :invalid_file_payload}
-
   defp normalize_batch_file_entry(%{} = content) do
     path = Map.get(content, :path) || Map.get(content, "path")
     caption = Map.get(content, :caption) || Map.get(content, "caption")
@@ -378,10 +374,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
 
   defp send_normalized_file(api_mod, token, chat_id, %{files: files}, opts) when is_list(files) do
     send_file_batch(api_mod, token, chat_id, files, opts)
-  end
-
-  defp send_normalized_file(_api_mod, _token, _chat_id, _content, _opts) do
-    {:error, :invalid_file_payload}
   end
 
   defp send_file_batch(api_mod, token, chat_id, files, opts) do
@@ -520,7 +512,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         @default_retry_after_ms
     end
   rescue
-    _ -> @default_retry_after_ms
+    ArgumentError -> @default_retry_after_ms
   end
 
   defp retry_after_ms(_reason), do: @default_retry_after_ms
@@ -588,8 +580,6 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
       n when is_integer(n) -> n
       _ -> @default_telegram_outbound_send_delay_ms
     end
-  rescue
-    _ -> @default_telegram_outbound_send_delay_ms
   end
 
   defp image_file?(path) when is_binary(path) do
@@ -684,7 +674,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
         String.to_existing_atom("Elixir." <> mod)
       end
     rescue
-      _ ->
+      ArgumentError ->
         Logger.warning(
           "telegram api_mod #{inspect(mod)} does not resolve to a loaded module; " <>
             "falling back to the real Telegram API"

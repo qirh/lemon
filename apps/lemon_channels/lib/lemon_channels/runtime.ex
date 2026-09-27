@@ -15,8 +15,6 @@ defmodule LemonChannels.Runtime do
   alias LemonCore.InboundMessage
   alias LemonCore.RouterBridge
 
-  require Logger
-
   @type failure :: {:error, :unavailable | term()}
 
   @doc """
@@ -108,8 +106,6 @@ defmodule LemonChannels.Runtime do
     LemonChannels.Telegram.StateStore.delete_selected_resume({account_id, chat_id, thread_id})
     LemonChannels.Telegram.ResumeIndexStore.delete_thread(account_id, chat_id, thread_id)
     :ok
-  rescue
-    _ -> :ok
   end
 
   def clear_telegram_thread_state(_, _, _), do: :ok

@@ -32,7 +32,7 @@ defmodule LemonChannels.Adapters.Discord.ModelPolicyAdapter do
 
   @impl true
   def session_put(session_key, model) do
-    Store.put(@session_model_table, session_key, model)
+    :ok = Store.put(@session_model_table, session_key, model)
     :ok
   end
 
@@ -43,10 +43,8 @@ defmodule LemonChannels.Adapters.Discord.ModelPolicyAdapter do
 
   @spec delete_session_model_override(term()) :: :ok
   def delete_session_model_override(session_key) when is_binary(session_key) do
-    Store.delete(@session_model_table, session_key)
+    :ok = Store.delete(@session_model_table, session_key)
     :ok
-  rescue
-    _ -> :ok
   end
 
   def delete_session_model_override(_session_key), do: :ok

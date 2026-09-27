@@ -50,8 +50,6 @@ defmodule LemonChannels.Adapters.Xmtp.Bridge do
     Map.get(cfg, key) || Map.get(cfg, to_string(key))
   end
 
-  defp cfg_value(_, _), do: nil
-
   defp drop_nil_values(map) do
     map
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)

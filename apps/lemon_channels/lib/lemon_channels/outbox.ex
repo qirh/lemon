@@ -8,6 +8,10 @@ defmodule LemonChannels.Outbox do
   - Rate limiting
   - Automatic chunking for long messages
   - Telemetry emission
+
+  Adapter exceptions and worker exits are terminal, outcome-unknown failures:
+  a platform may have accepted the write before the worker died. They notify
+  the caller, release the delivery group, and are never replayed automatically.
   """
 
   use GenServer
@@ -38,7 +42,10 @@ defmodule LemonChannels.Outbox do
   def enqueue(%OutboundPayload{} = payload) do
     GenServer.call(__MODULE__, {:enqueue, payload}, @call_timeout_ms)
   catch
-    :exit, _reason ->
+    :exit, {:noproc, _} ->
+      {:error, :channels_outbox_unavailable}
+
+    :exit, {:timeout, _} ->
       # IMPORTANT: The GenServer may still process this enqueue even though the
       # call timed out on our side. The message sits in the GenServer mailbox and
       # will be delivered eventually, but we have no way to get the ref back.
@@ -51,6 +58,9 @@ defmodule LemonChannels.Outbox do
       )
 
       {:error, :enqueue_timeout}
+
+    :exit, reason ->
+      {:error, {:outbox_exit, reason}}
   end
 
   @doc """
@@ -229,37 +239,19 @@ defmodule LemonChannels.Outbox do
         state = %{state | processing: processing}
         state = release_processing_group(state, entry, task_ref)
 
-        # Treat unexpected worker exits as delivery failures. This is the critical difference
-        # from raw spawn/1: we always clean up bookkeeping and keep the queue moving.
+        # A worker may have sent the message before dying. Release the group,
+        # report the ambiguous failure, and never replay that external write.
         reason = {:worker_exit, reason}
+        failure_meta = outbox_failure_meta(entry)
 
-        if retryable_reason?(reason) and entry.attempts < max_attempts() do
-          {entry, delay_ms} = schedule_retry(entry, reason)
-          queue = :queue.in(entry, state.queue)
-          state = %{state | queue: queue}
+        Logger.warning(
+          "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)} " <>
+            "meta=#{inspect(failure_meta)}"
+        )
 
-          emit_queue_depth_telemetry(state, :retry_scheduled, %{
-            delay_ms: delay_ms,
-            attempts: entry.attempts,
-            reason: inspect(reason, limit: 50)
-          })
-
-          Process.send_after(self(), :process_queue, delay_ms)
-          {:noreply, state}
-        else
-          reason = finalize_failure_reason(reason)
-          failure_meta = outbox_failure_meta(entry)
-
-          Logger.warning(
-            "Delivery worker exited after #{entry.attempts} attempts: #{inspect(reason)} " <>
-              "meta=#{inspect(failure_meta)}"
-          )
-
-          maybe_notify_delivery(entry.payload, {:error, reason})
-
-          send(self(), :process_queue)
-          {:noreply, state}
-        end
+        maybe_notify_delivery(entry.payload, {:error, reason})
+        send(self(), :process_queue)
+        {:noreply, state}
     end
   end
 
@@ -271,11 +263,7 @@ defmodule LemonChannels.Outbox do
        when is_pid(pid) and is_reference(ref) do
     tag = get_in(payload.meta || %{}, [:notify_tag]) || :outbox_delivered
 
-    try do
-      send(pid, {tag, ref, result})
-    rescue
-      _ -> :ok
-    end
+    send(pid, {tag, ref, result})
 
     :ok
   end
@@ -584,21 +572,27 @@ defmodule LemonChannels.Outbox do
 
         plugin ->
           try do
-            plugin.deliver(payload)
+            # Validate inside the isolated worker. A broken adapter contract must
+            # not crash the queue owner and lose unrelated pending deliveries.
+            case plugin.deliver(payload) do
+              {:ok, _} = result -> result
+              {:error, _} = result -> result
+            end
           rescue
-            e ->
-              # Emit telemetry exception
+            error ->
               LemonCore.Telemetry.emit(
                 [:lemon, :channels, :deliver, :exception],
                 %{duration: System.monotonic_time() - start_time},
                 Map.merge(meta, %{
                   kind: :exception,
-                  reason: Exception.message(e),
+                  reason: Exception.message(error),
                   stacktrace: __STACKTRACE__
                 })
               )
 
-              {:error, {:exception, e}}
+              # Observability only: let the supervisor report DOWN, never
+              # turn a potentially completed write into a retryable error.
+              reraise error, __STACKTRACE__
           end
       end
 
@@ -714,6 +708,10 @@ defmodule LemonChannels.Outbox do
        when status >= 400 and status < 500 and status != 429, do: false
 
   defp retryable_reason?({:worker_exit, _reason}), do: false
+  defp retryable_reason?(:outcome_unknown), do: false
+  defp retryable_reason?({:outcome_unknown, _reason}), do: false
+  defp retryable_reason?({:exception, _reason}), do: false
+  defp retryable_reason?({_kind, %{__exception__: true}}), do: false
   defp retryable_reason?(:normal), do: true
   defp retryable_reason?(:shutdown), do: true
   defp retryable_reason?(_reason), do: true
@@ -744,7 +742,5 @@ defmodule LemonChannels.Outbox do
       %{depth: queue_depth(state), max_queue_size: state.max_queue_size, count: 1},
       Map.put(metadata, :event, event)
     )
-  rescue
-    _ -> :ok
   end
 end

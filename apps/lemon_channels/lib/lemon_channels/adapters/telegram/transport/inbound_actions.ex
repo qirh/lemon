@@ -100,7 +100,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
       end
 
     meta0 =
-      (inbound.meta || %{})
+      inbound.meta
       |> drop_non_native_resume()
       |> Map.put(:progress_msg_id, progress_msg_id)
       |> Map.put(:user_msg_id, user_msg_id)
@@ -211,8 +211,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
     else
       state
     end
-  rescue
-    _ -> state
   end
 
   defp report_submission_failure(
@@ -235,8 +233,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp reject_unsupported_resume(state, inbound, callbacks, engine) do
@@ -254,8 +250,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp send_progress(state, chat_id, reply_to_message_id) do
@@ -287,10 +281,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
 
         error
     end
-  rescue
-    _ ->
-      Logger.warning("telegram inbound routing failed: reason=unavailable")
-      {:error, :unavailable}
   end
 
   defp pop_submission_dedupe_refs(inbound) do

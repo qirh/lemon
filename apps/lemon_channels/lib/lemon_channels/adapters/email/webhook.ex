@@ -142,19 +142,6 @@ defmodule LemonChannels.Adapters.Email.Webhook do
               Plug.Conn.send_resp(conn, 503, "unavailable")
           end
         end
-
-      _unexpected ->
-        case remember(reservation, "outcome_unknown") do
-          :ok ->
-            Logger.error(
-              "email webhook handoff outcome unknown; suppressing redelivery: reason=unexpected_result"
-            )
-
-            Plug.Conn.send_resp(conn, 200, "outcome unknown")
-
-          {:error, :idempotency_unavailable} ->
-            Plug.Conn.send_resp(conn, 503, "unavailable")
-        end
     end
   end
 
