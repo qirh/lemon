@@ -26,7 +26,7 @@ defmodule Mix.Tasks.Lemon.Help do
     {"Onboarding & setup",
      ~w(lemon.new lemon.setup lemon.onboard lemon.onboard.anthropic lemon.onboard.codex
         lemon.onboard.copilot lemon.onboard.gemini lemon.onboard.antigravity lemon.providers
-        lemon.workspace lemon.update lemon.hermes.audit lemon.hermes.migrate)},
+        lemon.workspace lemon.update)},
     {"Secrets", ~w(lemon.secrets.init lemon.secrets.set lemon.secrets.list lemon.secrets.status
         lemon.secrets.check lemon.secrets.delete lemon.secrets.import_env lemon.voice.secrets)},
     {"Diagnostics",

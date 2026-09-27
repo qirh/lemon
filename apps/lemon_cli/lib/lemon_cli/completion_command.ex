@@ -3,8 +3,8 @@ defmodule LemonCli.CompletionCommand do
   Generates deterministic Bash, Zsh, and Fish completion scripts from
   `LemonCli.CommandRegistry`.
 
-  The launchers set `LEMON_CLI_LAUNCHER` only for generation so source-only
-  and packaged-release-only commands remain truthful.
+  Both launchers export `LEMON_CLI_LAUNCHER`, so the generated script lists
+  exactly the commands available in the launcher that produced it.
   """
 
   alias LemonCli.CommandRegistry
@@ -13,7 +13,7 @@ defmodule LemonCli.CompletionCommand do
 
   @spec run([String.t()]) :: 0 | 2
   def run([shell]) when shell in @shells do
-    IO.write(render(shell, launcher_from_env()))
+    IO.write(render(shell, CommandRegistry.launcher()))
     0
   end
 
@@ -26,13 +26,6 @@ defmodule LemonCli.CompletionCommand do
   def render("bash", launcher), do: render_bash(commands(launcher))
   def render("zsh", launcher), do: render_zsh(commands(launcher))
   def render("fish", launcher), do: render_fish(commands(launcher))
-
-  defp launcher_from_env do
-    case System.get_env("LEMON_CLI_LAUNCHER") do
-      "source" -> :source
-      _other -> :release
-    end
-  end
 
   defp commands(launcher), do: CommandRegistry.completion_commands(launcher)
 

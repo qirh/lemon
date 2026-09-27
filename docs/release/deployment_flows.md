@@ -54,15 +54,16 @@ under `~/.lemon`:
 
 `bin/lemon` inside every release is a launcher shim that picks the bundled
 profile and applies user-install defaults before delegating to
-`bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
-`remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
-runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
-`secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
-redacted support bundle. The sim profile does not bundle the runtime CLI, but
-does support `doctor --bundle`. With no arguments the launcher starts the TUI
-in an interactive terminal, auto-starting the daemon; non-interactive
-invocation prints usage.
-
+`bin/<profile>`. Its lifecycle commands include `tui`, `web`, `start`, `run`,
+`daemon`, `stop`, `restart`, and `status`; release VM tools are `remote`,
+`eval`, and `rpc`. The full and minimal runtime profiles dispatch `setup`,
+`model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers`,
+`blueprints`, `profile`, `backup`, `context`, `sessions`, `learn`, `update`,
+`completion`, `migrate`, `node`, and `version` through the shared CLI.
+`doctor --bundle [path]` generates a redacted support bundle. The sim profile
+does not bundle the runtime CLI, but does support `doctor --bundle`. With no
+arguments the launcher opens the TUI in an interactive terminal; without a TTY
+it prints usage and exits.
 The launcher never builds Elixir source from user input. `doctor` argv is
 forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
 `#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
@@ -348,7 +349,7 @@ The source launcher creates a high-entropy process-scoped operator token when
 it boots a new local runtime, shares it only through the daemon and TUI process
 environments, and stops that owned runtime when the TUI exits.
 
-Persistent runtimes started by `./bin/lemon --daemon` or installed
+Persistent runtimes started by `./bin/lemon daemon` or installed
 `lemon daemon` create a port-scoped credential under `~/.lemon/run`. A later
 TUI loads that credential automatically only when it is a regular current-user
 file with mode 0600 and a valid 256-bit token. Explicit
@@ -359,7 +360,7 @@ loopback access.
 
 Runtime ownership is independent of token origin: every daemon started by
 `./bin/lemon-tui` is stopped when that client exits, including when the token
-was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
+was preconfigured. Start `./bin/lemon daemon` separately before attaching if
 the source runtime must remain persistent; already-running runtimes are never
 stopped by the TUI launcher.
 

@@ -10,12 +10,15 @@ Verifies Lemon release artifacts beyond checksums:
   - validates manifest and artifact checksums (manifest mode)
   - extracts release profile(s) into clean temp dirs
   - evaluates MCP library composition in packaged min/full releases
-  - starts each release daemon without Mix
+  - starts each release daemon without Mix (min/full through the packaged
+    `lemon daemon` launcher, which records the pidfile and waits for health)
   - checks control-plane /healthz or sim broadcast /readyz
+  - checks `lemon status`, the unified `lemon --help` registry, `lemon version`,
+    and the read-only `lemon migrate hermes audit --json` (non-sim profiles)
   - checks Web /healthz for lemon_runtime_full
   - checks `lemon web --no-open` reports the healthy packaged Web URL
   - checks lemon_runtime_full asset-digest artifacts and daemon log
-  - stops the daemon
+  - stops the daemon (`lemon stop` for non-sim profiles)
   - generates a release-runtime support bundle with release eval (non-sim profiles)
 
 Manifest mode boots every artifact for the target platform (default:
@@ -301,8 +304,10 @@ cleanup_work_dir() {
   local work_dir="$1"
   local bin
 
+  # Stop through each profile executable, never the launcher: the launcher
+  # resolves the caller's real ~/.lemon/run state during cleanup.
   for bin in "$work_dir"/*/extract/bin/*; do
-    if [ -x "$bin" ]; then
+    if [ -x "$bin" ] && [ "$(basename "$bin")" != "lemon" ]; then
       "$bin" stop >/dev/null 2>&1 || true
     fi
   done
@@ -364,7 +369,7 @@ boot_one_profile() {
     )
   fi
 
-  run_release() {
+  run_with_env() {
     (
       cd "$extract_dir"
       env \
@@ -377,9 +382,11 @@ boot_one_profile() {
         -u VERCEL_GIT_COMMIT_REF \
         -u LEMON_MCP_DISABLED \
         "${env_vars[@]}" \
-        "$release_bin" "$@"
+        "$@"
     )
   }
+  run_release() { run_with_env "$release_bin" "$@"; }
+  run_launcher() { run_with_env "$extract_dir/bin/lemon" "$@"; }
 
   if [ "$profile" = "lemon_runtime_min" ] || [ "$profile" = "lemon_runtime_full" ]; then
     run_release eval '
@@ -420,7 +427,11 @@ boot_one_profile() {
     fi
   fi
 
-  run_release daemon
+  if [ "$profile" = "sim_broadcast_platform" ]; then
+    run_release daemon
+  else
+    run_launcher daemon
+  fi
 
   if [ "$profile" = "sim_broadcast_platform" ]; then
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile sim-ui"
@@ -474,16 +485,47 @@ boot_one_profile() {
     echo "ok $profile booted, enforced auth, served assets, and preserved spectator state"
   else
     wait_for_health "http://127.0.0.1:$control_port/healthz" "$profile control-plane"
+    run_launcher status
+
+    local help_output command
+    help_output="$(run_launcher --help)"
+    for command in tui web start daemon stop status remote eval rpc setup doctor sessions \
+      migrate node version; do
+      if ! printf '%s\n' "$help_output" | grep -Eq "^  $command( |$)"; then
+        echo "$profile: packaged 'lemon --help' did not list $command" >&2
+        exit 1
+      fi
+    done
+    if printf '%s\n' "$help_output" | grep -Eq "^  (send|media|models|policy|skill|usage) "; then
+      echo "$profile: packaged 'lemon --help' advertised a source-only command" >&2
+      exit 1
+    fi
+
+    if [ -z "$(run_launcher version)" ]; then
+      echo "$profile: packaged 'lemon version' printed nothing" >&2
+      exit 1
+    fi
+
+    mkdir -p "$profile_dir/hermes"
+    run_launcher migrate hermes audit --json --source "$profile_dir/hermes" \
+      --target "$home_dir/.lemon" > "$profile_dir/hermes-audit.json"
+    python3 - "$profile" "$profile_dir/hermes-audit.json" <<'PY'
+import json
+import sys
+
+profile, path = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+start = text.find("{")
+report = json.loads(text[start:]) if start >= 0 else {}
+if "summary" not in report or not isinstance(report.get("items"), list):
+    print(f"{profile}: packaged 'lemon migrate hermes audit --json' emitted no report", file=sys.stderr)
+    sys.exit(1)
+PY
 
     if [ "$profile" = "lemon_runtime_full" ]; then
       wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
 
-      launcher_output="$(
-        (
-          cd "$extract_dir"
-          env "${env_vars[@]}" "$extract_dir/bin/lemon" web --no-open
-        ) 2>&1
-      )"
+      launcher_output="$(run_launcher web --no-open 2>&1)"
       if ! printf '%s\n' "$launcher_output" | grep -q "Lemon Web: http://127.0.0.1:$web_port/"; then
         echo "$profile: packaged 'lemon web --no-open' did not report the healthy Web URL" >&2
         printf '%s\n' "$launcher_output" >&2
@@ -493,7 +535,7 @@ boot_one_profile() {
       assert_no_asset_warmup_failure "$profile" "$extract_dir"
     fi
 
-    run_release stop
+    run_launcher stop
     run_release eval "LemonCore.Doctor.CLI.bundle!(bundle_path: \"$bundle_path\")"
 
     if [ ! -f "$bundle_path" ]; then

@@ -83,19 +83,22 @@ done
 launcher_output="$TEST_DIR/launcher-output"
 web_output="$TEST_DIR/web-output"
 
-LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT" \
-LEMON_WEB_PORT="$WEB_PORT" \
-LEMON_SIM_UI_PORT=1 \
-  "$ROOT/bin/lemon" --daemon --no-distribution >"$launcher_output" 2>&1
+# Both background and foreground starts must reuse the healthy runtime before
+# compiling or registering an Erlang node name.
+for command in daemon start; do
+  LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT" \
+  LEMON_WEB_PORT="$WEB_PORT" \
+  LEMON_SIM_UI_PORT=1 \
+    "$ROOT/bin/lemon" "$command" --no-distribution >"$launcher_output" 2>&1
 
-grep -Fq "A healthy Lemon runtime is already running; reusing it." "$launcher_output"
-grep -Fq "Control plane: ws://localhost:$CONTROL_PORT/ws" "$launcher_output"
-grep -Fq "Web UI:        http://localhost:$WEB_PORT/" "$launcher_output"
+  grep -Fq "a healthy Lemon runtime is already running on port $CONTROL_PORT; reusing it" \
+    "$launcher_output"
 
-if grep -Fq "Starting unified Lemon runtime" "$launcher_output"; then
-  echo "launcher attempted to start a duplicate runtime" >&2
-  exit 1
-fi
+  if grep -Fq "Control plane: ws://" "$launcher_output"; then
+    echo "launcher '$command' attempted to start a duplicate runtime" >&2
+    exit 1
+  fi
+done
 
 LEMON_CONTROL_PLANE_PORT="$CONTROL_PORT" \
 LEMON_WEB_PORT="$WEB_PORT" \

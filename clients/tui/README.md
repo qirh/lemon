@@ -21,8 +21,8 @@ placed in command arguments, or printed.
 
 Every runtime started by `../../bin/lemon-tui` is launcher-owned and stopped
 with the TUI, including when `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` was already
-set. The source `../../bin/lemon --daemon` and installed `lemon daemon`
-launchers instead create a port-scoped operator credential at
+set. The source `../../bin/lemon daemon` and installed `lemon daemon` launchers
+instead create a port-scoped operator credential at
 `~/.lemon/run/control-plane-<port>.token`, with a mode-0700 parent and mode-0600
 file, and pass it to the persistent runtime. A later TUI validates the file is
 regular, owned by the current user, mode 0600, and a full 256-bit token before

@@ -63,6 +63,7 @@ cat > "$FAKE_BIN/mix" <<'EOF'
 for arg in "$@"; do
   if [[ "$arg" == "--no-halt" ]]; then
     printf '%s' "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" > "$LEMON_TUI_TEST_SOURCE_RUNTIME_TOKEN"
+    touch "$LEMON_TUI_TEST_HEALTH"
     sleep 300
     exit 0
   fi
@@ -104,7 +105,7 @@ runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
 [[ "$runtime_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$runtime_token" == "$client_token" ]]
 [[ ! -s "$LEMON_TUI_TEST_INSTALL_TOKEN" ]]
-grep -qx -- '--daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
+grep -qx -- 'daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
 grep -qx -- '--test-argument' "$LEMON_TUI_TEST_CLIENT_ARGS"
 ! grep -Fq -- "$runtime_token" "$LEMON_TUI_TEST_CLIENT_ARGS"
 ! grep -Fq -- "$runtime_token" "$bootstrap_output"
@@ -135,7 +136,7 @@ managed_pid_file="$TEST_DIR/source-runtime.pid"
 rm -f "$LEMON_TUI_TEST_HEALTH" "$LEMON_TUI_TEST_CLIENT_TOKEN"
 export LEMON_RUNTIME_PID_FILE="$managed_pid_file"
 
-if ! "$ROOT/bin/lemon" --daemon --no-distribution --port "$managed_port" > "$TEST_DIR/source-daemon-output" 2>&1; then
+if ! "$ROOT/bin/lemon" daemon --no-distribution --port "$managed_port" > "$TEST_DIR/source-daemon-output" 2>&1; then
   cat "$TEST_DIR/source-daemon-output" >&2
   exit 1
 fi

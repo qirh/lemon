@@ -67,8 +67,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
 | `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
-| `mix lemon.hermes.audit` | Audit Hermes data compatibility without writing files. |
-| `mix lemon.hermes.migrate` | Migrate compatible Hermes data into Lemon. |
+| Hermes migration Mix tasks | Deleted; use `lemon migrate hermes` from a release or `./bin/lemon migrate hermes` from a source checkout. |
 
 ## Secrets
 

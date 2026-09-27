@@ -5,11 +5,14 @@ defmodule LemonCli.CommandRegistryTest do
 
   alias LemonCli.{CLI, CommandRegistry, CompletionCommand}
 
-  @runtime_families ~w(setup model gateway doctor config secrets channels providers blueprints profile backup context sessions learn update completion)
+  @runtime_families ~w(setup model gateway doctor config secrets channels providers blueprints profile backup context sessions learn update completion migrate node version)
+  @source_only ~w(send media models policy skill usage)
+  @lifecycle ~w(tui web start run daemon stop restart status)
+  @release_only ~w(remote eval rpc)
 
-  test "registry is the complete unique runtime family source for dispatch and help" do
-    assert CommandRegistry.names() == @runtime_families
-    assert length(Enum.uniq(CommandRegistry.names())) == length(@runtime_families)
+  test "registry is the complete unique family source for dispatch and help" do
+    assert CommandRegistry.names() == @runtime_families ++ @source_only
+    assert length(Enum.uniq(CommandRegistry.names())) == length(CommandRegistry.names())
 
     Enum.each(CommandRegistry.commands(), fn command ->
       assert is_binary(command.summary) and command.summary != ""
@@ -19,28 +22,43 @@ defmodule LemonCli.CommandRegistryTest do
       assert CommandRegistry.help(command.name) =~ "Usage: #{command.usage}"
     end)
 
-    help = CommandRegistry.help()
-    Enum.each(@runtime_families, &assert(help =~ &1))
+    Enum.each(@lifecycle ++ @release_only, fn name ->
+      assert CommandRegistry.lifecycle?(name)
+      refute CommandRegistry.command?(name)
+      assert CommandRegistry.help(name) =~ "Usage: lemon #{name}"
+    end)
   end
 
-  test "source and release completion metadata preserve their own launcher commands" do
+  test "help lists exactly the commands the invoking launcher can run" do
+    for {launcher, present, absent} <- [
+          {:source, @runtime_families ++ @source_only ++ @lifecycle, @release_only},
+          {:release, @runtime_families ++ @lifecycle ++ @release_only, @source_only}
+        ] do
+      help = CommandRegistry.overview(launcher)
+
+      for name <- present, do: assert(help =~ ~r/^  #{name} /m, "#{launcher} help lacks #{name}")
+      for name <- absent, do: refute(help =~ ~r/^  #{name} /m, "#{launcher} help lists #{name}")
+    end
+  end
+
+  test "source and release completion never advertise the other launcher's commands" do
     source = Enum.map(CommandRegistry.completion_commands(:source), & &1.name)
     release = Enum.map(CommandRegistry.completion_commands(:release), & &1.name)
 
-    assert "send" in source
-    assert "node" in source
-    refute "tui" in source
-    refute "daemon" in source
+    for name <- @runtime_families ++ @lifecycle do
+      assert name in source
+      assert name in release
+    end
 
-    assert "tui" in release
-    assert "daemon" in release
-    refute "send" in release
-    refute "node" in release
+    for name <- @source_only do
+      assert name in source
+      refute name in release
+    end
 
-    Enum.each(@runtime_families, fn family ->
-      assert family in source
-      assert family in release
-    end)
+    for name <- @release_only do
+      assert name in release
+      refute name in source
+    end
   end
 
   test "generated shell scripts are deterministic and structurally complete" do

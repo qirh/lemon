@@ -28,48 +28,69 @@ user-visible rules:
 
 Use the same command nouns in an installed release and a source checkout.
 Installed releases use `lemon`; a checkout uses the matching `./bin/lemon`
-wrapper. Direct Mix tasks remain contributor-level alternatives, not the
-recommended commands for users of a packaged release.
+wrapper. The command table shows launcher commands separately from commands
+dispatched by `LemonCli.CLI`.
 
-Packaged and Mix `secrets check` / `secrets import-env` commands read the same
-ordered environment-secret names from `LemonCore.Secrets.EnvCatalog`, keeping
-release and source-checkout behavior aligned.
+Packaged and source `secrets check` / `secrets import-env` commands read the
+same ordered environment-secret names from `LemonCore.Secrets.EnvCatalog`.
 
 External 1Password, Bitwarden Secrets Manager, and command sources remain
 read-only fallbacks behind the encrypted Lemon store. Their source and packaged
 diagnostics share `lemon secrets sources status|test`; both surfaces report
 only readiness, stable provenance, counts, byte counts, and error kinds.
 
-| Purpose | Installed release | Source checkout | Contributor Mix adapter |
-| --- | --- | --- | --- |
-| First-time setup | `lemon setup` | `./bin/lemon setup` | `mix lemon.setup` |
-| Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` | `mix lemon.onboard anthropic` |
-| Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` | `mix lemon.setup gateway` |
-| Diagnostics | `lemon doctor` | `./bin/lemon doctor` | `mix lemon.doctor` |
-| Open the local Web UI | `lemon web` | `./bin/lemon web` | Start the full runtime directly |
-| Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
-| Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
-| Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` | Use the same Mix-free command boundary |
-| Inspect channel configuration | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
-| Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
-| Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` | Use the same control-plane command boundary |
-| Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
-| Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
-| Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
-| Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` | Call `LemonCore.SessionLifecycle` from IEx/tests |
-| Review/confirm learning from bounded sources | `lemon learn '@file:guide.md'` | `./bin/lemon learn '@file:guide.md'` | Call `LemonSkills.Learn.review/2` from IEx/tests |
-| Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) | `mix lemon.update` remains source maintenance |
-| Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` | Call `LemonCli.CompletionCommand.render/2` from IEx/tests |
+| Purpose | Installed release | Source checkout |
+| --- | --- | --- |
+| Start TUI (interactive no-argument launch) | `lemon` | `./bin/lemon` |
+| Foreground runtime | `lemon start` or `lemon run` | `./bin/lemon start` or `./bin/lemon run` |
+| Background runtime | `lemon daemon` | `./bin/lemon daemon` |
+| First-time setup | `lemon setup` | `./bin/lemon setup` |
+| Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |
+| Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` |
+| Diagnostics | `lemon doctor` | `./bin/lemon doctor` |
+| Open the local Web UI | `lemon web` | `./bin/lemon web` |
+| Validate/show config | `lemon config validate` | `./bin/lemon config validate` |
+| Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` |
+| Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` |
+| Inspect channel configuration | `lemon channels` | `./bin/lemon channels` |
+| Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` |
+| Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` |
+| Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` |
+| Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` |
+| Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` |
+| Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` |
+| Review/confirm learning from bounded sources | `lemon learn '@file:guide.md'` | `./bin/lemon learn '@file:guide.md'` |
+| Migrate Hermes data | `lemon migrate hermes audit` | `./bin/lemon migrate hermes audit` |
+| Join a named execution node | `lemon node join ...` | `./bin/lemon node join ...` |
+| Print version | `lemon version` | `./bin/lemon version` |
+| Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) |
+| Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` |
+
+Blueprint and profile-chat commands start the local runtime through the
+launcher when it is not already healthy, in both source checkouts and packaged
+releases.
+
+`mix lemon.update` remains a source-maintenance task for config migration and
+bundled-skill sync; it is not reachable as `./bin/lemon update`.
+The removed Hermes-specific Mix tasks are deleted; use the unified migration
+CLI above.
 
 ## Command registry and completion
 
-`LemonCli.CommandRegistry` is the single source for Mix-free runtime-family
-dispatch, top-level help, command help, and shell completion metadata. It
-contains setup, model, gateway, doctor, config, secrets (including external
-source diagnostics), channels, providers, blueprints, profile, backup, context,
-sessions, update, and completion. Launcher-only
-metadata is separated into source and release sets so generated scripts never
-advertise commands the current launcher cannot run.
+`LemonCli.CommandRegistry` is the single registry for CLI dispatch, top-level
+and command help, and shell completion metadata. It defines the CLI families
+available in source and packaged runtimes, plus source-only Mix-backed
+commands: `send`, `media`, `models`, `policy`, `skill`, and `usage`. These
+source-only commands are omitted from release help and completion.
+
+Lifecycle commands are registry entries too (for help and completion), but the
+launcher shell executes them: `tui`, `web`, `start`, `run`, `daemon`, `stop`,
+`restart`, and `status` work in both launchers; `remote`, `eval`, and `rpc` are
+release-only. Reaching a lifecycle command inside `LemonCli.CLI` is a usage
+error. Both launchers export `LEMON_CLI_LAUNCHER` (`source` or `release`) for
+availability filtering and `LEMON_LAUNCHER` (their own path) so
+`LemonCli.LocalRuntime` can run `$LEMON_LAUNCHER daemon` when a command needs
+the runtime.
 
 ## Safe managed-release updates
 
@@ -96,9 +117,8 @@ installation examples.
 `lemon blueprints` is a Mix-free client for the authenticated local control
 plane. It accepts only catalog IDs below the canonical `~/.lemon/bundles`
 boundary; arbitrary roots, paths, archives, scripts, command jobs, environment
-overrides, and secret values are not CLI inputs. A source checkout needs its
-unified runtime running first (`./bin/lemon --daemon`); the packaged launcher
-starts its daemon when necessary.
+overrides, and secret values are not CLI inputs. Both launchers start the local
+runtime when it is not already healthy.
 
 ```bash
 lemon blueprints                         # bounded catalog list
@@ -230,12 +250,10 @@ and redaction counts. There is no CLI switch to include secrets.
 
 Lifecycle commands run in the release CLI's fresh, non-booted VM. Canonical
 chat is different: it must outlive that one-shot process, so the CLI connects
-to the authenticated loopback control plane and calls `profile.chat`. The
-packaged launcher starts the daemon when needed; source users start
-`./bin/lemon --daemon` before `./bin/lemon profile chat`. The request sends only
-the profile ID, prompt, queue mode, and optional model override—working
-directory and execution node are resolved again from the profile by the
-long-running runtime.
+to the authenticated loopback control plane and calls `profile.chat`. Both
+launchers start the daemon when needed. The request sends only the profile ID,
+prompt, queue mode, and optional model override—working directory and execution
+node are resolved again from the profile by the long-running runtime.
 
 The direct in-VM submission path assigns a run ID before calling the router. If
 acceptance cannot be confirmed, `profile chat` prints that safe run reference,
