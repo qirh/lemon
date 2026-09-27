@@ -144,8 +144,10 @@ this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
 
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
-tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
-files with no pipeline, so it needs the digest step only. Skipping either one
+tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` commits its
+built `app.css` (Tailwind source in `apps/lemon_web/assets`, rebuilt by
+developers with `mix do --app lemon_web assets.build`), so it needs the digest
+step only. Skipping either one
 makes the release log "Could not warm up static assets" at boot and serve
 undigested assets.
 

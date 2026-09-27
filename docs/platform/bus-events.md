@@ -123,7 +123,7 @@ Subscribers:
 Subscribers: `lemon_web/live/session_live.ex:17`, `discord/transport.ex:3408`,
 `telegram/transport.ex:729`, `LemonControlPlane.EventBridge` (dynamic).
 
-### 2.3 `exec_approvals` — 6 subscribers
+### 2.3 `exec_approvals` — 7 subscribers
 
 | Event type | Publisher | Payload | Env |
 |---|---|---|---|
@@ -133,7 +133,8 @@ Subscribers: `lemon_web/live/session_live.ex:17`, `discord/transport.ex:3408`,
 
 Subscribers: `exec_approvals.ex:77` (the requester itself, awaiting resolution),
 `coding_agent/session.ex:1139`, `discord:3414`, `telegram:1354`, `control_plane/acp.ex:361`,
-`EventBridge`.
+`EventBridge`, `lemon_web/live/session_live.ex` (chat approval panel, filtered to the tab's
+session key).
 
 ### 2.4 `cron` — 2 subscribers
 
@@ -204,7 +205,7 @@ crosses an app boundary *and* has a consumer that is not its publisher's sibling
 |---|---|---|
 | `run:<id>` | 12 | Consumed by router, coding_agent, control plane (WS + SSE + ACP), automation, gateway, channels |
 | `session:<key>` | 4 | Consumed by the web UI and two channel plugins |
-| `exec_approvals` | 6 | Consumed by two channel plugins, the ACP server and coding_agent |
+| `exec_approvals` | 7 | Consumed by two channel plugins, the ACP server, coding_agent and the web chat |
 | `cron` | 2 | Crosses `lemon_automation` → `lemon_control_plane` → WS clients |
 | `system` | 1 | Publishers in `lemon_core` and `lemon_control_plane`; reaches WS clients |
 | `goals` | 1 | Crosses `agent_core` → `lemon_control_plane` → WS clients |

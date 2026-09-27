@@ -4,7 +4,16 @@ defmodule LemonWeb.Live.Components.MessageComponent do
   use Phoenix.Component
 
   alias LemonWeb.Live.Components.ToolCallComponent
+  alias LemonWeb.Markdown
 
+  @doc """
+  One transcript entry, rendered as a stream item under `id`.
+
+  Finished assistant replies render as sanitized markdown (`LemonWeb.Markdown`).
+  While a reply is still streaming it renders as plain text, so each delta
+  re-sends only this item's text instead of re-parsing markdown per token.
+  """
+  attr(:id, :string, required: true)
   attr(:message, :map, required: true)
 
   def message(assigns) do
@@ -13,11 +22,12 @@ defmodule LemonWeb.Live.Components.MessageComponent do
       |> assign(:container_class, container_class(assigns.message))
       |> assign(:bubble_class, bubble_class(assigns.message))
       |> assign(:control_label, control_label(assigns.message))
+      |> assign(:pending?, Map.get(assigns.message, :pending, false) == true)
 
     ~H"""
-    <div class={@container_class}>
+    <div id={@id} class={@container_class} data-kind={@message.kind}>
       <%= if @message.kind == :tool_call do %>
-        <ToolCallComponent.tool_call event={@message.event} />
+        <ToolCallComponent.tool_call id={@id <> "-card"} event={@message.event} />
       <% else %>
         <div class={@bubble_class}>
           <%= if is_binary(@control_label) do %>
@@ -25,8 +35,12 @@ defmodule LemonWeb.Live.Components.MessageComponent do
               {@control_label}
             </p>
           <% end %>
-          <p class="whitespace-pre-wrap break-words text-sm leading-relaxed">{@message.content}</p>
-          <%= if @message.kind == :assistant and Map.get(@message, :pending, false) do %>
+          <%= if @message.kind == :assistant and not @pending? do %>
+            <div class="lemon-markdown">{Markdown.to_html(@message.content || "")}</div>
+          <% else %>
+            <p class="whitespace-pre-wrap break-words text-sm leading-relaxed">{@message.content}</p>
+          <% end %>
+          <%= if @message.kind == :assistant and @pending? do %>
             <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-400">streaming</p>
           <% end %>
         </div>
@@ -45,7 +59,7 @@ defmodule LemonWeb.Live.Components.MessageComponent do
   end
 
   defp bubble_class(%{kind: :assistant}) do
-    "max-w-[90%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm sm:max-w-[75%]"
+    "min-w-0 max-w-[90%] rounded-2xl rounded-bl-md border border-slate-200 bg-white px-4 py-3 text-slate-900 shadow-sm sm:max-w-[75%]"
   end
 
   defp bubble_class(_) do

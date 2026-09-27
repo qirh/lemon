@@ -57,32 +57,6 @@ defmodule LemonWebTest do
     assert {:noreply, ^socket} = LemonWeb.SessionLive.handle_info(message, socket)
   end
 
-  test "session live keeps appended messages in chronological order" do
-    socket = %Phoenix.LiveView.Socket{
-      assigns: %{__changed__: %{}, messages: [], last_run_id: nil}
-    }
-
-    run_started =
-      LemonCore.Event.new(
-        :run_started,
-        %{run_id: "run_test", engine: "echo"},
-        %{run_id: "run_test"}
-      )
-
-    tool_1 = LemonCore.Event.new(:engine_action, %{name: "tool_1"}, %{run_id: "run_test"})
-    tool_2 = LemonCore.Event.new(:engine_action, %{name: "tool_2"}, %{run_id: "run_test"})
-
-    assert {:noreply, socket} = LemonWeb.SessionLive.handle_info(run_started, socket)
-    assert {:noreply, socket} = LemonWeb.SessionLive.handle_info(tool_1, socket)
-    assert {:noreply, socket} = LemonWeb.SessionLive.handle_info(tool_2, socket)
-
-    assert [
-             %{kind: :system, content: "Run started (echo)."},
-             %{kind: :tool_call, event: %{name: "tool_1"}},
-             %{kind: :tool_call, event: %{name: "tool_2"}}
-           ] = socket.assigns.messages
-  end
-
   test "session live blocks submit when upload persistence fails" do
     previous = Application.get_env(:lemon_web, :upload_persist_fun)
 
@@ -102,7 +76,6 @@ defmodule LemonWebTest do
       assigns: %{
         __changed__: %{},
         uploads: %{files: %{entries: []}},
-        messages: [],
         session_key: "agent:web:browser",
         agent_id: "default",
         last_run_id: nil
@@ -113,7 +86,7 @@ defmodule LemonWebTest do
              LemonWeb.SessionLive.handle_event("submit", %{"chat" => %{"prompt" => ""}}, socket)
 
     assert socket.assigns.submit_error == "Upload failed: receipt.pdf: permission denied"
-    assert socket.assigns.messages == []
+    refute Map.has_key?(socket.assigns, :streams)
     assert socket.assigns.prompt == ""
   end
 
