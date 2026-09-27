@@ -25,7 +25,11 @@ defmodule LemonChannels.Telegram.FakeAPI do
   Pass it straight to the transport (see `transport_fake_api_test.exs`):
 
       LemonChannels.Adapters.Telegram.Transport.start_link(
-        config: %{bot_token: "fake-token", api_mod: LemonChannels.Telegram.FakeAPI}
+        config: %{
+          bot_token: "fake-token",
+          api_mod: LemonChannels.Telegram.FakeAPI,
+          allowed_chat_ids: [310_001]
+        }
       )
 
   Under `MIX_ENV=test`, a `[gateway.telegram] api_mod =

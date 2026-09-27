@@ -164,7 +164,9 @@ Do not add queue-mode branches to `lemon_gateway`.
 ### Change model or resume resolution
 
 Start in `run_orchestrator.ex`, `resume_resolver.ex`, and `model_selection.ex`.
-Top-level execution is always native; use `LemonCore.Cwd` for default cwd selection.
+Top-level execution is always native; use `LemonCore.Cwd` for default cwd selection (`channel_default_cwd/0` — configured `gateway.default_cwd`, else the assistant home — for `origin: :channel`, `default_cwd/0` otherwise).
+
+`Router.build_inbound_run_request/4` always sets `meta.channel_context` (channel, account, peer kind/id, thread) from the normalized inbound message, so `LemonRouter.Policy` applies per-channel policy and the group-chat policy (`approvals: :always` for `bash`, `execute_code`, `write`, `edit`, `patch`, `hashline_edit`) on real channel ingress.
 
 ### Change output behavior
 

@@ -245,83 +245,178 @@ defmodule LemonCli.Setup.GatewayTest do
   end
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Telegram adapter: non-interactive without secrets
+  # Telegram adapter: owner pairing with a stubbed Bot API
   # ──────────────────────────────────────────────────────────────────────────
 
-  describe "Telegram.run/2 — secrets not configured" do
-    test "returns {:error, :secrets_not_configured} with guidance" do
-      # Telegram adapter checks Secrets.status() — without a real keychain
-      # in the test env the master key is often absent.  We override the
-      # io.error callback to capture the output.
-      {io, get_log} = capture_io()
-      result = Telegram.run(["--non-interactive"], io)
+  describe "Telegram.run/2" do
+    @telegram_token "123456789:#{String.duplicate("A", 35)}"
 
-      case result do
-        {:error, :secrets_not_configured} ->
-          errors = error_messages(get_log.())
-          assert Enum.any?(errors, &String.contains?(&1, "secret"))
+    test "gives packaged-install guidance when encrypted secrets are not configured" do
+      {io, get_log} = capture_io(%{secrets_status: fn -> %{configured: false} end})
 
-        {:error, :token_not_found} ->
-          # Secrets are configured but token is absent — also fine for unit
-          errors = error_messages(get_log.())
-          assert Enum.any?(errors, &String.contains?(&1, "token"))
+      assert {:error, :secrets_not_configured} = Telegram.run(["--non-interactive"], io)
 
-        _ ->
-          :ok
-      end
+      output = messages(get_log.())
+      assert Enum.any?(output, &String.contains?(&1, "lemon secrets init"))
+      refute Enum.any?(output, &String.contains?(&1, "mix lemon"))
+    end
+
+    test "non-interactive setup refuses to write an unpaired config without --chat-id" do
+      config_path = tmp_config_path()
+
+      {io, get_log} =
+        capture_io(%{
+          config_path: config_path,
+          secrets_status: fn -> %{configured: true} end,
+          secret_set: fn _key, _value -> {:ok, :stored} end
+        })
+
+      args = ["--non-interactive", "--token", @telegram_token, "--skip-smoke"]
+      assert {:error, :missing_chat_id} = Telegram.run(args, io)
+
+      refute File.exists?(config_path)
+      assert Enum.any?(messages(get_log.()), &String.contains?(&1, "--chat-id"))
+    end
+
+    test "non-interactive flags write a paired config without persisting the raw token" do
+      config_path = tmp_config_path()
+
+      {io, get_log} =
+        capture_io(%{
+          config_path: config_path,
+          secrets_status: fn -> %{configured: true} end,
+          secret_set: fn key, value ->
+            send(self(), {:secret_set, key, value})
+            {:ok, :stored}
+          end,
+          telegram_get_me: fn @telegram_token -> {:ok, "lemon_test_bot"} end
+        })
+
+      assert :ok =
+               Telegram.run(
+                 [
+                   "--non-interactive",
+                   "--token",
+                   @telegram_token,
+                   "--chat-id",
+                   "4242",
+                   "--chat-id",
+                   "-1001234567890"
+                 ],
+                 io
+               )
+
+      assert_receive {:secret_set, "telegram_bot_token", @telegram_token}
+
+      config = File.read!(config_path)
+      assert config =~ "enable_telegram = true"
+      assert config =~ ~s(bot_token_secret = "telegram_bot_token")
+      assert config =~ "allowed_chat_ids = [4242, -1001234567890]"
+      refute config =~ @telegram_token
+      refute Enum.any?(messages(get_log.()), &String.contains?(&1, @telegram_token))
+    end
+
+    test "interactive pairing captures the chat that sends /start and acknowledges it" do
+      config_path = tmp_config_path()
+      chat_id = 987_654_321
+      test_pid = self()
+
+      Process.put(:telegram_updates, [
+        [],
+        [start_update(41, 555, "hello")],
+        [start_update(42, chat_id, "/start")]
+      ])
+
+      {io, _get_log} =
+        capture_io(%{
+          config_path: config_path,
+          secrets_status: fn -> %{configured: true} end,
+          secret_get: fn "telegram_bot_token" -> {:error, :not_found} end,
+          secret: fn _prompt -> @telegram_token end,
+          secret_set: fn _key, _value -> {:ok, :stored} end,
+          telegram_get_me: fn @telegram_token -> {:ok, "lemon_test_bot"} end,
+          telegram_get_updates: fn @telegram_token, offset, _timeout_s ->
+            send(test_pid, {:get_updates, offset})
+
+            case Process.get(:telegram_updates, []) do
+              [batch | rest] ->
+                Process.put(:telegram_updates, rest)
+                {:ok, batch}
+
+              [] ->
+                {:ok, []}
+            end
+          end
+        })
+
+      assert :ok = Telegram.run(["--pair-timeout", "5"], io)
+
+      config = File.read!(config_path)
+      assert config =~ "allowed_chat_ids = [#{chat_id}]"
+      refute config =~ "555"
+
+      # The /start update is acknowledged so a running transport never replays it.
+      assert_received {:get_updates, 43}
+    end
+
+    test "pairing gives up after the bounded wait with a /whoami hint" do
+      config_path = tmp_config_path()
+
+      {io, get_log} =
+        capture_io(%{
+          config_path: config_path,
+          secrets_status: fn -> %{configured: true} end,
+          secret_get: fn _key -> {:ok, @telegram_token} end,
+          telegram_get_updates: fn _token, _offset, _timeout_s ->
+            Process.sleep(1_100)
+            {:ok, []}
+          end
+        })
+
+      assert {:error, :pairing_timeout} =
+               Telegram.run(["--skip-smoke", "--pair-timeout", "1"], io)
+
+      refute File.exists?(config_path)
+      assert Enum.any?(messages(get_log.()), &String.contains?(&1, "/whoami"))
+    end
+
+    test "reports an invalid token from getMe without exposing it" do
+      {io, get_log} =
+        capture_io(%{
+          config_path: tmp_config_path(),
+          secrets_status: fn -> %{configured: true} end,
+          secret_set: fn _key, _value -> {:ok, :stored} end,
+          telegram_get_me: fn _token -> {:error, :unauthorized} end
+        })
+
+      assert {:error, :unauthorized} =
+               Telegram.run(
+                 ["--non-interactive", "--token", @telegram_token, "--chat-id", "1"],
+                 io
+               )
+
+      assert Enum.any?(error_messages(get_log.()), &String.contains?(&1, "401"))
+      refute Enum.any?(messages(get_log.()), &String.contains?(&1, @telegram_token))
     end
   end
 
-  # ──────────────────────────────────────────────────────────────────────────
-  # Telegram adapter: token format validation (pure, no secrets)
-  # ──────────────────────────────────────────────────────────────────────────
+  defp tmp_config_path do
+    path =
+      Path.join(System.tmp_dir!(), "lemon-telegram-#{System.unique_integer([:positive])}.toml")
 
-  describe "Telegram token format" do
-    test "valid tokens accepted by regex" do
-      valid = [
-        "123456789:ABCDEFabcdef1234567890abcdefABCDEFGH",
-        "987654321:aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrR"
-      ]
-
-      regex = ~r/^\d+:[\w-]{35,100}$/
-      Enum.each(valid, fn t -> assert Regex.match?(regex, t), "expected #{t} to match" end)
-    end
-
-    test "invalid tokens rejected by regex" do
-      invalid = ["nocodon", "123456:short", "", "abc:#{String.duplicate("x", 35)}"]
-      regex = ~r/^\d+:[\w-]{35,100}$/
-
-      Enum.each(invalid, fn t ->
-        refute Regex.match?(regex, t), "expected #{t} NOT to match"
-      end)
-    end
+    on_exit(fn -> File.rm(path) end)
+    path
   end
 
-  # ──────────────────────────────────────────────────────────────────────────
-  # Telegram adapter: --skip-smoke bypasses connectivity
-  # ──────────────────────────────────────────────────────────────────────────
-
-  describe "Telegram.run/2 — --skip-smoke" do
-    test "smoke step outputs skip message when --skip-smoke is set" do
-      # We cannot easily stub Secrets or :httpc here, so we just test that
-      # the skip-smoke flag propagates the right message when the run gets
-      # that far (it may not if secrets aren't configured).
-      {io, get_log} = capture_io()
-      # Provide a fake secret callback that returns a correctly-formatted token
-      # so the adapter gets past secrets (if configured in the test environment).
-      io = %{
-        io
-        | secret: fn _ -> "123456789:#{String.duplicate("A", 35)}" end,
-          prompt: fn _ -> "" end
+  defp start_update(update_id, chat_id, text) do
+    %{
+      "update_id" => update_id,
+      "message" => %{
+        "message_id" => update_id,
+        "chat" => %{"id" => chat_id, "type" => "private"},
+        "from" => %{"id" => chat_id, "username" => "owner"},
+        "text" => text
       }
-
-      _result = Telegram.run(["--skip-smoke", "--non-interactive"], io)
-
-      all = messages(get_log.())
-
-      if Enum.any?(all, &String.contains?(&1, "skip")) do
-        assert Enum.any?(all, &String.contains?(&1, "smoke"))
-      end
-    end
+    }
   end
 end

@@ -5,7 +5,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
   require Logger
 
-  alias LemonChannels.Adapters.Telegram.Transport.{ActionRunner, Normalize, Pipeline}
+  alias LemonChannels.Adapters.Telegram.Transport.{
+    ActionRunner,
+    Normalize,
+    Pipeline,
+    UpdateProcessor
+  }
+
   alias LemonChannels.Telegram.PollerLock
 
   @webhook_clear_retry_ms 5 * 60 * 1000
@@ -19,7 +25,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
                                      {:ok, map()} | {:error, term()} | {:skip, map()}),
           process_media_group: (map(), map() -> any()),
           persist_offset: (map(), integer() -> any()),
+          reply_whoami: (map(), map() -> any()),
           send_approval_request: (map(), map() -> any()),
+          send_unpaired_notice: (map(), map() -> any()),
           start_async_task: (map(), (-> any()) -> any()),
           submit_buffer: (map(), map() -> map())
         }
@@ -84,16 +92,23 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     end
   end
 
+  # Transcription costs money and replies in-chat, so it only runs for chats
+  # that pass authorization; everything else reaches the pipeline untouched
+  # and is dropped there.
   defp maybe_transcribe_event(state, %{kind: :message, inbound: inbound} = normalized, callbacks) do
-    case callbacks.maybe_transcribe_voice.(state, inbound) do
-      {:ok, inbound} ->
-        {:ok, %{normalized | inbound: inbound, text: inbound.message.text}}
+    if UpdateProcessor.authorized_inbound?(state, inbound) do
+      case callbacks.maybe_transcribe_voice.(state, inbound) do
+        {:ok, inbound} ->
+          {:ok, %{normalized | inbound: inbound, text: inbound.message.text}}
 
-      {:skip, new_state} ->
-        {:skip, new_state}
+        {:skip, new_state} ->
+          {:skip, new_state}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:ok, normalized}
     end
   end
 

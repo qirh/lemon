@@ -16,6 +16,7 @@ defmodule LemonChannels.Doctor.Checks.Channels do
     [
       check_channel_readiness(readiness),
       check_telegram(telegram),
+      check_telegram_allowlist(telegram),
       check_telegram_voice_transcription(telegram, proofs),
       check_discord_config(discord),
       check_discord_dm(discord, proofs),
@@ -83,6 +84,34 @@ defmodule LemonChannels.Doctor.Checks.Channels do
 
   defp check_telegram(_telegram) do
     Check.skip("channels.telegram.config", "Telegram is disabled.")
+  end
+
+  defp check_telegram_allowlist(%{enabled: true} = telegram) do
+    cond do
+      Map.get(telegram, :allowed_peer_count, 0) > 0 ->
+        Check.pass(
+          "channels.telegram.allowlist",
+          "Telegram accepts #{telegram.allowed_peer_count} paired chat(s)."
+        )
+
+      Map.get(telegram, :allow_all_peers) == true ->
+        Check.warn(
+          "channels.telegram.allowlist",
+          "Telegram accepts every chat (gateway.telegram.allow_all_chats = true); anyone who finds the bot can run the agent.",
+          "Run `lemon gateway setup telegram` to pair your chat and remove allow_all_chats."
+        )
+
+      true ->
+        Check.fail(
+          "channels.telegram.allowlist",
+          "Telegram allowlist is empty: the bot is unpaired and ignores every chat.",
+          "Run `lemon gateway setup telegram` to pair your chat (writes gateway.telegram.allowed_chat_ids)."
+        )
+    end
+  end
+
+  defp check_telegram_allowlist(_telegram) do
+    Check.skip("channels.telegram.allowlist", "Telegram is disabled.")
   end
 
   defp check_telegram_voice_transcription(%{enabled: true} = telegram, proofs) do

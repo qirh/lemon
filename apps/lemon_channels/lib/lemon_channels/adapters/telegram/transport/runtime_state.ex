@@ -6,12 +6,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.RuntimeState do
   into a large struct migration in the middle of the PR5 seam refactor.
   """
 
+  @unpaired_notice_interval_ms 10 * 60 * 1000
+
   @default_fields %{
     buffers: %{},
     media_groups: %{},
     pending_new: %{},
     reaction_runs: %{},
     model_pickers: %{},
+    unpaired_notices: %{},
     last_poll_error: nil,
     last_poll_error_log_ts: nil,
     last_webhook_clear_ts: nil
@@ -35,6 +38,33 @@ defmodule LemonChannels.Adapters.Telegram.Transport.RuntimeState do
   end
 
   def parse_allowed_chat_ids(_), do: nil
+
+  @doc """
+  Record that an unpaired chat was told how to pair the bot.
+
+  Returns `{state, true}` when the notice should be sent now, or
+  `{state, false}` when this chat was already notified within the rate-limit
+  window. Expired entries are pruned on every call so strangers cannot grow the
+  map without bound.
+  """
+  @spec claim_unpaired_notice(map(), integer(), integer()) :: {map(), boolean()}
+  def claim_unpaired_notice(state, chat_id, now_ms)
+      when is_map(state) and is_integer(chat_id) and is_integer(now_ms) do
+    notices =
+      state
+      |> Map.get(:unpaired_notices, %{})
+      |> Map.reject(fn {_chat_id, sent_ms} ->
+        now_ms - sent_ms >= @unpaired_notice_interval_ms
+      end)
+
+    if Map.has_key?(notices, chat_id) do
+      {Map.put(state, :unpaired_notices, notices), false}
+    else
+      {Map.put(state, :unpaired_notices, Map.put(notices, chat_id, now_ms)), true}
+    end
+  end
+
+  def claim_unpaired_notice(state, _chat_id, _now_ms), do: {state, false}
 
   @spec initial_offset(integer() | nil, integer() | nil, boolean()) :: integer()
   def initial_offset(config_offset, stored_offset, drop_pending_updates?) do

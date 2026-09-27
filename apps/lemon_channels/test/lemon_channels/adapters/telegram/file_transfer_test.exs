@@ -198,6 +198,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -232,6 +233,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: false, uploads_dir: "incoming"}
         }
@@ -256,6 +258,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true}
         }
@@ -298,6 +301,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true}
         }
@@ -331,6 +335,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -355,6 +360,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -500,6 +506,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -526,6 +533,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -548,6 +556,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -574,6 +583,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{enabled: true, auto_put: true, uploads_dir: "incoming"}
         }
@@ -602,6 +612,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
             enabled: true,
@@ -679,6 +690,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
         config: %{
           bot_token: "token",
           api_mod: FileTransferMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           files: %{
             enabled: true,

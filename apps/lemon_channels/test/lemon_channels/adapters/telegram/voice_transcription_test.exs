@@ -181,6 +181,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: true,
@@ -206,6 +207,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: true,
@@ -228,6 +230,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: false,

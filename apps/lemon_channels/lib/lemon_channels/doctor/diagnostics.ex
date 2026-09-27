@@ -3,6 +3,7 @@ defmodule LemonChannels.Doctor.Diagnostics do
   Redacted Telegram and Discord configuration diagnostics for support bundles.
   """
 
+  alias LemonChannels.Adapters.Telegram.Transport.RuntimeState
   alias LemonCore.Config
 
   # The transports this diagnostic knows how to report on. "Supported" below
@@ -61,7 +62,13 @@ defmodule LemonChannels.Doctor.Diagnostics do
         configured_string?(map_value(telegram, :token)) or
           configured_string?(map_value(telegram, :bot_token)),
       token_secret_configured: configured_string?(map_value(telegram, :bot_token_secret)),
-      allowed_peer_count: length(List.wrap(map_value(telegram, :allowed_chat_ids, []))),
+      allowed_peer_count:
+        telegram
+        |> map_value(:allowed_chat_ids)
+        |> RuntimeState.parse_allowed_chat_ids()
+        |> List.wrap()
+        |> length(),
+      allow_all_peers: map_value(telegram, :allow_all_chats, false) == true,
       deny_unbound_peers: map_value(telegram, :deny_unbound_chats, false) == true,
       binding_count: Enum.count(bindings, &(transport(&1) == :telegram)),
       topic_binding_count:

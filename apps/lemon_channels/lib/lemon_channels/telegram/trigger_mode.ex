@@ -6,7 +6,9 @@ defmodule LemonChannels.Telegram.TriggerMode do
 
   @chat_table :telegram_chat_trigger_mode
   @topic_table :telegram_topic_trigger_mode
-  @default_mode :all
+  # Groups only wake the agent when addressed (mention, reply, or command),
+  # matching Discord; `/trigger all` opts a chat or topic into every message.
+  @default_mode :mentions
 
   @spec resolve(String.t(), integer(), integer() | nil) :: %{
           mode: :all | :mentions,

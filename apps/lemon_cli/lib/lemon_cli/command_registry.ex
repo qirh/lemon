@@ -82,7 +82,13 @@ defmodule LemonCli.CommandRegistry do
       subcommands: [%{name: "setup", summary: "Configure Telegram or Discord"}],
       options: [
         option("--transport NAME, -t NAME", ["--transport", "-t"], "Gateway adapter"),
-        option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts")
+        option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts"),
+        option("--token TOKEN", ["--token"], "Bot token to store in encrypted secrets"),
+        option("--chat-id ID", ["--chat-id"], "Telegram chat to allow (repeatable)"),
+        option("--pair-timeout SECONDS", ["--pair-timeout"], "Telegram /start pairing wait")
+      ],
+      details: [
+        "Telegram setup pairs the bot with your chat: send /start to the bot when prompted, or pass --chat-id. An unpaired bot ignores every chat."
       ]
     },
     %{

@@ -127,8 +127,13 @@ enable_discord = false
 enable_xmtp = false
 
 [gateway.telegram]
-bot_token = "123456:token"
+# `lemon gateway setup telegram` stores the token in encrypted secrets, pairs
+# your chat via /start, and writes these three keys.
+bot_token_secret = "telegram_bot_token"
+# Required: chats allowed to use the bot. With no allowlist the bot is unpaired
+# and ignores every chat (it only answers /whoami and a pairing hint).
 allowed_chat_ids = [12345678]
+# allow_all_chats = true         # explicit opt-out: accept every chat when allowed_chat_ids is empty
 default_account_id = "default"   # optional account for ./bin/lemon send account-scoped lookups
 default_chat_id = 12345678       # optional default for ./bin/lemon send --to telegram
 default_thread_id = 35           # optional forum topic/thread
@@ -1014,7 +1019,9 @@ Why it matters:
 - The native executor runs with `cwd` set to the project root (so file edits/commands happen in the right repo).
 - The gateway loads per-project config from `<project_root>/.lemon/config.toml` (which can override agent profiles,
   models, tool policy, etc. compared to your global `~/.lemon/config.toml`).
-- If a chat has no bound project, gateway falls back to `gateway.default_cwd` (or `~/` by default).
+- If a chat has no bound project, runs use `gateway.default_cwd` when configured, otherwise the
+  assistant home (`~/.lemon/agent/workspace`, or `$LEMON_AGENT_DIR/workspace`). Channel runs never
+  default to your `$HOME`.
 
 ### Projects
 
@@ -1044,7 +1051,8 @@ queue_mode = "steer"
 ```
 
 Notes:
-- If you omit `project`, LemonGateway will run with `cwd` set to `gateway.default_cwd` when configured, otherwise `~/`.
+- If you omit `project`, LemonGateway will run with `cwd` set to `gateway.default_cwd` when configured, otherwise the
+  assistant home (`~/.lemon/agent/workspace`).
 - You can also bind at the topic/thread level by setting `topic_id` in the binding (takes precedence over the chat-level
   binding when a matching topic exists).
 - `topic_id` corresponds to Telegram's `message_thread_id` (only present in forum topics).
@@ -1187,7 +1195,8 @@ Commands:
 - `/file put [--force] <path>`: upload a Telegram document into the active working root.
 - `/file get <path>`: fetch a file (or zip a directory) from the active working root back into Telegram.
 
-If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or `~/`).
+If no project is bound for the chat, the active root falls back to `gateway.default_cwd` (or the assistant home,
+`~/.lemon/agent/workspace`).
 
 When `auto_send_generated_files = true`, Lemon tracks generated files requested
 by browser/media tools and sends up to
@@ -1252,12 +1261,35 @@ reserve_tokens = 16384          # optional safety margin before limit
 trigger_ratio = 0.9             # optional; 0.9 means trigger at 90% of context window
 ```
 
+## Telegram Pairing and Access
+
+The Telegram adapter fails closed. It accepts updates only from chats listed in
+`gateway.telegram.allowed_chat_ids`. With an empty or missing allowlist the bot is
+**unpaired**: it drops every message and callback, logs a warning, and replies at
+most once per chat every 10 minutes with
+"This bot is not paired. Run `lemon gateway setup telegram`." `lemon doctor` reports
+an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist`).
+
+- `/whoami` is answered in any chat, paired or not, with the chat id and your user id.
+  Use it to find the id of a group you want to add to `allowed_chat_ids`.
+- `lemon gateway setup telegram` pairs interactively: it asks you to send `/start` to the
+  bot, waits up to `--pair-timeout` seconds (default 120), and writes the chat id. For
+  scripts: `lemon gateway setup telegram --non-interactive --token <token> --chat-id <id>`
+  (`--chat-id` is repeatable).
+- `allow_all_chats = true` explicitly accepts every chat when no allowlist is set. Anyone
+  who finds the bot can then run the agent; doctor reports it as a warning.
+
+In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
+for every `bash`, `execute_code`, `write`, `edit`, `patch`, and `hashline_edit` call,
+because any member can prompt the agent.
+
 ## Trigger Mode (Mentions-Only)
 
-In Telegram group chats, you can gate runs so Lemon only triggers when explicitly invoked:
+Telegram group chats (like Discord) default to mentions-only: Lemon runs only on `@botname`, a reply to the bot, or a
+slash command. Direct messages always run.
 - `/trigger`: show current trigger mode.
-- `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands.
-- `/trigger all`: run on all messages.
+- `/trigger mentions`: only run on `@botname`, reply-to-bot, or slash commands (default).
+- `/trigger all`: run on all messages in this chat or topic (group admins only).
 - `/trigger clear`: clear a topic override (forum topics only).
 - `/cwd [project_id|path|clear]`: show, set, or clear the chat/topic working directory override used by future `/new` sessions.
 

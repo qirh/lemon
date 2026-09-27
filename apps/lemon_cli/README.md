@@ -312,8 +312,11 @@ and secrets may not exist yet or when live provider verification is required.
 `lemon gateway setup` provides interactive and non-interactive adapters for
 both supported messaging gateways:
 
-- `telegram` stores a Telegram bot token in encrypted secrets and verifies it
-  with the Telegram Bot API.
+- `telegram` stores a Telegram bot token in encrypted secrets, verifies it with
+  `getMe`, pairs the owner's chat (send `/start` to the bot; setup polls
+  `getUpdates` for up to `--pair-timeout` seconds, default 120), and writes
+  `enable_telegram`, `bot_token_secret`, and `allowed_chat_ids` to
+  `[gateway.telegram]`. Non-interactive runs require `--chat-id` (repeatable).
 - `discord` stores a Discord bot token in encrypted secrets, enables Discord,
   writes its secret reference and a default/allowed channel scope to
   `[gateway.discord]`, and verifies the token with Discord's bot identity API.
@@ -326,6 +329,10 @@ lemon gateway setup
 lemon gateway setup telegram
 lemon gateway setup discord
 
+# Scripted Telegram pairing without waiting for /start.
+lemon gateway setup telegram --non-interactive \
+  --token "$TELEGRAM_BOT_TOKEN" --chat-id 12345678
+
 # Source checkout: use the matching wrapper.
 ./bin/lemon gateway setup discord --non-interactive \
   --token "$DISCORD_BOT_TOKEN" \
@@ -333,7 +340,8 @@ lemon gateway setup discord
   --allowed-channel-id 234567890123456789
 ```
 
-The Discord token is persisted as `discord_bot_token` by default and only its
+The Telegram token is persisted as `telegram_bot_token` by default. The
+Discord token is persisted as `discord_bot_token` by default and only its
 secret key is written to TOML. Pass `--secret-key <name>` to use another key,
 `--allowed-guild-id <id>` to restrict by guild as well, or `--skip-smoke` when
 the Discord API identity check cannot be reached.

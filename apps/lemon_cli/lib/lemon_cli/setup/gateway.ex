@@ -1,6 +1,6 @@
 defmodule LemonCli.Setup.Gateway do
   @moduledoc """
-  Gateway setup dispatcher for `mix lemon.setup gateway`.
+  Gateway setup dispatcher for `lemon gateway setup`.
 
   Routes to the correct transport-specific adapter based on the first
   positional argument or the `--transport` flag.  Without a transport
@@ -9,11 +9,11 @@ defmodule LemonCli.Setup.Gateway do
 
   ## Usage
 
-      mix lemon.setup gateway                    # interactive picker
-      mix lemon.setup gateway telegram           # directly run Telegram adapter
-      mix lemon.setup gateway discord            # directly run Discord adapter
-      mix lemon.setup gateway --transport telegram  # equivalent flag form
-      mix lemon.setup gateway telegram --non-interactive
+      lemon gateway setup                    # interactive picker
+      lemon gateway setup telegram           # pair a Telegram bot with your chat
+      lemon gateway setup discord            # restrict a Discord bot to a channel
+      lemon gateway setup --transport telegram  # equivalent flag form
+      lemon gateway setup telegram --non-interactive --token <token> --chat-id <id>
 
   ## Adding new adapters
 
@@ -57,7 +57,7 @@ defmodule LemonCli.Setup.Gateway do
 
     if non_interactive? do
       list_adapters(io)
-      io.info.("Specify a transport with: mix lemon.setup gateway <transport>")
+      io.info.("Specify a transport with: lemon gateway setup <transport>")
       :ok
     else
       pick_adapter_interactively(@adapters, io)
@@ -70,7 +70,7 @@ defmodule LemonCli.Setup.Gateway do
         io.error.("Unknown gateway transport: #{inspect(transport)}")
         io.info.("")
         list_adapters(io)
-        io.info.("Usage: mix lemon.setup gateway <transport>")
+        io.info.("Usage: lemon gateway setup <transport>")
         {:error, :unknown_transport}
 
       adapter ->

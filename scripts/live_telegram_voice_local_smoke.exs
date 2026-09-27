@@ -112,7 +112,7 @@ defmodule LemonScripts.LiveTelegramVoiceLocalSmoke do
             voice_transcription: true,
             voice_transcription_provider: "local_transcript",
             voice_max_bytes: 10_000,
-            authorized_chat_ids: [123_000 + token]
+            allowed_chat_ids: [123_000 + token]
           }
         )
 
