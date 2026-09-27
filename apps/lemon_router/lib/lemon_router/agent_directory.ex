@@ -271,16 +271,12 @@ defmodule LemonRouter.AgentDirectory do
     else
       %{}
     end
-  rescue
-    _ -> %{}
   end
 
   defp indexed_sessions do
     LemonCore.RunStore.list_sessions()
     |> Enum.map(&indexed_session_entry/1)
     |> Enum.reject(&is_nil/1)
-  rescue
-    _ -> []
   end
 
   defp indexed_session_entry({session_key, entry})
@@ -310,8 +306,6 @@ defmodule LemonRouter.AgentDirectory do
       run_count: normalize_int(map_get(entry, :run_count)),
       origin: map_get(entry, :origin) || :unknown
     }
-  rescue
-    _ -> nil
   end
 
   defp indexed_session_entry(_), do: nil
@@ -330,10 +324,8 @@ defmodule LemonRouter.AgentDirectory do
       _unexpected ->
         {:error, :unavailable}
     end
-  rescue
-    _ -> {:error, :unavailable}
   catch
-    _, _ -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
   end
 
   defp active_session_entry(%{session_key: session_key, run_id: run_id})
@@ -368,8 +360,6 @@ defmodule LemonRouter.AgentDirectory do
       run_count: nil,
       origin: :active
     }
-  rescue
-    _ -> nil
   end
 
   defp active_session_entry(_), do: nil
@@ -380,8 +370,6 @@ defmodule LemonRouter.AgentDirectory do
       run when is_map(run) -> normalize_int(map_get(run, :started_at))
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp run_started_at_ms(_), do: nil
@@ -483,8 +471,6 @@ defmodule LemonRouter.AgentDirectory do
     end
   end
 
-  defp render_target(_), do: "unknown"
-
   defp render_target_label(route, peer_label, peer_username, topic_name) do
     base =
       cond do
@@ -545,8 +531,6 @@ defmodule LemonRouter.AgentDirectory do
     }
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
     |> Map.new()
-  rescue
-    _ -> %{}
   end
 
   defp normalize_route_filter(_), do: %{}
@@ -593,11 +577,7 @@ defmodule LemonRouter.AgentDirectory do
       {:error, _} -> nil
       parsed when is_map(parsed) -> parsed
     end
-  rescue
-    _ -> nil
   end
-
-  defp parse_session(_), do: nil
 
   defp parsed_kind(%{kind: kind}) when kind in [:main, :channel_peer], do: kind
   defp parsed_kind(_), do: :unknown

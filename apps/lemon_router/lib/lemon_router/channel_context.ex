@@ -19,18 +19,6 @@ defmodule LemonRouter.ChannelContext do
       parsed when is_map(parsed) ->
         parsed
     end
-  rescue
-    _ ->
-      %{
-        agent_id: "unknown",
-        kind: :unknown,
-        channel_id: nil,
-        account_id: "unknown",
-        peer_kind: :unknown,
-        peer_id: session_key,
-        thread_id: nil,
-        sub_id: nil
-      }
   end
 
   def parse_session_key(_session_key) do

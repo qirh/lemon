@@ -107,7 +107,7 @@ defmodule LemonRouter do
       []
     end
   rescue
-    _ -> []
+    ArgumentError -> []
   catch
     :exit, _ -> []
   end
@@ -120,7 +120,7 @@ defmodule LemonRouter do
     is_pid(Process.whereis(LemonRouter.RunRegistry)) and
       match?([{_pid, _} | _], Registry.lookup(LemonRouter.RunRegistry, run_id))
   rescue
-    _ -> false
+    ArgumentError -> false
   catch
     :exit, _ -> false
   end
@@ -139,8 +139,6 @@ defmodule LemonRouter do
       pid when is_pid(pid) -> DynamicSupervisor.count_children(pid)[:active] || 0
       _ -> 0
     end
-  rescue
-    _ -> 0
   catch
     :exit, _ -> 0
   end
@@ -166,8 +164,6 @@ defmodule LemonRouter do
     else
       @zero_counts
     end
-  rescue
-    _ -> @zero_counts
   catch
     :exit, _ -> @zero_counts
   end
@@ -176,8 +172,6 @@ defmodule LemonRouter do
     metadata =
       try do
         GenServer.call(pid, :get_metadata, @metadata_timeout_ms)
-      rescue
-        _ -> %{}
       catch
         :exit, _ -> %{}
       end

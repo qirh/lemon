@@ -54,8 +54,6 @@ defmodule LemonRouter.ResumeResolver do
       :none ->
         {:ok, nil, nil}
     end
-  rescue
-    _ -> {:ok, nil, nil}
   end
 
   defp resolve_auto_resume(_session_key), do: {:ok, nil, nil}
@@ -111,8 +109,6 @@ defmodule LemonRouter.ResumeResolver do
       normalized -> normalized
     end
   end
-
-  defp normalize_engine(_), do: nil
 
   defp disable_auto_resume?(meta) when is_map(meta) do
     fetch(meta, :disable_auto_resume) == true

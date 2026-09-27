@@ -216,8 +216,6 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
     end
   end
 
-  defp media_directive_path(_), do: nil
-
   defp unwrap_media_path(path) do
     path
     |> unwrap_media_path("`")
@@ -247,8 +245,6 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
       end
     end)
   end
-
-  defp resolve_generated_files(_, _), do: []
 
   defp resolve_explicit_send_files(files, root) when is_list(files) do
     files
@@ -376,8 +372,6 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
     |> then(&MapSet.member?(@image_extensions, &1))
   end
 
-  defp image_path?(_), do: false
-
   defp generated_image_paths(state) when is_map(state) do
     case Map.get(state, :generated_image_paths) do
       paths when is_list(paths) -> paths
@@ -421,8 +415,6 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
     |> Path.expand()
     |> resolve_absolute_path()
   end
-
-  defp real_path(_), do: :error
 
   defp resolve_absolute_path(path) when is_binary(path) do
     case Path.split(path) do

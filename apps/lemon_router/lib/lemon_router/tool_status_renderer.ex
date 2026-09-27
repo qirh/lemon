@@ -178,7 +178,6 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   defp format_action_line(action, actions) when is_map(action) do
     title = truncate_one_line(action[:title] || action["title"] || "", 80)
-    extra = nil
     indent = String.duplicate("  ", action_depth(action, actions))
 
     case {action[:kind] || action["kind"], action[:phase] || action["phase"]} do
@@ -196,16 +195,16 @@ defmodule LemonRouter.ToolStatusRenderer do
         indent <> symbol <> " approval: " <> title <> suffix
 
       {_kind, :started} ->
-        indent <> "\u25b8 " <> title <> (extra || "")
+        indent <> "\u25b8 " <> title
 
       {_kind, :updated} ->
-        indent <> "\u25b8 " <> title <> (extra || "")
+        indent <> "\u25b8 " <> title
 
       {_kind, :completed} ->
         ok? = (action[:ok] || action["ok"]) == true
         symbol = if ok?, do: "\u2713", else: "\u2717"
         preview = extract_result_preview(action[:detail] || action["detail"])
-        base = indent <> symbol <> " " <> title <> (extra || "")
+        base = indent <> symbol <> " " <> title
 
         if ok? or preview in [nil, ""] do
           base
@@ -215,7 +214,7 @@ defmodule LemonRouter.ToolStatusRenderer do
         end
 
       {_kind, other} ->
-        indent <> "\u25b8 " <> "[#{other}] " <> title <> (extra || "")
+        indent <> "\u25b8 " <> "[#{other}] " <> title
     end
   end
 
@@ -269,8 +268,6 @@ defmodule LemonRouter.ToolStatusRenderer do
         detail["result"]
 
     LemonRouter.ToolPreview.to_text(preview)
-  rescue
-    _ -> nil
   end
 
   defp extract_result_preview(_), do: nil
@@ -284,7 +281,5 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   defp truncate_one_line(other, _max_len) do
     LemonRouter.ToolPreview.to_text(other) || inspect(other)
-  rescue
-    _ -> inspect(other)
   end
 end

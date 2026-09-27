@@ -177,8 +177,6 @@ defmodule LemonRouter.Policy do
       nil -> %{}
       policy when is_map(policy) -> policy
     end
-  rescue
-    _ -> %{}
   end
 
   # Tools that mutate files or execute code on the host. Group chats require
@@ -186,8 +184,6 @@ defmodule LemonRouter.Policy do
   @group_approval_tools ~w(bash write edit patch hashline_edit)
 
   # Load channel-specific restrictions
-  defp get_channel_policy(nil), do: %{}
-
   defp get_channel_policy(channel_context) do
     channel_id = channel_context[:channel_id]
     peer_kind = channel_context[:peer_kind]
@@ -207,8 +203,6 @@ defmodule LemonRouter.Policy do
       end
 
     merge(channel_policy, group_policy)
-  rescue
-    _ -> %{}
   end
 
   # Load session overrides from store
@@ -219,8 +213,6 @@ defmodule LemonRouter.Policy do
       nil -> %{}
       policy when is_map(policy) -> policy
     end
-  rescue
-    _ -> %{}
   end
 
   # Load operator runtime overrides from store
@@ -229,7 +221,5 @@ defmodule LemonRouter.Policy do
       nil -> %{}
       policy when is_map(policy) -> policy
     end
-  rescue
-    _ -> %{}
   end
 end

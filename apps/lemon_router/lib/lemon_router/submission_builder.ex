@@ -65,7 +65,7 @@ defmodule LemonRouter.SubmissionBuilder do
       profile_tool_policy = normalize_profile_tool_policy(agent_profile)
 
       base_tool_policy =
-        if is_map(profile_tool_policy) and map_size(profile_tool_policy) > 0 do
+        if map_size(profile_tool_policy) > 0 do
           Policy.merge(base_tool_policy, profile_tool_policy)
         else
           base_tool_policy
@@ -175,8 +175,6 @@ defmodule LemonRouter.SubmissionBuilder do
       nil -> %{}
       config when is_map(config) -> config
     end
-  rescue
-    _ -> %{}
   end
 
   defp get_agent_profile(agent_id) when is_binary(agent_id) do
@@ -188,13 +186,6 @@ defmodule LemonRouter.SubmissionBuilder do
     else
       {:error, {:unknown_agent_id, agent_id}}
     end
-  rescue
-    _ ->
-      if fallback_agent_profile_exists?(agent_id) do
-        {:ok, %{}}
-      else
-        {:error, {:unknown_agent_id, agent_id}}
-      end
   catch
     :exit, _ ->
       if fallback_agent_profile_exists?(agent_id) do
@@ -208,8 +199,6 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp agent_profile_exists?(agent_id) when is_binary(agent_id) and agent_id != "" do
     AgentProfiles.exists?(agent_id) == true
-  rescue
-    _ -> fallback_agent_profile_exists?(agent_id)
   catch
     :exit, _ -> fallback_agent_profile_exists?(agent_id)
   end
@@ -220,8 +209,6 @@ defmodule LemonRouter.SubmissionBuilder do
     cfg = LemonCore.Config.cached()
     agents = MapHelpers.get_key(cfg, :agents) || %{}
     Map.has_key?(agents, agent_id) or agent_id == "default"
-  rescue
-    _ -> agent_id == "default"
   catch
     :exit, _ -> agent_id == "default"
   end
@@ -234,8 +221,6 @@ defmodule LemonRouter.SubmissionBuilder do
       _ -> %{}
     end
   end
-
-  defp normalize_profile_tool_policy(_), do: %{}
 
   defp resolve_effective_cwd(cwd_override, meta, origin) do
     normalize_cwd(cwd_override) || normalize_cwd(MapHelpers.get_key(meta, :cwd)) ||
@@ -255,8 +240,6 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp default_model_from_config do
     LemonCore.Config.cached().agent.default_model
-  rescue
-    _ -> nil
   end
 
   defp maybe_put(map, _key, nil), do: map
@@ -292,8 +275,6 @@ defmodule LemonRouter.SubmissionBuilder do
       else
         nil
       end
-    rescue
-      _ -> nil
     catch
       :exit, _ -> nil
     end

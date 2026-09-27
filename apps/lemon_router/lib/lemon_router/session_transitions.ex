@@ -631,8 +631,6 @@ defmodule LemonRouter.SessionTransitions do
     end
   end
 
-  defp extract_async_followup(_meta), do: nil
-
   defp truthy?(true), do: true
   defp truthy?("true"), do: true
   defp truthy?(1), do: true

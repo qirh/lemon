@@ -182,9 +182,9 @@ defmodule LemonRouter.SessionCoordinator do
       end
     end
   rescue
-    _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   catch
-    _, _ -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
   end
 
   defp runtime_active_sessions do
@@ -195,9 +195,7 @@ defmodule LemonRouter.SessionCoordinator do
         [%{run_id: :"$1", session_key: :"$3"}]}
      ])}
   rescue
-    _ -> {:error, :unavailable}
-  catch
-    _, _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   end
 
   def start_link(opts) do
@@ -634,9 +632,9 @@ defmodule LemonRouter.SessionCoordinator do
         {:error, :session_busy}
     end
   rescue
-    _ -> {:error, :router_not_ready}
+    ArgumentError -> {:error, :router_not_ready}
   catch
-    _, _ -> {:error, :router_not_ready}
+    :exit, _ -> {:error, :router_not_ready}
   end
 
   defp recover_surviving_session_run(state, _session_key), do: {:ok, state}
@@ -702,8 +700,6 @@ defmodule LemonRouter.SessionCoordinator do
       [{pid, _} | _] when is_pid(pid) -> if Process.alive?(pid), do: pid
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp partially_started_run_pid(_run_id), do: nil
@@ -732,14 +728,6 @@ defmodule LemonRouter.SessionCoordinator do
       )
 
     Bus.broadcast(Bus.run_topic(submission.run_id), event)
-  rescue
-    error ->
-      Logger.error(
-        "SessionCoordinator failed to emit start failure run_id=#{inspect(submission.run_id)} " <>
-          "error=#{Exception.message(error)}"
-      )
-
-      :ok
   end
 
   defp start_failure_reason(reason)
@@ -836,8 +824,6 @@ defmodule LemonRouter.SessionCoordinator do
   defp maybe_cancel_active(%SessionState{active: %{pid: pid}} = state, reason) when is_pid(pid) do
     LemonRouter.RunProcess.abort(pid, reason)
     state
-  rescue
-    _ -> state
   end
 
   defp maybe_cancel_active(state, _reason), do: state
@@ -852,13 +838,11 @@ defmodule LemonRouter.SessionCoordinator do
         GenServer.cast(run_pid, {steer_mode, submission_run_id, prompt || "", self()})
         :ok
     end
-  rescue
-    _ -> :error
   end
 
   # Redirect degrades to a queued follow-up when the run cannot accept it. The
   # correction is not lost, but the user asked to change an in-flight request,
-  # so tell them what actually happened. Never crash the coordinator over it.
+  # so tell them what actually happened.
   defp notify_redirect_fallback(%Submission{run_id: run_id, session_key: session_key}) do
     parsed = LemonRouter.ChannelContext.parse_session_key(session_key)
 
@@ -892,8 +876,6 @@ defmodule LemonRouter.SessionCoordinator do
     else
       _ -> :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp notify_redirect_fallback(_submission), do: :ok
@@ -925,9 +907,9 @@ defmodule LemonRouter.SessionCoordinator do
       :ok
     end
   rescue
-    _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   catch
-    _, _ -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
   end
 
   defp clear_active_session_registry(
@@ -944,7 +926,7 @@ defmodule LemonRouter.SessionCoordinator do
 
     state
   rescue
-    _ -> state
+    ArgumentError -> state
   end
 
   defp clear_active_session_registry(state), do: state
@@ -955,8 +937,6 @@ defmodule LemonRouter.SessionCoordinator do
     if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
       runtime.run_pid(run_id)
     end
-  rescue
-    _ -> nil
   end
 
   defp runtime_run_pid(_), do: nil
@@ -971,9 +951,7 @@ defmodule LemonRouter.SessionCoordinator do
        {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
      ])}
   rescue
-    _ -> {:error, :unavailable}
-  catch
-    _, _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   end
 
   defp maybe_cancel_resume_conversation(session_key, reason) do
@@ -981,8 +959,6 @@ defmodule LemonRouter.SessionCoordinator do
       nil -> :ok
       conversation_key -> cancel_conversation(conversation_key, reason)
     end
-  rescue
-    _ -> :ok
   end
 
   defp resume_conversation_key(session_key) when is_binary(session_key) do

@@ -144,6 +144,28 @@ and the durable terminal `RunStore` record before any retry can enqueue work.
 idle coordinator from surviving authoritative run processes after a registry
 restart so the one-run-per-session rule still holds.
 
+### Failure boundaries
+
+Unexpected exceptions in router callbacks and internal state transitions propagate
+to OTP instead of being converted into successful acknowledgements, empty policy,
+or unchanged state. Coalescer crashes are visible to their callers and supervisors;
+async task-surface subscribers restart after abnormal exits, but stop normally on
+terminal task events. A restart resumes future events, not a replay of lost deltas.
+
+Expected failures remain distinct: unavailable registry reads return explicit
+errors, store/process exits at admission boundaries retain an outcome-unknown
+result, and malformed enqueue acknowledgements retain the durable submitting
+fence. A callback crash also leaves that fence intact, so supervisor recovery
+cannot accidentally enqueue the same fixed run ID twice. Definite pre-enqueue
+rejections still roll back the claim for retry.
+
+`SurfaceManager.finalize_answer/3` returns final-dispatch errors rather than
+acknowledging a rejected delivery, and does not mark streamed coalescer state
+finalized after that rejection. `StreamCoalescer` preserves explicit dispatch
+errors for retry and reports a crashed finalize call separately. Completion-time
+artifact enrichment and termination-time cancellation remain best-effort so a
+secondary failure cannot suppress the final answer or terminal event.
+
 ## Output Semantics
 
 Router coalescers only track semantic state:
