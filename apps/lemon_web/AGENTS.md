@@ -4,7 +4,7 @@ Phoenix web interface for Lemon with LiveView. Provides real-time agent chat and
 
 ## Quick Orientation
 
-This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. The frontend uses checked-in compiled Tailwind CSS plus vendored Phoenix/LiveView JS from umbrella dependencies; production has no runtime CDN dependency. The HTTP server is Bandit.
+This is a Phoenix 1.7 LiveView app inside the Lemon umbrella. The frontend uses Tailwind CSS built from `assets/` (output committed to `priv/static/assets/app.css`; rebuild with `mix do --app lemon_web assets.build` after changing classes) plus vendored Phoenix/LiveView JS from umbrella dependencies; production has no runtime CDN dependency. The HTTP server is Bandit.
 
 Key entry points:
 - **Router**: `lib/lemon_web/router.ex` -- all routes defined here
@@ -22,7 +22,9 @@ Key entry points:
 - **LiveView Sessions**: Real-time chat interface with streaming updates
 - **File Uploads**: Multi-file uploads (up to 5 files, 20MB each) with progress tracking
 - **Message Display**: User messages, assistant responses, system notifications, tool calls
-- **Tool Call Visualization**: Collapsible `<details>` elements showing engine actions and results
+- **Tool Call Visualization**: Collapsed cards (name, argument summary, running/done/failed) updated in place per action id
+- **Markdown**: Finished assistant replies render through the allow-list sanitizer `LemonWeb.Markdown`
+- **Approvals**: This session's pending tool approvals can be resolved from the browser through `LemonCore.ExecApprovals.resolve/2`
 - **Authentication**: Optional access token protection via Bearer header, query param, or session
 - **First-run readiness**: Shared `LemonCore.Setup.Readiness` state blocks doomed prompt/upload submissions and gives exact setup recovery
 - **Run control**: Active browser runs expose cancellation plus explicit
@@ -79,7 +81,11 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 - `:session_key` - Current session identifier
 - `:agent_id` - Agent handling the session
 - `:prompt` - Current textarea value
-- `:messages` - List of message maps (max 250, newest kept on overflow)
+- `@streams.messages` - Transcript stream (`stream/3`, `limit: -250`); messages are not kept server-side after render
+- `:transcript_empty?` - Drives the empty-state hint (the stream itself cannot be inspected)
+- `:streaming` - `run_id => message` for the reply currently receiving deltas
+- `:streamed_runs` - Runs that produced deltas, so `:run_completed` does not re-append the answer
+- `:approvals` / `:approval_notice` - Pending approvals for this session (display records from `ApprovalComponent.view/1`) and the last decision feedback
 - `:last_run_id` - Tracks current run for delta aggregation
 - `:run_status` - `:idle`, `:running`, `:stopping`, or `:unavailable` for active-run controls
 - `:control_mode` - `:followup`, `:steer`, or `:redirect` while a run is active
@@ -89,8 +95,8 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 - `:submit_error` - Validation/error string shown above submit button
 
 **PubSub integration:**
-- Subscribes to `LemonCore.Bus.session_topic(session_key)` and the global `"system"` topic on mount (only when `connected?/1`)
-- Receives session events `:run_started`, `:delta`, `:engine_action`, `:run_completed` plus system `:config_reloaded` and `:secret_changed` readiness events
+- Subscribes to `LemonCore.Bus.session_topic(session_key)`, the global `"system"` topic, and `"exec_approvals"` on mount (only when `connected?/1`)
+- Receives session events `:run_started`, `:delta`, `:engine_action`, `:run_completed`, system `:config_reloaded` and `:secret_changed` readiness events, and `:approval_requested` / `:approval_resolved` (filtered to this session's key)
 - Unknown `%LemonCore.Event{}` types are silently ignored
 
 The UI must fail closed while `LemonCore.Setup.Readiness.ready?/1` is false:
@@ -229,10 +235,25 @@ Messages are plain maps. Different kinds have different shapes:
 }
 ```
 
-**Message list management:**
-- Messages prepended for O(1) then reversed; max 250 kept (newest)
-- `upsert_assistant_delta/3` finds an existing `:pending` assistant message by `run_id` and appends text, or creates a new one
-- `finalize_assistant_message/3` marks the matching assistant message as `pending: false`; if none exists and `answer` is non-nil, appends a new final message
+**Transcript stream management:**
+- `append_message/2` is `stream_insert/4` with `limit: -250`: new ids append, known ids update in place. Never go back to a list assign: a per-token re-render of the whole transcript is what streams remove
+- `upsert_assistant_delta/3` extends the `:streaming` message for the run and re-inserts only that item; while `pending: true` it renders as plain text (no markdown parse per token)
+- A non-reasoning `:engine_action` with phase `started` closes the run's streaming reply, so later deltas start a new reply below the tool card
+- `finalize_assistant_message/3` closes the streaming reply (now rendered as markdown); if the run never streamed and `answer` is non-empty, appends a final message
+- Tool card ids are derived from `run_id` + `action.id`, so started/updated/completed events update one card
+
+**Approvals:** mount loads this session's pending approvals from
+`LemonCore.ExecApprovalStore`; `"resolve-approval"` first checks that the
+store's pending record has this tab's `session_key` (never trust the rendered
+list or the client-supplied id alone), then calls
+`LemonCore.ExecApprovals.resolve/2` — the transition behind the control
+plane's `exec.approval.resolve` and Telegram's buttons. Do not add a second
+resolve path. Action payloads are credential-masked before display.
+
+**Markdown:** `LemonWeb.Markdown.to_html/1` re-emits the `EarmarkParser` AST
+through an allow-list. Keep it that way: never swap in a renderer that passes
+raw HTML through, never allow attributes from the source (IALs), keep the
+`http`/`https`/`mailto`/relative link rule, and keep images as alt text.
 
 ### Components
 
@@ -241,26 +262,29 @@ Messages are plain maps. Different kinds have different shapes:
 | Component | Module | Purpose |
 |-----------|--------|---------|
 | `FileUploadComponent` | `LemonWeb.Live.Components.FileUploadComponent` | Drag-drop file upload UI with progress bars |
-| `MessageComponent` | `LemonWeb.Live.Components.MessageComponent` | Message bubble rendering (delegates tool_call to ToolCallComponent) |
-| `ToolCallComponent` | `LemonWeb.Live.Components.ToolCallComponent` | `<details>` element; auto-open when phase is `started` or `updated` |
+| `MessageComponent` | `LemonWeb.Live.Components.MessageComponent` | One transcript stream item; markdown for finished assistant replies; delegates tool_call to ToolCallComponent |
+| `ToolCallComponent` | `LemonWeb.Live.Components.ToolCallComponent` | Collapsed `<details>` card; `JS.ignore_attributes("open")` preserves the user's open state across updates |
+| `ApprovalComponent` | `LemonWeb.Live.Components.ApprovalComponent` | Pending-approval panel; `decision/1` maps button values to `ExecApprovals.resolve/2` decisions |
+| `Payload` | `LemonWeb.Live.Components.Payload` | `false`-preserving key reads, credential masking, JSON formatting |
 | `CoreComponents` | `LemonWeb.CoreComponents` | `<.button>`, `<.input>`, `<.flash_group>` |
 | `Layouts` | `LemonWeb.Layouts` | Root and app layouts via `embed_templates "layouts/*"` |
 
 **Usage pattern:**
 ```elixir
 # In SessionLive.render/1
-<MessageComponent.message message={message} />
+<MessageComponent.message :for={{dom_id, message} <- @streams.messages} id={dom_id} message={message} />
+<ApprovalComponent.panel approvals={@approvals} notice={@approval_notice} />
 <FileUploadComponent.file_upload upload={@uploads.files} />
 ```
 
 **ToolCallComponent fields read from `event` map:**
-- `event.action.title` or `event.action.kind` -> displayed as title
-- `event.action.detail` -> shown as preformatted JSON/text
-- `event.phase` -> shown as label; controls `open?` (`started`/`updated` = open)
-- `event.ok` -> shows "ok" or "failed" status
-- `event.message` -> additional preformatted output
+- `event.action.detail.name` (else `event.action.kind`) -> tool name
+- `event.action.title` (backticks stripped, truncated) -> argument summary
+- `event.phase` + `event.ok` -> `running` until `completed`; `completed` with `ok: false` is `failed`, otherwise `done`
+- `event.action.detail.args` (credential-masked), `event.action.detail.result`, `event.message` -> expanded body
 
-All field access uses `LemonCore.MapHelpers.get_key/2` for atom-or-string key lookup.
+Field access uses `Payload.fetch/2`, not `MapHelpers.get_key/2`: the `a || b`
+lookup turns `ok: false` into `nil` and would hide failures.
 
 ## Authentication Flow
 
@@ -461,12 +485,14 @@ Other available macros: `:router`, `:controller`, `:live_component`, `:html`.
 mix test apps/lemon_web
 
 # Run a specific test file
-mix test apps/lemon_web/test/lemon_web/session_live_test.exs
+mix test apps/lemon_web/test/lemon_web/session_chat_live_test.exs
 ```
 
 ### Existing Tests
 
-- `test/lemon_web_test.exs` -- Smoke tests: application starts, endpoint config present, router and SessionLive modules load
+- `test/lemon_web_test.exs` -- Application/endpoint wiring, setup readiness, active-run controls, auth, static assets
+- `test/lemon_web/session_chat_live_test.exs` -- Transcript stream (a delta's pushed diff is captured with `:erlang.trace/3` and must not contain earlier messages), markdown sanitization in the page, tool cards, approvals resolved through the real `LemonCore.ExecApprovals` path
+- `test/lemon_web/markdown_test.exs` -- `LemonWeb.Markdown` allow-list edge cases
 
 ### Writing LiveView Tests
 
@@ -510,6 +536,7 @@ When testing routes behind `RequireAccessToken`, either:
 - `LemonCore.Event` -- Event struct received in `handle_info/2` callbacks; has `:type`, `:payload`, `:meta`
 - `LemonCore.SessionKey` -- Session key generation and parsing: `channel_peer/1`, `valid?/1`, `agent_id/1`
 - `LemonCore.MapHelpers` -- `get_key/2` for atom-or-string map key access
+- `LemonCore.ExecApprovals` / `LemonCore.ExecApprovalStore` -- Pending-approval lookup and `resolve/2` for the chat approval panel (`"exec_approvals"` bus topic)
 - `LemonCore.PubSub` -- The PubSub server process (configured as endpoint's `pubsub_server`)
 - `LemonCore.Setup.Readiness` -- Single read-only first-run readiness state shared with the CLI/TUI
 - `LemonCore.RouterBridge` -- Fail-safe active-run lookup used to discover and
@@ -551,10 +578,12 @@ When testing routes behind `RequireAccessToken`, either:
 
 ```
 apps/lemon_web/
+|-- assets/                           # Tailwind source/config + locked npm deps (build only)
 |-- lib/lemon_web.ex                    # __using__ macros: :live_view, :router, :html, etc.
 |-- lib/lemon_web/application.ex        # OTP application (Telemetry + Endpoint)
 |-- lib/lemon_web/endpoint.ex           # Phoenix endpoint (Bandit, session cookie)
 |-- lib/lemon_web/router.ex             # Routes + :browser pipeline
+|-- lib/lemon_web/markdown.ex           # Allow-list markdown renderer for assistant replies
 |-- lib/lemon_web/telemetry.ex          # Telemetry supervisor
 |-- lib/lemon_web/gettext.ex            # i18n backend
 |-- lib/lemon_web/plugs/
@@ -568,8 +597,10 @@ apps/lemon_web/
 |   |-- profile_management_live.ex      # Authenticated preview-first profile lifecycle
 |   |-- components/
 |       |-- file_upload_component.ex    # Upload UI with progress bars
-|       |-- message_component.ex        # Chat message bubbles
-|       |-- tool_call_component.ex      # Collapsible tool call details
+|       |-- message_component.ex        # Transcript stream items
+|       |-- tool_call_component.ex      # Collapsed tool call cards
+|       |-- approval_component.ex       # Pending approval panel
+|       |-- payload.ex                  # Masking/formatting helpers
 |-- lib/lemon_web/components/
 |   |-- core_components.ex              # button/1, input/1, flash_group/1
 |   |-- layouts.ex                      # embeds layouts/* templates
@@ -583,14 +614,16 @@ apps/lemon_web/
 |       |-- 404.html.heex             # Not found page
 |       |-- 500.html.heex             # Server error page
 |-- priv/
-|   |-- static/assets/app.css          # Checked-in compiled Tailwind stylesheet
+|   |-- static/assets/app.css          # Tailwind build output (source in assets/)
 |   |-- static/assets/session.css      # Responsive active-run controls and notices
 |   |-- static/assets/management.css   # Responsive session/provider management UI
 |   |-- static/assets/app.js           # Client JS (LiveSocket init, session keys)
 |   |-- gettext/.keep                   # i18n placeholder
 |-- test/
     |-- test_helper.exs
-    |-- lemon_web_test.exs              # Smoke tests
-    |-- lemon_web/live/
-        |-- games_live_test.exs         # Games LiveView integration tests
+    |-- lemon_web_test.exs              # App, readiness, active-run, asset tests
+    |-- lemon_web/
+        |-- session_chat_live_test.exs  # Transcript stream, markdown, tool cards, approvals
+        |-- markdown_test.exs           # Markdown sanitization
+        |-- *_management_live_test.exs  # Management LiveViews
 ```

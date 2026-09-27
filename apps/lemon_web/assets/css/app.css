@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Assistant replies rendered by LemonWeb.Markdown. The HTML is generated at
+   runtime from an allow-listed tag set, so it carries no utility classes of its
+   own; style it by descendant here. */
+@layer components {
+  .lemon-markdown {
+    @apply break-words text-sm leading-relaxed text-slate-900;
+  }
+
+  .lemon-markdown > * + * {
+    @apply mt-3;
+  }
+
+  .lemon-markdown h1 {
+    @apply text-lg font-semibold;
+  }
+
+  .lemon-markdown h2 {
+    @apply text-base font-semibold;
+  }
+
+  .lemon-markdown h3,
+  .lemon-markdown h4,
+  .lemon-markdown h5,
+  .lemon-markdown h6 {
+    @apply text-sm font-semibold;
+  }
+
+  .lemon-markdown a {
+    @apply font-medium text-sky-700 underline underline-offset-2 hover:text-sky-900;
+  }
+
+  .lemon-markdown ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+
+  .lemon-markdown ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+
+  .lemon-markdown li > ul,
+  .lemon-markdown li > ol {
+    @apply mt-1;
+  }
+
+  .lemon-markdown blockquote {
+    @apply border-l-4 border-slate-200 pl-3 text-slate-600;
+  }
+
+  .lemon-markdown hr {
+    @apply border-slate-200;
+  }
+
+  .lemon-markdown :not(pre) > code {
+    @apply rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.8125rem] text-slate-800;
+  }
+
+  .lemon-markdown pre {
+    @apply overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-relaxed text-slate-100;
+  }
+
+  .lemon-markdown pre code {
+    @apply font-mono;
+  }
+
+  .lemon-markdown table {
+    @apply block w-full overflow-x-auto border-collapse text-left text-xs;
+  }
+
+  .lemon-markdown th,
+  .lemon-markdown td {
+    @apply border border-slate-200 px-2 py-1 align-top;
+  }
+
+  .lemon-markdown th {
+    @apply bg-slate-50 font-semibold;
+  }
+}
