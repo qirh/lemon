@@ -531,7 +531,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             inbound
             | meta:
                 if(is_nil(meta[:resume]), do: Map.put(meta, :resume, explicit_resume), else: meta),
-              message: Map.put(inbound.message || %{}, :text, stripped_prompt)
+              message: Map.put(inbound.message, :text, stripped_prompt)
           }
 
         finish_submission(state, inbound, dedupe_refs)
@@ -544,7 +544,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         inbound = %{
           inbound
           | meta: meta,
-            message: Map.put(inbound.message || %{}, :text, stripped_prompt)
+            message: Map.put(inbound.message, :text, stripped_prompt)
         }
 
         finish_submission(state, inbound, dedupe_refs)

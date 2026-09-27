@@ -54,5 +54,4 @@ defmodule LemonCore.Runtime.ReleaseProfileTest do
       assert length(Profile.app_list(:runtime_full)) > length(Profile.app_list(:runtime_min))
     end
   end
-
 end

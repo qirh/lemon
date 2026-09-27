@@ -104,6 +104,7 @@ defmodule CodingAgent.FileReadTracker do
       read_concurrency: true,
       write_concurrency: true
     ])
+
     {:ok, %{watched: %{}}}
   end
 

@@ -218,7 +218,11 @@ defmodule LemonAutomation.CronDelivery do
        %{
          channel_id: channel,
          account_id: account_id(channel),
-         peer: %{kind: peer_kind(channel, int_id), id: Integer.to_string(int_id), thread_id: thread_id}
+         peer: %{
+           kind: peer_kind(channel, int_id),
+           id: Integer.to_string(int_id),
+           thread_id: thread_id
+         }
        }}
     else
       _ -> :error
@@ -242,7 +246,11 @@ defmodule LemonAutomation.CronDelivery do
        %{
          channel_id: "telegram",
          account_id: account_id("telegram"),
-         peer: %{kind: peer_kind("telegram", chat_id), id: Integer.to_string(chat_id), thread_id: nil}
+         peer: %{
+           kind: peer_kind("telegram", chat_id),
+           id: Integer.to_string(chat_id),
+           thread_id: nil
+         }
        }}
     else
       _ -> :none
@@ -252,7 +260,8 @@ defmodule LemonAutomation.CronDelivery do
   defp discord_owner do
     with true <- gateway(:enable_discord) == true,
          section when is_map(section) <- gateway(:discord),
-         channel_id when is_integer(channel_id) <- section |> field(:default_channel_id) |> to_int() do
+         channel_id when is_integer(channel_id) <-
+           section |> field(:default_channel_id) |> to_int() do
       thread_id = section |> field(:default_thread_id) |> to_int()
 
       {:ok,

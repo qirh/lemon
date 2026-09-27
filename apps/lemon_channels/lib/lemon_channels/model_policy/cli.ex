@@ -179,7 +179,9 @@ defmodule LemonChannels.ModelPolicy.CLI do
         LemonCore.CLI.info("Effective policy for #{format_route(route)}:")
         LemonCore.CLI.info("  Model:    #{resolve_effective_model(route) || "(none)"}")
 
-        LemonCore.CLI.info("  Thinking: #{display_thinking_level(ModelPolicy.resolve_thinking_level(route), "(none)")}")
+        LemonCore.CLI.info(
+          "  Thinking: #{display_thinking_level(ModelPolicy.resolve_thinking_level(route), "(none)")}"
+        )
     end
   end
 

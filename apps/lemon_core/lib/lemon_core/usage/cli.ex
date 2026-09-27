@@ -46,7 +46,9 @@ defmodule LemonCore.Usage.CLI do
     LemonCore.CLI.info("Tokens output: #{Map.get(tokens, :output, 0)}")
     LemonCore.CLI.info("Tokens total: #{Map.get(tokens, :total, 0)}")
 
-    LemonCore.CLI.info("Today: #{Map.get(today, :date, "unknown")} requests=#{Map.get(today, :requests, 0)} cost=#{format_money(Map.get(today, :cost, 0.0))}")
+    LemonCore.CLI.info(
+      "Today: #{Map.get(today, :date, "unknown")} requests=#{Map.get(today, :requests, 0)} cost=#{format_money(Map.get(today, :cost, 0.0))}"
+    )
 
     LemonCore.CLI.info("Includes prompts: #{truthy?(cleanup[:includes_prompts])}")
     LemonCore.CLI.info("Includes responses: #{truthy?(cleanup[:includes_responses])}")
@@ -72,7 +74,9 @@ defmodule LemonCore.Usage.CLI do
     LemonCore.CLI.info("Providers:")
 
     Enum.each(providers, fn provider ->
-      LemonCore.CLI.info("  #{provider.provider}: requests=#{provider.requests} cost=#{format_money(provider.cost)} input_tokens=#{provider.input_tokens} output_tokens=#{provider.output_tokens}")
+      LemonCore.CLI.info(
+        "  #{provider.provider}: requests=#{provider.requests} cost=#{format_money(provider.cost)} input_tokens=#{provider.input_tokens} output_tokens=#{provider.output_tokens}"
+      )
     end)
   end
 

@@ -118,6 +118,4 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
 
   defp redact_action(list) when is_list(list), do: Enum.map(list, &redact_action/1)
   defp redact_action(value), do: value
-
-  
 end

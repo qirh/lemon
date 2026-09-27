@@ -267,6 +267,5 @@ defmodule Mix.Tasks.Lemon.EvalTest do
       check_names = Enum.map(decoded["results"], & &1["name"])
       assert "read_edit_workflow" in check_names
     end
-
   end
 end

@@ -862,7 +862,15 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
   defp stream_request_with_retries(stream, initial_output, url, headers, params, policy, attempt) do
     retry = fn ->
-      stream_request_with_retries(stream, initial_output, url, headers, params, policy, attempt + 1)
+      stream_request_with_retries(
+        stream,
+        initial_output,
+        url,
+        headers,
+        params,
+        policy,
+        attempt + 1
+      )
     end
 
     case stream_request(url, headers, params) do
@@ -1088,7 +1096,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
   end
 
   defp retry_delay_ms(attempt, policy, error_text) when is_binary(error_text) do
-    RetryHelper.extract_retry_delay_ms(error_text) || RetryHelper.backoff_delay_ms(attempt, policy)
+    RetryHelper.extract_retry_delay_ms(error_text) ||
+      RetryHelper.backoff_delay_ms(attempt, policy)
   end
 
   defp retryable_stream_output_error?(

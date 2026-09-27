@@ -129,8 +129,7 @@ describe("heartbeat (cron-backed)", () => {
 	// A same-agent cron job that is not the heartbeat must never be touched.
 	const otherJob = { id: "job-9", agentId: "default", enabled: true, meta: { source: "remind" } };
 
-	const cronRequests = () =>
-		CRON_METHODS.flatMap((method) => harness.server.requestsFor(method));
+	const cronRequests = () => CRON_METHODS.flatMap((method) => harness.server.requestsFor(method));
 
 	test("/heartbeat every creates the agent's heartbeat job when none exists", async () => {
 		harness.server.respondWith("cron.list", { jobs: [otherJob] });

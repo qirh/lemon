@@ -473,7 +473,9 @@ defmodule LemonCli.CommandRegistry do
         option("--not-ready", ["--not-ready"], "Browse skills missing dependencies"),
         option("--all", ["--all"], "Include hidden skills when browsing")
       ],
-      subcommands(~w(list browse search discover hermes install update remove inspect check info draft curator))
+      subcommands(
+        ~w(list browse search discover hermes install update remove inspect check info draft curator)
+      )
     ),
     runtime(
       "usage",

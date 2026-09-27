@@ -11,9 +11,8 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
 
     # Poker also carries a :players map, so its :table/:player_stats check
     # must win over the werewolf fallthrough.
-    assert SimHelpers.infer_domain_type(
-             state(%{table: %{}, player_stats: %{}, players: %{}})
-           ) == :poker
+    assert SimHelpers.infer_domain_type(state(%{table: %{}, player_stats: %{}, players: %{}})) ==
+             :poker
 
     assert SimHelpers.infer_domain_type(state(%{})) == :unknown
   end
@@ -23,6 +22,7 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
              "X's turn (3 moves)"
 
     assert summary(%{board: [], winner: "O"}) == "Winner: O"
+
     assert summary(%{machine: %{}, day_number: 4, max_days: 14, bank_balance: 123.4}) ==
              "Day 4/14 - $123.40"
 

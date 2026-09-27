@@ -182,7 +182,9 @@ defmodule LemonGateway.Tools.CronTest do
     assert added.details["once"] == true
     assert added.details["timezone"] == "local"
 
-    update = call_tool(tool, %{"action" => "update", "id" => added.details["id"], "deliverTo" => "none"})
+    update =
+      call_tool(tool, %{"action" => "update", "id" => added.details["id"], "deliverTo" => "none"})
+
     assert update.details["updated"] == true
 
     listed =

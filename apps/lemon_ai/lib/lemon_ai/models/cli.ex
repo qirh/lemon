@@ -100,6 +100,7 @@ defmodule LemonAi.Models.CLI do
     do: Enum.take(models, limit)
 
   defp limit_rows(models, nil), do: models
+
   defp limit_rows(_models, _limit),
     do: raise(Error, message: "--limit must be a non-negative integer")
 

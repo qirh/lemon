@@ -422,7 +422,6 @@ defmodule LemonCore.Context do
   defp git_args("staged"), do: {["--cached", "--"], "staged"}
   defp git_args(selector), do: {[selector, "--"], selector}
 
-
   defp redact_reference(reference, "url") do
     case parse_reference(reference) do
       {:url, url} ->

@@ -47,7 +47,9 @@ defmodule CodingAgent.SessionAgentLoopTest do
 
   defp tool_call_message(n) do
     assistant(
-      [%ToolCall{type: :tool_call, id: "call_#{n}", name: "echo", arguments: %{"text" => "#{n}"}}],
+      [
+        %ToolCall{type: :tool_call, id: "call_#{n}", name: "echo", arguments: %{"text" => "#{n}"}}
+      ],
       :tool_use
     )
   end

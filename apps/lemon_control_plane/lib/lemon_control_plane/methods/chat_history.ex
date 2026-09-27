@@ -169,8 +169,6 @@ defmodule LemonControlPlane.Methods.ChatHistory do
 
   defp maybe_preview(text, false), do: text
 
-  
-
   defp truncated?(text, true) when is_binary(text), do: false
   defp truncated?(text, false) when is_binary(text), do: byte_size(text) > @preview_bytes
   defp truncated?(_, _), do: false

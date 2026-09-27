@@ -74,7 +74,8 @@ defmodule LemonAutomation.CronDeliveryTest do
 
       session_key = "agent:default:telegram:default:group:-100999:thread:5:sub:abc"
 
-      assert {:ok, %{channel_id: "telegram", peer: %{kind: :group, id: "-100999", thread_id: "5"}}} =
+      assert {:ok,
+              %{channel_id: "telegram", peer: %{kind: :group, id: "-100999", thread_id: "5"}}} =
                CronDelivery.target(job(), session_key)
     end
 

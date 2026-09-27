@@ -545,6 +545,7 @@ defmodule LemonAi.ModelsLegacyTest do
             @frontier do
         model = Models.get_model(provider, id)
         assert %Model{id: ^id, reasoning: true} = model
+
         assert model.cost == %ModelCost{
                  input: input,
                  output: output,

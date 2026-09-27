@@ -13,17 +13,20 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
     # Clean up token store after each test
     on_exit(fn ->
       try do
-        LemonCore.Store.list(:session_tokens) |> Enum.each(fn {k, _} ->
+        LemonCore.Store.list(:session_tokens)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:session_tokens, k)
         end)
 
-        LemonCore.Store.list(:session_token_heads) |> Enum.each(fn {k, _} ->
+        LemonCore.Store.list(:session_token_heads)
+        |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:session_token_heads, k)
         end)
       rescue
         _ -> :ok
       end
     end)
+
     :ok
   end
 
@@ -52,7 +55,8 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
         token: token,
         identity: %{"type" => "node"},
         issued_at_ms: System.system_time(:millisecond) - 60_000,
-        expires_at_ms: System.system_time(:millisecond) - 1000  # Expired
+        # Expired
+        expires_at_ms: System.system_time(:millisecond) - 1000
       })
 
       {:error, :expired_token} = TokenStore.validate(token)
@@ -87,7 +91,8 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
         "token" => token,
         "identity" => %{"type" => "node"},
         "issued_at_ms" => System.system_time(:millisecond) - 60_000,
-        "expires_at_ms" => System.system_time(:millisecond) - 1000  # Expired
+        # Expired
+        "expires_at_ms" => System.system_time(:millisecond) - 1000
       })
 
       {:error, :expired_token} = TokenStore.validate(token)
@@ -115,28 +120,34 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
   describe "cleanup_expired/0" do
     test "returns count of expired tokens removed (not total count)" do
       # Create 3 valid tokens
-      valid_tokens = for i <- 1..3 do
-        token = "valid-token-#{i}-#{System.unique_integer([:positive])}"
-        LemonCore.Store.put(:session_tokens, token, %{
-          token: token,
-          identity: %{"type" => "node"},
-          issued_at_ms: System.system_time(:millisecond),
-          expires_at_ms: System.system_time(:millisecond) + 60_000
-        })
-        token
-      end
+      valid_tokens =
+        for i <- 1..3 do
+          token = "valid-token-#{i}-#{System.unique_integer([:positive])}"
+
+          LemonCore.Store.put(:session_tokens, token, %{
+            token: token,
+            identity: %{"type" => "node"},
+            issued_at_ms: System.system_time(:millisecond),
+            expires_at_ms: System.system_time(:millisecond) + 60_000
+          })
+
+          token
+        end
 
       # Create 2 expired tokens
-      expired_tokens = for i <- 1..2 do
-        token = "expired-token-#{i}-#{System.unique_integer([:positive])}"
-        LemonCore.Store.put(:session_tokens, token, %{
-          token: token,
-          identity: %{"type" => "node"},
-          issued_at_ms: System.system_time(:millisecond) - 60_000,
-          expires_at_ms: System.system_time(:millisecond) - 1000
-        })
-        token
-      end
+      expired_tokens =
+        for i <- 1..2 do
+          token = "expired-token-#{i}-#{System.unique_integer([:positive])}"
+
+          LemonCore.Store.put(:session_tokens, token, %{
+            token: token,
+            identity: %{"type" => "node"},
+            issued_at_ms: System.system_time(:millisecond) - 60_000,
+            expires_at_ms: System.system_time(:millisecond) - 1000
+          })
+
+          token
+        end
 
       {:ok, expired_count} = TokenStore.cleanup_expired()
 
@@ -156,6 +167,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
 
     test "returns 0 when no tokens are expired" do
       token = "not-expired-#{System.unique_integer([:positive])}"
+
       LemonCore.Store.put(:session_tokens, token, %{
         token: token,
         identity: %{"type" => "node"},
@@ -170,6 +182,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
     test "handles string keys when cleaning up" do
       # Create expired token with string keys
       token = "expired-string-cleanup-#{System.unique_integer([:positive])}"
+
       LemonCore.Store.put(:session_tokens, token, %{
         "token" => token,
         "identity" => %{"type" => "node"},
@@ -239,6 +252,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
     test "filters out expired tokens with string keys" do
       # Create valid token with string keys
       valid_token = "active-string-#{System.unique_integer([:positive])}"
+
       LemonCore.Store.put(:session_tokens, valid_token, %{
         "token" => valid_token,
         "identity" => %{"type" => "node"},
@@ -248,6 +262,7 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
 
       # Create expired token with string keys
       expired_token = "inactive-string-#{System.unique_integer([:positive])}"
+
       LemonCore.Store.put(:session_tokens, expired_token, %{
         "token" => expired_token,
         "identity" => %{"type" => "node"},
@@ -259,9 +274,12 @@ defmodule LemonControlPlane.Auth.TokenStorePersistenceTest do
 
       # Should only return the active token
       assert active != []
-      tokens = Enum.map(active, fn info ->
-        info[:token] || info["token"]
-      end)
+
+      tokens =
+        Enum.map(active, fn info ->
+          info[:token] || info["token"]
+        end)
+
       assert valid_token in tokens
       refute expired_token in tokens
     end

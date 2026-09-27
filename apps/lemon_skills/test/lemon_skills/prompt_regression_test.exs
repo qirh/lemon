@@ -86,11 +86,12 @@ defmodule LemonSkills.PromptRegressionTest do
 
   describe "bootstrap prompt — no body content" do
     test "render_skill_list/1 output contains only metadata fields" do
-      view = skill_view("k8s-rollout",
-        name: "K8s Rollout",
-        description: "Manage Kubernetes rollouts with kubectl",
-        activation_state: :active
-      )
+      view =
+        skill_view("k8s-rollout",
+          name: "K8s Rollout",
+          description: "Manage Kubernetes rollouts with kubectl",
+          activation_state: :active
+        )
 
       xml = PromptView.render_skill_list([view])
 
@@ -156,13 +157,14 @@ defmodule LemonSkills.PromptRegressionTest do
     end
 
     test "single skill XML entry stays within per-slot budget" do
-      view = skill_view("my-skill",
-        name: "My Skill",
-        description: String.duplicate("A very long description. ", 20),
-        activation_state: :not_ready,
-        missing_bins: ["tool1", "tool2"],
-        missing_env_vars: ["SECRET_KEY", "API_TOKEN"]
-      )
+      view =
+        skill_view("my-skill",
+          name: "My Skill",
+          description: String.duplicate("A very long description. ", 20),
+          activation_state: :not_ready,
+          missing_bins: ["tool1", "tool2"],
+          missing_env_vars: ["SECRET_KEY", "API_TOKEN"]
+        )
 
       entry = PromptView.render_entry(view)
       char_count = String.length(entry)
@@ -244,7 +246,10 @@ defmodule LemonSkills.PromptRegressionTest do
       LemonSkills.refresh(cwd: tmp_dir)
 
       summary_len = read_skill_text(tmp_dir, "section-size-skill", "summary") |> String.length()
-      section_len = read_skill_text(tmp_dir, "section-size-skill", "section", "Usage") |> String.length()
+
+      section_len =
+        read_skill_text(tmp_dir, "section-size-skill", "section", "Usage") |> String.length()
+
       full_len = read_skill_text(tmp_dir, "section-size-skill", "full") |> String.length()
 
       assert summary_len < full_len,
@@ -257,7 +262,9 @@ defmodule LemonSkills.PromptRegressionTest do
              "section (#{section_len}) should be > summary (#{summary_len})"
     end
 
-    test "summary size is body-independent — large body doesn't inflate summary", %{tmp_dir: tmp_dir} do
+    test "summary size is body-independent — large body doesn't inflate summary", %{
+      tmp_dir: tmp_dir
+    } do
       # Skill A: tiny body
       write_skill!(tmp_dir, "small-body-skill", """
       ---
@@ -280,8 +287,11 @@ defmodule LemonSkills.PromptRegressionTest do
 
       LemonSkills.refresh(cwd: tmp_dir)
 
-      small_summary_len = read_skill_text(tmp_dir, "small-body-skill", "summary") |> String.length()
-      large_summary_len = read_skill_text(tmp_dir, "large-body-skill", "summary") |> String.length()
+      small_summary_len =
+        read_skill_text(tmp_dir, "small-body-skill", "summary") |> String.length()
+
+      large_summary_len =
+        read_skill_text(tmp_dir, "large-body-skill", "summary") |> String.length()
 
       # Headers are identical structure; the difference should only be the
       # description difference, not the body size.  Both summaries should be

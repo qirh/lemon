@@ -767,7 +767,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
            }
   end
 
-
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),

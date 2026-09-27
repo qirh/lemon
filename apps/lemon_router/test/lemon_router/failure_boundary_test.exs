@@ -7,8 +7,12 @@ defmodule LemonRouter.FailureBoundaryTest do
   defmodule Dispatcher do
     def dispatch(intent) do
       case Application.fetch_env!(:lemon_router, :failure_boundary_dispatch) do
-        :raise -> raise "dispatcher callback bug"
-        {:error, reason} -> {:error, reason}
+        :raise ->
+          raise "dispatcher callback bug"
+
+        {:error, reason} ->
+          {:error, reason}
+
         {:deliver, recipient} ->
           send(recipient, {:delivered, intent})
           :ok
@@ -71,8 +75,7 @@ defmodule LemonRouter.FailureBoundaryTest do
                final_text: "complete answer"
              )
 
-    assert_receive {:delivered,
-                    %{kind: :stream_finalize, body: %{text: "complete answer"}}}
+    assert_receive {:delivered, %{kind: :stream_finalize, body: %{text: "complete answer"}}}
     assert %{finalized: true, last_sent_text: "complete answer"} = :sys.get_state(recovered)
   end
 
@@ -106,7 +109,8 @@ defmodule LemonRouter.FailureBoundaryTest do
     end
   end
 
-  test "surface delivery rejection remains explicit and does not finalize its coalescer", context do
+  test "surface delivery rejection remains explicit and does not finalize its coalescer",
+       context do
     Application.put_env(:lemon_router, :failure_boundary_dispatch, {:error, :unavailable})
     state = %{run_id: "run-surface", session_key: context.session_key, saw_delta: true}
     event = Event.new(:run_completed, %{completed: %{ok: true, answer: "final answer"}}, %{})
@@ -123,7 +127,9 @@ defmodule LemonRouter.FailureBoundaryTest do
 
   defp await_replacement(supervisor, old_pid, attempts) do
     case DynamicSupervisor.which_children(supervisor) do
-      [{:undefined, pid, :worker, _}] when is_pid(pid) and pid != old_pid -> pid
+      [{:undefined, pid, :worker, _}] when is_pid(pid) and pid != old_pid ->
+        pid
+
       _ ->
         Process.sleep(10)
         await_replacement(supervisor, old_pid, attempts - 1)

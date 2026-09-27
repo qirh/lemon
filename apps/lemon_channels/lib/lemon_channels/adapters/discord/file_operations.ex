@@ -36,8 +36,15 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
          {:ok, dest_abs} <- TelegramFileOps.resolve_dest_abs(root, dest_rel),
          :ok <- TelegramFileOps.ensure_not_denied(root, dest_rel, cfg),
          {:ok, bytes} <- download_attachment_bytes(url),
-         :ok <- TelegramFileOps.enforce_bytes_limit(bytes, cfg, :max_upload_bytes, @default_max_upload_bytes),
-         {:ok, final_rel, _final_abs} <- TelegramFileOps.write_document(dest_rel, dest_abs, bytes, force: force) do
+         :ok <-
+           TelegramFileOps.enforce_bytes_limit(
+             bytes,
+             cfg,
+             :max_upload_bytes,
+             @default_max_upload_bytes
+           ),
+         {:ok, final_rel, _final_abs} <-
+           TelegramFileOps.write_document(dest_rel, dest_abs, bytes, force: force) do
       {:ok, "Saved: #{final_rel}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
@@ -66,7 +73,13 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
          {:ok, abs} <- TelegramFileOps.resolve_dest_abs(root, rel),
          :ok <- TelegramFileOps.ensure_not_denied(root, rel, cfg),
          {:ok, kind, send_path, filename} <- TelegramFileOps.prepare_file_get(abs),
-         :ok <- TelegramFileOps.enforce_path_size(send_path, cfg, :max_download_bytes, @default_max_download_bytes),
+         :ok <-
+           TelegramFileOps.enforce_path_size(
+             send_path,
+             cfg,
+             :max_download_bytes,
+             @default_max_download_bytes
+           ),
          :ok <- send_file_to_channel(channel_id, send_path, filename) do
       if kind == :zip, do: File.rm(send_path)
       {:ok, "Sent: #{filename}"}
@@ -87,7 +100,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   """
   def handle_attachment_auto_put(state, inbound) do
     cfg = files_cfg(state)
-    attachments = (inbound.meta[:attachments] || [])
+    attachments = inbound.meta[:attachments] || []
 
     channel_id = inbound.meta[:channel_id]
 
@@ -105,8 +118,15 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
           with {:ok, dest_abs} <- TelegramFileOps.resolve_dest_abs(root, rel),
                :ok <- TelegramFileOps.ensure_not_denied(root, rel, cfg),
                {:ok, bytes} <- download_attachment_bytes(url),
-               :ok <- TelegramFileOps.enforce_bytes_limit(bytes, cfg, :max_upload_bytes, @default_max_upload_bytes),
-               {:ok, final_rel, _} <- TelegramFileOps.write_document(rel, dest_abs, bytes, force: false) do
+               :ok <-
+                 TelegramFileOps.enforce_bytes_limit(
+                   bytes,
+                   cfg,
+                   :max_upload_bytes,
+                   @default_max_upload_bytes
+                 ),
+               {:ok, final_rel, _} <-
+                 TelegramFileOps.write_document(rel, dest_abs, bytes, force: false) do
             {:ok, final_rel}
           else
             {:error, msg} -> {:error, msg}
@@ -146,7 +166,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   """
   def should_auto_put?(state, inbound) when is_map(state) do
     cfg = files_cfg(state)
-    attachments = (inbound.meta[:attachments] || [])
+    attachments = inbound.meta[:attachments] || []
     should_auto_put?(cfg) and attachments != []
   end
 
@@ -203,11 +223,18 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       id = parse_id(attachment_id)
 
       cond do
-        is_integer(id) and is_map_key(resolved, id) -> Map.get(resolved, id)
-        is_binary(attachment_id) and is_map_key(resolved, attachment_id) -> Map.get(resolved, attachment_id)
+        is_integer(id) and is_map_key(resolved, id) ->
+          Map.get(resolved, id)
+
+        is_binary(attachment_id) and is_map_key(resolved, attachment_id) ->
+          Map.get(resolved, attachment_id)
+
         # Try the first attachment if we can't match by ID
-        map_size(resolved) == 1 -> resolved |> Map.values() |> List.first()
-        true -> nil
+        map_size(resolved) == 1 ->
+          resolved |> Map.values() |> List.first()
+
+        true ->
+          nil
       end
     else
       nil

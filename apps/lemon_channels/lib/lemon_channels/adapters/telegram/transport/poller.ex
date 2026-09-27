@@ -84,7 +84,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
           {:error, _reason} ->
             state
         end
-      {:error, _reason} -> state
+
+      {:error, _reason} ->
+        state
     end
   rescue
     error ->

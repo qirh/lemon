@@ -21,7 +21,13 @@ defmodule LemonMemory.SafetyTest do
     {text, count} = Safety.redact_for_operator(content)
 
     assert count == 4
-    for secret <- ["CUSTOM_CLIENT_SECRET", "/custom/work/private.txt", "internal.example", "abcdefghijklmnop"] do
+
+    for secret <- [
+          "CUSTOM_CLIENT_SECRET",
+          "/custom/work/private.txt",
+          "internal.example",
+          "abcdefghijklmnop"
+        ] do
       refute text =~ secret
     end
   end

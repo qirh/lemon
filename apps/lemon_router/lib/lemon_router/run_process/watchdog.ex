@@ -218,11 +218,12 @@ defmodule LemonRouter.RunProcess.Watchdog do
       LemonCore.Event.new(
         :run_completed,
         LemonCore.Events.RunCompleted.new(%{
-          completed: LemonCore.Events.Completion.new(%{
-            ok: false,
-            error: error,
-            answer: ""
-          }),
+          completed:
+            LemonCore.Events.Completion.new(%{
+              ok: false,
+              error: error,
+              answer: ""
+            }),
           duration_ms: duration_ms
         }),
         %{

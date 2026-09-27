@@ -5,7 +5,6 @@ defmodule LemonCore.Doctor.SupportBundle do
   alias LemonCore.Config.Modular
   alias LemonCore.Doctor.Report
 
-
   @env_allowlist ~w(
     LANG
     LEMON_CONTROL_PLANE_PORT
@@ -50,7 +49,6 @@ defmodule LemonCore.Doctor.SupportBundle do
       {:error, reason} -> {:error, reason}
     end
   end
-
 
   defp bundle_path(opts) do
     case Keyword.get(opts, :bundle_path) do
@@ -274,7 +272,6 @@ defmodule LemonCore.Doctor.SupportBundle do
     memory contents, media bytes, or tool outputs.
     """
   end
-
 
   # Media, browser and LSP diagnostics are owned by other apps; core looks their
   # modules up through config rather than naming them.

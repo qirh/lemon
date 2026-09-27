@@ -24,7 +24,8 @@ defmodule LemonSim.Examples.SeededDeterminismTest do
 
       # The run must actually exercise updater randomness (evidence, wandering,
       # village events, items), not just the seeded setup.
-      assert first.world.rng_state != Werewolf.initial_world(player_count: 6, seed: 4_242).rng_state
+      assert first.world.rng_state !=
+               Werewolf.initial_world(player_count: 6, seed: 4_242).rng_state
     end
 
     test "the seed, not the process RNG, decides the world" do

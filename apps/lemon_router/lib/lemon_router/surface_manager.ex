@@ -30,7 +30,7 @@ defmodule LemonRouter.SurfaceManager do
         meta: coalescer_meta(state)
       )
     end
-   
+
     :ok
   end
 
@@ -88,14 +88,14 @@ defmodule LemonRouter.SurfaceManager do
         surface: surface
       )
     end
-   
+
     :ok
   end
 
   @spec ingest_status_action(map(), map(), term()) :: :ok
   def ingest_status_action(state, action_event, surface) do
     _ = maybe_start_async_task_surface_subscriber(state, action_event, surface)
-   
+
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       ToolStatusCoalescer.ingest_action(
         state.session_key,
@@ -106,7 +106,7 @@ defmodule LemonRouter.SurfaceManager do
         surface: surface
       )
     end
-   
+
     :ok
   end
 
@@ -122,7 +122,7 @@ defmodule LemonRouter.SurfaceManager do
         meta: coalescer_meta(state)
       )
     end
-   
+
     :ok
   end
 
@@ -137,7 +137,7 @@ defmodule LemonRouter.SurfaceManager do
         surface: surface
       )
     end
-   
+
     :ok
   end
 
@@ -152,7 +152,7 @@ defmodule LemonRouter.SurfaceManager do
           %{"ok" => ok} -> ok == true
           _ -> false
         end
-   
+
       Enum.each(finalizable_status_surfaces(state), fn surface ->
         ToolStatusCoalescer.finalize_run(
           state.session_key,
@@ -164,7 +164,7 @@ defmodule LemonRouter.SurfaceManager do
         )
       end)
     end
-   
+
     :ok
   end
 
@@ -175,7 +175,7 @@ defmodule LemonRouter.SurfaceManager do
         ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
       end)
     end
-   
+
     :ok
   end
 
@@ -183,12 +183,12 @@ defmodule LemonRouter.SurfaceManager do
   def flush_all(state) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       StreamCoalescer.flush(state.session_key, channel_id)
-   
+
       Enum.each(active_status_surfaces(state), fn surface ->
         ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
       end)
     end
-   
+
     :ok
   end
 
@@ -222,6 +222,7 @@ defmodule LemonRouter.SurfaceManager do
         resolved_final_text = streamed_final_text(state, channel_id, final_text)
 
         record_finalize_dispatch(state, :direct_stream_finalize)
+
         with :ok <- dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta) do
           case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
                  meta: meta,
@@ -281,7 +282,7 @@ defmodule LemonRouter.SurfaceManager do
         meta: coalescer_meta(state)
       )
     end
-   
+
     :ok
   end
 
@@ -291,7 +292,7 @@ defmodule LemonRouter.SurfaceManager do
          true <- String.trim(answer) != "",
          routes when is_list(routes) and routes != [] <- fanout_routes(state) do
       primary_signature = primary_route_signature(state)
-   
+
       routes
       |> Enum.map(&normalize_fanout_route/1)
       |> Enum.reject(&is_nil/1)
@@ -308,11 +309,11 @@ defmodule LemonRouter.SurfaceManager do
           body: %{text: answer, seq: index},
           meta: %{surface: :answer, fanout: true, fanout_index: index}
         }
-   
+
         case dispatcher().dispatch(intent) do
           :ok ->
             :ok
-   
+
           {:error, reason} ->
             Logger.warning(
               "Failed to dispatch fanout output for run_id=#{inspect(state.run_id)} route=#{inspect(route)} reason=#{inspect(reason)}"
@@ -320,7 +321,7 @@ defmodule LemonRouter.SurfaceManager do
         end
       end)
     end
-   
+
     :ok
   end
 
@@ -625,6 +626,7 @@ defmodule LemonRouter.SurfaceManager do
 
             {:error, {:dispatch_failed, dispatch_reason}}
         end
+
       _ ->
         Logger.warning(
           "Streamed final route resolution failed for run_id=#{inspect(state.run_id)}"
@@ -670,6 +672,7 @@ defmodule LemonRouter.SurfaceManager do
 
             {:error, {:dispatch_failed, dispatch_reason}}
         end
+
       _ ->
         Logger.warning(
           "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} coalescer_reason=#{inspect(reason)}"
@@ -699,7 +702,9 @@ defmodule LemonRouter.SurfaceManager do
           fallback_binding: fallback_binding,
           meta: coalescer_meta(state)
         )
-      _ -> :ok
+
+      _ ->
+        :ok
     end
   end
 

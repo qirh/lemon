@@ -8,7 +8,6 @@ defmodule LemonMemory.Safety do
 
   alias LemonMemory.Document
 
-
   @doc """
   Returns true when text contains common secret-looking material.
   """

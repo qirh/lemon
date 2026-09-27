@@ -87,7 +87,6 @@ defmodule LemonSkills.Tools.RecallTest do
     refute text(result) =~ "TEMPLATE"
   end
 
-
   test "rejects an empty query, an unknown scope, and a missing agent", %{
     tmp_dir: tmp_dir,
     search_fn: search_fn

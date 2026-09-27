@@ -114,7 +114,10 @@ defmodule LemonCore.RedactTest do
 
   test "strict config exports retain safe settings and omit multiline and unlabeled secrets" do
     hex = "0x" <> String.duplicate("ab", 32)
-    input = "model = \"claude\"\nprivate = \"\"\"hidden-one\nhidden-two\"\"\"\nsession = \"hidden-three\"\n#{hex}"
+
+    input =
+      "model = \"claude\"\nprivate = \"\"\"hidden-one\nhidden-two\"\"\"\nsession = \"hidden-three\"\n#{hex}"
+
     {output, count} = Redact.text(input, strict: true, count: true)
 
     for value <- ["hidden-one", "hidden-two", "hidden-three", hex], do: refute(output =~ value)
@@ -125,7 +128,16 @@ defmodule LemonCore.RedactTest do
   end
 
   test "ordinary text and noncredential data remain useful" do
-    for value <- ["status=ready model=claude", "the tokenizer uses 42 tokens", "basic authentication", "api_key =\nmodel=claude", "", nil, false, 5] do
+    for value <- [
+          "status=ready model=claude",
+          "the tokenizer uses 42 tokens",
+          "basic authentication",
+          "api_key =\nmodel=claude",
+          "",
+          nil,
+          false,
+          5
+        ] do
       assert Redact.text(value) == value
     end
 

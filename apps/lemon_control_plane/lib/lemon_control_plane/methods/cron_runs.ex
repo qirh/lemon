@@ -342,7 +342,11 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
       key = key_to_string(k)
-      value = if LemonCore.Redact.sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      value =
+        if LemonCore.Redact.sensitive_key?(key),
+          do: %{"redacted" => true, "kind" => "secret"},
+          else: v
 
       Map.put(acc, key, serialize_term(value, depth + 1))
     end)
@@ -361,7 +365,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
     do: inspect(LemonCore.Redact.text(value), limit: 200)
 
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
-
 
   defp key_to_string(key) when is_binary(key), do: key
   defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)

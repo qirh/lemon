@@ -102,9 +102,7 @@ defmodule LemonCore.Store.ReadCacheTest do
 
       assert {"agent:test:main", %{agent_id: "test"}} in ReadCache.list(:sessions_index)
 
-      assert {{"default", -1001, nil}, %{peer_kind: :group}} in ReadCache.list(
-               :demo_targets
-             )
+      assert {{"default", -1001, nil}, %{peer_kind: :group}} in ReadCache.list(:demo_targets)
     end
   end
 

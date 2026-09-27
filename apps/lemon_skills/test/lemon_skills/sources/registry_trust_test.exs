@@ -16,5 +16,4 @@ defmodule LemonSkills.Sources.RegistryTrustTest do
       assert Registry.trust_for_ref("acme/tools/my-skill") == :community
     end
   end
-
 end

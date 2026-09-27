@@ -22,7 +22,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert result.provider_message == "overloaded_error: Overloaded"
       assert result.retryable == true
     end
-
   end
 
   describe "OpenAI error format parsing" do
@@ -44,7 +43,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert result.message =~ "Context length exceeded"
       assert Error.context_length_error?(result)
     end
-
   end
 
   describe "AWS Bedrock error format parsing" do
@@ -59,7 +57,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert result.category == :rate_limit
       assert result.provider_message =~ "Too many requests"
     end
-
   end
 
   # ============================================================================
@@ -153,9 +150,7 @@ defmodule LemonAi.ErrorProviderTest do
 
       assert info.retry_after == 2500
     end
-
   end
-
 
   # ============================================================================
   # DateTime Parsing from Rate-Limit Headers
@@ -207,7 +202,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert info.reset_at == nil
     end
 
-
     test "prioritizes request reset over token reset" do
       headers = [
         {"x-ratelimit-reset-requests", "1704067200"},
@@ -218,7 +212,6 @@ defmodule LemonAi.ErrorProviderTest do
 
       assert info.reset_at == DateTime.from_unix!(1_704_067_200)
     end
-
 
     test "retry-after with decimal is parsed as integer" do
       headers = [
@@ -369,7 +362,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert result.provider_message == "validation_error: Field validation failed"
     end
 
-
     test "handles error with null values" do
       body = %{
         "error" => %{
@@ -430,7 +422,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert result.category == :client
       assert result.provider_message == "Nested array message"
     end
-
   end
 
   # ============================================================================
@@ -603,7 +594,6 @@ defmodule LemonAi.ErrorProviderTest do
       assert delay >= 58_000 and delay <= 62_000
     end
 
-
     test "Google RetryInfo body supplies retry delay when headers are missing" do
       body = %{
         "error" => %{
@@ -670,6 +660,5 @@ defmodule LemonAi.ErrorProviderTest do
       assert result.retryable == true
       assert result.rate_limit_info.retry_after == 2_000
     end
-
   end
 end

@@ -160,6 +160,7 @@ defmodule LemonRouter.AgentEndpoints do
     case maybe_get_endpoint(agent_id, target) do
       {:ok, endpoint} ->
         {:ok, %{route: endpoint.route, endpoint: endpoint, target: endpoint.name}}
+
       {:error, :not_found} ->
         with {:ok, route} <- parse_target_string(target, opts),
              {:ok, normalized_route} <- normalize_route(route, opts) do
@@ -341,6 +342,7 @@ defmodule LemonRouter.AgentEndpoints do
 
   defp infer_default_peer_kind("telegram", peer_id) when is_binary(peer_id),
     do: infer_telegram_peer_kind(peer_id)
+
   defp infer_default_peer_kind(_channel_id, _peer_id), do: :dm
 
   defp normalize_peer_kind(kind) when kind in @allowed_peer_kinds, do: kind

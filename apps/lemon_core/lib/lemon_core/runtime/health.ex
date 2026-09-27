@@ -156,7 +156,9 @@ defmodule LemonCore.Runtime.Health do
     end
   end
 
-  defp parse_status(<<"HTTP/", _version::binary-size(3), " ", code::binary-size(3), _rest::binary>>) do
+  defp parse_status(
+         <<"HTTP/", _version::binary-size(3), " ", code::binary-size(3), _rest::binary>>
+       ) do
     case Integer.parse(code) do
       {status, ""} -> {:ok, status}
       _ -> {:error, :bad_response}

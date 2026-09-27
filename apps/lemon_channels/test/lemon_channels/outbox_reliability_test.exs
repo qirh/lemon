@@ -36,9 +36,11 @@ defmodule LemonChannels.OutboxReliabilityTest do
     end
 
     Registry.register(ControlledPlugin)
+
     on_exit(fn ->
       if Process.whereis(Registry), do: Registry.unregister(ControlledPlugin.id())
     end)
+
     %{account: "reliability-#{System.unique_integer([:positive])}"}
   end
 
@@ -111,6 +113,7 @@ defmodule LemonChannels.OutboxReliabilityTest do
   defp assert_group_drained(account) do
     state = :sys.get_state(Outbox)
     refute Enum.any?(:queue.to_list(state.queue), &(&1.payload.account_id == account))
+
     refute Enum.any?(state.processing, fn {_ref, entry} -> entry.payload.account_id == account end)
   end
 

@@ -292,7 +292,6 @@ defmodule LemonCore.Config.Agent do
     }
   end
 
-
   defp normalize_string_list(nil), do: []
 
   defp normalize_string_list(values) when is_list(values) do

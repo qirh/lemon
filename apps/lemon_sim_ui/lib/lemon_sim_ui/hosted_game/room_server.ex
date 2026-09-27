@@ -254,7 +254,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
           handle_host_control(action, params, state)
         end
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -302,11 +303,15 @@ defmodule LemonSimUi.HostedGame.RoomServer do
         state = %{state | connections: connections, monitor_refs: monitor_refs}
         broadcast(state.room)
 
-        HostedGame.emit(:player_connected, %{count: 1}, %{room_id: state.room.id, seat_id: actor_id})
+        HostedGame.emit(:player_connected, %{count: 1}, %{
+          room_id: state.room.id,
+          seat_id: actor_id
+        })
 
         {:reply, {:ok, actor_id}, state}
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -609,7 +614,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
             {:reply, {:error, reason}, state}
         end
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -664,7 +670,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
           room
           |> Map.merge(%{
             status: "stopped",
-            terminal_reason: if(room.status == "lobby", do: "host_cancelled", else: "host_stopped"),
+            terminal_reason:
+              if(room.status == "lobby", do: "host_cancelled", else: "host_stopped"),
             deadline_at_ms: nil,
             paused_remaining_ms: nil,
             paused_at_ms: nil,
@@ -684,7 +691,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
             {:reply, {:error, reason}, state}
         end
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -1071,7 +1079,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
 
         {:ok, action["name"], params}
 
-      _ -> {:error, :no_legal_action}
+      _ ->
+        {:error, :no_legal_action}
     end
   end
 

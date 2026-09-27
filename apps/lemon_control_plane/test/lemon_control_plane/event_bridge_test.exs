@@ -130,7 +130,6 @@ defmodule LemonControlPlane.EventBridgeTest do
       assert :ok = EventBridge.unsubscribe_topics(["session:#{session_key}"])
       Presence.unregister(conn_id)
     end
-
   end
 
   describe "event forwarding" do
@@ -461,8 +460,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
       LemonCore.Bus.broadcast("run:#{run_id}", event)
 
-      assert_receive {:event, "agent",
-                      %{"type" => "tool_use", "action" => %{"detail" => detail}},
+      assert_receive {:event, "agent", %{"type" => "tool_use", "action" => %{"detail" => detail}},
                       _state_version},
                      1_000
 

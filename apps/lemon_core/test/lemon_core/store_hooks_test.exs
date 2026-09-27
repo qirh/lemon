@@ -105,7 +105,6 @@ defmodule LemonCore.StoreHooksTest do
       finalize(store, "run_blank", %{session_key: ""})
       refute_receive {:hook_fired, _}
     end
-
   end
 
   describe "run history provider" do

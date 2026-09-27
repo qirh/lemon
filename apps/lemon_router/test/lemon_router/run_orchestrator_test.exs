@@ -457,7 +457,9 @@ defmodule LemonRouter.RunOrchestratorTest do
         assert_receive {:DOWN, ^monitor, :process, ^orchestrator, reason}
 
         case outcome do
-          {:raise, message} -> assert {%RuntimeError{message: ^message}, _stack} = reason
+          {:raise, message} ->
+            assert {%RuntimeError{message: ^message}, _stack} = reason
+
           {:throw, value} ->
             assert match?({:bad_return_value, ^value}, reason) or
                      match?({{:nocatch, ^value}, _stack}, reason)

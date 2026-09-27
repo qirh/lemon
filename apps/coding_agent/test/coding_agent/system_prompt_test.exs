@@ -94,6 +94,7 @@ defmodule CodingAgent.SystemPromptTest do
       })
 
     referenced_tools = SystemPrompt.referenced_tool_names(prompt)
+
     default_tool_names =
       tmp_dir
       |> ToolRegistry.get_tools(include_extensions: false, include_mcp: false)

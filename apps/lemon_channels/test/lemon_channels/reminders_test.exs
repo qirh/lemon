@@ -145,7 +145,10 @@ defmodule LemonChannels.RemindersTest do
     end
 
     test "topics are separate chats" do
-      FakeCron.seed([job("topic", @topic), job("root", "agent:default:telegram:default:group:-100")])
+      FakeCron.seed([
+        job("topic", @topic),
+        job("root", "agent:default:telegram:default:group:-100")
+      ])
 
       reply = Reminders.list(opts(@topic))
 

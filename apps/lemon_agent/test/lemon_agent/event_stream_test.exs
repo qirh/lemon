@@ -1161,7 +1161,6 @@ defmodule LemonAgent.EventStreamTest do
       {:ok, result} = EventStream.result(stream)
       assert result == ["first"]
     end
-
   end
 
   describe "late calls" do

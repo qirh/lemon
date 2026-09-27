@@ -17,7 +17,9 @@ defmodule LemonWeb.MarkdownTest do
   test "code is shown literally with a sanitized language class" do
     out = html("```elixir\nIO.puts(\"<b>\") &amp;\n```\n\n```x\" onclick=\"y\nboom\n```")
 
-    assert out =~ ~s|<pre><code class="language-elixir">IO.puts(&quot;&lt;b&gt;&quot;) &amp;amp;</code></pre>|
+    assert out =~
+             ~s|<pre><code class="language-elixir">IO.puts(&quot;&lt;b&gt;&quot;) &amp;amp;</code></pre>|
+
     refute out =~ ~s|onclick="|
   end
 
@@ -57,7 +59,10 @@ defmodule LemonWeb.MarkdownTest do
 
     refute out =~ ~r/href="\s*(javascript|java\s*script|data):/i
     assert out =~ "a b c d"
-    assert out =~ ~s|<a href="https://example.com/?q=1&amp;r=2" target="_blank" rel="noopener noreferrer nofollow">e</a>|
+
+    assert out =~
+             ~s|<a href="https://example.com/?q=1&amp;r=2" target="_blank" rel="noopener noreferrer nofollow">e</a>|
+
     assert out =~ ~s|href="/relative"|
     assert out =~ ~s|href="mailto:me@example.com"|
   end

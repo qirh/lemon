@@ -1,7 +1,12 @@
 defmodule LemonSim.Bench.Suite.RunAdapter.Registry do
   @moduledoc false
 
-  alias LemonSim.Bench.Suite.RunAdapter.Adapters.{Poker, VendingBench, VendingBenchArena, Werewolf}
+  alias LemonSim.Bench.Suite.RunAdapter.Adapters.{
+    Poker,
+    VendingBench,
+    VendingBenchArena,
+    Werewolf
+  }
 
   @adapters %{
     "poker" => Poker,

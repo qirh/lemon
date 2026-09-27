@@ -1,5 +1,4 @@
 defmodule LemonChannels.ScriptSend.CLI do
-
   alias LemonChannels.ScriptSend
 
   @moduledoc """

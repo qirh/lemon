@@ -188,7 +188,10 @@ defmodule LemonWeb.Markdown do
   # `&`); an entity in element content can never be re-parsed as markup.
   defp escape_text(text) do
     text
-    |> String.replace(~r/&(?!(?:#\d{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});)/, "&amp;")
+    |> String.replace(
+      ~r/&(?!(?:#\d{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]{1,31});)/,
+      "&amp;"
+    )
     |> String.replace("<", "&lt;")
     |> String.replace(">", "&gt;")
     |> String.replace("\"", "&quot;")

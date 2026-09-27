@@ -117,7 +117,10 @@ defmodule CodingAgent.Session.ProviderRetry do
         end
 
       other ->
-        EventStream.error(ctx.output, error_message(ctx.model, "invalid_stream: #{inspect(other)}"))
+        EventStream.error(
+          ctx.output,
+          error_message(ctx.model, "invalid_stream: #{inspect(other)}")
+        )
     end
   end
 

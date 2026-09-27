@@ -433,8 +433,7 @@ defmodule LemonSim.Examples.VendingBench.OfflineRunner do
 
       case BenchReplay.apply_batch(current_state, [input], Updater) do
         {:ok, next_state, appended} ->
-          {:cont,
-           {:ok, next_state, Enum.reverse(appended, acc_events), [[input] | acc_batches]}}
+          {:cont, {:ok, next_state, Enum.reverse(appended, acc_events), [[input] | acc_batches]}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}

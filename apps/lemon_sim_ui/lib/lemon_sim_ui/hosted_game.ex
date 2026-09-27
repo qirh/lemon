@@ -119,7 +119,8 @@ defmodule LemonSimUi.HostedGame do
 
             :ok
 
-          _ -> {:error, :invalid_hosted_ai_model}
+          _ ->
+            {:error, :invalid_hosted_ai_model}
         end
     end
   rescue
@@ -325,7 +326,8 @@ defmodule LemonSimUi.HostedGame do
                   []
                 end
 
-              {:error, reason} -> [{room.id, reason}]
+              {:error, reason} ->
+                [{room.id, reason}]
             end
           end)
 

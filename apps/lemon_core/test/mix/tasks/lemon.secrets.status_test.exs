@@ -93,5 +93,4 @@ defmodule Mix.Tasks.Lemon.Secrets.StatusTest do
       assert output =~ "source: none"
     end
   end
-
 end

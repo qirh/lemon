@@ -107,6 +107,7 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              TokenStore.replace_node_session(unique("old-token"), identity, ttl_ms: 60_000)
 
     old_generation = old_token.identity["sessionGeneration"]
+
     assert :ok =
              LemonCore.NodeRegistry.register_session(
                node_id,

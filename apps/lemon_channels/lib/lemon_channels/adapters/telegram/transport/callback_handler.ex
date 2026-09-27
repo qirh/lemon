@@ -304,7 +304,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp decision_label(:approve_agent), do: "approve agent"
   defp decision_label(:approve_global), do: "approve global"
   defp decision_label(:deny), do: "deny"
-  defp decision_label(other), do: inspect(other)
 
   defp render_model_picker_text(session_model, future_model) do
     session_line = if is_binary(session_model), do: session_model, else: "(not set)"

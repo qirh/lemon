@@ -719,7 +719,9 @@ defmodule LemonSkills.CLI do
       LemonCore.CLI.info("No skill drafts found.")
       LemonCore.CLI.info("\nRun 'lemon skill draft generate' to synthesize drafts.")
     else
-      LemonCore.CLI.info("\n#{String.pad_trailing("KEY", 30)} #{String.pad_trailing("CREATED", 24)} STATUS")
+      LemonCore.CLI.info(
+        "\n#{String.pad_trailing("KEY", 30)} #{String.pad_trailing("CREATED", 24)} STATUS"
+      )
 
       LemonCore.CLI.info(String.duplicate("-", 70))
 
@@ -727,7 +729,9 @@ defmodule LemonSkills.CLI do
         created = draft.created_at || "unknown"
         status = if draft.has_skill_file, do: "ready", else: "missing SKILL.md"
 
-        LemonCore.CLI.info("#{String.pad_trailing(draft.key, 30)} #{String.pad_trailing(created, 24)} #{status}")
+        LemonCore.CLI.info(
+          "#{String.pad_trailing(draft.key, 30)} #{String.pad_trailing(created, 24)} #{status}"
+        )
       end)
 
       LemonCore.CLI.info("\n#{length(drafts)} draft(s).")
@@ -742,7 +746,9 @@ defmodule LemonSkills.CLI do
     global = "--local" not in opts
     cwd = unless global, do: get_cwd(opts)
 
-    LemonCore.CLI.info("Synthesizing skill drafts from agent '#{agent_id}' (last #{max_docs} runs)...")
+    LemonCore.CLI.info(
+      "Synthesizing skill drafts from agent '#{agent_id}' (last #{max_docs} runs)..."
+    )
 
     case Pipeline.run(:agent, agent_id, max_docs: max_docs, global: global, cwd: cwd) do
       {:ok, %{generated: gen, skipped: skipped, total_candidates: total}} ->
@@ -762,7 +768,9 @@ defmodule LemonSkills.CLI do
         end
 
       {:error, :feature_disabled} ->
-        LemonCore.CLI.error("Skill synthesis is disabled (features.skill_synthesis_drafts = \"off\").")
+        LemonCore.CLI.error(
+          "Skill synthesis is disabled (features.skill_synthesis_drafts = \"off\")."
+        )
 
         LemonCore.CLI.info("Re-enable with: features.skill_synthesis_drafts = \"default-on\"")
         LemonCore.CLI.fail!("Feature disabled")
@@ -838,14 +846,14 @@ defmodule LemonSkills.CLI do
   defp manage_drafts(_) do
     LemonCore.CLI.info("""
     Manage synthesized skill drafts.
-    
+
     Usage:
       lemon skill draft list              # List all drafts
       lemon skill draft generate          # Synthesize new drafts from run history
       lemon skill draft review <key>      # Review a draft's content
       lemon skill draft publish <key>     # Promote a draft to an installed skill
       lemon skill draft delete <key>      # Delete a draft
-    
+
     Options:
       --local                    Work with project-local drafts (default: global)
       --cwd=<path>               Project directory for --local
@@ -875,7 +883,9 @@ defmodule LemonSkills.CLI do
       LemonCore.CLI.info("\nAgent-authored skills:")
 
       Enum.each(rows, fn row ->
-        LemonCore.CLI.info("  #{row.name} state=#{row.lifecycle_state} loads=#{row.load_count} writes=#{row.write_count} idle_days=#{row.idle_days || "unknown"}")
+        LemonCore.CLI.info(
+          "  #{row.name} state=#{row.lifecycle_state} loads=#{row.load_count} writes=#{row.write_count} idle_days=#{row.idle_days || "unknown"}"
+        )
       end)
     end
   end
@@ -914,14 +924,14 @@ defmodule LemonSkills.CLI do
   defp manage_curator(_) do
     LemonCore.CLI.info("""
     Manage skill curation.
-    
+
     Usage:
       lemon skill curator status          # Show curator state and candidates
       lemon skill curator run             # Apply lifecycle transitions
       lemon skill curator run --prompt    # Also print the agent review prompt
       lemon skill curator pause           # Pause scheduled curator checks
       lemon skill curator resume          # Resume scheduled curator checks
-    
+
     Options:
       --local                    Work with project-local skill usage (default: global)
       --cwd=<path>               Project directory for --local

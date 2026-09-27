@@ -122,7 +122,7 @@ defmodule LemonCore.Redact do
       matches ->
         {parts, offset, count} =
           Enum.reduce(matches, {[], 0, count}, fn [{start, size} | _] = spans,
-                                                {parts, offset, count} ->
+                                                  {parts, offset, count} ->
             captures = Enum.map(spans, fn {at, length} -> binary_part(text, at, length) end)
             original = hd(captures)
             redacted = replacement.(captures)

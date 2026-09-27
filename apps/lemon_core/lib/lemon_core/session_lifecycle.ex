@@ -793,8 +793,11 @@ defmodule LemonCore.SessionLifecycle do
     do: value |> Tuple.to_list() |> sanitize_redacted(depth + 1)
 
   defp sanitize_redacted(value, _depth),
-    do: value |> inspect(limit: 100) |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
-
+    do:
+      value
+      |> inspect(limit: 100)
+      |> LemonCore.Redact.text(strict: true)
+      |> truncate_export_text()
 
   defp maybe_redact(value, false), do: value
 
@@ -802,7 +805,6 @@ defmodule LemonCore.SessionLifecycle do
     do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
 
   defp maybe_redact(value, true), do: sanitize_term(value, true)
-
 
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 

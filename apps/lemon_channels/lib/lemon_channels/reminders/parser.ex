@@ -196,9 +196,7 @@ defmodule LemonChannels.Reminders.Parser do
     do: ok("0 */#{n} * * *", false, "every #{n} hours", what)
 
   defp hour_interval(n, _what) do
-    error(
-      "Every #{n} hours does not divide a day evenly; use one of 1, 2, 3, 4, 6, 8, 12, 24."
-    )
+    error("Every #{n} hours does not divide a day evenly; use one of 1, 2, 3, 4, 6, 8, 12, 24.")
   end
 
   # --- helpers --------------------------------------------------------------

@@ -1389,10 +1389,17 @@ defmodule LemonAutomation.CronManager do
 
   defp validate_once(params) do
     case fetch_param(params, :once) do
-      :error -> {:ok, params}
-      {:ok, nil} -> {:ok, params |> Map.delete("once") |> Map.put(:once, false)}
-      {:ok, value} when is_boolean(value) -> {:ok, params |> Map.delete("once") |> Map.put(:once, value)}
-      {:ok, _value} -> {:invalid_target, "once must be a boolean"}
+      :error ->
+        {:ok, params}
+
+      {:ok, nil} ->
+        {:ok, params |> Map.delete("once") |> Map.put(:once, false)}
+
+      {:ok, value} when is_boolean(value) ->
+        {:ok, params |> Map.delete("once") |> Map.put(:once, value)}
+
+      {:ok, _value} ->
+        {:invalid_target, "once must be a boolean"}
     end
   end
 

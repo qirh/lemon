@@ -63,6 +63,4 @@ defmodule LemonControlPlane.Methods.ConfigSet do
       value
     end
   end
-
-  
 end

@@ -10,11 +10,22 @@ defmodule LemonChannels.Telegram.ResumeIndexStore do
   @resume_table :telegram_msg_resume
   @session_table :telegram_msg_session
 
-  @spec put_resume(binary(), integer(), integer() | nil, integer(), ResumeToken.t() | map(), keyword()) ::
+  @spec put_resume(
+          binary(),
+          integer(),
+          integer() | nil,
+          integer(),
+          ResumeToken.t() | map(),
+          keyword()
+        ) ::
           :ok
   def put_resume(account_id, chat_id, thread_id, message_id, resume, opts \\ [])
       when is_binary(account_id) and is_integer(chat_id) and is_integer(message_id) do
-    Store.put(@resume_table, resume_key(account_id, chat_id, thread_id, message_id, opts), normalize_resume(resume))
+    Store.put(
+      @resume_table,
+      resume_key(account_id, chat_id, thread_id, message_id, opts),
+      normalize_resume(resume)
+    )
   end
 
   @spec get_resume(binary(), integer(), integer() | nil, integer(), keyword()) ::
@@ -36,7 +47,11 @@ defmodule LemonChannels.Telegram.ResumeIndexStore do
   def put_session(account_id, chat_id, thread_id, message_id, session_key, opts \\ [])
       when is_binary(account_id) and is_integer(chat_id) and is_integer(message_id) and
              is_binary(session_key) do
-    Store.put(@session_table, resume_key(account_id, chat_id, thread_id, message_id, opts), session_key)
+    Store.put(
+      @session_table,
+      resume_key(account_id, chat_id, thread_id, message_id, opts),
+      session_key
+    )
   end
 
   @spec get_session(binary(), integer(), integer() | nil, integer(), keyword()) :: binary() | nil

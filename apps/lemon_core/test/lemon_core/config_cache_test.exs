@@ -8,7 +8,9 @@ defmodule LemonCore.ConfigCacheTest do
 
   setup do
     # Create a temporary directory for test configs
-    tmp_dir = Path.join(System.tmp_dir!(), "config_cache_test_#{System.unique_integer([:positive])}")
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "config_cache_test_#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(tmp_dir)
 
     # Create a mock HOME directory
@@ -219,7 +221,6 @@ defmodule LemonCore.ConfigCacheTest do
       # Should have default structure
       assert is_map(config.agent)
     end
-
   end
 
   describe "concurrent access" do
@@ -233,11 +234,12 @@ defmodule LemonCore.ConfigCacheTest do
       """)
 
       # Spawn multiple concurrent gets
-      tasks = for _ <- 1..10 do
-        Task.async(fn ->
-          ConfigCache.get(nil, mtime_check_interval_ms: 100)
-        end)
-      end
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn ->
+            ConfigCache.get(nil, mtime_check_interval_ms: 100)
+          end)
+        end
 
       results = Task.await_many(tasks)
 
@@ -259,11 +261,12 @@ defmodule LemonCore.ConfigCacheTest do
       ConfigCache.get(nil)
 
       # Spawn multiple concurrent reloads
-      tasks = for _ <- 1..5 do
-        Task.async(fn ->
-          ConfigCache.reload(nil)
-        end)
-      end
+      tasks =
+        for _ <- 1..5 do
+          Task.async(fn ->
+            ConfigCache.reload(nil)
+          end)
+        end
 
       results = Task.await_many(tasks)
 
@@ -286,6 +289,7 @@ defmodule LemonCore.ConfigCacheTest do
       # Create two different project configs
       project1 = Path.join(tmp_dir, "project1")
       File.mkdir_p!(Path.join(project1, ".lemon"))
+
       File.write!(Path.join(project1, ".lemon/config.toml"), """
       [defaults]
       model = "project1-model"
@@ -293,6 +297,7 @@ defmodule LemonCore.ConfigCacheTest do
 
       project2 = Path.join(tmp_dir, "project2")
       File.mkdir_p!(Path.join(project2, ".lemon"))
+
       File.write!(Path.join(project2, ".lemon/config.toml"), """
       [defaults]
       model = "project2-model"

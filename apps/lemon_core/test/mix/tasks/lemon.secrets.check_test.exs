@@ -86,7 +86,6 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
       assert output =~
                "0 from store, 0 from external sources, 0 from env, #{missing_count} missing"
     end
-
   end
 
   describe "check with store secrets" do

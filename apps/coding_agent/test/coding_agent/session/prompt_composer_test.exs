@@ -66,7 +66,10 @@ defmodule CodingAgent.Session.PromptComposerTest do
     File.write!(Path.join(tmp_dir, "AGENTS.md"), "project instructions marker")
 
     environment =
-      CodingAgent.SystemPrompt.Environment.capture(tmp_dir, date: ~D[2026-09-27], shell: "/bin/zsh")
+      CodingAgent.SystemPrompt.Environment.capture(tmp_dir,
+        date: ~D[2026-09-27],
+        shell: "/bin/zsh"
+      )
 
     prompt =
       PromptComposer.compose_system_prompt(
@@ -86,7 +89,12 @@ defmodule CodingAgent.Session.PromptComposerTest do
 
     positions =
       Enum.map(
-        ["explicit prompt marker", "## Working on code", "project instructions marker", "## Environment"],
+        [
+          "explicit prompt marker",
+          "## Working on code",
+          "project instructions marker",
+          "## Environment"
+        ],
         fn marker -> prompt |> :binary.match(marker) |> elem(0) end
       )
 

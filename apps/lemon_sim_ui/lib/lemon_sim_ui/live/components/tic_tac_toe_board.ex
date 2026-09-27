@@ -6,11 +6,13 @@ defmodule LemonSimUi.Live.Components.TicTacToeBoard do
 
   alias LemonCore.MapHelpers
 
-  attr :world, :map, required: true
-  attr :interactive, :boolean, default: false
+  attr(:world, :map, required: true)
+  attr(:interactive, :boolean, default: false)
 
   def render(assigns) do
-    board = MapHelpers.get_key(assigns.world, :board) || [["", "", ""], ["", "", ""], ["", "", ""]]
+    board =
+      MapHelpers.get_key(assigns.world, :board) || [["", "", ""], ["", "", ""], ["", "", ""]]
+
     current_player = MapHelpers.get_key(assigns.world, :current_player)
     status = MapHelpers.get_key(assigns.world, :status)
     winner = MapHelpers.get_key(assigns.world, :winner)

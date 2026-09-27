@@ -57,6 +57,7 @@ defmodule LemonCore.IntrospectionTest do
 
   test "preview bounds and captured arguments cannot expose credential values" do
     secret = "sk-introspection-must-not-leak"
+
     payload = %{
       result_preview: String.duplicate("x", 250) <> " " <> secret,
       input: %{command: "Authorization: Bearer hidden-auth", nested: [%{apiKey: "hidden-key"}]},
@@ -67,7 +68,14 @@ defmodule LemonCore.IntrospectionTest do
     assert {:ok, event} =
              Introspection.build_event(:tool_completed, payload, capture_tool_args: true)
 
-    for hidden <- [secret, "hidden-auth", "hidden-key", "hidden-password", "hidden first", "second"] do
+    for hidden <- [
+          secret,
+          "hidden-auth",
+          "hidden-key",
+          "hidden-password",
+          "hidden first",
+          "second"
+        ] do
       refute inspect(event.payload) =~ hidden
     end
 

@@ -109,12 +109,14 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
   defp status_dot_class(:failed), do: "h-2 w-2 shrink-0 rounded-full bg-rose-500"
 
   defp status_badge_class(:running),
-    do: "ml-auto shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+    do:
+      "ml-auto shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
 
   defp status_badge_class(:done),
     do:
       "ml-auto shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800"
 
   defp status_badge_class(:failed),
-    do: "ml-auto shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-800"
+    do:
+      "ml-auto shrink-0 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-800"
 end

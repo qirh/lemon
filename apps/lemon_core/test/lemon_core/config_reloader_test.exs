@@ -144,7 +144,6 @@ defmodule LemonCore.ConfigReloaderTest do
   end
 
   describe "redaction" do
-
     test "does not redact non-sensitive fields" do
       assert ConfigReloader.redact_value("agent.default_provider", "anthropic") == "anthropic"
       assert ConfigReloader.redact_value("gateway.max_concurrent_runs", 5) == 5

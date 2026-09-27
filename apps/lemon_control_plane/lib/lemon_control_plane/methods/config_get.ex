@@ -166,6 +166,4 @@ defmodule LemonControlPlane.Methods.ConfigGet do
         value
     end
   end
-
-  
 end

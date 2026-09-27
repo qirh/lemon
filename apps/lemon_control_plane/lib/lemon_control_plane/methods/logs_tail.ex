@@ -92,10 +92,6 @@ defmodule LemonControlPlane.Methods.LogsTail do
   defp redact_value(value) when is_binary(value), do: LemonCore.Redact.text(value)
   defp redact_value(value), do: value
 
-  
-
-  
-
   defp normalize_limit(limit) when is_integer(limit) and limit > 0, do: min(limit, @max_limit)
 
   defp normalize_limit(limit) when is_binary(limit) do

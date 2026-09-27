@@ -152,6 +152,4 @@ defmodule LemonControlPlane.Methods.AgentWait do
   defp format_error(nil), do: nil
   defp format_error(error) when is_binary(error), do: LemonCore.Redact.text(error)
   defp format_error(error), do: error |> inspect() |> LemonCore.Redact.text()
-
-  
 end

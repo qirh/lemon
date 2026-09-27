@@ -4,7 +4,7 @@ defmodule LemonSimUi.Live.Components.EventLog do
   """
   use Phoenix.Component
 
-  attr :events, :list, required: true
+  attr(:events, :list, required: true)
 
   def render(assigns) do
     ~H"""
@@ -40,6 +40,7 @@ defmodule LemonSimUi.Live.Components.EventLog do
         "make_statement" ->
           player = Map.get(payload, "player_id") || Map.get(payload, :player_id, "?")
           stmt = Map.get(payload, "statement") || Map.get(payload, :statement, "")
+
           "#{player}: \"#{String.slice(stmt, 0, 80)}#{if String.length(stmt) > 80, do: "...", else: ""}\""
 
         "cast_vote" ->
@@ -97,32 +98,77 @@ defmodule LemonSimUi.Live.Components.EventLog do
 
     case kind_str do
       # Werewolf events
-      "choose_victim" -> "text-red-400 border-red-500/30 bg-red-950/20"
-      "investigate_player" -> "text-purple-300 border-purple-500/30 bg-purple-950/20"
-      "investigation_result" -> "text-purple-400 border-purple-500/40 bg-purple-950/30"
-      "protect_player" -> "text-emerald-300 border-emerald-500/30 bg-emerald-950/20"
-      "sleep" -> "text-slate-500 border-slate-700 bg-slate-900/30"
-      "make_statement" -> "text-amber-300 border-amber-500/20 bg-amber-950/10"
-      "cast_vote" -> "text-rose-300 border-rose-500/30 bg-rose-950/20"
-      "night_resolved" -> "text-blue-300 border-blue-500/30 bg-blue-950/20"
-      "player_eliminated" -> "text-red-500 border-red-600/50 bg-red-950/30"
-      "vote_result" -> "text-rose-400 border-rose-500/40 bg-rose-950/20"
-      "phase_changed" -> "text-cyan-300 border-cyan-500/30 bg-cyan-950/10"
-      "game_over" -> "text-fuchsia-400 border-fuchsia-500/40 bg-fuchsia-950/20"
-      "action_rejected" -> "text-amber-500 border-amber-600/40 bg-amber-950/20"
+      "choose_victim" ->
+        "text-red-400 border-red-500/30 bg-red-950/20"
+
+      "investigate_player" ->
+        "text-purple-300 border-purple-500/30 bg-purple-950/20"
+
+      "investigation_result" ->
+        "text-purple-400 border-purple-500/40 bg-purple-950/30"
+
+      "protect_player" ->
+        "text-emerald-300 border-emerald-500/30 bg-emerald-950/20"
+
+      "sleep" ->
+        "text-slate-500 border-slate-700 bg-slate-900/30"
+
+      "make_statement" ->
+        "text-amber-300 border-amber-500/20 bg-amber-950/10"
+
+      "cast_vote" ->
+        "text-rose-300 border-rose-500/30 bg-rose-950/20"
+
+      "night_resolved" ->
+        "text-blue-300 border-blue-500/30 bg-blue-950/20"
+
+      "player_eliminated" ->
+        "text-red-500 border-red-600/50 bg-red-950/30"
+
+      "vote_result" ->
+        "text-rose-400 border-rose-500/40 bg-rose-950/20"
+
+      "phase_changed" ->
+        "text-cyan-300 border-cyan-500/30 bg-cyan-950/10"
+
+      "game_over" ->
+        "text-fuchsia-400 border-fuchsia-500/40 bg-fuchsia-950/20"
+
+      "action_rejected" ->
+        "text-amber-500 border-amber-600/40 bg-amber-950/20"
+
       # Generic fallbacks
       _ ->
         cond do
-          String.contains?(kind_str, "move") -> "text-emerald-300 border-emerald-500/30"
-          String.contains?(kind_str, "attack") -> "text-red-400 border-red-500/40 bg-red-950/20"
-          String.contains?(kind_str, "damage") -> "text-amber-400 border-amber-500/30"
-          String.contains?(kind_str, "died") or String.contains?(kind_str, "dead") -> "text-red-500 border-red-600/50 bg-red-950/40"
-          String.contains?(kind_str, "rejected") -> "text-amber-500 border-amber-600/40"
-          String.contains?(kind_str, "cover") -> "text-cyan-300 border-cyan-500/30"
-          String.contains?(kind_str, "turn") or String.contains?(kind_str, "round") -> "text-slate-400 border-slate-700"
-          String.contains?(kind_str, "game_over") -> "text-purple-400 border-purple-500/40 bg-purple-950/20"
-          String.contains?(kind_str, "place_mark") -> "text-blue-300 border-blue-500/30"
-          true -> "text-slate-400 border-glass-border bg-slate-900/60"
+          String.contains?(kind_str, "move") ->
+            "text-emerald-300 border-emerald-500/30"
+
+          String.contains?(kind_str, "attack") ->
+            "text-red-400 border-red-500/40 bg-red-950/20"
+
+          String.contains?(kind_str, "damage") ->
+            "text-amber-400 border-amber-500/30"
+
+          String.contains?(kind_str, "died") or String.contains?(kind_str, "dead") ->
+            "text-red-500 border-red-600/50 bg-red-950/40"
+
+          String.contains?(kind_str, "rejected") ->
+            "text-amber-500 border-amber-600/40"
+
+          String.contains?(kind_str, "cover") ->
+            "text-cyan-300 border-cyan-500/30"
+
+          String.contains?(kind_str, "turn") or String.contains?(kind_str, "round") ->
+            "text-slate-400 border-slate-700"
+
+          String.contains?(kind_str, "game_over") ->
+            "text-purple-400 border-purple-500/40 bg-purple-950/20"
+
+          String.contains?(kind_str, "place_mark") ->
+            "text-blue-300 border-blue-500/30"
+
+          true ->
+            "text-slate-400 border-glass-border bg-slate-900/60"
         end
     end
   end

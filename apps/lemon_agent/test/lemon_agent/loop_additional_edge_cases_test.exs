@@ -180,7 +180,6 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
       # Error stop reason should terminate with stream error, not agent_end
       assert {:error, :assistant_error, %{new_messages: _messages}} = List.last(events)
     end
-
   end
 
   # ============================================================================
@@ -767,7 +766,6 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
       end
     end
   end
-
 
   # ============================================================================
   # Follow-up Message Edge Cases

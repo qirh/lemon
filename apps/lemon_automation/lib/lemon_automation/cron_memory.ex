@@ -285,8 +285,8 @@ defmodule LemonAutomation.CronMemory do
         _ -> ""
       end
 
-    "- run #{id} · #{entry_field(entry, "started_at") || "?"} · " <>
-      "#{entry_field(entry, "status") || "unknown"} · #{result}"
+    ("- run #{id} · #{entry_field(entry, "started_at") || "?"} · " <>
+       "#{entry_field(entry, "status") || "unknown"} · #{result}")
     |> String.slice(0, @summary_line_chars)
   end
 

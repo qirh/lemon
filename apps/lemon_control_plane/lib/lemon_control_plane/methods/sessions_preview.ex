@@ -84,10 +84,10 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   defp truncate(text, max) when is_binary(text), do: String.slice(text, 0, max) <> "..."
   defp truncate(_, _), do: nil
 
-  defp preview_text(text, max) when is_binary(text), do: text |> LemonCore.Redact.text() |> truncate(max)
-  defp preview_text(_, _), do: nil
+  defp preview_text(text, max) when is_binary(text),
+    do: text |> LemonCore.Redact.text() |> truncate(max)
 
-  
+  defp preview_text(_, _), do: nil
 
   defp truncated?(text, max) when is_binary(text), do: byte_size(text) > max
   defp truncated?(_, _), do: false

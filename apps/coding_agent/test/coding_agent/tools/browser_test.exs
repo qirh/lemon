@@ -1165,5 +1165,4 @@ defmodule CodingAgent.Tools.BrowserTest do
     module = Module.concat(CodingAgent.Tools, Macro.camelize(name))
     module.tool(cwd, opts)
   end
-
 end

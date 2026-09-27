@@ -57,7 +57,12 @@ defmodule LemonWeb.SessionChatLiveTest do
       {:ok, view, _html} = live(build_conn(), "/sessions/#{session_key("segments")}")
 
       send(view.pid, delta("run-seg", "Let me look."))
-      send(view.pid, action("run-seg", "call_1", :started, %{name: "read", args: %{"path" => "mix.exs"}}))
+
+      send(
+        view.pid,
+        action("run-seg", "call_1", :started, %{name: "read", args: %{"path" => "mix.exs"}})
+      )
+
       send(view.pid, delta("run-seg", "Found it."))
       send(view.pid, completed("run-seg", "Let me look.Found it."))
 
@@ -93,7 +98,12 @@ defmodule LemonWeb.SessionChatLiveTest do
       assert has_element?(view, ".lemon-markdown h1", "Release notes")
       assert has_element?(view, ".lemon-markdown p code", "mix test")
       assert has_element?(view, ".lemon-markdown pre code.language-elixir", ~s|IO.puts("<ok>")|)
-      assert has_element?(view, ~s|.lemon-markdown a[href="https://example.com"][target="_blank"]|, "good")
+
+      assert has_element?(
+               view,
+               ~s|.lemon-markdown a[href="https://example.com"][target="_blank"]|,
+               "good"
+             )
 
       refute has_element?(view, "#transcript script")
       refute html =~ "<script"
@@ -111,7 +121,11 @@ defmodule LemonWeb.SessionChatLiveTest do
       bash = %{name: "bash", args: %{"command" => "ls -la", "api_key" => "sk-live-secret"}}
       read = %{name: "read", args: %{"path" => "README.md"}}
 
-      send(view.pid, Event.new(:run_started, %{run_id: "run-tools", engine: "lemon"}, %{run_id: "run-tools"}))
+      send(
+        view.pid,
+        Event.new(:run_started, %{run_id: "run-tools", engine: "lemon"}, %{run_id: "run-tools"})
+      )
+
       send(view.pid, action("run-tools", "call_bash", :started, bash, title: "`ls -la`"))
       send(view.pid, action("run-tools", "call_read", :started, read, title: "read: `README.md`"))
 
@@ -134,12 +148,20 @@ defmodule LemonWeb.SessionChatLiveTest do
       )
 
       html = render(view)
-      cards = view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query("details.tool-call-card")
+
+      cards =
+        view |> render() |> LazyHTML.from_fragment() |> LazyHTML.query("details.tool-call-card")
 
       assert Enum.count(cards) == 2
       refute has_element?(view, "details.tool-call-card[open]")
       assert has_element?(view, "details.tool-call-card[data-status=done] summary", "ls -la")
-      assert has_element?(view, "details.tool-call-card[data-status=failed] summary", "read: README.md")
+
+      assert has_element?(
+               view,
+               "details.tool-call-card[data-status=failed] summary",
+               "read: README.md"
+             )
+
       assert has_element?(view, "details.tool-call-card[data-status=done]", "total 0")
       refute html =~ "sk-live-secret"
 
@@ -167,7 +189,10 @@ defmodule LemonWeb.SessionChatLiveTest do
           })
         end)
 
-      assert_eventually(fn -> has_element?(view, "#approval-#{approval_id}", "rm -rf ./build") end)
+      assert_eventually(fn ->
+        has_element?(view, "#approval-#{approval_id}", "rm -rf ./build")
+      end)
+
       assert has_element?(view, "#approval-#{approval_id}", "Clean stale build output")
 
       view
@@ -190,7 +215,8 @@ defmodule LemonWeb.SessionChatLiveTest do
       their_request = request_async(theirs, other_key, %{"command" => "shutdown now"})
 
       assert_eventually(fn ->
-        is_map(ExecApprovalStore.get_pending(mine)) and is_map(ExecApprovalStore.get_pending(theirs))
+        is_map(ExecApprovalStore.get_pending(mine)) and
+          is_map(ExecApprovalStore.get_pending(theirs))
       end)
 
       {:ok, view, html} = live(build_conn(), "/sessions/#{key}")
@@ -246,7 +272,8 @@ defmodule LemonWeb.SessionChatLiveTest do
 
   defp session_key(name), do: "agent:web_chat_#{name}_#{System.unique_integer([:positive])}:main"
 
-  defp delta(run_id, text), do: Event.new(:delta, %{run_id: run_id, text: text}, %{run_id: run_id})
+  defp delta(run_id, text),
+    do: Event.new(:delta, %{run_id: run_id, text: text}, %{run_id: run_id})
 
   defp completed(run_id, answer) do
     Event.new(
@@ -322,8 +349,12 @@ defmodule LemonWeb.SessionChatLiveTest do
 
   defp assert_eventually(fun, attempts \\ 50) do
     cond do
-      fun.() -> :ok
-      attempts == 0 -> flunk("condition was not met in time")
+      fun.() ->
+        :ok
+
+      attempts == 0 ->
+        flunk("condition was not met in time")
+
       true ->
         Process.sleep(20)
         assert_eventually(fun, attempts - 1)

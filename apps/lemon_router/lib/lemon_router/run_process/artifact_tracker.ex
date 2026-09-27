@@ -448,7 +448,9 @@ defmodule LemonRouter.RunProcess.ArtifactTracker do
               end
 
             resolve_absolute_path(combined)
-          _ -> :error
+
+          _ ->
+            :error
         end
 
       {:ok, _stat} ->

@@ -123,8 +123,7 @@ defmodule CodingAgent.SystemPrompt do
      "Use `edit` for changes to existing files. Keep each change as small as the task allows."},
     {~w(write),
      "Use `write` only to create new files or when replacing a whole file is genuinely simpler than editing it."},
-    {~w(patch),
-     "Use `patch` for coordinated multi-hunk or multi-file changes."},
+    {~w(patch), "Use `patch` for coordinated multi-hunk or multi-file changes."},
     {~w(grep find),
      "Use `grep` to search file contents and `find` to locate files by name instead of shell grep/find; " <>
        "both respect .gitignore."},

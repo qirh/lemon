@@ -104,7 +104,6 @@ defmodule LemonSkills.Sources.GithubRegistryTest do
       HttpMock.stub(url, {:error, :not_found})
       assert Github.fetch_manifest("acme/deploy-skill") == {:error, :not_found}
     end
-
   end
 
   describe "registry source" do

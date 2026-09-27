@@ -411,7 +411,11 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
                    onboard_user(access_token_from_secret(secret), tier_id, configured_project_id) do
               updated =
                 secret
-                |> put_project_fields(configured_project_id, managed_project_id, managed_project_id)
+                |> put_project_fields(
+                  configured_project_id,
+                  managed_project_id,
+                  managed_project_id
+                )
 
               {:ok, updated, project_fields_changed?(secret, updated)}
             end

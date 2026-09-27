@@ -155,7 +155,11 @@ defmodule LemonCore.Introspection do
           Map.put(acc, key, "[redacted]")
 
         result_preview_payload_key?(key_name) ->
-          Map.put(acc, key, raw |> sanitize_value(opts) |> truncate_binary(@max_result_preview_bytes))
+          Map.put(
+            acc,
+            key,
+            raw |> sanitize_value(opts) |> truncate_binary(@max_result_preview_bytes)
+          )
 
         true ->
           Map.put(acc, key, sanitize_value(raw, opts))
@@ -178,7 +182,10 @@ defmodule LemonCore.Introspection do
   defp normalize_key_name(_), do: ""
 
   defp forbidden_payload_key?(key_name),
-    do: MapSet.member?(@forbidden_payload_keys, key_name) or LemonCore.Redact.sensitive_key?(key_name)
+    do:
+      MapSet.member?(@forbidden_payload_keys, key_name) or
+        LemonCore.Redact.sensitive_key?(key_name)
+
   defp tool_args_payload_key?(key_name), do: MapSet.member?(@tool_args_payload_keys, key_name)
 
   defp result_preview_payload_key?(key_name),

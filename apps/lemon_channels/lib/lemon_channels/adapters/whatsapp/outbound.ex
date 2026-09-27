@@ -30,9 +30,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
     chunks = chunk_text(text, @chunk_limit)
     chunk_count = length(chunks)
 
-    Logger.debug(
-      "WhatsApp outbound text chunks: peer_id=#{peer.id} chunks=#{chunk_count}"
-    )
+    Logger.debug("WhatsApp outbound text chunks: peer_id=#{peer.id} chunks=#{chunk_count}")
 
     result =
       chunks
@@ -113,6 +111,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
         end
 
         result
+
       {:error, reason} ->
         Logger.warning(
           "WhatsApp outbound file normalization failed: peer_id=#{payload.peer.id} " <>
@@ -141,9 +140,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
 
     case Transport.deliver(transport_payload) do
       {:ok, result} ->
-        Logger.debug(
-          "WhatsApp outbound reaction sent successfully: peer_id=#{payload.peer.id}"
-        )
+        Logger.debug("WhatsApp outbound reaction sent successfully: peer_id=#{payload.peer.id}")
 
         {:ok, result}
 
@@ -271,8 +268,12 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
     config = LemonChannels.GatewayConfig.get(:whatsapp, %{}) || %{}
 
     case Map.fetch(config, :use_markdown) do
-      {:ok, nil} -> true
-      {:ok, v} -> v
+      {:ok, nil} ->
+        true
+
+      {:ok, v} ->
+        v
+
       :error ->
         case Map.fetch(config, "use_markdown") do
           {:ok, nil} -> true

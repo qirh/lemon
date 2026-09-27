@@ -396,6 +396,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
 
           memory_tool = Remember.tool(project_dir, workspace_dir: project_dir)
           skill_tool = SkillManage.tool(project_dir, tool_opts)
+
           learning_prompt =
             SystemPrompt.build(project_dir, %{workspace_dir: home_dir, session_scope: :main})
 

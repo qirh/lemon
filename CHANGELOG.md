@@ -10,15 +10,51 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Source and packaged launchers now share command dispatch, help, completion,
+  and lifecycle semantics. Running `lemon` in a terminal opens the TUI;
+  `lemon start`/`lemon run` start the foreground runtime. Non-interactive
+  no-argument calls return usage with exit code 2. `send`, `media`, `models`,
+  `policy`, `skill`, `usage`, and `migrate hermes` also work without Mix in
+  runtime releases.
+- Native coding sessions no longer stop at an incidental default turn cap.
+  Explicit limits remain available; retries, thinking state, and tool results
+  survive the appropriate session transitions.
+- Durable memory is recalled automatically into the next user message using
+  agent-scoped full-text search and the selected workspace's `USER.md`.
+  Recall is bounded to 2 KiB, stays out of the cached system prompt, and can
+  be disabled with `[memory] auto_recall = false`. The model-facing memory
+  tools are now `remember` and `recall`.
+- Heartbeats use cron rather than a second session scheduler. Reminder and
+  proactive jobs preserve their originating delivery target.
+- Shared credential redaction now covers session, profile, memory, config,
+  diagnostic, webhook, and Web surfaces while preserving their stricter
+  content allowlists and output bounds.
+- Standalone packaging is limited to `lemon_ai`, `lemon_core`, `lemon_agent`,
+  `lemon_memory`, and `lemon_platform_test`. Version 0.2.0 tarballs are locally
+  installable; these packages have not been published by this change.
+
 - Refreshed the public website, README, and onboarding docs with a shared Lemon
   visual identity, clearer task navigation, and current feature guidance.
 
-- `CodingAgent.Session` now keeps heartbeat, automatic-compaction, and
-  overflow-recovery bookkeeping in state structs owned by those subsystems
-  instead of twenty loose session fields. Public APIs, emitted events, and
-  the persisted session format are unchanged.
+- `CodingAgent.Session` keeps automatic-compaction and overflow-recovery
+  bookkeeping in subsystem-owned state structs. The persisted session format
+  is unchanged.
 
 ### Removed
+
+- The duplicate `clients/lemon-web` application, `coding_agent_ui`, and
+  `lemon_tcg`; the supported clients are the Bun TUI and Phoenix LiveView Web.
+- `execute_code`, `python_repl`, their persistent Python/RPC bridge, the MCP
+  server surface, and obsolete agent factories. Native tools and the MCP
+  client remain; browser actions use explicit browser-tab tools.
+- Unused control-plane methods: the built-in registry is reduced from 188 to
+  79 methods used by retained clients. Retired device, proof/readiness,
+  heartbeat, and other unsupported APIs have no compatibility aliases.
+- Long-tail simulation arenas, generated proof/readiness machinery, orphaned
+  modules, and duplicate or implementation-only tests. LemonSim's product
+  focus is Werewolf, Poker, and VendingBench.
+- The `memory_topic`, `session_search`, and `search_memory` tool names. Use
+  `remember` and `recall`; no deprecated aliases are retained.
 
 - The built-in `x_api` satellite, its X/Twitter tools and channel adapter,
   OAuth helpers, credential registry entries, release wiring, and developer
@@ -32,13 +68,36 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `STOPPED`, after their runner exits. Live Werewolf playback keeps its
   playback indicator until the final scene has been shown.
 
+- Router callback defects now reach callers or OTP supervision instead of
+  being acknowledged as success. Durable replay/admission and cancellation
+  fences remain intact; rejected final deliveries remain retryable.
+- Channel delivery no longer replays an external write after an adapter crash
+  or lost acknowledgement. A failed Telegram update does not stop the rest of
+  its fetched batch; WhatsApp acknowledgement timeouts report unknown outcome.
+- File edits handle normalized whitespace and Unicode without damaging
+  original UTF-8, BOM, line endings, or surrounding content. Read freshness
+  and mutation locks prevent stale or concurrent overwrites.
+- Provider handling preserves Retry-After delays, image tool results, and
+  usage/cost accounting. Telegram access checks remain fail-closed, including
+  pairing, group policy, and attachment-size refusal.
+- LemonSim replay verification checks artifact integrity and replays recorded
+  batches; seeded randomness makes retained offline arenas reproducible.
+- Removed unreachable and unused Elixir paths rather than suppressing
+  compiler diagnostics.
+- Updated locked Bandit, Mint, LiveView, LazyHTML, Gun, and Cowlib releases
+  after Hex reported upstream security advisories; refreshed the vendored
+  LiveView browser client to match. Cowlib's
+  [structured-header](https://cna.erlef.org/cves/CVE-2026-43966.html) and
+  [cookie-encoder](https://cna.erlef.org/cves/CVE-2026-43969.html) advisories
+  still have no fixed Hex release and remain tracked upstream.
+
 - Bash streaming previews retain the most recent 50,000 output bytes plus an
   omission marker, preserving UTF-8 boundaries without retaining discarded
   source binaries. Final results and full-output files are unchanged.
 
-- Restricted tool profiles now deny alternate hashline editing, topic-memory
-  writes, and task delegation through `hashline_edit`, `memory_topic`, and
-  `task`. Full-access and orchestrator profiles are unchanged.
+- Restricted tool profiles deny alternate hashline editing, memory writes,
+  and task delegation through `hashline_edit`, `remember`, and `task`.
+  Full-access and orchestrator profiles are unchanged.
 
 - Tool approval failures now block execution on exceptions, exits, throws,
   malformed replies, and unsupported approval scopes without exposing raw
@@ -117,13 +176,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   user-relevant tools. Automatic filesystem checkpoint lifecycle events remain
   auditable internally and available through explicit `/checkpoint` and
   `/rollback` commands without being pushed into ordinary channel chats.
-- Source `./bin/lemon` now detects and reuses a healthy local control plane
-  before compilation or Erlang distribution startup, so invoking it beside an
-  existing runtime no longer fails with a duplicate `lemon@host` node name.
+- Source `./bin/lemon start` detects and reuses a healthy local control plane
+  before compilation or Erlang distribution startup, avoiding duplicate
+  `lemon@host` registration.
   Web health probes tolerate bounded slow responses and trailing whitespace,
   and the quality lane exercises both direct-launch and `web --no-open` reuse.
 
 ### Added
+
+- Background shell execution with session-owned `bash_output` and
+  `kill_process` tools, explicit millisecond timeouts, and preserved partial
+  output on timeout or cancellation.
+- Structured TUI tool cards with real-line-number edit diffs, bounded command
+  output, and reasoning display; LiveView chat improvements for streaming,
+  Markdown, and tool approvals.
+- A keyless `mix lemon.sim.demo` Werewolf spectator demo and offline
+  Werewolf/Poker run bundles for local replay verification.
 
 - `mix lemon.eval --output <path> --revision <full-sha>` writes versioned,
   redacted contract reports with check outcomes and explicit revision metadata,
@@ -283,10 +351,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - A shared `LemonCore.Setup.Readiness` contract plus a fail-closed Web first-run
   guide, live config/secret refresh, active-run stop control, and accessible
   responsive status/composer states.
-- Durable same-session heartbeats with idle-only recurring turns, queued-user
-  priority, missed-tick coalescing, pause/resume/clear lifecycle, restart-safe
-  fire claims, reset tombstones, logical session-key resolution, an admin
-  `sessions.heartbeat` API, and TUI `/heartbeat`/`/hb` commands.
+- Cron-backed TUI `/heartbeat`/`/hb` commands and channel `/remind` scheduling
+  reuse the automation scheduler rather than retaining session heartbeat
+  state or a `sessions.heartbeat` API.
 - Portable Hermes-compatible slash-command discovery metadata for channel and
   interactive clients, exposed through the read-only `commands.catalog`
   control-plane method while preserving Lemon's router/session ownership and
@@ -355,69 +422,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   external resources for recompilation, malformed entries fail compilation
   with their model key, and atom-valued API/provider/input/compatibility fields
   accept only explicit allowlists.
-- `execute_code` gained an explicit result channel: `text()` blocks are the tool
-  result (write-through flushed per call, so they survive a timeout/abort kill),
-  while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts
-  that never call `text()` keep the historic stdout-only result byte-for-byte.
-  New knobs: `max_text_bytes` (text budget, default 64 KiB) and
-  `max_parallel_rpc` (pump dispatch concurrency, default 4).
-- `execute_code` result-channel hardening (fix round): the `text()` budget now
-  charges the JSON-encoded frame, so NUL-heavy strings that expand six-fold
-  under escaping are refused on the script side instead of being written and
-  silently dropped by the host; persistent kernels reset the per-cell bridge
-  (fresh text budget, fresh counters) and refuse calls from threads stamped
-  with an earlier cell; `notify()` caps are per run across sweeps, malformed
-  frames are no longer forwarded or counted, and a final notification drain
-  forwards a `notify()` issued immediately before exit; claimed RPC requests
-  always end answered (a killed sweep leaves in-flight claim markers that the
-  successor sweep or the cancel path answers in writing, reconstructing the
-  call accounting), and an approval prompt left pending by a killed dispatch
-  is cancelled, so it can never be approved into policy after the script died.
-- `execute_code` result-channel adversarial hardening (fix round 2): RPC
-  dispatch is now gated on publishing a regular-file claim marker (a planted
-  object at the marker name or a symlinked request is answered with an error
-  and never dispatched), recovery trusts only regular-file markers (planted
-  directories are ignored, never charged) and restores the real accounting
-  beside an already-published successful response, marker deletion failures
-  can never re-charge the budget on a later sweep, and approval cancel/resolve
-  is one atomic store transition (`LemonCore.ExecApprovals.cancel/2` and
-  `resolve/2` now return `{:error, :not_pending}` to the loser) with the
-  dispatch watcher cancelling after each owner death so a prompt registered
-  after its sweep died cannot be orphaned; a killed sweep's lost accounting
-  is flagged (`rpc_accounting_loss`) and forces the result to `:untrusted`;
-  persistent-cell thread quarantine now stamps threads with their creator's
-  cell generation at construction time, so a stale thread's descendants stay
-  stale; the `text()` host-side budget charges the encoded frame (identical
-  to the shim) and the shim normalizes lone surrogates, so an in-budget
-  block is always delivered.
-- `execute_code` result-channel hardening (fix round 4): a sweep caught
-  raising or throwing mid-flight is still contained (the server stays
-  alive) but no longer reported as if it had merely kept its old stats —
-  it settles through the same recovery-plus-`rpc_accounting_loss` path as
-  an abnormal death, so claims it dispatched are answered and charged from
-  the host-side claim ledger and surviving responses instead of being
-  silently discarded; claim recovery takes the tool identity from the
-  host-owned ledger whenever both ledger and script-writable marker exist,
-  so overwriting a marker body can no longer forge the recorded tool; and
-  a successful cancel folds the sweep's still-queued claim-ledger messages
-  through the same deduplicating recovery instead of reinserting them as
-  stale ledger entries.
-- `execute_code` result-channel hardening (fix round 5): the persistent
-  server's claim ledger now records a reservation entry the moment a
-  request spends its `max_calls` slot — refined by its disposition
-  (`:invalid`, `:unknown_tool`, `:denied` when answered without dispatch,
-  `:claimed` for dispatch-bound requests) — and sweep-failure settlement
-  re-applies reserved entries exactly (one call, one error or denial, the
-  replay memory, no response writes), so a contained fault after an
-  answered-but-never-dispatched request can no longer erase that spend and
-  let resumed sweeps exceed the call budget.
-- `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
-  messages are forwarded to the tool's partial-update callback (capped at 4 KiB
-  per message, 64 per run) — and `batch([...])`, which runs helper calls in
-  parallel through the pump's bounded wave dispatch with exact call-limit,
-  replay, and byte-budget accounting.
-
-
 - Packaged and Mix `secrets check` output now reports only `present` and source
   category counts; it no longer reveals credential prefixes or suffixes.
 - Lemon Web now ships compiled CSS inside the release instead of loading
@@ -539,12 +543,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   submit errors with injection-safe whole-entry history envelopes; and cleared
   stale session follow-up diagnostics/background compaction when turns end or a
   new prompt supersedes the snapshot.
-- Heartbeat reconfiguration now updates cron jobs with mutable fields only,
-  disables the superseded cron or timer mechanism, preserves nonrepresentable
-  intervals with exact timers, records timer terminal/suppression state, and
-  skips overlapping timer runs with telemetry. Automation submit-and-wait paths
-  now subscribe before submission through one fixed-run-id lifecycle, closing
-  synchronous-completion races in cron, goal, heartbeat, and Kanban runs.
+- Automation submit-and-wait paths subscribe before submission through one
+  fixed-run-id lifecycle, closing synchronous-completion races in cron,
+  goal, heartbeat, and Kanban runs.
 - Cron retries now persist due time and lineage across manager restarts, claim
   deterministic attempt IDs, and share one terminal policy path for normal,
   stale, aborted, start-failed, and crashed-worker outcomes. Cron work is

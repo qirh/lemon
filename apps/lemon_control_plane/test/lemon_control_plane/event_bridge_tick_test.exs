@@ -15,6 +15,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
     case Process.whereis(EventBridge) do
       nil ->
         {:ok, pid} = EventBridge.start_link([])
+
         on_exit(fn ->
           # Avoid flakiness: the bridge can terminate between `Process.alive?/1` and `GenServer.stop/1`.
           if is_pid(pid) do
@@ -25,6 +26,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
             end
           end
         end)
+
         {:ok, bridge_pid: pid}
 
       pid ->
@@ -36,11 +38,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
     test "maps :cron_tick to tick event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         # Create a cron_tick event (what LemonAutomation.Events.emit_tick sends)
-        event = LemonCore.Event.new(
-          :cron_tick,
-          %{timestamp_ms: System.system_time(:millisecond)},
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :cron_tick,
+            %{timestamp_ms: System.system_time(:millisecond)},
+            %{}
+          )
 
         # Broadcast on cron topic
         LemonCore.Bus.broadcast("cron", event)
@@ -56,11 +59,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
     test "maps :tick to tick event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         # Create a direct tick event
-        event = LemonCore.Event.new(
-          :tick,
-          System.system_time(:millisecond),
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :tick,
+            System.system_time(:millisecond),
+            %{}
+          )
 
         # Broadcast on system topic
         LemonCore.Bus.broadcast("system", event)
@@ -75,11 +79,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   describe "presence event mapping" do
     test "maps :presence_changed to presence event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :presence_changed,
-          %{connections: [], count: 0},
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :presence_changed,
+            %{connections: [], count: 0},
+            %{}
+          )
 
         LemonCore.Bus.broadcast("presence", event)
 
@@ -93,11 +98,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   describe "heartbeat event mapping" do
     test "maps :heartbeat to heartbeat event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :heartbeat,
-          %{agent_id: "test-agent", status: :ok},
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :heartbeat,
+            %{agent_id: "test-agent", status: :ok},
+            %{}
+          )
 
         LemonCore.Bus.broadcast("system", event)
 
@@ -109,11 +115,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
     test "maps :heartbeat_alert to heartbeat event with alert status" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :heartbeat_alert,
-          %{agent_id: "test-agent", response: "NOT OK"},
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :heartbeat_alert,
+            %{agent_id: "test-agent", response: "NOT OK"},
+            %{}
+          )
 
         LemonCore.Bus.broadcast("cron", event)
 
@@ -127,17 +134,18 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   describe "node event mapping" do
     test "maps :node_pair_requested to node.pair.requested event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :node_pair_requested,
-          %{
-            pairing_id: "pair-1",
-            code: "123456",
-            node_type: "browser",
-            node_name: "Test Browser",
-            expires_at_ms: System.system_time(:millisecond) + 300_000
-          },
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :node_pair_requested,
+            %{
+              pairing_id: "pair-1",
+              code: "123456",
+              node_type: "browser",
+              node_name: "Test Browser",
+              expires_at_ms: System.system_time(:millisecond) + 300_000
+            },
+            %{}
+          )
 
         LemonCore.Bus.broadcast("nodes", event)
 
@@ -149,15 +157,16 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
     test "maps :node_pair_resolved to node.pair.resolved event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :node_pair_resolved,
-          %{
-            pairing_id: "pair-1",
-            node_id: "node-1",
-            approved: true
-          },
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :node_pair_resolved,
+            %{
+              pairing_id: "pair-1",
+              node_id: "node-1",
+              approved: true
+            },
+            %{}
+          )
 
         LemonCore.Bus.broadcast("nodes", event)
 
@@ -169,17 +178,18 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
     test "maps :node_invoke_request to node.invoke.request event" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :node_invoke_request,
-          %{
-            invoke_id: "invoke-1",
-            node_id: "node-1",
-            method: "screenshot",
-            args: %{},
-            timeout_ms: 30_000
-          },
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :node_invoke_request,
+            %{
+              invoke_id: "invoke-1",
+              node_id: "node-1",
+              method: "screenshot",
+              args: %{},
+              timeout_ms: 30_000
+            },
+            %{}
+          )
 
         LemonCore.Bus.broadcast("nodes", event)
 
@@ -195,11 +205,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
       # We can't easily test the internal state, but we can verify
       # the event is processed without error
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :presence_changed,
-          %{connections: [], count: 1},
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :presence_changed,
+            %{connections: [], count: 1},
+            %{}
+          )
 
         # Send multiple events
         LemonCore.Bus.broadcast("presence", event)
@@ -214,11 +225,12 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
     test "bumps health version on health_changed" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        event = LemonCore.Event.new(
-          :health_changed,
-          %{status: "healthy"},
-          %{}
-        )
+        event =
+          LemonCore.Event.new(
+            :health_changed,
+            %{status: "healthy"},
+            %{}
+          )
 
         LemonCore.Bus.broadcast("system", event)
 
@@ -230,24 +242,26 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
     test "bumps cron version on cron events" do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
-        tick_event = LemonCore.Event.new(
-          :cron_tick,
-          %{timestamp_ms: System.system_time(:millisecond)},
-          %{}
-        )
+        tick_event =
+          LemonCore.Event.new(
+            :cron_tick,
+            %{timestamp_ms: System.system_time(:millisecond)},
+            %{}
+          )
 
         LemonCore.Bus.broadcast("cron", tick_event)
 
-        run_started = LemonCore.Event.new(
-          :cron_run_started,
-          %{
-            cron_run_id: "run-1",
-            job_id: "job-1",
-            job_name: "test",
-            run: %{id: "run-1", job_id: "job-1"}
-          },
-          %{}
-        )
+        run_started =
+          LemonCore.Event.new(
+            :cron_run_started,
+            %{
+              cron_run_id: "run-1",
+              job_id: "job-1",
+              job_name: "test",
+              run: %{id: "run-1", job_id: "job-1"}
+            },
+            %{}
+          )
 
         LemonCore.Bus.broadcast("cron", run_started)
 

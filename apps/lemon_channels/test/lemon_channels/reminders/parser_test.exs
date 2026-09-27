@@ -26,7 +26,9 @@ defmodule LemonChannels.Reminders.ParserTest do
     end
 
     test "every weekday 8:30 daily brief keeps 'daily brief' as the text" do
-      parsed = assert_parsed("every weekday 8:30 daily brief", "30 8 * * 1-5", false, "daily brief")
+      parsed =
+        assert_parsed("every weekday 8:30 daily brief", "30 8 * * 1-5", false, "daily brief")
+
       assert parsed.description == "every weekday at 08:30"
     end
   end

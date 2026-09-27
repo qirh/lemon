@@ -160,7 +160,6 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
 
       assert OpenAICodexResponses.get_env_api_key() == nil
     end
-
   end
 
   # ============================================================================

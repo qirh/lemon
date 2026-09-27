@@ -80,7 +80,6 @@ defmodule LemonMemory.Recall do
     end
   end
 
-
   defp render([], nil, _budget), do: :skip
 
   defp render(docs, user_facts, budget) do
@@ -108,7 +107,9 @@ defmodule LemonMemory.Recall do
           case IO.binread(file, 2_048) do
             content when is_binary(content) ->
               content = binary_part(content, 0, utf8_boundary(content, byte_size(content)))
-              if String.trim(content) != "", do: "USER.md: " <> snippet(content, @user_snippet_bytes)
+
+              if String.trim(content) != "",
+                do: "USER.md: " <> snippet(content, @user_snippet_bytes)
 
             _ ->
               nil

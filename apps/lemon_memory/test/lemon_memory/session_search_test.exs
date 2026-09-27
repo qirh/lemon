@@ -142,7 +142,8 @@ defmodule LemonMemory.SessionSearchTest do
       session = "agent:capped:main"
       seed(store, matching_docs(22, session, now))
 
-      assert length(search(store, "deploy", scope: :session, scope_key: session, limit: 100)) == 20
+      assert length(search(store, "deploy", scope: :session, scope_key: session, limit: 100)) ==
+               20
     end
 
     test "a caller limit below the cap is honoured", %{store: store, now: now} do

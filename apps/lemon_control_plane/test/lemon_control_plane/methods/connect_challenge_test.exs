@@ -189,7 +189,10 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
         |> Enum.map(&Task.await(&1, 2_000))
 
       assert Enum.count(results, &match?({:ok, %{"verified" => true}}, &1)) == 1
-      assert Enum.count(results, &match?({:error, {:unauthorized, "Invalid challenge"}}, &1)) == 11
+
+      assert Enum.count(results, &match?({:error, {:unauthorized, "Invalid challenge"}}, &1)) ==
+               11
+
       assert NodeStore.get_challenge(approved["challengeToken"]) == nil
     end
 

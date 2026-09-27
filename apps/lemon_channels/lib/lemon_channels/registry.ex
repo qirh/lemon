@@ -39,7 +39,10 @@ defmodule LemonChannels.Registry do
     GenServer.call(__MODULE__, {:get, plugin_id}, @call_timeout_ms)
   catch
     :exit, reason ->
-      Logger.warning("[Channels.Registry] get_plugin(#{inspect(plugin_id)}) failed: #{inspect(reason)}")
+      Logger.warning(
+        "[Channels.Registry] get_plugin(#{inspect(plugin_id)}) failed: #{inspect(reason)}"
+      )
+
       nil
   end
 
@@ -295,5 +298,4 @@ defmodule LemonChannels.Registry do
       _ -> false
     end
   end
-
 end

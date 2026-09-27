@@ -62,9 +62,7 @@ defmodule LemonCore.Quality.DocsCheck do
   end
 
   defp discover_git_tracked_docs(root) do
-    case System.cmd("git", ["-C", root, "ls-files", "-z", "--", "docs"],
-           stderr_to_stdout: true
-         ) do
+    case System.cmd("git", ["-C", root, "ls-files", "-z", "--", "docs"], stderr_to_stdout: true) do
       {output, 0} ->
         docs =
           output
@@ -129,13 +127,11 @@ defmodule LemonCore.Quality.DocsCheck do
 
   @spec local_link?(String.t()) :: boolean()
   defp local_link?(link) do
-    not (
-      link == "" or
-        String.starts_with?(link, "#") or
-        String.starts_with?(link, "http://") or
-        String.starts_with?(link, "https://") or
-        String.starts_with?(link, "mailto:")
-    )
+    not (link == "" or
+           String.starts_with?(link, "#") or
+           String.starts_with?(link, "http://") or
+           String.starts_with?(link, "https://") or
+           String.starts_with?(link, "mailto:"))
   end
 
   @spec link_exists?(String.t(), String.t(), String.t()) :: boolean()

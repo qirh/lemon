@@ -12,7 +12,7 @@ defmodule LemonRouter.DeliveryRouteResolver do
 
     cond do
       parsed.kind == :channel_peer and is_binary(parsed.channel_id) and parsed.channel_id != "" and
-          parsed.peer_kind in [:dm, :group, :channel] and is_binary(parsed.peer_id) and
+        parsed.peer_kind in [:dm, :group, :channel] and is_binary(parsed.peer_id) and
           parsed.peer_id != "" ->
         {:ok,
          %DeliveryRoute{

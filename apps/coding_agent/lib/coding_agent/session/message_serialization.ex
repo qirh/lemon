@@ -87,7 +87,11 @@ defmodule CodingAgent.Session.MessageSerialization do
         thinking: thinking,
         thinking_signature: signature
       }) do
-    put_signature(%{"type" => "thinking", "thinking" => thinking}, "thinking_signature", signature)
+    put_signature(
+      %{"type" => "thinking", "thinking" => thinking},
+      "thinking_signature",
+      signature
+    )
   end
 
   def serialize_content_block(%LemonAi.Types.ToolCall{

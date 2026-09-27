@@ -153,7 +153,9 @@ defmodule LemonAutomation.SkillCurator do
   end
 
   defp maybe_put_report_error(result, :ok), do: result
-  defp maybe_put_report_error(result, {:error, reason}), do: Map.put(result, :review_report_error, reason)
+
+  defp maybe_put_report_error(result, {:error, reason}),
+    do: Map.put(result, :review_report_error, reason)
 
   defp enabled?(cfg), do: Keyword.get(cfg, :enabled, true) == true
 

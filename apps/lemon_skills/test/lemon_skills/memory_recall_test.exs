@@ -37,7 +37,6 @@ defmodule LemonSkills.MemoryRecallTest do
     %{store: store, request: request, cwd: cwd}
   end
 
-
   test "contributes a bounded volatile block for the user message", %{
     store: store,
     request: request

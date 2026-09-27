@@ -36,7 +36,9 @@ defmodule LemonAutomation.HeartbeatTest do
       assert ok_run.suppressed
       refute deliver?
 
-      {alert, deliver?} = Heartbeat.apply_policy(heartbeat, run(:completed, "HEARTBEAT_OK - disk 95%"))
+      {alert, deliver?} =
+        Heartbeat.apply_policy(heartbeat, run(:completed, "HEARTBEAT_OK - disk 95%"))
+
       refute alert.suppressed
       assert deliver?
 
@@ -95,6 +97,11 @@ defmodule LemonAutomation.HeartbeatTest do
   end
 
   defp run(status, output) do
-    %CronRun{id: "run_#{System.unique_integer([:positive])}", job_id: "job", status: status, output: output}
+    %CronRun{
+      id: "run_#{System.unique_integer([:positive])}",
+      job_id: "job",
+      status: status,
+      output: output
+    }
   end
 end

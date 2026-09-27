@@ -1255,6 +1255,5 @@ defmodule LemonGateway.RunSupervisorTest do
                  worker_pid: self()
                })
     end
-
   end
 end

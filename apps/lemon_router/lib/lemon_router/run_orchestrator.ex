@@ -875,7 +875,9 @@ defmodule LemonRouter.RunOrchestrator do
           state when state in ["accepted", "submitting"] ->
             identity = MapHelpers.get_key(entry, :identity)
             compacted = compact_admission(state, identity)
-            if entry != compacted, do: Store.compare_and_swap(@run_admission_table, run_id, entry, compacted)
+
+            if entry != compacted,
+              do: Store.compare_and_swap(@run_admission_table, run_id, entry, compacted)
 
           _state ->
             :ok

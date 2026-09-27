@@ -543,7 +543,11 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
       key = key_to_string(k)
-      value = if LemonCore.Redact.sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      value =
+        if LemonCore.Redact.sensitive_key?(key),
+          do: %{"redacted" => true, "kind" => "secret"},
+          else: v
 
       Map.put(acc, key, serialize_term(value, depth + 1))
     end)
@@ -566,10 +570,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
-
-  
-
-  
 
   defp get_map(nil, _key, default), do: default
 

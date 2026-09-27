@@ -6,7 +6,9 @@ defmodule LemonCore.Config.AutomationTest do
   test "the daily brief is off unless a time is configured" do
     assert %Automation{daily_brief: nil} = Automation.resolve(%{})
     assert %Automation{daily_brief: nil} = Automation.resolve(%{"automation" => %{}})
-    assert %Automation{daily_brief: nil} = Automation.resolve(%{"automation" => %{"daily_brief" => false}})
+
+    assert %Automation{daily_brief: nil} =
+             Automation.resolve(%{"automation" => %{"daily_brief" => false}})
 
     assert %Automation{daily_brief: "08:00"} =
              Automation.resolve(%{"automation" => %{"daily_brief" => " 08:00 "}})

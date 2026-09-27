@@ -55,5 +55,4 @@ defmodule LemonAi.TypesTest do
       assert %ToolResultMessage{tool_call_id: "tc1"} = hd(ctx.messages)
     end
   end
-
 end

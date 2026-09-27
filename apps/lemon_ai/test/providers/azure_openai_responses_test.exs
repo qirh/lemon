@@ -693,7 +693,6 @@ defmodule LemonAi.Providers.AzureOpenAIResponsesTest do
 
       EventStream.result(stream, 1000)
     end
-
   end
 
   # ============================================================================

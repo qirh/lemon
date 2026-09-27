@@ -585,7 +585,6 @@ defmodule LemonCore.ProfileStore do
     end)
   end
 
-
   defp move_home_to_trash(profile, opts) do
     home = profile["paths"]["home"]
 

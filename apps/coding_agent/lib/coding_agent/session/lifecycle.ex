@@ -401,7 +401,6 @@ defmodule CodingAgent.Session.Lifecycle do
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
 
-
   defp load_or_create_session(cwd, nil, session_id, parent_session) do
     SessionManager.new(cwd, id: session_id, parent_session: parent_session)
   end

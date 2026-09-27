@@ -97,5 +97,4 @@ defmodule Mix.Tasks.Lemon.Secrets.InitTest do
       refute File.read!(key_path) == original
     end
   end
-
 end

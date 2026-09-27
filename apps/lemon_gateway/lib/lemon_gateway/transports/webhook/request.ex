@@ -5,7 +5,6 @@ defmodule LemonGateway.Transports.Webhook.Request do
 
   alias Plug.Conn
 
-
   @spec authorize_request(Conn.t(), map(), map(), map()) :: :ok | {:error, :unauthorized}
   def authorize_request(conn, _payload, integration, webhook_config) do
     expected = normalize_blank(fetch(integration, :token))

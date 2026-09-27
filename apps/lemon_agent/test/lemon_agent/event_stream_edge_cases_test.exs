@@ -204,7 +204,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
       end
     end
 
-
     test "subscriber added after completion sees terminal event" do
       {:ok, stream} = EventStream.start_link()
 
@@ -275,7 +274,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
              "Expected at least one consumer to receive canceled event"
     end
 
-
     test "stream handles owner crash vs normal exit differently" do
       # Normal exit
       owner1 =
@@ -317,7 +315,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
   # ============================================================================
 
   describe "event ordering guarantees" do
-
     test "synchronous push guarantees order before async push" do
       {:ok, stream} = EventStream.start_link()
 

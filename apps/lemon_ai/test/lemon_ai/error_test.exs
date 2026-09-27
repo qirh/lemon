@@ -1025,7 +1025,6 @@ defmodule LemonAi.ErrorTest do
       info = Error.extract_rate_limit_info(headers)
       assert info.retry_after == nil
     end
-
   end
 
   describe "format_error/1 - additional error types" do
@@ -1192,7 +1191,6 @@ defmodule LemonAi.ErrorTest do
       result = Error.suggested_retry_delay_from_error(error)
       assert result == 5_000
     end
-
   end
 
   describe "auth_error?/1 - edge cases" do
@@ -1281,7 +1279,6 @@ defmodule LemonAi.ErrorTest do
       result = Error.format_rate_limit_info(info)
       assert result =~ "50/unknown remaining"
     end
-
   end
 
   describe "integration - parse and retry flow" do
