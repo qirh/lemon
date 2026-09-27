@@ -44,7 +44,6 @@ LemonAi (main API)
 | `LemonAi.Models` | Compile-time registry assembled from per-provider modules whose catalogs live in `priv/models/*.json`. Registry entries should stay aligned with live provider IDs; dead preview/model aliases that return provider 404s should be removed instead of left selectable. |
 | `LemonAi.Types` | All type/struct definitions (inline in module) |
 | `LemonAi.Error` | HTTP error parsing, classification, retryability, and formatting utilities; provider-specific overloaded responses such as Anthropic HTTP 529 are transient retryable errors |
-| `LemonAi.HttpInspector` | Captures and saves request dumps for 4xx errors |
 | `LemonAi.PromptDiagnostics` | Opt-in prompt size + token usage diagnostics |
 
 ### Provider Implementation Modules
@@ -712,7 +711,6 @@ LemonAi.Supervisor (one_for_one)
 - Set `LEMON_AI_HTTP_TRACE=1` to see all HTTP requests/responses in logs
 - Set `LEMON_AI_DEBUG=1` to dump raw SSE events from Anthropic to `/tmp/lemon_anthropic_sse.log`
 - Set `LEMON_AI_PROMPT_DIAGNOSTICS=1` to log prompt sizes and token usage for every call
-- Check `~/.lemon/logs/http-errors/` for saved 4xx error dumps from `LemonAi.HttpInspector`
 - Use `LemonAi.CircuitBreaker.get_state(:provider)` to inspect circuit breaker status
 - Use `LemonAi.CallDispatcher.get_state()` to see concurrency caps and active request counts
 - Use `LemonAi.ModelCache.stats()` to inspect cache entries

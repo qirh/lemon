@@ -74,6 +74,21 @@ defmodule LemonChannels.PortBridgeContractTest do
     end)
   end
 
+  test "without a configured bridge_script both wrappers run the script shipped in lemon_channels/priv" do
+    Enum.each(@bridges, fn bridge ->
+      {:ok, pid} = bridge.module.start_link(config: %{}, notify_pid: self())
+
+      try do
+        expected = Application.app_dir(:lemon_channels, "priv/#{bridge.script_filename}")
+
+        assert :sys.get_state(pid).script_path == expected
+        assert File.regular?(expected)
+      after
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      end
+    end)
+  end
+
   test "shared parser keeps adapter-specific event and error envelopes", %{tmp_dir: tmp_dir} do
     if System.find_executable("node") do
       startup_marker_path = Path.join(tmp_dir, "bridge_parser_started.txt")

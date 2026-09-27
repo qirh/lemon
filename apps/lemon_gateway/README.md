@@ -156,10 +156,8 @@ with `retry_safe: false` and never submit another run.
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
 | `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
 | `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`) |
-| `LemonGateway.Shared` | `shared.ex` | Shared utilities (config access, data normalization, IP parsing) |
 | `LemonGateway.DependencyManager` | `dependency_manager.ex` | Centralized app startup, module availability checks, safe bus/telemetry |
 | `LemonGateway.AI` | `ai.ex` | Direct HTTP chat completions for OpenAI and Anthropic APIs |
-| `LemonGateway.Dev` | `dev.ex` | Development helpers (recompile and hot-reload) |
 
 ### Scheduling and Run Execution
 
@@ -188,7 +186,6 @@ failures without parsing rendered command output.
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGateway.Executor` | `executor.ex` | Validates and invokes the configured singleton executor |
-| `LemonGateway.Workspace` | `workspace.ex` | Workspace directory for channel-bound files, configured rather than read from the agent |
 
 The public engine plugin, registration, enumeration, and test-compliance
 surfaces are removed. `EngineInfoBridge` retains transport-registry and

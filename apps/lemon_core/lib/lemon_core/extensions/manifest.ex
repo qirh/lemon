@@ -64,14 +64,6 @@ defmodule LemonCore.Extensions.Manifest do
     end
   end
 
-  @spec validate_map(map(), String.t()) :: validation()
-  def validate_map(manifest, label \\ "embedded") when is_map(manifest) and is_binary(label) do
-    label
-    |> base_validation()
-    |> Map.put(:byte_size, byte_size(Jason.encode!(manifest)))
-    |> validation_for_map(manifest)
-  end
-
   defp base_validation(path) do
     %{
       path: path,

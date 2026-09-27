@@ -10,7 +10,7 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BRIDGE_DIR="$LEMON_ROOT/apps/lemon_gateway/priv"
+BRIDGE_DIR="$LEMON_ROOT/apps/lemon_channels/priv"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "node is required for XMTP bridge" >&2

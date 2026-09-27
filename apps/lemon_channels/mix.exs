@@ -14,6 +14,7 @@ defmodule LemonChannels.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
+      elixirc_paths: elixirc_paths(Mix.env()),
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 47]],
@@ -24,6 +25,9 @@ defmodule LemonChannels.MixProject do
       docs: docs()
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   defp description do
     "Messaging channels for BEAM agents: the Plugin behaviour, adapter " <>

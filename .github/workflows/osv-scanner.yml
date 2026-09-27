@@ -10,8 +10,8 @@ on:
       - "clients/*/package.json"
       - "clients/*/package-lock.json"
       - "clients/tui/bun.lock"
-      - "apps/lemon_gateway/priv/package.json"
-      - "apps/lemon_gateway/priv/package-lock.json"
+      - "apps/lemon_channels/priv/package.json"
+      - "apps/lemon_channels/priv/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
       - "tools/diagrams/package.json"
@@ -26,8 +26,8 @@ on:
       - "clients/*/package.json"
       - "clients/*/package-lock.json"
       - "clients/tui/bun.lock"
-      - "apps/lemon_gateway/priv/package.json"
-      - "apps/lemon_gateway/priv/package-lock.json"
+      - "apps/lemon_channels/priv/package.json"
+      - "apps/lemon_channels/priv/package-lock.json"
       - "docs/package.json"
       - "docs/package-lock.json"
       - "tools/diagrams/package.json"
@@ -52,7 +52,7 @@ jobs:
         --lockfile=clients/lemon-web/package-lock.json
         --lockfile=clients/tui/bun.lock
         --lockfile=clients/lemon-browser-node/package-lock.json
-        --lockfile=apps/lemon_gateway/priv/package-lock.json
+        --lockfile=apps/lemon_channels/priv/package-lock.json
         --lockfile=docs/package-lock.json
         --lockfile=tools/diagrams/package-lock.json
       fail-on-vuln: false

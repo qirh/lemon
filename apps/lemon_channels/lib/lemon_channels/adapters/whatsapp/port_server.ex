@@ -11,7 +11,6 @@ defmodule LemonChannels.Adapters.WhatsApp.PortServer do
     label: "whatsapp",
     event_tag: :whatsapp_bridge_event,
     script_filename: "whatsapp_bridge.mjs",
-    adapter_dir: __DIR__,
     log_module: __MODULE__
   }
 
