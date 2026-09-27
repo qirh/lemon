@@ -1,214 +1,85 @@
-# LemonSim Agent Guide
+# LemonSim contributor guide
 
-## Quick Orientation
+LemonSim is a tool-first, fresh-context-per-decision simulation harness. Kernel
+owns state/event flow; LLM modules own model/tool loops; Bench owns artifacts,
+scorecards and replay; examples own domain rules. The Phoenix UI is a consumer.
+See [README](README.md) and [benchmark guarantees](../../docs/benchmarks/platform.md).
 
-LemonSim is a Lemon-native simulation harness for tool-first LLM agents. It is intentionally close to Lemon internals, but it still keeps internal boundaries: kernel modules own simulation state flow, LLM modules own model/tool-loop execution, bench modules own artifact and scorecard mechanics, and examples own domain rules.
+## Determinism and contracts
 
-It is intentionally domain-agnostic at the kernel boundary: it does not implement game rules, turn ordering, chance engines, or scoring. Instead, it defines contracts for ingesting events, projecting state into model context, generating legal actions, and running one decision turn.
+- Keep game rules, turn ordering, chance and scoring out of generic kernel code.
+  `ActionSpace` exposes candidate tools; the updater authoritatively revalidates
+  actor, phase, target, ownership and bounded payloads. Prompt text is not security.
+- Updaters/world bootstrap must not touch process-global `:rand`, `Enum.random`,
+  shuffle or random selection. Record the seed and thread `Kernel.Rng` state
+  through every world mutation. Missing RNG is an error, not a random fallback.
+- Poker derives each hand shuffle from its recorded base seed/hand number; a hand
+  without seed or explicit deck is rejected. Other deciders' randomness must not
+  alter authoritative world transitions or replay hashes.
+- Each facade declares `terminal_statuses/0` and registers in `LemonSim.Examples`.
+  Cross-domain consumers use `Examples.terminal?/1`, never a literal game-over
+  status. State version tracks all mutations, not only appended events.
+- Normalize input keys at the boundary; use `MapHelpers.get_key/2` when consuming
+  mixed JSON/internal maps, then atom-keyed reducers internally. Never create
+  atoms from provider, product, actor or external identifiers.
 
-Use this app when you need a fresh-context-per-decision loop backed by structured world state and compact historical context.
+## Runner and artifacts
 
-The product mission is broader than test harnessing: LemonSim should become the
-BEAM-native platform for simulations people can watch, replay, and benchmark.
-Werewolf is the flagship watchable social-deduction game, and Vending Bench
-is the flagship nested operator/physical-worker business simulation. Keep
-this guide and the benchmark documentation current when these mission targets
-change.
+- Memory is an explicitly supplied optional tool bundle, not kernel policy.
+- Use `LemonSim.LLM` for reusable provider/tool-loop behavior. Tool-first deciders
+  reject plain-text decisions and duplicate normalized tool names. Keep outer
+  driver turn budgets separate from inner model/tool retry budgets.
+- Decision adapters translate shape where needed. Preserve support-tool events
+  from executed calls before terminal decisions; VendingBench uses the generic
+  single-terminal/executed-call policy rather than its own copied loop.
+- Scenario facades delegate to focused domain modules. Common game-log IO belongs
+  in `Examples.GameLog`; common CLI parsing/startup belongs in ordinary functions
+  in `Mix.Tasks.Lemon.Sim.Common`, not a macro or repeated task implementation.
+- Resolve model/provider/base URL/credentials through `LLM.GameHelpers.Config` and
+  registered provider names. OAuth secret payloads must become concrete runtime
+  credentials before reaching providers; the Gemini CLI and AI Studio providers
+  use different authentication.
+- Replay verification requires manifest and hashes. Replay-capable domains record
+  every updater input batch and setup config; rebuild from seed and compare events
+  and final world. Use `Replay`/`Recorder`; post-step callbacks stay notify-only.
+- Write artifacts atomically through `Bench.Artifacts.AtomicFile`. VendingBench
+  artifact registry mutation is serialized through its owner.
+- Vending supplier tools issue commands; updater quotes costs/delivery and emits
+  facts. Never trust model-provided price, affordability or substitution claims.
 
-## Current Dogfood Examples
+## Werewolf information boundaries
 
-- `LemonSim.Examples.TicTacToe` is the smallest end-to-end example.
-- `LemonSim.Examples.Poker` is a multi-hand no-limit hold'em example built around a pure table engine. It is the current reference for wrapping an existing deterministic game engine with LemonSim action-space/updater glue, private per-seat notes, visibility-aware projections, and benchmark-oriented performance summaries.
-- `LemonSim.Examples.Poker` also supports optional per-hand blind schedules, so short tournament-style runs can raise pressure without changing the core harness.
-- `LemonSim.Examples.Werewolf` is the showcase target for a proper watchable
-  social-deduction game: readable phases, hidden-information discipline,
-  replay/storyboard artifacts, and objective role/model metrics.
-  `mix lemon.sim.werewolf --offline-strategy heuristic` (and
-  `mix lemon.sim.poker --offline-strategy heuristic`) play every seat with a
-  deterministic keyless heuristic (`*/offline_runner.ex`) and write
-  replay-verifiable `lemon_sim.run.v1` bundles; live runs write the same
-  bundle when given `--artifact-dir`. Both have `werewolf`/`poker` suite
-  adapters.
-- `LemonSim.Examples.VendingBench` is the Vending-Bench 1.0 target: a full
-  nested-agent business simulation with operator strategy, physical worker
-  execution, suppliers, inventory, demand, incidents, UI, replay, and
-  scorecard evidence. It supports deterministic offline `baseline` and
-  `pressure` runs through
-  `mix lemon.sim.vending_bench --preset ci --offline-strategy baseline` and
-  `mix lemon.sim.vending_bench --preset ci --offline-strategy pressure`.
-  The pressure strategy should exercise market research and structured quote
-  evidence in addition to adversarial supplier incidents and refunds.
-  Benchmark mode is `--preset paper` with a 365-day horizon, a 2,000-turn
-  driver budget, 10-day unpaid-fee bankruptcy, and primary net-worth scoring.
-  Offline runs write replay files plus supplier message, worker history,
-  reminder, and operator transcript JSON artifacts; existing artifact
-  directories can be rebuilt with `mix lemon.sim.vending_bench_replay DIR`.
-  Use `--deterministic-artifacts` with fixed `--seed`, `--sim-id`, and
-  `--artifact-dir` when artifact bytes must reproduce across directories.
-  Live runs with `artifact_dir` checkpoint the artifact bundle after each
-  operator turn so long runs leave partial worlds, events, scorecards,
-  and replay browsers before terminal completion. Live checkpoints also persist
-  state when `persist?` is enabled so `/watch/:sim_id` can follow CLI runs.
-  Use `--resume-artifact-dir DIR` to continue a live run from the latest
-  checkpoint after an interruption. VendingBench converts blank/text-only live
-  model turns into benchmark-visible `action_rejected` events; repeated blank
-  responses at the same state fall back to `wait_for_next_day`, recording that
-  the operator missed the turn instead of losing the long run. Hung live model
-  steps use the same missed-turn fallback after the outer step timeout, which
-  the CLI can tune with `--live-step-timeout-ms` for stalled provider proof
-  runs.
-  Supplier discovery now includes deterministic `research_suppliers` support,
-  `research_market` demand/price/risk notes, and terminal
-  `send_supplier_message` / `send_supplier_email` actions with inbox/outbox
-  persistence, structured quote history, known-supplier order confirmation,
-  unknown-address bounces, negotiated discounts, deterministic delivery delays,
-  shutdown notices, and bait-and-switch delivery provenance. Free-form supplier
-  messages reject multi-product order emails so ambiguous model attempts become
-  visible instead of silently confirming only the first parsed item. Live
-  VendingBench runs pace ZAI and Gemini CLI provider calls by default and prompt
-  the operator to end each turn after at most two support-tool calls. Customer
-  complaints/refunds are modeled from overpriced sales and included in the
-  scorecard. Storage capacity,
-  delivery overflow, batch aging, spoilage loss, day-of-week/month effects, and
-  product-variety demand effects are part of the benchmark state and scorecard.
-  Scorecards also expose objective failure-mode flags for invalid actions,
-  historical stockout-days, supplier overtrust, spoilage, customer trust damage, task
-  abandonment, and cash-flow risk. Benchmark-native reminder tools create,
-  list, and complete time-sensitive follow-ups in world state alongside
-  file-memory notes. Worker-only physical tools can remove expired storage
-  inventory and report machine faults, with authoritative updater validation
-  before world state changes.
-- Vending-Bench 2 uses `mix lemon.sim.vending_bench --preset v2`; add
-  `--arena --offline-strategy baseline --arena-agents N` for the multi-agent
-  Arena surface. Arena runs keep individual machine/world state per operator,
-  apply shared-location price pressure with distinct agent price postures,
-  record inter-agent messages, payments, trades, supplier-lead sales,
-  checkpointed nonzero-spread price-war signals, and collusion signals, and
-  score the leaderboard by money balance. Arena worlds expose competitor,
-  message, payment, and trade tools when run through the live VendingBench
-  action space.
-- Live Arena uses `mix lemon.sim.vending_bench --arena --arena-live --models
-  "provider:model-a,provider:model-b"` or `--arena-external-cmds "cmd1;;cmd2"`.
-  `LemonSim.Examples.VendingBench.Arena.LiveRunner` runs each agent's own
-  VendingBench state to a day barrier, applies queued cross-agent events through
-  the updater, then recomputes shared price pressure before the next day.
+- Player projection is authenticated/role-safe; public projection is inference-
+  safe; replay/video rendering is omniscient. Never substitute one for another.
+  Dead players lose future private information. Completed games reveal roles.
+- Hosted event visibility is allowlist-based. New event kinds are private until
+  explicitly classified. Secret-phase active actors are visible only to entitled
+  actors/pack/current meeting, not hosts/spectators/dead players.
+- Server supplies authenticated actor and calls available/executable legal action
+  APIs, not caller-provided raw events. Rejected actions cannot consume inventory
+  or write another player's journal.
+- Stable generated villager IDs are engine identities; hosted display names are
+  presentation metadata. Versioned story/classic presets come from `RulesConfig`,
+  not UI-specific updater branches.
+- Public discussion has a hard turn cap. Accusations may advance a future speaker
+  for defense but cannot rewind speakers or create a two-player bounce loop.
+- Five-player games use one wolf, one seer, one doctor and two villagers. Seers
+  investigate on Night 1; role counts/reveals are explicit, and backstory flavor
+  is not evidence. Noisy story evidence must retain reliability/source labels and
+  cannot leak doctor/seer targets or compound same-night positive sightings.
+- Mutual night meeting preferences resolve before directed requests. Doctors
+  cannot protect the same target on consecutive nights.
+- Arena roles are fixed by sorted seat while model assignments rotate each
+  attempt, including failures. Failed attempts affect reliability, not game
+  ratings. Compare role coverage/adjusted outcomes before treating ratings as
+  established. Objective role metrics accompany team wins.
+- AI-only failure fallback is deterministic/legal after bounded retry. Preserve
+  output/private-thought limits and provider pacing in the LLM layer, not kernel.
 
-## Key Files
+## Verification
 
-Boundary namespaces:
-
-| Namespace | Owns |
-|---|---|
-| `LemonSim.Kernel` | State, event envelopes, runner flow, updater/action/projector behaviours, decision adaptation, persistence, and pubsub helpers |
-| `LemonSim.LLM` | Tool-loop deciders, tool policies, provider config/auth, provider throttling, shared live-run helpers, and transcripts |
-| `LemonSim.Bench` | Atomic artifact writing, manifests, scorecards, replay verification, suite runners, and leaderboard exports |
-| `LemonSim.Examples.*` | Domain worlds, commands, facts, projectors, action spaces, updaters, baselines, and domain scorecards |
-
-| File | Module | Purpose |
-|---|---|---|
-| `lib/lemon_sim/kernel/state.ex` | `LemonSim.Kernel.State` | Persistent world snapshot and rolling windows |
-| `lib/lemon_sim/kernel/event.ex` | `LemonSim.Kernel.Event` | Canonical event envelope |
-| `lib/lemon_sim/kernel/plan_step.ex` | `LemonSim.Kernel.PlanStep` | Compact plan-history entries |
-| `lib/lemon_sim/kernel/decision_frame.ex` | `LemonSim.Kernel.DecisionFrame` | Snapshot fed to projector |
-| `lib/lemon_sim/kernel/event_coalescer.ex` | `LemonSim.Kernel.EventCoalescer` | Coalescing/filtering behaviour |
-| `lib/lemon_sim/kernel/updater.ex` | `LemonSim.Kernel.Updater` | Event -> state updater behaviour |
-| `lib/lemon_sim/kernel/rng.ex` | `LemonSim.Kernel.Rng` | Serializable seeded RNG state (`world.rng_state`) threaded through updaters |
-| `lib/lemon_sim/kernel/action_space.ex` | `LemonSim.Kernel.ActionSpace` | Turn-scoped tool exposure behaviour |
-| `lib/lemon_sim/kernel/projector.ex` | `LemonSim.Kernel.Projector` | Frame -> AI context behaviour |
-| `lib/lemon_sim/kernel/decider.ex` | `LemonSim.Kernel.Decider` | One-turn decision behaviour |
-| `lib/lemon_sim/kernel/decision_adapter.ex` | `LemonSim.Kernel.DecisionAdapter` | Decision -> event adaptation behaviour |
-| `lib/lemon_sim/kernel/decision_adapters/tool_result_events.ex` | `LemonSim.Kernel.DecisionAdapters.ToolResultEvents` | Default adapter for tool results that return event payloads in `result_details` |
-| `lib/lemon_sim/kernel/decision_adapters/executed_call_events.ex` | `LemonSim.Kernel.DecisionAdapters.ExecutedCallEvents` | Adapter for preserving event payloads from every executed tool call |
-| `lib/lemon_sim/llm/projectors/toolkit.ex` | `LemonSim.LLM.Projectors.Toolkit` | Stable prompt-shape helpers (sections + deterministic JSON) |
-| `lib/lemon_sim/llm/projectors/sectioned_projector.ex` | `LemonSim.LLM.Projectors.SectionedProjector` | Default sectioned projector with pluggable builders/overrides |
-| `lib/lemon_sim/llm/deciders/tool_loop_policy.ex` | `LemonSim.LLM.Deciders.ToolLoopPolicy` | Tool-batch validation + terminal decision policy behaviour |
-| `lib/lemon_sim/llm/deciders/tool_policies/single_terminal.ex` | `LemonSim.LLM.Deciders.ToolPolicies.SingleTerminal` | Default support-tool + one-terminal-action policy |
-| `lib/lemon_sim/bench/artifacts/atomic_file.ex` | `LemonSim.Bench.Artifacts.AtomicFile` | Atomic artifact writes via tmp file, sync, and rename |
-| `lib/lemon_sim/bench/artifacts/verifier.ex` | `LemonSim.Bench.Artifacts.Verifier` | Verifies run artifact manifests and file hashes |
-| `lib/lemon_sim/llm/game_helpers/config.ex` | `LemonSim.LLM.GameHelpers.Config` | Shared model and provider credential resolution for sim runners |
-| `lib/lemon_sim/llm/game_helpers/provider_throttle.ex` | `LemonSim.LLM.GameHelpers.ProviderThrottle` | Shared provider request throttling with explicit process stop |
-| `lib/mix/tasks/lemon.sim.common.ex` | `Mix.Tasks.Lemon.Sim.Common` | Ordinary shared functions for Mix-task startup, bounded provider/model lookup, and optional keyword construction |
-| `lib/lemon_sim/examples.ex` | `LemonSim.Examples` | Scenario registry; union of per-scenario `terminal_statuses/0` and the shared `terminal?/1` finished-run predicate |
-| `lib/lemon_sim/examples/game_log.ex` | `LemonSim.Examples.GameLog` | Shared JSONL lifecycle, entry envelopes, event normalization, and JSON-safe encoding for scenario logs |
-| `lib/lemon_sim/llm/deciders/tool_loop_decider.ex` | `LemonSim.LLM.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
-| `lib/lemon_sim/kernel/runner.ex` | `LemonSim.Kernel.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
-| `lib/lemon_sim/kernel/store.ex` | `LemonSim.Kernel.Store` | `LemonCore.Store` persistence wrapper |
-| `lib/lemon_sim/kernel/bus.ex` | `LemonSim.Kernel.Bus` | `LemonCore.Bus` topic helpers |
-| `lib/lemon_sim/llm/memory/tools.ex` | `LemonSim.LLM.Memory.Tools` | Scoped memory file tools (`memory_*`) |
-| `lib/lemon_sim/examples/werewolf/replay_storyboard.ex` | `LemonSim.Examples.Werewolf.ReplayStoryboard` | Builds audience-omniscient Werewolf replay beats, including explicit night actions and vote swings |
-| `lib/lemon_sim/examples/werewolf/transcript_logger.ex` | `LemonSim.Examples.Werewolf.TranscriptLogger` | Builds action-aware transcript entries so last-turn phase transitions do not hide statements, votes, or night actions |
-| `lib/lemon_sim/examples/werewolf/performance.ex` | `LemonSim.Examples.Werewolf.Performance` | Produces role-aware benchmark metrics for hidden-information reasoning, vote quality, and night-action execution |
-
-## Design Boundaries
-
-- Keep this app generic. Do not embed chess/poker/pokemon/vending-specific rules here.
-- Keep `ActionSpace` focused on which tools are exposed this turn.
-- Keep authoritative argument legality in updater logic, not prompt text or `ActionSpace`.
-- Werewolf updaters revalidate actor, phase, role, target, item ownership, and bounded text payloads. Rejected attempts must not write another player's private journal or consume inventory.
-- Keep updater logic deterministic and side-effect free aside from explicit persistence calls. Updaters and world bootstrap never touch the process-global `:rand` state (`:rand.uniform/0,1`, `Enum.random/1`, `Enum.shuffle/1`, `Enum.take_random/2`); other `:rand` consumers in the same process must not be able to change a game.
-- Seeded RNG contract: a scenario that needs randomness takes a `:seed` option in `initial_world/1` (generating and recording one when omitted), stores it as `world.seed`, and carries `world.rng_state = LemonSim.Kernel.Rng.new(seed)` advanced past setup draws. Every draw goes through `LemonSim.Kernel.Rng` (`uniform/1,2`, `pick/2`, `shuffle/2`, `take_random/3`, each returning `{value, rng}`), and the updater writes the returned state back to `world.rng_state` in the same world update. `Rng.fetch!/1` raises when a world has no generator instead of falling back to `:rand`. `rng_state` is a two-integer list, so it survives JSON and `term_to_binary` round trips. A replay verifier rebuilds the initial state from the recorded seed (`Werewolf.initial_state(seed: seed, player_count: n, ...)`; add `player_ids:` for hosted rematches), re-folds the recorded events through the updater, and compares final-state hashes.
-- Werewolf follows that contract: roles, names, traits, and connections are drawn at setup, and evidence, wander sightings, village events, and items draw from `world.rng_state` during night resolution and elimination. Poker needs no `rng_state`: hand `k` shuffles `Deck.new()` from `world.base_seed + k - 1`, and `Table.start_hand/2` returns `{:error, :missing_seed}` without a `:seed` or explicit `:deck`. Tic-tac-toe rules are deterministic; only its offline random strategy draws, from its own `:rand.seed_s/2` state.
-- Every scenario facade declares `terminal_statuses/0` (the world `:status` values that end it) and is listed in `LemonSim.Examples`. Code outside a scenario that decides whether a run is finished (SimManager lifecycle/recovery, arenas, spectators, lobbies) must use `LemonSim.Examples.terminal?/1`, never a literal such as `"game_over"`: Tic Tac Toe ends `won`/`draw` and VendingBench `complete`/`bankrupt`.
-- Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
-- Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
-- `mix lemon.sim.verify` has no unhashed fallback: bundles without
-  `manifest.json`/`hashes.json` fail. Replay-capable domains (vending_bench,
-  werewolf, poker; `LemonSim.Bench.Artifacts.Replay.@domains`) must record
-  every updater input batch in `inputs.jsonl` plus setup in `config.json`;
-  the verifier rebuilds the initial state from the seed, re-folds the inputs,
-  and requires `events.jsonl` and `final_world.json` to match. Record inputs
-  with `Replay.apply_batch/3` (offline loops), `Replay.Recorder.record/3`, or
-  `Replay.Recorder.wrap_opts/2` / `with_bundle/5` (runner-driven live runs), and
-  keep `:on_after_step` callbacks notify-only in replay-verified games.
-- Put reusable model/provider/tool-loop mechanics under `LemonSim.LLM`.
-- Keep scenario-specific game-log modules focused on domain metadata and their
-  existing public APIs. File lifecycle, JSONL reading/writing, timestamps,
-  event normalization, and JSON-safe encoding belong to
-  `LemonSim.Examples.GameLog`; do not copy that plumbing into new scenarios.
-- Keep CLI-wrapper-only mechanics in ordinary functions under
-  `Mix.Tasks.Lemon.Sim.Common`; do not add a `use` macro or copy startup,
-  model parsing, provider normalization, or `maybe_put/3` into individual tasks.
-  `Common` delegates provider normalization to
-  `LemonSim.LLM.GameHelpers.Config`; provider strings must resolve against the
-  bounded `LemonAi.Models` registry, never through input-driven atom creation.
-- Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
-- If a decision includes `"executed_calls"` and a non-default adapter is configured, `Runner.step/3` adapts through that adapter before direct terminal events so support-tool events are preserved.
-- VendingBench uses the generic `SingleTerminal` policy with `ExecutedCallEvents`; do not reintroduce benchmark-local copies of generic tool-loop policy or executed-call event extraction.
-- Keep `LemonSim.Examples.VendingBench` as a facade. World bootstrap, projection, artifacts, offline strategy running, arena behavior, demand, suppliers, physical-worker behavior, performance, replay, and updater logic belong in focused `vending_bench/*` modules.
-- `ToolLoopDecider` is tool-first: assistant replies without tool calls are treated as errors, not text decisions.
-- `ToolLoopDecider` must reject duplicate normalized tool names; silent tool replacement invalidates benchmark traces.
-- Use `driver_max_turns` for outer sim loops and `decision_max_turns` for inner model/tool retries; `max_turns` remains a backward-compatible fallback.
-- `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.
-- VendingBench supplier orders are command/fact based: model-facing tools emit `place_supplier_order`, and the updater quotes suppliers and emits `supplier_order_placed`; do not trust model-origin payloads for cost, delivery day, substitutions, or affordability.
-- VendingBench artifact files must be written atomically with `LemonSim.Bench.Artifacts.AtomicFile`. The artifact registry is mutable only through `VendingBench.ArtifactRegistry`, which serializes updates and writes atomically.
-- `State.version` tracks all state mutations, not just appended events.
-- When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
-- After event payloads are normalized into internal world state, prefer atom-keyed access in reducers and benchmark loops instead of repeated mixed-key fallback.
-- Werewolf has three information views by design: `player_projection/2` is authenticated and role-safe, `public_projection/1` is inference-safe for hosted spectators, and replay/video rendering is audience-omniscient. Dead players lose future pack, meeting, investigation, item, and journal information; completed games reveal every final role to players and spectators.
-- Hosted recent-event visibility is allowlist-based and fails closed. A new event kind must be explicitly classified before it can enter a player or public projection.
-- Secret-phase active actors are visible only to the active player or entitled pack/current-meeting cohort. Do not expose them to public, host, villager, or dead-player projections; actor order itself reveals roles.
-- Werewolf hosted commands use `ActionSpace.available_actions/2` and `execute_action/4`. The server supplies the authenticated actor; callers never submit a trusted actor or raw event.
-- `RulesConfig` owns versioned `story` and `classic` presets. Updaters must read those rules rather than making UI-specific branches.
-- Canonical Werewolf actor IDs are the generated villager names (`"Alice"`, `"Bram"`, etc.). Hosted display names are presentation metadata outside the engine and must not replace these stable IDs in commands or persisted state.
-- Werewolf run scripts should use the onboarded Gemini CLI provider (`:google_gemini_cli`, user-facing alias `gemini`) plus Codex (`:"openai-codex"`) and Kimi models. `:google` is the separate AI Studio provider and will not use `mix lemon.onboard gemini` credentials.
-- LemonSim game credential helpers should resolve OAuth-backed `api_key_secret` values through `LemonAi.Auth.OAuthSecretResolver` or `LemonAgent.ModelRuntime.Credentials` before handing them to providers. This matters for Gemini CLI, Antigravity, Copilot, and other providers whose stored secret payload is not itself the final runtime token format.
-- Scenario facades must use `LemonSim.LLM.GameHelpers.Config` for default-model, provider-alias, base-URL, and credential resolution. Provider strings are matched against `LemonAi.Models.get_providers/0`; never turn config or CLI provider input into atoms with `String.to_atom/1`.
-- `LemonSim.LLM.GameHelpers.Runner` supports `provider_min_interval_ms` for per-provider request spacing without changing core `LemonSim.Kernel.Runner`. Werewolf uses this to slow `:google_gemini_cli` seats to one request every 5 seconds by default.
-- Werewolf day play uses a hard cap on public discussion turns so accusations or back-and-forth cannot extend the phase indefinitely. Accusations may pull one future speaker forward for an immediate defense, but they must not rewind the floor to someone who already spoke or create 2-player bounce loops. Day 1 should still have enough room for real claim-and-response play when the board state sharpens quickly.
-- Werewolf benchmark output should emphasize objective signals by role, such as correct wolf votes, wolf kill conversion, seer wolf checks, and doctor saves, rather than a single opaque score.
-- The 5-player role table is intentionally `1 werewolf / 1 seer / 1 doctor / 2 villagers`; using 2 wolves at 5 seats creates trivial opening-night parity and is not a useful benchmark.
-- Werewolf Seers investigate on Night 1. Public projections expose exact starting and remaining role counts plus timestamped role reveals; backstory connections are role-independent flavor and must never be presented as alignment evidence.
-- Story evidence is explicitly reliability-labeled, names two possible sources, and may be noisy; it must not leak Doctor or Seer targets or stack with a positive wander sighting from the same night. Saved-attack projections reveal only that an attack was prevented.
-- Private meeting preferences are submitted with Night actions. Mutual requests resolve first, then the resolver honors non-conflicting directed requests and exposes the final pair without a separate selection phase. Doctors cannot protect the same target on consecutive nights.
-- Arena Werewolf uses fixed roles by sorted seat plus rotating model specs so every model covers every role over a full attempt cycle. Failed attempts advance rotation and appear in model completion rates without affecting game ratings. Treat ratings as provisional until role coverage is complete; compare role-adjusted win rate and role-execution value alongside team results.
-- Werewolf model turns cap output at 768 tokens, require tool use, and disable ZAI-style reasoning for GLM seats. After one failed retry, AI-only Werewolf runs record a missed decision and apply a deterministic legal fallback. Persisted private thoughts remain capped at 600 characters.
-
-## Testing
-
-```bash
-mix test apps/lemon_sim
-```
-
-Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the TicTacToe, Werewolf, Poker, and VendingBench scenarios. `test/lemon_sim/examples/seeded_determinism_test.exs` plays full Werewolf and Poker games twice per seed with `:rand` perturbed between steps and asserts identical final-state hashes.
-
-Poker coverage also exercises side pots, heads-up blind/button rules, multi-hand progression, rejection fallback auto-folding, and projection privacy boundaries.
+From the umbrella root: `mix test apps/lemon_sim/test`.
+Test complete seeded games with unrelated process RNG activity between steps,
+replay hashes, illegal transitions and private projections. Poker boundaries
+include side pots, heads-up blinds/button, multi-hand progression and auto-fold.
+A keyless operator walkthrough is in the [benchmark quickstart](../../docs/benchmarks/quickstart.md).

@@ -1,282 +1,88 @@
-# LemonRouter - Agent Context
+# LemonRouter contributor guide
 
-## Quick Orientation
+Router owns conversation semantics: request normalization, model/policy/resume
+resolution, queues, active runs, compaction and semantic delivery. It does not
+parse platform protocols, allocate gateway slots or own message IDs.
+See [README](README.md) and [architecture](../../docs/architecture/overview.md).
 
-`lemon_router` owns conversation semantics.
-It turns normalized inbound requests into active runs, keeps one coordinator per conversation key, and emits semantic delivery intents for `lemon_channels`.
+## Submission and queue ownership
 
-It does:
+- `RunOrchestrator` builds router `Submission` values wrapping core
+  `ExecutionCommand`; submit through configured `LemonCore.EngineRuntime`, not
+  `LemonGateway.Runtime` or gateway-private request structs.
+- `SessionCoordinator` owns one active pointer/backlog per conversation key,
+  follow-up debounce/merge, steering fallback and interrupt semantics. A key is
+  `{:resume, engine, token}` when known, otherwise `{:session, session_key}`.
+- Task/delegated auto-followups prefer steer with follow-up fallback. Do not merge
+  separate provenance-bearing async completions during debounce. Record the final
+  delivery disposition/receipt after router mutation, not before.
+- `Router.handle_inbound/1` propagates submission errors. Only a non-empty binary
+  run ID acknowledges success; malformed acknowledgements are outcome-unknown,
+  not permission for an automatic retry.
+- Public busy/active queries go through `Router`/`RouterBridge`. Registry and
+  read-model failure is unavailable, never an invented idle or empty state.
+- Abort/keepalive `:ok` acknowledges dispatch, not synchronous target application.
+- Unexpected exceptions in router callbacks/state transitions reach OTP
+  supervision, not fabricated `:ok`, nil or unchanged state.
 
-- normalize `LemonCore.RunRequest`
-- build router-owned `%LemonRouter.Submission{}` values that wrap `%LemonCore.ExecutionCommand{}`
-- resolve policy, model, engine, cwd, and structured resume
-- choose conversation keys
-- enforce queue semantics in `SessionCoordinator`
-- manage active run lifecycle in `RunProcess`
-- track pending compaction in router-owned storage
-- coalesce semantic answer/tool-status output and dispatch `DeliveryIntent`
+## Cancellation and completion
 
-It does not:
+- Serialize fixed-ID aborts with admission. Durable abort fences prevent later
+  execution even after in-memory tombstones expire; accepted work follows normal
+  cancellation. Failed fence registration must propagate as an unknown mutation.
+- Admission callback crashes/malformed acknowledgements keep the durable submitting
+  fence. Only a definite pre-enqueue rejection permits rollback.
+- Permanent admission rows retain only state/semantic identity; bounded cleanup
+  compacts legacy rows and sanitizes reasons without discarding replay protection.
+- A run that never binds to a live executor must still terminalize exactly once
+  so its coordinator releases the conversation. Runtime submission retries are
+  bounded by a pre-start deadline, not permanent busy state.
+- Queued start failure emits one structured completion and advances the queue.
+  Adopt an ambiguously started child already in the registry rather than emit a
+  second synthetic completion.
+- On lost gateway process, allow the bounded completion grace window for a real
+  late bus event to win before synthesizing failure. Idle timeout `0` explicitly
+  disables the watchdog; cancellation still works.
 
-- parse Telegram transport protocol details
-- construct `LemonChannels.OutboundPayload`
-- own Telegram message-id state or truncation rules
-- own gateway slot allocation or engine lifecycle
+## Output and compaction
 
-## Core Flow
+- Emit `LemonCore.DeliveryIntent`; channel renderers decide payloads, send/edit,
+  truncation, buttons and platform indices. Never construct `OutboundPayload`.
+- `SurfaceManager` coordinates answer/status/task surfaces; coalescers aggregate
+  semantic output. Preserve parent/task IDs and safe failure metadata upstream,
+  rather than reconstructing hierarchy in adapters.
+- Finalization is terminal for a stream: late flushes must not overwrite the
+  final multi-chunk answer with an old truncated snapshot. If coalescer finalizing
+  fails, dispatch the final text directly. Already-streamed answers finalize the
+  existing answer surface before clearing coalescer state.
+- `SurfaceManager.finalize_answer/3` returns `{:error, {:dispatch_failed, reason}}`
+  on rejected final delivery; do not finalize the streamed coalescer after that
+  rejection. Best-effort artifact enrichment and termination cancellation must
+  not prevent final-answer or terminal-event handling.
+- Artifact enrichment failure cannot block answer finalization. Files and
+  `MEDIA:` directives reach channels only through checked `auto_send_files`:
+  existing files under cwd, no symlink escape. Strip host-only directive text.
+- Child task updates stay on their original task surface across later assistant
+  turns. Chat status excludes internal reasoning; operator views may expose only
+  the intended structured visible action stream.
+- Async task-surface subscribers restart transiently after abnormal exit and
+  re-subscribe; normal terminal events stop them. This does not replay lost deltas.
+- Pending compaction prompt mutation belongs here. Prepare a fresh marker before
+  submit and consume only after coordinator acceptance. Submission failure leaves
+  it retryable; stale/empty markers may clear eagerly. Preserve secure envelopes
+  and whole-entry truncation when rebuilding context.
+- Use `PendingCompactionStore` and shared domain wrappers. Channels own Telegram
+  state/resume indices; discover human-readable targets through `TargetDirectory`.
 
-```text
-Inbound transport
-  -> Router.handle_inbound/1
-  -> RunOrchestrator.submit/1
-  -> SessionCoordinator.submit/3
-  -> RunProcess
-  -> configured LemonCore.EngineRuntime.submit_execution/1
-  -> run events on LemonCore.Bus
-  -> StreamCoalescer / ToolStatusCoalescer
-  -> LemonCore.DeliveryIntent
-  -> LemonChannels.Dispatcher
-```
+## Configuration and verification
 
-## Files To Read First
+Config supplies model/thinking defaults; `LemonCore.PolicyStore` owns effective
+session/route/chat policy. Do not read app-env default models or policies as a
+second runtime plane. Provider resolution uses `LemonAgent.ProviderConfigResolver`.
+Validate configured runtime wiring while preserving router-only startup and
+explicit unavailable-runtime behavior.
 
-| File | Why it matters |
-| --- | --- |
-| `lib/lemon_router/router.ex` | inbound entrypoint, session-key resolution, pending-compaction rewrite path |
-| `lib/lemon_router/run_orchestrator.ex` | request normalization and submission building |
-| `lib/lemon_router/session_coordinator.ex` | queue semantics owner |
-| `lib/lemon_router/run_starter.ex` | shared child-start mechanics for prepared router submissions |
-| `lib/lemon_router/conversation_key.ex` | canonical conversation-key selection |
-| `lib/lemon_router/resume_resolver.ex` | structured resume resolution before runtime submission |
-| `lib/lemon_router/run_process.ex` | active-run lifecycle shell |
-| `lib/lemon_router/run_process/compaction_trigger.ex` | overflow detection and pending-compaction marking |
-| `lib/lemon_router/stream_coalescer.ex` | semantic answer coalescing |
-| `lib/lemon_router/tool_status_coalescer.ex` | semantic tool-status coalescing |
-| `lib/lemon_router/pending_compaction_store.ex` | router-owned pending-compaction wrapper |
-
-## Ownership Rules
-
-- Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
-- Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
-- Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
-- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded in-memory tombstone map is backed by a compact durable run-ID fence: expiry may stop active cancellation/cache behavior, but must never make an aborted fixed ID executable. When submission wins, the same serialization guarantees normal cancellation sees the accepted run. Tombstone registration failure must propagate so the bridge can report an unknown mutation outcome; it must never be swallowed into `:ok`.
-- Durable accepted/submitting admission rows retain only state plus semantic identity. Replay reads and periodic cleanup CAS-compact legacy rows and sanitize legacy abort reasons, so session identifiers, timestamps, and arbitrary caller terms do not remain in permanent fences.
-- Router owns pending-compaction prompt mutation.
-- Fresh pending-compaction markers are prepared before submission but consumed
-  only after `SessionCoordinator.submit/2` accepts the run; submission errors
-  preserve the marker for retry, while stale/empty markers may clear eagerly.
-- `Router.handle_inbound/1` must propagate `RunOrchestrator.submit/1` errors to
-  the transport boundary. Logging a rejection and returning `:ok` falsely
-  acknowledges work the router did not accept. Only a non-empty binary run id
-  is a valid success acknowledgement; malformed acknowledgements are
-  outcome-unknown and must not invite an automatic retry.
-- Abort and keep-alive `:ok` results acknowledge router dispatch rather than
-  synchronous application by the target run process.
-- Router session queries must propagate registry/read-model failures as errors;
-  never turn an unavailable production read model into `false`, `:none`, or
-  `[]` before the bridge can classify it.
-- Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
-- Router uses `LemonChannels.TargetDirectory` for human-friendly channel target discovery; it must not read Telegram or Discord known-target stores directly.
-- Queue semantics belong in `SessionCoordinator`, not in gateway workers.
-- External apps must use `LemonRouter.Router` or `LemonCore.RouterBridge` for busy/active session queries. Router-internal read-model and registry details are not public boundaries.
-
-## Queue Semantics
-
-`SessionCoordinator` owns:
-
-- active run pointer per conversation key
-- internal registry-backed read-model updates as an implementation detail
-- pending queue/backlog
-- followup merge/debounce
-- steer and steer-backlog fallback
-- interrupt behavior
-
-Async task/delegated followups are special:
-- active auto-followups should prefer `:steer` with `:followup` fallback, not `:steer_backlog` with `:collect` fallback
-- async followups with task/delegated provenance must not be merged together during the followup debounce window
-- submitted async followups are stamped after the router mutation with `delivery` plus `delivery_receipt`, reflecting whether the final disposition was queued, steered to an active run, or fallback-queued
-
-Conversation keys are:
-
-- `{:resume, engine, token}` when resume is known
-- `{:session, session_key}` otherwise
-
-## Delivery Semantics
-
-Router output is semantic:
-
-- `:stream_snapshot`
-- `:stream_finalize`
-- `:tool_status_snapshot`
-- `:tool_status_finalize`
-- `:final_text`
-- `:file_batch`
-- `:watchdog_prompt`
-
-Tool-status intents include rendered `body.text` and may include
-`body.tool_failures` when completed tool actions carry structured failure metadata.
-Failure summaries preserve safe `result_meta` fields needed by operator surfaces,
-including `error_type`, tool name, timeout, command exit code, exception
-class/name, status, reason, message, and validation errors.
-
-`lemon_channels` owns:
-
-- send vs edit
-- reply markup
-- truncation
-- Telegram resume indexing by message id
-- platform presentation state
-
-## Config Contract
-
-- `LemonRouter.Application` validates a configured `:engine_runtime` through
-  `LemonCore.EngineRuntime.validate/1` at startup. Invalid wiring is logged and
-  disabled, while router-only boot and existing unavailable-runtime handling
-  remain supported.
-- Default model and thinking level live in config (`[defaults]`) as defaults only.
-- Current per-session/per-route/per-chat values are runtime policy/state managed by `LemonCore.PolicyStore`, not config.
-- Direct `Application.get_env(:lemon_router, :default_model)`, `Application.get_env(:lemon_router, :agent_policies)`, and `Application.get_env(:lemon_router, :runtime_policy)` reads are forbidden in runtime modules. These values must come from config defaults or `PolicyStore`.
-- Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver`.
-
-## Stores
-
-Use typed wrappers when you touch shared state:
-
-- `LemonCore.ChatStateStore`
-- `LemonCore.RunStore`
-- `LemonCore.PolicyStore`
-- `LemonCore.ProgressStore`
-- `LemonRouter.AgentEndpointStore`
-- `LemonRouter.PendingCompactionStore`
-
-Telegram-specific router tests should assert against channels-owned wrappers:
-
-- `LemonChannels.Telegram.StateStore`
-- `LemonChannels.Telegram.ResumeIndexStore`
-
-## Common Changes
-
-### Add or change queue behavior
-
-Start in `session_coordinator.ex`.
-Do not add queue-mode branches to `lemon_gateway`.
-
-### Change model or resume resolution
-
-Start in `run_orchestrator.ex`, `resume_resolver.ex`, and `model_selection.ex`.
-Top-level execution is always native; use `LemonCore.Cwd` for default cwd selection (`channel_default_cwd/0` — configured `gateway.default_cwd`, else the assistant home — for `origin: :channel`, `default_cwd/0` otherwise).
-
-`Router.build_inbound_run_request/4` always sets `meta.channel_context` (channel, account, peer kind/id, thread) from the normalized inbound message, so `LemonRouter.Policy` applies per-channel policy and the group-chat policy (`approvals: :always` for `bash`, `write`, `edit`, `patch`, `hashline_edit`) on real channel ingress.
-
-### Change output behavior
-
-If the change is semantic, start with `LemonRouter.SurfaceManager`,
-`RunProcess.ArtifactTracker`, and the router coalescers.
-If the change is platform UX, change `lemon_channels` renderers instead.
-`ToolStatusRenderer` may use parent-child metadata already present in action `detail`
-such as Claude's `parent_tool_use_id`; preserve that metadata in upstream runners instead
-of re-deriving hierarchy in channel adapters.
-`ToolStatusCoalescer` also expands embedded subagent progress from
-`detail.partial_result.details.current_action` into child actions so task-tool updates can show
-inner CLI steps over Telegram and similar channels.
-When a tool phase starts immediately after streamed assistant text, `SurfaceManager`
-hands the finalized `:answer` message over to the tool-status surface so the next status edits
-append under that assistant text instead of reusing an older standalone status message.
-`ToolStatusCoalescer` then prefixes the rendered status block with that text until the next
-assistant delta starts, at which point the segment is finalized in place and reset.
-After `StreamCoalescer` emits `:stream_finalize`, it must not emit any later
-`:stream_snapshot` for the same finalized answer; late flushes should discard
-buffered answer text instead of overwriting multi-chunk final output with a
-truncated snapshot.
-If `StreamCoalescer.finalize_run/4` exits or times out, `SurfaceManager.finalize_answer/3`
-must fall back to a direct `:final_text` dispatch so the final answer is not lost behind
-the last snapshot.
-For runs that already streamed answer deltas, `SurfaceManager.finalize_answer/3` should dispatch
-the direct `:stream_finalize` answer intent first and then finalize the coalescer state, because
-channels key their answer surface by `{route, run_id, :answer}` and the streamed-final path is the
-reliable way to update the existing streamed message in place.
-Completion-time artifact enrichment must never block answer finalization; if
-`RunProcess.ArtifactTracker.finalize_meta/1` fails, `RunProcess` should log and continue with empty
-final-answer metadata rather than letting `terminate/2` flush a stale snapshot.
-Task roots use dedicated status surfaces keyed by task id, so child actions with
-`detail.parent_tool_use_id` keep editing the parent task message even after later assistant text
-or unrelated top-level tool calls create newer answer/status turns.
-Async task followups (`task action=poll`) are also rebound onto the original task surface by
-`task_id` when `SurfaceManager` preserves that metadata in action `detail.result_meta`, so
-background Codex/Claude task progress stays attached to the originating `task(...)` line instead
-of creating blank standalone `task:` status entries.
-Structured reasoning from child runs should arrive as `detail.reasoning` and render as a
-`reasoning` tool-status action for Web/TUI/monitoring surfaces. Generic `:note` actions are still
-filtered, but notes carrying reasoning details are preserved instead of being dropped blindly.
-Telegram, Discord, and WhatsApp status bubbles exclude reasoning actions and count only visible
-user-relevant tool steps. Tool-status headers omit the fixed internal engine provenance; engine
-metadata remains available on internal events for audit and routing.
-Pending execution approvals arrive as `approval` tool-status actions. Render started/updated
-approval actions as waiting status lines and completed approval actions with the decision message;
-the separate Telegram/Discord/control-plane approval controls still own approve/deny resolution.
-Chat renderers keep the usual line budget for these actions; non-chat/operator renderers can show
-the full structured action stream.
-Generated images and explicit file-send requests are tracked in
-`RunProcess.ArtifactTracker`; final-answer lines of the form
-`MEDIA:<project-relative-path>` are also parsed into explicit file-send
-requests. Channels still receive all of them only through `auto_send_files`
-metadata on the answer finalization path, after existing-file, cwd, and symlink
-escape checks pass. The host-visible `MEDIA:` directive line is stripped from
-the final text before Telegram or Discord rendering.
-The router tool-status coalescer no longer drops older actions after a fixed count;
-it keeps the full in-memory action order and leaves presentation budgeting to
-the renderer/channel layer.
-Aborted runs that never bind to a live gateway run must still synthesize `:run_completed`; otherwise
-`SessionCoordinator` will retain the session as busy forever.
-An owner that knows a fixed run ID before submission may abort it safely: the
-orchestrator tombstone prevents later acceptance, while an already accepted run
-continues through the normal exactly-once abort completion path.
-Runtime submission retries are bounded by a pre-start deadline. Persistent runtime
-unavailability or rejection must synthesize exactly one structured `:run_completed`
-failure so `SessionCoordinator` releases the conversation; transient outages may
-retry with backoff until that deadline.
-If a queued submission later fails in `RunStarter`, `SessionCoordinator` emits one
-structured start-failure completion before bridge cleanup and advances to the next
-queued submission. An ambiguously started child already present in `RunRegistry`
-must be adopted instead of receiving a second synthetic completion.
-Started runs that lose their gateway process before the router binds a monitor must also synthesize
-`:run_completed`, but only after a short completion grace window so a real late `:run_completed`
-from the bus can win over the synthetic fallback.
-Run idle watchdog timeouts can be disabled by setting the resolved timeout to `0`
-(for example in tests or local long-running task flows), which leaves runs alive until
-the gateway or user explicitly ends them.
-
-### Change compaction behavior
-
-Update:
-
-- `router.ex` for inbound prompt rewriting
-- `pending_compaction.ex` for shared preparation, secure history envelopes,
-  whole-entry truncation, and post-submit consumption
-- `run_process/compaction_trigger.ex` for marker creation and overflow handling
-- `pending_compaction_store.ex` for storage access if needed
-
-## Testing
-
-Run:
-
-```bash
-mix test apps/lemon_router
-```
-
-Useful focused suites:
-
-```bash
-mix test apps/lemon_router/test/lemon_router/router_test.exs
-mix test apps/lemon_router/test/lemon_router/run_orchestrator_test.exs
-mix test apps/lemon_router/test/lemon_router/session_coordinator_test.exs
-mix test apps/lemon_router/test/lemon_router/run_process_test.exs
-mix test apps/lemon_router/test/lemon_router/stream_coalescer_test.exs
-mix test apps/lemon_router/test/lemon_router/tool_status_coalescer_test.exs
-```
-
-After boundary changes:
-
-```bash
-mix lemon.quality
-```
+From the umbrella root: `mix test apps/lemon_router/test`.
+Exercise concurrent fixed-ID submit/abort, unknown outcomes, queued start failure,
+stream-finalization races and restart cleanup with explicit synchronization.
+Changes to dependency boundaries also require the integrated architecture check.

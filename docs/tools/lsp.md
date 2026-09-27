@@ -4,8 +4,8 @@ Lemon has two diagnostics paths:
 
 - `lsp_diagnostics`: the model-facing coding-agent tool for one-file
   diagnostics and post-edit baseline/delta checks.
-- supervised LSP sessions: BEAM-owned stdio language-server processes exposed
-  through the control plane for operator/editor-style integrations.
+- supervised LSP sessions: BEAM-owned stdio language-server processes managed
+  through the in-process `LemonLsp.ServerManager` API.
 
 Both paths are preview surfaces. They are designed to be supportable first:
 status and support bundles expose capabilities, counters, hashes, and install
@@ -65,10 +65,12 @@ The supervised stdio manager registers these language servers:
 Override env vars can point at either a command on `PATH` or an absolute local
 executable path. Public status redacts absolute paths to command basenames.
 
-## Control-Plane Methods
+## Supervised Session API
 
-Operator/editor surfaces can use:
-
+The in-process session API is defined by
+[`LemonLsp.ServerManager`](../../apps/lemon_lsp/lib/lemon_lsp/server_manager.ex):
+start/initialize a session, open/change/close documents, send requests or
+notifications, and stop the session. It is not exposed as control-plane RPCs.
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,
@@ -90,38 +92,15 @@ The manager records both push diagnostics from
 `textDocument/diagnostic` responses. Public status keeps only URI hashes,
 diagnostic counts, severity counts, and timestamps.
 
-## Proof Lanes
+## Focused Test Coverage
 
-Focused LSP coverage:
-
-```bash
-mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs --seed 1
-```
-
-Broader preview lane:
+From the umbrella root:
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
-  apps/lemon_core/test/lemon_core/doctor/lsp_diagnostics_test.exs \
-  apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
-  apps/lemon_core/test/lemon_core/application_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs \
-  apps/lemon_web/test/lemon_web_test.exs \
-  apps/coding_agent/test/coding_agent/tools/write_test.exs \
-  apps/coding_agent/test/coding_agent/tools/edit_test.exs \
-  apps/coding_agent/test/coding_agent/tools/patch_test.exs \
-  apps/coding_agent/test/coding_agent/tools_test.exs \
-  apps/coding_agent/test/coding_agent/tool_registry_test.exs \
-  apps/coding_agent/test/coding_agent_test.exs --seed 1
+  apps/lemon_lsp/test --seed 1
 ```
 
-The latest broader preview lane passed locally on 2026-05-16 with `404 tests,
-0 failures`.
-
+Exercise supervised server startup, framing, document diagnostics, timeout cleanup
+and wrapper-child termination. These are local checks, not proof that a particular
+language server is installed or correctly configured on an operator's machine.

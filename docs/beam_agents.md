@@ -1,596 +1,75 @@
 # BEAM Agent Architecture and Invariants
 
-This document describes the BEAM/OTP architecture for agent management in the Lemon codebase.
+Lemon uses OTP processes for agent/session ownership and supervised tasks for
+model/tool work. This page records lifecycle guarantees and limits; the
+[architecture overview](architecture/overview.md) explains app boundaries,
+[telemetry reference](telemetry.md) owns event names, and the
+[agent guide](../apps/lemon_agent/AGENTS.md) owns contributor gotchas.
 
-## Table of Contents
+## Supervision and isolation
 
-1. [Core Invariants](#core-invariants)
-2. [Supervision Tree](#supervision-tree)
-3. [Event Flow](#event-flow)
-4. [Telemetry Events](#telemetry-events)
-5. [Baseline Documentation (Phase 0)](#baseline-documentation-phase-0)
-   - [Current Tool Execution Path](#current-tool-execution-path)
-   - [Failure Handling](#failure-handling)
-   - [Session Event Fan-Out](#session-event-fan-out)
-   - [Current Supervision Structure](#current-supervision-structure)
-6. [Regression Testing Checklist](#regression-testing-checklist)
+`LemonAgent.Supervisor` owns the abort-signal table owner, agent registry,
+subagent supervisor, loop task supervisor and tool task supervisor.
+`CodingAgent` separately owns native sessions, persistence and coordination.
+Supervision does not mean replaying a side effect: crashed tool tasks report
+errors and are not automatically restarted/retried.
 
----
+- Agent loops run under `LemonAgent.LoopTaskSupervisor`.
+- Tools run under `LemonAgent.ToolTaskSupervisor`; monitors connect crashes to
+  the corresponding tool result without crashing unrelated sessions.
+- Subagents are discoverable and supervised. Coordinators track their children
+  and cancel outstanding work on timeout or parent termination.
+- Abort is cooperative and best-effort for external work. The loop checks the
+  abort signal at safe points, and tools must honor it. A task can remain active
+  briefly during scheduler/NIF/external-process cleanup.
+- Context truncation preserves chronological history and tool-call/result units.
+  Session persistence and prompt projection are separate: a model-facing safety
+  transform must not silently rewrite the user's stored transcript.
 
-## Core Invariants
+## Event flow
 
-All agent implementations must adhere to these invariants:
-
-### 1. Agent Loops Must Be Supervised Tasks
-
-All agent loop executions must run under a `Task.Supervisor`. This ensures:
-
-- Crash visibility through supervisor monitoring
-- Proper resource cleanup on termination
-- Observable lifecycle through OTP tooling
-
-**Implementation:**
-- `LemonAgent.LoopTaskSupervisor` - Task.Supervisor for agent loop tasks
-- `LemonAgent.ToolTaskSupervisor` - Task.Supervisor for tool execution tasks
-- Agent loops started via `Task.Supervisor.async_nolink/2` or `start_child/2`
-
-### 2. Agent Event Streams Must Be Bounded and Cancelable
-
-Event streams must have:
-
-- **Bounded queues** - Configurable `max_queue` to prevent unbounded memory growth
-- **Backpressure** - `push/2` provides feedback for flow control
-- **Cancellation** - Explicit `cancel/2` API for clean termination
-- **Owner monitoring** - Streams auto-cancel when owner process dies
-- **Timeout support** - Configurable stream timeout with automatic cancellation
-
-**Implementation:**
-- `LemonAgent.EventStream` - Provides bounded, cancelable event streaming
-- Options: `:owner`, `:max_queue`, `:drop_strategy`, `:timeout`
-
-### 3. Subagents Must Be Registered, Discoverable, and Supervised
-
-All subagents (child agent processes) must:
-
-- Register in `LemonAgent.AgentRegistry` for discoverability
-- Run under `LemonAgent.SubagentSupervisor` for supervision
-- Use structured keys like `{session_id, role, index}` for identification
-
-**Implementation:**
-- `LemonAgent.AgentRegistry` - Registry for agent process lookup
-- `LemonAgent.SubagentSupervisor` - DynamicSupervisor for subagent lifecycle
-
-### 4. Coordinators Must Cancel Subagents on Timeout or Parent Termination
-
-Coordinator processes that spawn subagents must:
-
-- Track all spawned subagents by ID
-- Monitor subagent processes for crashes
-- Cancel all subagents when the coordinator terminates
-- Enforce timeouts and cancel remaining subagents when one completes
-
-**Implementation:**
-- `CodingAgent.Coordinator` - Orchestrates subagent execution
-- Uses process monitoring and timeout-based cancellation
-
----
-
-## Supervision Tree
-
-```
-LemonAgent.Supervisor (:one_for_one)
-+-- LemonAgent.AbortSignal.TableOwner (GenServer)
-+-- LemonAgent.AgentRegistry (Registry)
-+-- LemonAgent.SubagentSupervisor (DynamicSupervisor)
-+-- LemonAgent.LoopTaskSupervisor (Task.Supervisor)
-+-- LemonAgent.ToolTaskSupervisor (Task.Supervisor)
+```text
+provider stream → agent loop → coding session → runtime bus
+                     │              │              │
+                 tool tasks     subscribers     router/client
 ```
 
----
-
-## Event Flow
-
-```
-+------------------------------------------------------------------+
-| Client Application                                                |
-+-----------------------------+------------------------------------+
-                              |
-                              v
-        +------------------------------------------------------+
-        | LemonAgent.Agent (GenServer)                          |
-        | - Manages state                                      |
-        | - Subscribers + monitoring                           |
-        | - Queue management (steering/follow-up)              |
-        | - Task lifecycle (supervised)                        |
-        +-------------------------+----------------------------+
-                                  |
-         Task.Supervisor.async_nolink (LoopTaskSupervisor)
-                                  |
-                                  v
-        +------------------------------------------------------+
-        | LemonAgent.Loop (Supervised Task)                     |
-        | - agent_loop / agent_loop_continue                   |
-        | - Creates EventStream (bounded, cancelable)          |
-        | - Runs stateless loop logic                          |
-        | - Manages LLM calls + tool execution                 |
-        +-------------------------+---------------+------------+
-                                  |               |
-                       Emits Events via       Spawns Tools
-                       EventStream.push()      (Parallel)
-                                  |               |
-                   +--------------+--+     +------+------+
-                   | EventStream     |     | Tool Tasks  |
-                   | (GenServer)     |     |             |
-                   | - Bounded       |     | Monitored   |
-                   | - Cancelable    |     |             |
-                   +-----------------+     +-------------+
-```
-
----
-
-## Telemetry Events
-
-The following telemetry events are emitted:
-
-- `[:lemon_agent, :loop, :start]` - Agent loop started
-- `[:lemon_agent, :loop, :end]` - Agent loop completed
-- `[:lemon_agent, :tool_task, :start]` - Tool task started
-- `[:lemon_agent, :tool_task, :end]` - Tool task completed
-- `[:lemon_agent, :tool_task, :error]` - Tool task failed or was aborted
-- `[:lemon_agent, :tool_result, :emit]` - Tool result message emitted (`tool_name`, `tool_call_id`, `is_error`, `trust`)
-- `[:lemon_agent, :subagent, :spawn]` - Subagent spawned
-- `[:lemon_agent, :subagent, :end]` - Subagent completed (explicit stop only; a crashed subagent emits nothing)
-- `[:lemon_ai, :dispatcher, :rejected]` - Request rejected (rate limit/circuit open)
-
-See [telemetry.md](telemetry.md) for the emit-site-verified catalog, measurements, and metadata.
-
----
-
-## Baseline Documentation (Phase 0)
-
-This section provides detailed baseline documentation for the current BEAM agent
-implementation. It serves as Phase 0 of the BEAM Agent Sessions Plan, establishing
-a reference point for understanding current behavior before making architectural
-changes.
-
-### Current Tool Execution Path
-
-Tool execution is handled in `apps/lemon_agent/lib/lemon_agent/loop/tool_calls.ex`.
-
-#### Entry Point
-
-Tool calls are extracted from assistant messages and executed in parallel:
-
-```elixir
-# Line 674-679
-defp execute_and_collect_tools(context, new_messages, tool_calls, config, signal, stream) do
-  {results, steering_messages, context, new_messages} =
-    execute_tool_calls(context, new_messages, tool_calls, config, signal, stream)
-
-  {results, steering_messages, context, new_messages}
-end
-```
-
-#### Parallel Execution
-
-The `execute_tool_calls_parallel/5` function spawns tool tasks:
-
-```elixir
-# apps/lemon_agent/lib/lemon_agent/loop.ex
-defp execute_tool_calls_parallel(context, new_messages, tool_calls, signal, stream) do
-  parent = self()
-
-  {pending_by_ref, pending_by_mon} =
-    Enum.reduce(tool_calls, {%{}, %{}}, fn tool_call, {by_ref, by_mon} ->
-      tool = find_tool(context.tools, tool_call.name)
-
-      EventStream.push(stream, {:tool_execution_start, tool_call.id, tool_call.name, tool_call.arguments})
-
-      ref = make_ref()
-
-      {:ok, pid} =
-        Task.Supervisor.start_child(LemonAgent.ToolTaskSupervisor, fn ->
-          {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
-          send(parent, {:tool_task_result, ref, tool_call, result, is_error})
-        end)
-
-      mon_ref = Process.monitor(pid)  # <-- Monitor for crash detection
-
-      {
-        Map.put(by_ref, ref, %{tool_call: tool_call, mon_ref: mon_ref}),
-        Map.put(by_mon, mon_ref, ref)
-      }
-    end)
-
-  collect_parallel_tool_results(context, new_messages, pending_by_ref, pending_by_mon, [], stream)
-end
-```
-
-#### Key Implementation Details
-
-| Aspect | Implementation | Location |
-|--------|---------------|----------|
-| Process creation | `Task.Supervisor.start_child/2` (supervised) | `LemonAgent.ToolTaskSupervisor` |
-| Crash detection | `Process.monitor(pid)` | Line 707 |
-| Result tracking | `pending_by_ref` and `pending_by_mon` maps | Lines 693, 709-711 |
-| Result message | `{:tool_task_result, ref, tool_call, result, is_error}` | Line 704 |
-
-#### Result Collection
-
-Results are collected in `collect_parallel_tool_results/6` (lines 718-783):
-
-```elixir
-receive do
-  {:tool_task_result, ref, tool_call, result, is_error} ->
-    # Normal completion - process result
-    ...
-
-  {:DOWN, mon_ref, :process, _pid, reason} ->
-    # Process crashed - convert to error result
-    ...
-end
-```
-
-#### Tool Result Trust and Metadata Pipeline
-
-- Tools return `%LemonAgent.Types.AgentToolResult{trust: ...}`.
-- `emit_tool_result/7` normalizes trust before emitting messages and telemetry:
-  `:untrusted` stays `:untrusted`; every other value becomes `:trusted`.
-- Emitted tool result telemetry (`[:lemon_agent, :tool_result, :emit]`) includes `tool_name`, `tool_call_id`, `is_error`, and normalized `trust`.
-- External-content tools use `LemonAgent.Security.ExternalContent.untrusted_json_result/1`, which sets `trust: :untrusted` and places the JSON payload into `details`.
-- `LemonAgent.Security.ExternalContent.trust_metadata/2` emits structured trust metadata fields:
-  `untrusted`, `source`, `source_label`/`sourceLabel`, `wrapping_applied`/`wrappingApplied`,
-  `wrapped_fields`/`wrappedFields`, and optional `warning_included`/`warningIncluded`.
-- Current tool payload conventions:
-  `browser` and `web_download` include both `trustMetadata` and `trust_metadata`;
-  `web_fetch` includes `trustMetadata`; `web_search` includes `trust_metadata`.
-
----
-
-### Failure Handling
-
-#### Process Crash Handling
-
-When a tool task process crashes, the DOWN message is handled at lines 745-780:
-
-```elixir
-# Lines 745-780
-{:DOWN, mon_ref, :process, _pid, reason} ->
-  case Map.get(pending_by_mon, mon_ref) do
-    nil ->
-      # Unknown monitor, continue collecting
-      collect_parallel_tool_results(...)
-
-    ref ->
-      %{tool_call: tool_call} = Map.fetch!(pending_by_ref, ref)
-      {pending_by_ref, pending_by_mon} = drop_pending_task(pending_by_ref, pending_by_mon, ref)
-
-      {context, new_messages, results} =
-        emit_tool_result(
-          tool_call,
-          error_to_result("Tool task crashed: #{inspect(reason)}"),  # <-- Error conversion
-          true,  # is_error = true
-          context,
-          new_messages,
-          results,
-          stream
-        )
-
-      collect_parallel_tool_results(...)
-  end
-```
-
-#### Exception Handling in Tool Execution
-
-Tool execution includes try/rescue at lines 844-857:
-
-```elixir
-# Lines 844-857
-defp execute_single_tool(tool, tool_call, signal, stream) do
-  # ... on_update callback setup ...
-
-  try do
-    case tool.execute.(tool_call.id, tool_call.arguments, signal, on_update) do
-      {:ok, result} -> {result, false}
-      {:error, reason} -> {error_to_result(reason), true}
-      %AgentToolResult{} = result -> {result, false}
-      other -> {error_to_result("Unexpected tool result: #{inspect(other)}"), true}
-    end
-  rescue
-    e ->
-      {error_to_result(Exception.message(e)), true}
-  catch
-    kind, value ->
-      {error_to_result("#{kind}: #{inspect(value)}"), true}
-  end
-end
-```
-
-#### Missing Tool Handling
-
-When a tool is not found, an error result is returned (lines 820-826):
-
-```elixir
-# Lines 820-827
-defp execute_tool_call(nil, tool_call, _signal, _stream) do
-  error_result = %AgentToolResult{
-    content: [%TextContent{type: :text, text: "Tool #{tool_call.name} not found"}],
-    details: nil
-  }
-
-  {error_result, true}
-end
-```
-
-#### Error Result Conversion
-
-The `error_to_result/1` helper converts errors to `AgentToolResult` structs:
-
-```elixir
-# Lines 1067-1079
-defp error_to_result(reason) when is_binary(reason) do
-  %AgentToolResult{
-    content: [%TextContent{type: :text, text: reason}],
-    details: nil
-  }
-end
-
-defp error_to_result(reason) do
-  %AgentToolResult{
-    content: [%TextContent{type: :text, text: inspect(reason)}],
-    details: nil
-  }
-end
-```
-
----
-
-### Session Event Fan-Out
-
-The session GenServer (`apps/coding_agent/lib/coding_agent/session.ex`) delegates all
-subscription and broadcast bookkeeping to `CodingAgent.Session.Notifier`
-(`apps/coding_agent/lib/coding_agent/session/notifier.ex`). Every `handle_call`/`handle_info`
-in `session.ex` is a thin wrapper that calls `Notifier.broadcast_event/2`,
-`Notifier.subscribe_stream/3`, `Notifier.subscribe_direct/3`, or
-`Notifier.prune_subscribers/3`.
-
-There are **two** subscriber paths, and `broadcast_event/2` fans out to both:
-
-```elixir
-@spec broadcast_event(map(), LemonAgent.Types.agent_event()) :: :ok
-def broadcast_event(state, event) do
-  session_event = {:session_event, state.session_manager.header.id, event}
-
-  # Path 1: direct listeners — raw fire-and-forget send/2.
-  Enum.each(state.event_listeners, fn {pid, _ref} ->
-    send(pid, session_event)
-  end)
-
-  # Path 2: bounded, cancelable EventStreams.
-  Enum.each(state.event_streams, fn {_mon_ref, %{stream: stream}} ->
-    LemonAgent.EventStream.push_async(stream, session_event)
-  end)
-
-  :ok
-end
-```
-
-#### Subscriber Management
-
-State carries both collections:
-
-- `event_listeners: [{pid(), reference()}]` — direct subscribers registered via
-  `Notifier.subscribe_direct/3`.
-- `event_streams: %{reference() => %{pid: pid(), stream: pid()}}` — bounded
-  subscribers registered via `Notifier.subscribe_stream/3`, each backed by an
-  `LemonAgent.EventStream` (`max_queue`, `drop_strategy`, `timeout`).
-
-#### Backpressure
-
-The two paths differ deliberately:
-
-| Path | Mechanism | Backpressure |
-|------|-----------|--------------|
-| Direct listeners | `send/2` fire-and-forget | None — intended for trusted in-VM consumers (e.g. the TUI) that keep up with the stream |
-| EventStreams | `LemonAgent.EventStream.push_async/2` | Bounded queue with a configurable drop strategy, so a slow consumer cannot grow the producer's mailbox |
-
-Prefer `subscribe_stream/3` for any consumer that may fall behind; the bounded
-queue is exactly the mechanism that prevents the unbounded-mailbox risk the raw
-`send/2` path carries.
-
-#### Dead Subscriber Cleanup
-
-When a subscriber dies, the session's `{:DOWN, ...}` handler calls
-`Notifier.prune_subscribers/3`, which drops the pid from `event_listeners` and
-cancels + demonitors any `EventStream` owned by that pid (`EventStream.cancel(stream,
-:subscriber_down)`).
-
----
-
-### Current Supervision Structure
-
-#### LemonAgent.Application
-
-File: `apps/lemon_agent/lib/lemon_agent/application.ex`
-
-```
-LemonAgent.Supervisor (:one_for_one)
-+-- LemonAgent.AbortSignal.TableOwner (GenServer)
-+-- LemonAgent.AgentRegistry (Registry, keys: :unique)
-+-- LemonAgent.SubagentSupervisor (DynamicSupervisor)
-+-- LemonAgent.LoopTaskSupervisor (Task.Supervisor)
-+-- LemonAgent.ToolTaskSupervisor (Task.Supervisor)
-```
-
-```elixir
-def start(_type, _args) do
-  children = [
-    # Owns the abort-signal ETS table so it doesn't get created by short-lived processes.
-    LemonAgent.AbortSignal.TableOwner,
-    # Registry for agent process lookup and discovery
-    {Registry, keys: :unique, name: LemonAgent.AgentRegistry},
-    # DynamicSupervisor for subagent processes
-    {LemonAgent.SubagentSupervisor, name: LemonAgent.SubagentSupervisor},
-    # Task.Supervisor for agent loop tasks
-    {Task.Supervisor, name: LemonAgent.LoopTaskSupervisor},
-    # Task.Supervisor for tool execution tasks
-    {Task.Supervisor, name: LemonAgent.ToolTaskSupervisor}
-  ]
-
-  opts = [strategy: :one_for_one, name: LemonAgent.Supervisor]
-  Supervisor.start_link(children, opts)
-end
-```
-
-#### CodingAgent.Application
-
-File: `apps/coding_agent/lib/coding_agent/application.ex`
-
-```
-CodingAgent.Supervisor (:one_for_one)
-+-- CodingAgent.SessionRegistry (Registry, keys: :unique)
-+-- CodingAgent.SessionSupervisor (DynamicSupervisor)
-```
-
-```elixir
-# Lines 8-14
-def start(_type, _args) do
-  children = [
-    {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
-    CodingAgent.SessionSupervisor
-  ]
-
-  opts = [strategy: :one_for_one, name: CodingAgent.Supervisor]
-  # ...
-end
-```
-
-#### Agent Loop Tasks
-
-Agent loop tasks ARE supervised via `Task.Supervisor`:
-
-```elixir
-# apps/lemon_agent/lib/lemon_agent/loop.ex, Lines 115-134
-case Task.Supervisor.start_child(LemonAgent.LoopTaskSupervisor, fn ->
-    try do
-      run_agent_loop(prompts, context, config, signal, stream_fn, stream)
-    rescue
-      e ->
-        EventStream.error(stream, {:exception, Exception.message(e)}, nil)
-    catch
-      kind, value ->
-        EventStream.error(stream, {kind, value}, nil)
-    end
-  end) do
-  {:ok, pid} ->
-    EventStream.attach_task(stream, pid)
-  # ...
-end
-```
-
-#### Tool Tasks - Supervised
-
-Individual tool execution tasks are supervised under `LemonAgent.ToolTaskSupervisor`:
-
-```elixir
-# apps/lemon_agent/lib/lemon_agent/loop.ex
-{:ok, pid} =
-  Task.Supervisor.start_child(LemonAgent.ToolTaskSupervisor, fn ->
-    {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
-    send(parent, {:tool_task_result, ref, tool_call, result, is_error})
-  end)
-```
-
-This means:
-- Tool task crashes are detected via monitors and surfaced as tool errors
-- Supervisor visibility into running tool tasks (`LemonAgent.ToolTaskSupervisor`)
-- Tool tasks can be terminated on abort via `Task.Supervisor.terminate_child/2`
-
----
-
-## Regression Testing Checklist
-
-Use this checklist to verify BEAM agent behavior after making changes:
-
-### Tool Execution
-
-- [ ] Tool tasks complete normally and return results
-- [ ] Tool task crashes are handled gracefully (converted to error results)
-- [ ] Missing tools return appropriate error message
-- [ ] Tool exceptions are caught and converted to error results
-- [ ] Parallel tool execution completes all tools
-- [ ] Tool execution events are emitted: `tool_execution_start`, `tool_execution_update`, `tool_execution_end`
-
-### Abort Handling
-
-- [ ] Abort mid-tools terminates running tasks
-- [ ] Abort signal is respected during tool execution
-- [ ] Partial results are handled correctly on abort
-- [ ] Agent loop exits cleanly on abort
-
-### Event Broadcasting
-
-- [ ] Session events reach all subscribers
-- [ ] Slow subscribers don't block session
-- [ ] Dead subscribers are cleaned up automatically
-- [ ] Events are delivered in order to each subscriber
-- [ ] Event format: `{:session_event, session_id, event}`
-
-### Registry Operations
-
-- [ ] Main agent appears in LemonAgent.AgentRegistry
-- [ ] Subagents appear in LemonAgent.AgentRegistry
-- [ ] Sessions appear in CodingAgent.SessionRegistry
-- [ ] Registry cleanup occurs on process termination
-
-### Session Isolation
-
-- [ ] Session crash doesn't affect other sessions
-- [ ] Each session maintains independent state
-- [ ] Session supervisor restarts failed sessions (if configured)
-- [ ] Session events are scoped to their session_id
-
-### Supervision Tree
-
-- [ ] LemonAgent.Supervisor starts successfully
-- [ ] CodingAgent.Supervisor starts successfully
-- [ ] Child process failures are handled per supervision strategy
-- [ ] Application restart brings up all required processes
-
-### Message Persistence
-
-- [ ] User messages are persisted on `message_end`
-- [ ] Assistant messages are persisted on `message_end`
-- [ ] Tool result messages are persisted on `message_end`
-- [ ] Session can be restored from persisted messages
-
----
-
-## File Reference
-
-| Component | File Path |
-|-----------|-----------|
-| Tool execution loop | `apps/lemon_agent/lib/lemon_agent/loop.ex` |
-| Agent GenServer | `apps/lemon_agent/lib/lemon_agent/agent.ex` |
-| LemonAgent supervisor | `apps/lemon_agent/lib/lemon_agent/application.ex` |
-| Event stream | `apps/lemon_agent/lib/lemon_agent/event_stream.ex` |
-| Session GenServer | `apps/coding_agent/lib/coding_agent/session.ex` |
-| CodingAgent supervisor | `apps/coding_agent/lib/coding_agent/application.ex` |
-| Session supervisor | `apps/coding_agent/lib/coding_agent/session_supervisor.ex` |
-| Session registry | `apps/coding_agent/lib/coding_agent/session_registry.ex` |
-
----
-
-## Known Limitations
-
-1. **No automatic tool retries**: Tool execution tasks run under
-   `LemonAgent.ToolTaskSupervisor`, but are not automatically retried/restarted on crash.
-
-2. **No event backpressure**: Event broadcasting uses fire-and-forget `send/2`,
-   which can cause mailbox growth with slow consumers.
-
-3. **No event batching**: Each event is sent individually to each subscriber,
-   creating overhead with many subscribers or high event frequency.
-
-4. **Best-effort tool task abort**: Abort terminates in-flight tool tasks, but tasks may
-   still run briefly until termination takes effect (scheduler timing, NIFs, external calls).
+The agent emits turn/message/tool events and a terminal result. The terminal
+`agent_end` carries newly produced messages, not the entire conversation.
+Session notifications use `{:session_event, session_id, event}`.
+
+`CodingAgent.Session.Notifier` owns subscriber bookkeeping. It has two deliberately
+different paths:
+
+| Subscription | Delivery | Limit |
+| --- | --- | --- |
+| Direct | Fire-and-forget `send/2` | No mailbox backpressure; trusted consumers must keep up |
+| EventStream | Bounded stream with configured drop/timeout policy | Queue bounds do not guarantee lossless replay |
+
+Prefer the stream path for consumers that may fall behind. Stream owner death
+cancels its attached task. Subscriber monitoring removes dead direct listeners
+and cancels/demonitors owned streams. Every terminal/error path must release
+subscriptions and resources without inventing a successful result.
+
+## Failure and mutation semantics
+
+A tool failure is a result, not a reason to rerun all other tools in the batch.
+Unexpected owner-process bugs should reach OTP supervision rather than return
+fabricated empty/unchanged state. Boundary code distinguishes definite rejection
+from an unknown mutation outcome: a timeout or exit can happen after acceptance.
+Retain fixed run identity and reconcile unknown outcomes; do not duplicate work.
+
+Session direct fanout remains fire-and-forget and events are not batched. There
+is no universal lossless replay protocol for transient subscribers. Supervision
+recovers a process, not arbitrary in-flight remote effects. Durable lifecycle
+stores and explicit idempotency/lease contracts provide those guarantees where
+implemented.
+
+## Verification
+
+Use [the canonical test lanes](testing.md) from the umbrella root. For runtime
+changes exercise normal completion, tool crash, abort during tools, owner death,
+slow/dead subscribers, restart and cross-session isolation. Assert observable
+results and terminal cleanup; do not pin copied supervisor trees or module
+existence. Live provider tests are separate opt-in checks, not implied by unit
+coverage.

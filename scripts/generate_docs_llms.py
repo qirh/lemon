@@ -65,6 +65,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         (
             ("architecture/overview.md", "System architecture and message flow."),
             ("beam_agents.md", "BEAM-native agent processes, supervision, and coordination."),
+            ("platform-split.md", "Current five-package release boundary and unpublished package status."),
             ("context.md", "Context assembly, compaction, and overflow behavior."),
             ("model-selection-decoupling.md", "Provider and model selection design."),
             ("security/safety.md", "Approval, redaction, and execution safety boundaries."),
@@ -98,9 +99,9 @@ FULL_ROOT_FILES = {
     "long-running-agent-harnesses.md",
     "mix-tasks.md",
     "model-selection-decoupling.md",
+    "platform-split.md",
     "runtime-hot-reload.md",
     "skills.md",
-    "skills_v2.md",
     "subagent-parent-questions.md",
     "support.md",
     "telemetry.md",
@@ -110,7 +111,6 @@ FULL_ROOT_FILES = {
 FULL_DIRECTORIES = (
     "architecture/",
     "benchmarks/",
-    "for-dummies/",
     "getting-started/",
     "platform/",
     "reference/",

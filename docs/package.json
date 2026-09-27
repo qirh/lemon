@@ -4,11 +4,13 @@
   "private": true,
   "description": "Lemon documentation site (VitePress)",
   "scripts": {
+    "predev": "python3 ../scripts/generate_docs_llms.py",
     "dev": "vitepress dev .",
+    "prebuild": "python3 ../scripts/generate_docs_llms.py",
     "build": "vitepress build .",
     "test": "node --test .vitepress/source-links.test.mjs",
     "preview": "vitepress preview .",
-    "link-check": "markdown-link-check --config .mlc.json **/*.md --quiet"
+    "link-check": "node .vitepress/check-links.mjs"
   },
   "devDependencies": {
     "markdown-link-check": "^3.13.6",

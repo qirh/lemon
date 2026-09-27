@@ -46,9 +46,7 @@ path: `OPENAI_API_KEY`, `[providers.openai] api_key`, `api_key_secret`, or the
 default Lemon secret. Provider base URLs can come from `[providers.openai]
 base_url` or `OPENAI_BASE_URL`; otherwise Lemon uses `https://api.openai.com/v1`.
 Vertex Imagen jobs resolve `providers.google_vertex` project, location, and
-service-account JSON through Lemon runtime config/secrets. The live image proof
-can be run with `--provider vertex_imagen`, defaulting to
-`imagen-4.0-generate-001` in `us-central1`.
+service-account JSON through Lemon runtime config/secrets.
 
 `maxRetries` retries bounded transient provider failures such as 429 and 5xx
 responses. Non-transient provider errors are recorded as failed media jobs with
@@ -225,11 +223,8 @@ Public surfaces return:
 - redacted `media_job` metadata
 
 Public surfaces do not return raw prompts, raw provider responses, raw generated
-bytes, API keys, or channel message bodies. Support bundles reuse the same
-redacted metadata. Provider proof readiness is grouped by launch
-lane, so alternate providers such as `vertex_imagen`, `google_tts`, and
-`deepgram_transcribe` can satisfy the image, TTS, and STT lanes while exposing
-copy-ready per-provider rerun commands.
+bytes, API keys, or channel message bodies. Support bundles and the `media_status`
+tool reuse the same redacted metadata.
 
 Transcription and image-analysis outputs are treated as untrusted external
 content even when they come from deterministic local preview workers. The
@@ -247,26 +242,19 @@ explicit `auto_send_files` entry when the file exists under the run working
 directory. The directive line is removed from the channel text before
 Telegram/Discord rendering.
 
-## Proof Lanes
+## Focused Test Coverage
 
-Focused deterministic media tool lane:
+From the umbrella root:
 
 ```bash
-mix test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
+mix test apps/lemon_media/test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_generate_image_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_generate_speech_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_transcribe_audio_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_analyze_image_test.exs \
-  apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs \
-  apps/coding_agent/test/coding_agent/tools_test.exs \
-  apps/coding_agent/test/coding_agent/tool_registry_test.exs \
-  apps/coding_agent/test/coding_agent/tool_policy_test.exs \
-  apps/coding_agent/test/coding_agent_test.exs \
-  apps/lemon_channels/test/lemon_channels/adapters/discord/renderer_test.exs \
-  apps/lemon_channels/test/lemon_channels/adapters/telegram/renderer_test.exs --seed 1
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs --seed 1
 ```
 
-The latest lane passed locally on 2026-05-16 with `256 tests, 0 failures`.
-
-Optional manual real-service channel smokes are available through
-`scripts/live_telegram_matrix.py` and `scripts/live_discord_matrix.py`.
+Provider credentials and real channel delivery require separate opt-in operator
+checks. See [testing](../testing.md) for the supported manual smoke lanes; no
+stored live-proof artifact is required by the runtime.
