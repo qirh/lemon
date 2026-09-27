@@ -123,10 +123,8 @@ This lane passed locally on 2026-05-16 with `32 tests, 0 failures` across
 Memory-provider proof covers the BEAM-native provider boundary behind
 `search_memory` and the Hermes-compatible `session_search` wrapper: local SQLite remains the built-in provider, registered BEAM
 providers receive safety-screened ingest fan-out, scoped searches fan out without
-broadening missing scope keys, provider failures are isolated, `memory.status`
-exposes read-only provider shape renders the same redacted registry
-state, and `memory_diagnostics.json` redacts memory contents and raw provider
-config.
+broadening missing scope keys, provider failures are isolated, and
+`memory_diagnostics.json` in support bundles redacts memory contents and raw provider config.
 
 ```bash
 mix test apps/lemon_core/test/lemon_core/memory_providers_test.exs \
@@ -220,9 +218,8 @@ writes `.lemon/proofs/discord-slash-interaction-proof-latest.json` with the
 current completed deterministic check set. The proof covers the 16-command
 local slash inventory, checkpoint/rollback/kanban/media payload decoding, and safe local interaction
 responses for session/model/thinking/resume/cancel/media/trigger/cwd/topic/file
-paths. The proof artifact also records safe coverage counts consumed by
-`proofs.status`, support bundles, and. It is not real Discord
-client-click evidence.
+paths. The proof artifact also records safe coverage counts consumed by support
+bundles. It is not real Discord client-click evidence.
 
 The live Discord runtime also has a passive client-click proof recorder. When a
 real slash-command interaction arrives from Discord with live-only fields such
@@ -264,7 +261,7 @@ observed.
 
 For live Discord matrix runs, keep `--result-path` for operator handoff data
 such as nonces and Discord message ids, and add `--proof-path` when the result
-should feed `proofs.status`, support bundles, doctor gates, or.
+should be collected for support bundles and doctor gates.
 The proof path writes a sanitized artifact with hashed channel/user/message
 identifiers, check counts, reason kinds, cleanup assertions, and safe coverage
 booleans for which live-matrix families were exercised, but no raw Discord ids,
@@ -430,8 +427,8 @@ MIX_ENV=test mix run scripts/live_wasm_telemetry_smoke.exs
 This writes `.lemon/proofs/wasm-tool-telemetry-latest.json` and verifies
 successful WASM tool execution, returned sidecar errors, and sidecar exits emit
 redacted start/stop/exception telemetry with hashed WASM paths and tool-call
-ids. `extensions.status` and surface the redacted proof status,
-check status, host-boundary flags, proof hash, and redaction summary. It proves
+ids. The proof artifact surfaces redacted proof and check status, host-boundary
+flags, its hash, and a redaction summary. It proves
 the wrapper telemetry contract only; public registry workflow and broad sandbox
 parity remain separate plugin-ecosystem work.
 
@@ -478,14 +475,11 @@ params from lifecycle telemetry.
 `extensions.wasm_policy`, and the registry install/update proof as
 `extensions.registry_audit`, and the WASM sidecar lifecycle proof as
 `extensions.wasm_lifecycle`. These checks warn when a stale or incomplete
-proof exists and skip before the matching proof has been generated. The generic
-`proofs.status` and support-bundle proof inventory also preserve proof-level
-`redaction` maps for extension/WASM artifacts, so recent proof summaries expose
-the redacted raw-cwd/session/tool/param/path/manifest/distribution flags even
-when the artifact has no generic `cleanup` map. The JSON-RPC `proofs.status`
-method preserves the same `redaction` map on formatted recent proofs for
-external clients with lowerCamelCase keys, and renders the generic
-proof-row redaction summary in its proof artifact panel.
+proof exists and skip before the matching proof has been generated.
+Support-bundle proof inventories preserve `redaction` maps for extension/WASM
+artifacts. Recent proof summaries expose the redacted
+raw-cwd/session/tool/param/path/manifest/distribution flags even when an artifact
+has no generic `cleanup` map; proof artifacts retain the same redaction summary.
 
 Telegram and Discord renderer checks cover finalized-run text presentation,
 file batches, generated-file auto-send boundaries, and Discord config-gated
@@ -499,7 +493,7 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/renderer_test
 This lane passed locally on 2026-05-16 with `19 tests, 0 failures`.
 
 Media job observability checks cover redacted generated-media metadata,
-`media.status`, support-bundle `media_diagnostics.json` snapshot
+support-bundle `media_diagnostics.json` snapshot
 visibility, router finalization recording for generated `auto_send_files`, and
 Hermes-compatible final-answer `MEDIA:<path>` directives that resolve through
 the same safe attachment path:
@@ -789,8 +783,7 @@ The full registered-server real-repository fixture proof passed locally on
 Rust, TypeScript, and Elixir fixtures, initial/reintroduced diagnostics for all
 servers, final clean diagnostics, closed documents, and cleanup flags false for
 raw paths, file contents, diagnostics output, raw session ids, and server I/O.
-`proofs.status`, support bundles and
-`mix lemon.doctor --verbose` consume both
+Support bundles and `mix lemon.doctor --verbose` consume both
 `.lemon/proofs/lsp-project-fixtures-latest.json` and
 `.lemon/proofs/lsp-real-repo-fixtures-latest.json`; the final readiness audit
 validates the same files by default or the
@@ -835,7 +828,7 @@ This smoke passed locally on 2026-05-16 with `completed_count: 12` and
 `failed_count: 0`; the nested external `fetch` client completed 6 checks and
 the official OpenAI SDK client completed 4 checks.
 
-`proofs.status`, support bundles, and `mix lemon.doctor --verbose` consume the
+Support bundles and `mix lemon.doctor --verbose` consume the
 same redacted result rows as `openai_compat_*` checks with proof scope
 `openai_compat_api`. The doctor check `openai_compat.api_preview` passes only
 when the local smoke has completed health/capability, Chat Completions,
@@ -1016,7 +1009,7 @@ The official ACP SDK proof is documented in `docs/tools/acp.md` and writes
 `completed_count: 8`, `failed_count: 0`, `update_count: 2`, and
 `client_request_count: 4`.
 
-`proofs.status`, support bundles, and `mix lemon.doctor --verbose` consume the
+Support bundles and `mix lemon.doctor --verbose` consume the
 ACP stdio proof rows as `acp_stdio_*`, `acp_stdio_external_*`, and
 `acp_official_sdk_*` checks. The doctor check `acp.preview` passes only when
 the deterministic stdio smoke, external Node stdio client proof, and official
@@ -1028,9 +1021,9 @@ ACP SDK client proof are all complete. Rerun
 MCP preview proof uses three redacted smoke artifacts:
 `.lemon/proofs/mcp-stdio-latest.json`,
 `.lemon/proofs/mcp-http-latest.json`, and
-`.lemon/proofs/mcp-sse-latest.json`. `proofs.status`, support bundles, and
-`mix lemon.doctor --verbose` consume them as `mcp_stdio`, `mcp_http`, and
-`mcp_sse` proof scopes. The doctor check `mcp.preview` passes only when stdio,
+`.lemon/proofs/mcp-sse-latest.json`.
+Support bundles and `mix lemon.doctor --verbose` consume the artifacts as
+`mcp_stdio`, `mcp_http`, and `mcp_sse` proof scopes. The doctor check `mcp.preview` passes only when stdio,
 Streamable HTTP, and legacy SSE smoke proofs are all complete. Rerun
 `MIX_ENV=test mix run scripts/live_mcp_stdio_smoke.exs`,
 `MIX_ENV=test mix run scripts/live_mcp_http_smoke.exs`, and
@@ -1077,15 +1070,9 @@ mix test apps/lemon_control_plane/test/lemon_control_plane/methods/optional_pari
   apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs --seed 1
 ```
 
-This lane passed locally on 2026-05-16 with `90 tests, 0 failures` after adding
-`providers.status` coverage for redacted runtime credential readiness and schema
-validation, plus `extensions.status` coverage for redacted extension loading,
-tool-conflict, and extension-provider shape. It also covers `proofs.status`,
-the read-only redacted proof-artifact summary for
-`.lemon/proofs/*proof*.json`, `.lemon/proofs/*-latest.json`, and
-`tmp/*proof*.json`, including safe provider fallback proof object/provider-path
-fields and inferred `provider_fallback` scope without raw prompts, answers, or
-provider response bodies. Source installs can inspect the same redacted local
+The operator interfaces below cover these redacted local artifacts and readiness
+information without exposing raw prompts, answers, or provider response bodies.
+Source installs can inspect the redacted local
 inventory through `mix lemon.proofs` or `./bin/lemon proofs --limit 5`,
 generated-media job, artifact, and provider-proof readiness through
 `mix lemon.media` or `./bin/lemon media --limit 5`, a compact launch-readiness
@@ -1102,26 +1089,14 @@ the non-strict wrappers and checks support-bundle `readiness_summary.json` for
 the shared proof-gate object, the five expected proof-gate ids,
 `proof_gate_summary.gateCount == 5`, the proof-gate status map, and the
 provider-media gate status. It also checks the prompt, provider-response,
-raw-path, raw-filename, bot-token, and proof-detail cleanup claims. The same
-support lane also covers JSON-RPC `readiness.status`, which returns the compact
-launch-readiness rollup with lowerCamelCase cleanup keys and the shared
-`LemonCore.Doctor.ProofLaunchGates` proof-gate summary for operator clients.
-The JSON-RPC summary includes proof-gate status/counts/status maps for
-lightweight clients and a sorted unresolved-gate reason-kind list derived from
-both singular gate reasons and provider-media reason lists.
-The control-plane optional parity lane passed locally on 2026-05-18 with
-`69 tests, 0 failures` after adding `readiness.status` coverage for promoted
-Telegram/Discord gate counts, provider-media state, proof totals, unresolved
-gate limiting, registry metadata, and redaction of raw ids, prompts, provider
-responses, and token-like values. It also locks in sanitized
-`lemon.discord_live_matrix` coverage retention for `check_count`, sender shape,
-restart, free-response, DM, thread, generated-media, and file-delivery
-booleans plus slash-registration coverage booleans while still redacting raw
-Discord artifact names and details. It also preserves sanitized terminal
+raw-path, raw-filename, bot-token, and proof-detail cleanup claims.
+The support bundle retains sanitized `lemon.discord_live_matrix` coverage
+booleans for check count, sender shape, restart, free-response, DM, thread,
+generated-media and file delivery, plus slash-registration coverage, without
+raw Discord artifact names or details. It also preserves sanitized terminal
 backend proof rows as `terminal_backend_*` checks and exposes only safe Docker
-hardening booleans and policy values from terminal backend proofs, including
-cgroup-observed memory, CPU, and pids limit flags, without command text or
-output.
+hardening booleans and policy values, including cgroup-observed memory, CPU,
+and pids limits, without command text or output.
 
 Provider setup diagnostics are also covered in the support-bundle lane:
 
@@ -1275,8 +1250,8 @@ evaluation, hover, select-option, upload-file, download, metadata endpoint
 blocking, public-route guard rejection, model-visible screenshot, local
 browser-to-media vision, browser analyze, cookie set/get redaction, clear-state
 reset, attach-only CDP endpoint mode, and 40 redacted browser progress updates
-across 20 started and 20 completed phases in the proof JSON. `proofs.status`,
-support bundles and `mix lemon.doctor --verbose` consume the same
+across 20 started and 20 completed phases in the proof JSON.
+Support bundles and `mix lemon.doctor --verbose` consume the same
 `.lemon/proofs/browser-smoke-latest.json` artifact through `browser.preview`;
 the final readiness audit validates it by default or
 `LEMON_BROWSER_PROOF_JSON` when release evidence lives elsewhere.
@@ -1349,8 +1324,8 @@ tooling on this page into three tiers, cheapest sufficient tier first.
 Tier 1 (DIRECT, no Telegram) works against the BEAM node and the control
 plane: non-interactive `elixir --rpc-eval` against the running node, the
 control-plane WebSocket on port 4040 (`connect`/`chat.send`/`agent` +
-`agent.wait` with the deterministic `echo` engine, `events.subscribe`,
-`sessions.list`, `logs.tail`), `LemonCore.Bus.subscribe` on `run:<id>` /
+`agent.wait` with the deterministic `echo` engine, `sessions.list`, `logs.tail`),
+`LemonCore.Bus.subscribe` on `run:<id>` /
 `session:<key>` topics, the `:channel_delivery` event on the `"channels"`
 topic for outbound-delivery observability, and synthetic channel-shaped
 inbound via `LemonChannels.Runtime.submit_inbound/1`. For anything mutating,
@@ -1500,9 +1475,9 @@ attachment whose filename contains the proof nonce, and no leaked `MEDIA:` line
 in the channel-facing text. Sanitized proof artifacts include
 `contains_media_directive` coverage, marker status, attachment count/document
 status, directive-leak status, and hashed channel/topic identifiers only. Those
-sanitized fields are consumed by doctor, support bundles, and `proofs.status`
-so operators can distinguish missing proof, missing attachment, and leaked
-directive cases without raw paths or message bodies.
+sanitized fields are consumed by doctor and support bundles so operators can
+distinguish missing proof, missing attachment, and leaked directive cases
+without raw paths or message bodies.
 
 The Telegram and Discord MEDIA directive proofs passed on 2026-05-17 against a
 fresh main-checkout runtime. Telegram topic `35` wrote

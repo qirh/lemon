@@ -252,15 +252,10 @@ internal callers can opt into legacy symlink following with
 `lsp_diagnostics` runs workspace-aware language diagnostics for a single file.
 `write`, `edit`, and `patch` can opt into post-edit diagnostics with
 baseline/delta reporting so newly introduced issues are surfaced without
-failing edits when local checkers are missing. Operator surfaces can inspect
 redacted checker and supervised language-server session capability metadata
-through `lsp.diagnostics.status` and `lsp_diagnostics.json` in support
-bundles. The BEAM manager can also start/stop sessions, run the
+in support bundles. The BEAM manager can also start/stop sessions, run the
 initialize handshake, send framed JSON-RPC requests, synchronize open/change/
-close document notifications, and capture redacted diagnostic notifications
-through `lsp.server.start`, `lsp.server.initialize`, `lsp.document.open`,
-`lsp.document.change`, `lsp.document.close`, `lsp.server.request`, and
-`lsp.server.stop`.
+close document notifications, and capture redacted diagnostic notifications.
 
 `kanban` is implemented in `LemonSkills.Tools` and exposes durable board and task operations backed by
 `LemonAgent.Workspace.KanbanStore`. It is the model-facing surface for multi-agent work

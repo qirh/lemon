@@ -57,7 +57,6 @@ Additional nuance:
 
 - `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
-- `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
 - `lemon secrets sources status|test` returns only source readiness,
   provenance, counts, byte counts, duration, and stable error kinds. Combined
   stdout/stderr and resolved values are never included.

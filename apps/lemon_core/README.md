@@ -113,7 +113,10 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 |--------|---------|
 | `LemonCore.Doctor.SupportBundle` | Redacted doctor report, runtime metadata, config, and diagnostics ZIP writer |
 | `LemonCore.Doctor.ProviderDiagnostics` | Provider setup/routing diagnostics for support bundles without raw API keys, secret names, base URLs, env var names, prompts, or provider responses |
-| `LemonChannels.Doctor.Readiness` | Redacted channel launch-gate readiness summary shared by support bundles and `channels.status` (lives in `lemon_channels`; reached through `config :lemon_core, :doctor_runtime`) |
+| `LemonChannels.Doctor.Readiness` | Redacted channel launch-gate readiness summary shared by support bundles (lives in `lemon_channels`; reached through `config :lemon_core, :doctor_runtime`) |
+
+PUT 134.=134:
+launch-gate summary: promoted platform list, gate
 | `LemonChannels.Doctor.Checks.Channels` | Channel readiness checks built from redacted channel diagnostics, shared launch-gate readiness and proof reason kinds (lives in `lemon_channels`; registers through `config :lemon_core, :doctor_checks`) |
 | `LemonCore.Doctor.Checks.Media` | Media readiness checks for provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
 | `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
@@ -131,7 +134,7 @@ must not include raw prompts, responses, channel message bodies, credentials,
 or secret values.
 
 `channel_readiness.json` in support bundles mirrors the shared channel
-launch-gate summary used by `channels.status`: promoted platform list, gate
+launch-gate summary: promoted platform list, gate
 counts, redacted gate evidence, safe reason kinds, and copy-ready next actions
 for live proof gates such as slash client-click wait mode. It must not
 include bot tokens, secret names, chat/channel/guild ids, message bodies, raw

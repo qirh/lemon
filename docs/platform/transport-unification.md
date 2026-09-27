@@ -146,13 +146,6 @@ subsystems that are not channels and are off by default. That is the wrong trade
 
 ## 4. What deleting `Transport` + `TransportRegistry` breaks
 
-- **`LemonControlPlane.Methods.TransportsStatus`** is the only runtime consumer. It already
-  reaches the registry through a *dynamic atom* indirection (`transport_registry_module()` +
-  `Code.ensure_loaded?` + `function_exported?` + `apply`), degrading to
-  `"status" => "registry_stopped"` when absent. Two consequences: (a) deleting the registry does
-  not crash it, it just reports empty; (b) **this is the same anti-pattern 2.5 is removing** for
-  `LemonGateway.Config`/`EngineRegistry`. Recommendation: fold `transports.status` into 2.5's
-  `EngineInfoBridge` work rather than 2.4 — it is the same fix, and doing it twice is waste.
 - **Docs asserting the current design**: `apps/lemon_gateway/README.md:126,369`,
   `apps/lemon_gateway/AGENTS.md:3,25`, `docs/architecture_boundaries.md:58`. All describe the
   ingress set as "transitional legacy" implying eventual full retirement. If the recommendation
@@ -222,8 +215,8 @@ out of 2.4 and attached to 2.5, where the identical bridge was already being bui
 > **A1 resolved:** (b) accepted — webhook/SMS/voice are permanent gateway-owned ingress;
 > (a) answered — Farcaster is unused, so it was **deleted** (D12, C1 below).
 > **A2, A3 and B1 are done** (see the table). B2/B3 await the go-ahead.
-> C2/D1/D2' were re-assigned: chat_state became its own task, and transports.status,
-> capability delegation and the telegram surfaces went to 2.5.
+> D1/D2' were re-assigned: chat_state became its own task, and capability
+> delegation and the telegram surfaces went to 2.5.
 
 Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour" to
 **"establish the boundary, then port the one that fits."**
@@ -240,7 +233,6 @@ Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour"
 | **B3** | **Port email** to `LemonChannels.Adapters.Email` on top of B2: inbound, then outbound, then cutover. Add `email` to `TransportRegistry`'s `@channels_owned_transport_ids` (the mechanism Telegram/Discord/WhatsApp already used). Delete `gateway/transports/email/`. | L | **YES** — new adapter under `lemon_channels/adapters/`, plus adapter registration. Strictly after 2.3. |
 | **C1** ✅ | Farcaster: execute A1(a) — **deleted** 2026-08-10 (transport, tests, config keys, 5 env vars, docs). | S | No |
 | **E1** | **Capability delegation** (§7a): widen `Plugin.meta/0` to the typed vocabulary, resolve `Capabilities.Registry.lookup/1` through the registered adapter, delete the 5 hard-coded clauses, relocate the per-channel assertions. Unblocked now that 2.3 has landed. | M | No (2.3 complete) |
-| **C2** | Fold `transports.status`'s dynamic-atom registry peek into **2.5**'s bridge work rather than solving it here. | S | No (belongs to 2.5) |
 | **D1** | Move the chat_state item **out** of 2.4 into its own task (§5). | S | No |
 | **D2'** | Move the telegram-surfaces item **out** of 2.4 and attach to **2.5** (§6). | S | No |
 
@@ -248,7 +240,7 @@ Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour"
 
 A1 → A2/A3 (docs, parallel, no collisions, can start immediately) → B1 (tests, no collisions) →
 B2 → B3. C1 is done and was independent of the rest. **2.3 has since landed**, so the former block on B2/B3 is clear. E1 (§7a) is
-independent of the port and can run in parallel with B1. C2/D1/D2' are re-assignments, not work.
+independent of the port and can run in parallel with B1. D1/D2' are re-assignments, not work.
 
 Everything before B2 is collision-free with 2.3 and can proceed the moment the decision
 checkpoint clears. B2 and B3 are the only items touching `lemon_channels` and must queue behind

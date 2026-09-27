@@ -9,9 +9,6 @@ Long-running implementation tasks can drift when the agent has no durable task m
 - feature requirement files (`FEATURE_REQUIREMENTS.json`)
 - todo dependency/progress tracking
 - checkpoint/resume snapshots plus preview filesystem rollback snapshots
-- unified progress snapshots
-- durable isolated background-command lifecycle and bounded no-tools side queries
-- control-plane introspection via `agent.progress`
 
 ## Core modules
 
@@ -25,8 +22,6 @@ Long-running implementation tasks can drift when the agent has no durable task m
   - Create/list/resume/delete checkpoint files under `System.tmp_dir()/lemon_checkpoints`
   - Store filesystem snapshots for file-tool rollback
   - Preview diff and restore all or selected paths from filesystem checkpoints
-- `CodingAgent.Progress`
-  - Aggregates todo + requirements + checkpoint stats into one snapshot payload
 - `CodingAgent.BackgroundRun`
   - Starts an isolated native full-tool session and immediately returns a durable id
   - Lists, inspects, retrieves, and cooperatively cancels background work
@@ -56,43 +51,10 @@ set `tools: []`, and run under their own `side_query:*` session key.
 Failures are reported with stable bounded codes rather than provider messages,
 paths, or credential-bearing details.
 
-## Progress snapshot API
-
-`CodingAgent.Progress.snapshot/2`:
-
-- input: `session_id`, optional `cwd` (default `.`)
-- output includes:
-  - `todos` progress stats
-  - `features` progress stats (or `nil` if no requirements file)
-  - `checkpoints` stats
-  - `overall_percentage`
-  - `next_actions` (`todos` + `features`)
-
-## Control-plane method: `agent.progress`
-
-JSON-RPC method exposed in `lemon_control_plane`.
-
-### Params
-
-- required: `sessionId`
-- optional: `cwd`, `runId`, `sessionKey`, `agentId`
-
-### Behavior
-
-- returns current `CodingAgent.Progress.snapshot/2` payload
-- includes a compact `summary` with todo/feature/checkpoint counts,
-  next-action counts, overall percentage, and cleanup flags that avoid echoing
-  next-action content, prompts, message bodies, credentials, or secrets
-- emits introspection event `:agent_progress_snapshot`
-- attaches optional run/session/agent metadata to introspection records when provided
-
 ## Validation commands
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs \
   apps/coding_agent/test/coding_agent/tools/todo_store_test.exs \
-  apps/coding_agent/test/coding_agent/checkpoint_test.exs \
-  apps/coding_agent/test/coding_agent/progress_test.exs
-
-mix test apps/lemon_control_plane/test/lemon_control_plane/methods/introspection_methods_test.exs
+  apps/coding_agent/test/coding_agent/checkpoint_test.exs
 ```

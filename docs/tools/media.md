@@ -225,8 +225,8 @@ Public surfaces return:
 - redacted `media_job` metadata
 
 Public surfaces do not return raw prompts, raw provider responses, raw generated
-bytes, API keys, or channel message bodies. Support bundles and `media.status`
-reuse the same redacted metadata. Provider proof readiness is grouped by launch
+bytes, API keys, or channel message bodies. Support bundles reuse the same
+redacted metadata. Provider proof readiness is grouped by launch
 lane, so alternate providers such as `vertex_imagen`, `google_tts`, and
 `deepgram_transcribe` can satisfy the image, TTS, and STT lanes while exposing
 copy-ready per-provider rerun commands.

@@ -124,9 +124,9 @@ steps.
       Use `--reset-session-between-checks` with the second bot sender so each
       check starts from a clean Discord session.
       Keep `--result-path` for operator handoff data such as nonces and message
-      ids; use `--proof-path` for the redacted artifact consumed by
-      `proofs.status`, `./bin/lemon proofs`, support bundles, doctor gates,
-      and.
+ids; use `--proof-path` for the redacted artifact consumed by
+`./bin/lemon proofs`, support bundles, and doctor gates.
+
       The runner stops on the first failed manual check by default; do not use
       `--continue-on-failure` for release evidence.
 - [ ] Before promoting Discord free-response support, run the unmentioned
@@ -298,7 +298,7 @@ steps.
       `extensions.wasm_telemetry`, `extensions.wasm_policy`,
       `extensions.registry_audit`, and `extensions.wasm_lifecycle` as `pass`;
       failed or missing rows remain blockers for plugin/extension host preview
-      support claims. Support bundles and `proofs.status` must expose the
+      support claims. Support bundles must expose the
       proof-level `redaction` maps for these artifacts without raw paths, cwd,
       session ids, params, manifest contents, distribution URLs, or tool
       payloads. The final audit defaults to

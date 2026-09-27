@@ -652,8 +652,7 @@ Provider onboarding flows:
 - Support `--set-default`, `--model`, and `--config-path`
 
 Provider readiness is visible through the source and packaged
-`lemon providers status` command and the read-only control-plane
-`providers.status` method. They use the same
+`lemon providers status` command. It uses the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -661,6 +660,7 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
+
 
 Fallbacks and credential-pool references can be edited through the same
 packaged/source command boundary:
@@ -687,28 +687,12 @@ lemon providers fallback remove zai --dry-run --json
 lemon providers fallback remove zai --confirm zai
 ```
 
-The admin-scoped `providers.configure` control-plane method exposes the same
-actions (`fallback.add`, `fallback.remove`, `fallback.clear`, `pool.upsert`,
-`pool.delete`, `pool.credential.add`, `pool.credential.remove`, and
-`pool.credential.clear`). RPC mutations are preview-only unless `apply: true`
-is explicit. Remote callers may select `global` or `project` scope but cannot
-provide an arbitrary config path. Results expose provider and pool names plus
-counts; they never include raw keys, secret names, credential references, base
-URLs, or environment-variable names.
 
-Preview results include an opaque `configRevision`. A caller that passes it
-back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
-service compares the revision while holding its target-config lock and rejects
-the mutation if any config content changed after preview. `/manage/providers`
-uses this contract for all Web mutations, then adds exact confirmation for
-destructive actions and requires credential-reference values to be re-entered
-instead of retaining them in LiveView state.
-
-Memory-provider readiness is visible through read-only `memory.status` and
-support-bundle `memory_diagnostics.json`. These surfaces expose
-provider ids, enabled state, source labels, scopes, timeout shape, and module
-load state without memory document contents, raw provider config, secret values,
-prompts, tool output, or provider error payloads.
+Memory-provider readiness is included in support-bundle
+`memory_diagnostics.json`. These surfaces expose provider ids, enabled state,
+source labels, scopes, timeout shape, and module load state without memory
+document contents, raw provider config, secret values, prompts, tool output,
+or provider error payloads.
 
 Doctor support bundles include a core-owned `provider_diagnostics.json` snapshot
 for offline support. That snapshot reports provider setup shape, credential
@@ -737,9 +721,8 @@ credential_pool = "burst"
 distribution = { openai = 70, zai = 20, anthropic = 10 }
 ```
 
-`providers.status` and `lemon providers status` include a redacted
-`routingConfig` block for effective fallback/pool configuration and a `routing`
-block with the requested
+`lemon providers status` includes a redacted `routingConfig` block for effective
+fallback/pool configuration and a `routing` block with the requested
 provider/model, selected provider/model, fallback candidates, candidate
 readiness booleans, selected routing profile, selected credential pool,
 profile distribution weights, pool provider names, pool strategy, and

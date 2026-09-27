@@ -197,7 +197,7 @@ top-level proof also includes `non_vision_image_rejection`, which posts runtime
 image bytes to `openai:o3-mini`, expects the sanitized 400 response, and verifies
 the stub submitter was not called. The proof is written to
 `.lemon/proofs/openai-compat-smoke-latest.json` plus a timestamped archive.
-`proofs.status`, support bundles, and `mix lemon.doctor --verbose` consume
+Support bundles and `mix lemon.doctor --verbose` consume
 those redacted result rows as `openai_compat_*` checks. The doctor check is
 `openai_compat.api_preview`; rerun the smoke if it warns or skips.
 

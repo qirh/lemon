@@ -476,7 +476,7 @@ LemonAutomation.HeartbeatManager.get_config(agent_id)
 # Returns %{timestamp_ms, status: :ok | :alert, response, suppressed, run_id, job_id}
 LemonAutomation.HeartbeatManager.get_last(agent_id)
 
-# Update heartbeat configuration - called by set-heartbeats control plane method
+# Update heartbeat configuration
 # Creates/updates/disables a cron job for the agent
 LemonAutomation.HeartbeatManager.update_config(agent_id, %{
   enabled: true,

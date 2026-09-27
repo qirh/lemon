@@ -82,7 +82,6 @@ methods (exact names from `LemonControlPlane.Methods.Registry`):
 - `chat.send` — params `sessionKey` (required), `prompt`, optional `agentId`, `queueMode`
 - `agent` — params `prompt` (required), `session_key`, `model`, `idempotency_key`; returns `run_id`
 - `agent.wait` — params `runId`, `timeoutMs`; blocks until the run completes
-- `events.subscribe` — params `topics` (allowed: `all`, `system`, `cron`, `nodes`, `presence`, `exec_approvals`, `channels`, `goals`, plus `run:<id>` / `runId`)
 - `sessions.list` — params `limit`, `offset`, `agentId`
 - `logs.tail` — params `limit` (max 1000), `level`
 
@@ -146,7 +145,7 @@ Every `LemonChannels.Dispatcher.dispatch/1` (success and failure) now emits:
 
 - telemetry `[:lemon, :channels, :dispatch]` — measurements `%{count: 1, duration: native}`, metadata `%{channel_id, account_id, kind, intent_id, run_id, session_key, ok}`
 - a typed `LemonCore.Events.ChannelDelivery` broadcast as `:channel_delivery` on the `"channels"` bus topic (fields: `intent_id`, `run_id`, `session_key`, `channel_id`, `account_id`, `peer_kind`, `peer_id`, `thread_id`, `kind`, `text_preview` ≤200 chars, `ok`, `error`, `duration_ms`, `ts_ms`)
-- a control-plane WS event `channel.delivery` (camelCase payload), received by clients subscribed via `events.subscribe` with `topics: ["channels"]`
+- a control-plane WS event `channel.delivery` (camelCase payload)
 
 So "did lemon actually deliver a reply to the channel?" is answerable without
 touching the channel:

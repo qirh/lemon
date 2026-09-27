@@ -336,7 +336,7 @@ Memory provider `config` supports:
 
 `LemonMemory.Providers` always keeps local SQLite as the built-in provider,
 isolates provider failures, deduplicates search results by document id, and
-reports only redacted provider shape through `memory.status` and
+reports only redacted provider shape in
 support bundles.
 
 ## Extension Discovery
@@ -452,8 +452,6 @@ sidecar exit. It verifies `[:coding_agent, :wasm, :tool, :start]`,
 tool-call ids. The proof artifact is
 `.lemon/proofs/wasm-tool-telemetry-latest.json` and records only aggregate
 counts, host-boundary flags, and redaction booleans.
-`extensions.status` exposes the same proof status, check status,
-host-boundary flags, proof hash, and redaction summary.
 
 This is wrapper telemetry proof for the WASM execution boundary. It is not
 public registry, broad sandbox policy, MCP, or marketplace parity proof.
@@ -682,50 +680,6 @@ WASM tool wrappers emit the matching redacted host telemetry through
 `[:coding_agent, :wasm, :tool, :exception]`. Metadata is bounded to the WASM
 host label, tool name, hashed WASM path, hashed tool-call id, status, duration,
 and redacted exception type.
-
-## Control-Plane Status
-
-Operators can inspect extension/plugin health without entering an agent session
-through the read-only `extensions.status` control-plane method:
-
-```json
-{
-  "method": "extensions.status",
-  "params": {
-    "cwd": "/path/to/project"
-  }
-}
-```
-
-The method loads project/global extensions, reports loaded extension names,
-versions, capabilities, config-schema presence, load/validation error counts,
-tool-conflict resolution, extension-provided provider names, extension-host
-execution telemetry proof shape, WASM wrapper telemetry proof shape, and WASM
-status shape when available. It redacts raw source paths, load-error messages,
-config schemas, provider modules, and path-like WASM metadata, replacing
-sensitive path fields with hashes. `LemonCore.Doctor.ExtensionDiagnostics`
-reports global, project, and configured extension directory existence,
-extension-file counts, manifest counts and aggregate manifest shape, nested
-library-file counts, and file/path hashes without loading plugin code or
-exposing raw source paths, file contents, manifest contents, distribution URLs,
-or load-error messages. When
-`.lemon/proofs/extension-host-smoke-latest.json` exists, the same diagnostics
-surface includes a redacted `execution_telemetry` summary with proof status,
-proof hash, completed/failed counts, telemetry-check status, config/env
-disabled-check status, disabled explicit-path block status, and redaction
-booleans. When `.lemon/proofs/wasm-tool-telemetry-latest.json` exists, the
-diagnostics also include a redacted `wasm_telemetry` summary with proof status,
-proof hash, success/error/exception/redaction check status, host-boundary flags,
-and redaction booleans. When `.lemon/proofs/wasm-policy-latest.json` exists,
-diagnostics include a redacted `wasm_policy` summary with proof status,
-approval-default check status, override status, policy-boundary flags, and
-redaction booleans. When
-`.lemon/proofs/extension-registry-audit-latest.json` exists, diagnostics include
-a redacted `registry_audit` summary with install/update proof status,
-installable/blocked/update counts, no-code-load status, proof hash, and
-redaction booleans. When `.lemon/proofs/wasm-lifecycle-latest.json` exists,
-diagnostics include a redacted `wasm_lifecycle` summary with discover/invoke,
-status, stop, proof hash, lifecycle-boundary flags, and redaction booleans.
 
 `mix lemon.doctor --verbose` includes `extensions.telemetry`,
 `extensions.wasm_telemetry`, `extensions.wasm_policy`, and

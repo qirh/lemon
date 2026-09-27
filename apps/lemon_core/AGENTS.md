@@ -159,12 +159,11 @@ Doctor `usage.status` should use `LemonCore.UsageDiagnostics` and report only
 aggregate usage/quota pressure. Do not include prompt text, response text,
 message bodies, credentials, or secret values in check messages/remediation.
 
-Support-bundle `channel_readiness.json` and control-plane `channels.status`
-should use `LemonChannels.Doctor.Readiness` for the shared channel
-launch-gate summary. Keep gate evidence and next actions redacted and
-copy-ready, especially slash-command client-click wait modes. Do not include bot
-tokens, secret names, chat/channel/guild ids, message bodies, raw proof paths,
-or raw proof details.
+Support-bundle `channel_readiness.json` should use
+`LemonChannels.Doctor.Readiness` for the shared channel launch-gate summary.
+Keep gate evidence and next actions redacted and copy-ready, especially
+slash-command client-click wait modes. Do not include bot tokens, secret names,
+chat/channel/guild ids, message bodies, raw proof paths, or raw proof details.
 
 Doctor `channels.readiness` should summarize the same
 `LemonChannels.Doctor.Readiness` launch-gate counts and point at the first
@@ -556,7 +555,7 @@ its documented generic answer rather than failing.
 
 Shared proof launch-gate summaries still live in
 `LemonCore.Doctor.ProofLaunchGates`, not in a Web or control-plane formatter, so
-support bundles, `proofs.status`, and `readiness.status` stay aligned on
+support bundles stay aligned on
 provider media, terminal backend and the registered channel gates without raw
 proof details. Everything a bundle or check emits stays redacted: sanitized
 status/reason kinds, never raw ids, message bodies, bot tokens or secret names.

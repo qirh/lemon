@@ -69,16 +69,6 @@ executable path. Public status redacts absolute paths to command basenames.
 
 Operator/editor surfaces can use:
 
-| Method | Purpose |
-| --- | --- |
-| `lsp.diagnostics.status` | Inspect redacted checker and language-server capability metadata. |
-| `lsp.server.start` | Start a supervised stdio language-server session. |
-| `lsp.server.initialize` | Send `initialize`, wait for the response, then send `initialized`. |
-| `lsp.document.open` | Send `textDocument/didOpen`. |
-| `lsp.document.change` | Send `textDocument/didChange` with full text content. |
-| `lsp.document.close` | Send `textDocument/didClose`. |
-| `lsp.server.request` | Send a JSON-RPC request and correlate the response by id. |
-| `lsp.server.stop` | Stop the supervised session. |
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,
@@ -173,9 +163,8 @@ When the ElixirLS command is an absolute local launcher, set
 `ELS_MODE=language_server`.
 
 The project-fixture proof lane writes
-`.lemon/proofs/lsp-project-fixtures-latest.json`, which is included by
-support bundles, read-only `proofs.status`, and through the
-first-party `.lemon/proofs/*-latest.json` inventory.
+`.lemon/proofs/lsp-project-fixtures-latest.json`, which is included by support
+bundles and the first-party `.lemon/proofs/*-latest.json` inventory.
 
 The real-repository fixture proof lane writes
 `.lemon/proofs/lsp-real-repo-fixtures-latest.json`. It covers all registered

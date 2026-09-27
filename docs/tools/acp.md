@@ -291,7 +291,7 @@ official SDK proof passed at `2026-05-17T11:12:42.429Z` with
 `completed_count: 8`, `failed_count: 0`, `update_count: 2`, and
 `client_request_count: 4`.
 
-`proofs.status`, support bundles, and `mix lemon.doctor --verbose` consume the
+Support bundles and `mix lemon.doctor --verbose` consume the
 three ACP proof artifacts as `acp_stdio_*`, `acp_stdio_external_*`, and
 `acp_official_sdk_*` checks. The doctor check is `acp.preview`; rerun the three
 smoke/client commands above if it warns or skips.
