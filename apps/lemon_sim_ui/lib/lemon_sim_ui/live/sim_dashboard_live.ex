@@ -895,7 +895,7 @@ defmodule LemonSimUi.SimDashboardLive do
           </div>
 
           <!-- Runner errors banner -->
-          <% runner_errors = Map.get((@selected_sim && @selected_sim.world) || %{}, :runner_errors) || Map.get((@selected_sim && @selected_sim.world) || %{}, "runner_errors") || [] %>
+          <% runner_errors = Map.get(@selected_sim.world, :runner_errors) || Map.get(@selected_sim.world, "runner_errors") || [] %>
           <div :if={runner_errors != []} class="glass-card rounded-lg border border-red-500/30 bg-red-950/20 p-3 mb-4">
             <details>
               <summary class="text-xs font-bold text-red-400 uppercase tracking-widest cursor-pointer hover:text-red-300 flex items-center gap-2">
