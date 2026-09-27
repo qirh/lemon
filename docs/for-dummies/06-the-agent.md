@@ -130,8 +130,7 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 |------|-------------|
 | `read` | Read file contents, optionally a specific line range |
 | `write` | Create or overwrite a file |
-| `edit` | Find-and-replace text in a file (must be a unique match) |
-| `hashline_edit` | Edit by line number when text isn't unique |
+| `edit` | Find-and-replace text in a file (must be a unique match; re-read first if the file changed on disk) |
 | `patch` | Apply a unified diff patch |
 | `multiedit` | Multiple find-and-replace edits in one call |
 | `ls` | List directory contents |
@@ -141,15 +140,15 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 | Tool | What It Does |
 |------|-------------|
 | `grep` | Search file contents with regex or literal text (via ripgrep) |
-| `find` | Find files by name pattern |
+| `find` | Find files by name pattern (skips `.gitignore`d files unless `no_ignore` is set) |
 
 ### Execution
 
 | Tool | What It Does |
 |------|-------------|
-| `bash` | Run a shell command (streaming output, abort-aware) |
-| `exec` | Run a long-running background process |
-| `process` | Control background processes (poll output, send input, kill) |
+| `bash` | Run a shell command (streaming output, abort-aware; `timeout` up to 10 minutes, or `run_in_background` for servers and long builds) |
+| `bash_output` | Read new output and the status of a background command |
+| `kill_process` | Stop a background command and its children |
 | `browser` | Control Chrome via Playwright (navigate, click, type, screenshot) |
 
 ### Web

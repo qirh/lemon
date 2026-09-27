@@ -623,7 +623,6 @@ defmodule CodingAgent.Tools.Task.Runner do
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
-      "hashline_edit" -> :file_change
       "glob" -> :tool
       "grep" -> :tool
       "websearch" -> :web_search
@@ -654,10 +653,6 @@ defmodule CodingAgent.Tools.Task.Runner do
         "write: `#{path_label(path)}`"
 
       "edit" ->
-        path = a["path"] || a["file_path"] || ""
-        "edit: `#{path_label(path)}`"
-
-      "hashline_edit" ->
         path = a["path"] || a["file_path"] || ""
         "edit: `#{path_label(path)}`"
 

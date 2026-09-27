@@ -75,13 +75,13 @@ new session identity can accept events.
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (58 platform builtins, plus any non-conflicting tools registered by satellite apps):
+**Default `coding_tools/2`** (platform builtins, plus any non-conflicting tools registered by satellite apps):
 
 | Category | Tools |
 |----------|-------|
-| **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
+| **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
-| **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
+| **Execution** | `bash`, `bash_output`, `kill_process` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
 | **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **System** | `tool_auth`, `extensions_status` |
@@ -236,7 +236,7 @@ the `kanban` tool through tool policy to avoid recursive board management.
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers** (not exposed as tools): `Tools.Hashline` (used by `hashline_edit`), `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers** (not exposed as tools): `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
 ### Tool Infrastructure
 
@@ -244,7 +244,9 @@ the `kanban` tool through tool policy to avoid recursive board management.
 |--------|---------|
 | `CodingAgent.Tools` | Tool factory -- `coding_tools/2`, `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution (builtin > WASM > extension); ETS extension cache |
-| `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper |
+| `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; fail-closed, and denials/timeouts/approval failures return `is_error: true` results |
+| `CodingAgent.MutationLock` | Re-entrant FIFO locks: the registry serializes each session's mutating builtins (`write`, `edit`, `patch`, `bash`, `checkpoint`) while read-only tools stay parallel; file tools also lock per path |
+| `CodingAgent.FileReadTracker` | Per-session digests of files the agent read or wrote; `edit` refuses to apply when the file changed on disk since then ("re-read the file") |
 | `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:orchestrator`, `:leaf_worker`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
 
 Internal `task` children default to the `:leaf_worker` policy. They keep normal work tools such as `read`, `write`, and `bash`, but recursive `task`/`agent` delegation is blocked unless a caller passes an explicit `tool_policy` override.
@@ -316,7 +318,7 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 | `CodingAgent.BackgroundRun` | Durable lifecycle facade for isolated full-tool `/bg` sessions |
 | `CodingAgent.SideQuery` | Bounded no-tools `/btw` facade over a live snapshot, durable session key, or explicit transcript snapshot |
 | `CodingAgent.Coordinator` | Orchestrates concurrent subagent executions |
-| `CodingAgent.ProcessManager` | DynamicSupervisor for background exec processes |
+| `CodingAgent.ProcessManager` | DynamicSupervisor for background processes (`bash` `run_in_background`, `bash_output`, `kill_process`); incremental `read_output/1`, per-session `check_owner/2` |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
@@ -970,8 +972,8 @@ apps/coding_agent/
 |   |   +-- tools.ex                         # Tool factory (coding_tools, read_only_tools, all_tools)
 |   |   +-- tools/                           # Individual tool modules
 |   |   |   +-- read.ex, write.ex, edit.ex, multiedit.ex
-|   |   |   +-- patch.ex, hashline_edit.ex, hashline.ex
-|   |   |   +-- bash.ex, exec.ex, process.ex, await.ex
+|   |   |   +-- patch.ex
+|   |   |   +-- bash.ex, bash_output.ex, kill_process.ex
 |   |   |   +-- grep.ex, find.ex, ls.ex, fuzzy.ex
 |   |   |   +-- webfetch.ex, websearch.ex, webdownload.ex
 |   |   |   +-- web_cache.ex, web_guard.ex

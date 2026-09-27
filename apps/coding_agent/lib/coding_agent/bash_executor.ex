@@ -15,7 +15,8 @@ defmodule CodingAgent.BashExecutor do
       :exit_code,
       :cancelled,
       :truncated,
-      :full_output_path
+      :full_output_path,
+      timed_out: false
     ]
 
     @type t :: %__MODULE__{
@@ -23,7 +24,8 @@ defmodule CodingAgent.BashExecutor do
             exit_code: integer() | nil,
             cancelled: boolean(),
             truncated: boolean(),
-            full_output_path: String.t() | nil
+            full_output_path: String.t() | nil,
+            timed_out: boolean()
           }
   end
 
@@ -210,7 +212,8 @@ defmodule CodingAgent.BashExecutor do
 
   defp handle_timeout(state) do
     cleanup_port(state)
-    finalize_result(%{state | cancelled: true, exit_code: nil})
+    result = finalize_result(%{state | cancelled: true, exit_code: nil})
+    %Result{result | timed_out: true}
   end
 
   defp cleanup_port(state) do
@@ -410,29 +413,27 @@ defmodule CodingAgent.BashExecutor do
   end
 
   @doc """
-  Kill a process and its children.
+  Kill a process and all of its descendants.
 
-  On Unix, attempts to kill the process group first, then falls back to killing
-  the single process. On Windows, uses taskkill with /T to kill the tree.
+  On Unix, the descendant tree is collected with `pgrep -P` before signalling,
+  so children of `bash -c` (a `sleep`, a test runner) do not outlive the
+  shell. The process group is signalled as well. `signal` is `:sigkill`
+  (default) or `:sigterm`. On Windows, uses `taskkill /T` to kill the tree.
   """
-  @spec kill_process_tree(os_pid :: integer()) :: :ok
-  def kill_process_tree(os_pid) when is_integer(os_pid) do
+  @spec kill_process_tree(os_pid :: integer(), signal :: :sigkill | :sigterm) :: :ok
+  def kill_process_tree(os_pid, signal \\ :sigkill) when is_integer(os_pid) do
     case :os.type() do
       {:unix, _} ->
-        # Try to kill process group first (negative PID)
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -9 -#{os_pid} 2>/dev/null")
-        catch
-          _, _ -> :ok
-        end
+        signal_number = if signal == :sigterm, do: 15, else: 9
+        pids = [os_pid | descendant_pids(os_pid)] |> Enum.map_join(" ", &Integer.to_string/1)
 
-        # Also try single process as fallback
+        command =
+          "kill -#{signal_number} -#{os_pid} 2>/dev/null; kill -#{signal_number} #{pids} 2>/dev/null"
+
         try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
+          # Every pid is an integer (guard + pgrep parse); shell kill syntax is deliberate.
           # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -9 #{os_pid} 2>/dev/null")
+          :os.cmd(String.to_charlist(command))
         catch
           _, _ -> :ok
         end
@@ -450,6 +451,31 @@ defmodule CodingAgent.BashExecutor do
 
         :ok
     end
+  end
+
+  defp descendant_pids(os_pid) do
+    case System.find_executable("pgrep") do
+      nil ->
+        []
+
+      pgrep ->
+        {output, _status} =
+          System.cmd(pgrep, ["-P", Integer.to_string(os_pid)], stderr_to_stdout: true)
+
+        children =
+          output
+          |> String.split()
+          |> Enum.flat_map(fn token ->
+            case Integer.parse(token) do
+              {pid, ""} -> [pid]
+              _ -> []
+            end
+          end)
+
+        children ++ Enum.flat_map(children, &descendant_pids/1)
+    end
+  rescue
+    _ -> []
   end
 
   # Get the OS PID from a port

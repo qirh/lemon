@@ -28,6 +28,8 @@ defmodule CodingAgent.Application do
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
+      CodingAgent.MutationLock,
+      CodingAgent.FileReadTracker,
       CodingAgent.SessionSupervisor,
       CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,

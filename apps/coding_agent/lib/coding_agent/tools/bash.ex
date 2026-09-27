@@ -2,10 +2,18 @@ defmodule CodingAgent.Tools.Bash do
   @moduledoc """
   Bash command execution tool for the coding agent.
 
-  Provides shell command execution with streaming output support and
-  cancellation via abort signals. Streaming replacement snapshots retain at
-  most 50,000 output bytes plus a fixed omission marker; the executor's final
-  result and full-output spill file remain authoritative.
+  Foreground commands stream output, honour abort signals, and are killed
+  (with their whole process tree) after `timeout` milliseconds (default
+  120 s, max 10 min). A timeout or an execution failure is returned as an
+  error tool result. Streaming replacement snapshots retain at most 50,000
+  output bytes plus a fixed omission marker; the executor's final result and
+  full-output spill file remain authoritative.
+
+  `run_in_background: true` starts the command under
+  `CodingAgent.ProcessManager` and returns a `process_id` immediately; read
+  its output with `bash_output` and stop it with `kill_process`. Background
+  processes are owned by the calling session and are killed when that
+  session's process exits.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -13,9 +21,11 @@ defmodule CodingAgent.Tools.Bash do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
   alias CodingAgent.BashExecutor
+  alias CodingAgent.ProcessManager
   alias CodingAgent.Tools.Bash.StreamingPreview
 
-  @default_timeout_ms 60_000
+  @default_timeout_ms 120_000
+  @max_timeout_ms 600_000
 
   @doc """
   Returns the bash tool definition.
@@ -23,7 +33,9 @@ defmodule CodingAgent.Tools.Bash do
   ## Parameters
 
     * `cwd` - The working directory for command execution
-    * `opts` - Optional keyword list of options (reserved for future use)
+    * `opts` - `:timeout_ms` / `:bash_timeout_ms` override the default
+      foreground timeout; `:session_id` / `:session_pid` own background
+      processes
 
   ## Returns
 
@@ -34,12 +46,27 @@ defmodule CodingAgent.Tools.Bash do
     %AgentTool{
       name: "bash",
       description:
-        "Execute a bash command. The command runs in a shell with the working directory set to the project root.",
+        "Execute a bash command in the project root. Foreground commands time out after " <>
+          "`timeout` ms (default #{@default_timeout_ms}, max #{@max_timeout_ms}). For servers, " <>
+          "watchers, or builds that may run longer, set run_in_background: true, then poll with " <>
+          "bash_output and stop with kill_process.",
       label: "Run Command",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "command" => %{"type" => "string", "description" => "The bash command to execute"},
+          "timeout" => %{
+            "type" => "integer",
+            "description" =>
+              "Foreground timeout in milliseconds (default #{@default_timeout_ms}, " <>
+                "max #{@max_timeout_ms}). The command and its children are killed when it expires."
+          },
+          "run_in_background" => %{
+            "type" => "boolean",
+            "description" =>
+              "Start the command in the background and return a process_id immediately " <>
+                "(default: false). Read output with bash_output; stop it with kill_process."
+          },
           "pty" => %{
             "type" => "boolean",
             "description" =>
@@ -58,16 +85,16 @@ defmodule CodingAgent.Tools.Bash do
   ## Parameters
 
     * `tool_call_id` - Unique identifier for this tool invocation
-    * `params` - Map containing "command" (required)
+    * `params` - "command" (required), "timeout", "run_in_background", "pty"
     * `signal` - Abort signal reference for cancellation (can be nil)
     * `on_update` - Callback function for streaming partial results (can be nil)
     * `cwd` - Working directory for command execution
-    * `opts` - Additional options (reserved for future use)
+    * `opts` - See `tool/2`
 
   ## Returns
 
-    * `AgentToolResult.t()` on success
-    * `{:error, term()}` on failure
+    * `AgentToolResult.t()` (with `is_error: true` for timeouts and execution failures)
+    * `{:error, term()}` for invalid parameters
   """
   @spec execute(
           tool_call_id :: String.t(),
@@ -92,11 +119,35 @@ defmodule CodingAgent.Tools.Bash do
     command = Map.fetch!(params, "command")
     use_pty = Map.get(params, "pty", false)
 
+    cond do
+      Map.get(params, "run_in_background", false) != true ->
+        with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
+          run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd)
+        end
+
+      use_pty == true ->
+        {:error, "pty is not supported with run_in_background"}
+
+      true ->
+        run_in_background(command, cwd, opts)
+    end
+  end
+
+  defp resolve_timeout(params, opts) do
+    default =
+      Keyword.get(opts, :timeout_ms, Keyword.get(opts, :bash_timeout_ms, @default_timeout_ms))
+
+    case Map.get(params, "timeout") do
+      nil -> {:ok, default}
+      ms when is_integer(ms) and ms > 0 -> {:ok, min(ms, @max_timeout_ms)}
+      ms when is_float(ms) and ms >= 1 -> {:ok, min(trunc(ms), @max_timeout_ms)}
+      _ -> {:error, "timeout must be a positive number of milliseconds (max #{@max_timeout_ms})"}
+    end
+  end
+
+  defp run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd) do
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
-
-    timeout_ms =
-      Keyword.get(opts, :timeout_ms, Keyword.get(opts, :bash_timeout_ms, @default_timeout_ms))
 
     executor_opts =
       [
@@ -109,16 +160,43 @@ defmodule CodingAgent.Tools.Bash do
     try do
       case BashExecutor.execute(command, cwd, executor_opts) do
         {:ok, result} ->
-          format_result(result)
+          format_result(result, timeout_ms)
 
         {:error, reason} ->
           %AgentToolResult{
-            content: [%TextContent{text: "Error executing command: #{inspect(reason)}"}]
+            content: [%TextContent{text: "Error executing command: #{inspect(reason)}"}],
+            is_error: true
           }
       end
     after
       # Stop the accumulator Agent to prevent memory leaks
       if accumulator_pid, do: Agent.stop(accumulator_pid)
+    end
+  end
+
+  defp run_in_background(command, cwd, opts) do
+    exec_opts = [
+      command: command,
+      cwd: cwd,
+      owner: Keyword.get(opts, :session_id),
+      owner_pid: Keyword.get(opts, :session_pid)
+    ]
+
+    case ProcessManager.exec(exec_opts) do
+      {:ok, process_id} ->
+        %AgentToolResult{
+          content: [
+            %TextContent{
+              text:
+                "Started background process #{process_id}. Read its output with " <>
+                  "bash_output (process_id: \"#{process_id}\"); stop it with kill_process."
+            }
+          ],
+          details: %{process_id: process_id, status: :running, exit_code: nil, background: true}
+        }
+
+      {:error, reason} ->
+        {:error, "Failed to start background process: #{inspect(reason)}"}
     end
   end
 
@@ -145,8 +223,23 @@ defmodule CodingAgent.Tools.Bash do
     {accumulator, callback}
   end
 
-  defp format_result(%BashExecutor.Result{} = result) do
+  defp format_result(%BashExecutor.Result{} = result, timeout_ms) do
     cond do
+      result.timed_out ->
+        output = result.output || ""
+
+        notice =
+          "Command timed out after #{timeout_ms} ms and was killed. Pass a larger timeout " <>
+            "(max #{@max_timeout_ms} ms) or use run_in_background: true."
+
+        text = if output != "", do: "#{output}\n\n#{notice}", else: notice
+
+        %AgentToolResult{
+          content: [%TextContent{text: text}],
+          details: result |> build_details() |> Map.put(:timed_out, true),
+          is_error: true
+        }
+
       result.cancelled ->
         # Cancelled via abort signal
         output_text =

@@ -241,6 +241,39 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert Enum.any?(events, &match?({:tool_execution_end, "call_tool_error", _, _, true}, &1))
   end
 
+  test "a result flagged is_error is an error tool_result that keeps its details" do
+    denied_tool = %AgentTool{
+      name: "denied_tool",
+      description: "Reports an approval denial",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Denied",
+      execute: fn _id, _params, _signal, _on_update ->
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "denied"}],
+          details: %{denied: true},
+          is_error: true
+        }
+      end
+    }
+
+    context = simple_context(tools: [denied_tool])
+    tool_call = Mocks.tool_call("denied_tool", %{}, id: "call_denied")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {[tool_result_message], _steering, _context, _new_messages} =
+      ToolCalls.execute_and_collect_tools(
+        context,
+        [],
+        [tool_call],
+        simple_config([]),
+        AbortSignal.new(),
+        stream
+      )
+
+    assert tool_result_message.is_error == true
+    assert tool_result_message.details == %{denied: true}
+  end
+
   test "emits error tool_result when tool task supervisor cannot start a task" do
     parent = self()
 

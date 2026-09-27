@@ -141,9 +141,9 @@ CodingAgent.Supervisor (one_for_one)
 
 | Category | Tools |
 |----------|-------|
-| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
+| File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
-| Execution | `bash` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
+| Execution | `bash`, `bash_output`, `kill_process` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
@@ -277,7 +277,7 @@ that should outlive one session. Kanban-dispatched worker runs block the
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
-**Internal helpers (not exposed as tools):** `Tools.Hashline`, `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
+**Internal helpers (not exposed as tools):** `Tools.WebCache`, `Tools.WebGuard`, `Tools.TodoStore`, `Tools.TodoStoreOwner`.
 
 Internal task runs infer a restrictive `tool_policy` and verification guardrail when the prompt says `use ... tools only`, so tool-constrained subtasks have to verify against tool output instead of guessing. For internal bash-only tasks, the runner accepts both backticked commands and plain phrasings like `Run this exact command and return the output: ...`, which keeps provider-generated shell subtasks on the normal child-session path.
 
@@ -326,7 +326,7 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
-| `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
+| `CodingAgent.ProcessManager` | DynamicSupervisor for background processes started by `bash` with `run_in_background`, read with `bash_output`, stopped with `kill_process` |
 | `CodingAgent.PythonRepl` | Facade for persistent `execute_code` kernels -- `execute/1`, `reset/3`, `detach_owner/2`, aggregate-only `snapshot/1` |
 | `CodingAgent.PythonRepl.Registry` | Serialized ownership/lifetime authority: key/owner mappings, generations, strict `max_live_kernels` admission with idle-only LRU eviction, idle reaping, owner monitors and co-owner forks |
 | `CodingAgent.PythonRepl.SessionSupervisor` | DynamicSupervisor for temporary `PythonRepl.Session` kernel workers (one python3 process each; serialized cells, bounded queue, live in-memory state only) |

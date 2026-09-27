@@ -254,6 +254,73 @@ defmodule CodingAgent.ProcessManager do
   end
 
   @doc """
+  Read the complete output lines a process produced since the previous
+  `read_output/1` call, advancing the read cursor.
+
+  Returns `%{process_id, status, exit_code, command, owner, lines,
+  dropped_lines}`; `dropped_lines` counts lines that scrolled out of the
+  bounded log before they were read. Works for running and finished
+  processes (finished ones are read from `ProcessStore`).
+  """
+  @spec read_output(String.t()) :: {:ok, map()} | {:error, term()}
+  def read_output(process_id) when is_binary(process_id) do
+    if ProcessSession.alive?(process_id) do
+      try do
+        ProcessSession.read_output(process_id)
+      catch
+        # The session stopped between the liveness check and the call.
+        :exit, _reason -> read_output_from_store(process_id)
+      end
+    else
+      read_output_from_store(process_id)
+    end
+  end
+
+  defp read_output_from_store(process_id) do
+    case ProcessStore.get(process_id) do
+      {:ok, record, logs} ->
+        total = Map.get(record, :total_lines, length(logs))
+        cursor = Map.get(record, :read_cursor, 0)
+        first_buffered = total - length(logs)
+        start = max(cursor, first_buffered)
+        :ok = ProcessStore.put_read_cursor(process_id, total)
+
+        {:ok,
+         %{
+           process_id: process_id,
+           status: Map.get(record, :status),
+           exit_code: Map.get(record, :exit_code),
+           command: Map.get(record, :command),
+           owner: Map.get(record, :owner),
+           lines: Enum.drop(logs, start - first_buffered),
+           dropped_lines: start - cursor
+         }}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Check that `owner` may access `process_id`. A `nil` owner (a caller outside
+  any session) may access every process; a session may access only the
+  processes it started. Processes owned by someone else report `:not_found`
+  so their existence is not disclosed.
+  """
+  @spec check_owner(String.t(), String.t() | nil) :: :ok | {:error, :not_found}
+  def check_owner(process_id, owner) when is_binary(process_id) do
+    case ProcessStore.get(process_id) do
+      {:ok, record, _logs} ->
+        if is_nil(owner) or Map.get(record, :owner) == owner,
+          do: :ok,
+          else: {:error, :not_found}
+
+      {:error, :not_found} ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
   Kill a running process.
 
   Signal can be :sigterm (default) or :sigkill.

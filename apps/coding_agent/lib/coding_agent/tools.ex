@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
+  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, patch, lsp_diagnostics, bash, bash_output, kill_process, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
   - `read_only_tools/2` - Exploration tools (read, read_skill, search_memory, session_search, grep, find, ls)
   - `all_tools/2` - All available tools as a map
   """
@@ -17,10 +17,11 @@ defmodule CodingAgent.Tools do
     Checkpoint,
     Write,
     Edit,
-    HashlineEdit,
     Patch,
     LspDiagnostics,
     Bash,
+    BashOutput,
+    KillProcess,
     Grep,
     Find,
     Ls,
@@ -75,7 +76,7 @@ defmodule CodingAgent.Tools do
   }
 
   @doc """
-  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
+  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, patch, lsp_diagnostics, bash, bash_output, kill_process, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
 
   ## Options
   - Any options are passed through to individual tools
@@ -93,10 +94,11 @@ defmodule CodingAgent.Tools do
       Checkpoint.tool(cwd, opts),
       Write.tool(cwd, opts),
       Edit.tool(cwd, opts),
-      HashlineEdit.tool(cwd, opts),
       Patch.tool(cwd, opts),
       LspDiagnostics.tool(cwd, opts),
       Bash.tool(cwd, opts),
+      BashOutput.tool(cwd, opts),
+      KillProcess.tool(cwd, opts),
       Grep.tool(cwd, opts),
       Find.tool(cwd, opts),
       Ls.tool(cwd, opts),
@@ -189,10 +191,11 @@ defmodule CodingAgent.Tools do
       "checkpoint" => Checkpoint.tool(cwd, opts),
       "write" => Write.tool(cwd, opts),
       "edit" => Edit.tool(cwd, opts),
-      "hashline_edit" => HashlineEdit.tool(cwd, opts),
       "patch" => Patch.tool(cwd, opts),
       "lsp_diagnostics" => LspDiagnostics.tool(cwd, opts),
       "bash" => Bash.tool(cwd, opts),
+      "bash_output" => BashOutput.tool(cwd, opts),
+      "kill_process" => KillProcess.tool(cwd, opts),
       "grep" => Grep.tool(cwd, opts),
       "find" => Find.tool(cwd, opts),
       "ls" => Ls.tool(cwd, opts),

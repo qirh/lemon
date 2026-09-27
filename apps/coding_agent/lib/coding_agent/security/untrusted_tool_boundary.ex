@@ -17,6 +17,7 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
   @prewrapped_tools MapSet.new(["webfetch", "websearch"])
   @tool_sources %{
     "bash" => :shell,
+    "bash_output" => :shell,
     "find" => :local_search,
     "grep" => :local_search,
     "read" => :local_file,

@@ -292,7 +292,10 @@ defmodule CodingAgent.Tools.Grep do
         args
       end
 
-    args ++ [opts.pattern, opts.path]
+    # `--regexp=` keeps a pattern that starts with `-` (e.g. `->`) from being
+    # parsed as a flag (`-e -foo` is rejected by ripgrep's argument parser);
+    # `--` does the same for the path.
+    args ++ ["--regexp=" <> opts.pattern, "--", opts.path]
   end
 
   defp parse_ripgrep_output(output, opts) do

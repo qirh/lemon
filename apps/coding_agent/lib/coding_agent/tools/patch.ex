@@ -35,6 +35,8 @@ defmodule CodingAgent.Tools.Patch do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias CodingAgent.FileReadTracker
+  alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileValidation
@@ -128,16 +130,26 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp execute_local_patch(operations, cwd, diagnostics?, signal, opts) do
+    paths = operation_paths(operations, cwd)
+
+    MutationLock.with_locks(Enum.map(paths, &MutationLock.path_key/1), fn ->
+      apply_local_patch(operations, paths, cwd, diagnostics?, signal, opts)
+    end)
+  end
+
+  defp apply_local_patch(operations, paths, cwd, diagnostics?, signal, opts) do
     with :ok <- validate_operations(operations, cwd, opts),
          {:ok, prepared_operations} <- prepare_operations(operations, cwd, signal),
          baselines <- diagnostic_baselines(operations, cwd, diagnostics?, opts),
          {:ok, checkpoint} <-
-           CheckpointGuard.before_mutation(operation_paths(operations, cwd), cwd, opts, %{
+           CheckpointGuard.before_mutation(paths, cwd, opts, %{
              tool: "patch",
              action: "apply",
              operation_count: length(operations)
            }),
          {:ok, summary} <- commit_prepared_operations(prepared_operations, signal) do
+      FileReadTracker.refresh(opts, paths)
+
       {diagnostics, diagnostics_text} =
         patch_diagnostics(summary.details.changed, cwd, baselines, diagnostics?, opts)
 

@@ -14,6 +14,7 @@ defmodule CodingAgent.ToolRegistry do
 
   alias LemonAgent.Types.AgentTool
   alias CodingAgent.Extensions
+  alias CodingAgent.MutationLock
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
@@ -47,6 +48,8 @@ defmodule CodingAgent.ToolRegistry do
     {:patch, Tools.Patch},
     {:lsp_diagnostics, Tools.LspDiagnostics},
     {:bash, Tools.Bash},
+    {:bash_output, Tools.BashOutput},
+    {:kill_process, Tools.KillProcess},
     {:grep, Tools.Grep},
     {:find, Tools.Find},
     {:ls, Tools.Ls},
@@ -86,7 +89,6 @@ defmodule CodingAgent.ToolRegistry do
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
     {:extensions_status, Tools.ExtensionsStatus},
-    {:hashline_edit, Tools.HashlineEdit},
     # Appended last on purpose: `execute_code` is config-gated, so keeping it at
     # the tail leaves the tool-order prefix identical whether or not it is
     # enabled, which is what prompt caching needs.
@@ -372,9 +374,31 @@ defmodule CodingAgent.ToolRegistry do
       name == :execute_code and not Tools.ExecuteCode.enabled?(cwd, opts)
     end)
     |> Enum.map(fn {name, module} ->
-      {Atom.to_string(name), module.tool(cwd, opts), :builtin}
+      name = Atom.to_string(name)
+      {name, module.tool(cwd, opts) |> maybe_serialize_mutation(name, cwd, opts), :builtin}
     end)
   end
+
+  # Mutating builtins run one at a time per session: the agent loop executes a
+  # batch of tool calls concurrently, and two writers interleaving on the
+  # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
+  # Read-only tools stay parallel. File tools additionally lock per path.
+  @mutating_builtins ~w(write edit patch bash checkpoint)
+
+  defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
+       when name in @mutating_builtins do
+    key = {:session, Keyword.get(opts, :session_id) || Path.expand(cwd)}
+    execute = tool.execute
+
+    %{
+      tool
+      | execute: fn tool_call_id, params, signal, on_update ->
+          MutationLock.with_lock(key, fn -> execute.(tool_call_id, params, signal, on_update) end)
+        end
+    }
+  end
+
+  defp maybe_serialize_mutation(tool, _name, _cwd, _opts), do: tool
 
   defp mcp_tool_tuples(_cwd, _opts, false), do: []
 

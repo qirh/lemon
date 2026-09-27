@@ -2,7 +2,7 @@ defmodule CodingAgent.Tools.FileValidation do
   @moduledoc """
   Shared file access validation: type checking, error formatting, and write-access checks.
 
-  Used by Read, Write, Edit, Grep, Ls, Find, Patch, and HashlineEdit tools to
+  Used by Read, Write, Edit, Grep, Ls, Find, and Patch tools to
   eliminate duplicated File.stat dispatch logic.
   """
 
@@ -66,7 +66,7 @@ defmodule CodingAgent.Tools.FileValidation do
   Checks that `path` exists and is writable.
 
   Returns `:ok` if the file has write access, or `{:error, reason_atom}` matching
-  the contract expected by Edit and HashlineEdit tools.
+  the contract expected by the Edit tool.
   """
   @spec check_write_access(String.t()) :: :ok | {:error, atom()}
   def check_write_access(path) do

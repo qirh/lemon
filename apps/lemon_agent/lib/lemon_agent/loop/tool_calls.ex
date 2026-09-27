@@ -727,8 +727,10 @@ defmodule LemonAgent.Loop.ToolCalls do
 
     try do
       case tool.execute.(tool_call.id, tool_call.arguments, signal, on_update) do
+        {:ok, %AgentToolResult{is_error: true} = result} -> {result, true}
         {:ok, result} -> {result, false}
         {:error, reason} -> {tool_error_result(reason), true}
+        %AgentToolResult{is_error: true} = result -> {result, true}
         %AgentToolResult{} = result -> {result, false}
         other -> {unexpected_tool_result(other), true}
       end

@@ -695,4 +695,19 @@ defmodule CodingAgent.Tools.GrepTest do
       assert is_boolean(result)
     end
   end
+
+  describe "patterns that start with a dash" do
+    test "are searched for, not parsed as flags", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "flags.ex"), "-foo value\nfn x -> y end\nplain\n")
+
+      result = Grep.execute("call_1", %{"pattern" => "-foo"}, nil, nil, tmp_dir, [])
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert details.match_count == 1
+      assert text =~ "-foo value"
+
+      params = %{"pattern" => "->", "literal" => true}
+      arrow = Grep.execute("call_2", params, nil, nil, tmp_dir, [])
+      assert %AgentToolResult{details: %{match_count: 1}} = arrow
+    end
+  end
 end

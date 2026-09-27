@@ -24,7 +24,7 @@ defmodule CodingAgent.ToolRegistryExecuteCodeTest do
       assert List.last(enabled) == "execute_code"
 
       assert Enum.find_index(enabled, &(&1 == "execute_code")) >
-               Enum.find_index(enabled, &(&1 == "hashline_edit"))
+               Enum.find_index(enabled, &(&1 == "extensions_status"))
 
       assert {:ok, tool} = ToolRegistry.get_tool(cwd, "execute_code", enabled_opts())
       assert tool.name == "execute_code"
