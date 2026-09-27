@@ -720,6 +720,15 @@ Optional dependencies are not inherited: add it to your own `deps/0` to enable i
 
 Durable memory has the same requirement in `lemon_memory`.
 
+### What the Hex package leaves out
+
+The Hex tarball ships the library, not this repository's tooling: the
+architecture/docs lint (`LemonCore.Quality.*`, `mix lemon.quality`,
+`mix lemon.architecture.docs`, `mix lemon.check_duplicate_tests`), the
+managed-install self-updater (`LemonCore.Update.*`, `mix lemon.update`), the
+platform benchmark runner (`mix lemon.bench`) and the repo task catalog
+(`mix lemon.help`) exist only in the lemon checkout.
+
 ## Filesystem layout
 
 Everything lemon_core reads or writes by convention hangs off a per-user state

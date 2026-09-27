@@ -26,13 +26,8 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 
 ## Installation
 
-```elixir
-def deps do
-  [{:lemon_browser, "~> 0.1"}]
-end
-```
-
-Starting the application starts `LemonBrowser.LocalServer` under
+`lemon_browser` is an app in the Lemon umbrella, not a Hex package; it ships as
+part of the reference runtime. Starting the application starts `LemonBrowser.LocalServer` under
 `LemonBrowser.Supervisor`; no other wiring is required.
 
 ## Driving a browser

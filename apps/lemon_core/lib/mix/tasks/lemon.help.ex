@@ -39,7 +39,7 @@ defmodule Mix.Tasks.Lemon.Help do
     {"Skills", ~w(lemon.skill lemon.skill.lint)},
     {"Benchmarks (platform)", ~w(lemon.bench)},
     # ── lemon-sim product block: these three groups and the lemon.sim.* entries
-    # in @fallback leave with the lemon-sim repo (docs/platform-split.md Phase 5).
+    # in @fallback (docs/platform-split.md).
     # Task names only — no compile-time reference to any sim module. ──
     {"Sim: scenario runners",
      ~w(lemon.sim.poker lemon.sim.tic_tac_toe lemon.sim.vending_bench lemon.sim.werewolf)},
@@ -59,7 +59,7 @@ defmodule Mix.Tasks.Lemon.Help do
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
     "lemon.media" => "Show redacted generated-media and provider-proof readiness",
     "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)",
-    # ── lemon-sim product block — leaves with the lemon-sim repo ──
+    # ── lemon-sim product block ──
     "lemon.sim.leaderboard" => "Print and rewrite a suite leaderboard",
     "lemon.sim.ratings" => "Aggregate suite leaderboards into cross-suite model ratings",
     "lemon.sim.score" => "Print the scorecard for a run artifact bundle",

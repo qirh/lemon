@@ -1,192 +1,150 @@
-# Publishing the hex packages
+# Publishing the Hex packages
 
 The umbrella ships two different things on two different clocks:
 
 | | Artifact | Version scheme | Tag | Tooling |
 |---|---|---|---|---|
 | **Product** | Release tarballs of the whole umbrella | CalVer `YYYY.MM.PATCH` | `v2026.08.0` | `scripts/bump_version.sh` → `.github/workflows/release.yml` |
-| **Platform** | Individual apps on hex.pm | semver, per package | `lemon_ai-v0.1.0` | `scripts/release_package` / `scripts/publish_train` → `.github/workflows/publish.yml` |
+| **Packages** | Five apps on hex.pm | semver, per package | `lemon_ai-v0.2.0` | `scripts/release_package` → `.github/workflows/publish.yml` |
 
-This page covers the second. Each published package starts at `0.1.0` and moves
-independently (decision D10 in `docs/platform-split.md`); `1.0.0` waits until
-the Phase 5 extraction has proven the APIs.
+This page covers the second. Status and the decisions behind it are in
+[`docs/platform-split.md`](../platform-split.md).
 
 ## The packages
 
-`hex_package.exs` is the source of truth for which apps publish and under what
-name. Since the 2026-08-10 rename (`ai`→`lemon_ai`, `agent_core`→`lemon_agent`)
-every app name matches its hex name:
+Exactly five apps publish, in this dependency order (`scripts/verify_packages
+--list` is the source of truth):
 
 ```
-scripts/release_package --list
+lemon_ai → lemon_core → lemon_agent → lemon_memory → lemon_platform_test
 ```
 
-```
-  APP                    HEX NAME               VERSION
-  lemon_ai               lemon_ai               0.1.0
-  lemon_core             lemon_core             0.1.0
-  lemon_media            lemon_media            0.1.0
-  lemon_agent            lemon_agent            0.1.0
-  lemon_memory           lemon_memory           0.1.0
-  lemon_channels         lemon_channels         0.1.0
-  lemon_router           lemon_router           0.1.0
-  lemon_gateway          lemon_gateway          0.1.0
-  lemon_platform_test    lemon_platform_test    0.1.0
-  lemon_browser          lemon_browser          0.1.0
-  lemon_skills           lemon_skills           0.1.0
-```
+| Package | In-repo version | Sibling deps |
+|---|---|---|
+| `lemon_ai` | 0.2.0 | none |
+| `lemon_core` | 0.2.0 | none |
+| `lemon_agent` | 0.2.0 | `lemon_ai`, `lemon_core` |
+| `lemon_memory` | 0.2.0 | `lemon_core` |
+| `lemon_platform_test` | 0.2.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent` (all optional) |
 
-`lemon_media` is a package because `lemon_channels` and `lemon_router` depend on
-it (decision D13). It was not in the original list of eight, and leaving it out
-would have blocked both of them — see the second failure mode below.
-`lemon_cli_runners` joined with D15 (vendor CLI wrappers extracted from
-`lemon_agent`) and was removed again on 2026-08-21 (D16 in
-`docs/platform-split.md`), when vendor CLI task runners were deleted in favor of
-native-only in-process subagents; its `0.1.0` on hex.pm is abandoned in place.
-`lemon_browser` and `lemon_skills` joined as packages 11 and 12 when D14 was
-approved (2026-08-13): both are shared platform infrastructure that the
-coding-agent product group depends on, and unpublished they blocked its
-extraction. `lemon_skills` went through an API-stabilization pass first
-(externally-consumed modules documented, internals `@moduledoc false`).
+Every other app is in-repo only. `lemon_platform_test`'s `PluginCase` targets
+`lemon_channels`, which is not published, so outside this repository it needs a
+path dependency on a checkout.
 
+`0.2.0` is the first installable release line. The `0.1.0` releases published on
+2026-08-11 cannot be installed (below); sibling requirements are `~> 0.2` so no
+resolver ever picks them.
 
-Tags use the **app** name (`lemon_agent-v0.2.0`): the tag has to name a
-directory the workflow can `cd` into.
+## Retiring the 0.1.0 releases (owner action, not yet done)
 
-> **0.1.0 provenance:** every package's first release was published to hex.pm
-> on 2026-08-11 *without* going through the tag flow — a first publish needs no
-> version bump, so a bare `mix hex.publish` leaves no release commit and no
-> tag. There are no `*-v0.1.0` tags; the exact build commit is unrecorded.
-> From `0.1.1` on, use the tooling below so every release is tagged.
-
-## Publish order
-
-Hex has no notion of "released together". A package's dependencies must already
-exist on hex.pm at the moment it is published, so the first publish walks the
-dependency graph bottom-up:
-
-```
-lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test → lemon_browser → lemon_skills
-```
-
-`lemon_channels` precedes `lemon_router` because the router depends on it.
-
-`scripts/release_package` enforces this. Before publishing it reads the target's
-`in_umbrella` runtime deps and checks each one against hex.pm, refusing the
-release when a dep is unpublished. `--force` overrides, which is only correct
-when you are publishing that dep in the same session and know it lands first.
-
-Two failure modes are worth recognising:
-
-- **"dep X is not published on hex.pm"** — ordering. Publish X first.
-- **"dep X is not in hex_package.exs @packages"** — X is not a package at all.
-  This is not an ordering problem and `--force` will not save you: `mix
-  hex.build` *drops* path dependencies rather than erroring, so forcing past it
-  ships a tarball that claims the package has no such dependency and fails to
-  compile for anyone outside this repo. Publish X too, make the dependency
-  optional, or invert it. This is exactly what happened to `lemon_media`, and
-  why D13 promoted it to a package rather than forcing past it.
-
-## Releasing the whole train
-
-`scripts/publish_train` drives `release_package` across every package in
-dependency order — for lockstep version bumps (D10: the packages "move
-together for now"):
+Every `0.1.0` tarball shipped a `mix.exs` whose first line was
+`Code.require_file("../../hex_package.exs", __DIR__)`, a file that is not in the
+tarball, so `mix compile` fails with `Code.LoadError` for any consumer. Ten
+packages were published that way; `lemon_skills` and `lemon_browser` never were.
+Retiring keeps the releases resolvable for anyone who locked them but warns on
+every `mix deps.get`. Run as a package owner:
 
 ```bash
-# Preflight: dry-run every package in order. Changes nothing, exits non-zero
-# if any package would fail a real release.
-scripts/publish_train 0.2.0
+# The five that continue from 0.2.0.
+for pkg in lemon_ai lemon_core lemon_agent lemon_memory lemon_platform_test; do
+  mix hex.retire "$pkg" 0.1.0 invalid \
+    --message "uninstallable: mix.exs requires a file missing from the package; use ~> 0.2"
+done
 
-# Release + publish the train.
-HEX_API_KEY=... scripts/publish_train 0.2.0 --publish [--push]
+# The five that are no longer published at all.
+for pkg in lemon_media lemon_router lemon_gateway lemon_channels; do
+  mix hex.retire "$pkg" 0.1.0 invalid \
+    --message "uninstallable, and no longer published; the app lives in github.com/z80dev/lemon"
+done
+mix hex.retire lemon_cli_runners 0.1.0 invalid \
+  --message "uninstallable, and removed: subagents are native-only"
 ```
 
-Properties worth knowing:
+Check with `curl -s https://hex.pm/api/packages/<pkg> | jq .retirements`.
 
-- **Sequential by design.** `--publish` requires a local `HEX_API_KEY` because
-  pushing all tags and letting CI publish cannot work for a full train: the
-  tag-triggered workflows run concurrently and the publish-order gate fails
-  every package whose deps have not landed yet. CI publishing is for single
-  releases.
-- **Idempotent resume.** A package already on hex.pm at the target version is
-  skipped; a package tagged locally but missing from hex.pm (a run that died
-  between tag and publish) is finished with a bare `mix hex.publish`. Re-run
-  the same command after a failure and the train continues where it stopped.
-- **Quality runs once** for the whole train, not per package
-  (`--skip-quality` skips it).
-- Preflight passes `--force` to the per-package dry runs: before the train has
-  run, in-train deps are necessarily absent from hex.pm. The real run keeps
-  the order gate armed — by publish time each dep must actually be there.
+## How a package's mix.exs stays self-contained
+
+The tarball ships `apps/<pkg>/mix.exs` verbatim, so it may not read anything
+outside its own directory. Each of the five decides at load time which form it
+is in:
+
+- **Umbrella** — it sits at `apps/<pkg>/mix.exs` under the umbrella's `mix.exs`:
+  it shares the umbrella's `_build`, `deps`, `mix.lock` and config, and sibling
+  packages are `in_umbrella: true`.
+- **Package** — anywhere else (`deps/<pkg>/` in a consumer, an unpacked
+  tarball): no umbrella paths, and a private `lemon_deps/1` rewrites each
+  `in_umbrella` sibling into a `~> 0.2` Hex requirement, keeping `optional: true`.
+
+`LEMON_HEX_PUBLISH=1` forces the package form inside the repo. `mix hex.build`
+needs it: run without it, the deps are still `in_umbrella` and hex refuses to
+build ("Dependencies excluded from the package"). `scripts/verify_packages` and
+`scripts/release_package` set it for you.
+
+`lemon_core`'s package `exclude_patterns` leave this repository's tooling out of
+the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the `lemon.quality`,
+`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.update`,
+`lemon.bench` and `lemon.help` tasks.
+
+## Proving the tarballs work
+
+```bash
+scripts/verify_packages [--keep] [--no-generator]
+```
+
+It builds each package with `mix hex.build --unpack`, compiles a scratch
+consumer project that depends on nothing but the unpacked directories, boots
+`:lemon_agent`, checks the repo-only modules are absent, then runs
+`mix lemon.new --packages-path` for the base and `--memory` shapes against the
+same tarballs and runs their tests. It needs Hex and network access to hex.pm.
+`.github/workflows/packaging.yml` runs it on pull requests that touch the
+packages and nightly, plus an advisory Elixir 1.15 leg for the declared floor.
 
 ## Releasing a package
 
 ```bash
-# 1. See what would happen. Changes nothing.
+# 1. Every check, no changes. Includes scripts/verify_packages.
 scripts/release_package lemon_core 0.2.0 --dry-run
 
-# 2. Do it: bumps mix.exs, rolls the changelog, commits, tags.
+# 2. Release: sets @version, rolls the changelog, commits, tags lemon_core-v0.2.0.
 scripts/release_package lemon_core 0.2.0
 
-# 3. Push the tag. CI publishes.
+# 3. Push. publish.yml verifies the tag and publishes it.
 git push origin main && git push origin lemon_core-v0.2.0
 ```
 
-The script refuses to run unless the working tree is clean, the version is
-greater than the current one, the tag is free, `apps/<pkg>/CHANGELOG.md` has an
-`## [Unreleased]` section with entries, `mix hex.build` succeeds, the publish
-order holds, and `mix lemon.quality` is green.
+The script refuses unless the package is one of the five, the version is not
+behind `@version` in `mix.exs`, the tag is free, the tree is clean,
+`apps/<pkg>/CHANGELOG.md` has entries under `## [Unreleased]`, every sibling it
+depends on is on hex.pm at its in-repo version, and `scripts/verify_packages`
+passes. It publishes from the unpacked tarball, so the release (docs included)
+is exactly what was verified.
 
-On release it moves the `[Unreleased]` entries under `## [<version>] - <date>`,
-leaves a fresh empty `[Unreleased]`, commits both files, and creates an
-annotated tag. If `HEX_API_KEY` is set locally it publishes directly; otherwise
-it stops and prints the command to run later — pushing the tag is the normal
-path, since CI publishes from it.
+Hex has no multi-package release. Release in dependency order and let each
+publish land before the next; a package whose siblings are not on hex.pm yet is
+refused. A lockstep release of all five is the same command five times:
 
-### Options
+```bash
+for pkg in $(scripts/verify_packages --list); do
+  HEX_API_KEY=... scripts/release_package "$pkg" 0.2.0 --yes
+done
+```
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Run every check, change nothing. Reports and exits 0. |
-| `--strict` | With `--dry-run`, exit non-zero if any check would fail. |
-| `--verify` | Verify an already-tagged release. What CI runs. |
-| `--skip-quality` | Skip `mix lemon.quality` (CI runs it as its own step). |
-| `--force` | Bypass the publish-order gate. Read the warning above first. |
-| `--yes` | Skip the interactive confirmation. |
+| `--dry-run` | Run every check, change nothing. |
+| `--verify` | Check an already-tagged release (what CI runs on the tag). |
+| `--publish-tagged` | Publish an already-tagged release from its tarball (CI's publish job). |
+| `--yes` | Skip the confirmation. |
 
 ## What CI does
 
 `.github/workflows/publish.yml` fires on `*-v*` tags (and on manual dispatch,
 which defaults to verify-only). It splits the tag into package and version, runs
-`scripts/release_package --verify` — mix.exs matches the tag, the changelog has
-that version's section, hex metadata builds, publish order holds — then runs the
-quality lane, then publishes package and docs to hex.pm.
+`scripts/release_package --verify`, then `--publish-tagged`. Without the
+`HEX_API_KEY` secret the publish step exits with a notice instead of failing.
 
-**Without the `HEX_API_KEY` secret the publish step no-ops with a notice rather
-than failing.** Everything up to the actual upload still runs, so the pipeline
-is exercisable before the key exists.
+## Changelogs
 
-## LEMON_HEX_PUBLISH
-
-Sibling packages depend on each other with `in_umbrella: true`, which hex
-cannot express. `hex_package.exs` rewrites those into real hex requirements, but
-only when `LEMON_HEX_PUBLISH=1` — so the umbrella's own compile, test and
-`mix deps.get` never see the hex form.
-
-Every hex command must therefore set it:
-
-```bash
-cd apps/lemon_core && LEMON_HEX_PUBLISH=1 mix hex.build
-```
-
-`scripts/release_package` and the workflow both set it for you. Running
-`mix hex.build` without it produces a tarball whose dependencies have silently
-vanished.
-
-## Changelog discipline
-
-Every published package has an `apps/<pkg>/CHANGELOG.md` in Keep a Changelog
-format. A change to a published package's `lib/` should land with its changelog
-entry in the same PR.
-
-Reviewers check this; there is no CI job for it.
+Each of the five keeps `apps/<pkg>/CHANGELOG.md` in Keep a Changelog format;
+`release_package` rolls `[Unreleased]` into the released version. Apps that are
+not published have no package changelog; the root `CHANGELOG.md` covers them.

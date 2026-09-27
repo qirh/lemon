@@ -1,5 +1,12 @@
 # AI App - Agent Guidelines
 
+**Hex package.** `lemon_ai` is one of the five published packages
+(`docs/release/hex-packages.md`). Its `mix.exs` ships verbatim in the tarball, so
+it must stay self-contained: no `Code.require_file`, nothing read outside the app
+directory.
+`scripts/verify_packages` builds a consumer from the tarball; run it after
+touching `mix.exs`. User-visible `lib/` changes need a `CHANGELOG.md` entry.
+
 ## Purpose and Responsibilities
 
 The `ai` app provides a unified LLM API abstraction layer for the Lemon platform. It enables seamless interaction with multiple AI providers through a consistent streaming interface.

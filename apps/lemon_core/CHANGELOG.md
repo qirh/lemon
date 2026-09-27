@@ -10,8 +10,20 @@ First release as a standalone package. `lemon_core` used to be the umbrella's
 catch-all shared app; this release turns it into a library you can embed. The
 theme of every change below is the same: nothing in `lemon_core` knows about
 Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
+
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained.
+
 ### Removed
 
+- This repository's own tooling is no longer in the package: `LemonCore.Quality.*`,
+  `LemonCore.Update.*`, and the `mix lemon.quality`, `lemon.architecture.docs`,
+  `lemon.check_duplicate_tests`, `lemon.update`, `lemon.bench` and `lemon.help`
+  tasks. They remain in the lemon repository.
 - Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
   `[runtime.cli]` is rejected.
 - `LemonCore.Store`'s domain functions: `put/get/delete_chat_state`, the

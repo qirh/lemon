@@ -1,18 +1,23 @@
-Code.require_file("../../hex_package.exs", __DIR__)
-
 defmodule LemonCore.MixProject do
   use Mix.Project
 
+  @version "0.2.0"
   @source_url "https://github.com/z80dev/lemon"
+
+  # This file ships verbatim in the hex tarball, so it must not read anything
+  # outside its own directory. Inside the lemon repo it sits at
+  # apps/lemon_core/mix.exs under the umbrella's mix.exs and shares the
+  # umbrella's build, deps and lockfile; anywhere else (deps/lemon_core in a
+  # consumer, an unpacked tarball) it is a standalone package.
+  # LEMON_HEX_PUBLISH=1 forces the standalone form inside the repo.
+  @umbrella Path.basename(Path.dirname(__DIR__)) == "apps" and
+              File.regular?(Path.expand("../../mix.exs", __DIR__)) and
+              System.get_env("LEMON_HEX_PUBLISH") not in ["1", "true"]
 
   def project do
     [
       app: :lemon_core,
-      version: "0.1.0",
-      build_path: "../../_build",
-      config_path: "../../config/config.exs",
-      deps_path: "../../deps",
-      lockfile: "../../mix.lock",
+      version: @version,
       test_pattern: "*_test.exs",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
@@ -22,7 +27,20 @@ defmodule LemonCore.MixProject do
       description: description(),
       package: package(),
       docs: docs()
-    ]
+    ] ++ umbrella_paths()
+  end
+
+  defp umbrella_paths do
+    if @umbrella do
+      [
+        build_path: "../../_build",
+        config_path: "../../config/config.exs",
+        deps_path: "../../deps",
+        lockfile: "../../mix.lock"
+      ]
+    else
+      []
+    end
   end
 
   defp description do
@@ -33,9 +51,17 @@ defmodule LemonCore.MixProject do
 
   defp package do
     [
-      name: Lemon.HexPackage.name(:lemon_core),
       licenses: ["MIT"],
       files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE),
+      # Tooling for the lemon repository itself stays out of the tarball: the
+      # architecture/docs lint (`mix lemon.quality`), the managed-install
+      # self-updater (`mix lemon.update`), the repo's benchmark runner and task
+      # catalog. Nothing else in lib/ references these modules, and
+      # scripts/verify_packages compiles the tarball without them.
+      exclude_patterns: [
+        ~r{^lib/lemon_core/(quality|update)/},
+        ~r{^lib/mix/tasks/lemon\.(quality|architecture\.docs|check_duplicate_tests|update|bench|help)\.ex$}
+      ],
       links: %{
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/apps/lemon_core/CHANGELOG.md"
@@ -68,7 +94,7 @@ defmodule LemonCore.MixProject do
   # inheriting a SQLite NIF, an HTTP client and a pubsub server it may not use.
   # Each optional dep degrades explicitly — see the module docs named below.
   defp deps do
-    Lemon.HexPackage.deps([
+    [
       {:jason, "~> 1.4"},
       {:toml, "~> 0.7"},
       {:telemetry, "~> 1.0"},
@@ -89,6 +115,6 @@ defmodule LemonCore.MixProject do
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       # Property-based tests (Store round-trip/isolation, Events round-trip, UUID structure).
       {:stream_data, "~> 1.1", only: :test}
-    ])
+    ]
   end
 end

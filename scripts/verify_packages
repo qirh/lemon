@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# verify_packages — prove the published Hex packages work for someone who is
+# not inside this repository.
+#
+# Usage:
+#   scripts/verify_packages [--keep] [--tmp <dir>] [--no-generator]
+#   scripts/verify_packages --list
+#
+# Options:
+#   --keep          Leave the unpacked packages and projects in place.
+#   --tmp <dir>     Work directory (default: a mktemp directory). Must not be
+#                   inside the repository.
+#   --no-generator  Stop after the consumer project; skip `mix lemon.new`.
+#   --list          Print the published packages in dependency order and exit.
+#
+# Every other check builds from inside the umbrella, where sibling apps and the
+# umbrella's own files are always present. The 0.1.0 releases shipped a mix.exs
+# that required a file outside the tarball and failed to load for every
+# consumer; nothing caught it because nothing built from the tarball. This
+# script builds from nothing but the tarballs:
+#
+#   1. `LEMON_HEX_PUBLISH=1 mix hex.build --unpack` each package into
+#      <tmp>/packages/<package> — exactly the files hex.pm would receive.
+#   2. A scratch consumer project depends on those directories by path (the
+#      packages' own sibling requirements are hex requirements, so the path deps
+#      carry `override: true`), fetches the rest from hex.pm, compiles, boots
+#      :lemon_agent, and checks the repo-only tooling stayed out of lemon_core.
+#   3. The installer generates the base and --memory project shapes against the
+#      same unpacked packages (`--packages-path`), compiles them with
+#      --warnings-as-errors and runs their tests.
+#
+# Consumer commands run with HOME pointed into <tmp>, so nothing a package
+# writes under ~ touches your real home; MIX_HOME/HEX_HOME keep their usual
+# locations so the installed Hex and fetched packages are reused.
+#
+# Requires Hex (`mix local.hex`) and network access to hex.pm.
+# See docs/release/hex-packages.md.
+
+set -euo pipefail
+
+# The published set, in dependency order: each package depends only on
+# packages listed before it. scripts/release_package reads this via --list.
+PACKAGES=(lemon_ai lemon_core lemon_agent lemon_memory lemon_platform_test)
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+KEEP=0
+TMP=""
+GENERATOR=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --list) printf '%s\n' "${PACKAGES[@]}"; exit 0 ;;
+    --keep) KEEP=1; shift ;;
+    --tmp) TMP="$2"; shift 2 ;;
+    --no-generator) GENERATOR=0; shift ;;
+    -h|--help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [[ -z "$TMP" ]]; then
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/lemon_verify_packages.XXXXXX")"
+fi
+mkdir -p "$TMP"
+# Resolve symlinks (macOS /tmp -> /private/tmp) so every path Mix compares is
+# spelled the same way.
+TMP="$(cd "$TMP" && pwd -P)"
+
+case "$TMP/" in
+  "$REPO_ROOT"/*)
+    echo "--tmp must be outside the repository: an unpacked package under apps/" >&2
+    echo "would be mistaken for an umbrella app." >&2
+    exit 2
+    ;;
+esac
+
+cleanup() {
+  if [[ $KEEP -eq 0 ]]; then
+    rm -rf "$TMP"
+  else
+    echo "work directory left in $TMP"
+  fi
+}
+trap cleanup EXIT
+
+PKG_DIR="$TMP/packages"
+CONSUMER_HOME="$TMP/home"
+mkdir -p "$PKG_DIR" "$CONSUMER_HOME"
+
+# Runs a command as a consumer machine would: fresh HOME, shared Mix/Hex caches.
+consumer() {
+  env HOME="$CONSUMER_HOME" \
+    MIX_HOME="${MIX_HOME:-$HOME/.mix}" \
+    HEX_HOME="${HEX_HOME:-$HOME/.hex}" \
+    LEMON_HEX_PUBLISH= \
+    "$@"
+}
+
+# ── 1. Build and unpack each tarball ────────────────────────────────────────
+
+for pkg in "${PACKAGES[@]}"; do
+  echo "==> $pkg: hex.build --unpack"
+  (cd "$REPO_ROOT/apps/$pkg" &&
+    LEMON_HEX_PUBLISH=1 mix hex.build --unpack --output "$PKG_DIR/$pkg" >/dev/null)
+  [[ -f "$PKG_DIR/$pkg/mix.exs" ]] || {
+    echo "hex.build produced no mix.exs for $pkg" >&2
+    exit 1
+  }
+done
+
+# ── 2. A consumer that depends on nothing but the tarballs ──────────────────
+
+CONSUMER="$TMP/consumer"
+mkdir -p "$CONSUMER/lib"
+
+{
+  cat <<'EOF'
+defmodule PackagesConsumer.MixProject do
+  use Mix.Project
+
+  def project do
+    [app: :packages_consumer, version: "0.1.0", elixir: "~> 1.15", deps: deps()]
+  end
+
+  def application, do: [extra_applications: [:logger]]
+
+  defp deps do
+    [
+EOF
+  for pkg in "${PACKAGES[@]}"; do
+    printf '      {:%s, path: "%s", override: true},\n' "$pkg" "$PKG_DIR/$pkg"
+  done
+  cat <<'EOF'
+    ]
+  end
+end
+EOF
+} >"$CONSUMER/mix.exs"
+
+echo
+echo "==> consumer: deps.get"
+(cd "$CONSUMER" && consumer mix deps.get >/dev/null)
+
+echo "==> consumer: compile"
+(cd "$CONSUMER" && consumer mix compile)
+
+echo "==> consumer: boot and inspect"
+(cd "$CONSUMER" && consumer mix run -e '
+  {:ok, _} = Application.ensure_all_started(:lemon_agent)
+
+  for module <- [LemonAi, LemonCore.Store, LemonAgent, LemonMemory.Store, LemonPlatformTest.BackendCase] do
+    Code.ensure_loaded?(module) || raise "#{inspect(module)} is missing from the packages"
+  end
+
+  # Repo-only tooling is excluded from the lemon_core tarball (apps/lemon_core/mix.exs).
+  for module <- [LemonCore.Quality.ArchitectureCheck, LemonCore.Update.Version, Mix.Tasks.Lemon.Quality] do
+    Code.ensure_loaded?(module) && raise "#{inspect(module)} leaked into the lemon_core package"
+  end
+
+  IO.puts("consumer ok: packages compile, :lemon_agent boots, repo tooling excluded")
+')
+
+if [[ $GENERATOR -eq 0 ]]; then
+  echo
+  echo "packages verified (generator skipped)."
+  exit 0
+fi
+
+# ── 3. mix lemon.new against the tarballs ───────────────────────────────────
+
+generate_and_check() {
+  local name="$1"; shift
+  local dir="$TMP/$name"
+
+  echo
+  echo "==> generating $name ${*:-(no flags)} against the unpacked packages"
+  (cd "$REPO_ROOT/installer" && mix run -e \
+    "Mix.Task.run(\"lemon.new\", [\"$dir\", \"--packages-path\", \"$PKG_DIR\", \"--no-install\"] ++ System.argv())" \
+    -- "$@")
+
+  echo "==> $name: deps.get"
+  (cd "$dir" && consumer mix deps.get >/dev/null)
+
+  echo "==> $name: compile --warnings-as-errors"
+  # Dependencies compile first and separately: a warning inside a package is
+  # not the generated project's problem, and --warnings-as-errors does not
+  # distinguish. The forced recompile covers only the generated app.
+  (cd "$dir" && consumer env MIX_ENV=test mix compile >/dev/null 2>&1 || true)
+  (cd "$dir" && consumer env MIX_ENV=test mix compile --force --warnings-as-errors)
+
+  echo "==> $name: test"
+  (cd "$dir" && consumer mix test)
+}
+
+generate_and_check base_agent
+generate_and_check memory_agent --memory
+
+echo
+echo "packages verified: ${PACKAGES[*]} build from their tarballs, and generated projects pass."

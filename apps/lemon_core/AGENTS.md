@@ -2,6 +2,13 @@
 
 This is the **base app** of the Lemon umbrella. All other apps depend on it. It contains cross-cutting concerns that must be stable and dependency-free (within the umbrella).
 
+**Hex package.** `lemon_core` is one of the five published packages
+(`docs/release/hex-packages.md`). Its `mix.exs` ships verbatim in the tarball, so
+it must stay self-contained: no `Code.require_file`, nothing read outside the app
+directory.
+`scripts/verify_packages` builds a consumer from the tarball; run it after
+touching `mix.exs`. User-visible `lib/` changes need a `CHANGELOG.md` entry.
+
 ## Purpose and Responsibilities
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
@@ -657,7 +664,15 @@ Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
 ### Quality Tasks
 
 The architecture check parses the complete `deps/0` body in every umbrella
-`mix.exs`, including dependency lists wrapped by `Lemon.HexPackage.deps/1`.
+`mix.exs`, including dependency lists wrapped by a published package's
+`lemon_deps/1` helper.
+
+The quality modules (`lib/lemon_core/quality/`), the self-updater
+(`lib/lemon_core/update/`) and the repo-only tasks `lemon.quality`,
+`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.update`,
+`lemon.bench` and `lemon.help` are excluded from the Hex tarball by
+`exclude_patterns` in `mix.exs`. Nothing else in `lib/` may reference them:
+`scripts/verify_packages` compiles the tarball without them.
 The direct-dependency policy is exact: both an undeclared edge and a policy
 permission left behind after an edge is removed fail the check. Cross-app source
 references that intentionally avoid a direct Mix dependency live in the

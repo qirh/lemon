@@ -11,6 +11,9 @@ implementation of a Lemon behaviour:
 | `LemonChannels.Plugin` | `LemonPlatformTest.PluginCase` |
 | `LemonMemory.Provider` | `LemonPlatformTest.ProviderCase` |
 
+`PluginCase` targets `lemon_channels`, which is not published to Hex; outside this
+repository it needs a path dependency on a lemon checkout.
+
 ```elixir
 defmodule MyApp.RedisBackendComplianceTest do
   use LemonPlatformTest.BackendCase,
@@ -53,15 +56,15 @@ identity; neither is a Gateway routing choice.
 ## Optional dependencies
 
 Each case needs exactly one platform app, and they are all `optional: true`, so you
-compile only the one you use — a `PluginCase` does not drag in the gateway, SQLite,
-and a Telegram client. Add the app your case targets alongside the kit:
+compile only the one you use — a `BackendCase` does not drag in SQLite and the agent
+runtime. Add the app your case targets alongside the kit:
 
 | Case / tool | Add |
 | --- | --- |
-| `BackendCase`, `EventsCase` | `{:lemon_core, "~> 0.1", only: :test}` |
-| `PluginCase` | `{:lemon_channels, "~> 0.1", only: :test}` |
-| `ProviderCase` | `{:lemon_memory, "~> 0.1", only: :test}` |
-| `FakeLLM` | `{:lemon_ai, "~> 0.1", only: :test}` and `{:lemon_agent, "~> 0.1", only: :test}` |
+| `BackendCase`, `EventsCase` | `{:lemon_core, "~> 0.2", only: :test}` |
+| `ProviderCase` | `{:lemon_memory, "~> 0.2", only: :test}` |
+| `FakeLLM` | `{:lemon_ai, "~> 0.2", only: :test}` and `{:lemon_agent, "~> 0.2", only: :test}` |
+| `PluginCase` | `lemon_channels`, which is not published to Hex: a path dependency on `apps/lemon_channels` in a lemon checkout |
 
 Forget one and the case raises at compile time naming the package to add.
 

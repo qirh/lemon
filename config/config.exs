@@ -106,7 +106,7 @@ config :lemon_core, :env_registries, [
   LemonRouter.Env,
   LemonSkills.Env,
   LemonWeb.Env,
-  # lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5)
+  # lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md)
   LemonSimUi.Env
 ]
 
@@ -171,11 +171,11 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 # here rather than in lemon_core so the platform never names a product's module.
 config :lemon_core, :runtime_endpoints, [
   {:web_port, :lemon_web, LemonWeb.Endpoint},
-  # lemon-sim product block — moves to the lemon-sim repo (see docs/platform-split.md Phase 5)
+  # lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md)
   {:sim_port, :lemon_sim_ui, LemonSimUi.Endpoint}
 ]
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],

@@ -13,20 +13,19 @@ a `%LemonAi.Types.Model{}` at any provider and the rest of your code stays ident
 
 ## Install
 
-`lemon_ai` is not yet on Hex. Add it as a git dependency for now:
-
 ```elixir
 def deps do
   [
-    {:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
+    {:lemon_ai, "~> 0.2"}
   ]
 end
 ```
 
-Once published, this becomes:
+`0.2.0` is the first installable release line; the `0.1.0` release on Hex cannot be
+installed and is retired. Until `0.2.0` is on Hex, depend on the repository instead:
 
 ```elixir
-{:lemon_ai, "~> 0.1"}
+{:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
 ```
 
 The OTP application is named `:lemon_ai`, so you call it as `LemonAi.*`. It starts its own

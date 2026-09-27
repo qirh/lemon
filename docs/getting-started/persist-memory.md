@@ -36,7 +36,7 @@ or add it by hand. In `mix.exs`:
 
 ```elixir
 {:lemon_memory, path: "/path/to/lemon/apps/lemon_memory"},
-# {:lemon_memory, "~> 0.1"},
+# {:lemon_memory, "~> 0.2"},
 ```
 
 `lemon_memory` depends on `exqlite`, which builds a SQLite NIF, so the first

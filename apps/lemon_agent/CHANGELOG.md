@@ -10,6 +10,14 @@ First release as a standalone package. `lemon_agent` is the `:lemon_agent`
 application from the Lemon umbrella; the OTP application name and every
 `LemonAgent.*` module name are unchanged.
 
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained, and requires
+  `lemon_ai` and `lemon_core` as `~> 0.2`.
+
 ### Added
 
 - `LemonAgent.ToolRegistry` — runtime tool registration backed by
