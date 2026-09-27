@@ -755,8 +755,6 @@ defmodule CodingAgent.ToolDisclosure do
     end
   end
 
-  defp invoke_args(_), do: {:ok, %{}}
-
   defp reject_bridge(name) when name in @bridge_names,
     do: {:error, "tool_search and tool_invoke cannot be invoked through tool_invoke"}
 

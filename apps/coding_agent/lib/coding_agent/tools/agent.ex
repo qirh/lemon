@@ -1085,8 +1085,6 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp completion_from_summary(_), do: nil
-
   defp normalize_answer(answer, _fallback) when is_binary(answer), do: answer
   defp normalize_answer(nil, fallback) when is_binary(fallback), do: fallback
   defp normalize_answer(nil, _fallback), do: ""
@@ -1650,8 +1648,6 @@ defmodule CodingAgent.Tools.Agent do
     |> ensure_default_agent_id()
     |> Enum.sort()
   end
-
-  defp normalize_agent_ids(_), do: ["default"]
 
   defp normalize_agent_id(id) when is_binary(id) do
     id = String.trim(id)

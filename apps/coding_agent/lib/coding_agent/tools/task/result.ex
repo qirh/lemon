@@ -561,12 +561,6 @@ defmodule CodingAgent.Tools.Task.Result do
   defp poll_content_text(:completed, preview, _error), do: "Status: completed\n#{preview}"
   defp poll_content_text(:error, _preview, error), do: "Status: error\n#{format_error(error)}"
 
-  defp poll_content_text(status, preview, _error) when preview in [nil, ""] do
-    "Status: #{status}"
-  end
-
-  defp poll_content_text(status, preview, _error), do: "Status: #{status}\n#{preview}"
-
   defp nonterminal_content_text(status, events) do
     action = latest_event_current_action(events)
 

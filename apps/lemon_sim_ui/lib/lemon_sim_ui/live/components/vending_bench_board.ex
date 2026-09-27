@@ -966,8 +966,6 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     end
   end
 
-  defp format_time(nil), do: "00:00"
-
   defp format_time(minutes) when is_integer(minutes) do
     h = div(minutes, 60) |> rem(24)
     m = rem(minutes, 60)

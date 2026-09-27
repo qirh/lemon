@@ -157,21 +157,17 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
   end
 
   defp tool_schema_artifact(state, opts) do
-    case LemonSim.Examples.VendingBench.ActionSpace.tools(state, opts) do
-      {:ok, tools} ->
-        tools
-        |> Enum.map(fn tool ->
-          %{
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters
-          }
-        end)
-        |> Enum.sort_by(& &1.name)
+    {:ok, tools} = LemonSim.Examples.VendingBench.ActionSpace.tools(state, opts)
 
-      _ ->
-        []
-    end
+    tools
+    |> Enum.map(fn tool ->
+      %{
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters
+      }
+    end)
+    |> Enum.sort_by(& &1.name)
   end
 
   defp config_artifact(state, opts, tool_schemas, prompts) do

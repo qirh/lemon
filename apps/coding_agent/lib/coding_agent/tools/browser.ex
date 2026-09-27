@@ -1470,8 +1470,6 @@ defmodule CodingAgent.Tools.Browser do
     end)
   end
 
-  defp sensitive_browser_arg_count(_method, _args), do: 0
-
   defp safe_error_kind(reason) when is_atom(reason), do: Atom.to_string(reason)
 
   defp safe_error_kind(reason) when is_binary(reason) do

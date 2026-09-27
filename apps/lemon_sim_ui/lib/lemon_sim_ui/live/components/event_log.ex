@@ -15,7 +15,6 @@ defmodule LemonSimUi.Live.Components.EventLog do
           <div class={["text-[11px] rounded border px-3 py-2 flex gap-2 items-start stagger-enter backdrop-blur-sm", event_class(event.kind)]}>
             <span class="text-slate-600 font-bold opacity-50 shrink-0 w-6">[{idx + 1}]</span>
             <div class="flex items-center gap-1.5 flex-wrap">
-              <span :if={event_icon(event.kind)} class="text-sm shrink-0">{event_icon(event.kind)}</span>
               <span class="font-extrabold tracking-wide uppercase drop-shadow-sm">{format_kind(event.kind)}</span>
               <span :if={event.payload != %{}} class="opacity-80">
                 {format_payload(event.kind, event.payload)}
@@ -91,26 +90,6 @@ defmodule LemonSimUi.Live.Components.EventLog do
       end
 
     formatted
-  end
-
-  defp event_icon(kind) do
-    kind_str = if is_atom(kind), do: Atom.to_string(kind), else: to_string(kind)
-
-    case kind_str do
-      "choose_victim" -> nil
-      "investigate_player" -> nil
-      "investigation_result" -> nil
-      "protect_player" -> nil
-      "sleep" -> nil
-      "make_statement" -> nil
-      "cast_vote" -> nil
-      "night_resolved" -> nil
-      "player_eliminated" -> nil
-      "vote_result" -> nil
-      "phase_changed" -> nil
-      "game_over" -> nil
-      _ -> nil
-    end
   end
 
   defp event_class(kind) do

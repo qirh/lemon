@@ -363,11 +363,7 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def visible_text_delta(msg, accumulated_text) do
-    text =
-      case safe_get_visible_text(msg) do
-        visible when is_binary(visible) -> visible
-        _ -> ""
-      end
+    text = safe_get_visible_text(msg)
 
     cond do
       text == "" ->
@@ -1130,8 +1126,6 @@ defmodule CodingAgent.Session.Presentation do
     end
   end
 
-  defp latest_task_current_action(_), do: nil
-
   defp latest_task_action_detail(details) when is_map(details) do
     details
     |> task_result_events()
@@ -1150,14 +1144,10 @@ defmodule CodingAgent.Session.Presentation do
     end)
   end
 
-  defp latest_task_action_detail(_), do: nil
-
   defp task_result_events(details) when is_map(details) do
     events = Map.get(details, :events) || Map.get(details, "events")
     if is_list(events), do: events, else: []
   end
-
-  defp task_result_events(_), do: []
 
   defp maybe_put_meta(meta, _key, nil), do: meta
 

@@ -106,8 +106,6 @@ defmodule LemonGateway.Sms.Config do
     Map.get(sms, key)
   end
 
-  defp sms_cfg(_), do: nil
-
   defp sms_config do
     try do
       case LemonGateway.Config.get(:sms) do

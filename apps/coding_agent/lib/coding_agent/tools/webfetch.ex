@@ -1076,8 +1076,6 @@ defmodule CodingAgent.Tools.WebFetch do
     Map.get(map, key, Map.get(map, to_string(key), default))
   end
 
-  defp get_map_value(_map, _key, default), do: default
-
   defp ensure_map(value) when is_map(value), do: value
   defp ensure_map(_), do: %{}
 

@@ -527,13 +527,7 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       end
 
     # Tool conflicts section
-    sections =
-      if tool_conflicts != nil do
-        conflict_section = format_conflicts_section(tool_conflicts)
-        [conflict_section | sections]
-      else
-        sections
-      end
+    sections = [format_conflicts_section(tool_conflicts) | sections]
 
     sections =
       if load_errors != [] do

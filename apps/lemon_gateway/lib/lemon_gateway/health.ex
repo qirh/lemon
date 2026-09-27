@@ -155,9 +155,6 @@ defmodule LemonGateway.Health do
 
       {:error, reason} ->
         {:error, reason}
-
-      other ->
-        {:error, {:unexpected_executor_validation, other}}
     end
   rescue
     error ->
@@ -197,9 +194,6 @@ defmodule LemonGateway.Health do
 
       {:healthy, false} ->
         {:error, :xmtp_unhealthy}
-
-      other ->
-        {:error, {:unexpected_xmtp_status, other}}
     end
   rescue
     error ->

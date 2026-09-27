@@ -144,12 +144,12 @@ defmodule CodingAgent.Tools.Task.Execution do
 
       {:error, _kind, _details} = reason ->
         if task_id, do: TaskStore.fail(task_id, reason)
-        if run_id, do: RunGraph.fail(run_id, reason)
+        RunGraph.fail(run_id, reason)
         {:error, budget_reservation_error(reason)}
 
       {:error, _kind} = reason ->
         if task_id, do: TaskStore.fail(task_id, reason)
-        if run_id, do: RunGraph.fail(run_id, reason)
+        RunGraph.fail(run_id, reason)
         {:error, budget_reservation_error(reason)}
     end
   end

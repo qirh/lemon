@@ -357,6 +357,4 @@ defmodule LemonControlPlane.Methods.UsageCost do
     |> DateTime.to_date()
     |> Date.to_iso8601()
   end
-
-  defp format_date(_), do: nil
 end

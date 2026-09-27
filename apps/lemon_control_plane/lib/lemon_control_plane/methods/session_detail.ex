@@ -420,8 +420,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
     _ -> 0
   end
 
-  defp count_tool_calls(_), do: 0
-
   defp extract_tool_calls(events, max) when is_list(events) do
     events
     |> Enum.filter(&action_event?/1)
@@ -430,8 +428,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   rescue
     _ -> []
   end
-
-  defp extract_tool_calls(_, _), do: []
 
   defp action_event?(ev) when is_map(ev) do
     Map.get(ev, :__event__) == :action_event or is_map(get_map(ev, :action))
@@ -488,8 +484,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       }
     end)
   end
-
-  defp build_event_digest(_, _), do: []
 
   defp build_raw_events(events, opts) do
     events

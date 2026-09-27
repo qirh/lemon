@@ -112,7 +112,6 @@ defmodule LemonControlPlane.Methods.RunsRecentList do
       cond do
         ok == true -> "completed"
         error in [:user_requested, :interrupted, :aborted] -> "aborted"
-        error == :aborted -> "aborted"
         true -> "error"
       end
 
