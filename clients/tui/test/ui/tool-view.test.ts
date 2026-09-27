@@ -137,7 +137,8 @@ describe("error detection and lifecycle", () => {
 
 describe("diff extraction", () => {
 	test("an edit renders the tool's own diff with its real line numbers", () => {
-		const diff = " 118\tfunction a() {\n-119\t\treturn 1;\n+119\t\treturn 2;\n 120\t}\n...\n 300\tend";
+		const diff =
+			" 118\tfunction a() {\n-119\t\treturn 1;\n+119\t\treturn 2;\n 120\t}\n...\n 300\tend";
 		const edit = block({
 			detail: {
 				name: "edit",

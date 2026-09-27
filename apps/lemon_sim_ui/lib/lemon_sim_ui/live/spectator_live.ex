@@ -370,7 +370,7 @@ defmodule LemonSimUi.SpectatorLive do
     winner = LemonCore.MapHelpers.get_key(world, :winner)
 
     hand_label =
-      if status == "game_over" do
+      if LemonSim.Examples.terminal_status?(status) do
         "Complete"
       else
         "Hand #{completed_hands + 1}/#{max_hands}"
@@ -393,7 +393,7 @@ defmodule LemonSimUi.SpectatorLive do
         league_path="/arena/poker/leaderboard"
         winner={@winner}
         running={@running}
-        show_stopped={@game_status != "game_over"}
+        show_stopped={not LemonSim.Examples.terminal_status?(@game_status)}
       >
         <:meta>
           <SpectatorChrome.meta_line label="Poker" label_class="text-emerald-400" progress={@hand_label}>
@@ -733,9 +733,7 @@ defmodule LemonSimUi.SpectatorLive do
 
   defp maybe_complete_broadcast(socket) do
     if !socket.assigns[:running] && socket.assigns[:state] do
-      status = LemonCore.MapHelpers.get_key(socket.assigns.state.world, :status)
-
-      if status == "game_over" do
+      if LemonSim.Examples.terminal?(socket.assigns.state) do
         case find_active_sim(socket.assigns.sim_id, socket.assigns[:domain_type]) do
           nil -> assign(socket, game_over_redirect: true)
           new_sim_id -> push_navigate(socket, to: ~p"/watch/#{new_sim_id}")

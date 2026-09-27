@@ -17,7 +17,7 @@ different answers:
 | Problem | Answer |
 |---|---|
 | The model should remember what was said five minutes ago | The conversation, already in `AgentState.messages` |
-| The conversation is longer than the context window | Compaction — `LemonAi.ContextCompactor`, or a `transform_context` function |
+| The conversation is longer than the context window | Compaction — an `AgentLoopConfig` `transform_context` function (coding sessions use `CodingAgent.Compaction`) |
 | The agent should remember something from last week | This guide |
 
 A memory document is a *summary* of one exchange, not a transcript. Keep them
@@ -36,7 +36,7 @@ or add it by hand. In `mix.exs`:
 
 ```elixir
 {:lemon_memory, path: "/path/to/lemon/apps/lemon_memory"},
-# {:lemon_memory, "~> 0.1"},
+# {:lemon_memory, "~> 0.2"},
 ```
 
 `lemon_memory` depends on `exqlite`, which builds a SQLite NIF, so the first

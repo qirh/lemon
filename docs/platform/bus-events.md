@@ -12,13 +12,14 @@ of what was found, and the migration tables in §8–§9 say which rows have sin
 > map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
 
 Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
-`test/`), the topics they publish to, and every process that subscribes. The plan of record is
-[`docs/platform-split.md`](../platform-split.md) §5 item **3.1**; its risk row predicts that
-"catalog first will reveal undocumented consumer assumptions." It does — §6 lists thirteen, two
+`test/`), the topics they publish to, and every process that subscribes. This was item **3.1** of
+the platform-split plan ([`docs/platform-split.md`](../platform-split.md) is now its status
+page), whose risk row predicted that "catalog first will reveal undocumented consumer
+assumptions." It does — §6 lists thirteen, two
 of which are live bugs.
 
 This document is the canonical catalog for bus topics and payload types.
-`docs/platform/lemon_core.md` provides the higher-level core boundary.
+`apps/lemon_core/README.md` describes the higher-level core boundary.
 
 > **Top-level execution end state.** `engine` remains in run events, completion
 > records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
@@ -108,6 +109,8 @@ Subscribers:
 | 11 | `LemonAutomation.HeartbeatManager` | `heartbeat_manager.ex:630` | `:run_completed`, `:run_failed` |
 | 12 | webhook transport | `transports/webhook/response.ex:61,100,148` | `:run_completed` |
 | 13 | telegram plugin | `telegram/transport.ex:737` | `:run_completed`, catch-all |
+
+> **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
 
 ### 2.2 `session:<session_key>` — 4 subscribers
 
@@ -395,7 +398,7 @@ Compatibility for one release cycle rests on two mechanisms:
    *(History: the shim was removed in S13 on 2026-08-13, before 0.2 — §9. The contract-kit
    assertion now checks the opposite, that no payload module implements `Access`.)*
 
-Semver rule once a struct is published, to go in `docs/platform/lemon_core.md`:
+Semver rule for a published struct (`lemon_core` is a Hex package):
 
 | Change | Bump |
 |---|---|
@@ -733,8 +736,8 @@ neither Farcaster nor the email port appears anywhere in this catalog (Farcaster
 Bus; the email adapter at `apps/lemon_channels/lib/lemon_channels/adapters/email/` has no Bus
 call sites). The email port (task #27) is therefore not expected to change any row above. The one
 row that would move is webhook's `run:<id>` subscription (`transports/webhook/response.ex`), if
-webhook is ever relocated — per `transport-unification.md` §1 it stays in the gateway, so it
-should not be.
+webhook is ever relocated — per decision D2 in `docs/platform-split.md` it stays in the gateway,
+so it should not be.
 
 ## 9. S13 — removing the `Access` shim
 

@@ -97,6 +97,10 @@ config :lemon_automation, :skill_curator, enabled: false
 # from generating drafts (and touching the memory store) during unrelated suites.
 config :lemon_automation, :synthesis_runner, enabled: false
 
+# The daily brief job is reconciled from the developer's config.toml at boot;
+# `LemonAutomation.HeartbeatTest` exercises the sync explicitly instead.
+config :lemon_automation, daily_brief_sync: false
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.
@@ -127,7 +131,7 @@ config :lemon_gateway, :telegram, nil
 # Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
 config :lemon_control_plane, :browser_local_fallback, false
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4092],
   secret_key_base:

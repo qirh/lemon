@@ -1128,7 +1128,7 @@ defmodule LemonCore.Backup do
       {:ok, %File.Stat{type: :regular, size: size}} ->
         hash =
           path
-          |> File.stream!([], @copy_chunk_bytes)
+          |> File.stream!(@copy_chunk_bytes)
           |> Enum.reduce(:crypto.hash_init(:sha256), &:crypto.hash_update(&2, &1))
           |> :crypto.hash_final()
           |> Base.encode16(case: :lower)

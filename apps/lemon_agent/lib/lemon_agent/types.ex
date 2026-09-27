@@ -94,7 +94,7 @@ defmodule LemonAgent.Types do
     that runs when it calls it.
 
     This is the unit every tool in the platform reduces to, whether it is a
-    built-in, an MCP tool adapted by `LemonMcp.ToolAdapter`, or one contributed
+    built-in, a tool discovered from an external MCP server, or one contributed
     at runtime by an app the platform does not know about (see
     `LemonAgent.ToolRegistry`).
 

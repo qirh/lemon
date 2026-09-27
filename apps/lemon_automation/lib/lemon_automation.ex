@@ -5,7 +5,7 @@ defmodule LemonAutomation do
   This app handles:
 
   - **Cron Jobs** - Scheduled agent runs with cron expressions
-  - **Heartbeats** - Periodic health checks with smart suppression
+  - **Heartbeats** - Cron jobs flagged `meta.heartbeat: true` whose all-clear replies are suppressed
   - **Wake** - Immediate trigger for scheduled jobs
 
   ## Cron Jobs
@@ -19,16 +19,22 @@ defmodule LemonAutomation do
         agent_id: "agent_abc",
         session_key: "agent:agent_abc:main",
         prompt: "Generate a daily status report",
-        timezone: "America/New_York"
+        timezone: "local"
       })
+
+  ## Delivery
+
+  A finished run's result is sent to the originating Telegram/Discord chat, an
+  explicit `deliver_to` target, or - for jobs created from the TUI, web, CLI or
+  any other non-chat session - the paired owner chat. `deliver_to: "none"`
+  opts out. See `LemonAutomation.CronDelivery`.
 
   ## Heartbeats
 
-  Heartbeats are special cron jobs that check agent health. They support
-  automatic suppression when the agent responds with "HEARTBEAT_OK":
-
-      # Responses containing "HEARTBEAT_OK" are suppressed from channels
-      # but still logged for monitoring purposes
+  A heartbeat is a cron job with `meta.heartbeat: true`. A reply of exactly
+  `HEARTBEAT_OK` is suppressed (kept in run history, not delivered); anything
+  else is delivered. `[automation] daily_brief = "HH:MM"` keeps an opt-in
+  daily-brief heartbeat in sync. See `LemonAutomation.Heartbeat`.
 
   ## Wake
 
@@ -48,10 +54,9 @@ defmodule LemonAutomation do
   ## Architecture
 
   ```
-  [CronManager] --tick--> [Wake] --submit--> [LemonRouter]
-       |                    ^
-       v                    |
-  [HeartbeatManager] ------+
+  [CronManager] --tick--> [RunSubmitter] --submit--> [LemonRouter]
+       |
+       +--terminal run--> [Heartbeat policy] --> [CronDelivery] --> [LemonChannels]
        |
        v
   [Events] --> [Bus]

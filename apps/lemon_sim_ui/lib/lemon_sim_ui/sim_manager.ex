@@ -17,6 +17,7 @@ defmodule LemonSimUi.SimManager do
   alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
   alias LemonSim.LLM.Usage
 
+  alias LemonSim.Examples
   alias LemonSim.Examples.{TicTacToe, VendingBench, Poker}
 
   alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
@@ -329,9 +330,7 @@ defmodule LemonSimUi.SimManager do
             # Verify game actually finished
             case stored_state do
               %{world: world} ->
-                status = MapHelpers.get_key(world, :status)
-
-                if status == "game_over" do
+                if Examples.terminal?(world) do
                   timer_ref =
                     Process.send_after(
                       self(),
@@ -556,7 +555,7 @@ defmodule LemonSimUi.SimManager do
         enqueue_recovery(next, sim_id)
 
       {:error, reason, next}
-      when reason in [:not_found, :game_over, :already_running, :turn_budget_exhausted] ->
+      when reason in [:not_found, :finished, :already_running, :turn_budget_exhausted] ->
         Logger.warning(
           "[SimManager] cannot recover #{source} simulation #{sim_id}: #{inspect(reason)}"
         )
@@ -656,7 +655,7 @@ defmodule LemonSimUi.SimManager do
       Store.list_states()
       |> Enum.filter(fn stored_state ->
         run_meta_value(stored_state, :status) in ["completed", "failed", "stopped"] or
-          MapHelpers.get_key(stored_state.world, :status) == "game_over"
+          Examples.terminal?(stored_state)
       end)
       |> Enum.sort_by(
         fn stored_state ->
@@ -695,14 +694,13 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp resume_loaded_state(stored_state, state) do
-    world_status = MapHelpers.get_key(stored_state.world, :status)
     lifecycle_status = run_meta_value(stored_state, :status)
     resumable = run_meta_value(stored_state, :resumable, true)
     recovery_attempts = run_meta_value(stored_state, :recovery_attempts, 0)
 
     cond do
-      world_status == "game_over" ->
-        {:error, :game_over, state}
+      Examples.terminal?(stored_state) ->
+        {:error, :finished, state}
 
       lifecycle_status in ["completed", "failed", "stopped"] or resumable == false ->
         {:error, {:not_resumable, lifecycle_status || "unknown"}, state}
@@ -769,7 +767,7 @@ defmodule LemonSimUi.SimManager do
 
   defp recoverable_run?(state) do
     is_struct(state, State) and
-      MapHelpers.get_key(state.world, :status) != "game_over" and
+      not Examples.terminal?(state) and
       run_meta_value(state, :status) == "running" and
       run_meta_value(state, :resumable, false) == true
   end
@@ -913,44 +911,55 @@ defmodule LemonSimUi.SimManager do
             "Werewolf model_specs must contain exactly #{length(player_ids)} entries"
     end
 
-    config = load_project_config()
+    offline_strategy = Keyword.get(opts, :offline_strategy)
+
+    if offline_strategy && model_specs != [] do
+      raise ArgumentError, "Werewolf offline_strategy cannot be combined with model_specs"
+    end
 
     {initial_state, run_opts} =
-      if model_specs != [] do
-        model_assignments =
-          player_ids
-          |> Enum.zip(model_specs)
-          |> Enum.into(%{}, fn {player_id, spec} ->
-            {provider, model_id} = parse_model_spec(spec)
-            model = resolve_model!(provider, model_id, config)
-            api_key = SimConfig.resolve_provider_api_key!(provider, config, "werewolf")
-            {player_id, {model, api_key}}
-          end)
+      cond do
+        offline_strategy ->
+          {initial_state, offline_run_opts(:werewolf, offline_strategy, opts)}
 
-        state_with_models = attach_model_assignments(initial_state, model_assignments)
-        {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+        model_specs != [] ->
+          config = load_project_config()
 
-        run_opts =
-          LemonSim.Examples.Werewolf.default_opts(
-            model: default_model,
-            stream_options: %{api_key: default_key}
-          )
-          |> Keyword.put(:persist?, true)
-          |> Keyword.put(:on_before_step, nil)
-          |> Keyword.put(:on_after_step, &on_after_step/2)
-          |> Keyword.put(:model_assignments, model_assignments)
+          model_assignments =
+            player_ids
+            |> Enum.zip(model_specs)
+            |> Enum.into(%{}, fn {player_id, spec} ->
+              {provider, model_id} = parse_model_spec(spec)
+              model = resolve_model!(provider, model_id, config)
+              api_key = SimConfig.resolve_provider_api_key!(provider, config, "werewolf")
+              {player_id, {model, api_key}}
+            end)
 
-        {state_with_models, run_opts}
-      else
-        {model, stream_options} = resolve_default_model_for_ui()
+          state_with_models = attach_model_assignments(initial_state, model_assignments)
+          {default_model, default_key} = model_assignments |> Map.values() |> List.first()
 
-        run_opts =
-          LemonSim.Examples.Werewolf.default_opts(model: model, stream_options: stream_options)
-          |> Keyword.put(:persist?, true)
-          |> Keyword.put(:on_before_step, nil)
-          |> Keyword.put(:on_after_step, &on_after_step/2)
+          run_opts =
+            LemonSim.Examples.Werewolf.default_opts(
+              model: default_model,
+              stream_options: %{api_key: default_key}
+            )
+            |> Keyword.put(:persist?, true)
+            |> Keyword.put(:on_before_step, nil)
+            |> Keyword.put(:on_after_step, &on_after_step/2)
+            |> Keyword.put(:model_assignments, model_assignments)
 
-        {initial_state, run_opts}
+          {state_with_models, run_opts}
+
+        true ->
+          {model, stream_options} = resolve_default_model_for_ui()
+
+          run_opts =
+            LemonSim.Examples.Werewolf.default_opts(model: model, stream_options: stream_options)
+            |> Keyword.put(:persist?, true)
+            |> Keyword.put(:on_before_step, nil)
+            |> Keyword.put(:on_after_step, &on_after_step/2)
+
+          {initial_state, run_opts}
       end
 
     {:ok, initial_state, modules, run_opts}
@@ -1042,10 +1051,15 @@ defmodule LemonSimUi.SimManager do
   # teardown) keeps working unchanged.
   defp start_runner(initial_state, modules, run_opts, human_player) do
     fun = fn ->
-      if human_player do
-        run_interactive(initial_state, modules, run_opts, human_player)
-      else
-        run_ai_only(initial_state, modules, run_opts)
+      cond do
+        human_player ->
+          run_interactive(initial_state, modules, run_opts, human_player)
+
+        Keyword.has_key?(run_opts, :offline_decider) ->
+          run_offline(initial_state, modules, run_opts)
+
+        true ->
+          run_ai_only(initial_state, modules, run_opts)
       end
     end
 
@@ -1413,6 +1427,56 @@ defmodule LemonSimUi.SimManager do
     end
   end
 
+  # Keyless loop for offline strategies (`mix lemon.sim.demo`): the offline
+  # decider picks one legal action per turn from the world alone, with a
+  # `:rand` state seeded from the world seed and threaded through the run (no
+  # model, no provider keys). SimManager still owns persistence, broadcast,
+  # decision traces, the absolute turn budget, and completed/failed lifecycle
+  # marking exactly as in the AI loop, so spectators and recovery see a normal
+  # run. A resumed run reseeds from `{seed, turns_completed}`.
+  defp run_offline(state, modules, opts) do
+    decider = Keyword.fetch!(opts, :offline_decider)
+    max_turns = run_meta_value(state, :max_turns, Keyword.get(opts, :driver_max_turns, 50))
+    turns_completed = run_meta_value(state, :turns_completed, 0)
+    seed = MapHelpers.get_key(state.world, :seed) || 0
+    rng = decider.seed_rng(seed, turns_completed)
+    delay_ms = Keyword.get(opts, :offline_step_delay_ms, 0)
+
+    do_offline_loop(state, modules.updater, decider, rng, delay_ms, max_turns, turns_completed)
+  end
+
+  defp do_offline_loop(state, updater, decider, rng, delay_ms, max_turns, turn) do
+    cond do
+      Examples.terminal?(state) ->
+        state |> mark_run_completed_if_terminal() |> persist_state!() |> broadcast_update()
+
+      turn >= max_turns ->
+        report_turn_limit_exceeded(state, max_turns)
+
+      true ->
+        with {:ok, event, rng} <- decider.decide(state, rng),
+             {:ok, stepped_state, _signal} <-
+               Runner.ingest_events(state, [event], updater, halt_on_decide?: false) do
+          next_state =
+            advance_after_successful_step(
+              state,
+              %{state: stepped_state, decision: %{}, events: [event]},
+              turn
+            )
+
+          if delay_ms > 0, do: Process.sleep(delay_ms)
+          do_offline_loop(next_state, updater, decider, rng, delay_ms, max_turns, turn + 1)
+        else
+          {:error, reason} ->
+            state
+            |> record_sim_error(turn, :offline_decision_failed, inspect_error(reason))
+            |> mark_run_failed(:offline_decision_failed)
+            |> persist_state!()
+            |> broadcast_update()
+        end
+    end
+  end
+
   defp run_interactive(state, modules, opts, human_team) do
     terminal? = Keyword.get(opts, :terminal?, fn _s -> false end)
     max_turns = Keyword.get(opts, :driver_max_turns, 50)
@@ -1751,66 +1815,108 @@ defmodule LemonSimUi.SimManager do
 
   defp build_resume_opts(domain, state) when is_map_key(@resumable_examples, domain) do
     example = Map.fetch!(@resumable_examples, domain)
-    modules = example.modules()
-
-    # Check if state has per-player model assignments and rebuild them
-    players = MapHelpers.get_key(state.world, :players) || %{}
-
-    model_info_count =
-      Enum.count(players, fn {_id, player} -> MapHelpers.get_key(player, :model) != nil end)
 
     run_opts =
-      if model_info_count == map_size(players) and model_info_count > 0 do
-        config = load_project_config()
+      case persisted_start_opt(state, :offline_strategy) do
+        nil ->
+          model_resume_opts(domain, example, state)
 
-        model_assignments =
-          players
-          |> Enum.filter(fn {_id, p} -> MapHelpers.get_key(p, :model) != nil end)
-          |> Enum.into(%{}, fn {player_id, p} ->
-            spec = MapHelpers.get_key(p, :model)
-            {provider, model_id} = parse_model_spec(spec)
-            m = resolve_model!(provider, model_id, config)
-            api_key = SimConfig.resolve_provider_api_key!(provider, config, to_string(domain))
-            {player_id, {m, api_key}}
-          end)
-
-        {default_model, default_key} = model_assignments |> Map.values() |> List.first()
-
-        example.default_opts(
-          model: default_model,
-          stream_options: %{api_key: default_key}
-        )
-        |> Keyword.put(:persist?, true)
-        |> Keyword.put(:on_before_step, nil)
-        |> Keyword.put(:on_after_step, &on_after_step/2)
-        |> Keyword.put(:model_assignments, model_assignments)
-      else
-        if model_info_count > 0 do
-          raise "Persisted #{domain} model assignments are incomplete"
-        end
-
-        {model, stream_options} =
-          case run_meta_value(state, :model) do
-            spec when is_binary(spec) ->
-              resolve_model_stream_options!(spec, load_project_config(), to_string(domain))
-
-            _ ->
-              resolve_default_model_for_ui()
-          end
-
-        example.default_opts(model: model, stream_options: stream_options)
-        |> Keyword.put(:persist?, true)
-        |> Keyword.put(:on_before_step, nil)
-        |> Keyword.put(:on_after_step, &on_after_step/2)
+        strategy ->
+          offline_run_opts(domain, strategy,
+            offline_step_delay_ms: persisted_start_opt(state, :offline_step_delay_ms) || 0
+          )
       end
 
-    {:ok, modules, run_opts}
+    {:ok, example.modules(), run_opts}
   rescue
     e -> {:error, Exception.message(e)}
   end
 
   defp build_resume_opts(domain, _state) do
     {:error, "Resume not yet supported for #{domain}"}
+  end
+
+  defp model_resume_opts(domain, example, state) do
+    # Check if state has per-player model assignments and rebuild them
+    players = MapHelpers.get_key(state.world, :players) || %{}
+
+    model_info_count =
+      Enum.count(players, fn {_id, player} -> MapHelpers.get_key(player, :model) != nil end)
+
+    if model_info_count == map_size(players) and model_info_count > 0 do
+      config = load_project_config()
+
+      model_assignments =
+        players
+        |> Enum.filter(fn {_id, p} -> MapHelpers.get_key(p, :model) != nil end)
+        |> Enum.into(%{}, fn {player_id, p} ->
+          spec = MapHelpers.get_key(p, :model)
+          {provider, model_id} = parse_model_spec(spec)
+          m = resolve_model!(provider, model_id, config)
+          api_key = SimConfig.resolve_provider_api_key!(provider, config, to_string(domain))
+          {player_id, {m, api_key}}
+        end)
+
+      {default_model, default_key} = model_assignments |> Map.values() |> List.first()
+
+      example.default_opts(
+        model: default_model,
+        stream_options: %{api_key: default_key}
+      )
+      |> Keyword.put(:persist?, true)
+      |> Keyword.put(:on_before_step, nil)
+      |> Keyword.put(:on_after_step, &on_after_step/2)
+      |> Keyword.put(:model_assignments, model_assignments)
+    else
+      if model_info_count > 0 do
+        raise "Persisted #{domain} model assignments are incomplete"
+      end
+
+      {model, stream_options} =
+        case run_meta_value(state, :model) do
+          spec when is_binary(spec) ->
+            resolve_model_stream_options!(spec, load_project_config(), to_string(domain))
+
+          _ ->
+            resolve_default_model_for_ui()
+        end
+
+      example.default_opts(model: model, stream_options: stream_options)
+      |> Keyword.put(:persist?, true)
+      |> Keyword.put(:on_before_step, nil)
+      |> Keyword.put(:on_after_step, &on_after_step/2)
+    end
+  end
+
+  # Keyless deciders for scenarios that can run without provider credentials,
+  # keyed by domain and then by `:offline_strategy` name. A decider exposes
+  # `seed_rng(seed, turns_completed)` and `decide(state, rng)` returning
+  # `{:ok, event, rng}` (see `run_offline/3`).
+  @offline_deciders %{werewolf: %{"heuristic" => LemonSim.Examples.Werewolf.OfflineRunner}}
+  @offline_default_max_turns 1_000
+
+  defp offline_run_opts(domain, strategy, opts) do
+    name = to_string(strategy)
+
+    case @offline_deciders |> Map.get(domain, %{}) |> Map.get(name) do
+      nil ->
+        raise ArgumentError, "unknown #{domain} offline strategy: #{inspect(name)}"
+
+      decider ->
+        [
+          offline_strategy: name,
+          offline_decider: decider,
+          offline_step_delay_ms: Keyword.get(opts, :offline_step_delay_ms, 0),
+          driver_max_turns: Keyword.get(opts, :max_turns, @offline_default_max_turns),
+          persist?: true
+        ]
+    end
+  end
+
+  defp persisted_start_opt(state, key) do
+    state
+    |> run_meta_value(:start_opts, %{})
+    |> fetch(key, Atom.to_string(key), nil)
   end
 
   defp random_hex(bytes) do
@@ -1864,7 +1970,9 @@ defmodule LemonSimUi.SimManager do
       :arena_domain,
       :balanced_roles?,
       :role_rotation_index,
-      :max_days
+      :max_days,
+      :offline_strategy,
+      :offline_step_delay_ms
     ])
     |> Enum.into(%{})
   end
@@ -1876,7 +1984,7 @@ defmodule LemonSimUi.SimManager do
     }
 
     updates =
-      if MapHelpers.get_key(state.world, :status) == "game_over" do
+      if Examples.terminal?(state) do
         Map.merge(updates, %{
           status: "completed",
           resumable: false,
@@ -1890,7 +1998,7 @@ defmodule LemonSimUi.SimManager do
   end
 
   defp mark_run_completed_if_terminal(state) do
-    if MapHelpers.get_key(state.world, :status) == "game_over" do
+    if Examples.terminal?(state) do
       put_run_meta(state, %{
         status: "completed",
         resumable: false,

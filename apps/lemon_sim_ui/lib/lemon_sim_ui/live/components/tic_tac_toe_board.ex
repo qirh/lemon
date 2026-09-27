@@ -20,7 +20,7 @@ defmodule LemonSimUi.Live.Components.TicTacToeBoard do
     move_history = reconstruct_moves(board)
     x_moves = Enum.count(move_history, fn {mark, _, _} -> mark == "X" end)
     o_moves = Enum.count(move_history, fn {mark, _, _} -> mark == "O" end)
-    game_over? = status in ["won", "draw"]
+    game_over? = LemonSim.Examples.terminal_status?(status)
 
     assigns =
       assigns

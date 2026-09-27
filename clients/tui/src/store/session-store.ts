@@ -349,9 +349,7 @@ export class SessionStore {
 		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:reasoning`;
 		const reasoning = action?.detail?.reasoning as { text?: unknown } | undefined;
 		const text =
-			typeof reasoning?.text === "string" && reasoning.text.length > 0
-				? reasoning.text
-				: undefined;
+			typeof reasoning?.text === "string" && reasoning.text.length > 0 ? reasoning.text : undefined;
 		const existing = this.reasoningByActionId.get(actionId);
 		if (existing) {
 			if (existing.phase === "completed" && phase !== "completed") return existing;

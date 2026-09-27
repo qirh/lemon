@@ -52,9 +52,8 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 |--------|---------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop |
 | `CodingAgent.SessionManager` | JSONL persistence with tree structure |
-| `CodingAgent.Session.Heartbeat` | Durable same-session recurring prompt state, idle scheduling, fire claims, and clear tombstones |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
-| `CodingAgent.SessionRegistry` | Registry for persisted-ID lookup plus ambiguity-safe logical session-key lookup from registration metadata |
+| `CodingAgent.SessionRegistry` | Registry for persisted-ID session lookup |
 | `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
 | `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, durable-node-ID-keyed local session and recovery credential storage with legacy-name migration |
@@ -72,44 +71,18 @@ new session identity can accept events.
 
 ### Tools
 
-Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
+`CodingAgent.ToolRegistry` owns the session tool set: `@builtin_tools` plus any non-conflicting tools registered by satellite apps through `LemonAgent.ToolRegistry`, then WASM, extension, and MCP tools. Tool modules outside that list are not offered unless a caller injects them.
 
-**Default `coding_tools/2`** (platform builtins, plus any non-conflicting tools registered by satellite apps):
+**Default builtins** (`@builtin_tools`, plus any non-conflicting tools registered by satellite apps):
 
 | Category | Tools |
 |----------|-------|
 | **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
-| **Execution** | `bash`, `bash_output`, `kill_process` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
-| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| **Execution** | `bash`, `bash_output`, `kill_process` |
+| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **System** | `tool_auth`, `extensions_status` |
-
-`execute_code` is programmatic tool calling: the model submits a python3 script that
-invokes a fixed compile-time helper allowlist (`read`, `grep`, `find`, `ls`, `webfetch`)
-through the same policy/approval path as direct tool calls. The result comes back via
-the shim's `text()` blocks -- each flushed to disk per call, so deliberate results
-survive a timeout/abort kill -- with stdout/stderr demoted to a labeled diagnostics
-tail; `notify()` streams progress through the tool's update callback and `batch()`
-dispatches parallel helper calls (pump waves bounded by `max_parallel_rpc`).
-RPC requests always end answered (a killed or faulting sweep leaves claim evidence --
-in-flight markers plus, in session mode, a host-side claim ledger the script cannot
-delete -- that the successor sweep or the cancel/abnormal-exit/contained-fault path
-answers in writing, with the ledger's tool identity outranking the script-writable
-marker body, flagging `rpc_accounting_loss` when the evidence forces a lower bound),
-approval prompts left pending by a killed dispatch are cancelled when the dispatch
-task dies, persistent
-cells reset the per-cell bridge (fresh
-text budget, thread-tag quarantine), and the `text()` budget charges the
-JSON-encoded frame. It runs as
-host code with bash-equivalent authority -- never a sandbox. The
-default `kernel_mode = "per_call"` gives every run a fresh process; the opt-in `"session"`
-mode dispatches serialized cells to a persistent supervised interpreter keyed by persisted
-session id + agent id + canonical cwd/interpreter + helper set + protocol version (see
-`CodingAgent.PythonRepl`). Kernel state is live process memory only -- never durable or
-transcript-restored -- and is discarded on reset, session close/reset, idle reap,
-capacity eviction, timeout/cancellation, or crash. The canonical operator contract is
-`docs/tools/execute-code.md`.
 
 `browser_screenshot` writes screenshot bytes to local artifacts by default
 instead of returning base64 to the model. Pass `includeImage: true` only when a
@@ -164,12 +137,6 @@ Providers implement `CodingAgent.Search.Provider`, declare `:search` and/or
 registered by trusted extensions with provider type `:search`. Concurrent
 identical requests are coalesced by `CodingAgent.Search.SingleFlight` before
 successful results enter the existing bounded/persistent web cache.
-
-`browser_exec` is the bounded provider-neutral BUA-style program surface; raw
-CDP steps require explicit developer mode. `computer_use` is the separate
-native-app surface backed by exact-session cua-driver state. It defaults to
-background input delivery, returns driver verification verdicts, writes managed
-capture artifacts, and never automatically replays an uncertain action.
 
 `session_search` is the Hermes-compatible no-LLM recall tool. It infers
 discovery, scroll, or browse mode from the argument shape and reads from Lemon's
@@ -227,11 +194,10 @@ creates/lists/updates/comments tasks, and reads from `LemonAgent.Workspace.Kanba
 multi-agent work can outlive one session. Kanban-dispatched worker runs block
 the `kanban` tool through tool policy to avoid recursive board management.
 
-**Additional tools** (exist as modules but NOT in default set -- must be registered explicitly or accessed via `all_tools/2`):
+**Additional tools** (exist as modules but NOT in `@builtin_tools` -- callers inject them explicitly):
 
 | Tool | Module | Notes |
 |------|--------|-------|
-| `truncate` | `Tools.Truncate` | Truncate long text with configurable strategies |
 | `lsp_formatter` | `Tools.LspFormatter` | Format supported files with local formatters |
 | `ask_parent` | `Tools.AskParent` | Child-only extra tool injected into eligible task-spawned sessions |
 
@@ -241,7 +207,6 @@ the `kanban` tool through tool policy to avoid recursive board management.
 
 | Module | Purpose |
 |--------|---------|
-| `CodingAgent.Tools` | Tool factory -- `coding_tools/2`, `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution (builtin > WASM > extension); ETS extension cache |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper; fail-closed, and denials/timeouts/approval failures return `is_error: true` results |
 | `CodingAgent.MutationLock` | Re-entrant FIFO locks: the registry serializes each session's mutating builtins (`write`, `edit`, `patch`, `bash`, `checkpoint`) while read-only tools stay parallel; file tools also lock per path |
@@ -283,7 +248,6 @@ bootstrap prompt composition, memory-path resolution, and extra tool loading;
 invalid/missing profile IDs fall back to the default workspace. Never accept a
 workspace path from profile metadata or config—only the validated stable ID.
 | `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + skills) |
-| `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
 `CodingAgent.Session` composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed. The untrusted boundary fences ordinary `read`, `grep`, `find`, `bash`, and community/project `read_skill` output using source-aware labels, strips unsafe control/bidirectional characters, and keeps the complete envelope within the configured result budget. Idempotence uses an opaque marker added only to the ephemeral pre-LLM copy; tool-returned metadata cannot claim that wrapping already happened. The audited `webfetch`/`websearch` paths retain their existing single external-content fence. Intentional AGENTS/bootstrap loading and builtin skills whose installed bundle matches the release bundle remain explicit trusted instruction paths.
@@ -292,7 +256,6 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 - `State` for state-building, prompt/reset shaping, diagnostics, and guardrail transform composition
 - `Notifier` for UI notifications plus subscriber/event-stream lifecycle and fanout
 - `Persistence` for message/session persistence helpers and session-file saving
-- `Heartbeat` for validation, append-only persistence, timer-token bookkeeping, idle-only recurring turns, and reset-safe tombstones
 - `BackgroundTasks` for deferred branch-summary/background work and branch navigation helpers
 - `CompactionLifecycle` for auto-compaction triggering/result handling
 - `OverflowRecovery` for context-window recovery and retry flow
@@ -458,11 +421,9 @@ defmodule CodingAgent.Tools.MyTool do
 end
 ```
 
-2. **Register in `CodingAgent.ToolRegistry`** - Add `{:my_tool, Tools.MyTool}` to `@builtin_tools` list
+2. **Register in `CodingAgent.ToolRegistry`** - Add `{:my_tool, Tools.MyTool}` to `@builtin_tools` list, and classify the name in `CodingAgent.ToolPolicy` (`@minimal_core_tools`, `@external_tools`, `@dangerous_tools`) as appropriate
 
-3. **Register in `CodingAgent.Tools`** if it belongs in the default set - add to `coding_tools/2`, `all_tools/2`, and the module alias list
-
-4. **Add tests** at `test/coding_agent/tools/my_tool_test.exs`
+3. **Add tests** at `test/coding_agent/tools/my_tool_test.exs`
 
 Note: `tool/2` receives `cwd` and `opts`. Capture `cwd`/`opts` in the `execute` closure rather than passing them as extra arguments to a named public function (see existing tools for the pattern).
 
@@ -570,18 +531,11 @@ Sessions are persisted as JSONL files via `CodingAgent.SessionManager`:
 - First entry: `SessionHeader` with version, id, cwd
 - Subsequent: `SessionEntry` with tree structure (id, parent_id)
 - Entry types: `:message`, `:compaction`, `:branch_summary`, `:label`, and custom
-  entries such as the latest-wins `session_heartbeat` state/tombstone.
+  entries. Custom entries of a type nothing reads (including retired types left
+  in old files) are skipped when rebuilding context.
 
 Location: `~/.lemon/agent/sessions/{encoded-cwd}/{session_id}.jsonl`
 (cwd is encoded with path separators replaced by `--`, e.g. `--home-user-project--`)
-
-Same-session heartbeats must remain append-only and persistence-first: persist a
-fire claim before provider dispatch, and persist a clear tombstone before reset
-rotates the session identity. A reset persistence failure must leave the old
-identity intact. Real queued prompts/steers/follow-ups win over a due heartbeat;
-elapsed ticks coalesce and resume re-anchors the interval. Client-facing lookup
-uses `SessionRegistry.lookup_session_key/1` because the TUI's logical key is not
-necessarily the JSONL header ID; ambiguous live claims fail closed.
 
 ## Workspace Management
 
@@ -594,7 +548,7 @@ Bootstrap files loaded from `~/.lemon/agent/workspace/` (initialized from `priv/
 | `TOOLS.md` | main + subagent | Tool documentation |
 | `IDENTITY.md` | main only | Identity configuration |
 | `USER.md` | main only | User preferences |
-| `HEARTBEAT.md` | main only | Health check configuration |
+| `HEARTBEAT.md` | main only | Checklist the scheduled heartbeat cron job reads (`HEARTBEAT_OK` = nothing to report) |
 | `BOOTSTRAP.md` | main only | Startup instructions |
 | `MEMORY.md` | main only | Persistent memory (optional, omitted if missing) |
 
@@ -768,7 +722,6 @@ Session and EventHandler emit introspection events via `LemonCore.Introspection.
 | `:session_started` | `init/1` after state is built | `session_id`, `cwd`, `model`, `session_scope` |
 | `:session_ended` | `terminate/2` | `session_id`, `turn_count` |
 | `:compaction_triggered` | `apply_compaction_result/3` on success | `tokens_before`, `first_kept_entry_id` |
-| `:session_heartbeat` | Heartbeat set/pause/resume/clear/fire | `action`, `status`, `interval_seconds`, `fire_count`, `prompt_bytes` (never prompt text) |
 
 ### EventHandler Events
 
@@ -958,7 +911,6 @@ apps/coding_agent/
 |   |   +-- session/
 |   |   |   +-- compaction_manager.ex        # Auto-compaction state machine
 |   |   |   +-- event_handler.ex             # Agent event -> session state
-|   |   |   +-- heartbeat.ex                 # Durable idle-only recurring turns
 |   |   |   +-- message_serialization.ex     # Message format conversion
 |   |   |   +-- model_resolver.ex            # Model + API key resolution
 |   |   |   +-- prompt_composer.ex           # System prompt layering
@@ -969,7 +921,6 @@ apps/coding_agent/
 |   |   +-- tool_executor.ex                 # Approval gating
 |   |   +-- tool_registry.ex                 # Dynamic resolution + ETS extension cache
 |   |   +-- tool_policy.ex                   # Policy profiles and checks
-|   |   +-- tools.ex                         # Tool factory (coding_tools, read_only_tools, all_tools)
 |   |   +-- tools/                           # Individual tool modules
 |   |   |   +-- read.ex, write.ex, edit.ex, multiedit.ex
 |   |   |   +-- patch.ex
@@ -981,7 +932,7 @@ apps/coding_agent/
 |   |   |   +-- todo_store.ex, todo_store_owner.ex
 |   |   |   +-- task.ex, agent.ex
 |   |   |   +-- tool_auth.ex, extensions_status.ex
-|   |   |   +-- read_skill.ex, skill_manage.ex, memory_topic.ex, truncate.ex
+|   |   |   +-- read_skill.ex, skill_manage.ex, memory_topic.ex
 |   |   |   +-- lsp_formatter.ex, lsp_diagnostics.ex, restart.ex
 |   |   |   +-- feature_requirements.ex
 |   |   +-- budget_tracker.ex, budget_enforcer.ex

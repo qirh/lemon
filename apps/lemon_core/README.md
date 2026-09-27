@@ -89,6 +89,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config.Tools` | Web tools and WASM config sub-module |
 | `LemonCore.Config.TUI` | Terminal UI theme and debug sub-module |
 | `LemonCore.Config.Logging` | Log file and rotation sub-module |
+| `LemonCore.Config.Automation` | `[automation]` sub-module (opt-in `daily_brief` HH:MM time) |
 | `LemonCore.Config.Validator` | Validation for both legacy and modular config structs |
 | `LemonCore.Config.ValidationError` | Raised by `Config.Modular.load!/1` on invalid config |
 | `LemonCore.Contract` | Validates configuration-injected modules for loadability and required behaviour callbacks |
@@ -693,6 +694,15 @@ Optional dependencies are not inherited: add it to your own `deps/0` to enable i
 ```
 
 Durable memory has the same requirement in `lemon_memory`.
+
+### What the Hex package leaves out
+
+The Hex tarball ships the library, not this repository's tooling: the
+architecture/docs lint (`LemonCore.Quality.*`, `mix lemon.quality`,
+`mix lemon.architecture.docs`, `mix lemon.check_duplicate_tests`), the
+managed-install self-updater (`LemonCore.Update.*`, `mix lemon.update`), the
+platform benchmark runner (`mix lemon.bench`) and the repo task catalog
+(`mix lemon.help`) exist only in the lemon checkout.
 
 ## Filesystem layout
 

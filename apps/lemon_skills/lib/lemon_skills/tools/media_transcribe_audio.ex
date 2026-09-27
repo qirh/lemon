@@ -5,8 +5,7 @@ defmodule LemonSkills.Tools.MediaTranscribeAudio do
   Transcribes a local audio artifact through Lemon's BEAM media worker path:
   deterministic local previews, OpenAI speech-to-text, or Deepgram speech-to-text.
   OpenAI/Deepgram runs require the corresponding provider API credentials (explicit
-  opts, config, or secrets). Registered as a builtin tool in `CodingAgent.ToolRegistry`
-  and exposed through the `CodingAgent.Tools` factories.
+  opts, config, or secrets). Registered as a builtin tool in `CodingAgent.ToolRegistry`.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}

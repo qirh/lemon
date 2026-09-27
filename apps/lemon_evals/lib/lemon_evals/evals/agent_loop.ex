@@ -12,7 +12,7 @@ defmodule LemonEvals.Evals.AgentLoop do
 
   alias LemonAgent.{EventStream, Loop}
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult}
-  alias CodingAgent.{PromptBuilder, ToolPolicy, ToolRegistry}
+  alias CodingAgent.{SystemPrompt, ToolPolicy, ToolRegistry}
   alias CodingAgent.Tools.{Grep, Patch, Read, ReadSkill, SkillManage}
   alias CodingAgent.Tools.Task, as: TaskTool
   alias LemonEvals.Types
@@ -37,12 +37,10 @@ defmodule LemonEvals.Evals.AgentLoop do
           skill_tool = SkillManage.tool(tmp_dir, tool_opts)
 
           prompt =
-            PromptBuilder.build(tmp_dir, %{
-              base_prompt: "Base.",
-              context: "release checklist reusable hotfix workflow",
-              include_skills: true,
-              include_commands: false,
-              include_mentions: false
+            SystemPrompt.build(tmp_dir, %{
+              workspace_dir: tmp_dir,
+              session_scope: :main,
+              skill_context: "release checklist reusable hotfix workflow"
             })
 
           responses = [
@@ -142,12 +140,10 @@ defmodule LemonEvals.Evals.AgentLoop do
           skill_tool = SkillManage.tool(tmp_dir, tool_opts)
 
           prompt =
-            PromptBuilder.build(tmp_dir, %{
-              base_prompt: "Base.",
-              context: "release hotfix checklist needs an added follow-up owner step",
-              include_skills: true,
-              include_commands: false,
-              include_mentions: false
+            SystemPrompt.build(tmp_dir, %{
+              workspace_dir: tmp_dir,
+              session_scope: :main,
+              skill_context: "release hotfix checklist needs an added follow-up owner step"
             })
 
           responses = [
@@ -273,12 +269,10 @@ defmodule LemonEvals.Evals.AgentLoop do
             )
 
           prompt =
-            PromptBuilder.build(project_dir, %{
-              base_prompt: "Base.",
-              context: "last time release handoff prior work",
-              include_skills: false,
-              include_commands: false,
-              include_mentions: false
+            SystemPrompt.build(project_dir, %{
+              workspace_dir: home_dir,
+              session_scope: :main,
+              skill_context: "last time release handoff prior work"
             })
 
           responses = [
@@ -374,7 +368,7 @@ defmodule LemonEvals.Evals.AgentLoop do
           read_tool = Read.tool(project_dir)
 
           prompt =
-            CodingAgent.SystemPrompt.build(project_dir, %{
+            SystemPrompt.build(project_dir, %{
               workspace_dir: home_dir,
               session_scope: :main,
               skill_context: "release handoff workspace memory"
@@ -490,7 +484,7 @@ defmodule LemonEvals.Evals.AgentLoop do
           patch_tool = Patch.tool(project_dir)
 
           prompt =
-            CodingAgent.SystemPrompt.build(project_dir, %{
+            SystemPrompt.build(project_dir, %{
               workspace_dir: home_dir,
               session_scope: :main,
               skill_context: "release handoff workspace memory update"

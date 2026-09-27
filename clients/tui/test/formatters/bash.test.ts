@@ -254,12 +254,7 @@ describe("bashFormatter", () => {
 			});
 
 			expect(result.summary).toBe("Error executing command: :enoent");
-			expect(result.details).toEqual([
-				"Failed",
-				"",
-				"stderr:",
-				"Error executing command: :enoent",
-			]);
+			expect(result.details).toEqual(["Failed", "", "stderr:", "Error executing command: :enoent"]);
 			expect(result.isError).toBe(true);
 		});
 

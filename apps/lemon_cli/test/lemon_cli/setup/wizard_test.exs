@@ -196,8 +196,8 @@ defmodule LemonCli.Setup.WizardTest do
         api_key_secret = "wizard_openai_key"
       """)
 
-      # One scripted answer: declining the optional runtime configuration.
-      io = recording_io(["n"])
+      # Scripted answers: decline the optional daily brief and runtime configuration.
+      io = recording_io(["n", "n"])
 
       assert Wizard.run_full([], io, config_path: config_path) == :ok
 
@@ -209,6 +209,8 @@ defmodule LemonCli.Setup.WizardTest do
 
       # Provider onboarding is never asked for again; runtime stays optional.
       assert Enum.any?(prompt_events(events), &String.contains?(&1, "Configure runtime profile"))
+      assert Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
+      refute File.read!(config_path) =~ "[automation]"
 
       assert Enum.all?(
                prompt_events(events),
@@ -216,6 +218,57 @@ defmodule LemonCli.Setup.WizardTest do
              )
 
       refute info_event?(events, &String.contains?(&1, "Verifying provider"))
+    end
+  end
+
+  describe "run_full/3 — daily brief" do
+    test "opting in records the brief time; rerunning does not ask again", %{
+      config_path: config_path
+    } do
+      set_master_key_env()
+      assert {:ok, _metadata} = Secrets.set("wizard_openai_key", "sk-wizard-brief")
+
+      File.write!(config_path, """
+      [defaults]
+        provider = "openai"
+        model = "openai:gpt-5"
+
+      [providers.openai]
+        api_key_secret = "wizard_openai_key"
+      """)
+
+      # yes to the brief, an invalid time, then 7:30; decline runtime configuration.
+      io = recording_io(["y", "7am", "7:30", "n"])
+      assert Wizard.run_full([], io, config_path: config_path) == :ok
+
+      assert %{"automation" => %{"daily_brief" => "07:30"}} =
+               config_path |> File.read!() |> Toml.decode!()
+
+      events = drain_events([])
+      assert error_event?(events, &String.contains?(&1, "24-hour time"))
+      assert info_event?(events, &String.contains?(&1, "Daily brief scheduled for 07:30"))
+
+      assert Wizard.run_full([], recording_io(["n"]), config_path: config_path) == :ok
+      events = drain_events([])
+      refute Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
+      assert info_event?(events, &String.contains?(&1, "Daily brief: scheduled at 07:30"))
+    end
+
+    test "non-interactive setup stays off unless --daily-brief is given", %{
+      config_path: config_path
+    } do
+      assert Wizard.run(["--non-interactive", "--config-path", config_path], recording_io()) ==
+               :ok
+
+      refute File.read!(config_path) =~ "daily_brief"
+
+      assert Wizard.run(
+               ["--non-interactive", "--config-path", config_path, "--daily-brief", "6:45"],
+               recording_io()
+             ) == :ok
+
+      assert %{"automation" => %{"daily_brief" => "06:45"}} =
+               config_path |> File.read!() |> Toml.decode!()
     end
   end
 

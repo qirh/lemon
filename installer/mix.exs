@@ -1,25 +1,15 @@
 defmodule LemonNew.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
-  @source_url "https://github.com/z80dev/lemon"
-
+  # Built and installed as a local Mix archive from a lemon checkout
+  # (`MIX_ENV=prod mix archive.build`); it is not published to Hex.
   def project do
     [
       app: :lemon_new,
-      version: @version,
+      version: "0.1.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      deps: deps(),
-      package: package(),
-      source_url: @source_url,
-      docs: docs(),
-      homepage_url: @source_url,
-      description: """
-      Lemon project generator. Scaffolds a BEAM agent project wired to the
-      lemon platform packages: an agent loop, one tool, one channel, and a
-      test suite that runs without an API key.
-      """
+      deps: deps()
     ]
   end
 
@@ -31,20 +21,4 @@ defmodule LemonNew.MixProject do
   # cannot carry dependencies: anything listed here is simply unavailable at
   # `mix lemon.new` time. Templates are compiled into the beam files.
   defp deps, do: []
-
-  defp docs do
-    [
-      source_ref: "v#{@version}",
-      extras: ["README.md"]
-    ]
-  end
-
-  defp package do
-    [
-      maintainers: ["z80"],
-      licenses: ["MIT"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib templates mix.exs README.md)
-    ]
-  end
 end

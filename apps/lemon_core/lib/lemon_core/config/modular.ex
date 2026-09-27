@@ -35,12 +35,14 @@ defmodule LemonCore.Config.Modular do
   - `LemonCore.Config.Logging` - Log file and rotation settings
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
   - `LemonCore.Config.Providers` - LLM provider configurations
+  - `LemonCore.Config.Automation` - Opt-in proactive automation (daily brief)
 
   See `LemonCore.Config` for the legacy configuration interface.
   """
 
   alias LemonCore.Config.{
     Agent,
+    Automation,
     Features,
     Gateway,
     Logging,
@@ -60,7 +62,8 @@ defmodule LemonCore.Config.Modular do
     :tui,
     :providers,
     :secrets,
-    :features
+    :features,
+    :automation
   ]
 
   @type t :: %__MODULE__{
@@ -71,7 +74,8 @@ defmodule LemonCore.Config.Modular do
           tui: TUI.t(),
           providers: Providers.t(),
           secrets: Secrets.t(),
-          features: Features.t()
+          features: Features.t(),
+          automation: Automation.t()
         }
 
   @doc """
@@ -245,7 +249,8 @@ defmodule LemonCore.Config.Modular do
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings),
       secrets: Secrets.resolve(settings),
-      features: Features.resolve(settings)
+      features: Features.resolve(settings),
+      automation: Automation.resolve(settings)
     }
   end
 

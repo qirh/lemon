@@ -168,9 +168,10 @@ Use `LemonCore.Config.Features.enabled?/2` — not `System.get_env`.
 - PRs require approval from the CODEOWNERS of affected files
 - Cross-cutting changes (`mix.exs`, shared schemas) require `@z80` sign-off
 - `scripts/test quality` must be green (lint + docs links + architecture boundaries)
-- **Changed a published package's `lib/`?** Add an entry to that package's
-  `CHANGELOG.md` in the same PR — the change is visible to third parties who
-  installed it from Hex. No CI job checks this; reviewers do.
+- **Changed a published package's `lib/`?** (`lemon_ai`, `lemon_core`,
+  `lemon_agent`, `lemon_memory`, `lemon_platform_test`.) Add an entry to that
+  package's `CHANGELOG.md` in the same PR — the change is visible to third
+  parties who installed it from Hex. No CI job checks this; reviewers do.
 
 The [pull request template](.github/pull_request_template.md) has the full
 checklist.

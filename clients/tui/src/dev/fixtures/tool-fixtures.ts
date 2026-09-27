@@ -57,7 +57,7 @@ const EDIT_DIFF = [
 	" 120\t\tif (title) return title;",
 	"+121\t\tconst kind = action?.kind?.trim();",
 	"+122\t\tif (kind) return kind;",
-	" 121\t\treturn \"tool\";",
+	' 121\t\treturn "tool";',
 	" 122\t}",
 ].join("\n");
 
@@ -274,7 +274,10 @@ export const TOOL_FIXTURES: ToolFixture[] = [
 		name: "find",
 		kind: "tool",
 		title: "find: `*.test.ts`",
-		started: { name: "find", args: { pattern: "*.test.ts", path: "clients/tui/test", type: "file" } },
+		started: {
+			name: "find",
+			args: { pattern: "*.test.ts", path: "clients/tui/test", type: "file" },
+		},
 		completed: {
 			name: "find",
 			args: { pattern: "*.test.ts", path: "clients/tui/test", type: "file" },

@@ -9,8 +9,8 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
   import LemonEvals.Support
 
   alias LemonAgent.Types.AgentToolResult
-  alias CodingAgent.PromptBuilder
   alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.SystemPrompt
   alias CodingAgent.Tools.{ReadSkill, SkillManage}
   alias LemonEvals.Types
   alias LemonSkills.Curator
@@ -170,22 +170,20 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           """)
 
           prompt =
-            PromptBuilder.build(tmp_dir, %{
-              base_prompt: "Base.",
-              context: "improve hermes memory recall and profile discipline",
-              include_skills: true,
-              include_commands: false,
-              include_mentions: false
+            SystemPrompt.build(tmp_dir, %{
+              workspace_dir: tmp_dir,
+              session_scope: :main,
+              skill_context: "improve hermes memory recall and profile discipline"
             })
 
           cond do
-            not String.contains?(prompt, "<relevant-skills>") ->
-              contract_fail("auto_skill_prompt_contract", "missing relevant skills block", %{
+            not String.contains?(prompt, "<available_skills>") ->
+              contract_fail("auto_skill_prompt_contract", "missing available skills block", %{
                 prompt: prompt
               })
 
             not String.contains?(prompt, "<key>hermes-memory</key>") ->
-              contract_fail("auto_skill_prompt_contract", "missing relevant skill key", %{
+              contract_fail("auto_skill_prompt_contract", "missing skill key", %{
                 prompt: prompt
               })
 
@@ -233,12 +231,10 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
 
           system_prompt =
-            CodingAgent.SystemPrompt.build(tmp_dir, %{
+            SystemPrompt.build(tmp_dir, %{
               workspace_dir: workspace_dir,
               session_scope: :main
             })
-
-          learning_prompt = PromptBuilder.build_learning_section()
 
           cond do
             not String.contains?(system_prompt, "Prefer the dedicated memory and skill tools") ->
@@ -258,10 +254,10 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
                 %{}
               )
 
-            not String.contains?(learning_prompt, "Prefer dedicated memory and skill tools") ->
+            not String.contains?(system_prompt, "Prefer dedicated memory and skill tools") ->
               contract_fail(
                 "dedicated_tool_preference_contract",
-                "learning prompt missing dedicated tool preference",
+                "learning workflow missing dedicated tool preference",
                 %{}
               )
 
@@ -275,13 +271,13 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
                 "skill_manage"
               ],
               fn tool ->
-                String.contains?(learning_prompt, "`#{tool}`")
+                String.contains?(system_prompt, "`#{tool}`")
               end
             ) ->
               contract_fail(
                 "dedicated_tool_preference_contract",
-                "learning prompt missing dedicated memory or skill tool names",
-                %{prompt: learning_prompt}
+                "system prompt missing dedicated memory or skill tool names",
+                %{prompt: system_prompt}
               )
 
             true ->
@@ -445,7 +441,8 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
 
           memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
           skill_tool = SkillManage.tool(project_dir, tool_opts)
-          learning_prompt = PromptBuilder.build_learning_section()
+          learning_prompt =
+            SystemPrompt.build(project_dir, %{workspace_dir: home_dir, session_scope: :main})
 
           with :ok <- assert_learning_prompt(learning_prompt),
                {:ok, search_result} <-

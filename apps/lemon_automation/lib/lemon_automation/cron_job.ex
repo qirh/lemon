@@ -15,6 +15,13 @@ defmodule LemonAutomation.CronJob do
   - `:cwd` - Optional command working directory
   - `:env` - Optional command environment overrides
   - `:memory_file` - Optional markdown file used as persistent cross-run memory
+  - `:deliver_to` - Where the completed run's result is sent (see
+    `LemonAutomation.CronDelivery`): `nil` (default: the originating chat when
+    the job was created from a Telegram/Discord conversation, otherwise the
+    paired owner chat), `"none"` (no channel delivery), or an explicit
+    `"telegram:<chat_id>[:<thread_id>]"` / `"discord:<channel_id>[:<thread_id>]"`
+  - `:once` - One-shot job: disabled when its scheduled run is claimed and
+    deleted after that run finishes (default: `false`)
   - `:monitor` - Monitor semantics: suppress delivery when the normalized output
     hash is unchanged (default: `false`)
   - `:monitor_notify_first_run` - Whether the baseline (first) monitored run
@@ -76,6 +83,7 @@ defmodule LemonAutomation.CronJob do
     :cwd,
     :env,
     :memory_file,
+    :deliver_to,
     :context_from,
     :model,
     :captured_default_model,
@@ -91,7 +99,8 @@ defmodule LemonAutomation.CronJob do
     max_retries: 0,
     retry_backoff_ms: 30_000,
     monitor: false,
-    monitor_notify_first_run: true
+    monitor_notify_first_run: true,
+    once: false
   ]
 
   @type t :: %__MODULE__{
@@ -106,6 +115,8 @@ defmodule LemonAutomation.CronJob do
           cwd: binary() | nil,
           env: map() | nil,
           memory_file: binary() | nil,
+          deliver_to: binary() | nil,
+          once: boolean(),
           monitor: boolean(),
           monitor_notify_first_run: boolean(),
           context_from: binary() | nil,
@@ -142,6 +153,8 @@ defmodule LemonAutomation.CronJob do
       cwd: get_attr(attrs, :cwd),
       env: get_attr(attrs, :env),
       memory_file: get_attr(attrs, :memory_file),
+      deliver_to: get_attr(attrs, :deliver_to),
+      once: get_attr(attrs, :once, false) == true,
       monitor: get_attr(attrs, :monitor, false),
       monitor_notify_first_run: get_attr(attrs, :monitor_notify_first_run, true),
       context_from: get_attr(attrs, :context_from),
@@ -177,6 +190,8 @@ defmodule LemonAutomation.CronJob do
         cwd: get_attr(attrs, :cwd, job.cwd),
         env: get_attr(attrs, :env, job.env),
         memory_file: get_attr(attrs, :memory_file, job.memory_file),
+        deliver_to: get_attr(attrs, :deliver_to, job.deliver_to),
+        once: get_attr(attrs, :once, job.once) == true,
         monitor: get_attr(attrs, :monitor, job.monitor),
         monitor_notify_first_run:
           get_attr(attrs, :monitor_notify_first_run, job.monitor_notify_first_run),
@@ -237,6 +252,8 @@ defmodule LemonAutomation.CronJob do
       cwd: job.cwd,
       env: job.env,
       memory_file: job.memory_file,
+      deliver_to: job.deliver_to,
+      once: job.once,
       monitor: job.monitor,
       monitor_notify_first_run: job.monitor_notify_first_run,
       context_from: job.context_from,
@@ -272,6 +289,8 @@ defmodule LemonAutomation.CronJob do
       cwd: get_attr(map, :cwd),
       env: get_attr(map, :env),
       memory_file: get_attr(map, :memory_file),
+      deliver_to: get_attr(map, :deliver_to),
+      once: get_attr(map, :once, false) == true,
       monitor: get_attr(map, :monitor, false),
       monitor_notify_first_run: get_attr(map, :monitor_notify_first_run, true),
       context_from: get_attr(map, :context_from),

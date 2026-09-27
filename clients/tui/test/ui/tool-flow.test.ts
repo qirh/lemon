@@ -420,7 +420,9 @@ describe("expand/collapse keys", () => {
 		expect(transcript(app)).not.toContain("second option");
 
 		terminal.sendInput(CTRL_R);
-		await waitFor(() => transcript(app).includes("second option"), { what: "the expanded thought" });
+		await waitFor(() => transcript(app).includes("second option"), {
+			what: "the expanded thought",
+		});
 
 		terminal.sendInput(CTRL_R);
 		await waitFor(() => !transcript(app).includes("second option"), { what: "the collapse" });

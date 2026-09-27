@@ -303,7 +303,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         event_streams: %{},
         session_key: session_key,
         agent_id: "agent-learning",
-        system_prompt: CodingAgent.PromptBuilder.build_learning_section()
+        system_prompt: "<learning-workflow>\nUse `search_memory`.\n</learning-workflow>"
       }
 
       messages = [
@@ -353,7 +353,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         steering_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
-        system_prompt: CodingAgent.PromptBuilder.build_learning_section()
+        system_prompt: "<learning-workflow>\nUse `search_memory`.\n</learning-workflow>"
       }
 
       messages = [

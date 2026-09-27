@@ -675,7 +675,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       end
 
       defp deps do
-        Lemon.HexPackage.deps(#{deps_block})
+        lemon_deps(#{deps_block})
       end
     end
     """

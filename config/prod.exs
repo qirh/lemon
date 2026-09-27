@@ -24,7 +24,7 @@ config :lemon_automation,
 
 config :lemon_web, LemonWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   cache_static_manifest: "priv/static/cache_manifest.json"
 

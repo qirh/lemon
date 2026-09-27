@@ -346,18 +346,21 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
     test "abort preserves partial output", %{tmp_dir: tmp_dir} do
       signal = AbortSignal.new()
+      parent = self()
 
       task =
         Task.async(fn ->
           BashExecutor.execute(
             "echo before_abort; sleep 5; echo after_abort",
             tmp_dir,
-            signal: signal
+            signal: signal,
+            on_chunk: fn chunk -> send(parent, {:chunk, chunk}) end
           )
         end)
 
-      # Wait for initial output
-      Process.sleep(100)
+      # Abort only once the command has produced output (a fixed sleep races
+      # shell startup under full-suite load).
+      assert_receive {:chunk, _chunk}, 5_000
       AbortSignal.abort(signal)
 
       {:ok, result} = Task.await(task, 5_000)

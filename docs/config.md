@@ -100,19 +100,6 @@ cache_compiled = true
 cache_dir = ""
 max_tool_invoke_depth = 4
 
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""
-timeout_ms = 120000
-max_rpc_calls = 100
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000
-tools = []
-kernel_mode = "per_call"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-
 [tui]
 theme = "lemon"
 debug = false
@@ -123,6 +110,10 @@ debug = false
 file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
+
+[automation]
+# Optional: opt-in daily brief at this server-local time (HH:MM, 24-hour).
+# daily_brief = "08:00"
 
 [gateway]
 max_concurrent_runs = 2
@@ -324,8 +315,6 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
-- `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_PYTHON_PATH`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`, `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`, `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`, `LEMON_EXECUTE_CODE_TOOLS`
-- `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -398,6 +387,7 @@ Use only these top-level sections:
 - `gateway`
 - `tui`
 - `logging`
+- `automation`
 
 Deprecated sections now fail validation and runtime loading:
 
@@ -928,7 +918,6 @@ environment variables select an existing CDP browser or the opt-in MV3 relay:
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
-| `LEMON_CUA_DRIVER_CMD` | PATH lookup | cua-driver executable for `computer_use` |
 
 For the existing-Chrome relay, set `LEMON_BROWSER_CDP_ENDPOINT` to
 `ws://127.0.0.1:<port>/cdp?token=<token>` and set attach-only mode. Treat that
@@ -956,48 +945,6 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
-## Execute Code (`execute_code`)
-
-`execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`). The
-result comes back through `text()` blocks; stdout/stderr is returned as a labeled
-diagnostics tail (a script that never calls `text()` keeps the stdout-only result), and
-`notify()`/`batch()` add streaming updates and parallel helper calls. It is disabled by
-default and **bash-equivalent** — the script runs as host code with the user's
-permissions, not in a sandbox. For the full behavior, security, and lifecycle contract
-see [`docs/tools/execute-code.md`](tools/execute-code.md).
-
-```toml
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""              # empty = find python3 on PATH
-timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
-max_rpc_calls = 100           # helper calls per run
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
-max_text_bytes = 65536        # total text() result-block bytes per run
-max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
-tools = []                    # helper subset; empty = full fixed allowlist
-
-# Persistent-kernel opt-in:
-kernel_mode = "per_call"      # "per_call" (default) | "session"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-```
-
-`kernel_mode = "session"` keeps one supervised python3 interpreter per session/cwd/
-interpreter/helper identity so imports, globals, and objects survive across calls
-(`reset = true` discards them). Kernel state is live process memory only — never durable,
-never in the transcript — and is lost on session close/reset, idle reap
-(`kernel_idle_timeout_ms`), eviction (`max_live_kernels`, idle-only LRU), or node restart.
-Only the literal value `"session"` enables persistence; any other value resolves to
-`"per_call"`. Cells are serialized one at a time per kernel with a bounded queue
-(`max_queued_cells_per_kernel`); a full queue is an error, not a fallback. Session mode
-falls back to an isolated per-call run only before code starts (missing session identity,
-unavailable registry, exhausted capacity, or startup failure) and reports it in result
-details.
-
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -1005,7 +952,6 @@ details.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
-- `runtime.tools.execute_code`: programmatic tool calling (python3 scripts, helper allowlist, optional persistent kernels).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
@@ -1013,6 +959,30 @@ details.
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
+- `automation`: opt-in proactive automation (`daily_brief`).
+
+## Automation
+
+`[automation]` holds opt-in proactive automation. It currently has one key:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+```
+
+- `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
+  `cron_daily_brief`, running every day at that time in the server's local
+  timezone (DST-aware) for the default agent's main session
+  (`agent:default:main`). The agent sends a short brief to your paired owner
+  chat, or replies `HEARTBEAT_OK` and sends nothing.
+- The job is reconciled when Lemon boots: a new or changed time takes effect at
+  the next start, and removing the key removes the job.
+- `lemon setup` offers to write this key (default: off); `lemon setup
+  --daily-brief HH:MM` writes it non-interactively.
+- A value that is not a `HH:MM` 24-hour time fails config validation
+  (`automation.daily_brief: must be a HH:MM 24-hour time`).
+
+See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 
 ## Gateway Projects and Bindings
 
@@ -1275,7 +1245,7 @@ an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist
   who finds the bot can then run the agent; doctor reports it as a warning.
 
 In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
-for every `bash`, `execute_code`, `write`, `edit`, `patch`, and `hashline_edit` call,
+for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call,
 because any member can prompt the agent.
 
 ## Trigger Mode (Mentions-Only)

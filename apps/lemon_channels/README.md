@@ -434,6 +434,9 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
 | `/media` | Preview generated-media job status with redacted type/status/artifact counts and cleanup policy |
+| `/remind <when> <what>` | Schedule a reminder in server-local time, e.g. `/remind in 20m check oven`, `/remind 9am stand-up`, `/remind every weekday 8:30 daily brief`; the cron job's result is delivered back to this chat/topic |
+| `/reminders` | List this chat's enabled reminders (id, schedule, next run) |
+| `/unremind <id>` | Cancel one of this chat's reminders |
 
 The Telegram picker should only surface models that are healthy enough for the
 current transport UX. Known-bad variants may remain in provider registries for

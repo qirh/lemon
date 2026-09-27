@@ -1,0 +1,97 @@
+name: Packaging
+
+# Proves the five published Hex packages (lemon_ai, lemon_core, lemon_agent,
+# lemon_memory, lemon_platform_test) work for someone outside this repository.
+#
+#   - tarballs:  scripts/verify_packages — `mix hex.build --unpack` each
+#                package, compile a consumer project that depends on nothing
+#                but the unpacked tarballs, boot :lemon_agent, then generate
+#                `mix lemon.new` projects against the same tarballs and run
+#                their tests. Every other lane builds inside the umbrella,
+#                which is how the 0.1.0 releases shipped uninstallable.
+#                The Elixir 1.15 leg checks the `elixir: "~> 1.15"` floor the
+#                packages declare; it is advisory until it has been green.
+#   - generator: scripts/verify_generator — both `mix lemon.new` shapes
+#                (including --channel, which needs the unpublished
+#                lemon_channels) against this checkout.
+#
+# Runs on pull requests that touch the packages, the generator or these
+# scripts, and nightly to catch drift from new upstream Hex releases.
+
+on:
+  pull_request:
+    paths:
+      - "apps/lemon_ai/**"
+      - "apps/lemon_core/**"
+      - "apps/lemon_agent/**"
+      - "apps/lemon_memory/**"
+      - "apps/lemon_platform_test/**"
+      - "apps/lemon_channels/**"
+      - "installer/**"
+      - "scripts/verify_packages"
+      - "scripts/verify_generator"
+      - "scripts/release_package"
+      - ".github/workflows/packaging.yml"
+  schedule:
+    - cron: "43 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packaging-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
+jobs:
+  tarballs:
+    name: tarballs — Elixir ${{ matrix.elixir }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: ${{ matrix.advisory }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - otp: "28.5"
+            elixir: "1.19.5"
+            advisory: false
+          - otp: "26.2"
+            elixir: "1.15.8"
+            advisory: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: scripts/verify_packages
+        run: scripts/verify_packages
+
+  generator:
+    name: generator against the checkout
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.5"
+          elixir-version: "1.19.5"
+
+      - name: scripts/verify_generator
+        run: scripts/verify_generator

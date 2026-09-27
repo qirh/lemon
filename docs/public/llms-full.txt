@@ -101,17 +101,17 @@ destination `CodingAgent.Executor`.
 
 ## Application Map
 
-The project is an Elixir umbrella with 24 applications:
+The project is an Elixir umbrella with 22 applications:
 
 **Stack (bottom-up):**
 
 | App | Role |
 |---|---|
-| `ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
-| `lemon_core` | EventBus, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
+| `lemon_ai` | Provider abstraction, streaming, cost tracking (published; no umbrella deps) |
+| `lemon_core` | EventBus, Store, config, secrets, boundary contracts (published; no umbrella deps) |
 | `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
-| `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
-| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Executor, Store backend, and memory-provider implementations (published) |
+| `lemon_agent` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics (published) |
+| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Store backend, event, memory-provider and channel Plugin implementations (published; `PluginCase` needs the in-repo `lemon_channels`) |
 
 **Assistant product:**
 
@@ -121,7 +121,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
-| `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
+| `lemon_automation` | CronManager, heartbeats, reminders, daily brief, scheduled-result delivery |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
@@ -159,19 +159,19 @@ replaceable.
 %% Source of truth: apps/*/mix.exs in_umbrella deps (see docs/architecture_boundaries.md).
 %% Solid = compile-time dependency. Dashed = runtime-only seam (no compile edge).
 graph TD
-    subgraph published["Published packages · Hex (the nine)"]
+    subgraph published["Published packages · Hex (the five)"]
         core["lemon_core"]
         ai["lemon_ai"]
         agent["lemon_agent"]
         mem["lemon_memory"]
-        media["lemon_media"]
-        chan["lemon_channels"]
-        router["lemon_router"]
-        gw["lemon_gateway"]
         kit["lemon_platform_test"]
     end
 
     subgraph reference["Reference runtime · in-repo, unpublished"]
+        router["lemon_router"]
+        gw["lemon_gateway"]
+        chan["lemon_channels"]
+        media["lemon_media"]
         cp["lemon_control_plane"]
         cli["lemon_cli"]
         web["lemon_web"]
@@ -181,7 +181,7 @@ graph TD
         lsp["lemon_lsp"]
     end
 
-    subgraph products["Products · consume the packages as a third party would"]
+    subgraph products["Products · in-repo"]
         ca["coding_agent"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
@@ -189,7 +189,7 @@ graph TD
         simui["lemon_sim_ui"]
     end
 
-    %% Published-tier compile edges (full fidelity from mix.exs)
+    %% Platform compile edges (full fidelity from mix.exs)
     agent --> ai
     agent --> core
     mem --> core
@@ -207,8 +207,7 @@ graph TD
     kit --> core
     kit --> agent
     kit --> ai
-    kit --> chan
-    kit --> gw
+    kit -->|"PluginCase · umbrella only"| chan
     kit --> mem
 
     %% The one allowed router->channels compile edge
@@ -226,7 +225,9 @@ graph TD
 Consumption is one-directional: reference-runtime, product, and satellite apps
 depend on the platform packages, and no platform package depends back on any of
 them. Only one representative consume-edge per tier is drawn; the invariant is
-that no arrow ever runs from `published` into the outer three tiers.
+that no arrow runs from `published` into the outer three tiers, except
+`lemon_platform_test`'s umbrella-only edge to `lemon_channels` (its Hex package
+does not carry it).
 
 ---
 
@@ -238,7 +239,7 @@ Four main paths through the system:
 
 2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
-3. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
+3. **Automation**: CronManager tick → Due jobs → Router → terminalization (heartbeat suppression) → EventBus + CronDelivery → originating or paired owner chat
 
 4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
    `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
@@ -555,7 +556,7 @@ Canonical files:
 - `TOOLS.md`
 - `IDENTITY.md`
 - `USER.md` (bounded profile and preference notes about the human)
-- `HEARTBEAT.md`
+- `HEARTBEAT.md` (checklist the scheduled heartbeat cron job works through; see [Reminders and heartbeats](user-guide/reminders-and-heartbeats.md))
 - `BOOTSTRAP.md`
 - `MEMORY.md` (bounded curated quick facts and topic index, main sessions only)
 
@@ -1619,6 +1620,7 @@ A VendingBench run emits:
 - `scorecard.json`
 - `usage.json`
 - `config.json`
+- `inputs.jsonl`
 - `manifest.json`
 - `hashes.json`
 - `prompts/operator.system.md`
@@ -1636,6 +1638,14 @@ model source files.
 `hashes.json` uses `lemon_sim.hashes.v1` and stores the file hashes that make the
 bundle tamper-evident.
 
+`inputs.jsonl` records every batch of input events the updater folded, one
+`{"events": [...]}` object per ingest, with the exact timestamps and metadata
+that were applied. Together with the seed and setup options in `config.json` it
+makes the run replayable. VendingBench, Werewolf, and Poker bundles all carry
+it; Werewolf and Poker bundles come from `mix lemon.sim.werewolf` /
+`mix lemon.sim.poker` with `--artifact-dir` (keyless with
+`--offline-strategy heuristic`).
+
 ## Verification
 
 ```bash
@@ -1644,15 +1654,22 @@ LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.verify /tmp/lemon-vb-ci-bas
 
 The verifier checks:
 
+- `manifest.json` and `hashes.json` exist (there is no unhashed fallback)
 - manifest and hash schema
 - required files for the scenario
 - manifest integrity fields against `hashes.json`
 - every hashed file's current SHA-256
+- for VendingBench, Werewolf, and Poker: rebuilds the initial state from
+  `config.json`, re-folds `inputs.jsonl` through the scenario updater, and
+  requires the appended events to reproduce `events.jsonl` line for line and
+  the final world to equal `final_world.json`
 - registered scorecard recomputation from `final_world.json`
 
-For VendingBench, a tampered `scorecard.json`, `events.jsonl`, `usage.json`, or
-other hashed file causes verification to fail. `mix lemon.sim.score` runs the
-same verification before printing the scorecard.
+A tampered `scorecard.json`, `events.jsonl`, `usage.json`, or other hashed file
+fails verification; because hashes are self-attested, the replay step is what
+catches a bundle whose files were edited and re-hashed consistently.
+`mix lemon.sim.score` runs the same verification before printing the
+scorecard, and suite recompute excludes every run that fails it.
 
 ## Suites And Leaderboards
 
@@ -1850,6 +1867,17 @@ Algorithm: Bradley-Terry MLE with one pseudo draw per active pair.
 | 1 | baseline | 1639.79 | 2 | 2-0-0 | 1 |
 | 2 | pressure | 1360.21 | 2 | 0-2-0 | 1 |
 ```
+
+## Watch A Live Game
+
+```bash
+mix lemon.sim.demo
+```
+
+Also keyless: it boots the `lemon_sim_ui` spectator, starts an offline
+Werewolf game whose seats are played by a seeded heuristic (no model calls),
+and prints the `/watch/<sim_id>` URL. Pass `--seed N` to replay the same game.
+See `apps/lemon_sim/README.md` ("Keyless demo") for options.
 
 ---
 
@@ -2247,22 +2275,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
 
-### Programmatic tool calling (`execute_code`)
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_EXECUTE_CODE_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the execute_code programmatic tool-calling tool is enabled. |
-| `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS` | integer | `1800000` |  | `lemon_core` | Idle time after which a persistent execute_code kernel is reaped, in milliseconds. |
-| `LEMON_EXECUTE_CODE_KERNEL_MODE` | string | `per_call` |  | `lemon_core` | execute_code kernel mode (`per_call` or `session`); any other value resolves to `per_call` and never enables persistence. |
-| `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS` | integer | `16` |  | `lemon_core` | Strict cap on simultaneous persistent execute_code kernels (idle-only LRU eviction). |
-| `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES` | integer | `50000` |  | `lemon_core` | Maximum script stdout bytes returned to the model (larger output is spilled to a file). |
-| `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL` | integer | `8` |  | `lemon_core` | Maximum queued cells waiting behind the one active cell per persistent execute_code kernel. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_CALLS` | integer | `100` |  | `lemon_core` | Maximum tool RPC calls one execute_code script may make. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES` | integer | `5242880` |  | `lemon_core` | Total byte budget for tool RPC results returned to one execute_code script. |
-| `LEMON_EXECUTE_CODE_PYTHON_PATH` | string | `` |  | `lemon_core` | Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH). |
-| `LEMON_EXECUTE_CODE_TIMEOUT_MS` | integer | `120000` |  | `lemon_core` | End-to-end wall-clock cap for one execute_code run, including session queue wait, in milliseconds. |
-| `LEMON_EXECUTE_CODE_TOOLS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist. |
-
 ### WASM tool runtime
 
 | Env Var | Type | Default | Secret | Apps | Description |
@@ -2453,7 +2465,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
-| `LEMON_CUA_DRIVER_CMD` | string | _(none)_ |  | `lemon_browser` | Path or executable name for the cua-driver used by computer_use. |
 
 ### Coding-agent CLI runners
 
@@ -2685,19 +2696,6 @@ cache_compiled = true
 cache_dir = ""
 max_tool_invoke_depth = 4
 
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""
-timeout_ms = 120000
-max_rpc_calls = 100
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000
-tools = []
-kernel_mode = "per_call"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-
 [tui]
 theme = "lemon"
 debug = false
@@ -2708,6 +2706,10 @@ debug = false
 file = "~/.lemon/log/lemon.log"
 # Optional: handler level for the file (defaults to "debug").
 level = "debug"
+
+[automation]
+# Optional: opt-in daily brief at this server-local time (HH:MM, 24-hour).
+# daily_brief = "08:00"
 
 [gateway]
 max_concurrent_runs = 2
@@ -2909,8 +2911,6 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
-- `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_PYTHON_PATH`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`, `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`, `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`, `LEMON_EXECUTE_CODE_TOOLS`
-- `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`, `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
 - `LEMON_TERMINAL_BACKENDS_ALLOW`, `LEMON_TERMINAL_BACKENDS_DENY`, `LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL`
 - `LEMON_DOCKER_TERMINAL_IMAGE`, `LEMON_DOCKER_TERMINAL_MEMORY`, `LEMON_DOCKER_TERMINAL_CPUS`, `LEMON_DOCKER_TERMINAL_PIDS_LIMIT`, `LEMON_DOCKER_TERMINAL_NETWORK`
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
@@ -2983,6 +2983,7 @@ Use only these top-level sections:
 - `gateway`
 - `tui`
 - `logging`
+- `automation`
 
 Deprecated sections now fail validation and runtime loading:
 
@@ -3513,7 +3514,6 @@ environment variables select an existing CDP browser or the opt-in MV3 relay:
 | `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
 | `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
 | `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
-| `LEMON_CUA_DRIVER_CMD` | PATH lookup | cua-driver executable for `computer_use` |
 
 For the existing-Chrome relay, set `LEMON_BROWSER_CDP_ENDPOINT` to
 `ws://127.0.0.1:<port>/cdp?token=<token>` and set attach-only mode. Treat that
@@ -3541,48 +3541,6 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
-## Execute Code (`execute_code`)
-
-`execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`). The
-result comes back through `text()` blocks; stdout/stderr is returned as a labeled
-diagnostics tail (a script that never calls `text()` keeps the stdout-only result), and
-`notify()`/`batch()` add streaming updates and parallel helper calls. It is disabled by
-default and **bash-equivalent** — the script runs as host code with the user's
-permissions, not in a sandbox. For the full behavior, security, and lifecycle contract
-see [`docs/tools/execute-code.md`](tools/execute-code.md).
-
-```toml
-[runtime.tools.execute_code]
-enabled = false
-python_path = ""              # empty = find python3 on PATH
-timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
-max_rpc_calls = 100           # helper calls per run
-max_rpc_result_bytes = 5242880
-max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
-max_text_bytes = 65536        # total text() result-block bytes per run
-max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
-tools = []                    # helper subset; empty = full fixed allowlist
-
-# Persistent-kernel opt-in:
-kernel_mode = "per_call"      # "per_call" (default) | "session"
-kernel_idle_timeout_ms = 1800000
-max_live_kernels = 16
-max_queued_cells_per_kernel = 8
-```
-
-`kernel_mode = "session"` keeps one supervised python3 interpreter per session/cwd/
-interpreter/helper identity so imports, globals, and objects survive across calls
-(`reset = true` discards them). Kernel state is live process memory only — never durable,
-never in the transcript — and is lost on session close/reset, idle reap
-(`kernel_idle_timeout_ms`), eviction (`max_live_kernels`, idle-only LRU), or node restart.
-Only the literal value `"session"` enables persistence; any other value resolves to
-`"per_call"`. Cells are serialized one at a time per kernel with a bounded queue
-(`max_queued_cells_per_kernel`); a full queue is an error, not a fallback. Session mode
-falls back to an isolated per-call run only before code starts (missing session identity,
-unavailable registry, exhausted capacity, or startup failure) and reports it in result
-details.
-
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -3590,7 +3548,6 @@ details.
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
-- `runtime.tools.execute_code`: programmatic tool calling (python3 scripts, helper allowlist, optional persistent kernels).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
@@ -3598,6 +3555,30 @@ details.
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
+- `automation`: opt-in proactive automation (`daily_brief`).
+
+## Automation
+
+`[automation]` holds opt-in proactive automation. It currently has one key:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local wall-clock time
+```
+
+- `daily_brief` (default: unset) — when set, Lemon keeps one heartbeat cron job,
+  `cron_daily_brief`, running every day at that time in the server's local
+  timezone (DST-aware) for the default agent's main session
+  (`agent:default:main`). The agent sends a short brief to your paired owner
+  chat, or replies `HEARTBEAT_OK` and sends nothing.
+- The job is reconciled when Lemon boots: a new or changed time takes effect at
+  the next start, and removing the key removes the job.
+- `lemon setup` offers to write this key (default: off); `lemon setup
+  --daily-brief HH:MM` writes it non-interactively.
+- A value that is not a `HH:MM` 24-hour time fails config validation
+  (`automation.daily_brief: must be a HH:MM 24-hour time`).
+
+See [Reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 
 ## Gateway Projects and Bindings
 
@@ -3860,7 +3841,7 @@ an enabled, unpaired Telegram adapter as a failure (`channels.telegram.allowlist
   who finds the bot can then run the agent; doctor reports it as a warning.
 
 In group chats (`group`, `supergroup`, `channel` peers) the router requires an approval
-for every `bash`, `execute_code`, `write`, `edit`, `patch`, and `hashline_edit` call,
+for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call,
 because any member can prompt the agent.
 
 ## Trigger Mode (Mentions-Only)
@@ -6846,7 +6827,8 @@ of the prompt:
    - `AGENTS.md` — project-specific agent instructions
    - `TOOLS.md` — tool configuration notes
    - `MEMORY.md` — persistent memory across sessions
-   - `HEARTBEAT.md` — heartbeat task config
+   - `HEARTBEAT.md` — checklist the scheduled heartbeat cron job works
+     through; a reply of exactly `HEARTBEAT_OK` means "nothing to report"
    - `BOOTSTRAP.md` — additional bootstrap content
 8. **Resource walk** — CLAUDE.md/AGENTS.md files found by walking up the
    directory tree from cwd to root
@@ -7286,15 +7268,15 @@ token is persisted back to the secrets store.
 
 ## Context Compaction
 
-When a conversation gets too long for the model's context window, the
-`ContextCompactor` can handle it:
+`lemon_ai` itself does not compact anything: a context-length error is
+classified as `:context_length` by `LemonAi.Error` and surfaced to the caller
+instead of walking the provider fallback chain.
 
-1. **Truncation** — drop the oldest messages (sliding window)
-2. **Summarization** — use the LLM itself to summarize old messages
-3. **Hybrid** — summarize then truncate if still too long
-
-This is triggered automatically by coding_agent when a context-length error
-is detected.
+Coding sessions own the recovery. `CodingAgent.Compaction` finds a safe cut
+point (never between a tool call and its result), asks the model to summarize
+the older messages, and keeps the recent tail. It runs proactively when the
+context nears the window, and `CodingAgent.Session.OverflowRecovery` runs it
+once and retries the turn when a provider reports a context-length error.
 
 ---
 
@@ -7907,12 +7889,14 @@ In `mix.exs`:
 
 ```elixir
 {:lemon_channels, path: "/path/to/lemon/apps/lemon_channels"},
-# {:lemon_channels, "~> 0.1"},
 
 {:lemon_platform_test,
  path: "/path/to/lemon/apps/lemon_platform_test", only: :test, runtime: false},
-# {:lemon_platform_test, "~> 0.1", only: :test, runtime: false}
+# {:lemon_platform_test, "~> 0.2", only: :test, runtime: false}
 ```
+
+`lemon_channels` is not published to Hex — it is part of Lemon's reference
+runtime — so a channel project always builds against a lemon checkout.
 
 `lemon_platform_test` is the contract-test kit. It is test-only and it is not
 optional in spirit — the compliance suite is how you find out that your adapter
@@ -7994,7 +7978,7 @@ In `lib/my_agent/application.ex`, after the supervisor starts:
 
 That call is the whole integration story. The platform has no compile-time
 knowledge of your module; a channel living in its own repository, depending on
-`lemon_channels` from Hex, registers exactly the same way.
+`lemon_channels` from a lemon checkout, registers exactly the same way.
 
 ## The four rules that are not in the signatures
 
@@ -8386,9 +8370,10 @@ paste any block into the project you generate in step 2 and it will work.
 
 ## 1. Install the generator
 
-The platform packages are not on Hex yet, so both the generator and the
-dependencies come from a checkout of the [lemon](https://github.com/z80dev/lemon)
-repository.
+The generator is built from a checkout of the
+[lemon](https://github.com/z80dev/lemon) repository, and the project it writes
+depends on the platform packages in that checkout. (The packages are also
+published to Hex from `0.2.0`; see "About those path dependencies" below.)
 
 ```bash
 git clone https://github.com/z80dev/lemon
@@ -8397,7 +8382,8 @@ MIX_ENV=prod mix archive.build
 mix archive.install lemon_new-0.1.0.ez
 ```
 
-You need Elixir 1.19 or later on OTP 27+. Check with `elixir --version`.
+The packages declare Elixir 1.15 or later; CI tests them on Elixir 1.19 / OTP 28,
+which is the safest choice. Check with `elixir --version`.
 
 ## 2. Generate a project
 
@@ -8436,10 +8422,10 @@ my_agent/
 
 The generator bakes in the checkout it was built from. Override it with
 `mix lemon.new my_agent --lemon-path /elsewhere/lemon` or by exporting
-`LEMON_PATH`. When the packages publish, each path line is replaced by the Hex
-line commented beneath it — note that two of the packages have a Hex name that
-differs from the application name your code uses (`LemonAi` ships as `lemon_ai`,
-`LemonAgent` as `lemon_agent`).
+`LEMON_PATH`. Each path line has the Hex requirement commented beneath it
+(`{:lemon_core, "~> 0.2"}`); swap them to build against a Hex release instead of
+the checkout. `0.2.0` is the first installable release — the `0.1.0` releases
+on Hex are broken and retired.
 
 ## 3. Read the agent
 
@@ -8590,7 +8576,7 @@ different answers:
 | Problem | Answer |
 |---|---|
 | The model should remember what was said five minutes ago | The conversation, already in `AgentState.messages` |
-| The conversation is longer than the context window | Compaction — `LemonAi.ContextCompactor`, or a `transform_context` function |
+| The conversation is longer than the context window | Compaction — an `AgentLoopConfig` `transform_context` function (coding sessions use `CodingAgent.Compaction`) |
 | The agent should remember something from last week | This guide |
 
 A memory document is a *summary* of one exchange, not a transcript. Keep them
@@ -8609,7 +8595,7 @@ or add it by hand. In `mix.exs`:
 
 ```elixir
 {:lemon_memory, path: "/path/to/lemon/apps/lemon_memory"},
-# {:lemon_memory, "~> 0.1"},
+# {:lemon_memory, "~> 0.2"},
 ```
 
 `lemon_memory` depends on `exqlite`, which builds a SQLite NIF, so the first
@@ -9563,7 +9549,7 @@ not a video. `tic_tac_toe` has no replay renderer.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle. |
+| `mix lemon.sim.verify PATH` | Verify a run artifact bundle: hashes, event replay (VendingBench, Werewolf, Poker), and scorecard recompute. Exits non-zero on failure. |
 
 ```bash
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
@@ -9580,8 +9566,9 @@ mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 
 ## Not a mix task
 
-`scripts/release_package` is a shell **script**, not a `mix` task — invoke it
-directly (`scripts/release_package <package>`). It is not listed by
+`scripts/release_package` and `scripts/verify_packages` are shell **scripts**,
+not `mix` tasks — invoke them directly (`scripts/release_package <package>
+<version>`; see `docs/release/hex-packages.md`). They are not listed by
 `mix lemon.help`.
 
 `./bin/lemon node join` is also a source wrapper, not a Mix task. It starts a
@@ -9828,13 +9815,14 @@ of what was found, and the migration tables in §8–§9 say which rows have sin
 > map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
 
 Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
-`test/`), the topics they publish to, and every process that subscribes. The plan of record is
-[`docs/platform-split.md`](../platform-split.md) §5 item **3.1**; its risk row predicts that
-"catalog first will reveal undocumented consumer assumptions." It does — §6 lists thirteen, two
+`test/`), the topics they publish to, and every process that subscribes. This was item **3.1** of
+the platform-split plan ([`docs/platform-split.md`](../platform-split.md) is now its status
+page), whose risk row predicted that "catalog first will reveal undocumented consumer
+assumptions." It does — §6 lists thirteen, two
 of which are live bugs.
 
 This document is the canonical catalog for bus topics and payload types.
-`docs/platform/lemon_core.md` provides the higher-level core boundary.
+`apps/lemon_core/README.md` describes the higher-level core boundary.
 
 > **Top-level execution end state.** `engine` remains in run events, completion
 > records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for
@@ -9924,6 +9912,8 @@ Subscribers:
 | 11 | `LemonAutomation.HeartbeatManager` | `heartbeat_manager.ex:630` | `:run_completed`, `:run_failed` |
 | 12 | webhook transport | `transports/webhook/response.ex:61,100,148` | `:run_completed` |
 | 13 | telegram plugin | `telegram/transport.ex:737` | `:run_completed`, catch-all |
+
+> **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
 
 ### 2.2 `session:<session_key>` — 4 subscribers
 
@@ -10211,7 +10201,7 @@ Compatibility for one release cycle rests on two mechanisms:
    *(History: the shim was removed in S13 on 2026-08-13, before 0.2 — §9. The contract-kit
    assertion now checks the opposite, that no payload module implements `Access`.)*
 
-Semver rule once a struct is published, to go in `docs/platform/lemon_core.md`:
+Semver rule for a published struct (`lemon_core` is a Hex package):
 
 | Change | Bump |
 |---|---|
@@ -10549,8 +10539,8 @@ neither Farcaster nor the email port appears anywhere in this catalog (Farcaster
 Bus; the email adapter at `apps/lemon_channels/lib/lemon_channels/adapters/email/` has no Bus
 call sites). The email port (task #27) is therefore not expected to change any row above. The one
 row that would move is webhook's `run:<id>` subscription (`transports/webhook/response.ex`), if
-webhook is ever relocated — per `transport-unification.md` §1 it stays in the gateway, so it
-should not be.
+webhook is ever relocated — per decision D2 in `docs/platform-split.md` it stays in the gateway,
+so it should not be.
 
 ## 9. S13 — removing the `Access` shim
 
@@ -10672,80 +10662,6 @@ compliance suite covers the module through the registry as with every other type
 
 ---
 
-Source: https://z80dev.github.io/lemon/platform/lemon_agent
-
-# lemon_agent
-
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
-
-`lemon_agent` is the agent itself: the agent loop, the tool registry and tool contract,
-subagents, the model runtime, and the workspace stores (goals, kanban,
-heartbeats) that multiple agents use to coordinate work. It depends on `lemon_ai` and
-`lemon_core` and nothing else in the platform, which makes it the package a third party
-starts from when building their own agent. This page will become the package README:
-defining a tool, driving the loop, spawning subagents, and the `LemonAgent.Workspace.*`
-stores. Source today is `apps/lemon_agent` plus three stores moving out of `lemon_core`.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/lemon_ai
-
-# lemon_ai
-
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
-
-`lemon_ai` is the provider-agnostic LLM client: it owns the provider behaviour and its
-implementations, the model registry, rate limiting, circuit breaking, context compaction,
-and the token/text helpers. It sits at the bottom of the platform dependency graph — it
-depends on nothing else in the platform and everything above it (`lemon_agent`, and
-through it router/gateway/channels/products) depends on it. This page will become the
-package README: supported providers, how to register a new one, streaming and tool-call
-semantics, and the retry/rate-limit knobs. Source today is `apps/lemon_ai`; it is published
-first because every other package needs it.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/lemon_channels
-
-# lemon_channels
-
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
-
-`lemon_channels` is ingress and egress: the channel core (Registry, Outbox, Dispatcher,
-PresentationState), the `LemonChannels.Plugin` behaviour, and the built-in adapters
-(telegram, discord, whatsapp, xmtp, email, webhook). `Plugin` is the best
-extension point in the tree and the intended first contribution for outside builders —
-a new adapter should require no changes to the platform. It talks to the router only
-through `LemonCore.RouterBridge`. This page will become the package README: the six
-`Plugin` callbacks with a worked example, runtime adapter registration, and the
-outbound rendering pipeline.
-
-XMTP and WhatsApp retain adapter-specific public `PortServer` callback/process
-identities, bridge scripts, event tags, and module-scoped warning logging while
-sharing line-delimited JSON port lifecycle, restart, and reconnect handling in
-`LemonChannels.PortBridge`.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/lemon_core
-
-# lemon_core
-
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
-
-`lemon_core` is the platform's shared language: the `Bus` and `Event` envelope, the
-`Store` and its pluggable backends, secrets, the config loader, the boundary
-contracts every other package speaks (`RunRequest`, `ExecutionCommand`, `InboundMessage`,
-`DeliveryIntent`, `EngineRuntime`, `RouterBridge`, `SessionKey`, `ResumeToken`,
-`RunEvents`, run phases),
-the primitives (clock, id, retry, telemetry, idempotency), and the Extensions
-manifest. Everything depends on it, so it must stay product-free. This page will become
-the package README once Phase 1 lands: the contract catalog, the `Store.Backend`
-behaviour, and the rules for evolving the bus wire format. See §6 of the plan for which
-modules stay and which leave.
-
----
-
 Source: https://z80dev.github.io/lemon/platform/lemon_gateway
 
 # lemon_gateway
@@ -10768,22 +10684,6 @@ execution slots, and there are no vendor CLI subprocess runners.
 Gateway-native email, webhook, SMS, and voice transport glue remains alongside
 the scheduler. External channel adapters such as Telegram and Discord live in
 `lemon_channels`.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/lemon_memory
-
-# lemon_memory
-
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
-
-`lemon_memory` is durable agent memory: the document schema, the memory store, the
-provider behaviour and its fan-out registry, the ingest pipeline, search, and task
-fingerprints. It is a small (~1.9k LOC) but headline-feature domain with a real
-extension point, which is why it becomes its own package rather than staying inside
-`lemon_core` (decision D4). This page will become the package README: the memory
-document shape, writing a `LemonMemory.Provider`, and wiring ingest into a run's
-lifecycle through the `Store.Hooks` callback rather than a direct call.
 
 ---
 
@@ -10822,658 +10722,6 @@ Each case template's moduledoc is the reference guide for its behaviour: the `us
 line, a minimal implementation, every suite option, and optional callbacks. The
 suites test contracts rather than implementation internals and avoid network calls,
 message delivery, and real task runs unless an explicit probe opts in.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/lemon_router
-
-# lemon_router
-
-**Status:** stub — package not yet carved out. Plan of record: [../platform-split.md](../platform-split.md).
-
-`lemon_router` owns run lifecycle and session orchestration: single-flight execution,
-queueing and steering, coalescing, policy resolution, the watchdog, and delivery
-routing. It reaches the execution runtime only through the `LemonCore.EngineRuntime`
-behaviour (never `LemonGateway.*` directly) and channels only through the
-Dispatcher/Outbox facade — the single allowed compile-time edge. This page will become
-the package README: the run state machine and phase events, the public `LemonRouter`
-facade, and which modules are internal. Source today is `apps/lemon_router`; the facade
-gets hardened in Phase 2.6 so that other apps stop touching `RunRegistry` /
-`RunSupervisor` / `RunOrchestrator`.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/phase-5-extraction
-
-# Phase 5 — Product-Repo Extraction Readiness
-
-Status: **historical investigation (2026-08-10; refreshed 2026-09-01).** Dependency facts read from `apps/*/mix.exs` and grepped call
-sites against the tree at the time of writing. The coding_agent-blocker resolution below is a
-**proposed decision (needs user sign-off)** — actually extracting a repo is a larger commitment
-than the boundary work of Phases 1–4, so this document names and prices the blocker rather than
-resolving it unilaterally.
-
-This is the missing piece the §5 Phase 5 checklist assumed away: it lists a per-repo procedure
-(`5.1`–`5.7`) but never states which product groups are *ready* to run it. The round-2 sweep
-found that they are not equally ready — `lemon-sim` has a clean published-only dependency profile
-while `coding-agent` is blocked on two unpublished apps — so the two are not interchangeable in
-the extraction order.
-
-## 1. Method
-
-The nine published packages (post-D13) are:
-
-`ai` → `lemon_ai`, `lemon_core`, `agent_core` → `lemon_agent`, `lemon_memory`, `lemon_media`,
-`lemon_router`, `lemon_gateway`, `lemon_channels`, `lemon_platform_test`.
-
-Everything else in `apps/` is either a **reference-runtime** app (stays in the platform repo,
-unpublished: `lemon_control_plane`, `lemon_cli`, `lemon_web`, `lemon_automation`, `lemon_skills`,
-`lemon_browser`, `lemon_lsp`) or a **product** app slated to leave (`coding_agent`,
-`lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`).
-The former X/Twitter satellite was deleted from the Lemon harness under D17 and
-is no longer an extraction target.
-
-An app is **extraction-ready** iff every one of its `in_umbrella` deps is either (a) a published
-package, or (b) another app in the *same product group* (which leaves in the same `git filter-repo`
-and stays an in-repo dep). Any `in_umbrella` dep on a reference-runtime app that stays behind is a
-**blocker**: after extraction it would have to resolve from hex, and there is no hex release.
-
-## 2. Per-product-group readiness
-
-| Product group | App | `in_umbrella` deps | Blocker (unpublished dep) |
-|---|---|---|---|
-| **lemon-sim** | `lemon_sim` | lemon_core, agent_core, ai | **none** |
-| | `lemon_sim_ui` | ai, lemon_core, **lemon_sim** | none (sim is intra-group) |
-| **coding-agent** | `coding_agent` | agent_core, ai, lemon_core, lemon_gateway, lemon_memory, lemon_platform_test*, **lemon_skills**, **lemon_browser** | **lemon_skills, lemon_browser** |
-| | `lemon_mcp` | **coding_agent**, lemon_core, agent_core, **lemon_skills** | **lemon_skills** |
-| | `lemon_evals` | agent_core, ai, **coding_agent**, lemon_core, **lemon_skills** | **lemon_skills** |
-
-\* `lemon_platform_test` is a `only: :test, runtime: false` dep — the same test-only dependency
-direction a third-party engine author has; not a runtime blocker.
-
-**lemon-sim is ready now.** Every platform dep it touches is published; the only cross-app dep
-inside the group (`sim_ui → sim`) travels with it in the extraction and remains an in-repo
-dep afterward. This confirms the D8 premise: sim has the cleanest profile and should be the
-**first** product extracted — which means the §5 Phase 5 order (`coding-agent` first) is backwards
-and should be flipped (see §5).
-
-**coding-agent is blocked** on two reference-runtime apps, `lemon_skills` and `lemon_browser`.
-`lemon_mcp` and `lemon_evals` inherit the `lemon_skills` blocker.
-
-## 3. Anatomy of the blocker
-
-### lemon_skills — large, clean-deps, shared, tool-heavy
-
-- **Size:** 19,442 LOC (`apps/lemon_skills/lib`). Not a leaf — it is the skill discovery /
-  MCP-source / lockfile / installer / synthesis subsystem plus the agent tool implementations.
-- **Its own deps are all published:** `lemon_core`, `lemon_memory`, `lemon_media`, `agent_core`,
-  `ai`. After D7 moved the three X tools out, it has **zero** unpublished deps — so it is itself
-  *publishable-clean*. The blocker is not that skills can't be published; it's whether we *want* to
-  commit to semver on a 19k-LOC surface.
-- **coding_agent's coupling is deep and wide:** 24 references across 8 files, ~20 distinct
-  `LemonSkills.*` modules — including live agent tools (`Tools.MediaAnalyzeImage`,
-  `MediaGenerateImage/Speech/Video`, `MediaStatus`, `MediaTranscribeAudio`, `Memory`,
-  `MemoryTopic`, `SearchMemory`, `Kanban`, `ReadSkill`, `SkillManage`) and prompt/relevance
-  surfaces (`Config`, `find_relevant`, `PromptView.render_relevant_skills`, `SkillView.from_entry`,
-  `McpSource.discover_tools`). This is load-bearing, not incidental.
-- **It is shared infrastructure, not product code.** Besides the coding-agent group
-  (`coding_agent`, `lemon_mcp`, `lemon_evals`), it is consumed by the **reference runtime**:
-  `lemon_control_plane` (25 refs) and `lemon_automation` (4 refs). The single `CodingAgent`
-  reference inside `lemon_skills` is a moduledoc comment (`prompt_view.ex:91`), not a real reverse
-  edge — so skills does not depend back on the product, but the runtime *does* depend on skills.
-
-### lemon_browser — tiny, clean, leaf
-
-- **Size:** 818 LOC. Deps: `lemon_core` + `jason` only — a leaf.
-- **coding_agent's coupling is shallow:** 3 references, all in one file
-  (`coding_agent/tools/browser.ex`), 3 modules: `LemonBrowser.Artifacts`, `.LocalServer`,
-  `.RoutePolicy`.
-- **Also shared with the runtime:** `lemon_control_plane` (5 refs). No reverse edge to CodingAgent.
-
-## 4. Options and cost
-
-The decisive fact for all four options is that **both skills and browser are shared between the
-coding-agent product and the reference runtime that stays behind.** They are platform
-infrastructure that the product happens to use, not product-owned code. That kills the "they leave
-together" option and shapes the rest.
-
-**(a) Publish `lemon_skills` + `lemon_browser` as packages 10 & 11.**
-Both are clean (published-only deps), so the tarball mechanism (`hex_package.exs`) works with no
-inversion. `lemon_browser` is trivial: 818 LOC, leaf, low API-churn risk — publishing it is one map
-entry and metadata, on par with the D13 `lemon_media` decision. `lemon_skills` is the real cost: a
-19k-LOC surface (discovery, MCP sources, lockfiles, installers, synthesis) whose API still churns;
-publishing commits us to semver on all of it, and 4.4-style changelog discipline on every change.
-*Viable, and the only option that doesn't add indirection, but it enlarges the published surface
-substantially and needs an API-stabilization pass on skills first.*
-
-**(b) Vendor / invert behind a behaviour** (the `RuntimeModules` / `EngineInfoBridge` pattern).
-For `lemon_browser` this is cheap and clean: 3 modules behind one configured runtime module, exactly
-the shape already used for doctor/media/lsp. For `lemon_skills` it is prohibitive: coding_agent
-consumes ~20 modules including a dozen concrete agent *tools*; a behaviour that fronts all of that is
-not a seam, it's a re-export of the whole app. *Attractive for browser, a non-starter for skills.*
-
-**(c) Extract coding_agent *with* skills + browser as a larger product repo.**
-**Not viable.** `lemon_control_plane` and `lemon_automation` (reference runtime, staying in the
-platform repo) both depend on `lemon_skills`, and `control_plane` depends on `lemon_browser`. If
-those apps leave with coding_agent, the reference runtime breaks and would itself need skills/browser
-inverted or published — i.e. you land back in (a)/(b) plus a broken runtime in the interim.
-
-**(d) Defer coding_agent extraction** until external demand, keeping it in the umbrella.
-Zero cost now; coding_agent is not the flagship (sim is, D8), so nothing forces its extraction on
-the Phase 5 timeline. The umbrella keeps building it against `in_umbrella` deps exactly as today.
-
-## 5. Recommendation
-
-**Two-part, argued from the asymmetry in §3:**
-
-1. **Extract `lemon-sim` first (unblocked flagship), not `coding-agent`.** Flip the §5 Phase 5
-   order. Sim is ready today (§2), it is the D8 flagship, and running the `5.1`–`5.7` procedure on
-   the clean case first de-risks the tooling (`git filter-repo`, CI port, nightly integration lane)
-   before the hard case.
-
-2. **For the coding-agent blocker, split the two deps by their cost:**
-   - **`lemon_browser`: publish it as a package** (cheap, clean, leaf — same rationale as D13 for
-     `lemon_media`). Inversion (b) is also fine here and slightly smaller-surface, but publishing is
-     more honest since control_plane consumes it too and a package serves both.
-   - **`lemon_skills`: publish it as a package as well (option a), *gated on an API-stabilization
-     pass*, and defer coding-agent's extraction until that pass lands.** Reject invert (b) — the
-     20-module, tool-heavy surface makes a fronting behaviour a re-export, not a seam. Reject
-     leave-together (c) — the reference runtime needs skills. Skills is genuine shared platform
-     infrastructure with clean deps; the only real question is committing to its API, so the work is
-     stabilization, not architecture. Until that lands, **defer (d)** coding-agent — it is not the
-     flagship and nothing on the timeline forces it.
-
-Net: sim extracts on the current Phase 5 tooling now; browser and skills become published packages
-10 & 11 when coding-agent's turn comes; coding-agent, mcp, and evals follow once
-skills' API is release-worthy. This keeps the "publish, don't invert, for shared clean-dep
-infrastructure" principle consistent with D13, and avoids bolting a 20-module behaviour onto the
-product boundary.
-
-## 6. Open items this surfaces
-
-- **Package count grows from 9 to 11** if the recommendation is accepted (`lemon_skills`,
-  `lemon_browser` join). Both need the 4.1 metadata treatment (`hex_package.exs` wrapping,
-  CHANGELOG, LICENSE, docs) and a slot in the 4.3 publish order (after their deps: browser after
-  core; skills after media/memory/agent).
-- **`lemon_skills` API-stabilization is now a named prerequisite** for coding-agent extraction, not
-  a hidden one. Scope: the ~20 modules coding_agent/mcp/evals consume (§3) are the public surface
-  that has to settle; the installer/lockfile/synthesis internals can stay `@moduledoc false`.
-- Hex-name availability for `lemon_skills` / `lemon_browser` not yet verified (E4 checked the
-  original 8 + media). Verify before reserving.
-
----
-
-Source: https://z80dev.github.io/lemon/platform/transport-unification
-
-# Phase 2.4 — Transport Unification: Inventory and Port Design
-
-Status: **historical design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
-
-> **Update 2026-08-10:** the Farcaster transport has been **deleted** (D12; ~1.4k LOC incl.
-> tests). The inventory below has been updated to the post-deletion tree; the analysis of why
-> it did not fit `Plugin` is retained because it is the reasoning behind the decision.
->
-> **Update 2026-09-01:** the former in-tree X/Twitter satellite used as an
-> extension-boundary example was subsequently removed from the Lemon harness.
-> The generic registry and capability lessons below remain applicable; no
-> current `apps/x_api` paths or built-in X integration exist.
-
-This document records the verified inventory, control-plane coupling, environment
-variables, chat-state dependency, Telegram surfaces, and the recommended amendment
-to **D2**.
-
-## 1. Headline recommendation
-
-**Amend D2.** D2 says: *"Email/farcaster/webhook/sms/voice move to `lemon_channels` as `Plugin`
-implementations; `LemonGateway.Transport` behaviour is deleted; one transport concept remains."*
-
-The evidence does not support that for four of the five. Recommended disposition:
-
-| Subsystem | D2 says | Recommended | Why (one line) |
-|---|---|---|---|
-| Email | port | **Port** | Genuinely message-shaped and async; the only clean fit. |
-| Farcaster | port | **Deleted** (D12, executed) | Synchronous frame response; off by default; no evidence of use. |
-| Webhook | port | **Keep in gateway** | Not a channel — a generic sync HTTP automation trigger. |
-| SMS | port | **Keep in gateway tooling** | Not a channel at all: no reply path, exposed as 4 agent tools. |
-| Voice | port | **Defer** | Live bidirectional streaming session; nothing in `Plugin` models it. |
-
-Consequently **`LemonGateway.Transport` cannot simply be deleted** in 2.4. What *can* be
-achieved — and what I recommend 2.4 actually deliver — is stated in §7.
-
-The "one transport concept remains" goal is still reachable, but by a different route than
-deletion: the honest end state is *two* concepts with a clear, documented boundary —
-`LemonChannels.Plugin` for conversational channels, and a gateway-owned integration surface for
-synchronous/tooling/streaming ingress. Pretending the latter is a channel is what has kept this
-migration stalled since July.
-
-## 2. Current-state inventory
-
-### 2.1 What is actually a "transport"
-
-Only **two** subsystems implement `LemonGateway.Transport`:
-`transports/email.ex` and `transports/webhook.ex` (farcaster was the third until D12 deleted
-it). **SMS and voice do not** — they are independent supervised subsystems that happen to start
-under the same supervisor. Any framing of "the five gateway transports" is inaccurate; it is two
-transports plus two unrelated Twilio subsystems.
-
-### 2.2 The behaviour itself is nearly empty
-
-`LemonGateway.Transport` (`transport.ex`, 67 LOC) has **two** required callbacks — `id/0` and
-`start_link/1` — plus an optional `child_spec/1` supplied by its `__using__` macro. It has no
-delivery, no normalization, no metadata. It is a supervised-worker registration marker.
-
-`LemonChannels.Plugin` (`plugin.ex`, 107 LOC) has **six**: `id/0`, `meta/0`, `child_spec/1`,
-`normalize_inbound/1`, `deliver/1`, `gateway_methods/0`.
-
-This asymmetry is the crux: porting is not a rename. Every ported subsystem must *grow* four
-callbacks it has no implementation for today, and for three of the four remaining the two central
-ones (`normalize_inbound/1` → `deliver/1`) are the wrong shape for what the subsystem does.
-
-### 2.3 Size and coverage
-
-| Subsystem | Source LOC | Test LOC | Implements `Transport`? | Reaches router via |
-|---|---:|---:|---|---|
-| Email | 2,114 | 294 | yes | `RouterBridge` + `RunRequest` |
-| Webhook | 1,777 | 357 | yes | `RouterBridge` + `RunRequest` |
-| Voice | 1,658 | 430 | **no** | none — calls `LemonGateway.AI.chat_completion/3` directly |
-| SMS | 937 | 583 | **no** | none — `Store`-backed inbox read by 4 agent tools |
-| `transport.ex` + `transport_registry.ex` + `transport_supervisor.ex` | 240 | — | — | — |
-
-Total ≈ **6.7k LOC** after the farcaster delete (it was 7.9k with farcaster, and the 5.1k
-quoted in §3/E3 of the plan of record predated counting SMS and voice).
-
-Coverage is uneven in exactly the places a port would be riskiest: `email/outbound.ex` (715 LOC)
-has **zero** dedicated tests, and voice's `DeepgramClient`/`RecordingDownloader`/
-`RecordingManager` (384 LOC combined) have zero.
-
-### 2.4 None of it runs by default
-
-Two independent gates are both off:
-
-1. `LemonGateway.LegacyIngressSupervisor` — which hosts `TransportRegistry`,
-   `TransportSupervisor`, `CommandRegistry`, both SMS children, and all four voice
-   registries/supervisors — starts only when `:legacy_ingress_enabled` is true.
-   `application.ex:72` defaults it to `false`, and **no checked-in config sets it** (only two
-   SMS test files flip it).
-2. `TransportRegistry.init/1` reads `:transports`, defaulting to `[]`. **No config sets it
-   either** — `config/test.exs` explicitly sets `[]`.
-
-So in a stock run, zero of these ~6.7k LOC execute. This is the single most important input to
-sequencing: there is **no user-facing urgency**, and therefore no reason to accept risk. It also
-means "deleting" a subsystem is far cheaper than porting it, and that any port can be validated
-without a migration window.
-
-## 3. Mapping onto `LemonChannels.Plugin`
-
-Re-verified 2026-08-10: **`lemon_channels` still has no `plug` or `bandit` dependency**
-(`mix.exs` deps: lemon_core, lemon_media, agent_core, jason, earmark_parser, req, nostrum). Every
-existing adapter is a *client* — poller, websocket client, or bridge process. Nothing in
-`lemon_channels` can receive an inbound HTTP POST on a bound port today. Email, webhook,
-SMS-webhook and voice-webhook all require exactly that. This is new infrastructure, not a
-missing callback, and it is the prerequisite for any port at all.
-
-Per-callback fit:
-
-| | Email | Webhook | SMS | Voice |
-|---|---|---|---|---|
-| `id/0` | ✅ | ✅ | ✅ | ✅ |
-| `meta/0` | ✅ | ⚠️ meaningless | ⚠️ meaningless | ⚠️ `capabilities` is free-form prose; `voice_support` already means "voice *notes*", not telephony |
-| `child_spec/1` | ✅ | ✅ | ✅ | ✅ |
-| `normalize_inbound/1` | ✅ | ⚠️ arbitrary JSON trigger | ❌ nothing to normalize | ❌ audio frames, not a message |
-| `deliver/1` | ✅ | ❌ **must return into the originating HTTP request**, plus callback-URL delivery | ❌ no reply path exists | ❌ streaming audio over a live socket |
-| `gateway_methods/0` | ✅ (none needed) | ✅ | ✅ | ✅ |
-
-The blocking gaps, restated precisely (this is the deliverable the plan-of-record asked for):
-
-1. **No synchronous round-trip.** `deliver/1` returns `{:ok, delivery_ref}` and is decoupled from
-   the inbound call. Webhook (sync mode) must produce its HTTP response *in the request cycle
-   that received the input* — as did every farcaster frame action, which is what made farcaster
-   the hardest case before it was deleted. There is no path from `deliver/1` back to the
-   originating connection.
-2. **No idempotency hook.** Webhook reserves an idempotency key under a `:global.trans` lock and
-   replays cached duplicate responses, before any normalization. The plugin lifecycle has no
-   pre-normalize step.
-3. **No per-request queue/execution mode.** Webhook sets `queue_mode` and sync-vs-async
-   per call. `InboundMessage` has no such field; `LemonRouter` derives queue behaviour from
-   conversation state by design (and 2.6 just hardened that).
-4. **No outbound-callback delivery.** Webhook POSTs results to a caller-supplied URL with
-   retry/backoff and private-host allowlisting. That is Lemon calling *out* to a third party —
-   a different responsibility from delivering into a channel.
-5. **No inbound HTTP hosting** (§3 above).
-6. **No session/streaming primitive.** Voice holds a live Twilio Media Streams socket with
-   Deepgram STT and sub-second turn-taking, deliberately bypassing the agent loop for latency.
-   `normalize_inbound → deliver` is one-payload-in/one-payload-out.
-7. **Single-ancestor threading.** `InboundMessage.message.reply_to_id` is one optional ID; email's
-   `References` header is a list needing union-find merge. Real work, but adapter-owned state,
-   not an API blocker — this one is solvable without touching `Plugin`.
-
-Gaps 1–4 exist *only* to serve non-channel use cases. Adding them to `Plugin` would enlarge the
-platform's most important extension point — the one third parties are meant to implement — for
-subsystems that are not channels and are off by default. That is the wrong trade.
-
-## 4. What deleting `Transport` + `TransportRegistry` breaks
-
-- **`LemonControlPlane.Methods.TransportsStatus`** is the only runtime consumer. It already
-  reaches the registry through a *dynamic atom* indirection (`transport_registry_module()` +
-  `Code.ensure_loaded?` + `function_exported?` + `apply`), degrading to
-  `"status" => "registry_stopped"` when absent. Two consequences: (a) deleting the registry does
-  not crash it, it just reports empty; (b) **this is the same anti-pattern 2.5 is removing** for
-  `LemonGateway.Config`/`EngineRegistry`. Recommendation: fold `transports.status` into 2.5's
-  `EngineInfoBridge` work rather than 2.4 — it is the same fix, and doing it twice is waste.
-- **Docs asserting the current design**: `apps/lemon_gateway/README.md:126,369`,
-  `apps/lemon_gateway/AGENTS.md:3,25`, `docs/architecture_boundaries.md:58`. All describe the
-  ingress set as "transitional legacy" implying eventual full retirement. If the recommendation
-  here is accepted, that language is simply **wrong** and should be corrected to "permanent
-  gateway-owned integration surface" regardless of whether any port happens.
-- **Config surface**: `:transports` (registry input) and `:legacy_ingress_enabled` (supervisor
-  gate). Neither is set anywhere; both are documented in the gateway README's config table.
-- **Doctor checks**: none reference `TransportRegistry`. `LemonCore.Doctor.ChannelDiagnostics`
-  hard-codes `@supported_transports [:telegram, :discord]` — see §6.
-- **Env vars** (post-1.9, now in `LemonGateway.Env`): 14 declarations, of which **10** are
-  `area: :gateway_sms` and **2** `area: :gateway_voice`. (The 5 farcaster vars under
-  `area: :gateway` went with the transport in D12.) SMS and voice stay in gateway, so **none of
-  the remaining 14 move**, and email/webhook configuration is TOML/`LemonGateway.Config`-driven
-  rather than env-var-driven. This is a much smaller migration than "move the env vars to
-  channels."
-
-## 5. The chat_state unblock — the Deferred item's premise is wrong
-
-Deferred item (`platform-split.md:200`) says the `chat_state`/`chat_state_store` → router move is
-*"blocked until gateway stops writing chat state (run.ex finalization + farcaster handler) — fold
-into Phase 2.4."*
-
-Verified writes in `lemon_gateway`:
-
-| Site | What it does | Transport-owned? |
-|---|---|---|
-| `run.ex:668` → `maybe_store_chat_state/2` → `store_chat_state/2` (`:958`) | On `:completed` with a `ResumeToken`, persists `%ChatState{}` | **No** |
-| `run.ex:617` → `maybe_clear_chat_state_on_context_overflow/2` (`:925`) | `ChatStateStore.delete/1` on context-overflow | **No** |
-
-(A third site, `transports/farcaster/cast_handler.ex:248`, deleted `ChatStateStore` entries when
-re-keying a frame session; it was the only transport-owned writer and died with the transport in
-D12.)
-
-The two `run.ex` sites are in `LemonGateway.Run`'s **finalization path**, which executes for
-*every* run regardless of ingress. They have nothing to do with transports. **2.4 will not remove
-them, and therefore does not unblock the chat_state move.**
-
-Recommendation: **decouple the chat_state item from 2.4.** The real question is who owns
-resume-token persistence at run finalization — gateway (writer today) or router (owner of
-conversation state, and already the only *reader*; the `:gateway_auto_resume_mutation`
-architecture rule forbids gateway reading chat state to mutate requests, so the split is already
-half-enforced). That is a focused ~2-site change worth its own task, and it is blocked on
-nothing. Doing it independently would let `chat_state` move to router without waiting on any
-transport work at all.
-
-## 6. Telegram surfaces (Deferred item, `platform-split.md:199`)
-
-`LemonCore.Doctor.ChannelDiagnostics` hard-codes `@supported_transports [:telegram, :discord]`
-(`channel_diagnostics.ex:8`, used at `:21`, `:23`, `:198`) to classify bindings as supported vs
-unsupported. Sibling surfaces: `config.ex`'s gateway-telegram block conversion,
-`channel_readiness`, and `inbound_message` naming.
-
-**Recommendation: make it a channel-registered capability, but not in 2.4.** The correct shape is
-that `ChannelDiagnostics` asks the channels registry which adapters are registered, instead of
-naming two of them in core — the same inversion as `EngineInfoBridge` (2.5) and the
-`MethodProvider` registry (2.2/D9). Since `Plugin.meta/0` already returns a `capabilities` map,
-the data exists; what is missing is a core-side bridge so `lemon_core` can ask without depending
-on `lemon_channels`.
-
-At the time this was blocked on **2.3**, which was proving the runtime
-self-registration path, and overlapped **2.5** (bridge pattern). It was moved
-out of 2.4 and attached to 2.5, where the identical bridge was already being built.
-
-## 7. What 2.4 should actually deliver
-
-> **Status 2026-08-10.** D2 amended in the plan of record; 2.4 rescoped to email-only.
-> **A1 resolved:** (b) accepted — webhook/SMS/voice are permanent gateway-owned ingress;
-> (a) answered — Farcaster is unused, so it was **deleted** (D12, C1 below).
-> **A2, A3 and B1 are done** (see the table). B2/B3 await the go-ahead.
-> C2/D1/D2' were re-assigned: chat_state became its own task, and transports.status,
-> capability delegation and the telegram surfaces went to 2.5.
-
-Given §1–§6, I recommend re-scoping 2.4 from "port five, delete a behaviour" to
-**"establish the boundary, then port the one that fits."**
-
-### Work items
-
-| # | Item | Size | Collides with 2.3? |
-|---|---|---|---|
-| **A1** ✅ | **Decision checkpoint (no code).** Confirm: (a) is Farcaster used by anyone? (b) accept SMS + webhook + voice as permanent gateway-owned ingress. Everything below depends on (b). | S | No |
-| **A2** ✅ | Correct the "transitional legacy ingress" language in `docs/architecture_boundaries.md:58`, `apps/lemon_gateway/README.md:126,369`, `apps/lemon_gateway/AGENTS.md:3,25` to describe the real end state. Amend **D2** in `platform-split.md` §4 and the 5.1k LOC figure in §3/E3. | S | No |
-| **A3** ✅ | Rename/re-scope `:legacy_ingress_enabled` — it gates surfaces that are staying by design, so "legacy" is misleading. Suggest `:gateway_ingress_enabled`. | S | No |
-| **B1** ✅ | **Characterization tests before any move**: `email/outbound.ex` (715 LOC, 0 tests). Also worth doing regardless of this migration: webhook's `Idempotency`/`SignatureValidation`/`Submission`, voice's `DeepgramClient`/`RecordingDownloader`/`RecordingManager`. | M | No |
-| **B2** | **Inbound HTTP hosting in `lemon_channels`**: add `plug` + `bandit` deps and a small `LemonChannels.InboundHttp` supervisor/router shell. Own PR — this is the "can channels host HTTP at all" risk, validated in isolation. | M | **YES** — `lemon_channels/mix.exs` + application supervision tree; 2.3 is editing adapter registration/config/capabilities. Sequence after 2.3 lands. |
-| **B3** | **Port email** to `LemonChannels.Adapters.Email` on top of B2: inbound, then outbound, then cutover. Add `email` to `TransportRegistry`'s `@channels_owned_transport_ids` (the mechanism Telegram/Discord/WhatsApp already used). Delete `gateway/transports/email/`. | L | **YES** — new adapter under `lemon_channels/adapters/`, plus adapter registration. Strictly after 2.3. |
-| **C1** ✅ | Farcaster: execute A1(a) — **deleted** 2026-08-10 (transport, tests, config keys, 5 env vars, docs). | S | No |
-| **E1** | **Capability delegation** (§7a): widen `Plugin.meta/0` to the typed vocabulary, resolve `Capabilities.Registry.lookup/1` through the registered adapter, delete the 5 hard-coded clauses, relocate the per-channel assertions. Unblocked now that 2.3 has landed. | M | No (2.3 complete) |
-| **C2** | Fold `transports.status`'s dynamic-atom registry peek into **2.5**'s bridge work rather than solving it here. | S | No (belongs to 2.5) |
-| **D1** | Move the chat_state item **out** of 2.4 into its own task (§5). | S | No |
-| **D2'** | Move the telegram-surfaces item **out** of 2.4 and attach to **2.5** (§6). | S | No |
-
-### Sequencing
-
-A1 → A2/A3 (docs, parallel, no collisions, can start immediately) → B1 (tests, no collisions) →
-B2 → B3. C1 is done and was independent of the rest. **2.3 has since landed**, so the former block on B2/B3 is clear. E1 (§7a) is
-independent of the port and can run in parallel with B1. C2/D1/D2' are re-assignments, not work.
-
-Everything before B2 is collision-free with 2.3 and can proceed the moment the decision
-checkpoint clears. B2 and B3 are the only items touching `lemon_channels` and must queue behind
-2.3.
-
-### What this does *not* deliver
-
-`LemonGateway.Transport` and `TransportRegistry` survive 2.4, holding email and webhook. After
-email ports, the registry has exactly one entry — at which point deleting
-the behaviour and inlining the remaining transport's supervision is a trivial follow-up worth
-doing for its own sake. That is the honest path to "one transport concept": shrink it to nothing
-by attrition, then remove it, rather than forcing four bad ports to justify a deletion.
-
-## 7a. Capability delegation — `LemonChannels.Capabilities` (addendum from 2.3 close-out)
-
-### What existed at the time: three sources, two vocabularies
-
-| Source | Shape | Owner | Used by |
-|---|---|---|---|
-| `Plugin.meta/0`'s `capabilities` map | snake_case flags + numbers: `edit_support`, `delete_support`, `thread_support`, `reaction_support`, `voice_support`, `image_support`, `file_support`, `chunk_limit`, `rate_limit` | each adapter | `Registry.get_capabilities/1` |
-| `Capabilities.from_legacy/1` (`capabilities.ex:636`) | converts the above into the typed form | lemon_channels | `Registry.get_capabilities_new/1` → `supports?/3`, `supports_feature?/3`, `validate/3` |
-| `Capabilities.Registry.lookup/1` (`capabilities.ex:282-346`) | **static, string-keyed table** hard-coding adapter ids; richer typed vocabulary: `:threads`, `:reactions`, `{:attachments, max_size:, features:}`, `{:rich_blocks, features:}`, `{:chunk_limit, value:}`, `{:rate_limit, value:}` | lemon_channels | `capability_query.ex:102`, `capabilities_test.exs` |
-
-So capability data lives in **two independent places** with **two different vocabularies**, and
-there is no mechanism keeping them in sync. `Registry.supports?/validate` read the *registered
-adapter's* meta (via `from_legacy`); `Registry.lookup/1` reads the *static table*. Nothing
-reconciles them.
-
-The vocabularies were not equivalent, so this was not a pure duplication: `from_legacy`
-can express neither `max_size` for attachments (it only ever sets `features: [:images]`) nor
-`rich_blocks` features nor `rate_limit`. The static table is strictly richer. Any delegation
-must therefore *widen the meta contract*, not just redirect lookups — otherwise telegram/discord
-silently lose `max_size`, `rich_blocks` features, and `rate_limit`.
-
-### Outcome (2026-08-10): deleted, not delegated
-
-Verifying the caller list before implementing changed the answer. `CapabilityQuery` aliases
-`LemonChannels.Registry` — the *plugin* registry — not `Capabilities.Registry`, so it already
-resolved through registered-adapter meta and already returned nil/false for unknown channels.
-`Capabilities.Registry.lookup/1` had **zero production callers**; only its own test file
-referenced it. The unconfigured-channel contract question was therefore moot: no caller could
-observe either answer.
-
-So `lookup/1` was deleted outright rather than repointed, `get_set/1` kept,
-and the `Plugin.meta/0` widening was **deferred** — see the Deferred section of
-`platform-split.md`, which records the richer vocabulary the table carried so it isn't lost with
-the code. Growing the platform's most third-party-facing extension point for data nobody reads
-was the wrong trade.
-
-The original delegation design is kept below for the day a real consumer appears.
-
-### Recommended end state (superseded — retained for when a consumer needs the richer vocabulary)
-
-Capability lookup delegates to the registered adapter; the static table is deleted.
-
-1. **Widen `Plugin.meta/0`'s `capabilities` to the typed vocabulary** — accept the
-   `Capability.spec()` list form (`[:threads, {:attachments, max_size: …}, {:chunk_limit, value: …}]`)
-   that `Capabilities.new/1` already consumes. Keep `from_legacy/1` accepting the current flag map
-   for one release so no adapter breaks on the day the contract widens.
-2. **Make `Capabilities.Registry.lookup/1` resolve through the channels registry**: look up the
-   registered plugin module for the id, call its `meta/0`, and build capabilities from that.
-   Fall back to `Capabilities.empty()` for unknown ids exactly as today (`capabilities.ex:345`).
-3. **Delete the hard-coded clauses.** Each adapter's own `meta/0` becomes the single source
-   of truth and external integrations self-describe.
-4. **Move the assertions.** `capabilities_test.exs`'s per-channel tests currently pin platform-side
-   constants; they should either move next to each adapter (asserting *that adapter's* meta) or
-   assert the delegation mechanism against a test double, not real channel constants.
-
-### Why this belongs to 2.4 rather than 2.5
-
-It is capability data flowing *from adapters into the platform*, which is the same direction as
-the port itself, and it is a precondition for a ported email adapter to declare its own
-attachment limits rather than having lemon_channels hard-code them. 2.5's `EngineInfoBridge` is
-about the platform reading *gateway* state across an app boundary — related in spirit, different
-data and different direction.
-
-Sizing: step 1 **S**, step 2 **S**, steps 3–4 **M** (the test churn is the bulk). No collision
-with 2.2.
-
-**Caveat worth deciding explicitly:** delegation makes capability lookup depend on a plugin being
-*registered at runtime*. Today `lookup("telegram")` answers correctly even if Telegram was never
-started. If any caller relies on that — asking about a channel that isn't configured — delegation
-changes behaviour from "static answer" to "empty". `capability_query.ex:102` is the one
-non-test caller to check before implementing.
-
-## 7b. B3 handoff — outbound + cutover (for the next worker)
-
-**What landed (B3 inbound-only, 2026-08-10).** `LemonChannels.Adapters.Email` implements
-`Plugin`'s six callbacks and normalizes provider webhook payloads into
-`LemonCore.InboundMessage`, with `LemonChannels.Adapters.Email.Webhook` receiving on
-`LemonChannels.InboundHttp` at `POST /email` (token-authenticated, 401 when no token is
-configured — an open inbound mail endpoint is a spam relay into someone's agent). 17 tests.
-
-**Nothing has cut over.** `LemonGateway.Transports.Email` is still registered and untouched, the
-channels adapter is *not* in `config :lemon_channels, adapters:`, and `InboundHttp` is disabled
-by default. Three independent gates, so this is inert in every existing runtime.
-
-**Status 2026-08-10: complete. All four items landed; email is a channel and the gateway
-transport is deleted.**
-
-1. **Outbound — done.** `LemonChannels.Adapters.Email.Outbound` sends over SMTP.
-   `smtp_options/1` moved across unchanged and its 22 characterization tests were carried over
-   verbatim into `apps/lemon_channels/test/lemon_channels/adapters/email/outbound_test.exs`; all
-   pass, so the configuration semantics are provably identical. Two behaviours did *not* survive,
-   both because they described the old entrypoint rather than email:
-   - the `job.meta` guard that made `deliver/2` a silent no-op for non-email runs — `deliver/1`
-     is only ever called for its own channel, so an unsendable payload is now an `{:error, _}`
-     rather than a swallowed `:ok`;
-   - the "Attachment references" block appended to the body from the run's output files — in this
-     pipeline a file is its own `:file` payload with the file attached, so there is nothing to
-     reference.
-
-   The gateway version read its reply headers from `job.meta.email_reply`, which
-   `OutboundPayload` has no equivalent of. That is what forced the decision below.
-
-2. **Thread-state persistence — decided: port the tables.** `LemonChannels.Adapters.Email.ThreadStore`
-   keeps `:email_message_threads` and `:email_thread_state` in `LemonCore.Store`, table names and
-   shapes unchanged so existing threads survive the cutover. Two reasons, either sufficient:
-
-   - **Outbound has nowhere else to get its headers.** `OutboundPayload` carries the recipient, a
-     thread id and a `reply_to`, but no `Subject` and no `References` chain — and should not,
-     since neither means anything to a channel that is not email. Without stored state a reply
-     invents a subject and sends an empty `References`, which is the difference between landing
-     inside the recipient's conversation and starting a new one. This alone settles it; the
-     stateless option was only ever viable for an inbound-only adapter.
-   - **The middle-message gap is real and cheap to close.** Recording `message id → thread id` as
-     messages arrive means any later message naming *any* known ancestor joins the existing
-     thread. `apps/lemon_channels/test/lemon_channels/adapters/email/thread_store_test.exs` has
-     the case as an executable test.
-
-   `thread_id/1` stays pure and stateless as the seed; `ThreadStore.resolve/2` layers the lookup
-   in front of it. So the store is an optimisation over a correct-by-default computation, not a
-   dependency: with no store running, reads answer `nil`, writes answer `{:error,
-   :store_unavailable}`, neither raises, and the adapter behaves exactly as it did before.
-
-3. **Attachments — done.** `LemonChannels.Adapters.Email.Attachments` prepares metadata on the
-   request path and defers the writes, same shape as the gateway's: deterministic paths, 10 MB
-   cap, sanitized filenames, 0600 on Unix, multipart `Plug.Upload` copied off Plug's temp file,
-   URL-only attachments passed through undownloaded. One addition the port needed: the channels
-   prompt is `message.text` and nothing else (`RunRequestBuilder`), so the attachment lines are
-   appended to the text — the gateway put them in a prompt it built itself.
-
-4. **Cutover — done.** `email` joined `discord` in `TransportRegistry`'s
-   `@channels_owned_transport_ids`, its `enable_email` gate and dual-gate warning are gone, the
-   adapter is in `config :lemon_channels, :adapters`, and
-   `apps/lemon_gateway/lib/lemon_gateway/transports/email{,.ex}` plus its tests are deleted.
-   `gen_smtp` and `mail` are no longer gateway dependencies — the email transport was their only
-   consumer there, verified by grep before removal.
-
-   **Inbound stays off by default**, deliberately. The gateway transport being replaced was
-   itself dead-by-default behind `:gateway_ingress_enabled`, so preserving that posture is what
-   makes this a move rather than a feature launch: the adapter registers (its `start_link/0`
-   returns `:ignore`, so it occupies no process), outbound is fully live once a relay is
-   configured, and *receiving* mail waits on a host explicitly enabling
-   `LemonChannels.InboundHttp` and setting a webhook token. Verified at boot: email is in the
-   registry, `InboundHttp.enabled?/0` is false, no Bandit child is running, and `deliver/1`
-   answers `{:error, :missing_smtp_relay}` rather than pretending. The enablement recipe is in
-   `LemonChannels.Adapters.Email`'s moduledoc.
-
-   One gateway test lost its subject: `LemonGateway.ConfigLoaderTest` asserted that the TOML
-   `email` block fed `smtp_options/1` correctly. Gateway must not reach across to
-   `lemon_channels` (see §8's risk about exactly that edge), so the loader test now asserts only
-   what the loader produces, and the consumer assertions moved to the channels outbound test with
-   the same fixture.
-
-**Config continuity.** `LemonChannels.Adapters.Email.Config` reads
-`config :lemon_channels, LemonChannels.Adapters.Email` *and* the canonical TOML `[gateway]`
-config's `email` block, application env winning. A deployment configured while email lived in the
-gateway therefore keeps its relay, sender and webhook token across the cutover without editing
-anything.
-
-**Hardening that came with the port.** Four things, three of which outlived the email adapter:
-
-- **`normalize_inbound/1` raised on hostile input**, violating the one `Plugin` rule the platform
-  cannot enforce. `subject[]=a&subject[]=b` through `Plug.Parsers`' urlencoded parser puts a
-  *list* in a string field; the adapter reached for `String.replace/4` and crashed, on four
-  fields. Non-binaries are now treated as absent — picking an element or stringifying would
-  invent a message the sender did not send. `LemonPlatformTest.PluginCase`'s hostile-input list
-  grew four entries of this class so every adapter is probed, which immediately caught the same
-  bug in Telegram (`message["text"]` as a list travelled all the way into `InboundMessage.text`).
-- **Authentication now runs before parsing.** `LemonChannels.InboundHttp.Handler` gained an
-  optional `authorized?/1` that the router calls between `:match` and `Plug.Parsers`, so an
-  unauthenticated caller can no longer make the listener decode a body before its 401. Handlers
-  that verify a signature over the body omit it and are unaffected.
-- **The body limit is configurable and coherent with attachments.**
-  `InboundHttp.max_body_bytes/0` (2 MB default, read per request rather than frozen into the plug
-  pipeline at compile time), and the email attachment cap now *derives* from it — three quarters,
-  since attachments arrive base64-encoded and inflate by about a third. A cap larger than the
-  body limit was unreachable, and the two can no longer be configured into contradiction.
-- **An unreachable router produces a truthful ambiguous receipt.** A mutation exception or exit
-  may occur after the router accepted the run, so `RouterBridge` classifies it as
-  `{:error, :outcome_unknown}` rather than definite unavailability. The email webhook durably
-  retains the fixed Message-ID/run reservation and answers 200 `outcome unknown`, preventing a
-  provider retry from duplicating work. Failures before a durable idempotency reservation exists
-  still return 503 and ask the provider to redeliver. Email replay content hashes upload bytes
-  rather than provider-generated temporary paths, and exact webhook response receipts are removed
-  with their completed primary reservations after the fixed 24-hour replay horizon. Caller webhook
-  idempotency keys are domain-separated and hashed before they enter any durable key, receipt, or
-  run metadata; cleanup commits atomically on SQLite and preserves the primary execution fence on
-  any ordered-backend failure. Upgrade migration creates the hashed fence and exact response before
-  conditionally removing legacy raw-key records, accepts only non-empty binary keys, and treats
-  incomplete cleanup scans as unavailable without advancing their schedule.
-
-**Contract kit.** `apps/lemon_platform_test/test/compliance/email_plugin_test.exs` relied on
-`deliver/1` being inert. Its probe is now a `:reaction` payload — a kind email has no concept of,
-refused before any configuration is read — so the probe stays side-effect-free regardless of what
-relay the host running the suite has configured.
-
-**Do not** take this as licence to port webhook/SMS/voice — §1 and the amended D2 still hold.
-
-## 8. Risks
-
-| Risk | Mitigation |
-|---|---|
-| Email's 715-LOC untested `outbound.ex` regresses during the port | B1 first, no exceptions — characterize before moving |
-| `lemon_channels` gaining `plug`/`bandit` bloats a to-be-published package | They are genuine runtime deps of an inbound adapter; if that is unacceptable, mark them optional and have the email adapter degrade like `exqlite` does in lemon_core (precedent: task #13 — and declare them properly in `extra_applications`, per the Mix code-path-pruning trap that bit `LemonCore.Httpc`) |
-| Someone "finishes" 2.4 by force-porting webhook/voice to hit the D2 wording | A2 amends D2 in writing before any code moves |
-| gateway ⇄ channels direct dependency gets added as a shortcut during B3 | Extend the architecture check to fail on that edge (it does not exist today) — cheap, and this migration is exactly the scenario that would tempt it |
 
 ---
 
@@ -12100,198 +11348,156 @@ origin and deep links. Keep every homepage link base-aware with VitePress
 
 Source: https://z80dev.github.io/lemon/release/hex-packages
 
-# Publishing the hex packages
+# Publishing the Hex packages
 
 The umbrella ships two different things on two different clocks:
 
 | | Artifact | Version scheme | Tag | Tooling |
 |---|---|---|---|---|
 | **Product** | Release tarballs of the whole umbrella | CalVer `YYYY.MM.PATCH` | `v2026.08.0` | `scripts/bump_version.sh` → `.github/workflows/release.yml` |
-| **Platform** | Individual apps on hex.pm | semver, per package | `lemon_ai-v0.1.0` | `scripts/release_package` / `scripts/publish_train` → `.github/workflows/publish.yml` |
+| **Packages** | Five apps on hex.pm | semver, per package | `lemon_ai-v0.2.0` | `scripts/release_package` → `.github/workflows/publish.yml` |
 
-This page covers the second. Each published package starts at `0.1.0` and moves
-independently (decision D10 in `docs/platform-split.md`); `1.0.0` waits until
-the Phase 5 extraction has proven the APIs.
+This page covers the second. Status and the decisions behind it are in
+[`docs/platform-split.md`](../platform-split.md).
 
 ## The packages
 
-`hex_package.exs` is the source of truth for which apps publish and under what
-name. Since the 2026-08-10 rename (`ai`→`lemon_ai`, `agent_core`→`lemon_agent`)
-every app name matches its hex name:
+Exactly five apps publish, in this dependency order (`scripts/verify_packages
+--list` is the source of truth):
 
 ```
-scripts/release_package --list
+lemon_ai → lemon_core → lemon_agent → lemon_memory → lemon_platform_test
 ```
 
-```
-  APP                    HEX NAME               VERSION
-  lemon_ai               lemon_ai               0.1.0
-  lemon_core             lemon_core             0.1.0
-  lemon_media            lemon_media            0.1.0
-  lemon_agent            lemon_agent            0.1.0
-  lemon_memory           lemon_memory           0.1.0
-  lemon_channels         lemon_channels         0.1.0
-  lemon_router           lemon_router           0.1.0
-  lemon_gateway          lemon_gateway          0.1.0
-  lemon_platform_test    lemon_platform_test    0.1.0
-  lemon_browser          lemon_browser          0.1.0
-  lemon_skills           lemon_skills           0.1.0
-```
+| Package | In-repo version | Sibling deps |
+|---|---|---|
+| `lemon_ai` | 0.2.0 | none |
+| `lemon_core` | 0.2.0 | none |
+| `lemon_agent` | 0.2.0 | `lemon_ai`, `lemon_core` |
+| `lemon_memory` | 0.2.0 | `lemon_core` |
+| `lemon_platform_test` | 0.2.0 | `lemon_core`, `lemon_memory`, `lemon_ai`, `lemon_agent` (all optional) |
 
-`lemon_media` is a package because `lemon_channels` and `lemon_router` depend on
-it (decision D13). It was not in the original list of eight, and leaving it out
-would have blocked both of them — see the second failure mode below.
-`lemon_cli_runners` joined with D15 (vendor CLI wrappers extracted from
-`lemon_agent`) and was removed again on 2026-08-21 (D16 in
-`docs/platform-split.md`), when vendor CLI task runners were deleted in favor of
-native-only in-process subagents; its `0.1.0` on hex.pm is abandoned in place.
-`lemon_browser` and `lemon_skills` joined as packages 11 and 12 when D14 was
-approved (2026-08-13): both are shared platform infrastructure that the
-coding-agent product group depends on, and unpublished they blocked its
-extraction. `lemon_skills` went through an API-stabilization pass first
-(externally-consumed modules documented, internals `@moduledoc false`).
+Every other app is in-repo only. `lemon_platform_test`'s `PluginCase` targets
+`lemon_channels`, which is not published, so outside this repository it needs a
+path dependency on a checkout.
 
+`0.2.0` is the first installable release line. The `0.1.0` releases published on
+2026-08-11 cannot be installed (below); sibling requirements are `~> 0.2` so no
+resolver ever picks them.
 
-Tags use the **app** name (`lemon_agent-v0.2.0`): the tag has to name a
-directory the workflow can `cd` into.
+## Retiring the 0.1.0 releases (owner action, not yet done)
 
-> **0.1.0 provenance:** every package's first release was published to hex.pm
-> on 2026-08-11 *without* going through the tag flow — a first publish needs no
-> version bump, so a bare `mix hex.publish` leaves no release commit and no
-> tag. There are no `*-v0.1.0` tags; the exact build commit is unrecorded.
-> From `0.1.1` on, use the tooling below so every release is tagged.
-
-## Publish order
-
-Hex has no notion of "released together". A package's dependencies must already
-exist on hex.pm at the moment it is published, so the first publish walks the
-dependency graph bottom-up:
-
-```
-lemon_ai → lemon_core → lemon_media → lemon_agent → lemon_memory → lemon_channels → lemon_router → lemon_gateway → lemon_platform_test → lemon_browser → lemon_skills
-```
-
-`lemon_channels` precedes `lemon_router` because the router depends on it.
-
-`scripts/release_package` enforces this. Before publishing it reads the target's
-`in_umbrella` runtime deps and checks each one against hex.pm, refusing the
-release when a dep is unpublished. `--force` overrides, which is only correct
-when you are publishing that dep in the same session and know it lands first.
-
-Two failure modes are worth recognising:
-
-- **"dep X is not published on hex.pm"** — ordering. Publish X first.
-- **"dep X is not in hex_package.exs @packages"** — X is not a package at all.
-  This is not an ordering problem and `--force` will not save you: `mix
-  hex.build` *drops* path dependencies rather than erroring, so forcing past it
-  ships a tarball that claims the package has no such dependency and fails to
-  compile for anyone outside this repo. Publish X too, make the dependency
-  optional, or invert it. This is exactly what happened to `lemon_media`, and
-  why D13 promoted it to a package rather than forcing past it.
-
-## Releasing the whole train
-
-`scripts/publish_train` drives `release_package` across every package in
-dependency order — for lockstep version bumps (D10: the packages "move
-together for now"):
+Every `0.1.0` tarball shipped a `mix.exs` whose first line was
+`Code.require_file("../../hex_package.exs", __DIR__)`, a file that is not in the
+tarball, so `mix compile` fails with `Code.LoadError` for any consumer. Ten
+packages were published that way; `lemon_skills` and `lemon_browser` never were.
+Retiring keeps the releases resolvable for anyone who locked them but warns on
+every `mix deps.get`. Run as a package owner:
 
 ```bash
-# Preflight: dry-run every package in order. Changes nothing, exits non-zero
-# if any package would fail a real release.
-scripts/publish_train 0.2.0
+# The five that continue from 0.2.0.
+for pkg in lemon_ai lemon_core lemon_agent lemon_memory lemon_platform_test; do
+  mix hex.retire "$pkg" 0.1.0 invalid \
+    --message "uninstallable: mix.exs requires a file missing from the package; use ~> 0.2"
+done
 
-# Release + publish the train.
-HEX_API_KEY=... scripts/publish_train 0.2.0 --publish [--push]
+# The five that are no longer published at all.
+for pkg in lemon_media lemon_router lemon_gateway lemon_channels; do
+  mix hex.retire "$pkg" 0.1.0 invalid \
+    --message "uninstallable, and no longer published; the app lives in github.com/z80dev/lemon"
+done
+mix hex.retire lemon_cli_runners 0.1.0 invalid \
+  --message "uninstallable, and removed: subagents are native-only"
 ```
 
-Properties worth knowing:
+Check with `curl -s https://hex.pm/api/packages/<pkg> | jq .retirements`.
 
-- **Sequential by design.** `--publish` requires a local `HEX_API_KEY` because
-  pushing all tags and letting CI publish cannot work for a full train: the
-  tag-triggered workflows run concurrently and the publish-order gate fails
-  every package whose deps have not landed yet. CI publishing is for single
-  releases.
-- **Idempotent resume.** A package already on hex.pm at the target version is
-  skipped; a package tagged locally but missing from hex.pm (a run that died
-  between tag and publish) is finished with a bare `mix hex.publish`. Re-run
-  the same command after a failure and the train continues where it stopped.
-- **Quality runs once** for the whole train, not per package
-  (`--skip-quality` skips it).
-- Preflight passes `--force` to the per-package dry runs: before the train has
-  run, in-train deps are necessarily absent from hex.pm. The real run keeps
-  the order gate armed — by publish time each dep must actually be there.
+## How a package's mix.exs stays self-contained
+
+The tarball ships `apps/<pkg>/mix.exs` verbatim, so it may not read anything
+outside its own directory. Each of the five decides at load time which form it
+is in:
+
+- **Umbrella** — it sits at `apps/<pkg>/mix.exs` under the umbrella's `mix.exs`:
+  it shares the umbrella's `_build`, `deps`, `mix.lock` and config, and sibling
+  packages are `in_umbrella: true`.
+- **Package** — anywhere else (`deps/<pkg>/` in a consumer, an unpacked
+  tarball): no umbrella paths, and a private `lemon_deps/1` rewrites each
+  `in_umbrella` sibling into a `~> 0.2` Hex requirement, keeping `optional: true`.
+
+`LEMON_HEX_PUBLISH=1` forces the package form inside the repo. `mix hex.build`
+needs it: run without it, the deps are still `in_umbrella` and hex refuses to
+build ("Dependencies excluded from the package"). `scripts/verify_packages` and
+`scripts/release_package` set it for you.
+
+`lemon_core`'s package `exclude_patterns` leave this repository's tooling out of
+the tarball: `LemonCore.Quality.*`, `LemonCore.Update.*`, and the `lemon.quality`,
+`lemon.architecture.docs`, `lemon.check_duplicate_tests`, `lemon.update`,
+`lemon.bench` and `lemon.help` tasks.
+
+## Proving the tarballs work
+
+```bash
+scripts/verify_packages [--keep] [--no-generator]
+```
+
+It builds each package with `mix hex.build --unpack`, compiles a scratch
+consumer project that depends on nothing but the unpacked directories, boots
+`:lemon_agent`, checks the repo-only modules are absent, then runs
+`mix lemon.new --packages-path` for the base and `--memory` shapes against the
+same tarballs and runs their tests. It needs Hex and network access to hex.pm.
+`.github/workflows/packaging.yml` runs it on pull requests that touch the
+packages and nightly, plus an advisory Elixir 1.15 leg for the declared floor.
 
 ## Releasing a package
 
 ```bash
-# 1. See what would happen. Changes nothing.
+# 1. Every check, no changes. Includes scripts/verify_packages.
 scripts/release_package lemon_core 0.2.0 --dry-run
 
-# 2. Do it: bumps mix.exs, rolls the changelog, commits, tags.
+# 2. Release: sets @version, rolls the changelog, commits, tags lemon_core-v0.2.0.
 scripts/release_package lemon_core 0.2.0
 
-# 3. Push the tag. CI publishes.
+# 3. Push. publish.yml verifies the tag and publishes it.
 git push origin main && git push origin lemon_core-v0.2.0
 ```
 
-The script refuses to run unless the working tree is clean, the version is
-greater than the current one, the tag is free, `apps/<pkg>/CHANGELOG.md` has an
-`## [Unreleased]` section with entries, `mix hex.build` succeeds, the publish
-order holds, and `mix lemon.quality` is green.
+The script refuses unless the package is one of the five, the version is not
+behind `@version` in `mix.exs`, the tag is free, the tree is clean,
+`apps/<pkg>/CHANGELOG.md` has entries under `## [Unreleased]`, every sibling it
+depends on is on hex.pm at its in-repo version, and `scripts/verify_packages`
+passes. It publishes from the unpacked tarball, so the release (docs included)
+is exactly what was verified.
 
-On release it moves the `[Unreleased]` entries under `## [<version>] - <date>`,
-leaves a fresh empty `[Unreleased]`, commits both files, and creates an
-annotated tag. If `HEX_API_KEY` is set locally it publishes directly; otherwise
-it stops and prints the command to run later — pushing the tag is the normal
-path, since CI publishes from it.
+Hex has no multi-package release. Release in dependency order and let each
+publish land before the next; a package whose siblings are not on hex.pm yet is
+refused. A lockstep release of all five is the same command five times:
 
-### Options
+```bash
+for pkg in $(scripts/verify_packages --list); do
+  HEX_API_KEY=... scripts/release_package "$pkg" 0.2.0 --yes
+done
+```
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Run every check, change nothing. Reports and exits 0. |
-| `--strict` | With `--dry-run`, exit non-zero if any check would fail. |
-| `--verify` | Verify an already-tagged release. What CI runs. |
-| `--skip-quality` | Skip `mix lemon.quality` (CI runs it as its own step). |
-| `--force` | Bypass the publish-order gate. Read the warning above first. |
-| `--yes` | Skip the interactive confirmation. |
+| `--dry-run` | Run every check, change nothing. |
+| `--verify` | Check an already-tagged release (what CI runs on the tag). |
+| `--publish-tagged` | Publish an already-tagged release from its tarball (CI's publish job). |
+| `--yes` | Skip the confirmation. |
 
 ## What CI does
 
 `.github/workflows/publish.yml` fires on `*-v*` tags (and on manual dispatch,
 which defaults to verify-only). It splits the tag into package and version, runs
-`scripts/release_package --verify` — mix.exs matches the tag, the changelog has
-that version's section, hex metadata builds, publish order holds — then runs the
-quality lane, then publishes package and docs to hex.pm.
+`scripts/release_package --verify`, then `--publish-tagged`. Without the
+`HEX_API_KEY` secret the publish step exits with a notice instead of failing.
 
-**Without the `HEX_API_KEY` secret the publish step no-ops with a notice rather
-than failing.** Everything up to the actual upload still runs, so the pipeline
-is exercisable before the key exists.
+## Changelogs
 
-## LEMON_HEX_PUBLISH
-
-Sibling packages depend on each other with `in_umbrella: true`, which hex
-cannot express. `hex_package.exs` rewrites those into real hex requirements, but
-only when `LEMON_HEX_PUBLISH=1` — so the umbrella's own compile, test and
-`mix deps.get` never see the hex form.
-
-Every hex command must therefore set it:
-
-```bash
-cd apps/lemon_core && LEMON_HEX_PUBLISH=1 mix hex.build
-```
-
-`scripts/release_package` and the workflow both set it for you. Running
-`mix hex.build` without it produces a tarball whose dependencies have silently
-vanished.
-
-## Changelog discipline
-
-Every published package has an `apps/<pkg>/CHANGELOG.md` in Keep a Changelog
-format. A change to a published package's `lib/` should land with its changelog
-entry in the same PR.
-
-Reviewers check this; there is no CI job for it.
+Each of the five keeps `apps/<pkg>/CHANGELOG.md` in Keep a Changelog format;
+`release_package` rolls `[Unreleased]` into the released version. Apps that are
+not published have no package changelog; the root `CHANGELOG.md` covers them.
 
 ---
 
@@ -13286,7 +12492,7 @@ Additional nuance:
 - The keychain provider is macOS-only and skips itself on other platforms, so a Linux host with no key configured reports `:missing_master_key` rather than a keychain failure.
 - If keychain returns malformed key material, env fallback is attempted first; only then returns `:invalid_master_key`.
 - Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value.
-- Key rotation (re-encryption under a new master key) is not implemented — see the "Key rotation" section of the `LemonCore.Secrets` moduledoc and item 1.5 in `docs/platform-split.md`.
+- Key rotation (re-encryption under a new master key) is not implemented — see the "Key rotation" section of the `LemonCore.Secrets` moduledoc and "Known gaps" in `docs/platform-split.md`.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
 - The local source launcher `bin/lemon` also normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
 
@@ -13574,7 +12780,7 @@ resolution and error semantics are in
 store but does not hold the master key. **What is not:**
 
 - **No key rotation.** Re-encrypting existing secrets under a new master key is
-  not implemented. This is a *known, documented gap* (item 1.5 in
+  not implemented. This is a *known, documented gap* ("Known gaps" in
   `docs/platform-split.md`, and the `LemonCore.Secrets` moduledoc), not an
   oversight — if the master key is exposed, rotation today means re-entering
   secrets, not an in-place re-wrap.
@@ -13595,15 +12801,16 @@ tarball and published to a public registry. This nearly happened.
 The guard is `exclude_patterns` in each publishable package's `mix.exs`:
 
 ```elixir
-# apps/lemon_channels/mix.exs
-files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE),
+# apps/lemon_ai/mix.exs
+files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
 exclude_patterns: [~r/\.env/, ~r/node_modules/],
 ```
 
 **Reviewer checklist for any new published package:** the `files` list should be
 an allowlist (not `.`), and if it includes `priv`, `exclude_patterns` must
-exclude `\.env` and any local-only build artifacts. `mix hex.build` and the
-tarball-audit lane verify the shipped file set. Never assume `.gitignore`
+exclude `\.env` and any local-only build artifacts. `scripts/verify_packages`
+(`mix hex.build --unpack`, then a consumer build from the unpacked tree) shows the
+shipped file set. Never assume `.gitignore`
 protects a published tarball — it does not.
 
 ## 3. Inbound webhooks — the internet-facing surface
@@ -13740,7 +12947,7 @@ compile-time edge.
 
 ## Known gaps (tracked)
 
-- **Secret key rotation** is not implemented (`docs/platform-split.md` item 1.5).
+- **Secret key rotation** is not implemented (`docs/platform-split.md`, "Known gaps").
 - **Prompt injection** via untrusted content is mitigated, not solved (§5).
 - **Local host compromise** is out of the threat model — anything that can read
   the master key source can decrypt secrets (§1).
@@ -15715,7 +14922,7 @@ event you are attaching to:
 |---|---|
 | `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
-| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]`, `[:coding_agent, :python_repl, ...]` |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
 
 `LemonCore.Telemetry`'s moduledoc records the intended convention for **new** emitters:
@@ -15808,7 +15015,6 @@ for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness sig
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :heartbeat, :skipped]` | `count: 1` | `agent_id`, `reason: :overlap` | `LemonAutomation.HeartbeatManager`, when a timer tick arrives while the prior timer heartbeat for that agent is still in flight |
 
 ### Channels — `[:lemon, :channels, ...]`
 
@@ -15876,8 +15082,6 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
 | `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
 | `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
-| `[:lemon_ai, :compacting_client, <event>]` | varies by call site | varies | [`compacting_client.ex:233`](../apps/lemon_ai/lib/lemon_ai/compacting_client.ex). Runtime suffix: `:request_started`, `:request_succeeded`, `:request_failed`, `:compaction_retry` |
-| `[:lemon_ai, :context_compactor, <event>]` | `system_time` | varies | [`context_compactor.ex:370`](../apps/lemon_ai/lib/lemon_ai/context_compactor.ex). Runtime suffix: `:compaction_started`, `:compaction_succeeded`, `:compaction_failed` |
 | `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
 ### Memory — `[:lemon, :memory, ...]`
@@ -15929,42 +15133,6 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon, :wasm, :invoke, :stop]` | `duration_ms`, `ok` | `host: :wasm`, `session_hash`, `cwd_hash`, `tool_hash` | [`wasm/sidecar_session.ex:408`](../apps/coding_agent/lib/coding_agent/wasm/sidecar_session.ex) |
 
 Session and cwd identifiers in the WASM events are hashed, not raw.
-
-### Execute code and persistent Python kernels — `[:coding_agent, :execute_code | :python_repl, ...]`
-
-The `execute_code` per-call path emits one event from
-[`execute_code.ex`](../apps/coding_agent/lib/coding_agent/tools/execute_code.ex)
-(`LemonCore.Telemetry.emit/3`):
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:coding_agent, :execute_code, :stop]` | `count: 1`, `duration_us` | `rpc_calls`, `rpc_denied`, `exit_code` (integer or `nil`) |
-
-The persistent-kernel subsystem (`kernel_mode = "session"`; see
-[`docs/tools/execute-code.md`](tools/execute-code.md)) emits the
-`[:coding_agent, :python_repl, ...]` families below. Measurements carry only bounded
-counts, capacities, and durations; metadata is a strict allowlist of categorical atoms.
-These events **never** include code, output, traceback text, bridge tokens, bridge or
-workspace paths, cwd, interpreter paths, PIDs, key digests, or raw errors.
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:coding_agent, :python_repl, :session, :start]` | `count: 1`, `live_kernels`, `capacity` | `%{}` |
-| `[:coding_agent, :python_repl, :session, :stop]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :session, :crash]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :session, :reap]` | `count: 1`, `idle_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :cell, :start]` | `count: 1`, `queue_depth`, `queue_capacity` | `%{}` |
-| `[:coding_agent, :python_repl, :cell, :stop]` | `count: 1`, `duration_ms` | `outcome` |
-| `[:coding_agent, :python_repl, :cell, :cancel]` | `count: 1`, `duration_ms` | `cause` |
-| `[:coding_agent, :python_repl, :fallback]` | `count: 1` | `reason` (`:missing_session_scope` \| `:registry_unavailable` \| `:capacity_exhausted` \| `:startup_failed` \| `:stop_failed`) |
-| `[:coding_agent, :python_repl, :bridge, :deny]` | `count: 1` | `reason: :authentication` |
-
-Each of these is also recorded best-effort through `LemonCore.Introspection` as a redacted
-`:python_repl_lifecycle_observed` summary containing only the event atom plus the same
-bounded measurements and categorical metadata — no run/session/key identity or payload.
-`CodingAgent.PythonRepl.snapshot/0` exposes only aggregate state (live/capacity counts,
-per-phase counts, owner and fork counts, reap settings). There is no control-plane API
-for kernel management.
 
 ### Session recovery — `[:coding_agent, :session, :overflow_recovery, ...]`
 
@@ -16178,11 +15346,10 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Five families build their final segment at runtime**, so they cannot be discovered by
+**Three families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
-advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
-`[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
-`[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
+advance: `[:lemon, :gateway, :scheduler, _]`, `[:coding_agent, :session, :overflow_recovery, _]`,
+and `[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:lemon_agent, :loop, :end]`
 reports `duration: nil` when the process-dictionary start time is missing. The scheduler
@@ -16361,6 +15528,8 @@ dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
 | `release.yml` | tag / dispatch | Runs `scripts/test fast`, `quality`, `eval-fast`, and `clients` before building artifacts |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |
+| `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project and generated projects built from the unpacked Hex tarballs; advisory Elixir 1.15 leg) and `scripts/verify_generator` (both generator shapes against the checkout) |
+| `publish.yml` | `<package>-v<version>` tag / dispatch | `scripts/release_package --verify`, then `--publish-tagged` when `HEX_API_KEY` is set |
 
 ## Hermetic test environment
 
@@ -16699,405 +15868,6 @@ Stable ACP support still needs:
 - raw media/artifact support before advertising image, audio, or embedded
   resource prompt capabilities
 - ACP delete/rename compatibility proof against a real editor client
-
----
-
-Source: https://z80dev.github.io/lemon/tools/execute-code
-
-# Execute Code (`execute_code`)
-
-`execute_code` is programmatic tool calling: the model submits a python3 script, the
-script calls agent tools through pre-imported helper functions, and the script's result
-comes back through an explicit channel: `text()` blocks are the result, while everything
-printed to stdout/stderr lands in a clearly labeled diagnostics tail. A script can read
-fifty files, grep a whole tree, or fetch a page and then emit a three-line summary via
-`text()`; intermediate tool results travel over a file-based RPC bridge and never enter
-the model transcript.
-
-The tool is **disabled by default** and **bash-equivalent**: scripts run as ordinary host
-code with the user's permissions. This is not a sandbox — see [Security](#security).
-
-## Configuration
-
-`execute_code` is configured under `[runtime.tools.execute_code]`
-(`LemonCore.Config.Tools.resolve_execute_code/1` owns TOML/env resolution):
-
-```toml
-[runtime.tools.execute_code]
-enabled = false                        # default: tool is not registered at all
-python_path = ""                       # explicit interpreter; empty = find python3 on PATH
-timeout_ms = 120000                    # end-to-end wall-time cap per run, including session queue wait
-max_rpc_calls = 100                    # helper calls one run may make
-max_rpc_result_bytes = 5242880         # total helper-result bytes one run may consume (5 MiB)
-max_output_bytes = 50000               # script stdout/stderr bytes returned as diagnostics
-max_text_bytes = 65536                 # total JSON-encoded text() frame bytes one run may emit
-max_parallel_rpc = 4                   # helper calls the pump dispatches concurrently
-tools = []                             # helper subset; empty = full fixed allowlist
-kernel_mode = "per_call"               # "per_call" (default) | "session"
-kernel_idle_timeout_ms = 1800000       # idle kernels reaped after 30 minutes
-max_live_kernels = 16                  # strict live-kernel cap (idle-only LRU eviction)
-max_queued_cells_per_kernel = 8        # FIFO queue depth behind the one active cell
-```
-
-Environment overrides (env wins over TOML):
-
-- `LEMON_EXECUTE_CODE_ENABLED`
-- `LEMON_EXECUTE_CODE_PYTHON_PATH`
-- `LEMON_EXECUTE_CODE_TIMEOUT_MS`
-- `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`
-- `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`
-- `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`
-- `LEMON_EXECUTE_CODE_MAX_TEXT_BYTES`
-- `LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC`
-- `LEMON_EXECUTE_CODE_TOOLS` (comma-separated subset of the allowlist)
-- `LEMON_EXECUTE_CODE_KERNEL_MODE`
-- `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`
-- `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`
-- `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`
-
-Only an explicit `"session"` selects session mode. Any other `kernel_mode` value — typos,
-booleans, anything — resolves to `"per_call"`, so a config mistake can never silently
-enable persistence. The numeric bounds are clamped to positive integers.
-
-## Kernel modes
-
-### `per_call` (default)
-
-Every run executes in a fresh python3 process in a fresh private workspace, through the
-same `BashExecutor` machinery as the `bash` tool. Imports, globals, and objects do not
-survive the run. `reset: true` is accepted and validated but redundant
-(`reset_performed: false` in details).
-
-### `session` (opt-in)
-
-Runs execute as **cells** on a persistent python3 interpreter (a *kernel*) supervised by
-`CodingAgent.PythonRepl` (a registry plus a `DynamicSupervisor` of temporary workers under
-`CodingAgent.PythonRepl.Supervisor`, started after `CodingAgent.TaskSupervisor`). Imports,
-globals, objects, the module cache, and `os.environ` survive across calls — see
-[State](#state-retention-and-loss).
-
-**State is live process memory only.** It is never written to disk, never added to the
-session transcript, and there is no checkpoint or restore. An application or node restart
-loses every kernel; the next call simply starts a new one.
-
-#### Keying and subagents
-
-A kernel is keyed by:
-
-- the persisted session ID (stable across turns, compaction, and resume — never `run_id`,
-  tool-call ID, or the caller-overridable `session_key`),
-- the agent/profile ID,
-- the canonical (symlink-resolved) working directory,
-- the canonical (symlink-resolved) interpreter path,
-- the enabled helper set, and
-- the runner protocol version.
-
-The owning `CodingAgent.Session` process is monitored separately. Subagents isolate
-naturally because they have distinct persisted session IDs; a subagent never shares its
-parent's kernel. Changing cwd, interpreter, agent, or helper set selects a *different*
-kernel — state is never migrated between keys. If two live actors resume the same persisted
-session they become co-owners of one kernel; a `reset` from one co-owner forks only the
-requester onto a fresh kernel and leaves siblings on the shared one.
-
-#### Cells, queueing, and timeouts
-
-Each kernel runs **one active cell at a time**; further calls wait in a FIFO queue bounded
-by `max_queued_cells_per_kernel` (default 8). A full queue returns a busy error — it never
-silently falls back, because a fresh process would not see the expected namespace. A queued
-call whose external abort fires or whose deadline expires simply leaves the queue; the active
-cell is undisturbed.
-
-## State retention and loss
-
-| Event | Result | Kernel state |
-|---|---|---|
-| Success | printed output | retained, including all mutations |
-| Ordinary Python exception | filtered traceback (line numbers offset by 1) | retained, including completed and partial mutations |
-| `SystemExit` | cell error | retained |
-| `input()` / stdin read | explicit unsupported-input error | retained |
-| Helper denial / error / budget limit | catchable `ToolError` in the script | retained |
-| Timeout (including queued wait) / abort / caller death | partial output may return, `state_retained: false` | **discarded** when active; a queued caller simply leaves the queue |
-| Interpreter crash, `os._exit`, protocol fault | error, `state_retained: false` | **discarded** |
-
-Cancellation escalates SIGINT → SIGTERM → SIGKILL against the interpreter process group
-with bounded grace periods; the user-visible contract is **state loss**, not
-`KeyboardInterrupt` recovery. A script cannot rely on catching the interrupt to keep its
-namespace. Code that has started executing is never retried and never replayed into a
-replacement kernel, because side effects may already exist.
-
-### `reset`
-
-`reset: true` discards retained state **before** the submitted script runs
-(`reset_performed: true` in details). If the old kernel cannot be confirmed gone
-(`:registry_unavailable` or `:stop_failed`), the call runs isolated per-call instead and
-details report the fallback; other reset failures are returned as errors and nothing runs.
-
-### Session lifecycle
-
-- **Session reset** (`/new`, identity rotation): the session synchronously detaches from
-  its kernels while idle, before the new identity is installed.
-- **Session close/termination**: the session requests detach during shutdown; the registry
-  monitor on the session PID is the crash fallback.
-- **Owner death**: detaching an owner removes its queued cells; if it owned the active
-  cell the kernel is discarded (its state is unsafe). A kernel with no owners stops
-  immediately.
-- **Config switch** back to `per_call` or `enabled = false` takes effect on the next call;
-  kernels retained earlier are detached on session reset/close and otherwise reaped when
-  idle.
-
-### Pre-start fallback only
-
-Session mode may fall back to the isolated per-call path **only before submitted code
-starts**. Details report `persistent: false` and a `fallback_reason`:
-
-| `fallback_reason` | Meaning |
-|---|---|
-| `missing_session_scope` | no stable session identity (e.g. a context without a persisted session ID/PID/agent ID) |
-| `registry_unavailable` | the kernel registry is not running |
-| `capacity_exhausted` | `max_live_kernels` reached and no idle kernel is evictable |
-| `startup_failed` | the kernel failed to start |
-| `stop_failed` | a requested reset could not confirm the old kernel stopped |
-
-Fallback text says the call ran isolated and will not persist. A full queue
-(`:queue_full`), a dead worker, or any failure after code started is **never** retried or
-fallen back.
-
-## Helpers and the tool bridge
-
-Scripts call agent tools through pre-imported helpers from a fixed, compile-time
-allowlist: `read`, `grep`, `find`, `ls`, `webfetch`. The `tools` setting (or
-`LEMON_EXECUTE_CODE_TOOLS`) may only **narrow** this list — no configuration can add
-Every helper call goes through the same `ToolPolicy` and approval handling as a direct
-tool call, in both kernel modes. Each cell gets a **fresh bridge**: a new owner-only
-(`0700`) RPC directory and a new random 256-bit token, validated in constant time; stale
-or cross-cell requests cannot call helpers. Helper failures raise a catchable
-`ToolError`. Per-run budgets: `max_rpc_calls` calls (dispatched `max_parallel_rpc` at a
-time), `max_rpc_result_bytes` total result bytes, and `max_text_bytes` total `text()`
-block bytes; exceeding any of them raises `ToolError`.
-
-`webfetch` results mark the tool result untrusted and wrap printed output as external
-content, exactly like the direct tool.
-
-## Result channels: `text()`, `notify()`, `batch()`
-
-Besides the per-tool helpers, every shim (both kernel modes) defines three
-module-level functions:
-
-- **`text(s)`** — the explicit result channel. Each call atomically flushes a
-  numbered `text-<n>.json` block into the per-run rpc directory (write-through,
-  never deferred to exit), so everything written before a timeout or abort kill
-  still reaches the tool result. Blocks are lock-guarded, so they are safe from
-  `batch()` worker threads, and the total emitted bytes are capped at
-`max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
-— exactly the bytes `json.dump` writes to disk, escaping included — on both
-sides of the bridge: the shim charges what it is about to write and the host
-charges the file body it actually reads, so a NUL-heavy string that six-folds
-under `\u0000` escaping is refused by the same budget on both sides, and an
-in-budget block is always delivered. The payload is normalized first (lone
-surrogates become U+FFFD), so every frame the shim writes is valid JSON the
-host can decode. An over-budget call raises `ToolError` while the blocks
-already flushed stay in the result. Non-strings are `str()`-coerced.
-- **`notify(msg)`** — a fire-and-forget streaming side channel. The pump
-  consumes `notify-<n>.json` frames on every sweep and forwards each message
-  to the tool's streaming update callback as a partial update
-  (`notify: <msg>`), capped at 4 KiB per message and 64 forwarded messages per
-  run — the counter rides the run's stats, so it spans sweeps and the final
-  drain. Anything beyond is silently dropped, malformed frames are consumed
-  without being forwarded or counted, and a run with no callback consumes and
-  discards them so they never accumulate. A `notify()` issued immediately
-  before exit is still forwarded: the per-call pump and the persistent stop
-  path each run one notification-only final drain, and in session mode that
-  drain runs as part of the teardown stats read (`RpcServer.drain_and_stats`)
-  so its count is included in the stats the cell's result reports.
-  Tool requests are never drained after the run — a posthumous request would
-  be tool work nobody is waiting for.
-- **`batch([(tool, params), ...])`** — parallel helper calls. Each element runs
-  the plain blocking call inside a bounded stdlib thread pool (16 workers max);
-  the Elixir pump dispatches claimed requests as supervised tasks in waves of
-  `max_parallel_rpc` (default 4), so independent reads genuinely overlap.
-  Results return in input order; if any call fails, every call is still waited
-  out and then the first failure (in input order) is re-raised as the same
-  `ToolError` a plain call raises.
-
-When a run emitted at least one `text()` block, the tool result is assembled
-as: the headline (if any) → `Script result (text()):` with the blocks verbatim
-in flush order → a `Diagnostics (stdout/stderr, not the result):` tail carrying
-the captured stdout/stderr (still capped at `max_output_bytes`, with the
-spill-to-file marker when truncated). On a timeout or abort the flushed blocks
-are still included — that is the point of write-through. A script that never
-calls `text()` keeps the historic stdout-only result byte-for-byte.
-
-Stderr remains merged into stdout on purpose: the port has no separate stderr
-capture, so un-merging would silently *discard* stderr (python tracebacks
-included) instead of surfacing it in the labeled diagnostics tail.
-
-Accounting under parallel dispatch stays exact because claiming —
-authentication, replay detection, and call-budget reservation — happens
-serially in the pump before any task starts, and the result-byte budget is
-spent by the pump as each task returns. A claimed request always ends
-answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
-in-flight `req-<id>.claim` marker, and **publication is the dispatch gate** —
-the rename must succeed and the published marker must be a regular file (a
-planted object at the marker name, or a symlinked request, is answered with a
-publication-failure error and its tool never runs). But the rpc directory is
-script-writable, so a marker alone is evidence only against crashes, never
-against a hostile script that deletes or replaces it after the gate. In
-session mode the claim therefore has a **second, host-side half**: the
-`RpcServer` records one ledger entry per **spent call slot** in its own
-process memory — via the pump's `:on_claim` hook, first a `:reserved` entry
-the moment a request passes the replay and call-budget gates, fed before
-the sweep-local spend itself so no kill can spend a call the ledger cannot
-prove, then the entry's disposition (`:invalid`/`:unknown_tool`/`:denied`
-for requests answered inside the claim without dispatching, `:claimed` for
-a dispatch-bound request, fed *before* the marker is published, making the
-ledger a superset of the published claims) — where the script cannot reach
-it. A sweep that dies mid-wave is recovered from **both halves** by the
-next sweep (or the server's cancel/abnormal-exit path, where no successor
-runs): its claimed ids are answered in writing and never re-dispatched,
-the replay memory is reconstructed so a replayed id is refused even when
-its marker was destroyed, and real accounting (ok status, result bytes,
-tool usage) is restored from a surviving response file plus the claim's
-tool identity — the ledger's name whenever the ledger recorded the id
-(host-owned beats script-writable, so overwriting the marker body cannot
-forge the recorded tool), and the marker's own body only for ids the
-ledger never saw. Reservation entries settle exactly — one call, one error
-or denial, the replay memory — and a disposition entry (`:invalid`,
-`:unknown_tool`, `:denied`) is answered in the settle: recovery writes the
-kind's error via `ensure_answered` whenever no response survives (a
-sweep-written answer is never overwritten), so a contained fault after an
-answered-but-never-dispatched request (invalid, unknown tool,
-policy-denied) can no longer erase that spend and let later sweeps exceed
-`max_calls`; an entry still bare `:reserved` (death between the feed,
-which precedes the spend, and the fate branch) charges the call exactly
-and counts one error, the conservative split of a branch that never ran —
-and writes no response, leaving the request file to the successor sweep's
-replay refusal (or the abort teardown — the cancel/abnormal-exit path
-where no successor runs). A `:claimed` entry with
-neither marker nor response surviving stamps `rpc_accounting_loss: true`:
-the accounting is then a lower bound and the
-cell's result is forced to `trust: :untrusted`. The same flag is stamped
-whenever a sweep is brutally killed, dies abnormally, or is caught
-raising/throwing mid-sweep — a contained fault is contained only in the
-process sense: its result settles through the same recovery-plus-lower-bound
-path, because work it dispatched and answered without returning its stats
-is unknowable. A successful cancel also settles the sweep's still-queued
-claim-ledger messages through the same deduplicating recovery, so no stale
-ledger entry outlives its sweep. Recovery trusts only regular-file markers
-(planted directories and symlinks at marker names are ignored outright) and
-charges each dead claim **exactly once**; a marker whose deletion fails
-(bounded retries) can never re-charge the budget on a later sweep.
-
-Approvals stay on the existing `ToolExecutor` path inside each task; each
-approval-requiring claim pre-allocates its approval id, and a tiny unlinked
-watcher cancels the pending prompt after the death of the sweep **and** again
-after the death of the dispatch task (it exits once both are gone), so a
-prompt registered in the window between the first cancel and the task's own
-death is still cancelled, and a cancelled prompt can never install policy
-(cancel, resolve, and a waiter's timeout are one atomic single-winner
-transition; the loser is `{:error, :not_pending}` — or a timeout with no
-side effects — and installs nothing). The exact lifetime guarantee: **prompts
-are cancelled when the dispatch task dies.** Dispatch tasks have trap_exit
-forced off at entry so they die with their sweep; the boundary is that tool
-code on the approval path can re-enable trap_exit afterwards and block past
-its task's death — such a task keeps its (cancelled-once) watcher parked
-until some other kill ends it, and until then the prompt outlives the
-script. This is adversarial tool behavior, not a supported mode; the
-boundary is demonstrated by the "a prompt registered after the sweep died
-cannot be orphaned" test in
-`apps/coding_agent/test/coding_agent/tools/execute_code_rpc_test.exs`.
-
-In session mode the kernel stages `lemon_tools.py` once and `_configure`
-installs a fresh bridge for every cell: new rpc dir and token, a full fresh
-`text()` budget (the per-call `max_text_bytes` rides the bridge), and reset
-sequence counters. Threads **inherit the cell generation of the thread that
-created them, captured at construction time** (an untagged creator — the main
-thread — falls back to the currently open cell), and the shim refuses bridge
-calls from threads tagged with an earlier cell, so a thread a finished cell
-left behind — and every thread it later spawns — can neither spend a later
-cell's budget nor write into its rpc directory (its `ToolError` is
-harmless). This is isolation hygiene, not a sandbox.
-
-## Output
-
-Only what the script writes to stdout/stderr is captured — there is no implicit
-final-expression repr. Line-buffered Python output preserves its order relative to child
-processes writing directly to the inherited stdout/stderr descriptors. Output is sanitized,
-capped at `max_output_bytes` keeping the first
-40% plus a rolling last 60% with a truncation marker, and the full combined output spills
-to a `0600` file whose path appears in the result as `full_output_path` and in
-`[Full output saved to: ...]` text. The path remains readable after the cell completes. A
-finished spill becomes eligible for best-effort reaping after 24 hours; an active capture
-owned by a live BEAM process is never reaped.
-
-For a run that used `text()`, this captured output is the **diagnostics tail**
-of the result, not the result itself — see
-[Result channels](#result-channels-text-notify-batch).
-
-## Bounds and reaping
-
-- `max_live_kernels` (default 16) is a strict cap: admission evicts the least-recently-used
-  **idle** kernel, and never evicts starting/running/cancelling/queued work. If nothing is
-  evictable the call falls back per-call (`capacity_exhausted`).
-- `kernel_idle_timeout_ms` (default 30 minutes) reaps idle kernels; running work is never
-  reaped. Ownerless kernels stop immediately.
-- Per-kernel queue: `max_queued_cells_per_kernel` (default 8).
-- Fixed internal constants (not configurable): 10 s startup timeout, 1 s INT/TERM/KILL
-  grace periods, 256 KiB protocol-frame cap, 64 KiB stream chunks.
-- Python memory and child processes inside a kernel are **not** OS-sandboxed; a runaway
-  script can consume host resources until its cell timeout fires.
-
-- Python REPL full-output spill files remain available after cell completion. A node
-  processes one batch of at most 1,000 direct entries per 24-hour reaper window across
-  its current and stale private staging roots, retaining continuations for later windows.
-  The current root is always processed first; one stale root may use its remaining budget.
-  Only expired regular `pi-python-repl-*` files that are no longer live are eligible.
-- Workspace and bridge teardown is bounded: removal visits at most 10,000 entries per
-  tree (no symlink following), so a script that planted a huge tree cannot stall the
-  owning process in `rm_rf`. Any remainder stays owner-only under the private staging
-  root and is eligible for the boot-time stale-root sweep on a later node.
-- Once at node boot, the reaper discovers sibling private staging roots left by prior
-  nodes (or a prior first-root race), but only when their `0600` owner marker identifies a
-  dead OS process. Empty stale roots are removed best-effort; non-empty roots are never
-  removed or traversed recursively.
-
-## Security
-
-`execute_code` runs **local host code with bash-equivalent authority**. It is classified
-with `bash` in `CodingAgent.ToolPolicy`, is default-off, and is approval-wrappable through
-the normal registry path. The helper allowlist bounds the *Lemon tool* surface, not the
-OS: Python can still read files, inspect the environment and network, and spawn processes.
-The per-cell bridge token prevents stale/cross-cell helper requests; it is not secret from
-code running in the same interpreter and is not a sandbox.
-
-**Host requirement (GNU/Linux):** private workspaces are created through GNU `mktemp`
-(coreutils, found on `PATH`) under `TMPDIR` (default `/tmp`) on a **local** filesystem —
-NFS is unsupported. A per-node staging root and every workspace/bridge/spill object
-beneath it are created atomically at exactly `0700` (directories) / `0600` (files) and
-validated; there is no chmod-after-create and no fallback to loosely-permissioned temp
-directories. Finished Python REPL spills become eligible for best-effort reaping after
-24 hours; active captures are excluded. At boot, a node considers a sibling staging root
-only when its validated owner marker names a dead OS PID; missing, malformed, and
-live-owner markers are skipped. OS PID reuse can therefore conservatively defer stale-root
-cleanup until a later boot. The reaper checks only direct regular `pi-python-repl-*` entries
-with `lstat` and never follows symlinks. On platforms without a suitable GNU `mktemp`, or if
-validation fails, the run fails closed **before any script executes** (per-call: a
-workspace-creation error; session mode: `startup_failed` fallback).
-
-## Telemetry and introspection
-
-`execute_code` and the kernel subsystem emit only bounded categorical metadata and
-count/duration measurements — never code, output, tracebacks, tokens, bridge paths, cwd,
-interpreter paths, PIDs, key digests, or raw errors. See
-[`docs/telemetry.md`](../telemetry.md#execute-code-and-persistent-python-kernels) for the
-event catalog (`[:coding_agent, :execute_code, :stop]` and the
-`[:coding_agent, :python_repl, ...]` families).
-
-Operators can read an **aggregate** kernel snapshot via
-`CodingAgent.PythonRepl.snapshot/0` — live/capacity counts, per-phase counts, owner and
-fork counts, and reap settings; it contains no identities or payload. Lifecycle events are
-also recorded through `LemonCore.Introspection` as redacted
-`:python_repl_lifecycle_observed` summaries. There is intentionally **no control-plane
-API** for kernel management.
 
 ---
 
@@ -17854,10 +16624,6 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
-- `browser_exec`: run a bounded BUA-style program of up to 25 typed browser
-  actions; raw CDP steps require explicit developer mode.
-- `computer_use`: capture and drive native apps through cua-driver with SOM,
-  vision, or AX state and background-first input delivery.
 
 ## Search and extraction providers
 
@@ -17912,22 +16678,6 @@ uses snapshot refs such as `@e5` as selectors. Hybrid requires
 `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
 backend, public URLs use that configured backend, and provider failure never
 falls back across identities.
-
-`browser_exec` is the provider-neutral Browser Use Agent code-mode equivalent.
-Its program is a bounded typed action list rather than arbitrary Python, so
-Lemon can audit every navigation, input, evaluation, screenshot, and tab step.
-Use `targetId = "$active"` to carry the prior tab result. A `cdp` step requires
-`browser_developer_mode: true`; `Browser.close`, `Target.closeTarget`, and raw
-download-policy mutation remain blocked.
-
-`computer_use` drives native desktop apps through a lazily started private
-`cua-driver` daemon in standard permission mode. Capture supports `som`,
-`vision`, and `ax`; input supports element or coordinates, click variants,
-drag, scroll, type, key/hotkey, value setting, app focus, and optional
-post-action capture. Input defaults to `background`. Foreground focus is an
-explicit escalation, capture artifacts follow browser retention, driver
-session ids are derived hashes, and timeouts/errors are not automatically
-replayed because the external effect may already have happened.
 
 By default the helper launches local Chrome/Chromium and connects over CDP on
 `127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the
@@ -20361,6 +19111,187 @@ invent APIs for those remaining capabilities.
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/reminders-and-heartbeats
+
+# Reminders, heartbeats, and the daily brief
+
+Lemon can reach out to you instead of waiting to be asked. Every proactive
+feature is an ordinary scheduled (cron) job run by the agent:
+
+- **Reminders** — one-off or recurring messages you set from Telegram with
+  `/remind`, or by asking the agent.
+- **Heartbeats** — a recurring check-in where the agent works through a
+  checklist and only messages you when something needs attention.
+- **Daily brief** — an opt-in morning heartbeat, configured by `lemon setup`.
+
+All of them need Lemon to be running when the job is due, and a paired chat to
+deliver to.
+
+---
+
+## Where results go
+
+When a scheduled job finishes, Lemon sends the result to one chat, chosen in
+this order:
+
+| Job | Delivered to |
+|---|---|
+| `deliver_to = "none"` | Nowhere. The run is still recorded in run history. |
+| `deliver_to = "telegram:<chat_id>[:<topic_id>]"` or `"discord:<channel_id>[:<thread_id>]"` | That chat, topic, or thread. |
+| Created from a Telegram or Discord conversation | The chat (and topic/thread) it was created in. |
+| Created anywhere else (TUI, browser, CLI) | Your **paired owner chat**: the first `gateway.telegram.allowed_chat_ids` entry when Telegram is enabled, otherwise `gateway.discord.default_channel_id` when Discord is enabled. |
+| No owner chat configured | Nowhere. |
+
+The message is the job name followed by the agent's reply. A failed or
+timed-out run sends `<job name> (<status>): <reason>` instead.
+
+Most people only need the owner chat. Pair Telegram once and every reminder,
+heartbeat, and brief reaches your phone:
+
+```bash
+lemon gateway setup telegram
+lemon restart
+```
+
+See [Setup › Optional Telegram or Discord](setup.md#optional-telegram-or-discord)
+for pairing details.
+
+---
+
+## Telegram reminders
+
+In a paired Telegram chat:
+
+```text
+/remind 9am stand-up
+/remind in 20m check oven
+/remind every weekday 8:30 daily brief
+```
+
+Lemon replies with the schedule, the next run time, and the reminder id. When
+the reminder fires, the agent writes the message (doing any lookup the reminder
+asks for) and sends it back to the same chat or forum topic.
+
+Supported `<when>` forms:
+
+| Form | Examples | Repeats |
+|---|---|---|
+| Relative delay | `in 20m`, `in 2h`, `in 1h30m`, `in 3d` (up to 364 days) | once |
+| Time of day | `9am`, `9:30pm`, `21:15`, `at 9am`, `noon`, `midnight` | once — today, or tomorrow if that time has passed |
+| Tomorrow | `tomorrow 9am` | once |
+| Every day | `every day 8:30`, `daily at 8:30` | daily |
+| Weekdays / weekends | `every weekday 8:30`, `every weekend 10am` | weekly pattern |
+| Day of week | `every monday 9am` | weekly |
+| Interval | `every 30m`, `every 2h`, `every hour` | minutes must divide 60, hours must divide 24 |
+
+A bare number is not a time: `/remind 5 things` is rejected. Use `5am` or
+`05:00`. Any unrecognized form replies with the usage text.
+
+Manage reminders for the current chat:
+
+```text
+/reminders          # list this chat's reminders, soonest first
+/unremind <id>      # cancel one (ids come from /remind and /reminders)
+```
+
+`/reminders` and `/unremind` only see reminders created in the same chat or
+topic. One-off reminders are removed automatically after they fire.
+
+**Times are the server's local time** — the clock of the machine running
+Lemon, including daylight-saving changes. If Lemon runs on a server in another
+timezone, write times in that server's zone.
+
+---
+
+## Asking the agent
+
+You can also ask in plain language from any interface: "remind me at 3pm to
+call the bank", "every Friday at 5pm summarise this week's commits". The agent
+uses its `cron` tool, which supports:
+
+- `once: true` — a one-shot job that runs at its next scheduled time and is then
+  removed.
+- `timezone: "local"` — interpret the schedule in the server's local time. The
+  default is `"UTC"`; any other zone name is also evaluated as UTC.
+- `deliverTo` — override the destination (`"none"`, `"telegram:<chat_id>"`,
+  `"discord:<channel_id>"`, or `"auto"` to restore the default).
+
+Jobs created from the TUI or browser are delivered to your paired owner chat.
+Ask the agent to list, pause, or remove its scheduled jobs the same way.
+
+---
+
+## Heartbeats
+
+A heartbeat is a recurring job for an agent's main session: the agent runs the
+prompt you give it and reports back only when something needs attention. Keep
+the checklist in `HEARTBEAT.md` in the assistant workspace
+(`~/.lemon/agent/workspace/HEARTBEAT.md`), one line per thing worth checking —
+failing CI, unanswered messages, tomorrow's calendar — and point the prompt at
+it.
+
+The reply rule (the default `HEARTBEAT.md` template spells it out for the
+agent):
+
+- If nothing needs your attention, the agent replies exactly `HEARTBEAT_OK`.
+  That run is marked **suppressed**, kept in run history, and **not** sent.
+- Any other reply, and any failed run, is delivered like any other job result.
+
+Set a heartbeat from the TUI (`/hb` is an alias):
+
+```text
+/heartbeat every 30m check HEARTBEAT.md and tell me only what needs attention
+/heartbeat status
+/heartbeat pause
+/heartbeat resume
+/heartbeat clear
+```
+
+Setting a heartbeat again updates the agent's existing heartbeat job. It runs
+in the server's local time and is delivered to your paired owner chat.
+
+Intervals must be cron-exact: minutes that divide 60 (`1m` … `30m`), hours that
+divide 24 (`1h`, `2h`, `3h`, `4h`, `6h`, `8h`, `12h`), or `1d` (daily at 09:00).
+Values such as `90m` or `5h` are rejected, and the minimum is `1m`.
+
+---
+
+## Daily brief
+
+The daily brief is a heartbeat that runs once a day in the default agent's main
+session. The agent follows `HEARTBEAT.md` if present, then sends a few bullets:
+today's reminders and scheduled jobs, anything due from memory, and open
+follow-ups. On a day with nothing worth saying it replies `HEARTBEAT_OK`, so
+you get no message.
+
+`lemon setup` offers it (default: off) and asks for a time. For scripted
+installs:
+
+```bash
+lemon setup --non-interactive --daily-brief 07:30
+```
+
+Either way the choice is written to your config:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local time
+```
+
+The brief is reconciled when Lemon boots, so a change takes effect at the next
+start (`lemon restart`). To turn it off, remove the `daily_brief` key and
+restart; the job is removed. See [Configuration](../config.md#automation).
+
+---
+
+## See Also
+
+- [`docs/user-guide/setup.md`](setup.md) — setup wizard and Telegram/Discord pairing
+- [`docs/config.md`](../config.md#automation) — the `[automation]` section
+- [`docs/user-guide/cli.md`](cli.md) — CLI and session commands
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/rollout
 
 # Feature Flag Rollout & Rollback Guide
@@ -20457,90 +19388,6 @@ loop is actually doing:
 
 ---
 
-Source: https://z80dev.github.io/lemon/user-guide/session-heartbeats
-
-# Session heartbeats
-
-A session heartbeat runs one recurring instruction inside an existing Lemon
-conversation. Use it for work that should retain the current transcript and run
-only when that session is otherwise idle—for example, "review the build queue
-and report meaningful changes every ten minutes."
-
-This is not cron. Cron owns independently scheduled jobs and normally launches
-an isolated run. A session heartbeat belongs to one live, durable coding session
-and uses that session's current provider, model, tools, approvals, transcript,
-compaction policy, and provider prompt-cache path.
-
-## TUI commands
-
-```text
-/heartbeat every 10m review CI and open pull requests
-/heartbeat 2h summarize meaningful project changes
-/heartbeat status
-/heartbeat pause
-/heartbeat resume
-/heartbeat clear
-```
-
-`/hb` is an alias. `off` and `stop` are aliases for `clear`. Supported interval
-units are seconds, minutes, hours, and days; the minimum interval is 60 seconds.
-Setting a heartbeat replaces the previous instruction and resets its fire
-count.
-
-## Runtime behavior
-
-- The heartbeat is persisted in the session JSONL file and restored when that
-  exact session is reopened.
-- A due tick waits for the agent to become idle. Real queued user input wins.
-- Multiple elapsed ticks coalesce into one turn rather than flooding the queue.
-- Lemon persists the fire count and timestamp before provider dispatch.
-- Pausing keeps the prompt. Resuming starts a fresh interval from the resume
-  time, so old elapsed time does not fire immediately.
-- Clearing writes a durable tombstone. Reset clears the old heartbeat before
-  rotating to a new session identity, and refuses to rotate if that tombstone
-  cannot be saved.
-- The injected turn explicitly tells the agent not to invent work when nothing
-  meaningful changed.
-
-Heartbeat prompts are ordinary user turns and therefore appear in the session
-history once fired. The admin status API also returns the configured prompt;
-do not put credentials or secret values in it.
-
-## Control-plane API
-
-`sessions.heartbeat` requires the `admin` scope. It accepts the logical session
-key used by the TUI; the runtime also accepts a persisted session ID. If more
-than one live session claims a logical key during handoff or recovery, the call
-fails with a conflict.
-
-```json
-{
-  "sessionKey": "agent:default:project",
-  "action": "set",
-  "intervalSeconds": 600,
-  "prompt": "review CI and report meaningful changes"
-}
-```
-
-Actions are `status`, `set`, `pause`, `resume`, and `clear`. `status` is the
-default. The response includes `configured`, `status`, `prompt`, interval and
-fire-count fields, plus the next scheduled time for an active heartbeat.
-
-## Elixir API
-
-```elixir
-{:ok, status} = CodingAgent.Session.heartbeat_set(session, "review CI", 600)
-{:ok, status} = CodingAgent.Session.heartbeat_status(session)
-{:ok, status} = CodingAgent.Session.heartbeat_pause(session)
-{:ok, status} = CodingAgent.Session.heartbeat_resume(session)
-{:ok, status} = CodingAgent.Session.heartbeat_clear(session)
-```
-
-Frozen/ephemeral context sessions reject heartbeat mutations because they have
-no durable session file to restore.
-
----
-
 Source: https://z80dev.github.io/lemon/user-guide/setup
 
 # Set up Lemon
@@ -20578,8 +19425,9 @@ re-checks the state and performs only pending work:
    an existing key;
 3. onboards a provider, auth credential, and default provider/model;
 4. checks the resulting configuration and credential, including a live provider
-   check when supported; and
-5. offers optional runtime-profile configuration.
+   check when supported;
+5. offers an opt-in daily brief (default: off); and
+6. offers optional runtime-profile configuration.
 
 It does not install source dependencies, configure Telegram or Discord, start
 a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
@@ -20662,6 +19510,24 @@ lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
 
 Append `--skip-verify` to that command to defer only the live check.
 
+### Daily brief
+
+After the provider step, setup asks whether you want a short daily brief on
+your phone each morning (default: no) and, if so, at what time (`HH:MM`,
+24-hour, this machine's local time; default `08:00`). The answer is written as
+`daily_brief` under `[automation]` in your config and takes effect the next time
+Lemon starts. If a brief is already configured, setup only reports its time.
+
+The non-interactive setup skips the question unless you pass the time:
+
+```bash
+lemon setup --non-interactive --daily-brief 07:30
+```
+
+The brief is delivered to your paired chat, so pair Telegram (see below). To
+change or remove it, edit `[automation] daily_brief` and restart Lemon. See
+[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
+
 ## Verify and recover
 
 After setup, inspect the persisted configuration and secret state, then run
@@ -20713,6 +19579,11 @@ to mentions, replies, and commands unless an admin sends `/trigger all`, and eve
 file edit or shell command in a group needs an approval. Remote chats run in the
 assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.
+
+The first paired Telegram chat is also your owner chat: reminders, heartbeats,
+the daily brief, and other scheduled results created outside a chat are sent
+there. In a paired chat, `/remind <when> <what>` sets a reminder. See
+[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
 
 Inspect redacted channel configuration (enabled state, credentials, binding and
 allowlist counts, registered transports) with:

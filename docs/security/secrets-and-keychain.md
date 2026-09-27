@@ -49,7 +49,7 @@ Additional nuance:
 - The keychain provider is macOS-only and skips itself on other platforms, so a Linux host with no key configured reports `:missing_master_key` rather than a keychain failure.
 - If keychain returns malformed key material, env fallback is attempted first; only then returns `:invalid_master_key`.
 - Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value.
-- Key rotation (re-encryption under a new master key) is not implemented — see the "Key rotation" section of the `LemonCore.Secrets` moduledoc and item 1.5 in `docs/platform-split.md`.
+- Key rotation (re-encryption under a new master key) is not implemented — see the "Key rotation" section of the `LemonCore.Secrets` moduledoc and "Known gaps" in `docs/platform-split.md`.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
 - The local source launcher `bin/lemon` also normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
 

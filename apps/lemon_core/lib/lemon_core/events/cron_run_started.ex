@@ -1,6 +1,6 @@
 defmodule LemonCore.Events.CronRunStarted do
   @moduledoc """
-  A cron job (or timer heartbeat) began executing. Published on `cron`.
+  A cron job began executing. Published on `cron`.
 
   Fields are flat rather than nesting the job and run records: consumers only ever read
   these, and the nested form is what let two emitters drift apart before Phase 3.1.

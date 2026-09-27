@@ -260,7 +260,8 @@ of the prompt:
    - `AGENTS.md` — project-specific agent instructions
    - `TOOLS.md` — tool configuration notes
    - `MEMORY.md` — persistent memory across sessions
-   - `HEARTBEAT.md` — heartbeat task config
+   - `HEARTBEAT.md` — checklist the scheduled heartbeat cron job works
+     through; a reply of exactly `HEARTBEAT_OK` means "nothing to report"
    - `BOOTSTRAP.md` — additional bootstrap content
 8. **Resource walk** — CLAUDE.md/AGENTS.md files found by walking up the
    directory tree from cwd to root
