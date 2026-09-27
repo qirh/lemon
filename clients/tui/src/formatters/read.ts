@@ -28,7 +28,6 @@ type ContentBlock = TextContentBlock | ImageContentBlock | { type: string };
 /** Read tool arguments */
 interface ReadArgs {
 	path?: string;
-	file_path?: string;
 	offset?: number;
 	limit?: number;
 }
@@ -117,7 +116,7 @@ export const readFormatter: ToolFormatter = {
 
 	formatArgs(args: Record<string, unknown>): FormattedOutput {
 		const typedArgs = args as ReadArgs;
-		const path = typedArgs.path || typedArgs.file_path || "";
+		const path = typedArgs.path || "";
 		const formattedPath = formatPath(path);
 
 		// Build range suffix if offset/limit specified

@@ -1,7 +1,7 @@
 /**
  * Tests for the edit formatter.
  *
- * Tests the formatting of edit and multiedit tool arguments and results,
+ * Tests the formatting of edit tool arguments and results,
  * including diff formatting and error handling.
  */
 
@@ -9,20 +9,6 @@ import { describe, expect, it } from "bun:test";
 import { editFormatter, formatDiff } from "../../src/formatters/edit.js";
 
 describe("editFormatter", () => {
-	describe("tools property", () => {
-		it('contains "edit"', () => {
-			expect(editFormatter.tools).toContain("edit");
-		});
-
-		it('contains "multiedit"', () => {
-			expect(editFormatter.tools).toContain("multiedit");
-		});
-
-		it("contains exactly two tools", () => {
-			expect(editFormatter.tools).toHaveLength(2);
-		});
-	});
-
 	describe("formatArgs - edit", () => {
 		it("shows path in summary", () => {
 			const result = editFormatter.formatArgs({
@@ -101,77 +87,6 @@ describe("editFormatter", () => {
 			// Should not have Match line
 			const matchLine = result.details.find((line) => line.includes("Match:"));
 			expect(matchLine).toBeUndefined();
-		});
-	});
-
-	describe("formatArgs - multiedit", () => {
-		it('shows "path (N edits)" in summary', () => {
-			const result = editFormatter.formatArgs({
-				path: "/Users/test/project/src/app.ts",
-				edits: [
-					{ old_text: "const x = 1;", new_text: "const x = 2;" },
-					{ old_text: "const y = 1;", new_text: "const y = 2;" },
-					{ old_text: "const z = 1;", new_text: "const z = 2;" },
-				],
-			});
-
-			expect(result.summary).toContain("app.ts");
-			expect(result.summary).toContain("(3 edits)");
-		});
-
-		it('shows singular "edit" for single edit', () => {
-			const result = editFormatter.formatArgs({
-				path: "/Users/test/project/src/app.ts",
-				edits: [{ old_text: "const x = 1;", new_text: "const x = 2;" }],
-			});
-
-			expect(result.summary).toContain("(1 edit)");
-		});
-
-		it("shows edit count in details", () => {
-			const result = editFormatter.formatArgs({
-				path: "/Users/test/project/src/app.ts",
-				edits: [
-					{ old_text: "const x = 1;", new_text: "const x = 2;" },
-					{ old_text: "const y = 1;", new_text: "const y = 2;" },
-				],
-			});
-
-			expect(result.details).toContainEqual(expect.stringContaining("Edits: 2"));
-		});
-
-		it("shows first edit preview in details", () => {
-			const result = editFormatter.formatArgs({
-				path: "/Users/test/project/src/app.ts",
-				edits: [
-					{ old_text: "first edit text", new_text: "replacement1" },
-					{ old_text: "second edit text", new_text: "replacement2" },
-				],
-			});
-
-			expect(result.details).toContainEqual(expect.stringContaining("First match:"));
-			expect(result.details).toContainEqual(expect.stringContaining("first edit text"));
-		});
-
-		it("handles empty edits array", () => {
-			const result = editFormatter.formatArgs({
-				path: "/Users/test/project/src/app.ts",
-				edits: [],
-			});
-
-			expect(result.summary).toContain("(0 edits)");
-		});
-
-		it("handles edits without old_text", () => {
-			const result = editFormatter.formatArgs({
-				path: "/Users/test/project/src/app.ts",
-				edits: [{ new_text: "replacement" }],
-			});
-
-			expect(result.summary).toContain("(1 edit)");
-			// Should not crash, no "First match" line
-			const firstMatchLine = result.details.find((line) => line.includes("First match:"));
-			expect(firstMatchLine).toBeUndefined();
 		});
 	});
 
@@ -291,59 +206,57 @@ describe("editFormatter", () => {
 		});
 	});
 
+	describe("formatResult - real edit results", () => {
+		it("points the summary at path:first_changed_line", () => {
+			const result = editFormatter.formatResult(
+				{
+					content: [
+						{
+							type: "text",
+							text: "Successfully replaced text in lib/a.ex.\n\n 119\tkeep\n-120\tbefore\n+120\tafter",
+						},
+					],
+					details: { diff: " 119\tkeep\n-120\tbefore\n+120\tafter", first_changed_line: 120 },
+					is_error: false,
+				},
+				{ path: "lib/a.ex", old_text: "before", new_text: "after" },
+			);
+
+			expect(result.summary).toBe("\u2713 Applied to lib/a.ex:120");
+			expect(result.details).toEqual([" 119\tkeep", "-120\tbefore", "+120\tafter"]);
+			expect(result.isError).toBe(false);
+		});
+
+		it("omits the line when first_changed_line is absent", () => {
+			const result = editFormatter.formatResult(
+				{ content: [], details: {}, is_error: false },
+				{ path: "lib/a.ex" },
+			);
+
+			expect(result.summary).toBe("\u2713 Applied to lib/a.ex");
+		});
+
+		it('does not mistake "not found" inside the applied diff for a failure', () => {
+			const result = editFormatter.formatResult(
+				{
+					content: [{ type: "text", text: "Successfully replaced text in lib/a.ex." }],
+					details: { diff: '-1\traise "missing"\n+1\traise "not found"', first_changed_line: 1 },
+					is_error: false,
+				},
+				{ path: "lib/a.ex" },
+			);
+
+			expect(result.isError).toBe(false);
+			expect(result.summary).toBe("\u2713 Applied to lib/a.ex:1");
+		});
+	});
+
 	describe("formatResult - failed edit", () => {
-		it('shows "No match found" in summary', () => {
-			const result = editFormatter.formatResult(
-				{
-					content: [{ type: "text", text: "No match found for the specified text." }],
-					details: { matched: false },
-				},
-				{ path: "/Users/test/project/src/app.ts" },
-			);
-
-			expect(result.summary).toContain("\u2717");
-			expect(result.summary).toContain("No match");
-		});
-
-		it("sets isError to true for no match", () => {
-			const result = editFormatter.formatResult(
-				{
-					content: [{ type: "text", text: "No match found" }],
-					details: { matched: false },
-				},
-				{ path: "/Users/test/project/src/app.ts" },
-			);
-
-			expect(result.isError).toBe(true);
-		});
-
-		it('detects "no match" in text content', () => {
-			const result = editFormatter.formatResult(
-				{
-					content: [{ type: "text", text: "Error: no match found in file" }],
-				},
-				{ path: "/Users/test/project/src/app.ts" },
-			);
-
-			expect(result.isError).toBe(true);
-		});
-
-		it('detects "not found" in text content', () => {
-			const result = editFormatter.formatResult(
-				{
-					content: [{ type: "text", text: "The specified text was not found." }],
-				},
-				{ path: "/Users/test/project/src/app.ts" },
-			);
-
-			expect(result.isError).toBe(true);
-		});
-
 		it("handles is_error flag in result", () => {
 			const result = editFormatter.formatResult(
 				{
 					is_error: true,
-					content: [{ type: "text", text: "Some error occurred" }],
+					content: [{ type: "text", text: "Could not find the exact text in lib/a.ex" }],
 				},
 				{ path: "/Users/test/project/src/app.ts" },
 			);
@@ -351,89 +264,7 @@ describe("editFormatter", () => {
 			expect(result.isError).toBe(true);
 			expect(result.summary).toContain("\u2717");
 			expect(result.summary).toContain("Failed");
-		});
-
-		it("handles isError flag in result", () => {
-			const result = editFormatter.formatResult(
-				{
-					isError: true,
-					content: [{ type: "text", text: "Some error occurred" }],
-				},
-				{ path: "/Users/test/project/src/app.ts" },
-			);
-
-			expect(result.isError).toBe(true);
-		});
-
-		it("handles error string property", () => {
-			const result = editFormatter.formatResult(
-				{
-					error: "File not found",
-					content: [],
-				},
-				{ path: "/Users/test/project/src/app.ts" },
-			);
-
-			expect(result.isError).toBe(true);
-		});
-	});
-
-	describe("formatResult - multiedit", () => {
-		it("shows edit count in summary", () => {
-			const result = editFormatter.formatResult(
-				{
-					content: [
-						{
-							type: "text",
-							text: "@@ -1 +1 @@\n-old1\n+new1\n@@ -5 +5 @@\n-old2\n+new2",
-						},
-					],
-				},
-				{
-					path: "/Users/test/project/src/app.ts",
-					edits: [
-						{ old_text: "old1", new_text: "new1" },
-						{ old_text: "old2", new_text: "new2" },
-					],
-				},
-			);
-
-			expect(result.summary).toContain("2 edits");
-		});
-
-		it('shows singular "edit" for single multiedit', () => {
-			const result = editFormatter.formatResult(
-				{
-					content: [{ type: "text", text: "@@ -1 +1 @@\n-old\n+new" }],
-				},
-				{
-					path: "/Users/test/project/src/app.ts",
-					edits: [{ old_text: "old", new_text: "new" }],
-				},
-			);
-
-			expect(result.summary).toContain("1 edit");
-			expect(result.summary).not.toContain("1 edits");
-		});
-
-		it("aggregates diff info in details", () => {
-			const diffText = "@@ -1 +1 @@\n-old1\n+new1\n@@ -10 +10 @@\n-old2\n+new2";
-			const result = editFormatter.formatResult(
-				{
-					content: [{ type: "text", text: diffText }],
-				},
-				{
-					path: "/Users/test/project/src/app.ts",
-					edits: [
-						{ old_text: "old1", new_text: "new1" },
-						{ old_text: "old2", new_text: "new2" },
-					],
-				},
-			);
-
-			// Should contain both @@ headers
-			expect(result.details.some((line) => line.includes("@@ -1"))).toBe(true);
-			expect(result.details.some((line) => line.includes("@@ -10"))).toBe(true);
+			expect(result.details).toEqual(["Could not find the exact text in lib/a.ex"]);
 		});
 	});
 

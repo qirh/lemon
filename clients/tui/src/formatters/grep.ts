@@ -26,11 +26,16 @@ interface GrepMatch {
 }
 
 /**
- * Parses grep output into a map grouped by file.
+ * Lines the grep tool writes around its match rows: the "Found N matches."
+ * header, the no-match message, and bracketed limit/truncation notices.
+ */
+const GREP_TEXT_CHROME = /^(Found \d+ match(es)?\.|No matches found\.|\[.*\])$/;
+
+/**
+ * Parses grep tool output into a map grouped by file.
  *
- * Handles grep output formats:
- * - "filename:line_number:content" (standard grep -n output)
- * - "filename" (file list only, from -l flag)
+ * Match rows look like "path:line: content". Context rows ("path-line- content"),
+ * the "Found N matches." header, and bracketed notices are skipped.
  *
  * @param text - Raw grep output text
  * @returns Map from file path to array of matches
@@ -42,35 +47,27 @@ export function parseGrepOutput(text: string): Map<string, GrepMatch[]> {
 		return result;
 	}
 
-	const lines = text.split(/\r?\n/);
-
-	for (const line of lines) {
-		if (!line.trim()) {
+	for (const line of text.split(/\r?\n/)) {
+		if (!line.trim() || GREP_TEXT_CHROME.test(line.trim())) {
 			continue;
 		}
 
-		// Try to parse as "filename:line_number:content"
 		const match = line.match(/^(.+?):(\d+):(.*)$/);
-		if (match) {
-			const [, filePath, lineNumStr, content] = match;
-			const lineNum = parseInt(lineNumStr, 10);
-
-			if (!result.has(filePath)) {
-				result.set(filePath, []);
-			}
-			result.get(filePath)!.push({
-				line: lineNum,
-				content: content,
-			});
-		} else {
-			// Treat as just a filename (grep -l output)
-			// Check if it looks like a file path (contains . or /)
-			if (line.includes("/") || line.includes(".")) {
-				if (!result.has(line)) {
-					result.set(line, []);
-				}
-			}
+		if (!match) {
+			continue;
 		}
+
+		const [, filePath, lineNumStr, content] = match;
+		let fileMatches = result.get(filePath);
+		if (!fileMatches) {
+			fileMatches = [];
+			result.set(filePath, fileMatches);
+		}
+		fileMatches.push({
+			line: parseInt(lineNumStr, 10),
+			// The tool separates the line number from the content with one space.
+			content: content.startsWith(" ") ? content.slice(1) : content,
+		});
 	}
 
 	return result;
@@ -150,35 +147,39 @@ export const grepFormatter: ToolFormatter = {
 		const text = extractText(result);
 		const pattern = (args?.pattern as string) || "";
 
-		// Check for error
-		if (typeof result === "object" && result !== null) {
-			const obj = result as Record<string, unknown>;
-			if (obj.is_error === true || obj.isError === true) {
-				const errorText = text || "Unknown error";
-				return {
-					summary: truncateText(errorText, 100),
-					details: errorText.split(/\r?\n/),
-					isError: true,
-				};
+		const obj: Record<string, unknown> =
+			result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+
+		if (obj.is_error === true) {
+			const errorText = text || "Unknown error";
+			return {
+				summary: truncateText(errorText, 100),
+				details: errorText.split(/\r?\n/),
+				isError: true,
+			};
+		}
+
+		const matches = parseGrepOutput(text);
+
+		// The tool's own count covers matches the (possibly truncated) text omits.
+		const resultDetails: Record<string, unknown> =
+			obj.details && typeof obj.details === "object"
+				? (obj.details as Record<string, unknown>)
+				: {};
+		let totalMatches = 0;
+		if (typeof resultDetails.match_count === "number") {
+			totalMatches = resultDetails.match_count;
+		} else {
+			for (const fileMatches of matches.values()) {
+				totalMatches += fileMatches.length;
 			}
 		}
 
-		// Parse the grep output
-		const matches = parseGrepOutput(text);
-
-		// Handle no matches
-		if (matches.size === 0) {
+		if (totalMatches === 0) {
 			return {
 				summary: "No matches",
 				details: ["No matches found"],
 			};
-		}
-
-		// Count total matches
-		let totalMatches = 0;
-		for (const fileMatches of matches.values()) {
-			// If we have match details, count them; otherwise count the file itself
-			totalMatches += fileMatches.length > 0 ? fileMatches.length : 1;
 		}
 
 		const fileCount = matches.size;
@@ -186,7 +187,10 @@ export const grepFormatter: ToolFormatter = {
 		// Build summary
 		const matchWord = totalMatches === 1 ? "match" : "matches";
 		const fileWord = fileCount === 1 ? "file" : "files";
-		const summary = `${totalMatches} ${matchWord} in ${fileCount} ${fileWord}`;
+		const summary =
+			fileCount > 0
+				? `${totalMatches} ${matchWord} in ${fileCount} ${fileWord}`
+				: `${totalMatches} ${matchWord}`;
 
 		// Build details
 		const details: string[] = [];
@@ -198,7 +202,7 @@ export const grepFormatter: ToolFormatter = {
 
 		for (const [filePath, fileMatches] of displayFiles) {
 			const formattedPath = formatPath(filePath);
-			const matchCount = fileMatches.length > 0 ? fileMatches.length : 1;
+			const matchCount = fileMatches.length;
 			const matchLabel = matchCount === 1 ? "match" : "matches";
 
 			// Add file header

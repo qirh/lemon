@@ -227,6 +227,7 @@ export class SessionController {
 		if (!session) return;
 		session.blocks.length = 0;
 		session.byActionId.clear();
+		session.reasoningByActionId.clear();
 		// The transcript is gone, so the stored history may legitimately be
 		// re-pulled on a later switch.
 		this.#hydrated.delete(key);
@@ -480,7 +481,12 @@ function historyToolTitle(message: ChatHistoryMessage): string {
 export function lastDaemonBlockAt(session: SessionStore): number | undefined {
 	for (let index = session.blocks.length - 1; index >= 0; index--) {
 		const block = session.blocks[index];
-		if (block.kind === "user" || block.kind === "assistant" || block.kind === "tool") {
+		if (
+			block.kind === "user" ||
+			block.kind === "assistant" ||
+			block.kind === "tool" ||
+			block.kind === "reasoning"
+		) {
 			return block.at;
 		}
 	}

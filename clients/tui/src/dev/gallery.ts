@@ -14,17 +14,23 @@
  *   bun run gallery --width 100              one width (repeatable, or 80,120)
  *   bun run gallery --plain                  strip ANSI (diffable output)
  *   bun run gallery --section diff           one section: tools|diff|shelf|accordion
- *   bun run gallery --list                   fixture names and their engines
+ *   bun run gallery --list                   fixture names, states, sections
  */
 
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AccordionComponent, type AccordionState } from "../ui/components/accordion.ts";
 import { renderDiff } from "../ui/components/diff.ts";
+import { ReasoningComponent } from "../ui/components/reasoning-block.ts";
 import { ToolCardComponent } from "../ui/components/tool-card.ts";
 import { ToolShelfComponent } from "../ui/components/tool-shelf.ts";
 import { getTheme, initTheme } from "../ui/theme/theme.ts";
-import { buildDiffText, type ToolCardState } from "../ui/tool-view.ts";
-import { fixtureBlock, TOOL_FIXTURES, type ToolFixture } from "./fixtures/tool-fixtures.ts";
+import { buildDiffText, serverDiffToRows, type ToolCardState } from "../ui/tool-view.ts";
+import {
+	fixtureBlock,
+	reasoningFixtureBlock,
+	TOOL_FIXTURES,
+	type ToolFixture,
+} from "./fixtures/tool-fixtures.ts";
 
 const STATES: ToolCardState[] = ["streaming", "running", "success", "error"];
 const STATE_LABELS: Record<ToolCardState, string> = {
@@ -154,9 +160,7 @@ export function renderToolSection(options: GalleryOptions, width: number): strin
 	if (fixtures.length === 0) throw new Error(`no fixture named '${options.tool}'`);
 
 	for (const fixture of fixtures) {
-		out.push(
-			...rule(`${fixture.name}  (${fixture.engine}, kind=${fixture.kind}) @${width}`, width),
-		);
+		out.push(...rule(`${fixture.name}  (kind=${fixture.kind}) @${width}`, width));
 		for (const state of options.states) {
 			out.push(...subheading(`  ${STATE_LABELS[state]}`, width));
 			for (const line of cardFor(fixture, state).render(width)) out.push(line);
@@ -175,11 +179,19 @@ export function renderDiffSection(width: number): string[] {
 	const out: string[] = [...rule(`diff samples @${width}`, width)];
 	const samples: Array<{ label: string; text: string; path?: string }> = [
 		{
-			label: "  single-line replacement (word-level highlight)",
+			label: "  server diff from the edit tool (real line numbers, two hunks)",
+			path: "lib/run.ex",
+			text: serverDiffToRows(
+				" 11\tdef start(job) do\n-12\t  {:ok, pid} = Runner.start_link(job)\n+12\t  {:ok, pid} = Runner.start_link(job, timeout: :infinity)\n 13\t  Registry.register(job.id, pid)\n...\n 40\tdef stop(pid) do\n+41\t  Logger.info(\"stopping\")\n 41\t  GenServer.stop(pid)",
+			),
+		},
+		{
+			label: "  single-line replacement anchored at line 12 (word-level highlight)",
 			path: "lib/run.ex",
 			text: buildDiffText(
 				"  {:ok, pid} = Runner.start_link(job)\n  Registry.register(job.id, pid)",
 				"  {:ok, pid} = Runner.start_link(job, timeout: :infinity)\n  Registry.register(job.id, pid)",
+				12,
 			),
 		},
 		{
@@ -261,11 +273,13 @@ export function renderAccordionSection(width: number): string[] {
 	}
 
 	out.push(...subheading("  per-kind defaults: reasoning collapses, tools expand", width));
-	for (const name of ["reasoning", "read"]) {
-		const fixture = TOOL_FIXTURES.find((item) => item.name === name);
-		if (!fixture) continue;
-		for (const line of cardFor(fixture, "success").render(width)) out.push(line);
+	for (const line of new ReasoningComponent(reasoningFixtureBlock({ at: STARTED_AT })).render(
+		width,
+	)) {
+		out.push(line);
 	}
+	const read = TOOL_FIXTURES.find((item) => item.name === "read");
+	if (read) for (const line of cardFor(read, "success").render(width)) out.push(line);
 	return out;
 }
 

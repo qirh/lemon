@@ -72,16 +72,16 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
- * The glyph a completed action gets. Subagents and reasoning read differently
- * from a plain tool call, so they are marked as such rather than sharing the
+ * The glyph a completed action gets. Subagents and notes read differently from
+ * a plain tool call, so they are marked as such rather than sharing the
  * generic check.
  */
 function completedGlyph(kind: string, theme: Theme): string {
 	if (theme.getSymbolPreset() === "ascii") {
-		return kind === "subagent" ? "@" : kind === "reasoning" || kind === "note" ? "*" : "v";
+		return kind === "subagent" ? "@" : kind === "note" ? "*" : "v";
 	}
 	if (kind === "subagent") return "◈";
-	if (kind === "reasoning" || kind === "note") return "✻";
+	if (kind === "note") return "✻";
 	return "✓";
 }
 

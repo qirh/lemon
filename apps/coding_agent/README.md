@@ -238,6 +238,16 @@ metadata and synthesize nonzero `bash` exits as structured `result_meta` with
 `error_type`, `tool_name`, `exit_code`, and a safe message so router and channel
 status surfaces do not need to parse terminal text.
 
+Completed tool action events carry two views of the result. `detail.result` is
+the 500-character preview that channel status renderers (Telegram, Discord)
+show. Next to it, `CodingAgent.Session.Presentation.put_operator_result/2`
+adds `detail.result_full` (the result text bounded to 32 KB, omitted when the
+preview already is the whole result) and `detail.details` (the tool's
+structured details — an edit's `diff` and `first_changed_line`, `exit_code`,
+`path`, … — made JSON-safe and bounded). Reasoning actions likewise carry a
+500-character `reasoning.text` preview plus a `reasoning.full_text` bounded to
+16 KB. The control plane promotes the full copies for operator clients.
+
 Local `patch` calls preflight every hunk in memory, reject duplicate paths and
 destructive move overwrites, revalidate each operation immediately before
 commit, and exclusively create new targets. Commits remain sequential, so a

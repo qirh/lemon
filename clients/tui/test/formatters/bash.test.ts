@@ -1,25 +1,15 @@
 /**
- * Tests for the bash formatter.
+ * Tests for the shell formatters (bash, bash_output, kill_process).
  */
 
 import { describe, expect, it } from "bun:test";
-import { bashFormatter } from "../../src/formatters/bash.js";
+import {
+	bashFormatter,
+	bashOutputFormatter,
+	killProcessFormatter,
+} from "../../src/formatters/bash.js";
 
 describe("bashFormatter", () => {
-	describe("tools property", () => {
-		it("should contain bash", () => {
-			expect(bashFormatter.tools).toContain("bash");
-		});
-
-		it("should contain exec", () => {
-			expect(bashFormatter.tools).toContain("exec");
-		});
-
-		it("should only contain bash and exec", () => {
-			expect(bashFormatter.tools).toHaveLength(2);
-		});
-	});
-
 	describe("formatArgs", () => {
 		it("should show simple command in summary", () => {
 			const result = bashFormatter.formatArgs({ command: "ls -la" });
@@ -50,26 +40,15 @@ describe("bashFormatter", () => {
 			expect(result.details).toContain("timeout: 60000ms");
 		});
 
-		it("should show cwd in details when provided", () => {
+		it("marks background and pty runs", () => {
 			const result = bashFormatter.formatArgs({
-				command: "npm install",
-				cwd: "/home/user/project",
+				command: "mix phx.server",
+				run_in_background: true,
+				pty: true,
 			});
 
-			expect(result.summary).toBe("npm install");
-			expect(result.details).toContain("cwd: /home/user/project");
-		});
-
-		it("should show both timeout and cwd when provided", () => {
-			const result = bashFormatter.formatArgs({
-				command: "npm test",
-				timeout: 120000,
-				cwd: "/home/user/project",
-			});
-
-			expect(result.details).toContain("npm test");
-			expect(result.details).toContain("timeout: 120000ms");
-			expect(result.details).toContain("cwd: /home/user/project");
+			expect(result.summary).toBe("mix phx.server (background)");
+			expect(result.details).toEqual(["mix phx.server", "background: true", "pty: true"]);
 		});
 
 		it("should handle empty command gracefully", () => {
@@ -117,8 +96,7 @@ describe("bashFormatter", () => {
 		it("should treat string result as stdout", () => {
 			const result = bashFormatter.formatResult("file1.txt\nfile2.txt\nfile3.txt");
 
-			expect(result.summary).toMatch(/^\[0\]/);
-			expect(result.summary).toContain("file1.txt");
+			expect(result.summary).toBe("file1.txt");
 			expect(result.isError).toBe(false);
 		});
 
@@ -256,18 +234,45 @@ describe("bashFormatter", () => {
 			expect(result.isError).toBe(false);
 		});
 
-		it("should handle null result", () => {
-			const result = bashFormatter.formatResult(null);
+		it("shows no exit badge when the result reports no exit code", () => {
+			const result = bashFormatter.formatResult({
+				content: [{ type: "text", text: "Command cancelled." }],
+				details: { exit_code: null, truncated: false },
+				is_error: false,
+			});
 
-			expect(result.summary).toBe("[0]");
-			expect(result.isError).toBe(false);
+			expect(result.summary).toBe("Command cancelled.");
+			expect(result.details[0]).toBe("Success");
+			expect(result.summary).not.toContain("undefined");
 		});
 
-		it("should handle undefined result", () => {
-			const result = bashFormatter.formatResult(undefined);
+		it("reports a failed call without an exit code as an error", () => {
+			const result = bashFormatter.formatResult({
+				content: [{ type: "text", text: "Error executing command: :enoent" }],
+				details: {},
+				is_error: true,
+			});
 
-			expect(result.summary).toBe("[0]");
-			expect(result.isError).toBe(false);
+			expect(result.summary).toBe("Error executing command: :enoent");
+			expect(result.details).toEqual([
+				"Failed",
+				"",
+				"stderr:",
+				"Error executing command: :enoent",
+			]);
+			expect(result.isError).toBe(true);
+		});
+
+		it("reads output from the text content when details carry only the exit code", () => {
+			const result = bashFormatter.formatResult({
+				content: [{ type: "text", text: "hello\n\nCommand exited with code 2" }],
+				details: { exit_code: 2, truncated: false },
+				is_error: false,
+			});
+
+			expect(result.summary).toBe("[2] hello");
+			expect(result.details).toEqual(["[2] Failed", "hello", "Command exited with code 2"]);
+			expect(result.isError).toBe(true);
 		});
 
 		it("should truncate very long output", () => {
@@ -419,5 +424,133 @@ Time:        1.234s`;
 			expect(result.isError).toBe(false);
 			expect(result.summary).toContain("total 32");
 		});
+	});
+
+	describe("run_in_background", () => {
+		it("summarizes the started process id", () => {
+			const result = bashFormatter.formatResult(
+				{
+					content: [{ type: "text", text: "Started background process bg_1" }],
+					details: { process_id: "bg_1", status: "running" },
+					is_error: false,
+				},
+				{ command: "sleep 100", run_in_background: true },
+			);
+
+			expect(result.summary).toBe("started in background: bg_1");
+			expect(result.details).toContain("process_id: bg_1");
+			expect(result.details).toContain("status: running");
+			expect(result.isError).toBe(false);
+		});
+
+		it("omits the id when the result has none", () => {
+			const result = bashFormatter.formatResult(
+				{ content: [], details: {}, is_error: false },
+				{ command: "sleep 100", run_in_background: true },
+			);
+
+			expect(result.summary).toBe("started in background");
+		});
+	});
+
+	describe("formatPartial", () => {
+		it("shows the latest streamed line without an exit badge", () => {
+			const result = bashFormatter.formatPartial!(
+				{ content: [{ type: "text", text: "compiling\nlinking\n" }] },
+				{ command: "make" },
+			);
+
+			expect(result.summary).toBe("linking");
+			expect(result.details).toEqual(["compiling", "linking"]);
+		});
+	});
+});
+
+describe("bashOutputFormatter", () => {
+	it("shows the process id as the argument summary", () => {
+		expect(bashOutputFormatter.formatArgs({ process_id: "bg_1" }).summary).toBe("bg_1");
+		expect(bashOutputFormatter.formatArgs({}).summary).toBe("");
+	});
+
+	it("summarizes status, exit code, and output", () => {
+		const result = bashOutputFormatter.formatResult(
+			{
+				content: [{ type: "text", text: "server listening on :4000" }],
+				details: {
+					process_id: "bg_1",
+					status: "completed",
+					exit_code: 0,
+					stdout: "server listening on :4000",
+				},
+				is_error: false,
+			},
+			{ process_id: "bg_1" },
+		);
+
+		expect(result.summary).toBe("completed [0] server listening on :4000");
+		expect(result.details).toEqual([
+			"process_id: bg_1",
+			"status: completed",
+			"exit code: 0",
+			"server listening on :4000",
+		]);
+		expect(result.isError).toBe(false);
+	});
+
+	it("shows a still-running process without an exit code", () => {
+		const result = bashOutputFormatter.formatResult(
+			{ content: [], details: { process_id: "bg_1", status: "running" }, is_error: false },
+			{ process_id: "bg_1" },
+		);
+
+		expect(result.summary).toBe("running");
+		expect(result.isError).toBe(false);
+	});
+
+	it("flags lost, killed, and error statuses and non-zero exits", () => {
+		for (const details of [
+			{ status: "lost" },
+			{ status: "killed" },
+			{ status: "error" },
+			{ status: "completed", exit_code: 1 },
+		]) {
+			const result = bashOutputFormatter.formatResult({ content: [], details, is_error: false });
+			expect(result.isError).toBe(true);
+		}
+	});
+});
+
+describe("killProcessFormatter", () => {
+	it("reports the killed process", () => {
+		const result = killProcessFormatter.formatResult(
+			{ content: [], details: { process_id: "bg_1", status: "killed" }, is_error: false },
+			{ process_id: "bg_1" },
+		);
+
+		expect(result.summary).toBe("killed bg_1");
+		expect(result.isError).toBe(false);
+	});
+
+	it("reports a process that was no longer running", () => {
+		const result = killProcessFormatter.formatResult(
+			{ content: [], details: { process_id: "bg_1", status: "completed" }, is_error: false },
+			{ process_id: "bg_1" },
+		);
+
+		expect(result.summary).toBe("bg_1: completed");
+	});
+
+	it("reports a failed kill", () => {
+		const result = killProcessFormatter.formatResult(
+			{
+				content: [{ type: "text", text: "Unknown process: bg_9" }],
+				details: {},
+				is_error: true,
+			},
+			{ process_id: "bg_9" },
+		);
+
+		expect(result.summary).toBe("kill failed: Unknown process: bg_9");
+		expect(result.isError).toBe(true);
 	});
 });

@@ -3,12 +3,7 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import {
-	shortenUrl,
-	webFetchFormatter,
-	webFormatter,
-	webSearchFormatter,
-} from "../../src/formatters/web.js";
+import { shortenUrl, webFetchFormatter, webSearchFormatter } from "../../src/formatters/web.js";
 
 describe("shortenUrl", () => {
 	it("returns empty string for empty input", () => {
@@ -397,62 +392,6 @@ describe("webSearchFormatter.formatResult", () => {
 		});
 
 		expect(result.summary).toBe("1 result");
-	});
-});
-
-describe("webFormatter (combined)", () => {
-	it("routes formatArgs to webfetch for URL args", () => {
-		const result = webFormatter.formatArgs({
-			url: "https://example.com/page",
-		});
-
-		expect(result.summary).toContain("example.com");
-	});
-
-	it("routes formatArgs to websearch for query args", () => {
-		const result = webFormatter.formatArgs({
-			query: "search term",
-		});
-
-		expect(result.summary).toBe('"search term"');
-	});
-
-	it("routes formatResult to webfetch when args have url", () => {
-		const result = webFormatter.formatResult(
-			{ details: { status: 200 } },
-			{ url: "https://example.com" },
-		);
-
-		expect(result.details).toContain("Status: 200 OK");
-	});
-
-	it("routes formatResult to websearch when args have query", () => {
-		const result = webFormatter.formatResult({ details: { results: [] } }, { query: "test" });
-
-		expect(result.summary).toContain("No results");
-	});
-
-	it("detects webfetch from result structure", () => {
-		const result = webFormatter.formatResult({
-			details: { status: 404, byte_count: 100 },
-		});
-
-		expect(result.isError).toBe(true);
-	});
-
-	it("detects websearch from result structure", () => {
-		const result = webFormatter.formatResult({
-			details: {
-				results: [{ title: "Test", url: "https://test.com" }],
-			},
-		});
-
-		expect(result.summary).toContain("1 result");
-	});
-
-	it("includes both tools in tools array", () => {
-		expect(webFormatter.tools).toContain("webfetch");
-		expect(webFormatter.tools).toContain("websearch");
 	});
 });
 

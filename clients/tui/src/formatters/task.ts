@@ -1,193 +1,195 @@
 /**
- * Formatter for task tool results.
+ * Formatter for subagent tools: task and agent.
  *
- * Handles formatting of task execution arguments and results,
- * including engine info, current action, and nested tool info.
+ * Both take an `action` (run, poll, join; task also has get). `run` launches a
+ * subagent from a prompt (agent targets a named `agent_id`); the others address
+ * earlier launches by `task_id`/`task_ids`. Results and streaming updates report
+ * a `status`, the subagent's `current_action`, and its output text.
  */
 
-import { truncateLines, truncateText } from "./base.js";
+import { extractText, truncateLines, truncateText } from "./base.js";
 import type { FormattedOutput, ToolFormatter } from "./types.js";
 
 /** Maximum length for prompt preview in summary */
 const PROMPT_SUMMARY_MAX_LENGTH = 60;
 
+/** Maximum length for a subject or output line in a result summary */
+const RESULT_SUMMARY_MAX_LENGTH = 80;
+
 /** Maximum lines of details to show */
 const DETAILS_MAX_LINES = 15;
 
-/**
- * Arguments structure for task tool.
- */
-interface TaskArgs {
-	action: "run" | "poll" | "join";
-	prompt?: string;
-	description?: string;
-	task_id?: string;
-}
+/** Maximum lines of output text to show in result details */
+const OUTPUT_MAX_LINES = 5;
 
 /**
- * Current action structure in task details.
- */
-interface CurrentAction {
-	title?: string;
-	kind?: string;
-	phase?: "started" | "completed" | string;
-	tool?: string;
-	tool_input?: Record<string, unknown>;
-}
-
-/**
- * Task details structure in result.
- */
-interface TaskDetails {
-	engine?: string;
-	current_action?: CurrentAction;
-	status?: string;
-	output?: string;
-}
-
-/**
- * Result structure from task tool.
- */
-interface TaskResult {
-	details?: TaskDetails;
-	content?: Array<{ type: string; text: string }>;
-}
-
-/**
- * Parses task details from a result object.
+ * Returns the value when it is a non-empty string.
  *
- * @param result - The raw result from task tool
- * @returns Parsed task details
+ * @param value - The value to check
+ * @returns The string, or undefined
  */
-function parseTaskDetails(result: unknown): TaskDetails | null {
-	if (!result || typeof result !== "object") {
-		return null;
+function nonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Keeps the string entries of an array value.
+ *
+ * @param value - Candidate array
+ * @returns String entries, or an empty array
+ */
+function stringList(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string")
+		: [];
+}
+
+/**
+ * Formats the subagent's current action with a phase indicator.
+ *
+ * @param action - The `current_action` details entry
+ * @returns Formatted action line, or undefined when it has no title or kind
+ */
+function formatCurrentAction(action: Record<string, unknown>): string | undefined {
+	const title = nonEmptyString(action.title) ?? nonEmptyString(action.kind);
+	if (!title) {
+		return undefined;
+	}
+	return action.phase === "completed" ? `✓ ${title}` : `▶ ${title}...`;
+}
+
+/**
+ * Formats a task/agent result or streaming update.
+ *
+ * @param result - The raw result
+ * @returns Formatted output
+ */
+function formatTaskResult(result: unknown): FormattedOutput {
+	const obj: Record<string, unknown> =
+		result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+	const details: Record<string, unknown> =
+		obj.details && typeof obj.details === "object"
+			? (obj.details as Record<string, unknown>)
+			: {};
+
+	const status = nonEmptyString(details.status);
+	const currentAction =
+		details.current_action && typeof details.current_action === "object"
+			? (details.current_action as Record<string, unknown>)
+			: undefined;
+	const taskIds = stringList(details.task_ids);
+	const joinedTasks = Array.isArray(details.tasks) ? details.tasks : [];
+	const outputLines = extractText(result)
+		.split(/\r?\n/)
+		.filter((line) => line.trim().length > 0);
+
+	const subject =
+		nonEmptyString(currentAction?.title) ??
+		nonEmptyString(currentAction?.kind) ??
+		nonEmptyString(details.description) ??
+		nonEmptyString(details.agent_id) ??
+		(taskIds.length > 0 ? `${taskIds.length} task${taskIds.length === 1 ? "" : "s"}` : undefined) ??
+		nonEmptyString(details.task_id);
+
+	let summary: string;
+	if (status && subject) {
+		summary = `${status}: ${truncateText(subject, RESULT_SUMMARY_MAX_LENGTH)}`;
+	} else if (status || subject) {
+		summary = truncateText((status ?? subject) as string, RESULT_SUMMARY_MAX_LENGTH);
+	} else if (outputLines.length > 0) {
+		summary = truncateText(outputLines[0].trim(), RESULT_SUMMARY_MAX_LENGTH);
+	} else {
+		summary = "completed";
 	}
 
-	const obj = result as TaskResult;
-
-	// Direct details object
-	if (obj.details && typeof obj.details === "object") {
-		return obj.details;
+	const lines: string[] = [];
+	if (status) {
+		lines.push(`status: ${status}`);
 	}
-
-	// Try to parse from content if present
-	if (Array.isArray(obj.content)) {
-		for (const block of obj.content) {
-			if (
-				block &&
-				typeof block === "object" &&
-				block.type === "text" &&
-				typeof block.text === "string"
-			) {
-				try {
-					const parsed = JSON.parse(block.text);
-					if (parsed.details && typeof parsed.details === "object") {
-						return parsed.details;
-					}
-				} catch {
-					// Not valid JSON, continue
-				}
-			}
+	for (const key of ["task_id", "agent_id", "role"]) {
+		const value = nonEmptyString(details[key]);
+		if (value) {
+			lines.push(`${key}: ${value}`);
 		}
 	}
-
-	return null;
-}
-
-/**
- * Gets the phase indicator for an action.
- *
- * @param phase - The action phase
- * @returns Phase indicator string
- */
-function getPhaseIndicator(phase?: string): string {
-	switch (phase) {
-		case "completed":
-			return "✓";
-		default:
-			return "▶";
+	const actionLine = currentAction ? formatCurrentAction(currentAction) : undefined;
+	if (actionLine) {
+		lines.push(actionLine);
 	}
-}
-
-/**
- * Formats the current action with phase indicator.
- *
- * @param action - The current action
- * @returns Formatted action string
- */
-function formatCurrentAction(action: CurrentAction): string {
-	const indicator = getPhaseIndicator(action.phase);
-	const title = action.title || action.kind || "processing";
-	const suffix = action.phase === "completed" ? "" : "...";
-	return `${indicator} ${title}${suffix}`;
-}
-
-/**
- * Formats nested tool information.
- *
- * @param action - The current action with tool info
- * @returns Formatted nested tool string, or null if no tool
- */
-function formatNestedTool(action: CurrentAction): string | null {
-	if (!action.tool) {
-		return null;
-	}
-
-	let toolInfo = action.tool;
-
-	// Add brief input description if available
-	if (action.tool_input && typeof action.tool_input === "object") {
-		const keys = Object.keys(action.tool_input);
-		if (keys.length > 0) {
-			const firstKey = keys[0];
-			const firstValue = action.tool_input[firstKey];
-			if (typeof firstValue === "string") {
-				const preview = truncateText(firstValue, 30);
-				toolInfo += `: ${preview}`;
-			}
+	for (const entry of joinedTasks) {
+		if (!entry || typeof entry !== "object") {
+			continue;
 		}
+		const task = entry as Record<string, unknown>;
+		const id = nonEmptyString(task.task_id) ?? "?";
+		const taskStatus = nonEmptyString(task.status) ?? "unknown";
+		const description = nonEmptyString(task.description);
+		lines.push(description ? `${id}: ${taskStatus} (${description})` : `${id}: ${taskStatus}`);
+	}
+	const error = nonEmptyString(details.error);
+	if (error) {
+		lines.push(`error: ${error}`);
+	}
+	if (outputLines.length > 0) {
+		if (lines.length > 0) {
+			lines.push("");
+		}
+		lines.push(...truncateLines(outputLines, OUTPUT_MAX_LINES));
 	}
 
-	return `  └─ ${toolInfo}`;
+	return {
+		summary,
+		details: truncateLines(lines, DETAILS_MAX_LINES),
+		isError: obj.is_error === true || status === "error",
+	};
 }
 
 /**
- * Formatter for task tool.
- *
- * Provides formatted output for task operations, showing:
- * - Engine and current action in summary
- * - Detailed engine info and action phases
- * - Nested tool information when available
+ * Formatter for the task and agent tools.
  */
 export const taskFormatter: ToolFormatter = {
-	tools: ["task"],
+	tools: ["task", "agent"],
 
 	formatArgs(args: Record<string, unknown>): FormattedOutput {
-		const taskArgs = args as unknown as TaskArgs;
-		const action = taskArgs.action || "run";
+		const action = nonEmptyString(args.action) ?? "run";
+		const agentId = nonEmptyString(args.agent_id);
+		const taskId = nonEmptyString(args.task_id);
+		const taskIds = stringList(args.task_ids);
 
-		// Get prompt/description preview
-		const promptText = taskArgs.prompt || taskArgs.description || "";
+		const promptText = nonEmptyString(args.prompt) ?? nonEmptyString(args.description) ?? "";
 		const promptPreview = promptText
 			? truncateText(promptText.replace(/\s+/g, " ").trim(), PROMPT_SUMMARY_MAX_LENGTH)
 			: "";
 
-		// Summary: action with prompt preview
-		const summary = promptPreview ? `${action}: ${promptPreview}` : action;
+		// Summary: what the call addresses — a prompt for run, task ids otherwise.
+		let summary: string;
+		if (action === "run") {
+			const head = agentId ? `run ${agentId}` : "run";
+			summary = promptPreview ? `${head}: ${promptPreview}` : head;
+		} else if (taskIds.length > 1) {
+			summary = `${action} ${taskIds.length} tasks`;
+		} else {
+			const target = taskIds[0] ?? taskId;
+			summary = target ? `${action} ${target}` : action;
+		}
 
-		// Details: action and full prompt
-		const details: string[] = [];
-		details.push(`action: ${action}`);
-
-		if (taskArgs.task_id) {
-			details.push(`task_id: ${taskArgs.task_id}`);
+		const details: string[] = [`action: ${action}`];
+		for (const key of ["agent_id", "role", "model", "task_id", "mode", "node", "cwd"]) {
+			const value = nonEmptyString(args[key]);
+			if (value) {
+				details.push(`${key}: ${value}`);
+			}
+		}
+		if (taskIds.length > 0) {
+			details.push(`task_ids: ${taskIds.join(", ")}`);
+		}
+		if (typeof args.async === "boolean") {
+			details.push(`async: ${args.async}`);
 		}
 
 		if (promptText) {
 			details.push("");
-			const promptLines = promptText.split(/\r?\n/);
-			details.push(...truncateLines(promptLines, 10));
+			details.push(...truncateLines(promptText.split(/\r?\n/), 10));
 		}
 
 		return {
@@ -197,54 +199,12 @@ export const taskFormatter: ToolFormatter = {
 	},
 
 	formatResult(result: unknown, _args?: Record<string, unknown>): FormattedOutput {
-		const taskDetails = parseTaskDetails(result);
-
-		if (!taskDetails) {
-			return {
-				summary: "completed",
-				details: [],
-			};
-		}
-
-		const engine = taskDetails.engine || "unknown";
-		const currentAction = taskDetails.current_action;
-		const actionTitle = currentAction?.title || currentAction?.kind || "idle";
-
-		// Summary: engine + current action title
-		const summary = `${engine}: ${actionTitle}`;
-
-		// Details: engine info and action phases
-		const details: string[] = [];
-		details.push(`engine: ${engine}`);
-
-		if (taskDetails.status) {
-			details.push(`status: ${taskDetails.status}`);
-		}
-
-		if (currentAction) {
-			details.push(formatCurrentAction(currentAction));
-
-			const nestedTool = formatNestedTool(currentAction);
-			if (nestedTool) {
-				details.push(nestedTool);
-			}
-		}
-
-		if (taskDetails.output) {
-			details.push("");
-			const outputLines = taskDetails.output.split(/\r?\n/);
-			details.push(...truncateLines(outputLines, 5));
-		}
-
-		return {
-			summary,
-			details: truncateLines(details, DETAILS_MAX_LINES),
-		};
+		return formatTaskResult(result);
 	},
 
-	formatPartial(partial: unknown, args?: Record<string, unknown>): FormattedOutput {
-		// Partial formatting uses the same logic as result formatting
-		return this.formatResult(partial, args);
+	formatPartial(partial: unknown, _args?: Record<string, unknown>): FormattedOutput {
+		// Streaming updates carry the same status/current_action details.
+		return formatTaskResult(partial);
 	},
 };
 

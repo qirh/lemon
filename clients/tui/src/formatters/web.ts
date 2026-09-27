@@ -319,51 +319,6 @@ const webSearchFormatter: ToolFormatter = {
 	},
 };
 
-/**
- * Combined formatter for all web tools.
- *
- * Routes formatting to the appropriate specialized formatter based on tool name.
- */
-export const webFormatter: ToolFormatter = {
-	tools: ["webfetch", "websearch"],
-
-	formatArgs(args: Record<string, unknown>): FormattedOutput {
-		// Detect which tool based on args
-		if ("url" in args) {
-			return webFetchFormatter.formatArgs(args);
-		}
-		if ("query" in args) {
-			return webSearchFormatter.formatArgs(args);
-		}
-		// Default to search formatter
-		return webSearchFormatter.formatArgs(args);
-	},
-
-	formatResult(result: unknown, args?: Record<string, unknown>): FormattedOutput {
-		// Detect which tool based on args
-		if (args && "url" in args) {
-			return webFetchFormatter.formatResult(result, args);
-		}
-		if (args && "query" in args) {
-			return webSearchFormatter.formatResult(result, args);
-		}
-		// Try to detect from result structure
-		const res = result as Record<string, unknown>;
-		if (res?.details && typeof res.details === "object") {
-			const details = res.details as Record<string, unknown>;
-			if ("status" in details || "content_type" in details || "byte_count" in details) {
-				return webFetchFormatter.formatResult(result, args);
-			}
-			if ("results" in details) {
-				return webSearchFormatter.formatResult(result, args);
-			}
-		}
-		// Default to search formatter
-		return webSearchFormatter.formatResult(result, args);
-	},
-};
-
-// Export individual formatters for direct use
 export { webFetchFormatter, webSearchFormatter };
 
-export default webFormatter;
+export default [webFetchFormatter, webSearchFormatter];

@@ -126,6 +126,7 @@ defmodule CodingAgent.Session.RunTranslator do
 
         detail =
           %{name: name, result: Presentation.truncate_result(result)}
+          |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
         ok? = Presentation.action_ok?(name, result, is_error)
@@ -143,6 +144,7 @@ defmodule CodingAgent.Session.RunTranslator do
         detail =
           action.detail
           |> Map.merge(%{result: Presentation.truncate_result(result)})
+          |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
         ok? = Presentation.action_ok?(name, result, is_error)

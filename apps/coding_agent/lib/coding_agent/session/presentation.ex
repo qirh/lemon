@@ -10,6 +10,18 @@ defmodule CodingAgent.Session.Presentation do
   @engine "lemon"
   @reasoning_update_threshold 700
 
+  # Channel renderers (Telegram, Discord) show `detail.result`, a 500-char
+  # preview. Operator clients (TUI, web over the control plane) additionally get
+  # these bounded full-fidelity copies; see `put_operator_result/2`.
+  @operator_result_max_bytes 32_768
+  @operator_reasoning_max_bytes 16_384
+  @operator_diff_max_bytes 32_768
+  @operator_detail_string_max_bytes 2_048
+  @operator_detail_list_max 200
+  @operator_detail_max_depth 4
+  # Internal bookkeeping or payloads another field already carries.
+  @operator_detail_dropped_keys ["acp_client", "events", "current_action", "action_detail"]
+
   defmodule ReasoningAccumulator do
     @moduledoc false
 
@@ -394,10 +406,12 @@ defmodule CodingAgent.Session.Presentation do
   def tool_kind(name) do
     case String.downcase(name || "") do
       "bash" -> :command
+      "bash_output" -> :command
+      "kill_process" -> :command
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
-      "glob" -> :tool
+      "patch" -> :file_change
       "grep" -> :tool
       "websearch" -> :web_search
       "webfetch" -> :web_search
@@ -415,7 +429,16 @@ defmodule CodingAgent.Session.Presentation do
       "bash" ->
         cmd = a["command"] || ""
         cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
-        "`#{cmd_preview}`"
+
+        if a["run_in_background"] == true,
+          do: "`#{cmd_preview}` (background)",
+          else: "`#{cmd_preview}`"
+
+      "bash_output" ->
+        "bash output: #{a["process_id"] || ""}"
+
+      "kill_process" ->
+        "kill: #{a["process_id"] || ""}"
 
       "read" ->
         path = a["path"] || a["file_path"] || ""
@@ -429,8 +452,8 @@ defmodule CodingAgent.Session.Presentation do
         path = a["path"] || a["file_path"] || ""
         "edit: `#{path_label(path)}`"
 
-      "glob" ->
-        "glob: `#{a["pattern"] || ""}`"
+      "find" ->
+        "find: `#{String.slice(a["pattern"] || "", 0, 40)}`"
 
       "grep" ->
         pattern = String.slice(a["pattern"] || "", 0, 30)
@@ -611,7 +634,7 @@ defmodule CodingAgent.Session.Presentation do
 
   def truncate_result(%LemonAgent.Types.AgentToolResult{} = result) do
     result
-    |> LemonAgent.get_text()
+    |> result_text()
     |> truncate_result()
   end
 
@@ -619,6 +642,137 @@ defmodule CodingAgent.Session.Presentation do
     do: truncate_result(text)
 
   def truncate_result(content) when is_list(content) do
+    content
+    |> result_text()
+    |> truncate_result()
+  end
+
+  def truncate_result(result), do: inspect(result, limit: 500)
+
+  @doc """
+  Adds the operator-client view of a tool result to an action `detail`.
+
+  `detail.result` stays the 500-char preview channel renderers show. This adds
+  `result_full` (the result text bounded to 32 KB, only when it is longer than
+  the preview) and `details` (the tool's structured details — diff,
+  first_changed_line, path, exit_code, ... — made JSON-safe and bounded).
+  `LemonControlPlane.EventBridge` promotes both for operator clients.
+  """
+  @spec put_operator_result(map(), term()) :: map()
+  def put_operator_result(detail, result) when is_map(detail) do
+    detail
+    |> maybe_put_result_full(result)
+    |> maybe_put_operator_details(result)
+  end
+
+  defp maybe_put_result_full(detail, result) do
+    full =
+      result
+      |> result_text()
+      |> LemonAi.Text.truncate_middle_utf8(@operator_result_max_bytes,
+        marker: fn removed -> "\n\n… [#{removed} bytes omitted] …\n\n" end
+      )
+
+    if full == Map.get(detail, :result), do: detail, else: Map.put(detail, :result_full, full)
+  end
+
+  defp maybe_put_operator_details(detail, %LemonAgent.Types.AgentToolResult{details: details})
+       when is_map(details) do
+    case operator_details(details) do
+      empty when map_size(empty) == 0 -> detail
+      sanitized -> Map.put(detail, :details, sanitized)
+    end
+  end
+
+  defp maybe_put_operator_details(detail, _result), do: detail
+
+  @doc """
+  Projects a tool's structured `details` into a JSON-safe, bounded map.
+
+  Structs, pids, functions and tuples are dropped, as are internal bookkeeping
+  keys. `diff` keeps up to 32 KB; other strings 2 KB. Lists keep their first 200
+  items and nesting stops at depth 4.
+  """
+  @spec operator_details(map()) :: map()
+  def operator_details(details) when is_map(details) and not is_struct(details) do
+    sanitize_detail_map(details, 1)
+  end
+
+  def operator_details(_details), do: %{}
+
+  defp sanitize_detail_map(map, depth) do
+    Enum.reduce(map, %{}, fn {key, value}, acc ->
+      with name when is_binary(name) <- detail_key_name(key),
+           false <- name in @operator_detail_dropped_keys,
+           {:ok, sanitized} <- sanitize_detail_value(name, value, depth) do
+        Map.put(acc, key, sanitized)
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  defp detail_key_name(key) when is_atom(key), do: Atom.to_string(key)
+  defp detail_key_name(key) when is_binary(key), do: key
+  defp detail_key_name(_key), do: nil
+
+  defp sanitize_detail_value(_name, value, _depth)
+       when is_nil(value) or is_boolean(value) or is_number(value),
+       do: {:ok, value}
+
+  defp sanitize_detail_value(_name, value, _depth) when is_atom(value), do: {:ok, value}
+
+  defp sanitize_detail_value(name, value, _depth) when is_binary(value) do
+    max_bytes =
+      if name == "diff", do: @operator_diff_max_bytes, else: @operator_detail_string_max_bytes
+
+    if String.valid?(value) do
+      {:ok, LemonAi.Text.truncate_bytes_utf8(value, max_bytes, marker: "\n...")}
+    else
+      :drop
+    end
+  end
+
+  defp sanitize_detail_value(_name, _value, depth) when depth >= @operator_detail_max_depth,
+    do: :drop
+
+  defp sanitize_detail_value(_name, value, depth) when is_map(value) and not is_struct(value) do
+    {:ok, sanitize_detail_map(value, depth + 1)}
+  end
+
+  defp sanitize_detail_value(name, value, depth) when is_list(value) do
+    items =
+      value
+      |> Enum.take(@operator_detail_list_max)
+      |> Enum.flat_map(fn item ->
+        case sanitize_detail_value(name, item, depth + 1) do
+          {:ok, sanitized} -> [sanitized]
+          :drop -> []
+        end
+      end)
+
+    {:ok, items}
+  end
+
+  defp sanitize_detail_value(_name, _value, _depth), do: :drop
+
+  @doc """
+  The full text of a tool result: every text block joined, or an inspected
+  fallback for results that carry no text.
+  """
+  @spec result_text(term()) :: String.t()
+  def result_text(result) when is_binary(result), do: result
+
+  def result_text(%LemonAgent.Types.AgentToolResult{} = result) do
+    case LemonAgent.get_text(result) do
+      text when is_binary(text) -> text
+      _ -> ""
+    end
+  end
+
+  def result_text(%LemonAi.Types.TextContent{text: text}) when is_binary(text), do: text
+
+  def result_text(content) when is_list(content) do
     content
     |> Enum.map(fn
       %LemonAi.Types.TextContent{text: text} when is_binary(text) -> text
@@ -629,10 +783,9 @@ defmodule CodingAgent.Session.Presentation do
     end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
-    |> truncate_result()
   end
 
-  def truncate_result(result), do: inspect(result, limit: 500)
+  def result_text(result), do: inspect(result, limit: 200, printable_limit: 4_096)
 
   def maybe_put_result_meta(detail, %LemonAgent.Types.AgentToolResult{} = result, name)
       when is_map(detail) do
@@ -836,10 +989,22 @@ defmodule CodingAgent.Session.Presentation do
       title: reasoning_title(text),
       phase: phase,
       ok: ok,
-      detail: %{
-        reasoning: %{text: reasoning_payload_text(text, phase), source: "lemon_reasoning"}
-      }
+      detail: %{reasoning: reasoning_payload(text, phase)}
     }
+  end
+
+  # `text` is the channel preview; `full_text` is the operator copy, bounded to
+  # 16 KB and only present when it differs from the preview.
+  defp reasoning_payload(text, phase) do
+    preview = reasoning_payload_text(text, phase)
+
+    full =
+      LemonAi.Text.truncate_bytes_utf8(text, @operator_reasoning_max_bytes,
+        marker: fn removed -> "\n… [#{removed} bytes of reasoning omitted]" end
+      )
+
+    payload = %{text: preview, source: "lemon_reasoning"}
+    if full == preview, do: payload, else: Map.put(payload, :full_text, full)
   end
 
   defp reasoning_payload_text(text, :updated) when byte_size(text) <= 500, do: text
