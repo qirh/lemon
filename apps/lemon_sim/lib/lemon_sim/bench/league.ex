@@ -75,8 +75,6 @@ defmodule LemonSim.Bench.League do
     }
   end
 
-  defp rotate([], _offset), do: []
-
   defp rotate(list, offset) do
     {left, right} = Enum.split(list, rem(offset, length(list)))
     right ++ left

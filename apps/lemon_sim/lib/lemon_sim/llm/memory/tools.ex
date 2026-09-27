@@ -266,9 +266,6 @@ defmodule LemonSim.LLM.Memory.Tools do
 
           {:error, reason} when is_binary(reason) ->
             {:error, reason}
-
-          {:error, reason} ->
-            {:error, "Unable to list memory files: #{inspect(reason)}"}
         end
       end
     }

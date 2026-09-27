@@ -420,8 +420,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
     _ -> 0
   end
 
-  defp count_tool_calls(_), do: 0
-
   defp extract_tool_calls(events, max) when is_list(events) do
     events
     |> Enum.filter(&action_event?/1)
@@ -430,8 +428,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   rescue
     _ -> []
   end
-
-  defp extract_tool_calls(_, _), do: []
 
   defp action_event?(ev) when is_map(ev) do
     Map.get(ev, :__event__) == :action_event or is_map(get_map(ev, :action))
@@ -467,7 +463,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp format_tool_detail(nil), do: nil
 
   defp format_tool_detail(detail) when is_binary(detail),
-    do: detail |> redact_text() |> truncate(@max_preview_bytes)
+    do: detail |> LemonCore.Redact.text() |> truncate(@max_preview_bytes)
 
   defp format_tool_detail(detail) do
     truncate(inspect(serialize_term(detail), limit: 120), @max_preview_bytes)
@@ -488,8 +484,6 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       }
     end)
   end
-
-  defp build_event_digest(_, _), do: []
 
   defp build_raw_events(events, opts) do
     events
@@ -549,7 +543,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
       key = key_to_string(k)
-      value = if sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+      value = if LemonCore.Redact.sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
 
       Map.put(acc, key, serialize_term(value, depth + 1))
     end)
@@ -566,35 +560,16 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   end
 
   defp serialize_term(value, _depth) when is_binary(value),
-    do: value |> redact_text() |> truncate(@max_string_bytes)
+    do: value |> LemonCore.Redact.text() |> truncate(@max_string_bytes)
 
   defp serialize_term(value, _depth) when is_integer(value) or is_float(value), do: value
   defp serialize_term(value, _depth) when is_boolean(value) or is_nil(value), do: value
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
 
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
+  
 
-  defp sensitive_key?(key) do
-    normalized = key |> to_string() |> String.downcase()
-
-    Enum.any?(
-      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
-      &String.contains?(normalized, &1)
-    )
-  end
+  
 
   defp get_map(nil, _key, default), do: default
 
@@ -639,7 +614,7 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   defp safe_binary(value), do: inspect(value)
 
   defp maybe_truncate(value, true, _max), do: value
-  defp maybe_truncate(value, false, max), do: value |> redact_text() |> truncate(max)
+  defp maybe_truncate(value, false, max), do: value |> LemonCore.Redact.text() |> truncate(max)
 
   defp truncate(nil, _), do: nil
   defp truncate(text, max) when is_binary(text) and byte_size(text) <= max, do: text

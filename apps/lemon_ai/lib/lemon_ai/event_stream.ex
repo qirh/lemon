@@ -405,11 +405,7 @@ defmodule LemonAi.EventStream do
   end
 
   def handle_cast({:complete, message}, state) do
-    stop_reason =
-      cond do
-        is_map(message) -> Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
-        true -> message.stop_reason
-      end
+    stop_reason = Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
 
     done_event = {:done, stop_reason, message}
 
@@ -427,11 +423,7 @@ defmodule LemonAi.EventStream do
   end
 
   def handle_cast({:error, message}, state) do
-    stop_reason =
-      cond do
-        is_map(message) -> Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
-        true -> message.stop_reason
-      end
+    stop_reason = Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
 
     error_event = {:error, stop_reason, message}
 

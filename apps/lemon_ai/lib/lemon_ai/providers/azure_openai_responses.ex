@@ -56,8 +56,6 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
 
-  require Logger
-
   # ============================================================================
   # Configuration
   # ============================================================================

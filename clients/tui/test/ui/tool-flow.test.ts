@@ -395,12 +395,12 @@ describe("action kinds", () => {
 		const { app, server } = await boot();
 		tool(server, {
 			id: "m1",
-			title: "session_search",
-			detail: { name: "session_search", args: { query: "x" }, result: "3 sessions matched" },
+			title: "custom_search",
+			detail: { name: "custom_search", args: { query: "x" }, result: "3 sessions matched" },
 			phase: "completed",
 			ok: true,
 		});
-		await waitFor(() => transcript(app).includes("session_search"), { what: "the card" });
+		await waitFor(() => transcript(app).includes("custom_search"), { what: "the card" });
 		expect(transcript(app)).toContain("3 sessions matched");
 	});
 });

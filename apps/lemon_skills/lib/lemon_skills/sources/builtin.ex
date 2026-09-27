@@ -55,7 +55,7 @@ defmodule LemonSkills.Sources.Builtin do
   end
 
   @impl true
-  def trust_level, do: :builtin
+  def trust_for_ref(_id), do: :builtin
 
   # ---------------------------------------------------------------------------
   # Private

@@ -146,26 +146,21 @@ defmodule LemonRouter.RunOrchestrator do
           completed_today: non_neg_integer()
         }
   def counts do
-    # Both sources are processes that may not be running, and calling a process
-    # that is not there *exits* rather than raising — so `rescue` alone left
-    # this function propagating the very failure it was written to absorb.
+    # Counts remain available during supervisor startup/shutdown; callback bugs
+    # are not equivalent to an unavailable process.
     active =
       try do
         %{active: n} = DynamicSupervisor.count_children(LemonRouter.RunSupervisor)
         n
-      rescue
-        _ -> 0
       catch
-        _kind, _reason -> 0
+        :exit, _reason -> 0
       end
 
     {queued, completed_today} =
       try do
         {LemonRouter.RunCountTracker.queued(), LemonRouter.RunCountTracker.completed_today()}
-      rescue
-        _ -> {0, 0}
       catch
-        _kind, _reason -> {0, 0}
+        :exit, _reason -> {0, 0}
       end
 
     %{active: active, queued: queued, completed_today: completed_today}
@@ -328,6 +323,11 @@ defmodule LemonRouter.RunOrchestrator do
 
             Logger.error("Failed to submit run to session coordinator: #{inspect(reason)}")
             {:error, reason}
+
+          _malformed_acknowledgement ->
+            # The callback may have enqueued work without returning its receipt.
+            # Keep the submitting fence; this is not a retryable rejection.
+            {:error, :outcome_unknown}
         end
 
       {:error, reason} ->
@@ -389,10 +389,8 @@ defmodule LemonRouter.RunOrchestrator do
       {:error, _reason} -> {:error, :admission_store_unavailable}
       _ -> {:error, :admission_store_unavailable}
     end
-  rescue
-    _ -> {:error, :admission_store_unavailable}
   catch
-    _, _ -> {:error, :admission_store_unavailable}
+    :exit, _ -> {:error, :admission_store_unavailable}
   end
 
   defp existing_admission(run_id, identity) do
@@ -416,10 +414,8 @@ defmodule LemonRouter.RunOrchestrator do
       _unexpected ->
         {:error, :admission_store_unavailable}
     end
-  rescue
-    _ -> {:error, :admission_store_unavailable}
   catch
-    _, _ -> {:error, :admission_store_unavailable}
+    :exit, _ -> {:error, :admission_store_unavailable}
   end
 
   defp continue_admission(params, identity, admission, ownership, state) do
@@ -510,18 +506,13 @@ defmodule LemonRouter.RunOrchestrator do
               :ok -> {error, state}
               _failure -> {{:error, :outcome_unknown}, state}
             end
-
-          _malformed_acknowledgement ->
-            {{:error, :outcome_unknown}, state}
         end
 
       _failure ->
         {{:error, :outcome_unknown}, state}
     end
-  rescue
-    _ -> {{:error, :outcome_unknown}, state}
   catch
-    _, _ -> {{:error, :outcome_unknown}, state}
+    :exit, _ -> {{:error, :outcome_unknown}, state}
   end
 
   defp accept_terminal_replay(run_id, identity, admission, state) do
@@ -553,10 +544,8 @@ defmodule LemonRouter.RunOrchestrator do
       _unexpected ->
         :terminal_outcome_unknown
     end
-  rescue
-    _ -> :terminal_outcome_unknown
   catch
-    _, _ -> :terminal_outcome_unknown
+    :exit, _ -> :terminal_outcome_unknown
   end
 
   defp classify_terminal_record(record, session_key, identity) do
@@ -628,10 +617,8 @@ defmodule LemonRouter.RunOrchestrator do
       _ ->
         {:error, :admission_store_unavailable}
     end
-  rescue
-    _ -> {:error, :admission_store_unavailable}
   catch
-    _, _ -> {:error, :admission_store_unavailable}
+    :exit, _ -> {:error, :admission_store_unavailable}
   end
 
   defp cache_accepted_admission(state, run_id, identity, expires_at_ms) do
@@ -730,9 +717,9 @@ defmodule LemonRouter.RunOrchestrator do
       do: :ok,
       else: {:error, :outcome_unknown}
   rescue
-    _ -> {:error, :outcome_unknown}
+    ArgumentError -> {:error, :outcome_unknown}
   catch
-    _, _ -> {:error, :outcome_unknown}
+    :exit, _ -> {:error, :outcome_unknown}
   end
 
   defp session_coordinator_mod do
@@ -816,10 +803,8 @@ defmodule LemonRouter.RunOrchestrator do
       _unexpected ->
         {:error, state}
     end
-  rescue
-    _ -> {:error, state}
   catch
-    _, _ -> {:error, state}
+    :exit, _ -> {:error, state}
   end
 
   defp persist_abort_tombstone(run_id, tombstone) do
@@ -828,10 +813,8 @@ defmodule LemonRouter.RunOrchestrator do
       {:error, _reason} = error -> error
       _unexpected -> {:error, :store_unavailable}
     end
-  rescue
-    _ -> {:error, :store_unavailable}
   catch
-    _, _ -> {:error, :store_unavailable}
+    :exit, _ -> {:error, :store_unavailable}
   end
 
   defp maybe_cleanup_durable_receipts(state) do
@@ -850,10 +833,8 @@ defmodule LemonRouter.RunOrchestrator do
     else
       state
     end
-  rescue
-    _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
   catch
-    _, _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
+    :exit, _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
   end
 
   defp compact_existing_admission(run_id, entry, identity) do
@@ -947,10 +928,6 @@ defmodule LemonRouter.RunOrchestrator do
       %{count: 1},
       %{reason: safe_error_label(reason)}
     )
-  rescue
-    _ -> :ok
-  catch
-    _, _ -> :ok
   end
 
   defp normalize_abort_reason(reason)

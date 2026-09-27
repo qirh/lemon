@@ -172,6 +172,4 @@ defmodule LemonSimUi.ArtifactReader do
         end
     end
   end
-
-  defp get_key(_map, _key), do: nil
 end

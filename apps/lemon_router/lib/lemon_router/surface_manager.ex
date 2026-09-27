@@ -30,10 +30,8 @@ defmodule LemonRouter.SurfaceManager do
         meta: coalescer_meta(state)
       )
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec prepare_status_action(map(), map()) :: {map(), term(), boolean()}
@@ -90,16 +88,14 @@ defmodule LemonRouter.SurfaceManager do
         surface: surface
       )
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec ingest_status_action(map(), map(), term()) :: :ok
   def ingest_status_action(state, action_event, surface) do
     _ = maybe_start_async_task_surface_subscriber(state, action_event, surface)
-
+   
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       ToolStatusCoalescer.ingest_action(
         state.session_key,
@@ -110,10 +106,8 @@ defmodule LemonRouter.SurfaceManager do
         surface: surface
       )
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec ingest_projected_child_action(map(), map(), term()) :: :ok
@@ -128,10 +122,8 @@ defmodule LemonRouter.SurfaceManager do
         meta: coalescer_meta(state)
       )
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec commit_status_segment(map(), term()) :: :ok
@@ -145,10 +137,8 @@ defmodule LemonRouter.SurfaceManager do
         surface: surface
       )
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec finalize_status(map(), Event.t()) :: :ok
@@ -162,7 +152,7 @@ defmodule LemonRouter.SurfaceManager do
           %{"ok" => ok} -> ok == true
           _ -> false
         end
-
+   
       Enum.each(finalizable_status_surfaces(state), fn surface ->
         ToolStatusCoalescer.finalize_run(
           state.session_key,
@@ -174,10 +164,8 @@ defmodule LemonRouter.SurfaceManager do
         )
       end)
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec flush_status(map()) :: :ok
@@ -187,28 +175,24 @@ defmodule LemonRouter.SurfaceManager do
         ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
       end)
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec flush_all(map()) :: :ok
   def flush_all(state) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       StreamCoalescer.flush(state.session_key, channel_id)
-
+   
       Enum.each(active_status_surfaces(state), fn surface ->
         ToolStatusCoalescer.flush(state.session_key, channel_id, surface: surface)
       end)
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
-  @spec finalize_answer(map(), Event.t(), map()) :: :ok
+  @spec finalize_answer(map(), Event.t(), map()) :: :ok | {:error, term()}
   def finalize_answer(state, %Event{} = event, extra_meta) when is_map(extra_meta) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       resume =
@@ -238,27 +222,27 @@ defmodule LemonRouter.SurfaceManager do
         resolved_final_text = streamed_final_text(state, channel_id, final_text)
 
         record_finalize_dispatch(state, :direct_stream_finalize)
-        dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
+        with :ok <- dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta) do
+          case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
+                 meta: meta,
+                 final_text: resolved_final_text,
+                 dispatch?: false
+               ) do
+            :ok ->
+              :ok
 
-        case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
-               meta: meta,
-               final_text: resolved_final_text,
-               dispatch?: false
-             ) do
-          :ok ->
-            :ok
+            {:error, reason} ->
+              record_finalize_dispatch(state, :fallback_stream_finalize)
+              dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
 
-          {:error, reason} ->
-            record_finalize_dispatch(state, :fallback_stream_finalize)
-            dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
-
-            maybe_dispatch_fallback_final_text(
-              state,
-              channel_id,
-              resolved_final_text,
-              meta,
-              reason
-            )
+              maybe_dispatch_fallback_final_text(
+                state,
+                channel_id,
+                resolved_final_text,
+                meta,
+                reason
+              )
+          end
         end
       else
         case stream_coalescer().finalize_run(
@@ -277,11 +261,9 @@ defmodule LemonRouter.SurfaceManager do
             dispatch_fallback_final_answer(state, channel_id, final_text, meta, reason)
         end
       end
+    else
+      :error -> :ok
     end
-
-    :ok
-  rescue
-    _ -> :ok
   end
 
   @spec maybe_seed_final_answer(map(), Event.t()) :: :ok
@@ -299,10 +281,8 @@ defmodule LemonRouter.SurfaceManager do
         meta: coalescer_meta(state)
       )
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec fanout_final_answer(map(), Event.t()) :: :ok
@@ -311,7 +291,7 @@ defmodule LemonRouter.SurfaceManager do
          true <- String.trim(answer) != "",
          routes when is_list(routes) and routes != [] <- fanout_routes(state) do
       primary_signature = primary_route_signature(state)
-
+   
       routes
       |> Enum.map(&normalize_fanout_route/1)
       |> Enum.reject(&is_nil/1)
@@ -328,11 +308,11 @@ defmodule LemonRouter.SurfaceManager do
           body: %{text: answer, seq: index},
           meta: %{surface: :answer, fanout: true, fanout_index: index}
         }
-
+   
         case dispatcher().dispatch(intent) do
           :ok ->
             :ok
-
+   
           {:error, reason} ->
             Logger.warning(
               "Failed to dispatch fanout output for run_id=#{inspect(state.run_id)} route=#{inspect(route)} reason=#{inspect(reason)}"
@@ -340,10 +320,8 @@ defmodule LemonRouter.SurfaceManager do
         end
       end)
     end
-
+   
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp coalescer_meta(%{execution_request: %LemonCore.ExecutionCommand{} = request}) do
@@ -383,7 +361,7 @@ defmodule LemonRouter.SurfaceManager do
       Process.alive?(pid) and subscriber_owns_surface?(pid, surface)
     end)
   rescue
-    _ -> false
+    ArgumentError -> false
   end
 
   defp subscriber_owns_surface?(pid, surface) when is_pid(pid) do
@@ -548,8 +526,6 @@ defmodule LemonRouter.SurfaceManager do
           thread_id: if(is_binary(thread_id) and thread_id != "", do: thread_id, else: nil)
         }
     end
-  rescue
-    _ -> nil
   end
 
   defp normalize_fanout_route(_), do: nil
@@ -608,8 +584,6 @@ defmodule LemonRouter.SurfaceManager do
 
   defp streamed_final_text(state, channel_id, _final_text) do
     stream_coalescer().current_text(state.session_key, channel_id, state.run_id)
-  rescue
-    _ -> nil
   end
 
   defp record_finalize_dispatch(state, mode) when is_atom(mode) do
@@ -621,8 +595,6 @@ defmodule LemonRouter.SurfaceManager do
       engine: "lemon",
       provenance: :direct
     )
-  rescue
-    _ -> :ok
   end
 
   defp dispatch_direct_final_answer(_state, _channel_id, text, _meta)
@@ -650,21 +622,16 @@ defmodule LemonRouter.SurfaceManager do
             Logger.warning(
               "Streamed final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)}"
             )
+
+            {:error, {:dispatch_failed, dispatch_reason}}
         end
       _ ->
         Logger.warning(
           "Streamed final route resolution failed for run_id=#{inspect(state.run_id)}"
         )
+
+        {:error, :invalid_delivery_route}
     end
-
-    :ok
-  rescue
-    error ->
-      Logger.warning(
-        "Streamed final dispatch raised for run_id=#{inspect(state.run_id)} error=#{Exception.message(error)}"
-      )
-
-      :ok
   end
 
   defp maybe_dispatch_fallback_final_text(_state, _channel_id, text, _meta, _reason)
@@ -700,21 +667,16 @@ defmodule LemonRouter.SurfaceManager do
             Logger.warning(
               "Fallback final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)} coalescer_reason=#{inspect(reason)}"
             )
+
+            {:error, {:dispatch_failed, dispatch_reason}}
         end
       _ ->
         Logger.warning(
           "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} coalescer_reason=#{inspect(reason)}"
         )
+
+        {:error, :invalid_delivery_route}
     end
-
-    :ok
-  rescue
-    error ->
-      Logger.warning(
-        "Fallback final dispatch raised for run_id=#{inspect(state.run_id)} error=#{Exception.message(error)} coalescer_reason=#{inspect(reason)}"
-      )
-
-      :ok
   end
 
   # ---- Async task surface subscriber wiring ----
@@ -739,8 +701,6 @@ defmodule LemonRouter.SurfaceManager do
         )
       _ -> :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp async_task_child_binding_fields(action_event) do

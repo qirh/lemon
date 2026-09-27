@@ -29,7 +29,7 @@ are*.
 | Conclusions | — | Explicit facts, stored and semantically searchable |
 | Multiple assistants | Shared store | Separate peers, each with its own representation |
 
-Honcho registers as an additional memory provider, so `search_memory` results can come
+Honcho registers as an additional memory provider, so `recall` results can come
 from both at once. Its recalled context reaches the model in two places rather than one:
 the part that holds still for a session is a section of the system prompt, and the part
 that is written fresh for the turn is attached to your own message on the way out —
@@ -287,7 +287,7 @@ model decides to read it.
 
 Two things are outside the mode. Writes are unaffected: a finished run's summaries are
 uploaded in every mode unless `LEMON_HONCHO_SAVE_MESSAGES` is false. And Honcho's
-registration as a *memory provider* is unaffected too, so `search_memory` still returns
+registration as a *memory provider* is unaffected too, so `recall` still returns
 Honcho hits alongside local ones in all three modes.
 
 ---
@@ -495,7 +495,7 @@ access log.
 **3. Whatever a memory tool call passes.** When the model calls `honcho_search` or
 `honcho_reasoning`, its query is sent; `honcho_conclude` sends the conclusion it was
 asked to record or the query it was asked to search; `honcho_profile` sends the profile
-lines it was asked to store. An ordinary `search_memory` call reaches Honcho too, since
+lines it was asked to store. An ordinary `recall` call reaches Honcho too, since
 Honcho is a registered memory provider, and sends it the search query. That text is the
 model's own wording rather than yours, though in practice it is often a verbatim quote
 of what you just said. Setting `LEMON_HONCHO_SAVE_MESSAGES=false` stops the two that
@@ -535,7 +535,7 @@ order:
 | `honcho_search` / `honcho_reasoning` query | 1,500 characters | The call is refused, and the model is told why |
 | `honcho_conclude` conclusion / query | 2,000 / 1,500 characters | The call is refused; nothing is recorded or searched |
 | `honcho_profile` card lines | 500 characters per line, 50 lines | The entire write is refused; your stored card is untouched |
-| A `search_memory` query, on its way to Honcho | 2,000 characters | Honcho contributes no results to that search; local results are unaffected |
+| A `recall` query, on its way to Honcho | 2,000 characters | Honcho contributes no results to that recall; local results are unaffected |
 
 The split is deliberate. Where the text only *narrows* a read, Lemon reads on without
 it — losing focus is cheaper than losing the turn. Where the text **is** the request, the

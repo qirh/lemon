@@ -1,36 +1,20 @@
 defmodule LemonCli.CLI do
   @moduledoc """
-  Runtime command-line entrypoint for Lemon.
+  Command-line entrypoint shared by the source (`./bin/lemon`) and packaged
+  (`lemon`) launchers.
 
-  `main/1` is the single halting boundary: the packaged launcher invokes it
-  through the selected release executable's `eval` with the forwarded
-  `System.argv()` and it converts the dispatch result into a process exit
-  code (`0` success, `1` failure, `2` usage error). Everything underneath —
-  `run/1` and the per-command handlers — is reusable and never halts, so
-  `Mix.Tasks.Lemon.Setup` and tests exercise exactly the same code paths
-  without Mix being available.
+  `main/1` is the single halting boundary: the source launcher calls it through
+  `mix run --no-start`, the packaged launcher through the release executable's
+  `eval`, both with the forwarded `System.argv()`. It converts the dispatch
+  result into a process exit code (`0` success, `1` failure, `2` usage error).
+  Everything underneath — `run/1` and the per-command handlers — is reusable
+  and never halts, so tests exercise exactly the launcher code paths.
 
-  ## Commands
-
-      setup [provider|runtime|gateway|doctor] [--non-interactive] [--config-path PATH]
-      model [--provider P] [--token T] [--auth oauth|api_key] [--model M] [--set-default]
-      gateway setup [transport] [--transport NAME] [--non-interactive]
-      doctor [--verbose] [--json] [--bundle [PATH]] [--bundle-path PATH] [--project-dir PATH]
-      config [validate|show] [--verbose] [--project-dir PATH]
-      secrets <status|init|set|list|delete|check|import-env|sources>
-      channels [--project-dir PATH] [--json]
-      providers [status|fallback|pool] [options]
-      blueprints [list|inspect|validate|preview|activate] [options]
-      profile <list|show|create|clone|rename|export|delete|roster|chat>
-      backup <contract|create|list|verify|restore> [options]
-      context <preview|resolve> <reference>... [bounded options]
-      sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
-      learn [review|confirm] <reference>... [options]
-      update <check|plan|apply|history|rollback> [options]
-      completion <bash|zsh|fish>
-
-  `model` delegates to provider onboarding; `gateway setup` delegates to the
-  gateway setup adapters.
+  Every command family, its help, and the launcher it is available in come
+  from `LemonCli.CommandRegistry`. Lifecycle commands (`tui`, `web`, `start`,
+  `daemon`, ...) belong to the launcher shell; reaching them here is a usage
+  error. Every other family runs a Mix-free command implementation shared by
+  source and packaged installs.
   """
 
   alias LemonCore.Backup
@@ -64,8 +48,9 @@ defmodule LemonCli.CLI do
   Returns whether interactive setup is still required.
 
   Setup derives the same state as the idempotent setup wizard. Configuration,
-  secret, and provider resolution failures intentionally fail closed. This is
-  Mix-free so packaged launchers can call it before starting the daemon.
+  secret, and provider resolution failures intentionally fail closed. Both
+  launchers reach it through `lemon setup --if-required` before starting a
+  runtime for the TUI.
   """
   @spec setup_required?() :: boolean()
   def setup_required? do
@@ -102,12 +87,11 @@ defmodule LemonCli.CLI do
     |> List.wrap()
     |> dispatch()
   rescue
-    error in Error ->
+    error in [Error, LemonCore.CLI.Error, LemonAi.Models.CLI.Error] ->
       IO.puts(:stderr, "Error: #{error.message}")
       error.exit_code
 
-    # Source checkouts still surface Mix errors (e.g. from task-owned code
-    # this CLI delegates to); render them the same user-readable way.
+    # Onboarding retains Mix's error type when invoked inside a source VM.
     error in Mix.Error ->
       IO.puts(:stderr, "Error: #{Exception.message(error)}")
       @exit_error
@@ -127,19 +111,29 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
+  defp dispatch(["help", command | _rest]), do: dispatch([command, "--help"])
+
   defp dispatch([command | rest]) do
     # Intercept help anywhere in the command's arguments — including after
     # subcommand words like `gateway setup --help` — so nothing downstream
     # (wizard, provider picker, gateway adapters, prompts on EOF) ever runs.
-    if CommandRegistry.command?(command) do
-      if help_requested?(rest) do
-        print_command_usage(command)
-        @exit_ok
-      else
-        run_command(command, rest)
+    with {:ok, entry} <- CommandRegistry.fetch(command),
+         true <- CommandRegistry.available?(entry, CommandRegistry.launcher()) do
+      cond do
+        help_requested?(rest) ->
+          print_command_usage(entry)
+          @exit_ok
+
+        CommandRegistry.lifecycle?(command) ->
+          IO.puts(:stderr, "`lemon #{command}` is handled by the lemon launcher script.")
+          @exit_usage
+
+        true ->
+          run_command(entry, rest)
       end
     else
-      unknown_command(command)
+      :error -> unknown_command(command)
+      false -> unavailable_command(command)
     end
   end
 
@@ -150,7 +144,26 @@ defmodule LemonCli.CLI do
     @exit_usage
   end
 
+  defp unavailable_command(command) do
+    case CommandRegistry.launcher() do
+      :release ->
+        IO.puts(:stderr, "`lemon #{command}` is available only from a source checkout.")
+
+      :source ->
+        IO.puts(:stderr, "`lemon #{command}` is available only in a packaged install.")
+    end
+
+    @exit_usage
+  end
+
   defp help_requested?(args), do: Enum.any?(args, &(&1 in ["--help", "-h", "help"]))
+
+  defp run_command(%{handler: handler}, args) do
+    apply(handler, :run, [args])
+    @exit_ok
+  end
+
+  defp run_command(%{name: name}, args), do: run_command(name, args)
 
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
@@ -160,7 +173,13 @@ defmodule LemonCli.CLI do
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
-  defp run_command("blueprints", args), do: LemonCli.BlueprintsCommand.run(args)
+
+  defp run_command("blueprints", args),
+    do: with_runtime(fn -> LemonCli.BlueprintsCommand.run(args) end)
+
+  defp run_command("profile", ["chat" | _] = args),
+    do: with_runtime(fn -> LemonCli.ProfileCommand.run(args) end)
+
   defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
@@ -168,12 +187,90 @@ defmodule LemonCli.CLI do
   defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
   defp run_command("update", args), do: LemonCli.UpdateCommand.run(args)
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
+  defp run_command("migrate", args), do: LemonCli.MigrateCommand.run(args)
+  defp run_command("node", args), do: run_node(args)
+
+  defp run_command("version", _args) do
+    IO.puts(LemonCore.Update.Version.current())
+    @exit_ok
+  end
+
+  # Commands that talk to the long-running runtime start it through the
+  # invoking launcher first, so neither launcher needs per-command shell logic.
+  defp with_runtime(fun) do
+    case LemonCli.LocalRuntime.ensure_running() do
+      :ok ->
+        fun.()
+
+      {:error, message} ->
+        IO.puts(:stderr, "Error: #{message}")
+        @exit_error
+    end
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # node
+  # ──────────────────────────────────────────────────────────────────────────
+
+  # lemon_cli does not depend on coding_agent; both runtime releases and the
+  # source umbrella load it, so resolve the node CLI at runtime.
+  defp execution_node_cli, do: Module.concat(["CodingAgent", "ExecutionNode", "CLI"])
+
+  defp run_node(["join" | args]) do
+    node_cli = execution_node_cli()
+
+    if Code.ensure_loaded?(node_cli) do
+      case node_cli.run(args) do
+        :ok ->
+          @exit_ok
+
+        {:error, message} ->
+          IO.puts(:stderr, "lemon node join: #{message}")
+          @exit_usage
+      end
+    else
+      IO.puts(:stderr, "Execution nodes are not available in this build.")
+      @exit_error
+    end
+  end
+
+  defp run_node(_args) do
+    IO.write(:stderr, CommandRegistry.help("node"))
+    @exit_usage
+  end
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
   # ──────────────────────────────────────────────────────────────────────────
 
   defp run_setup(args) do
+    if "--if-required" in args do
+      run_setup_if_required(List.delete(args, "--if-required"))
+    else
+      run_wizard(args)
+    end
+  end
+
+  # The launcher's first-run gate: one VM checks readiness and, only when
+  # needed, runs the wizard and re-checks, so a configured install pays for a
+  # single boot and an unconfigured daemon is never started.
+  defp run_setup_if_required(args) do
+    if setup_required?() do
+      IO.puts("Setup is required before Lemon can start; launching `lemon setup`.")
+      wizard_status = run_wizard(args)
+
+      if setup_required?() do
+        IO.puts(:stderr, "Setup is incomplete. Run `lemon setup` to finish configuration.")
+        if wizard_status == @exit_ok, do: @exit_error, else: wizard_status
+      else
+        @exit_ok
+      end
+    else
+      @exit_ok
+    end
+  end
+
+  defp run_wizard(args) do
     case Wizard.run(args, Runner.default_io(), usage_command: "lemon setup") do
       :ok -> @exit_ok
       {:error, reason} -> exit_code_for(reason)
@@ -1175,8 +1272,17 @@ defmodule LemonCli.CLI do
     IO.write(device, CommandRegistry.help())
   end
 
-  defp print_command_usage("providers"), do: LemonCli.ProvidersCommand.print_usage()
-  defp print_command_usage(command), do: IO.write(CommandRegistry.help(command))
+  defp print_command_usage(%{name: "providers"}), do: LemonCli.ProvidersCommand.print_usage()
+
+  defp print_command_usage(%{name: "node"}) do
+    node_cli = execution_node_cli()
+
+    if Code.ensure_loaded?(node_cli),
+      do: IO.write(node_cli.help()),
+      else: IO.write(CommandRegistry.help("node"))
+  end
+
+  defp print_command_usage(%{name: name}), do: IO.write(CommandRegistry.help(name))
 
   defp print_backup_usage(device) do
     IO.write(device, CommandRegistry.help("backup"))

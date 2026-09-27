@@ -63,6 +63,7 @@ cat > "$FAKE_BIN/mix" <<'EOF'
 for arg in "$@"; do
   if [[ "$arg" == "--no-halt" ]]; then
     printf '%s' "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" > "$LEMON_TUI_TEST_SOURCE_RUNTIME_TOKEN"
+    touch "$LEMON_TUI_TEST_HEALTH"
     sleep 300
     exit 0
   fi
@@ -104,7 +105,7 @@ runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
 [[ "$runtime_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$runtime_token" == "$client_token" ]]
 [[ ! -s "$LEMON_TUI_TEST_INSTALL_TOKEN" ]]
-grep -qx -- '--daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
+grep -qx -- 'daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
 grep -qx -- '--test-argument' "$LEMON_TUI_TEST_CLIENT_ARGS"
 ! grep -Fq -- "$runtime_token" "$LEMON_TUI_TEST_CLIENT_ARGS"
 ! grep -Fq -- "$runtime_token" "$bootstrap_output"
@@ -135,7 +136,7 @@ managed_pid_file="$TEST_DIR/source-runtime.pid"
 rm -f "$LEMON_TUI_TEST_HEALTH" "$LEMON_TUI_TEST_CLIENT_TOKEN"
 export LEMON_RUNTIME_PID_FILE="$managed_pid_file"
 
-if ! "$ROOT/bin/lemon" --daemon --no-distribution --port "$managed_port" > "$TEST_DIR/source-daemon-output" 2>&1; then
+if ! "$ROOT/bin/lemon" daemon --no-distribution --port "$managed_port" > "$TEST_DIR/source-daemon-output" 2>&1; then
   cat "$TEST_DIR/source-daemon-output" >&2
   exit 1
 fi
@@ -156,6 +157,19 @@ fi
 
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
 ! grep -Fq -- "$managed_token" "$TEST_DIR/managed-attach-output"
+
+# The unified source entrypoint must load the same credential and refuse an
+# unsafe credential file before launching a client.
+"$ROOT/bin/lemon" tui > "$TEST_DIR/source-tui-output" 2>&1
+[[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
+chmod 644 "$managed_token_file"
+rm -f "$LEMON_TUI_TEST_CLIENT_TOKEN"
+if "$ROOT/bin/lemon" tui > "$TEST_DIR/source-unsafe-output" 2>&1; then
+  echo "source launcher accepted a world-readable managed token" >&2
+  exit 1
+fi
+[[ ! -e "$LEMON_TUI_TEST_CLIENT_TOKEN" ]]
+chmod 600 "$managed_token_file"
 
 managed_runtime_pid="$(<"$managed_pid_file")"
 kill -TERM "$managed_runtime_pid" 2>/dev/null || true
@@ -246,6 +260,15 @@ fi
 
 [[ "$(<"$package_client_token")" == "$package_token" ]]
 ! grep -Fq -- "$package_token" "$TEST_DIR/package-attach-output"
+
+chmod 644 "$package_token_file"
+rm -f "$package_client_token"
+if "$release_root/bin/lemon" tui > "$TEST_DIR/package-unsafe-output" 2>&1; then
+  echo "release launcher accepted a world-readable managed token" >&2
+  exit 1
+fi
+[[ ! -e "$package_client_token" ]]
+chmod 600 "$package_token_file"
 
 kill -TERM "$(<"$TEST_DIR/package-runtime.pid")" 2>/dev/null || true
 

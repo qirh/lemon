@@ -11,7 +11,6 @@ defmodule LemonRouter.RunCountTracker do
   """
 
   use GenServer
-  require Logger
 
   # Counter indices inside :counters ref
   @idx_queued 1

@@ -76,7 +76,7 @@ defmodule CodingAgent.SystemPrompt do
       build_coding_section(Map.get(opts, :tool_names)),
       build_runtime_section(session_scope),
       build_skills_section(cwd, skill_trace_opts),
-      build_memory_workflow_section(session_scope),
+      build_memory_workflow_section(session_scope, Map.get(opts, :tool_names)),
       build_learning_workflow_section(session_scope),
       # Contributed context lands after the workflow sections and before the
       # boundaries: what a satellite contributes is background about the user and
@@ -150,6 +150,24 @@ defmodule CodingAgent.SystemPrompt do
      "Be concise. When you finish, say what changed, how you verified it, and what is still open."}
   ]
 
+  # Memory is two operations, one tool each. USER.md and MEMORY.md are loaded
+  # into every main session as workspace files, and a few relevant past
+  # conversations are attached to the user's message automatically
+  # (`LemonSkills.MemoryRecall`), so the tools are for saving and for looking
+  # further. A rule is left out when the session lacks its tool.
+  @memory_rules [
+    {"remember",
+     "Remember: when the user tells you a lasting fact or preference, or a decision worth keeping is settled, " <>
+       "use `remember` to save it as one short sentence (target `user` for who they are and how they like to work, " <>
+       "`memory` for everything else). Saved facts are loaded into every future session."},
+    {"recall",
+     "Recall: before answering anything that depends on earlier conversations, prior work, or something the user told you before, " <>
+       "use `recall` to search your past sessions and memory notes. Matching past conversations may already be attached " <>
+       "to the user's message as \"Relevant memory\"; use `recall` to look further."}
+  ]
+
+  @default_memory_tool_names ~w(remember recall)
+
   defp build_coding_section(tool_names) do
     available = MapSet.new(tool_names || @default_tool_names)
 
@@ -184,34 +202,31 @@ defmodule CodingAgent.SystemPrompt do
     |> String.trim()
   end
 
-  defp build_memory_workflow_section(:subagent) do
+  defp build_memory_workflow_section(:subagent, _tool_names) do
     """
-    ## Memory Workflow
-    This is a subagent session. Do not read or modify MEMORY.md unless the parent task explicitly asks for it.
+    ## Memory
+    This is a subagent session. Leave USER.md and MEMORY.md unchanged unless the parent task explicitly asks you to update them.
     """
     |> String.trim()
   end
 
-  defp build_memory_workflow_section(:main) do
-    """
-    ## Memory Workflow
-    Before answering about prior decisions, preferences, people, dates, or todos, inspect the right memory surface first.
-    Prefer the dedicated memory and skill tools below over shell commands for memory or skill work; use shell commands for project execution, not for bypassing `search_memory`, `session_search`, `memory_topic`, `memory`, `read_skill`, or `skill_manage`.
-    - Use `search_memory` to recall completed run history (past bug fixes, commands run, earlier answers, "last time" context).
-      Prefer `scope: "current"` to search both the project root and assistant home.
-      Use `scope: "project"` for repo-specific history, `scope: "home"` for assistant-home history, and `scope: "agent"` for longer-term patterns.
-    - Use `session_search` when a prompt or imported workflow explicitly asks for Hermes-style session search, browse, or scroll behavior.
-    - Use `read` to inspect user-editable workspace notes such as `MEMORY.md`, relevant `memory/topics/*.md` files, and recent `memory/YYYY-MM-DD.md` files.
-    - Use `grep` with `path: "memory"` to quickly find relevant workspace notes before opening files.
-    - Use `memory` for compact assistant-home `USER.md` profile facts and curated `MEMORY.md` quick facts.
-    - Use `memory_topic` to scaffold durable topic notes from `memory/topics/TEMPLATE.md` for longer facts, preferences, decisions, people, dates, or project context.
-    - Use `write` only when creating missing workspace memory files directly (`memory/topics/<topic-slug>.md` or `memory/YYYY-MM-DD.md`); prefer `memory_topic` for new topic notes.
-    - Use `skill_manage` to create or update a skill when you learn a reusable procedure, command sequence, integration, debugging playbook, or verification checklist.
-    - Use `todo` only for the active run's work queue and progress tracking; todos are not durable memory.
-    - Use `edit` to keep `MEMORY.md` concise as an index of key facts and topic files.
-    - If confidence is still low after checking memory files, say so explicitly.
-    """
-    |> String.trim()
+  defp build_memory_workflow_section(:main, tool_names) do
+    available = MapSet.new(tool_names || @default_memory_tool_names)
+
+    rules =
+      for {tool, rule} <- @memory_rules, MapSet.member?(available, tool), do: "- " <> rule
+
+    case rules do
+      [] ->
+        ""
+
+      rules ->
+        Enum.join(
+          ["## Memory" | rules] ++
+            ["If memory leaves you unsure about something the user expects you to know, say so."],
+          "\n"
+        )
+    end
   end
 
   defp build_learning_workflow_section(:subagent), do: ""
@@ -224,13 +239,9 @@ defmodule CodingAgent.SystemPrompt do
     Choose the right persistence surface:
     - Prefer dedicated memory and skill tools over shell commands for memory or skill work; use shell commands for project execution, not for bypassing these tools.
     - Use `read_skill` before following a relevant installed skill; skill hints are summaries, not the full procedure.
-    - Use `search_memory` before answering prompts that mention prior work, previous decisions, remembered context, or "last time"; this recalls completed run history.
-    - Use `session_search` when a prompt or imported workflow explicitly asks for Hermes-style session search, browse, or scroll behavior.
-    - Use `memory` for compact assistant-home `USER.md` profile facts and curated `MEMORY.md` quick facts.
-    - Use `memory_topic` for longer durable facts, preferences, decisions, people, dates, or project context that should be recalled later but is not a reusable procedure.
     - Use `skill_manage` when you discover a reusable workflow, recurring command sequence, API integration, debugging playbook, project convention, or verification checklist that will likely help future runs.
     - Use `todo` for the active run's task list and progress tracking; do not use todos as long-term memory.
-    - At the end of substantial work, before the final answer, decide whether the run produced durable context or a reusable workflow; write the memory topic or skill before finalizing when the lesson is clear.
+    - At the end of substantial work, before the final answer, decide whether the run produced a durable fact (save it with `remember`) or a reusable workflow (save it with `skill_manage`); write it before finalizing when the lesson is clear.
     </learning-workflow>
     """
     |> String.trim()

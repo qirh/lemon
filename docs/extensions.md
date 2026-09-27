@@ -205,8 +205,7 @@ The schema follows JSON Schema conventions with optional extensions:
 Extensions can register custom providers that integrate with the core system.
 Model providers add AI model backends. Memory providers implement
 `LemonMemory.Provider` and can participate in safety-screened memory ingest
-and scoped `search_memory` fan-out through `LemonMemory.Providers`. Search
-providers implement `CodingAgent.Search.Provider` and declare web `search`
+and scoped `recall` search through `LemonMemory.Providers`. Search
 and/or `extract` capabilities.
 
 ```elixir
@@ -336,7 +335,7 @@ Memory provider `config` supports:
 
 `LemonMemory.Providers` always keeps local SQLite as the built-in provider,
 isolates provider failures, deduplicates search results by document id, and
-reports only redacted provider shape through `memory.status` and
+reports only redacted provider shape in
 support bundles.
 
 ## Extension Discovery
@@ -585,31 +584,6 @@ WASM tool wrappers emit the matching redacted host telemetry through
 host label, tool name, hashed WASM path, hashed tool-call id, status, duration,
 and redacted exception type.
 
-## Control-Plane Status
-
-Operators can inspect extension/plugin health without entering an agent session
-through the read-only `extensions.status` control-plane method:
-
-```json
-{
-  "method": "extensions.status",
-  "params": {
-    "cwd": "/path/to/project"
-  }
-}
-```
-
-The method loads project/global extensions, reports loaded extension names,
-versions, capabilities, config-schema presence, load/validation error counts,
-tool-conflict resolution, extension-provided provider names, and WASM
-status shape when available. It redacts raw source paths, load-error messages,
-config schemas, provider modules, and path-like WASM metadata, replacing
-sensitive path fields with hashes. `LemonCore.Doctor.ExtensionDiagnostics`
-reports global, project, and configured extension directory existence,
-extension-file counts, manifest counts and aggregate manifest shape, nested
-library-file counts, and file/path hashes without loading plugin code or
-exposing raw source paths, file contents, manifest contents, distribution URLs,
-or load-error messages.
 
 ## Extension Status Report
 

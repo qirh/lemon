@@ -77,8 +77,6 @@ defmodule LemonRouter.AgentEndpoints do
       nil -> rows
       n -> Enum.take(rows, n)
     end
-  rescue
-    _ -> []
   end
 
   @spec get(binary(), binary()) :: {:ok, endpoint()} | {:error, :not_found}
@@ -91,8 +89,6 @@ defmodule LemonRouter.AgentEndpoints do
     else
       _ -> {:error, :not_found}
     end
-  rescue
-    _ -> {:error, :not_found}
   end
 
   def get(_agent_id, _name), do: {:error, :not_found}
@@ -127,8 +123,6 @@ defmodule LemonRouter.AgentEndpoints do
         {:error, reason} -> {:error, reason}
       end
     end
-  rescue
-    e -> {:error, e}
   end
 
   def put(_agent_id, _name, _target, _opts), do: {:error, :invalid_arguments}
@@ -138,10 +132,7 @@ defmodule LemonRouter.AgentEndpoints do
       when is_binary(agent_id) and agent_id != "" and is_binary(name) and name != "" do
     with {:ok, normalized_name} <- normalize_name(name) do
       AgentEndpointStore.delete(agent_id, normalized_name)
-      :ok
     end
-  rescue
-    _ -> :ok
   end
 
   def delete(_agent_id, _name), do: {:error, :invalid_arguments}
@@ -175,9 +166,6 @@ defmodule LemonRouter.AgentEndpoints do
           {:ok,
            %{route: normalized_route, endpoint: nil, target: render_target(normalized_route)}}
         end
-
-      other ->
-        other
     end
   end
 
@@ -250,8 +238,6 @@ defmodule LemonRouter.AgentEndpoints do
     else
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp normalize_entry(_agent_id, _entry), do: nil
@@ -297,8 +283,6 @@ defmodule LemonRouter.AgentEndpoints do
   end
 
   defp normalize_route(route, opts) when is_map(route) do
-    route = route || %{}
-
     channel_id =
       normalize_optional_binary(
         map_get(route, :channel_id) || map_get(route, :channelId) ||
@@ -351,13 +335,12 @@ defmodule LemonRouter.AgentEndpoints do
            thread_id: thread_id
          }}
     end
-  rescue
-    _ -> {:error, :invalid_route}
   end
 
   defp normalize_route(_route, _opts), do: {:error, :invalid_route}
 
-  defp infer_default_peer_kind("telegram", peer_id), do: infer_telegram_peer_kind(peer_id)
+  defp infer_default_peer_kind("telegram", peer_id) when is_binary(peer_id),
+    do: infer_telegram_peer_kind(peer_id)
   defp infer_default_peer_kind(_channel_id, _peer_id), do: :dm
 
   defp normalize_peer_kind(kind) when kind in @allowed_peer_kinds, do: kind
@@ -400,8 +383,6 @@ defmodule LemonRouter.AgentEndpoints do
       end
     end
   end
-
-  defp render_target(_), do: "unknown"
 
   defp normalize_name(name) when is_binary(name) do
     normalized =

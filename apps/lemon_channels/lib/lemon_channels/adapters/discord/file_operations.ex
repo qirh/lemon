@@ -7,8 +7,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   module where possible, adapting the download/upload paths for Discord's API.
   """
 
-  require Logger
-
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations, as: TelegramFileOps
   alias LemonChannels.BindingResolver
   alias LemonCore.ChatScope
@@ -43,10 +41,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       {:ok, "Saved: #{final_rel}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
-      _ -> {:error, "Upload failed."}
     end
-  rescue
-    _ -> {:error, "Upload failed."}
   end
 
   # ---------------------------------------------------------------------------
@@ -77,10 +72,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       {:ok, "Sent: #{filename}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
-      _ -> {:error, "Download failed."}
     end
-  rescue
-    _ -> {:error, "Download failed."}
   end
 
   # ---------------------------------------------------------------------------
@@ -118,7 +110,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
             {:ok, final_rel}
           else
             {:error, msg} -> {:error, msg}
-            _ -> {:error, "upload failed"}
           end
         end)
 
@@ -147,8 +138,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     else
       _ -> []
     end
-  rescue
-    _ -> []
   end
 
   @doc """
@@ -159,8 +148,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     cfg = files_cfg(state)
     attachments = (inbound.meta[:attachments] || [])
     should_auto_put?(cfg) and attachments != []
-  rescue
-    _ -> false
   end
 
   # ---------------------------------------------------------------------------
@@ -176,7 +163,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       _ -> {:error, "Failed to download attachment."}
     end
   rescue
-    _ -> {:error, "Failed to download attachment."}
+    ArgumentError -> {:error, "Failed to download attachment."}
   end
 
   def download_attachment_bytes(_), do: {:error, "No attachment URL provided."}
@@ -225,8 +212,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     else
       nil
     end
-  rescue
-    _ -> nil
   end
 
   # ---------------------------------------------------------------------------
@@ -236,8 +221,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   defp files_cfg(state) do
     cfg = state[:files] || %{}
     if is_map(cfg), do: cfg, else: %{}
-  rescue
-    _ -> %{}
   end
 
   defp ensure_files_enabled(cfg) do
@@ -258,8 +241,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     root = BindingResolver.resolve_cwd(scope)
     TelegramFileOps.ensure_project_root(root)
-  rescue
-    _ -> TelegramFileOps.ensure_project_root(nil)
   end
 
   defp resolve_project_root_from_inbound(inbound) do
@@ -268,8 +249,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     root = BindingResolver.resolve_cwd(scope)
     TelegramFileOps.ensure_project_root(root)
-  rescue
-    _ -> TelegramFileOps.ensure_project_root(nil)
   end
 
   defp resolve_put_dest(cfg, dest_path, filename) do
@@ -336,14 +315,12 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       %{} -> interaction |> map_get(:channel_id) |> parse_id()
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do
     Nostrum.Api.Message.create(channel_id, %{content: text})
   rescue
-    _ -> :ok
+    error -> {:error, {:discord_send_crashed, error}}
   end
 
   defp nested_option_value(interaction, subcommand, option_name) do
@@ -364,8 +341,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       if map_get(option, :name) == option_name, do: map_get(option, :value), else: nil
     end)
     |> normalize_blank()
-  rescue
-    _ -> nil
   end
 
   defp map_get(map, key) when is_map(map) do

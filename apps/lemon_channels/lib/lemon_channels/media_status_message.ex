@@ -91,8 +91,6 @@ defmodule LemonChannels.MediaStatusMessage do
     end
   end
 
-  defp cleanup_line(_), do: "default"
-
   defp counts_line(counts) when is_map(counts) and map_size(counts) > 0 do
     counts
     |> Enum.sort_by(fn {key, _value} -> to_string(key) end)

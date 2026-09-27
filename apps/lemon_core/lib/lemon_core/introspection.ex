@@ -25,20 +25,7 @@ defmodule LemonCore.Introspection do
 
   alias LemonCore.{Id, IntrospectionStore}
 
-  @forbidden_payload_keys MapSet.new([
-                            "api_key",
-                            "apikey",
-                            "authorization",
-                            "password",
-                            "private_key",
-                            "prompt",
-                            "response",
-                            "secret",
-                            "secrets",
-                            "stderr",
-                            "stdout",
-                            "token"
-                          ])
+  @forbidden_payload_keys MapSet.new(["prompt", "response", "stderr", "stdout"])
   @tool_args_payload_keys MapSet.new(["arguments", "input", "tool_arguments"])
   @result_preview_payload_keys MapSet.new(["preview", "result_preview"])
   @max_payload_bytes 4_096
@@ -146,7 +133,6 @@ defmodule LemonCore.Introspection do
   defp normalize_identifier(_), do: nil
 
   defp sanitize_payload(payload, opts) when is_map(payload), do: sanitize_value(payload, opts)
-  defp sanitize_payload(_payload, _opts), do: %{}
 
   defp sanitize_value(%{__struct__: _} = struct, opts) do
     struct
@@ -169,7 +155,7 @@ defmodule LemonCore.Introspection do
           Map.put(acc, key, "[redacted]")
 
         result_preview_payload_key?(key_name) ->
-          Map.put(acc, key, truncate_binary(raw, @max_result_preview_bytes))
+          Map.put(acc, key, raw |> sanitize_value(opts) |> truncate_binary(@max_result_preview_bytes))
 
         true ->
           Map.put(acc, key, sanitize_value(raw, opts))
@@ -182,7 +168,7 @@ defmodule LemonCore.Introspection do
   end
 
   defp sanitize_value(value, _opts) when is_binary(value) do
-    truncate_binary(value, @max_payload_bytes)
+    value |> LemonCore.Redact.text() |> truncate_binary(@max_payload_bytes)
   end
 
   defp sanitize_value(value, _opts), do: value
@@ -191,7 +177,8 @@ defmodule LemonCore.Introspection do
   defp normalize_key_name(key) when is_binary(key), do: String.downcase(key)
   defp normalize_key_name(_), do: ""
 
-  defp forbidden_payload_key?(key_name), do: MapSet.member?(@forbidden_payload_keys, key_name)
+  defp forbidden_payload_key?(key_name),
+    do: MapSet.member?(@forbidden_payload_keys, key_name) or LemonCore.Redact.sensitive_key?(key_name)
   defp tool_args_payload_key?(key_name), do: MapSet.member?(@tool_args_payload_keys, key_name)
 
   defp result_preview_payload_key?(key_name),

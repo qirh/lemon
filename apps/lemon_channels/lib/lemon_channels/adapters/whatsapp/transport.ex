@@ -48,8 +48,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   @spec enabled?() :: boolean()
   def enabled? do
     GatewayConfig.get(:enable_whatsapp, false) == true
-  rescue
-    _ -> false
   end
 
   @spec deliver(map()) :: {:ok, term()} | {:error, term()}
@@ -62,7 +60,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         {:error, :whatsapp_not_running}
     end
   catch
-    :exit, reason -> {:error, reason}
+    :exit, reason -> {:error, {:outcome_unknown, reason}}
   end
 
   # ============================================================================
@@ -105,10 +103,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     }
 
     {:ok, state}
-  rescue
-    error ->
-      Logger.warning("whatsapp transport failed to initialize: #{inspect(error)}")
-      {:stop, error}
   end
 
   # ============================================================================
@@ -247,7 +241,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
       {{from, _timer_ref}, pending_commands} ->
         Logger.warning("whatsapp command timed out: correlation_id=#{correlation_id}")
-        GenServer.reply(from, {:error, :timeout})
+        GenServer.reply(from, {:error, :outcome_unknown})
         {:noreply, %{state | pending_commands: pending_commands}}
     end
   end
@@ -310,7 +304,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
         case Inbound.normalize(event) do
           {:ok, inbound} ->
-            meta = inbound.meta || %{}
+            meta = inbound.meta
             refs = [{jid, message_id} | List.wrap(meta[:transport_dedupe_refs])]
             inbound = %{inbound | meta: Map.put(meta, :transport_dedupe_refs, refs)}
             callbacks = build_callbacks(state)
@@ -408,7 +402,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         session_key = SessionRouting.build_session_key(cb_state.account_id, inbound, scope)
 
         outcome =
-          if is_binary(session_key) and session_key != "" do
+          if session_key != "" do
             RouterBridge.abort_session(session_key, :user_requested)
           else
             {:error, :unavailable}
@@ -484,7 +478,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
       |> put_in([Access.key!(:account_id)], state.account_id)
       |> put_in(
         [Access.key!(:meta)],
-        Map.merge(inbound.meta || %{}, %{
+        Map.merge(inbound.meta, %{
           agent_id: agent_id,
           queue_mode: queue_mode,
           cwd: cwd,
@@ -506,11 +500,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         handle_submission_failure(dedupe_refs, inbound, state, error, :submit)
         error
     end
-  rescue
-    _ ->
-      error = {:error, :unavailable}
-      handle_submission_failure(inbound, state, error, :submit)
-      error
   end
 
   defp handle_submission_failure(inbound, state, error, context) do
@@ -553,10 +542,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
       text: text,
       reply_to: inbound.message.id
     })
-
-    :ok
-  rescue
-    _ -> :ok
   end
 
   defp pop_submission_dedupe_refs(inbound) do
@@ -614,13 +599,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
         state
     end
-  rescue
-    e ->
-      Logger.warning(
-        "whatsapp voice transcription crashed: #{Exception.format(:error, e, __STACKTRACE__)}"
-      )
-
-      state
   end
 
   defp do_transcribe_voice(media_path, media_mime, voice_cfg) do
@@ -656,15 +634,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
           normalize_blank(openai_cfg[:api_key] || openai_cfg["api_key"]),
       max_bytes: cfg_get(cfg, :voice_max_bytes, 10 * 1024 * 1024)
     }
-  rescue
-    _ ->
-      %{
-        enabled: false,
-        model: "gpt-4o-mini-transcribe",
-        base_url: nil,
-        api_key: nil,
-        max_bytes: 10 * 1024 * 1024
-      }
   end
 
   defp normalize_blank(nil), do: nil
@@ -714,10 +683,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
       text: payload.text,
       reply_to: payload[:reply_to_id]
     })
-
-    :ok
-  rescue
-    e -> {:error, e}
   end
 
   defp dispatch_outbound(port_server, %{kind: :send_media} = payload, correlation_id) do
@@ -740,10 +705,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
       media_type: media_type,
       caption: payload[:caption]
     })
-
-    :ok
-  rescue
-    e -> {:error, e}
   end
 
   defp dispatch_outbound(port_server, %{kind: :send_reaction} = payload, correlation_id) do
@@ -753,10 +714,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
       message_id: payload.message_id,
       emoji: payload.emoji
     })
-
-    :ok
-  rescue
-    e -> {:error, e}
   end
 
   defp dispatch_outbound(_port_server, payload, _correlation_id) do

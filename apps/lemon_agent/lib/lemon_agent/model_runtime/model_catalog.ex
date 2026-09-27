@@ -312,8 +312,6 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     |> Enum.uniq()
   end
 
-  defp provider_aliases(_provider), do: []
-
   defp openai_codex_auth_available? do
     Credentials.provider_has_credentials?("openai_codex", %{
       "openai-codex" => %{"auth_source" => "oauth"}

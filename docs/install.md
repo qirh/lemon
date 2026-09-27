@@ -40,12 +40,11 @@ When setup completes, start the interactive TUI and send your first message:
 $HOME/.lemon/bin/lemon
 ```
 
-The installer prints the PATH entry for its launcher. Once `~/.lemon/bin` is
-on your `PATH`, use `lemon` for this and the commands below. `lemon` starts the
-daemon when needed. If provider readiness is incomplete at a first interactive
-launch, it opens setup before starting the daemon. If it cannot open a
-terminal, it leaves the daemon stopped and tells you to run `lemon setup` from
-an interactive terminal.
+The launcher prints the PATH entry for its command. In an interactive terminal,
+invoking `lemon` with no arguments opens the TUI; without a TTY it prints usage
+and exits. The TUI runs setup when required, starts a daemon if needed, and
+then attaches. Use `lemon start` (or `lemon run`) to run the runtime in the
+foreground.
 
 ## Installer handoff and non-interactive installs
 
@@ -218,12 +217,13 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 ```
 
 The source wrapper follows the same setup and provider behavior described
-above. `./bin/lemon-tui` is the development TUI entry point after the source
-runtime is configured. When it starts a fresh runtime, the launcher generates
-and shares an in-memory operator token with the TUI, then stops that owned
-runtime when the TUI exits.
+above. In an interactive terminal, bare `./bin/lemon` opens the TUI; without a
+TTY it prints usage. `./bin/lemon start` (or `./bin/lemon run`) runs the runtime
+in the foreground. `./bin/lemon-tui` remains the development TUI entry point.
+When it starts a fresh runtime, the launcher generates and shares an in-memory
+operator token with the TUI, then stops that owned runtime when the TUI exits.
 
-Persistent runtimes started with `./bin/lemon --daemon` receive a private,
+Persistent runtimes started with `./bin/lemon daemon` receive a private,
 port-scoped credential at `~/.lemon/run/control-plane-<port>.token`; later TUI
 launches load it automatically after validating ownership, mode 0600, and
 format. Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are not persisted,
@@ -243,10 +243,9 @@ lemon web
 ```
 
 Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
-`./bin/lemon web`; invoking `./bin/lemon` beside an already healthy source
-runtime also reports and reuses it instead of registering a duplicate Erlang
-node. The browser checks the same config, secrets, provider,
-credential, and model readiness as setup. If anything is missing it lists the
+`./bin/lemon web`; the interactive no-argument source launcher opens the TUI,
+which reuses an already healthy runtime instead of registering a duplicate
+Erlang node. The browser checks the same config, secrets, provider,
 pending items, disables prompt/file submission, and points back to `lemon
 setup`; it never waits for a failed agent request to explain first-run setup.
 

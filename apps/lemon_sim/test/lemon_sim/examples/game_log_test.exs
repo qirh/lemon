@@ -38,8 +38,6 @@ defmodule LemonSim.Examples.GameLogTest do
 
     Enum.each(@domains, fn {module, terminal_function, step_metadata, terminal_metadata} ->
       path = Path.join(tmp_dir, "#{inspect(module)}.jsonl")
-      assert Code.ensure_loaded?(module)
-      assert function_exported?(module, :default_log_path, 1)
       log = module.start(path)
 
       assert :ok = module.log_init(log, world)

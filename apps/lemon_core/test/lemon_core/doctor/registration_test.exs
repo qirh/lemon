@@ -45,9 +45,6 @@ defmodule LemonCore.Doctor.RegistrationTest do
       registered = Doctor.registered_checks()
       assert Enum.all?(registered, &Code.ensure_loaded?/1)
       assert registered -- Doctor.builtin_checks() == registered
-
-      assert Doctor.builtin_checks() |> length() == 8
-      assert LemonCore.Doctor.Checks.Secrets in Doctor.builtin_checks()
     end
 
     test "registered check modules contribute checks" do
@@ -77,14 +74,6 @@ defmodule LemonCore.Doctor.RegistrationTest do
   end
 
   describe "runtime module registration" do
-    test "the umbrella registers the apps that own each diagnostic" do
-      registered = RuntimeModules.all()
-
-      assert Keyword.get(registered, :media_jobs) == LemonMedia.MediaJobs
-      assert Keyword.get(registered, :browser_artifacts) == LemonBrowser.Artifacts
-      assert Keyword.get(registered, :lsp_server_manager) == LemonLsp.ServerManager
-    end
-
     test "an unregistered key resolves to nil so diagnostics fall back" do
       assert RuntimeModules.fetch(:no_such_runtime) == nil
     end

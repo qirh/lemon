@@ -189,8 +189,8 @@ defmodule LemonAutomation.CronMonitor do
       run.triggered_by in [:manual, :wake] ->
         notify_preflight(job, run, class, digest, now, %{
           first_seen_at_ms: previous.first_seen_at_ms || now,
-          occurrences: (previous.occurrences || 0) + 1,
-          notifications: (previous.notifications || 1) + 1
+          occurrences: previous.occurrences + 1,
+          notifications: previous.notifications + 1
         })
 
       true ->
@@ -199,16 +199,16 @@ defmodule LemonAutomation.CronMonitor do
   end
 
   defp repeated_preflight(%CronJob{} = job, %CronRun{} = run, class, digest, now, previous) do
-    occurrences = (previous.occurrences || 0) + 1
+    occurrences = previous.occurrences + 1
     last_notified = previous.last_notified_at_ms || previous.first_seen_at_ms || now
 
-    if now - last_notified >= renotify_after_ms(previous.notifications || 1) do
+    if now - last_notified >= renotify_after_ms(previous.notifications) do
       run = annotate_repeat(run, occurrences, previous.first_seen_at_ms)
 
       notify_preflight(job, run, class, digest, now, %{
         first_seen_at_ms: previous.first_seen_at_ms || now,
         occurrences: occurrences,
-        notifications: (previous.notifications || 1) + 1
+        notifications: previous.notifications + 1
       })
     else
       CronStore.put_preflight_notice_state(job.id, %{
@@ -217,7 +217,7 @@ defmodule LemonAutomation.CronMonitor do
         first_seen_at_ms: previous.first_seen_at_ms || now,
         last_notified_at_ms: last_notified,
         occurrences: occurrences,
-        notifications: previous.notifications || 1
+        notifications: previous.notifications
       })
 
       CronStore.record_audit(:preflight_notice_suppressed, %{

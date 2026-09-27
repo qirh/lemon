@@ -520,8 +520,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     |> Enum.flat_map(fn
       %{"text" => text} when is_binary(text) -> [text]
       %{text: text} when is_binary(text) -> [text]
-      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
-      %{type: "text", text: text} when is_binary(text) -> [text]
       _other -> []
     end)
     |> Enum.join("\n")
@@ -702,8 +700,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   end
 
   defp optional_string(_value), do: nil
-
-  defp provider_config_value(nil, _key), do: nil
 
   defp provider_config_value(cfg, key) when is_map(cfg) do
     Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))

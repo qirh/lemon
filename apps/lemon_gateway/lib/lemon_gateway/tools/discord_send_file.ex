@@ -112,8 +112,6 @@ defmodule LemonGateway.Tools.DiscordSendFile do
     end
   end
 
-  defp normalize_filename(_params, resolved_path), do: {:ok, Path.basename(resolved_path)}
-
   defp normalize_caption(params) when is_map(params) do
     caption = Map.get(params, "caption") || Map.get(params, :caption)
 
@@ -129,8 +127,6 @@ defmodule LemonGateway.Tools.DiscordSendFile do
         {:error, "caption must be a string"}
     end
   end
-
-  defp normalize_caption(_), do: {:ok, nil}
 
   defp resolve_path(path, root, workspace_dir) do
     roots =

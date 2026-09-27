@@ -114,7 +114,8 @@ and products. See [platform status](../platform-split.md).
   UI clients must not create competing stores.
 - `remember` edits assistant workspace preferences/memory, while `recall` searches
   scoped historical runs and notes. Automatic recall is bounded local context on
-  the current user turn. Durable ingest is gated by `session_search`; unsafe
+  the current user turn, controlled by `[memory] auto_recall = true` and disabled
+  when `session_search` is off. Durable ingest also uses that feature gate; unsafe
   secret-bearing ingest is withheld, not merely redacted and stored. See
   [memory](../user-guide/memory.md).
 - Heartbeats are ordinary cron jobs distinguished by metadata; completed exact

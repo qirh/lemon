@@ -119,15 +119,6 @@ than forwards `Browser.close`. The extension displays connection state in its
 badge and reconnects with bounded backoff. See
 [`clients/lemon-browser-node/README.md`](../../clients/lemon-browser-node/README.md).
 
-Remote controllers use `browser.controller.ticket`, `register`, `heartbeat`,
-`result`, and `status`. Tickets are strong, short-lived, hashed at rest, and
-single-use. Registration binds the authenticated principal, exact controller,
-browser profile, Lemon session/run, and allowlisted capabilities. Each command
-has bounded completion, and results are accepted only from the exact registered
-WebSocket process. Controller-backend requests must supply the exact controller,
-profile, and session binding; omitted identities never select the only available
-controller implicitly. Offline, expired, replayed, mismatched, incomplete, or
-under-capability requests fail closed.
 
 Screenshots default to `.lemon/browser-artifacts/` under the active working
 directory unless a `path` is provided.
@@ -150,13 +141,10 @@ raw screenshot pixels as an image block.
 classifies each target as public, private, or local-document before forwarding
 to the browser worker. `public` rejects local/private/data/file targets, `local`
 rejects public web targets, and cloud metadata endpoints are blocked before the
-supervised worker in every route. The same `LemonBrowser.RoutePolicy`
-guard is enforced by the control-plane `browser.request` proxy before it
-dispatches `browser.navigate` to a paired node or local fallback; already
-prefixed methods such as `browser.navigate` are passed through without
-double-prefixing, and policy-only `route` args are stripped before node
-dispatch. Progress updates include only safe route classification metadata plus
-hashed host data, never the raw URL.
+supervised worker in every route. The `LemonBrowser.RoutePolicy` guard applies
+before navigation dispatch; `route` arguments are stripped before node dispatch.
+Progress updates include only safe route classification metadata plus hashed
+host data, never the raw URL.
 
 `browser_evaluate` is page-scoped JavaScript only. The evaluated value is
 returned as untrusted tool output, while progress updates omit the expression
@@ -189,18 +177,15 @@ clears cookies, current-page `localStorage`/`sessionStorage`, and buffered
 events by default; pass `clearCookies`, `clearStorage`, or `clearEvents` as
 `false` to leave a specific state surface intact.
 
-Control-plane operators can inspect the same BEAM-owned browser surface with
-`browser.status`, including local driver status, request counters, the last
-worker error, the artifact directory, and recent artifact cleanup metadata. The
-status surfaces include a redacted driver config
-summary showing local-CDP vs remote-CDP mode, attach-only state, launch behavior,
-local CDP port, and an endpoint hash when a managed endpoint is configured.
-`browser.status` also reports paired browser nodes.
-Doctor support bundles include the same redacted metadata in
-`browser_diagnostics.json`; screenshot bytes are not embedded in the bundle.
-Browser artifacts are local files and screenshot writes now enforce managed
-retention for the artifact directory: keep 14 days or the newest 100 files,
-whichever retains fewer old artifacts.
+Doctor support bundles include redacted browser metadata in
+`browser_diagnostics.json`, including local driver status, request counters, the
+last worker error, artifact directory, and recent artifact cleanup metadata.
+The metadata includes a redacted driver config summary showing local-CDP vs
+remote-CDP mode, attach-only state, launch behavior, local CDP port, and an
+endpoint hash when a managed endpoint is configured. Screenshot bytes are not
+embedded in the bundle. Browser artifacts are local files and screenshot writes
+now enforce managed retention for the artifact directory: keep 14 days or the
+newest 100 files, whichever retains fewer old artifacts.
 
 Browser tools emit channel-safe partial progress updates into Lemon's normal
 tool-status pipeline. The updates carry the browser method, phase, timeout,
@@ -326,7 +311,5 @@ Config knobs:
   `clients/lemon-browser-node`.
 - `Could not find Chrome/Chromium executable`: install Chrome/Chromium or set
   `LEMON_CHROME_EXECUTABLE`.
-- `browser.status` shows `last_error`: inspect that message first, then rerun
-  `mix lemon.doctor --bundle` if you need a support artifact.
 
 For Firecrawl-specific behavior, see [`docs/tools/firecrawl.md`](firecrawl.md).

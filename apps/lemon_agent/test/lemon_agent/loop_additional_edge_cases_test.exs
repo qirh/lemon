@@ -90,31 +90,6 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
   # ============================================================================
 
   describe "stream event edge cases" do
-    test "handles stream that emits no events before completion" do
-      context = simple_context()
-      empty_response = Mocks.assistant_message("")
-
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          # Complete immediately without start event - just complete with empty response
-          LemonAi.EventStream.complete(stream, empty_response)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
-
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      # Should handle gracefully - either error or complete with empty/error message
-      result = EventStream.result(stream)
-      # The important thing is it doesn't crash
-      assert match?({:error, _, _}, result) or match?({:ok, _}, result)
-    end
-
     test "turns terminal empty stop response into assistant error" do
       context = simple_context()
       %AssistantMessage{} = response = Mocks.assistant_message("")
@@ -206,54 +181,6 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
       assert {:error, :assistant_error, %{new_messages: _messages}} = List.last(events)
     end
 
-    test "handles stream process exiting with :noproc" do
-      context = simple_context()
-
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          # Kill the stream immediately
-          Process.exit(stream, :kill)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
-
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      # Should handle the exit gracefully
-      result = EventStream.result(stream)
-      # Either completes with canceled message or errors
-      assert match?({:ok, _}, result) or match?({:error, _, _}, result)
-    end
-
-    test "handles stream process exiting with :shutdown" do
-      context = simple_context()
-      partial_response = Mocks.assistant_message("Starting...")
-
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          LemonAi.EventStream.push(stream, {:start, partial_response})
-          Process.sleep(5)
-          GenServer.stop(stream, :shutdown)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
-
-      stream = Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-
-      # Should handle shutdown gracefully
-      result = EventStream.result(stream)
-      assert match?({:ok, _}, result) or match?({:error, _, _}, result)
-    end
   end
 
   # ============================================================================
@@ -841,39 +768,6 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
     end
   end
 
-  # ============================================================================
-  # Owner Process
-  # ============================================================================
-
-  describe "owner process parameter" do
-    test "agent_loop with custom owner" do
-      context = simple_context()
-      response = Mocks.assistant_message("Hello")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      owner = self()
-      stream = Loop.agent_loop([user_message("Hi")], context, config, nil, nil, owner)
-
-      {:ok, messages} = EventStream.result(stream)
-      assert messages != []
-    end
-
-    test "agent_loop_continue with custom owner" do
-      context = simple_context(messages: [user_message("Start")])
-      response = Mocks.assistant_message("Continued")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      owner = self()
-      stream = Loop.agent_loop_continue(context, config, nil, nil, owner)
-
-      {:ok, messages} = EventStream.result(stream)
-      assert is_list(messages)
-    end
-  end
 
   # ============================================================================
   # Follow-up Message Edge Cases

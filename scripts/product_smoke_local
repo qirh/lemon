@@ -15,7 +15,6 @@
 #   4. WebSocket probe: connect -> hello-ok -> health -> native agent
 #      -> agent.wait asserting a deterministic local-provider reply
 #   5. checks web /healthz (full runtime profile serves "ok")
-#   6. writes a redacted proof artifact to .lemon/proofs/product-smoke-local-latest.json
 #
 # Isolation guarantees — safe to run next to a production node:
 #   - HOME is a temp dir, so the runtime reads the fixture ~/.lemon/config.toml
@@ -332,7 +331,7 @@ if [ "$MODE" = "release" ]; then
   "$RELEASE_BIN" daemon
 else
   echo "[smoke] Booting dev runtime via bin/lemon (log: $WORK/runtime.log)..."
-  ./bin/lemon \
+  ./bin/lemon start \
     --sname "$SNAME" \
     --cookie "$COOKIE" \
     --port "$CONTROL_PORT" \
@@ -517,48 +516,5 @@ if [ "$WEB_RESPONSE" != "ok" ]; then
   echo "ERROR: web healthz expected \"ok\", got: $WEB_RESPONSE" >&2
   exit 1
 fi
-
-# ── Redacted proof artifact (house smoke-script pattern) ─────────────────────
-
-PROOF_DIR="$REPO_ROOT/.lemon/proofs"
-mkdir -p "$PROOF_DIR"
-python3 - "$PROOF_DIR/product-smoke-local-latest.json" <<PY
-import json
-import sys
-import time
-
-proof = {
-    "script": "scripts/product_smoke_local",
-    "mode": "$MODE",
-    "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-    "boot_seconds": $BOOT_SECONDS,
-    "node": "$SNAME",
-    "ports": {
-        "control_plane": $CONTROL_PORT,
-        "web": $WEB_PORT,
-        "sim_ui": $SIM_PORT,
-        "gateway_health": "ephemeral (LEMON_GATEWAY_HEALTH_PORT=0)",
-        "router_health": "ephemeral (LEMON_ROUTER_HEALTH_PORT=0)",
-    },
-    "checks": {
-        "control_plane_healthz": "ok",
-        "ws_connect_hello_ok": "ok",
-        "ws_health": "ok",
-        "ws_echo_agent_run": "ok",
-        "web_healthz": "ok",
-    },
-    "isolation": {
-        "temp_home": True,
-        "telegram_enabled": False,
-        "unique_sname_random_cookie": True,
-        "isolated_store_and_dotenv": True,
-    },
-}
-
-with open(sys.argv[1], "w") as f:
-    json.dump(proof, f, indent=2)
-    f.write("\n")
-print(f"[smoke] Proof written: {sys.argv[1]}")
-PY
 
 PASSED=1

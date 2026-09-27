@@ -50,13 +50,6 @@ defmodule LemonCore.HttpcTest do
     end
   end
 
-  describe "request/4 - module interface" do
-    test "exposes request/4" do
-      assert Code.ensure_loaded?(Httpc)
-      assert function_exported?(Httpc, :request, 4)
-    end
-  end
-
   describe "request/4 - GET requests" do
     test "makes a successful GET request", %{base_url: base_url} do
       assert {:ok, {{_, status_code, _}, headers, body}} = get("#{base_url}/get")

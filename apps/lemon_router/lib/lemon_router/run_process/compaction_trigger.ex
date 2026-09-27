@@ -93,8 +93,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     {primary_key, primary_tokens} = find_primary_token_count(usage)
     cached_tokens = sum_cached_tokens(usage)
     compute_total_input_tokens(primary_key, primary_tokens, cached_tokens)
-  rescue
-    _ -> nil
   end
 
   def usage_input_tokens(_), do: nil
@@ -126,8 +124,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     else
       nil
     end
-  rescue
-    _ -> nil
   end
 
   @spec context_length_exceeded_error?(term()) :: boolean()
@@ -146,8 +142,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       |> String.downcase()
 
     Enum.any?(@context_overflow_error_markers, &String.contains?(text, &1))
-  rescue
-    _ -> false
   end
 
   # ---- Compaction marker logic ----
@@ -183,8 +177,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   def maybe_reset_resume_on_context_overflow(_state, _event), do: :ok
@@ -216,8 +208,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   def maybe_store_chat_state(_state, _event), do: :ok
@@ -275,8 +265,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   def maybe_mark_pending_compaction_near_limit(_state, _event), do: :ok
@@ -337,11 +325,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       end
 
     fetch(completed, :ok) === true
-  rescue
-    _ -> false
   end
-
-  defp explicit_completed_ok_true?(_), do: false
 
   defp preemptive_compaction_config(session_key) when is_binary(session_key) do
     _session_key = session_key
@@ -364,14 +348,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           @default_preemptive_compaction_trigger_ratio
         )
     }
-  rescue
-    _ ->
-      %{
-        enabled: true,
-        context_window_tokens: nil,
-        reserve_tokens: default_compaction_reserve_tokens(),
-        trigger_ratio: @default_preemptive_compaction_trigger_ratio
-      }
   end
 
   defp preemptive_compaction_config(_session_key) do
@@ -394,14 +370,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           @default_preemptive_compaction_trigger_ratio
         )
     }
-  rescue
-    _ ->
-      %{
-        enabled: true,
-        context_window_tokens: nil,
-        reserve_tokens: @default_compaction_reserve_tokens,
-        trigger_ratio: @default_preemptive_compaction_trigger_ratio
-      }
   end
 
   defp resolve_compaction_config do
@@ -427,8 +395,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
     # Prefer app-level overrides in tests/runtime, then fall back to config file.
     Map.merge(config_cfg, router_cfg)
-  rescue
-    _ -> %{}
   end
 
   defp default_compaction_reserve_tokens do
@@ -443,15 +409,11 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       _ ->
         @default_compaction_reserve_tokens
     end
-  rescue
-    _ -> @default_compaction_reserve_tokens
   end
 
   defp resolve_preemptive_compaction_context_window(state, cfg) when is_map(cfg) do
     cfg.context_window_tokens || resolve_context_window_from_model(state)
   end
-
-  defp resolve_preemptive_compaction_context_window(_state, _cfg), do: nil
 
   defp resolve_context_window_from_model(state) when is_map(state) do
     model =
@@ -461,8 +423,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       end
 
     model_context_window(model)
-  rescue
-    _ -> nil
   end
 
   defp resolve_context_window_from_model(_), do: nil
@@ -481,8 +441,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
         nil
       end
     end)
-  rescue
-    _ -> nil
   end
 
   defp model_context_window(_), do: nil
@@ -518,8 +476,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
     |> Enum.uniq()
   end
-
-  defp model_lookup_candidates(_), do: []
 
   defp preemptive_compaction_threshold(context_window, reserve_tokens, trigger_ratio)
        when is_integer(context_window) and context_window > 0 and is_integer(reserve_tokens) and
@@ -584,11 +540,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
-
-  defp reset_telegram_resume_state(_), do: :ok
 
   defp normalize_telegram_account_id(parsed) do
     case parsed.account_id do

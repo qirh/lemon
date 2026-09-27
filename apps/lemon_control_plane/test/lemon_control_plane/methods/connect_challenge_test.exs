@@ -1,19 +1,11 @@
 defmodule LemonControlPlane.Methods.ConnectChallengeTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Methods.{
-    ConnectChallenge,
-    DevicePairRequest,
-    DevicePairApprove,
-    NodePairRequest,
-    NodePairApprove,
-    NodeRename
-  }
+  alias LemonControlPlane.Methods.{ConnectChallenge, NodePairRequest, NodePairApprove}
 
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.NodeStore
 
-  @admin_ctx %{conn_id: "test-conn", auth: %{role: :operator}}
   @pairing_ctx %{conn_id: "test-conn", auth: %{role: :operator, scopes: [:pairing]}}
   @challenge_ctx %{conn_id: "test-conn"}
 
@@ -21,22 +13,6 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
     # Clean up stores after each test
     on_exit(fn ->
       try do
-        # Clean up device pairing stores
-        LemonCore.Store.list(:device_pairing)
-        |> Enum.each(fn {k, _} ->
-          LemonCore.Store.delete(:device_pairing, k)
-        end)
-
-        LemonCore.Store.list(:device_pairing_challenges)
-        |> Enum.each(fn {k, _} ->
-          LemonCore.Store.delete(:device_pairing_challenges, k)
-        end)
-
-        LemonCore.Store.list(:devices)
-        |> Enum.each(fn {k, _} ->
-          LemonCore.Store.delete(:devices, k)
-        end)
-
         # Clean up node pairing stores
         LemonCore.Store.list(:nodes_pairing)
         |> Enum.each(fn {k, _} ->
@@ -90,105 +66,20 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
     test "has no auth scopes required" do
       assert ConnectChallenge.scopes() == []
     end
-  end
 
-  describe "device pairing flow with connect.challenge" do
-    test "full device pairing flow produces valid challenge token" do
-      # Step 1: Request device pairing
-      {:ok, request_result} =
-        DevicePairRequest.handle(
-          %{
-            "deviceType" => "mobile",
-            "deviceName" => "Test Phone"
-          },
-          @admin_ctx
-        )
+    test "a leftover device pairing challenge no longer authenticates" do
+      challenge = "legacy-device-challenge-#{System.unique_integer([:positive])}"
 
-      pairing_id = request_result["pairingId"]
-      assert is_binary(pairing_id)
-
-      # Step 2: Approve the pairing (this creates the challenge)
-      {:ok, approve_result} =
-        DevicePairApprove.handle(
-          %{
-            "pairingId" => pairing_id
-          },
-          @admin_ctx
-        )
-
-      assert approve_result["success"] == true
-      challenge_token = approve_result["challengeToken"]
-      assert is_binary(challenge_token)
-
-      # Step 3: Verify challenge via connect.challenge
-      {:ok, verify_result} =
-        ConnectChallenge.handle(
-          %{
-            "challenge" => challenge_token
-          },
-          @challenge_ctx
-        )
-
-      assert verify_result["verified"] == true
-      assert verify_result["identity"]["type"] == "device"
-      assert verify_result["identity"]["deviceName"] == "Test Phone"
-      assert is_binary(verify_result["token"])
-      assert verify_result["summary"]["verified"] == true
-      assert verify_result["summary"]["identityType"] == "device"
-      assert verify_result["summary"]["identityId"] == verify_result["identity"]["deviceId"]
-      assert verify_result["summary"]["credentialDelivery"]["includesSessionToken"] == true
-      assert verify_result["summary"]["cleanup"]["includesChallenge"] == false
-      assert verify_result["summary"]["cleanup"]["includesChallengeToken"] == false
-      assert verify_result["summary"]["cleanup"]["includesSecretValues"] == false
-    end
-
-    test "challenge token is one-time use" do
-      # Setup pairing
-      {:ok, request} =
-        DevicePairRequest.handle(
-          %{
-            "deviceType" => "tablet",
-            "deviceName" => "Test Tablet"
-          },
-          @admin_ctx
-        )
-
-      {:ok, approve} =
-        DevicePairApprove.handle(
-          %{
-            "pairingId" => request["pairingId"]
-          },
-          @admin_ctx
-        )
-
-      challenge_token = approve["challengeToken"]
-
-      # First use should succeed
-      {:ok, _} = ConnectChallenge.handle(%{"challenge" => challenge_token}, @challenge_ctx)
-
-      # Second use should fail (token consumed)
-      {:error, error} = ConnectChallenge.handle(%{"challenge" => challenge_token}, @challenge_ctx)
-      assert {:unauthorized, "Invalid challenge"} = error
-    end
-
-    test "expired challenge returns error" do
-      # Manually create an expired challenge
-      expired_challenge = "expired-device-challenge-123"
-
-      LemonCore.Store.put(:device_pairing_challenges, expired_challenge, %{
-        device_id: "dev-123",
-        device_name: "Old Device",
-        # Expired 1 second ago
-        expires_at_ms: System.system_time(:millisecond) - 1000
+      LemonCore.Store.put(:device_pairing_challenges, challenge, %{
+        device_id: "device-legacy",
+        device_name: "Legacy Device",
+        expires_at_ms: System.system_time(:millisecond) + 60_000
       })
 
-      {:error, error} =
-        ConnectChallenge.handle(%{"challenge" => expired_challenge}, @challenge_ctx)
+      on_exit(fn -> LemonCore.Store.delete(:device_pairing_challenges, challenge) end)
 
-      assert {:unauthorized, "Challenge expired"} = error
-
-      # Challenge should be cleaned up after expiry check
-      assert LemonCore.Store.get(:device_pairing_challenges, expired_challenge) == nil
+      assert {:error, {:unauthorized, "Invalid challenge"}} =
+               ConnectChallenge.handle(%{"challenge" => challenge}, @challenge_ctx)
     end
   end
 
@@ -379,67 +270,19 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
       assert {:error, :invalid_token} = TokenStore.validate("older-active-session")
       assert length(NodeStore.list_nodes()) == 1
     end
-
-    test "controller rename preserves ID-based recovery and issues the renamed identity" do
-      {:ok, request} =
-        NodePairRequest.handle(
-          %{"nodeType" => "coding_agent", "nodeName" => "Before Rename"},
-          @pairing_ctx
-        )
-
-      {:ok, approved} =
-        NodePairApprove.handle(%{"pairingId" => request["pairingId"]}, @pairing_ctx)
-
-      node_id = approved["nodeId"]
-
-      assert {:ok, %{"name" => "After Rename"}} =
-               NodeRename.handle(%{"nodeId" => node_id, "name" => "After Rename"}, @admin_ctx)
-
-      {:ok, recovery} =
-        NodePairRequest.handle(
-          %{
-            "nodeId" => node_id,
-            "nodeName" => "Before Rename",
-            "nodeType" => "coding_agent",
-            "recoveryToken" => approved["token"]
-          },
-          @pairing_ctx
-        )
-
-      pairing = NodeStore.get_pairing(recovery["pairingId"])
-      assert pairing.node_id == node_id
-      assert pairing.node_name == "After Rename"
-
-      {:ok, rotated} =
-        NodePairApprove.handle(%{"pairingId" => recovery["pairingId"]}, @pairing_ctx)
-
-      {:ok, verified} =
-        ConnectChallenge.handle(%{"challenge" => rotated["challengeToken"]}, @challenge_ctx)
-
-      assert verified["identity"]["nodeId"] == node_id
-      assert verified["identity"]["nodeName"] == "After Rename"
-      assert length(NodeStore.list_nodes()) == 1
-    end
   end
 
   describe "challenge token security" do
     test "challenge tokens are cryptographically random" do
-      {:ok, r1} =
-        DevicePairRequest.handle(%{"deviceType" => "a", "deviceName" => "A"}, @admin_ctx)
-
-      {:ok, a1} = DevicePairApprove.handle(%{"pairingId" => r1["pairingId"]}, @admin_ctx)
-
-      {:ok, r2} =
-        DevicePairRequest.handle(%{"deviceType" => "b", "deviceName" => "B"}, @admin_ctx)
-
-      {:ok, a2} = DevicePairApprove.handle(%{"pairingId" => r2["pairingId"]}, @admin_ctx)
+      token_a = node_challenge_token("Random A")
+      token_b = node_challenge_token("Random B")
 
       # Tokens should be different
-      assert a1["challengeToken"] != a2["challengeToken"]
+      assert token_a != token_b
 
       # Tokens should be long enough for security
-      assert byte_size(a1["challengeToken"]) >= 32
-      assert byte_size(a2["challengeToken"]) >= 32
+      assert byte_size(token_a) >= 32
+      assert byte_size(token_b) >= 32
     end
   end
 
@@ -463,30 +306,10 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
     end
 
     test "issued session token is stored in TokenStore" do
-      # Setup device pairing and get a challenge token
-      {:ok, request} =
-        DevicePairRequest.handle(
-          %{
-            "deviceType" => "mobile",
-            "deviceName" => "Token Test Device"
-          },
-          @admin_ctx
-        )
-
-      {:ok, approve} =
-        DevicePairApprove.handle(
-          %{
-            "pairingId" => request["pairingId"]
-          },
-          @admin_ctx
-        )
-
       # Verify the challenge - this should store the session token
       {:ok, verify_result} =
         ConnectChallenge.handle(
-          %{
-            "challenge" => approve["challengeToken"]
-          },
+          %{"challenge" => node_challenge_token("Token Test Node")},
           @challenge_ctx
         )
 
@@ -496,34 +319,14 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
       # Verify token is stored
       token_info = TokenStore.get_info(session_token)
       assert token_info != nil
-      assert token_info.identity["type"] == "device"
-      assert token_info.identity["deviceName"] == "Token Test Device"
+      assert token_info.identity["type"] == "node"
+      assert token_info.identity["nodeName"] == "Token Test Node"
     end
 
     test "stored session token can be validated" do
-      # Setup and get session token
-      {:ok, request} =
-        DevicePairRequest.handle(
-          %{
-            "deviceType" => "mobile",
-            "deviceName" => "Validation Test"
-          },
-          @admin_ctx
-        )
-
-      {:ok, approve} =
-        DevicePairApprove.handle(
-          %{
-            "pairingId" => request["pairingId"]
-          },
-          @admin_ctx
-        )
-
       {:ok, verify_result} =
         ConnectChallenge.handle(
-          %{
-            "challenge" => approve["challengeToken"]
-          },
+          %{"challenge" => node_challenge_token("Validation Test")},
           @challenge_ctx
         )
 
@@ -531,8 +334,8 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
       # Validate the token
       {:ok, identity} = TokenStore.validate(session_token)
-      assert identity["type"] == "device"
-      assert identity["deviceName"] == "Validation Test"
+      assert identity["type"] == "node"
+      assert identity["nodeName"] == "Validation Test"
     end
 
     test "invalid token returns error on validation" do
@@ -547,7 +350,7 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
       LemonCore.Store.put(:session_tokens, expired_token, %{
         token: expired_token,
-        identity: %{"type" => "device"},
+        identity: %{"type" => "node", "nodeId" => "node-expired"},
         issued_at_ms: System.system_time(:millisecond) - 1_000_000,
         expires_at_ms: System.system_time(:millisecond) - 1000
       })
@@ -556,47 +359,6 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
       # Token should be cleaned up after validation failure
       assert TokenStore.get_info(expired_token) == nil
-    end
-
-    test "Authorize.from_params validates token and extracts identity" do
-      # Setup and get session token
-      {:ok, request} =
-        DevicePairRequest.handle(
-          %{
-            "deviceType" => "mobile",
-            "deviceName" => "Authorize Test"
-          },
-          @admin_ctx
-        )
-
-      {:ok, approve} =
-        DevicePairApprove.handle(
-          %{
-            "pairingId" => request["pairingId"]
-          },
-          @admin_ctx
-        )
-
-      {:ok, verify_result} =
-        ConnectChallenge.handle(
-          %{
-            "challenge" => approve["challengeToken"]
-          },
-          @challenge_ctx
-        )
-
-      session_token = verify_result["token"]
-
-      # Use Authorize.from_params with the token
-      {:ok, auth_ctx} =
-        Authorize.from_params(%{
-          "auth" => %{"token" => session_token}
-        })
-
-      # Should have device role and scopes
-      assert auth_ctx.role == :device
-      assert :control in auth_ctx.scopes
-      assert auth_ctx.identity["type"] == "device"
     end
 
     test "Authorize.from_params rejects invalid token" do
@@ -647,29 +409,9 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
     end
 
     test "token can be revoked" do
-      # Setup and get session token
-      {:ok, request} =
-        DevicePairRequest.handle(
-          %{
-            "deviceType" => "mobile",
-            "deviceName" => "Revoke Test"
-          },
-          @admin_ctx
-        )
-
-      {:ok, approve} =
-        DevicePairApprove.handle(
-          %{
-            "pairingId" => request["pairingId"]
-          },
-          @admin_ctx
-        )
-
       {:ok, verify_result} =
         ConnectChallenge.handle(
-          %{
-            "challenge" => approve["challengeToken"]
-          },
+          %{"challenge" => node_challenge_token("Revoke Test")},
           @challenge_ctx
         )
 
@@ -684,5 +426,13 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
       # Token should now be invalid
       {:error, :invalid_token} = TokenStore.validate(session_token)
     end
+  end
+
+  defp node_challenge_token(node_name) do
+    {:ok, request} =
+      NodePairRequest.handle(%{"nodeType" => "compute", "nodeName" => node_name}, @pairing_ctx)
+
+    {:ok, approve} = NodePairApprove.handle(%{"pairingId" => request["pairingId"]}, @pairing_ctx)
+    approve["challengeToken"]
   end
 end

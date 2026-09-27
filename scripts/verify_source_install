@@ -7,10 +7,11 @@ usage: scripts/verify_source_install [--project-dir PATH] [--skip-compile] [--sk
 
 Verifies the supported source-install path:
   - checks Elixir and Erlang/OTP toolchain availability
-  - checks source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/policy/secrets/skill/usage/update
+  - checks the unified command registry help lists every launcher and CLI command
   - checks locked dependency resolution
   - checks source-wrapper setup readiness is required before fixture onboarding,
-    then satisfied by a locally stored fixture credential and default model
+    then satisfied by a locally stored fixture credential and default model,
+    and that `setup --if-required` is then a no-op
   - checks source-wrapper non-interactive setup runtime dispatch
   - checks source-wrapper channel configuration status
   - checks source-wrapper config validation
@@ -21,7 +22,8 @@ Verifies the supported source-install path:
   - checks source-wrapper secrets status
   - checks source-wrapper skill listing
   - checks source-wrapper usage diagnostics
-  - checks stage-1 local update dry-run dispatch
+  - checks source-checkout `update plan` fails closed before mutation
+  - checks `version` and the read-only Hermes migration audit
   - runs source-wrapper doctor JSON diagnostics and support-bundle generation unless --skip-doctor is set
 EOF
   exit 2
@@ -97,23 +99,6 @@ require_command() {
 require_command elixir
 require_command mix
 
-help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
-./bin/lemon --help >"$help_output"
-for subcommand in setup model gateway channels config doctor web send media models providers blueprints policy secrets skill usage update; do
-  if ! grep -q "./bin/lemon $subcommand" "$help_output"; then
-    fail "source wrapper help did not advertise ./bin/lemon $subcommand"
-  fi
-done
-rm -f "$help_output"
-ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/blueprints/policy/secrets/skill/usage/update"
-
-web_help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-web-help.XXXXXX")"
-./bin/lemon web --help >"$web_help_output"
-grep -q 'Usage: ./bin/lemon web \[--no-open\]' "$web_help_output" ||
-  fail "source wrapper web help did not document --no-open"
-rm -f "$web_help_output"
-ok "source-wrapper web command documents browser and no-open launch modes"
-
 elixir -e '
 required = Version.parse!("1.19.5")
 current = Version.parse!(System.version())
@@ -162,6 +147,9 @@ secrets_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-secrets.XXXXXX")"
 skill_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-skill.XXXXXX")"
 usage_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-usage.XXXXXX")"
 update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
+help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
+migrate_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-migrate.XXXXXX")"
+hermes_home="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-hermes.XXXXXX")"
 cleanup_setup_output() {
   rm -rf "$onboarding_home"
   rm -rf "$onboarding_project"
@@ -178,6 +166,9 @@ cleanup_setup_output() {
   rm -f "$skill_output"
   rm -f "$usage_output"
   rm -f "$update_output"
+  rm -f "$help_output"
+  rm -f "$migrate_output"
+  rm -rf "$hermes_home"
 }
 preserve_toolchain() {
   if [ -n "$toolchain_asdf_data_dir" ]; then
@@ -326,7 +317,14 @@ grep -q "OpenAI onboarding complete." "$onboarding_output" ||
   fail "fixture provider onboarding did not complete"
 
 assert_setup_required false
-
+run_onboarding_durable "$onboarding_output" setup --if-required || {
+  cat "$onboarding_output" >&2
+  fail "setup --if-required failed on a configured fixture"
+}
+if grep -q "Setup is required" "$onboarding_output"; then
+  fail "setup --if-required re-ran setup on a configured fixture"
+fi
+ok "setup --if-required is a no-op once setup is complete"
 
 run_onboarding_help setup --help
 grep -qi "setup" "$onboarding_output" ||
@@ -342,6 +340,22 @@ grep -qi "gateway" "$onboarding_output" ||
 
 ok "installed-style onboarding commands are discoverable without provider credentials"
 
+run_onboarding "$help_output" --help
+for command in tui web start run daemon stop restart status setup model gateway doctor \
+  config secrets channels providers blueprints profile backup context sessions learn update \
+  completion migrate node version send media models policy skill usage; do
+  grep -Eq "^  $command( |$)" "$help_output" ||
+    fail "source help did not list $command"
+done
+if grep -Eq "^  (remote|eval|rpc) " "$help_output"; then
+  fail "source help advertised a packaged-release-only command"
+fi
+ok "source-wrapper help lists the unified command registry"
+
+run_onboarding_help web --help
+grep -Fq 'Usage: lemon web [--no-open]' "$onboarding_output" ||
+  fail "source wrapper web help did not document --no-open"
+ok "launcher command help comes from the shared registry"
 
 run_onboarding "$setup_output" setup runtime --profile runtime_min --non-interactive
 grep -q "mix release lemon_runtime_min" "$setup_output" ||
@@ -411,12 +425,37 @@ grep -q "Includes credentials: false" "$usage_output" ||
   fail "usage output did not document credential cleanup"
 ok "source-wrapper usage diagnostics work"
 
-run_onboarding "$update_output" update --check --no-skill-sync --verbose
-grep -q "Version:" "$update_output" ||
-  fail "update check output did not include current version"
-grep -Fq 'Source checkout: this task does not download or apply updates (use `git pull`).' "$update_output" ||
-  fail "update check did not document the source-checkout update boundary"
-ok "stage-1 update dry-run dispatch works"
+if run_onboarding "$update_output" update plan; then
+  fail "source-checkout update plan unexpectedly succeeded"
+fi
+grep -q "Source checkouts cannot plan, apply, or roll back release artifacts" "$update_output" ||
+  fail "update plan did not document the source-checkout update boundary"
+ok "source-checkout update plan fails closed"
+
+run_onboarding "$update_output" version
+grep -Eq '^[0-9]+\.[0-9]+' "$update_output" ||
+  fail "version did not print a Lemon version"
+ok "version dispatch works: $(grep -E '^[0-9]+\.[0-9]+' "$update_output" | head -n 1)"
+
+run_onboarding "$migrate_output" migrate hermes audit --json \
+  --source "$hermes_home" --target "$onboarding_home/.lemon"
+python3 - "$migrate_output" <<'PY'
+import json
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.find("{")
+if start < 0:
+    print("error migrate hermes audit did not emit JSON", file=sys.stderr)
+    raise SystemExit(1)
+
+report = json.loads(text[start:])
+if "summary" not in report or not isinstance(report.get("items"), list):
+    print("error migrate hermes audit JSON lacks summary/items", file=sys.stderr)
+    raise SystemExit(1)
+
+print("ok read-only Hermes migration audit works")
+PY
 
 if ! $SKIP_DOCTOR; then
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install.XXXXXX")"

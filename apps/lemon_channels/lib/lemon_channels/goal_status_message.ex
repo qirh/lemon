@@ -521,8 +521,6 @@ defmodule LemonChannels.GoalStatusMessage do
     end
   end
 
-  defp auto_line(_), do: nil
-
   defp max_continuations(%{} = budget) do
     budget["max_continuations"] || budget[:max_continuations]
   end

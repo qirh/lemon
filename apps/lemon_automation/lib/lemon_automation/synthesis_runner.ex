@@ -104,7 +104,6 @@ defmodule LemonAutomation.SynthesisRunner do
       case state.last_run_at_ms do
         nil -> true
         last when is_integer(last) -> now_ms - last >= interval_ms(cfg)
-        _ -> true
       end
     else
       false

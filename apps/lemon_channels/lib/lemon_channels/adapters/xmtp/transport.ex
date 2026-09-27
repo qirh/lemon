@@ -1275,10 +1275,6 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
         error
     end
-  rescue
-    _ ->
-      Logger.warning("xmtp inbound routing failed: reason=unavailable")
-      {:error, :unavailable}
   end
 
   defp outbound_payload(%OutboundPayload{kind: :text} = payload) do
@@ -1316,13 +1312,9 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
         {:ok, outbound}
     end
-  rescue
-    error ->
-      {:error, error}
   end
 
   defp outbound_payload(%OutboundPayload{}), do: {:error, :unsupported_kind}
-  defp outbound_payload(_), do: {:error, :unsupported_payload}
 
   defp outbound_conversation_id(%OutboundPayload{} = payload) do
     meta = payload.meta || %{}
@@ -1460,8 +1452,6 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp fetch_nested(value, [key | rest]) when is_map(value) do
     next = Map.get(value, key) || Map.get(value, maybe_existing_atom(key))
     fetch_nested(next, rest)
-  rescue
-    _ -> nil
   end
 
   defp fetch_nested(_value, _keys), do: nil
@@ -1469,7 +1459,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp maybe_existing_atom(key) when is_binary(key) do
     String.to_existing_atom(key)
   rescue
-    _ -> nil
+    ArgumentError -> nil
   end
 
   defp maybe_existing_atom(key) when is_atom(key), do: key
@@ -1477,10 +1467,6 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
   defp fetch_meta(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
-  end
-
-  defp fetch_meta(map, key) when is_map(map) and is_binary(key) do
-    Map.get(map, key) || Map.get(map, maybe_existing_atom(key))
   end
 
   defp fetch_meta(_, _), do: nil

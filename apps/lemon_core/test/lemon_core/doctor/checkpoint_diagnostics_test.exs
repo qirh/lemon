@@ -60,10 +60,7 @@ defmodule LemonCore.Doctor.CheckpointDiagnosticsTest do
     assert is_binary(session_hash)
     assert rollback.tui_diff == "/checkpoint diff chk_a"
     assert rollback.tui_restore == "/checkpoint restore chk_a"
-    assert rollback.control_plane_diff =~ ~s("method":"checkpoint.diff")
-    assert rollback.control_plane_diff =~ ~s("checkpointId":"chk_a")
-    assert rollback.control_plane_restore =~ ~s("method":"checkpoint.restore")
-    assert rollback.control_plane_restore =~ ~s("checkpointId":"chk_a")
+    assert Map.keys(rollback) |> Enum.sort() == [:tui_diff, :tui_restore]
     refute inspect(summary) =~ "agent:secret-session"
     refute inspect(summary) =~ "/private/path/a.txt"
     refute inspect(summary) =~ "secret"

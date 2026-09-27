@@ -196,12 +196,7 @@ defmodule LemonSkills.Installer do
 
       source_kind = SourceRouter.source_kind(mod)
 
-      trust_level =
-        if function_exported?(mod, :trust_for_ref, 1) do
-          mod.trust_for_ref(id)
-        else
-          mod.trust_level()
-        end
+      trust_level = mod.trust_for_ref(id)
 
       force = Keyword.get(opts, :force, false)
       scope = if global, do: :global, else: {:project, cwd}
@@ -482,7 +477,7 @@ defmodule LemonSkills.Installer do
                source_module: mod,
                source_id: id,
                source_kind: entry.source_kind || SourceRouter.source_kind(mod),
-               trust_level: entry.trust_level || mod.trust_level(),
+               trust_level: entry.trust_level || mod.trust_for_ref(id),
                skill_name: entry.key,
                dest_dir: entry.path,
                scope: scope

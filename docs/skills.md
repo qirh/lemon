@@ -91,8 +91,6 @@ Get a specific skill by key.
 ```elixir
 {:ok, skill} = LemonSkills.get("bun-file-io")
 :error = LemonSkills.get("nonexistent")
-```
-
 **Options:**
 - `:cwd` - Project working directory (optional)
 
@@ -396,7 +394,7 @@ The sidecar tracks load/write counters, last-use fields, agent-authored creation
 - stale skills with recent activity are reactivated
 - pinned and non-agent-authored skills are skipped
 - no curator path deletes skills
-
+`skill_manage`, `remember`, and `recall`.
 Each curator run writes a machine report and a human report:
 
 | Scope | Reports |
@@ -408,7 +406,7 @@ Each curator run writes a machine report and a human report:
 
 The CLI wrapper is `mix lemon.skill curator status|run|pause|resume`. `run --prompt` also prints the curator review prompt an agent can use to consolidate narrow learned skills into broader umbrella skills via `read_skill` and `skill_manage`. The prompt prefers patching an existing class-level skill first, then updating supporting files such as `references/`, `templates/`, or `scripts/`, then creating a new class-level umbrella only when no existing skill owns the reusable lesson.
 
-`LemonAutomation.SkillCuratorManager` provides the Hermes-style background path. It checks for router idleness, respects the persisted curator interval/pause gates, runs the same conservative transitions, and submits the curator review prompt to `LemonRouter` only when agent-authored candidates need an agent consolidation pass. The default target is `agent:default:main`; override it with `config :lemon_automation, :skill_curator, agent_id: "...", session_key: "..."`. Background curator reviews default to a learning-only tool policy with `read_skill`, `skill_manage`, `search_memory`, and `memory_topic`.
+`LemonAutomation.SkillCuratorManager` provides the background path. It checks for router idleness, respects the persisted curator interval/pause gates, runs the same conservative transitions, and submits the curator review prompt to `LemonRouter` only when agent-authored candidates need an agent consolidation pass. The default target is `agent:default:main`; override it with `config :lemon_automation, :skill_curator, agent_id: "...", session_key: "..."`. Background curator reviews default to a learning-only tool policy with `read_skill`, `skill_manage`, `remember`, and `recall`.
 
 ## Project vs Global Skills
 

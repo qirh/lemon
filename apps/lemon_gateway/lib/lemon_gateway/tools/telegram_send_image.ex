@@ -5,6 +5,9 @@ defmodule LemonGateway.Tools.TelegramSendImage do
   Resolves the image path relative to the project or workspace root, validates
   the file type and size, and queues it for delivery to the active Telegram chat
   with an optional caption.
+
+  Oversized images report their measured size and the configured limit;
+  filesystem lookup failures remain a separate validation error.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -122,8 +125,6 @@ defmodule LemonGateway.Tools.TelegramSendImage do
     end
   end
 
-  defp normalize_caption(_), do: {:ok, nil}
-
   defp resolve_path(path, root, workspace_dir) do
     roots =
       [root, workspace_dir]
@@ -198,10 +199,10 @@ defmodule LemonGateway.Tools.TelegramSendImage do
   defp ensure_file_size_within_limit(path) do
     max_bytes = max_download_bytes_limit()
 
-    with {:ok, %File.Stat{size: size}} <- File.stat(path),
-         true <- size <= max_bytes do
-      :ok
-    else
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} when size <= max_bytes ->
+        :ok
+
       {:ok, %File.Stat{size: size}} ->
         {:error, "Image is too large (#{size} bytes). Max allowed is #{max_bytes} bytes."}
 

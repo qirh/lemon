@@ -884,7 +884,7 @@ defmodule LemonSimUi.SimDashboardLive do
                 Stop run
               </.button>
               <.button
-                :if={resume_supported?(@domain_type) and @selected_sim.sim_id not in @running and Map.get((@selected_sim && @selected_sim.world) || %{}, :status, Map.get((@selected_sim && @selected_sim.world) || %{}, "status")) == "in_progress"}
+                :if={resume_supported?(@domain_type) and @selected_sim.sim_id not in @running and Map.get(@selected_sim.world || %{}, :status, Map.get(@selected_sim.world || %{}, "status")) == "in_progress"}
                 phx-click="resume_sim"
                 phx-value-sim_id={@selected_sim.sim_id}
                 class="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition-all font-bold tracking-widest uppercase px-5 py-2.5 rounded shadow-neon-amber"
@@ -895,7 +895,7 @@ defmodule LemonSimUi.SimDashboardLive do
           </div>
 
           <!-- Runner errors banner -->
-          <% runner_errors = Map.get((@selected_sim && @selected_sim.world) || %{}, :runner_errors) || Map.get((@selected_sim && @selected_sim.world) || %{}, "runner_errors") || [] %>
+          <% runner_errors = Map.get(@selected_sim.world, :runner_errors) || Map.get(@selected_sim.world, "runner_errors") || [] %>
           <div :if={runner_errors != []} class="glass-card rounded-lg border border-red-500/30 bg-red-950/20 p-3 mb-4">
             <details>
               <summary class="text-xs font-bold text-red-400 uppercase tracking-widest cursor-pointer hover:text-red-300 flex items-center gap-2">

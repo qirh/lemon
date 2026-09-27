@@ -127,8 +127,6 @@ defmodule LemonCli.Onboarding.PromptUI do
     }
   end
 
-  defp normalize_input(nil), do: ""
-  defp normalize_input(:eof), do: ""
   defp normalize_input(value) when is_binary(value), do: String.trim(value)
   defp normalize_input(value) when is_list(value), do: value |> List.to_string() |> String.trim()
   defp normalize_input(value), do: value |> to_string() |> String.trim()

@@ -6,8 +6,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
   `CodingAgent.Session.OverflowRecovery.State`.
   """
 
-  require Logger
-
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
 
@@ -125,13 +123,6 @@ defmodule CodingAgent.Session.OverflowRecovery do
                    partial_state: partial_state
                  }
              }}
-
-          {:error, task_reason} ->
-            Logger.warning(
-              "Overflow recovery background task failed to start: #{inspect(task_reason)}"
-            )
-
-            :no_recovery
         end
     end
   end

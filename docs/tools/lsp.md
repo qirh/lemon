@@ -4,8 +4,8 @@ Lemon has two diagnostics paths:
 
 - `lsp_diagnostics`: the model-facing coding-agent tool for one-file
   diagnostics and post-edit baseline/delta checks.
-- supervised LSP sessions: BEAM-owned stdio language-server processes exposed
-  through the control plane for operator/editor-style integrations.
+- supervised LSP sessions: BEAM-owned stdio language-server processes managed
+  through the in-process `LemonLsp.ServerManager` API.
 
 Both paths are preview surfaces. They are designed to be supportable first:
 status and support bundles expose capabilities, counters, hashes, and install
@@ -65,20 +65,10 @@ The supervised stdio manager registers these language servers:
 Override env vars can point at either a command on `PATH` or an absolute local
 executable path. Public status redacts absolute paths to command basenames.
 
-## Control-Plane Methods
+## Supervised Session API
 
-Operator/editor surfaces can use:
-
-| Method | Purpose |
-| --- | --- |
-| `lsp.diagnostics.status` | Inspect redacted checker and language-server capability metadata. |
-| `lsp.server.start` | Start a supervised stdio language-server session. |
-| `lsp.server.initialize` | Send `initialize`, wait for the response, then send `initialized`. |
-| `lsp.document.open` | Send `textDocument/didOpen`. |
-| `lsp.document.change` | Send `textDocument/didChange` with full text content. |
-| `lsp.document.close` | Send `textDocument/didClose`. |
-| `lsp.server.request` | Send a JSON-RPC request and correlate the response by id. |
-| `lsp.server.stop` | Stop the supervised session. |
+The [LSP app guide](../../apps/lemon_lsp/README.md) describes the in-process
+session API. These sessions are not exposed as control-plane RPC methods.
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,

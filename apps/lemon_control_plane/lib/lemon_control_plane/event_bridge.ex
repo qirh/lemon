@@ -15,7 +15,7 @@ defmodule LemonControlPlane.EventBridge do
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
   - `goals` - Durable goal lifecycle events
-  - `system` - System events (shutdown, health, tick, talk.mode)
+  - `system` - System events (shutdown, health, tick)
   - `nodes` - Node pairing events
   - `presence` - Presence events
 
@@ -49,7 +49,6 @@ defmodule LemonControlPlane.EventBridge do
   | :cron_tick               | tick                      |
   | :tick                    | tick                      |
   | :presence_changed        | presence                  |
-  | :talk_mode_changed       | talk.mode                 |
   | :heartbeat               | heartbeat                 |
   | :heartbeat_alert         | heartbeat                 |
   | :metrics                 | metrics                   |
@@ -58,12 +57,8 @@ defmodule LemonControlPlane.EventBridge do
   | :node_pair_resolved      | node.pair.resolved        |
   | :node_invoke_request     | node.invoke.request       |
   | :node_invoke_completed   | node.invoke.completed     |
-  | :device_pair_requested   | device.pair.requested     |
-  | :device_pair_resolved    | device.pair.resolved      |
-  | :voicewake_changed       | voicewake.changed         |
   | :shutdown                | shutdown                  |
   | :health_changed          | health                    |
-  | :custom_event            | custom                    |
   | :task_started            | task.started              |
   | :task_completed          | task.completed            |
   | :task_error              | task.error                |
@@ -213,88 +208,16 @@ defmodule LemonControlPlane.EventBridge do
         :ok
 
       {event_name, payload} ->
-        # Get all connected clients from presence
         clients =
           get_connected_clients()
-          |> filter_subscribed_clients(event_name, payload)
+          |> Enum.filter(fn {_conn_id, info} -> general_event_client?(info) end)
 
         dispatch_event(clients, event_name, payload, state_version)
     end
   end
 
-  defp filter_subscribed_clients(clients, event_name, payload) do
-    Enum.filter(clients, fn {_conn_id, info} ->
-      general_event_client?(info) and subscribed_to_event?(info, event_name, payload)
-    end)
-  end
-
   defp general_event_client?(%{role: role}) when role in [:node, "node"], do: false
   defp general_event_client?(_info), do: true
-
-  defp subscribed_to_event?(
-         %{subscription_mode: :custom, subscriptions: subscriptions},
-         event_name,
-         payload
-       ) do
-    subscriptions = subscriptions || MapSet.new()
-
-    MapSet.member?(subscriptions, "all") ||
-      event_topics(event_name, payload)
-      |> Enum.any?(&MapSet.member?(subscriptions, &1))
-  end
-
-  defp subscribed_to_event?(_info, _event_name, _payload), do: true
-
-  defp event_topics(event_name, payload) do
-    topic_for_event(event_name) ++ run_topics(payload) ++ session_topics(payload)
-  end
-
-  defp topic_for_event(event_name) when event_name in ["cron", "cron.job", "cron.audit"],
-    do: ["cron"]
-
-  defp topic_for_event("goal"), do: ["goals"]
-  defp topic_for_event("channel.delivery"), do: ["channels"]
-  defp topic_for_event("tick"), do: ["cron", "system"]
-  defp topic_for_event("presence"), do: ["presence"]
-  defp topic_for_event("health"), do: ["system"]
-  defp topic_for_event("shutdown"), do: ["system"]
-  defp topic_for_event("talk.mode"), do: ["system"]
-  defp topic_for_event("heartbeat"), do: ["system"]
-  defp topic_for_event("metrics"), do: ["system"]
-  defp topic_for_event("log"), do: ["system"]
-  defp topic_for_event("voicewake.changed"), do: ["system"]
-  defp topic_for_event("custom"), do: ["system"]
-
-  defp topic_for_event(event_name) when is_binary(event_name) do
-    cond do
-      String.starts_with?(event_name, "exec.approval.") -> ["exec_approvals"]
-      String.starts_with?(event_name, "node.") -> ["nodes"]
-      String.starts_with?(event_name, "device.") -> ["nodes"]
-      true -> []
-    end
-  end
-
-  defp topic_for_event(_), do: []
-
-  defp run_topics(payload) do
-    case get_event_field(payload, "runId") do
-      run_id when is_binary(run_id) and run_id != "" -> ["run:#{run_id}"]
-      _ -> []
-    end
-  end
-
-  defp session_topics(payload) do
-    case get_event_field(payload, "sessionKey") do
-      session_key when is_binary(session_key) and session_key != "" -> ["session:#{session_key}"]
-      _ -> []
-    end
-  end
-
-  defp get_event_field(payload, key) when is_map(payload) do
-    Map.get(payload, key) || Map.get(payload, Macro.underscore(key))
-  end
-
-  defp get_event_field(_payload, _key), do: nil
 
   defp dispatch_event(clients, event_name, payload, state_version) do
     payload_meta = %{event: event_name, recipients: length(clients)}
@@ -409,10 +332,10 @@ defmodule LemonControlPlane.EventBridge do
   # Map bus events to WebSocket event names and payloads.
   #
   # Registered platform payloads are coerced to their struct once, here, so that every clause
-  # below can pattern-match one: a struct passes through untouched and a legacy map — a
-  # hand-built test payload, or an event injected through `events.ingest` — becomes its
-  # struct. A payload too malformed to coerce stays a map, misses its typed clause and is
-  # reported by the catch-all, instead of being fanned out to clients as a frame of nils.
+  # below can pattern-match one: a struct passes through untouched and a legacy map — such
+  # as a hand-built test payload — becomes its struct. A payload too malformed to coerce
+  # stays a map, misses its typed clause and is reported by the catch-all, instead of being
+  # fanned out to clients as a frame of nils.
   #
   # `meta` is deliberately still a free map (see docs/platform/bus-events.md §4.1), so it is
   # read with `Access`; the payload never is.
@@ -690,15 +613,6 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  # Talk mode events
-  defp map_event_type(:talk_mode_changed, %Events.TalkModeChanged{} = payload, _meta) do
-    {"talk.mode",
-     %{
-       "sessionKey" => payload.session_key,
-       "mode" => to_string(payload.mode)
-     }}
-  end
-
   # Heartbeat events
   defp map_event_type(:heartbeat, payload, _meta) do
     {"heartbeat",
@@ -808,52 +722,6 @@ defmodule LemonControlPlane.EventBridge do
 
   defp map_event_type(:health_changed, payload, _meta) do
     {"health", payload}
-  end
-
-  # Device pairing events
-  defp map_event_type(:device_pair_requested, payload, _meta) do
-    {"device.pair.requested",
-     %{
-       "pairingId" => payload[:pairing_id],
-       "deviceType" => payload[:device_type],
-       "deviceName" => payload[:device_name]
-     }}
-  end
-
-  defp map_event_type(:device_pair_resolved, payload, _meta) do
-    {"device.pair.resolved",
-     %{
-       "pairingId" => payload[:pairing_id],
-       "status" => to_string(payload[:status]),
-       "deviceType" => payload[:device_type],
-       "deviceName" => payload[:device_name]
-     }}
-  end
-
-  # Voicewake events
-  defp map_event_type(:voicewake_changed, payload, _meta) do
-    {"voicewake.changed",
-     %{
-       "enabled" => payload[:enabled],
-       "keyword" => payload[:keyword],
-       "backend" => payload[:backend]
-     }}
-  end
-
-  # Custom events (from system-event with custom_* types)
-  defp map_event_type(:custom_event, payload, meta) do
-    # Extract the original custom event type from meta or payload
-    custom_type = meta[:original_event_type] || payload[:custom_event_type] || "custom"
-
-    {"custom",
-     add_target_fields(
-       %{
-         "type" => custom_type,
-         "payload" => payload,
-         "timestampMs" => System.system_time(:millisecond)
-       },
-       meta
-     )}
   end
 
   # Task lifecycle events

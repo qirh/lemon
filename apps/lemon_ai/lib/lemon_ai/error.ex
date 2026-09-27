@@ -9,8 +9,6 @@ defmodule LemonAi.Error do
   - Generating user-friendly error messages
   """
 
-  require Logger
-
   # ============================================================================
   # Types
   # ============================================================================

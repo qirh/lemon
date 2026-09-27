@@ -11,9 +11,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
   def build_session_key(account_id, inbound, %ChatScope{} = scope) do
     agent_id =
       inbound.meta[:agent_id] ||
-        (inbound.meta && inbound.meta["agent_id"]) ||
-        BindingResolver.resolve_agent_id(scope) ||
-        "default"
+        inbound.meta["agent_id"] ||
+        BindingResolver.resolve_agent_id(scope)
 
     SessionKey.channel_peer(%{
       agent_id: agent_id,
@@ -37,8 +36,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
     else
       inbound
     end
-  rescue
-    _ -> inbound
   end
 
   @spec maybe_mark_fork_when_busy(binary() | nil, map(), binary() | nil, binary() | nil) :: map()
@@ -53,7 +50,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
         scope = %ChatScope{transport: :whatsapp, chat_id: peer_id, topic_id: thread_id}
         base_session_key = build_session_key(account_id, inbound, scope)
 
-        if is_binary(base_session_key) and session_busy?(base_session_key) do
+        if session_busy?(base_session_key) do
           Logger.warning(
             "WhatsApp auto-forking busy session peer_id=#{inspect(peer_id)} thread_id=#{inspect(thread_id)} " <>
               "base_session_key=#{inspect(base_session_key)} user_msg_id=#{inspect(inbound.meta[:user_msg_id])}"
@@ -67,8 +64,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
       true ->
         inbound
     end
-  rescue
-    _ -> inbound
   end
 
   @spec resolve_session_key(binary() | nil, map(), ChatScope.t(), map(), non_neg_integer()) ::
@@ -92,10 +87,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
       end
 
     {session_key, is_binary(session_key) and session_key != base_session_key}
-  rescue
-    _ ->
-      base_session_key = build_session_key(account_id, inbound, scope)
-      {base_session_key, false}
   end
 
   def resolve_session_key(_account_id, _inbound, _scope, meta0, _generation) do
@@ -115,8 +106,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
       pending_thread_id = pending[:thread_id] || pending["thread_id"]
       pending_peer_id == peer_id and pending_thread_id == thread_id
     end)
-  rescue
-    _ -> false
   end
 
   defp pending_new_for_scope?(_pending_new, _peer_id, _thread_id), do: false
@@ -165,8 +154,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
     else
       session_key <> ":sub:" <> to_string(sub_id)
     end
-  rescue
-    _ -> session_key
   end
 
   defp maybe_with_sub_id(session_key, _sub_id), do: session_key

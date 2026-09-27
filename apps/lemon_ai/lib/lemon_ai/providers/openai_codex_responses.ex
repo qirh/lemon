@@ -53,8 +53,6 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
 
-  require Logger
-
   # ============================================================================
   # Configuration
   # ============================================================================

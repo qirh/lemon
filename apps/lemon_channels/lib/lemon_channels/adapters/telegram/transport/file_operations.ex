@@ -40,8 +40,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   Extract the first present media attachment from the inbound message.
   Returns `{media_type, media_map}` or `nil`.
   """
-  def extract_media(inbound) do
-    meta = inbound.meta || %{}
+  def extract_media(%{meta: meta}) when is_map(meta) or is_nil(meta) do
+    meta = meta || %{}
 
     Enum.find_value(@media_types, fn type ->
       media = meta[type] || meta[Atom.to_string(type)]
@@ -50,17 +50,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
         {type, media}
       end
     end)
-  rescue
-    _ -> nil
   end
+
+  def extract_media(_inbound), do: nil
 
   @doc """
   Returns true when the inbound message has any downloadable media attachment.
   """
   def has_media?(inbound) do
     extract_media(inbound) != nil
-  rescue
-    _ -> false
   end
 
   @doc """
@@ -71,15 +69,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       {_type, media} -> media[:file_id] || media["file_id"]
       nil -> nil
     end
-  rescue
-    _ -> nil
   end
 
   @doc """
   Generate a filename for the media. Uses the Telegram-provided filename when
   available, otherwise generates `{type}_{YYYYMMDD_HHMMSS}{ext}`.
   """
-  def media_filename(media_type, media) do
+  def media_filename(media_type, media) when is_atom(media_type) and is_map(media) do
     telegram_name = media[:file_name] || media["file_name"]
 
     if is_binary(telegram_name) and telegram_name != "" do
@@ -90,9 +86,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       timestamp = format_timestamp()
       "#{type_prefix}_#{timestamp}#{ext}"
     end
-  rescue
-    _ -> "upload_#{System.system_time(:second)}.bin"
   end
+
+  def media_filename(_media_type, _media), do: "upload_#{System.system_time(:second)}.bin"
 
   defp ext_from_mime(_type, mime) when is_binary(mime) and mime != "" do
     Map.get(@mime_to_ext, mime, Map.get(@default_ext, :video, ".bin"))
@@ -148,7 +144,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
             {:ok, final_rel}
           else
             {:error, msg} -> {:error, msg}
-            _ -> {:error, "upload failed"}
           end
         end)
 
@@ -186,9 +181,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           )
 
         :ok
-
-      _ ->
-        :ok
     end
   end
 
@@ -209,7 +201,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     root = BindingResolver.resolve_cwd(scope)
 
     args = Commands.telegram_command_args(file_put_inbound.message.text || "", "file") || ""
-    parts = String.split(String.trim(args || ""), ~r/\s+/, trim: true)
+    parts = String.split(String.trim(args), ~r/\s+/, trim: true)
 
     rest =
       case parts do
@@ -241,9 +233,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
             "File uploads are restricted."
           )
 
-        :ok
-
-      _ ->
         :ok
     end
   end
@@ -282,7 +271,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
         {:ok, final_rel}
       else
         {:error, msg} -> {:error, msg}
-        _ -> {:error, "upload failed"}
       end
     end)
   end
@@ -320,8 +308,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
     enabled? and auto_put? and has_media?(inbound) and
       not Commands.command_message_for_bot?(inbound.message.text || "", state.bot_username)
-  rescue
-    _ -> false
   end
 
   @doc """
@@ -365,12 +351,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
             )
 
         {:error, :restricted}
-
-      _ ->
-        {:error, :unknown}
     end
-  rescue
-    _ -> {:error, :crash}
   end
 
   # ---------------------------------------------------------------------------
@@ -393,7 +374,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
       root = BindingResolver.resolve_cwd(scope)
 
-      parts = String.split(String.trim(args || ""), ~r/\s+/, trim: true)
+      parts = String.split(String.trim(args), ~r/\s+/, trim: true)
 
       case parts do
         [] ->
@@ -411,8 +392,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           state
       end
     end
-  rescue
-    _ -> state
   end
 
   def handle_file_put(state, inbound, cfg, chat_id, thread_id, user_msg_id, root, rest) do
@@ -442,9 +421,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
             "File uploads are restricted."
           )
 
-        state
-
-      _ ->
         state
     end
   end
@@ -480,12 +456,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
           )
 
         state
-
-      _ ->
-        state
     end
-  rescue
-    _ -> state
   end
 
   # ---------------------------------------------------------------------------
@@ -535,8 +506,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
 
     root = BindingResolver.resolve_cwd(scope)
     ensure_project_root(root)
-  rescue
-    _ -> ensure_project_root(nil)
   end
 
   def ensure_project_root(root) when is_binary(root) and byte_size(root) > 0,
@@ -603,7 +572,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     end
   end
 
-  def resolve_dest_abs(root, rel) do
+  def resolve_dest_abs(root, rel)
+      when is_binary(root) and (is_binary(rel) or is_nil(rel)) do
     rel = String.trim(rel || "")
 
     cond do
@@ -627,8 +597,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
         end
     end
   rescue
-    _ -> {:error, "Invalid path."}
+    ArgumentError -> {:error, "Invalid path."}
   end
+
+  def resolve_dest_abs(_root, _rel), do: {:error, "Invalid path."}
 
   def within_root?(root, abs) when is_binary(root) and is_binary(abs) do
     root = Path.expand(root)
@@ -645,8 +617,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     else
       :ok
     end
-  rescue
-    _ -> :ok
   end
 
   def download_media_bytes(state, inbound) do
@@ -677,8 +647,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
     else
       :ok
     end
-  rescue
-    _ -> :ok
   end
 
   def write_document(rel, abs, bytes, opts) do
@@ -700,7 +668,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
         {:ok, rel, abs}
     end
   rescue
-    _ -> {:error, "Failed to write file."}
+    File.Error -> {:error, "Failed to write file."}
   end
 
   def prepare_file_get(abs) do
@@ -723,26 +691,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       true ->
         {:error, "Not found."}
     end
-  rescue
-    _ -> {:error, "Not found."}
   end
 
   def enforce_path_size(path, cfg, key, default_max) do
     max = parse_int(cfg[key] || cfg[to_string(key)]) || default_max
 
     if is_integer(max) and max > 0 do
-      size =
-        case File.stat(path) do
-          {:ok, %File.Stat{size: s}} -> s
-          _ -> 0
-        end
+      case File.stat(path) do
+        {:ok, %File.Stat{size: size}} ->
+          if size > max, do: {:error, "File is too large."}, else: :ok
 
-      if is_integer(size) and size > max, do: {:error, "File is too large."}, else: :ok
+        {:error, _} ->
+          {:error, "Unable to read file size."}
+      end
     else
       :ok
     end
-  rescue
-    _ -> :ok
   end
 
   def send_document_reply(state, chat_id, thread_id, reply_to_id, path, filename) do
@@ -792,16 +756,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       |> Enum.filter(&File.regular?/1)
       |> Enum.map(&Path.relative_to(&1, dir))
 
-    _ =
-      :zip.create(
-        to_charlist(zip_path),
-        Enum.map(files, &to_charlist/1),
-        cwd: to_charlist(dir)
-      )
-
-    :ok
-  rescue
-    _ -> {:error, :zip_failed}
+    case :zip.create(
+           to_charlist(zip_path),
+           Enum.map(files, &to_charlist/1),
+           cwd: to_charlist(dir)
+         ) do
+      {:ok, _} -> :ok
+      {:error, _} -> {:error, :zip_failed}
+    end
   end
 
   defp sender_admin?(state, chat_id, sender_id) do
@@ -833,17 +795,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
       :ok ->
         :ok
 
-      {:error, _reason} ->
+      {:error, reason} when reason in [:channels_outbox_unavailable, :queue_full] ->
         opts =
           %{}
           |> maybe_put("reply_to_message_id", reply_to_message_id)
           |> maybe_put("message_thread_id", thread_id)
 
-        _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-        :ok
+        state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+
+      {:error, _} = error ->
+        error
     end
-  rescue
-    _ -> :ok
   end
 
   defp extract_message_ids(inbound) do

@@ -14,7 +14,7 @@ defmodule LemonSkills.Source do
   | `:git` | `LemonSkills.Sources.Git` | `:community` |
   | `:git` | `LemonSkills.Sources.Github` | `:community` |
   | `:git` | `LemonSkills.Sources.Hermes` | `:official` |
-  | `:registry` | `LemonSkills.Sources.Registry` | `:official` |
+  | `:registry` | `LemonSkills.Sources.Registry` | `:official` or `:community`, by namespace |
 
   ## Usage
 
@@ -22,7 +22,7 @@ defmodule LemonSkills.Source do
       # => {:ok, LemonSkills.Sources.Git, "https://github.com/acme/k8s-skill"}
 
       {:ok, dest} = mod.fetch(id, "/target/dir", [])
-      trust        = mod.trust_level()
+      trust        = mod.trust_for_ref(id)
   """
 
   alias LemonSkills.Entry
@@ -70,7 +70,11 @@ defmodule LemonSkills.Source do
               {:ok, String.t()} | {:error, term()}
 
   @doc """
-  Return the trust level assigned to all skills from this source.
+  Return the trust level assigned to this canonical source identifier.
+
+  Registry sources derive trust from the identifier's namespace. Other sources
+  assign the same trust to every identifier. Install and update use this same
+  contract; a missing stored trust value must not promote a community ref.
   """
-  @callback trust_level() :: Entry.trust_level()
+  @callback trust_for_ref(id :: source_id()) :: Entry.trust_level()
 end

@@ -21,8 +21,6 @@ defmodule LemonCore.Runtime.Health do
       # => %{status: :ok, apps: [...], missing: []}
   """
 
-  require Logger
-
   @default_timeout_ms 2_000
   @healthz_path "/healthz"
   @poll_interval_ms 500

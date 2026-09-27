@@ -91,10 +91,9 @@ agent-authored skills.
 
 Use skills for procedures, not for every remembered fact. A good skill captures
 repeatable steps: commands, preconditions, checks, rollback paths, API quirks, or
-project conventions that should guide future runs. Use `memory_topic` instead
-for durable facts, preferences, decisions, people, dates, or project context.
-Use `search_memory` to recall previous run history before answering "last time"
-questions, and use `todo` only for the active run's work queue.
+project conventions that should guide future runs. Use `remember` for compact
+durable facts and `recall` for previous run history or longer memory notes.
+Use `todo` only for the active run's work queue.
 
 ---
 
@@ -230,11 +229,9 @@ header, at least one skill, and exactly one cron automation:
 
 ### Review and activate
 
-Start the unified runtime, then use the same catalog-scoped CLI in a source
-checkout or packaged release. The packaged launcher starts its daemon when
-needed; source users run `./bin/lemon --daemon` first. With no arguments the
-family lists the bounded catalog, and a bundle ID plus `--profile` is preview
-shorthand:
+Use the same catalog-scoped CLI in a source checkout or packaged release. Both
+launchers start the daemon when needed. With no arguments the family lists the
+bounded catalog, and a bundle ID plus `--profile` is preview shorthand:
 
 ```bash
 lemon blueprints
@@ -396,7 +393,7 @@ The runtime also has an idle background curator path. When enabled, Lemon waits
 for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
 Those background reviews default to the learning tools only: `read_skill`,
-`skill_manage`, `search_memory`, and `memory_topic`.
+`skill_manage`, `remember`, and `recall`.
 
 ---
 

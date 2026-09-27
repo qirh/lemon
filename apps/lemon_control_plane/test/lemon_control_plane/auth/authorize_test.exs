@@ -37,15 +37,14 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert ctx.identity == nil
     end
 
-    test "does not accept params-only node or device roles" do
+    test "does not accept params-only node or unsupported roles" do
       assert {:error, {:unauthorized, "A valid node session token is required"}} =
                Authorize.from_params(%{"role" => "node", "client" => %{"id" => "node-123"}})
 
-      assert {:error, {:unauthorized, "A valid device session token is required"}} =
-               Authorize.from_params(%{
-                 "role" => "device",
-                 "client" => %{"id" => "device-456"}
-               })
+      for role <- ["device", "service"] do
+        assert {:error, {:unauthorized, "Unsupported role"}} =
+                 Authorize.from_params(%{"role" => role})
+      end
     end
   end
 
@@ -55,6 +54,14 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       identity = %{"type" => "service", "serviceId" => "svc-1"}
 
       {:ok, _} = TokenStore.store(token, identity)
+
+      assert {:error, {:unauthorized, "Unsupported token identity"}} =
+               Authorize.from_params(%{"auth" => %{"token" => token}})
+    end
+
+    test "retired device tokens cannot establish a connection" do
+      token = "retired-device-token-#{System.unique_integer([:positive])}"
+      {:ok, _} = TokenStore.store(token, %{"type" => "device", "deviceId" => "legacy"})
 
       assert {:error, {:unauthorized, "Unsupported token identity"}} =
                Authorize.from_params(%{"auth" => %{"token" => token}})
@@ -153,7 +160,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert Authorize.required_scopes("config.get") == [:admin]
       assert Authorize.required_scopes("exec.approvals.list") == [:approvals]
       assert Authorize.required_scopes("node.pair.start") == [:pairing]
-      assert Authorize.required_scopes("node.event") == [:invoke, :event]
+      assert Authorize.required_scopes("node.invoke.result") == [:invoke, :event]
       assert Authorize.required_scopes("chat.send") == [:write]
       assert Authorize.required_scopes("sessions.list") == [:read]
     end

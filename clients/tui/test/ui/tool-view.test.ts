@@ -250,8 +250,8 @@ describe("buildToolView", () => {
 	test("an unknown tool falls back to the generic formatter, not an empty card", () => {
 		const view = buildToolView(
 			block({
-				title: "session_search",
-				detail: { name: "session_search", args: { query: "x" }, result: "3 sessions" },
+				title: "custom_search",
+				detail: { name: "custom_search", args: { query: "x" }, result: "3 sessions" },
 				phase: "completed",
 				ok: true,
 			}),

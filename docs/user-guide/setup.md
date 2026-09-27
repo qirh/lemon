@@ -251,5 +251,5 @@ daemon's credential.
 
 Supplying a token does not make a runtime started by `./bin/lemon-tui`
 persistent: the launcher still stops it when the client exits. Start
-`./bin/lemon --daemon` separately, then attach with the same token, when the
+`./bin/lemon daemon` separately, then attach with the same token, when the
 runtime should outlive the TUI.

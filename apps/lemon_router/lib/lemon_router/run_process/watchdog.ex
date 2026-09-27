@@ -125,8 +125,6 @@ defmodule LemonRouter.RunProcess.Watchdog do
       _ ->
         :error
     end
-  rescue
-    _ -> :error
   end
 
   @spec fail_run_for_idle_timeout(map()) :: map()
@@ -207,8 +205,6 @@ defmodule LemonRouter.RunProcess.Watchdog do
     else
       _ -> :error
     end
-  rescue
-    _ -> :error
   end
 
   defp emit_synthetic_run_completion(state, error, duration_ms) do

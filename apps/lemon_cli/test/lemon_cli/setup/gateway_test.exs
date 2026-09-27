@@ -32,38 +32,6 @@ defmodule LemonCli.Setup.GatewayTest do
   end
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Adapter behaviour
-  # ──────────────────────────────────────────────────────────────────────────
-
-  describe "Adapter behaviour" do
-    test "Telegram implements all required callbacks" do
-      Code.ensure_loaded!(Telegram)
-
-      assert function_exported?(Telegram, :name, 0)
-      assert function_exported?(Telegram, :description, 0)
-      assert function_exported?(Telegram, :run, 2)
-    end
-
-    test "Telegram name and description are non-empty strings" do
-      assert is_binary(Telegram.name()) and byte_size(Telegram.name()) > 0
-      assert is_binary(Telegram.description()) and byte_size(Telegram.description()) > 0
-    end
-
-    test "Telegram.name/0 is \"telegram\"" do
-      assert Telegram.name() == "telegram"
-    end
-
-    test "Discord implements all required callbacks" do
-      Code.ensure_loaded!(Discord)
-
-      assert function_exported?(Discord, :name, 0)
-      assert function_exported?(Discord, :description, 0)
-      assert function_exported?(Discord, :run, 2)
-      assert Discord.name() == "discord"
-    end
-  end
-
-  # ──────────────────────────────────────────────────────────────────────────
   # Gateway dispatcher: non-interactive, no transport
   # ──────────────────────────────────────────────────────────────────────────
 

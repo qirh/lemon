@@ -109,7 +109,7 @@ defmodule LemonAutomation.CronCommandRunner do
         {[data | chunks], byte_count + byte_size(data), truncated?}
 
       true ->
-        <<prefix::binary-size(remaining), _rest::binary>> = data
+        <<prefix::binary-size(^remaining), _rest::binary>> = data
         {[prefix | chunks], @max_output_bytes, true}
     end
   end

@@ -1,60 +1,71 @@
 # Lemon command-line reference
 
-Lemon exposes the same Mix-free command families from an installed
-`lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
-Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
+The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
+same command surface. The launcher handles lifecycle commands; all other
+commands are dispatched by the CLI registry.
 
-## Learn from bounded sources
+## No-argument behavior
 
-```bash
-lemon learn '@file:docs/runbook.md' --root "$PWD" --json
-lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
-  --confirm <exact-review-digest> --json
-```
+This behavior is identical in source checkouts and packaged installs:
 
-Review is the default and never writes. Confirmation re-runs the bounded
-context selection and destination checks, then writes one canonical memory row
-and one audited skill draft only when the exact digest still matches. Responses
-omit source text, prompts, paths, URLs, secret names, and secret values. See
-[Learn from files, folders, and URLs](learn-from-sources.md).
+- In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI.
+- Without a TTY, `lemon` prints usage to stderr and exits with status 2.
+- `lemon start` and `lemon run` start the runtime in the foreground.
 
-The runtime command boundary has stable exit codes:
+Use `./bin/lemon` instead of `lemon` in the examples below when running from a
+source checkout.
 
-- `0` means the command completed successfully;
-- `1` means a safe operational or verification failure;
-- `2` means the command or its arguments are invalid.
+## Commands and availability
+
+### Launcher lifecycle commands
+
+The registry defines their help and completion; the launcher executes them:
+
+| Command | Source checkout | Packaged release | Purpose |
+| --- | --- | --- | --- |
+| `tui [args]` | Yes | Yes | Reuse a healthy runtime; otherwise run `setup --if-required` in an interactive terminal, start the daemon, and open the TUI. |
+| `web [--no-open]` | Yes | Full profile only | Start the daemon if needed, wait for Web UI health, and print its URL; open a browser unless `--no-open` is set. |
+| `start`, `run` | Yes | Yes | Run the runtime in the foreground. |
+| `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
+| `stop`, `restart`, `status` | Yes | Yes | Manage or inspect the daemon using its pidfile. |
+| `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
+
+Source runtime options go after `start`, `run`, `daemon`, or `restart`:
+`--debug`, `--port N`, `--web-port N`, `--sim-port N`, `--name name@host`,
+`--sname name`, `--cookie C`, and `--no-distribution`. For example,
+`./bin/lemon start --no-distribution`. Runtime options are accepted after the
+relevant lifecycle command, not as bare launcher flags.
+
+### CLI commands
+
+These commands are dispatched by `LemonCli.CLI` in both source checkouts and
+packaged releases:
+
+| Command | Availability | Notes |
+| --- | --- | --- |
+| `setup` | Source and release | `setup --if-required` exits 0 if setup is complete; otherwise runs the wizard and exits 1 if setup remains incomplete. |
+| `model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers` | Source and release | Configure or inspect Lemon and its integrations. |
+| `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
+| `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
+| `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
+| `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
+| `completion` | Source and release | Generate completion for the current launcher's available commands. |
+| `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
+| `node` | Source and release | Includes `node join`. |
+| `version` | Source and release | Print the Lemon version. |
+| `send`, `media`, `models`, `policy`, `skill`, `usage` | Source and release | Mix-free channel notifications, diagnostics, catalog, policies, and skill management; existing Mix tasks remain thin source adapters. |
+
+## Help and exit codes
+
+`lemon <launcher-command> --help` and `lemon help <command>` print help.
+Success exits 0, operational failures exit 1, and invalid commands or
+arguments exit 2.
 
 `--help`, `-h`, and `help` print command help without running the command body.
-Commands that support `--json` write one JSON document to stdout on success
-and one redacted JSON error document to stderr on operational failure. Invalid
-arguments remain human-readable usage errors with exit code `2`.
-
-## Runtime command families
-
-| Family | Purpose |
-| --- | --- |
-| `setup` | Complete first-run configuration |
-| `model` | Configure a model provider |
-| `gateway` | Configure Telegram or Discord |
-| `doctor` | Run diagnostics or create a support bundle |
-| `config` | Validate or show resolved configuration |
-| `secrets` | Manage encrypted credentials and inspect external read-only sources |
-| `channels` | Inspect channel configuration |
-| `providers` | Inspect provider readiness and manage routing |
-| `blueprints` | Review and exactly confirm cataloged skill automation bundles |
-| `profile` | Manage isolated specialist profiles |
-| `backup` | Create, verify, list, or restore user-state backups |
-| `context` | Preview or resolve bounded context references |
-| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
-| `sessions` | Inspect and manage durable sessions |
-| `update` | Check, non-mutating plan, exact-confirm apply/history/rollback |
-| `completion` | Generate shell completion scripts |
-
-The source and packaged launchers also expose commands specific to their own
-runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
-launcher. Completion generation detects the launcher, so it does not advertise
-packaged daemon commands in a source checkout or source-only commands in an
-installed release.
+Commands that document `--json` emit JSON on success. Redacted operational
+error JSON is supported by the profile, session, blueprint, provider, learning,
+and secret-source command families; other commands report errors as text on
+stderr. Invalid arguments remain human-readable usage errors.
 
 ## Update lifecycle
 
@@ -111,8 +122,8 @@ configuration and fail-closed resolution contract.
 
 `lemon blueprints` talks only to the authenticated local control plane. It
 never accepts a filesystem root or path and never starts a scheduler in the
-one-shot CLI VM. Installed releases start the daemon when needed; from a source
-checkout, start `./bin/lemon --daemon` first.
+one-shot CLI VM. Both source and packaged launchers start the local runtime
+when it is not already healthy.
 
 ```bash
 lemon blueprints

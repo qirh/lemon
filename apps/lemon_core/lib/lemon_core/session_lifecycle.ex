@@ -17,7 +17,6 @@ defmodule LemonCore.SessionLifecycle do
   """
 
   alias LemonCore.{ChatStateStore, PolicyStore, RunStore, SessionMetadataStore}
-  alias LemonCore.Doctor.SupportBundle
 
   @default_limit 100
   @max_limit 500
@@ -33,7 +32,6 @@ defmodule LemonCore.SessionLifecycle do
   @stats_version 1
   @export_version 1
   @prune_version 1
-  @sensitive_key_fragments ~w(api_key apikey authorization bearer credential master_key oauth password private_key secret token wallet_key)
 
   @type session_row :: %{
           session_key: String.t(),
@@ -382,7 +380,7 @@ defmodule LemonCore.SessionLifecycle do
 
       [read(summary, :prompt), read(completed, :answer)]
       |> Enum.filter(&is_binary/1)
-      |> Enum.map_join("\n", &redact_text/1)
+      |> Enum.map_join("\n", &LemonCore.Redact.text(&1, strict: true))
       |> String.downcase()
       |> String.contains?(query)
     end)
@@ -445,7 +443,7 @@ defmodule LemonCore.SessionLifecycle do
 
   defp safe_dimension(value) do
     original = value |> stringify() |> String.trim()
-    redacted = redact_text(original)
+    redacted = LemonCore.Redact.text(original, strict: true)
 
     cond do
       original == "" ->
@@ -762,7 +760,7 @@ defmodule LemonCore.SessionLifecycle do
   defp sanitize_redacted(nil, _depth), do: nil
 
   defp sanitize_redacted(value, _depth) when is_binary(value),
-    do: value |> redact_text() |> truncate_export_text()
+    do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
 
   defp sanitize_redacted(value, _depth) when is_atom(value), do: Atom.to_string(value)
   defp sanitize_redacted(value, _depth) when is_number(value) or is_boolean(value), do: value
@@ -775,7 +773,7 @@ defmodule LemonCore.SessionLifecycle do
       key_string = to_string(key)
 
       safe =
-        if sensitive_key?(key_string),
+        if LemonCore.Redact.sensitive_key?(key_string),
           do: "[REDACTED]",
           else: sanitize_redacted(nested, depth + 1)
 
@@ -795,21 +793,16 @@ defmodule LemonCore.SessionLifecycle do
     do: value |> Tuple.to_list() |> sanitize_redacted(depth + 1)
 
   defp sanitize_redacted(value, _depth),
-    do: value |> inspect(limit: 100) |> redact_text() |> truncate_export_text()
+    do: value |> inspect(limit: 100) |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
 
-  defp sensitive_key?(key) do
-    normalized = String.downcase(key)
-    Enum.any?(@sensitive_key_fragments, &String.contains?(normalized, &1))
-  end
 
   defp maybe_redact(value, false), do: value
 
   defp maybe_redact(value, true) when is_binary(value),
-    do: value |> redact_text() |> truncate_export_text()
+    do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
 
   defp maybe_redact(value, true), do: sanitize_term(value, true)
 
-  defp redact_text(text), do: SupportBundle.redact_text(text)
 
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 

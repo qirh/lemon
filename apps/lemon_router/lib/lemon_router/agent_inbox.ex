@@ -178,8 +178,6 @@ defmodule LemonRouter.AgentInbox do
       base_session ->
         resolve_new_base_session(agent_id, base_session, primary_target)
     end
-  rescue
-    _ -> {:error, :unavailable}
   end
 
   def resolve_session(_agent_id, selector, _opts),
@@ -341,15 +339,10 @@ defmodule LemonRouter.AgentInbox do
   end
 
   defp primary_route_from_opts(opts) do
-    cond do
-      is_map(opts[:primary_target] && opts[:primary_target].route) ->
-        opts[:primary_target].route
-
-      true ->
-        nil
+    case opts[:primary_target] do
+      %{route: route} when is_map(route) -> route
+      _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp submit(agent_id, prompt, resolved, opts) do
@@ -385,8 +378,6 @@ defmodule LemonRouter.AgentInbox do
       other ->
         {:error, {:invalid_submitter, other}}
     end
-  rescue
-    e -> {:error, e}
   end
 
   defp submitter do
@@ -492,8 +483,6 @@ defmodule LemonRouter.AgentInbox do
       parsed when is_map(parsed) -> route_from_parsed(parsed)
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp route_from_session_key(_), do: nil
@@ -503,8 +492,6 @@ defmodule LemonRouter.AgentInbox do
       {:error, _} -> nil
       parsed -> parsed
     end
-  rescue
-    _ -> nil
   end
 
   defp parse_session(_), do: nil
@@ -516,8 +503,6 @@ defmodule LemonRouter.AgentInbox do
       :ok
     end
   end
-
-  defp validate_prompt(_), do: {:error, :invalid_prompt}
 
   defp normalize_session_selector(nil), do: {:ok, :latest}
   defp normalize_session_selector(:latest), do: {:ok, :latest}
@@ -539,8 +524,6 @@ defmodule LemonRouter.AgentInbox do
       do: :ok,
       else: {:error, {:invalid_session_key, session_key}}
   end
-
-  defp validate_session_key(_), do: {:error, :invalid_session_key}
 
   defp ensure_session_agent(agent_id, session_key)
        when is_binary(agent_id) and is_binary(session_key) do
@@ -572,8 +555,6 @@ defmodule LemonRouter.AgentInbox do
   defp new_sub_id do
     LemonCore.Id.session_id()
     |> String.replace_prefix("sess_", "inbox_")
-  rescue
-    _ -> "inbox_#{System.unique_integer([:positive])}"
   end
 
   defp normalize_source(nil), do: "beam"

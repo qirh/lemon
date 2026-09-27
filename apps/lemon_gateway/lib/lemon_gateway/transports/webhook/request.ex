@@ -5,17 +5,6 @@ defmodule LemonGateway.Transports.Webhook.Request do
 
   alias Plug.Conn
 
-  @sensitive_query_fragments [
-    "token",
-    "secret",
-    "password",
-    "auth",
-    "authorization",
-    "api_key",
-    "apikey",
-    "signature",
-    "sig"
-  ]
 
   @spec authorize_request(Conn.t(), map(), map(), map()) :: :ok | {:error, :unauthorized}
   def authorize_request(conn, _payload, integration, webhook_config) do
@@ -400,8 +389,6 @@ defmodule LemonGateway.Transports.Webhook.Request do
     ] or String.ends_with?(host, ".localhost")
   end
 
-  defp localhost_variant?(_), do: false
-
   defp resolve_host_ips(host, opts) when is_binary(host) and is_list(opts) do
     resolver = Keyword.get(opts, :dns_resolver, &default_dns_resolver/1)
 
@@ -477,7 +464,7 @@ defmodule LemonGateway.Transports.Webhook.Request do
 
   defp sensitive_query_key?(key) do
     normalized_key = String.downcase(to_string(key))
-    Enum.any?(@sensitive_query_fragments, &String.contains?(normalized_key, &1))
+    LemonCore.Redact.sensitive_key?(key) or String.contains?(normalized_key, ["auth", "sig"])
   end
 
   defp remote_ip_to_string({a, b, c, d}), do: "#{a}.#{b}.#{c}.#{d}"
@@ -531,8 +518,6 @@ defmodule LemonGateway.Transports.Webhook.Request do
       _ -> nil
     end
   end
-
-  defp parse_ip(_), do: nil
 
   defp canonicalize_host(host) when is_binary(host) do
     host

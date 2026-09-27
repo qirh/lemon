@@ -303,7 +303,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         event_streams: %{},
         session_key: session_key,
         agent_id: "agent-learning",
-        system_prompt: "<learning-workflow>\nUse `search_memory`.\n</learning-workflow>"
+        system_prompt: "<learning-workflow>\nUse `recall`.\n</learning-workflow>"
       }
 
       messages = [
@@ -336,8 +336,8 @@ defmodule CodingAgent.Session.EventHandlerTest do
              ]
 
       assert Enum.sort(event.payload.missing_tools) == [
-               "memory_topic",
-               "search_memory",
+               "recall",
+               "remember",
                "skill_manage"
              ]
     end
@@ -353,7 +353,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
         steering_queue: :queue.new(),
         event_streams: %{},
         session_key: session_key,
-        system_prompt: "<learning-workflow>\nUse `search_memory`.\n</learning-workflow>"
+        system_prompt: "<learning-workflow>\nUse `recall`.\n</learning-workflow>"
       }
 
       messages = [
@@ -362,9 +362,9 @@ defmodule CodingAgent.Session.EventHandlerTest do
             "Last time we learned a reusable workflow for deployment incidents. Remember this decision.",
           timestamp: System.system_time(:millisecond)
         },
-        %LemonAi.Types.ToolResultMessage{tool_name: "search_memory", content: []},
+        %LemonAi.Types.ToolResultMessage{tool_name: "recall", content: []},
         %LemonAi.Types.ToolResultMessage{tool_name: "skill_manage", content: []},
-        %LemonAi.Types.ToolResultMessage{tool_name: "memory_topic", content: []}
+        %LemonAi.Types.ToolResultMessage{tool_name: "remember", content: []}
       ]
 
       EventHandler.handle({:agent_end, messages}, state, callbacks)

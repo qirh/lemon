@@ -58,8 +58,6 @@ defmodule LemonRouter.MediaJobRecorder do
           {:error, _reason} -> :failed
         end
     end
-  rescue
-    _ -> :failed
   end
 
   defp record_file(_file, _state, _opts), do: :skipped

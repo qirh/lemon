@@ -572,7 +572,6 @@ defmodule LemonAgent.Workspace.KanbanStore do
   end
 
   defp normalize_task_status(nil, [first | _]), do: {:ok, first}
-  defp normalize_task_status(nil, []), do: {:ok, "todo"}
 
   defp normalize_task_status(status, columns) do
     status = String.trim(to_string(status))

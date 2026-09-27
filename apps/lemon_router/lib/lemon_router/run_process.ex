@@ -464,8 +464,6 @@ defmodule LemonRouter.RunProcess do
           end
       end
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(:run_watchdog_confirmation_timeout, state) do
@@ -476,8 +474,6 @@ defmodule LemonRouter.RunProcess do
     else
       {:noreply, Watchdog.fail_run_for_idle_timeout(state)}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   # If the gateway run process dies without emitting a completion event, synthesize a failure
@@ -523,8 +519,6 @@ defmodule LemonRouter.RunProcess do
       Bus.broadcast(Bus.run_topic(state.run_id), event)
       {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info({:finalize_aborted_run, reason}, state) do
@@ -564,8 +558,6 @@ defmodule LemonRouter.RunProcess do
         Bus.broadcast(Bus.run_topic(state.run_id), event)
         {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(:ensure_gateway_bound, state) do
@@ -593,8 +585,6 @@ defmodule LemonRouter.RunProcess do
 
         {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(:finalize_missing_gateway_after_start, state) do
@@ -636,8 +626,6 @@ defmodule LemonRouter.RunProcess do
         Bus.broadcast(Bus.run_topic(state.run_id), event)
         {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(_msg, state) do
@@ -846,8 +834,6 @@ defmodule LemonRouter.RunProcess do
     else
       _ -> state
     end
-  rescue
-    _ -> state
   end
 
   defp maybe_demonitor_gateway_run(%{gateway_run_ref: nil} = state), do: state
@@ -855,8 +841,6 @@ defmodule LemonRouter.RunProcess do
   defp maybe_demonitor_gateway_run(%{gateway_run_ref: ref} = state) do
     Process.demonitor(ref, [:flush])
     %{state | gateway_run_ref: nil, gateway_run_pid: nil}
-  rescue
-    _ -> %{state | gateway_run_ref: nil, gateway_run_pid: nil}
   end
 
   defp gateway_down_grace_ms(:normal), do: 200
@@ -881,8 +865,6 @@ defmodule LemonRouter.RunProcess do
     else
       :ok
     end
-  rescue
-    error -> {:error, {error.__struct__, Exception.message(error)}}
   catch
     :exit, reason -> {:error, {:exit, reason}}
   end
@@ -929,8 +911,6 @@ defmodule LemonRouter.RunProcess do
           _ -> false
         end
     end
-  rescue
-    _ -> false
   end
 
   defp runtime_available?(_), do: false
@@ -941,8 +921,6 @@ defmodule LemonRouter.RunProcess do
     else
       :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp cancel_runtime_run(_, _, _), do: :ok
@@ -951,8 +929,6 @@ defmodule LemonRouter.RunProcess do
     if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
       runtime.run_pid(run_id)
     end
-  rescue
-    _ -> nil
   end
 
   defp runtime_run_pid(_, _), do: nil

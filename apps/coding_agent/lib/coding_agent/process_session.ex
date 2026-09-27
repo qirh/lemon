@@ -16,7 +16,6 @@ defmodule CodingAgent.ProcessSession do
   """
 
   use GenServer
-  require Logger
 
   alias CodingAgent.{BashExecutor, ProcessStore}
   alias LemonCore.TerminalBackends

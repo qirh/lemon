@@ -591,8 +591,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
       :error ->
         state
     end
-  rescue
-    _ -> state
   end
 
   defp build_intent(state, kind, text) do
@@ -749,8 +747,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
         _ -> false
       end
     end)
-  rescue
-    _ -> false
   end
 
   defp registry_key(session_key, channel_id, :status), do: {session_key, channel_id}
@@ -762,9 +758,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     |> Base.url_encode64(padding: false)
   end
 
-  defp normalize_action_event(ev) when is_map(ev) do
-    action = Map.get(ev, :action) || %{}
-
+  defp normalize_action_event(%{action: action} = ev) when is_map(action) do
     kind = Map.get(action, :kind)
 
     allowed_kinds = [
@@ -815,8 +809,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
       true ->
         {:skip, :irrelevant_kind}
     end
-  rescue
-    _ -> {:skip, :bad_event}
   end
 
   defp normalize_action_event(_), do: {:skip, :unknown}
@@ -901,8 +893,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     String.contains?(id, "thinking") or String.contains?(id, "reasoning")
   end
 
-  defp reasoning_note_id?(_), do: false
-
   defp expand_embedded_actions(action_data) when is_map(action_data) do
     case {skip_parent_action?(action_data), embedded_child_action(action_data)} do
       {true, nil} -> []
@@ -911,8 +901,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
       {false, child} -> [action_data, child]
     end
   end
-
-  defp expand_embedded_actions(action_data), do: [action_data]
 
   defp skip_parent_action?(action_data) when is_map(action_data) do
     detail = action_data[:detail] || %{}
@@ -923,8 +911,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     action_data[:kind] in ["subagent", :subagent] and name == "task" and
       action_name in ["poll", "join"]
   end
-
-  defp skip_parent_action?(_), do: false
 
   defp embedded_child_action(action_data) when is_map(action_data) do
     detail = action_data[:detail] || %{}
@@ -955,13 +941,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp embedded_child_action(_), do: nil
-
   defp current_action(detail) when is_map(detail) do
     current_action_from_partial_result(detail) || current_action_from_result_meta(detail)
   end
-
-  defp current_action(_), do: nil
 
   defp current_action_from_partial_result(detail) when is_map(detail) do
     partial_result = Map.get(detail, :partial_result) || Map.get(detail, "partial_result")
@@ -983,8 +965,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp current_action_from_partial_result(_), do: nil
-
   defp current_action_from_result_meta(detail) when is_map(detail) do
     result_meta = Map.get(detail, :result_meta) || Map.get(detail, "result_meta")
 
@@ -1003,14 +983,10 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp current_action_from_result_meta(_), do: nil
-
   defp embedded_action_detail(detail) when is_map(detail) do
     embedded_action_detail_from_partial_result(detail) ||
       embedded_action_detail_from_result_meta(detail)
   end
-
-  defp embedded_action_detail(_), do: %{}
 
   defp embedded_action_detail_from_partial_result(detail) when is_map(detail) do
     partial_result = Map.get(detail, :partial_result) || Map.get(detail, "partial_result")
@@ -1026,8 +1002,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp embedded_action_detail_from_partial_result(_), do: nil
-
   defp embedded_action_detail_from_result_meta(detail) when is_map(detail) do
     result_meta = Map.get(detail, :result_meta) || Map.get(detail, "result_meta")
 
@@ -1040,13 +1014,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp embedded_action_detail_from_result_meta(_), do: nil
-
   defp embedded_engine(detail) when is_map(detail) do
     embedded_engine_from_partial_result(detail) || embedded_engine_from_result_meta(detail)
   end
-
-  defp embedded_engine(_), do: nil
 
   defp embedded_engine_from_partial_result(detail) when is_map(detail) do
     partial_result = Map.get(detail, :partial_result) || Map.get(detail, "partial_result")
@@ -1062,8 +1032,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp embedded_engine_from_partial_result(_), do: nil
-
   defp embedded_engine_from_result_meta(detail) when is_map(detail) do
     result_meta = Map.get(detail, :result_meta) || Map.get(detail, "result_meta")
 
@@ -1075,8 +1043,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
       _ -> nil
     end
   end
-
-  defp embedded_engine_from_result_meta(_), do: nil
 
   defp embedded_child_id(parent_id, kind, title)
        when is_binary(parent_id) and is_binary(kind) and is_binary(title) do
@@ -1113,8 +1079,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
     ]
   end
 
-  defp allowed_embedded_kind?(_), do: false
-
   defp normalize_embedded_phase(phase) when is_binary(phase) do
     case String.downcase(phase) do
       "started" -> :started
@@ -1124,16 +1088,12 @@ defmodule LemonRouter.ToolStatusCoalescer do
     end
   end
 
-  defp normalize_embedded_phase(_), do: :updated
-
   defp embedded_ok(phase) when is_binary(phase) do
     case String.downcase(phase) do
       "completed" -> true
       _ -> nil
     end
   end
-
-  defp embedded_ok(_), do: nil
 
   defp upsert_action(actions, order, id, data) do
     id = equivalent_action_id(actions, data) || id

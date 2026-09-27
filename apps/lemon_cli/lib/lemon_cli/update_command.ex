@@ -64,7 +64,7 @@ defmodule LemonCli.UpdateCommand do
   end
 
   defp validate_mode(command) do
-    if launcher() == :source and command in ~w(plan apply rollback),
+    if CommandRegistry.launcher() == :source and command in ~w(plan apply rollback),
       do: {:error, :source_managed_only},
       else: :ok
   end
@@ -234,13 +234,6 @@ defmodule LemonCli.UpdateCommand do
     )
 
     1
-  end
-
-  defp launcher do
-    case System.get_env("LEMON_CLI_LAUNCHER") do
-      "source" -> :source
-      _ -> :release
-    end
   end
 
   defp ensure_started do

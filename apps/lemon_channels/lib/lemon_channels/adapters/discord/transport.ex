@@ -268,8 +268,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
 
     {:noreply, state}
-  rescue
-    _ -> {:noreply, state}
   end
 
   # Approval requests
@@ -340,8 +338,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
         {:new, %{memory_key: key, persistent_key: store_key}}
     end
-  rescue
-    _ -> {:new, %{memory_key: key, persistent_key: persistent_dedupe_key(inbound, key)}}
   end
 
   defp persistent_dedupe_key(inbound, key) do
@@ -382,8 +378,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end)
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp handle_inbound_message(state, inbound) do
@@ -395,29 +389,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         spawn(fn -> FileOperations.handle_attachment_auto_put(state, inbound) end)
       end
 
-    # Check if this is model picker input
-    {state, handled_picker?} = maybe_handle_model_picker_input(state, inbound, text)
-
-    if handled_picker? do
+    if should_ignore_for_trigger?(state, inbound, text) do
       state
     else
-      cond do
-        # Check for trigger mode (ignore in guilds if mentions-only)
-        should_ignore_for_trigger?(state, inbound, text) ->
-          state
-
-        # Non-command messages get buffered for debouncing
-        true ->
-          enqueue_buffer(state, inbound)
-      end
+      enqueue_buffer(state, inbound)
     end
-  rescue
-    e ->
-      Logger.warning(
-        "discord inbound handler crashed: #{Exception.format(:error, e, __STACKTRACE__)}"
-      )
-
-      state
   end
 
   defp submit_buffer(buffer, state) do
@@ -508,7 +484,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     {thinking_hint, thinking_scope} = resolve_thinking_hint(state, channel_id, thread_id)
 
     meta =
-      (inbound.meta || %{})
+      inbound.meta
       |> Map.put(:session_key, session_key)
       |> Map.put(:progress_msg_id, progress_msg_id)
       |> Map.put(:user_msg_id, user_msg_id)
@@ -615,8 +591,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     else
       state
     end
-  rescue
-    _ -> state
   end
 
   defp maybe_report_submission_failure(inbound, error) do
@@ -825,8 +799,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         handle_approval_component(interaction, custom_id)
         state
     end
-  rescue
-    _ -> state
   end
 
   # ============================================================================
@@ -863,7 +835,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     if is_binary(correction) and String.trim(correction) != "" do
       inbound = interaction_to_inbound(interaction, correction, state)
-      inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, :redirect)}
+      inbound = %{inbound | meta: Map.put(inbound.meta, :queue_mode, :redirect)}
 
       if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
         respond_to_submission(
@@ -888,7 +860,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       response = if(queue_mode == :steer, do: "Steering…", else: "Queued as follow-up")
 
       inbound = interaction_to_inbound(interaction, prompt, state)
-      inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, queue_mode)}
+      inbound = %{inbound | meta: Map.put(inbound.meta, :queue_mode, queue_mode)}
 
       if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
         respond_to_submission(
@@ -951,10 +923,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ ->
-      respond_ephemeral(interaction, "Command failed safely.")
-      state
   end
 
   # ============================================================================
@@ -1117,8 +1085,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         }
       )
     end)
-  rescue
-    _ -> :ok
   end
 
   # ============================================================================
@@ -1889,8 +1855,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp handle_file_put_interaction(interaction, state) do
@@ -1906,8 +1870,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         {:error, msg} -> respond_ephemeral(interaction, msg)
       end
     end
-  rescue
-    _ -> respond_ephemeral(interaction, "File upload failed.")
   end
 
   defp handle_file_get_interaction(interaction, state) do
@@ -1921,8 +1883,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         {:error, msg} -> respond_ephemeral(interaction, msg)
       end
     end
-  rescue
-    _ -> respond_ephemeral(interaction, "File download failed.")
   end
 
   defp file_subcommand(interaction) do
@@ -1953,8 +1913,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   # ============================================================================
@@ -1984,8 +1942,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           state
       end
     end
-  rescue
-    _ -> state
   end
 
   defp create_thread_or_forum_post(channel_id, name, initial_message)
@@ -2035,14 +1991,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ -> state
-  end
-
-  # Model picker input from regular messages (text matching for DMs)
-  defp maybe_handle_model_picker_input(state, _inbound, _text) do
-    # Discord uses component interactions for model picker, not text input
-    {state, false}
   end
 
   # ============================================================================
@@ -2066,8 +2014,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       _ ->
         false
     end
-  rescue
-    _ -> false
   end
 
   defp resolve_trigger_mode(account_id, channel_id, nil) do
@@ -2099,8 +2045,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       reply_to_bot?(inbound, state) -> true
       true -> false
     end
-  rescue
-    _ -> false
   end
 
   defp reply_to_bot?(%{meta: %{reply_to_author_id: author_id}}, %{bot_user_id: bot_id})
@@ -2150,8 +2094,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp maybe_send_approval_request(_state, _payload), do: :ok
@@ -2198,7 +2140,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp decision_label(:approve_session), do: "Approved (session)"
   defp decision_label(:approve_agent), do: "Approved (agent)"
   defp decision_label(:approve_global), do: "Approved (global)"
-  defp decision_label(_), do: "Unknown"
 
   defp format_action(action) when is_map(action) do
     cond do
@@ -2260,8 +2201,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       thinking_usage()
     ]
     |> Enum.join("\n")
-  rescue
-    _ -> thinking_usage()
   end
 
   defp render_thinking_set(%ChatScope{topic_id: topic_id}, level) when is_integer(topic_id) do
@@ -2326,8 +2265,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     else
       "No working directory configured for #{scope_label}.\nUsage: `/cwd [project_id|path|clear]`"
     end
-  rescue
-    _ -> "Usage: `/cwd [project_id|path|clear]`"
   end
 
   defp render_cwd_set(scope, root) do
@@ -2356,8 +2293,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           _ -> "(not configured)"
         end
     end
-  rescue
-    _ -> "(not configured)"
   end
 
   defp format_model_line(model_value, model_scope)
@@ -2401,8 +2336,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
 
     Enum.join(lines, "\n")
-  rescue
-    _ -> base_msg
   end
 
   # ============================================================================
@@ -2454,8 +2387,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             {:error, "Unknown project: #{sel}"}
         end
     end
-  rescue
-    _ -> {:error, "Failed to select project."}
   end
 
   defp looks_like_path?(s) when is_binary(s) do
@@ -2468,15 +2399,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       override when is_binary(override) and override != "" -> true
       _ -> false
     end
-  rescue
-    _ -> false
   end
 
   defp clear_cwd_override(%ChatScope{} = scope) do
     _ = ProjectBindingStore.delete_override(scope)
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp extract_project_info({:ok, %{id: id, root: root}}), do: %{id: id, root: root}
@@ -2492,8 +2419,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       data: %{content: content, flags: 64, allowed_mentions: safe_allowed_mentions()}
     }
 
-    _ = safe_interaction_response(interaction, payload)
-    :ok
+    safe_interaction_response(interaction, payload)
   end
 
   defp respond_with_components(interaction, content, components, opts) do
@@ -2509,8 +2435,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       }
     }
 
-    _ = safe_interaction_response(interaction, payload)
-    :ok
+    safe_interaction_response(interaction, payload)
   end
 
   defp update_interaction(interaction, content, components) do
@@ -2519,13 +2444,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       data: %{content: content, components: components, allowed_mentions: safe_allowed_mentions()}
     }
 
-    _ = safe_interaction_response(interaction, payload)
-    :ok
+    safe_interaction_response(interaction, payload)
   end
 
   defp acknowledge_interaction(interaction) do
-    _ = safe_interaction_response(interaction, %{type: 6})
-    :ok
+    safe_interaction_response(interaction, %{type: 6})
   end
 
   defp safe_interaction_response(interaction, payload) do
@@ -2537,7 +2460,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   rescue
     error ->
       Logger.warning("discord interaction response failed: #{inspect(error)}")
-      :ok
+      {:error, {:discord_interaction_crashed, error}}
   end
 
   defp send_followup(interaction, content) do
@@ -2552,7 +2475,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       })
     end
   rescue
-    _ -> :ok
+    error -> {:error, {:discord_followup_crashed, error}}
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do
@@ -2561,7 +2484,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       allowed_mentions: safe_allowed_mentions()
     })
   rescue
-    _ -> :ok
+    error -> {:error, {:discord_send_crashed, error}}
   end
 
   defp safe_allowed_mentions, do: %{parse: [], replied_user: false}
@@ -2765,16 +2688,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
         error
     end
-  rescue
-    _ ->
-      Logger.warning("discord inbound routing failed: reason=unavailable")
-      {:error, :unavailable}
   end
 
   defp safe_delete_chat_state(key) do
     ChatStateStore.delete(key)
-  rescue
-    _ -> :ok
   end
 
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
@@ -2790,8 +2707,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp run_completed_ok?(event) do
@@ -2851,8 +2766,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp coalesce_text(value, _existing, _key) when is_binary(value) and value != "", do: value
@@ -2954,8 +2867,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp safe_start_consumer do
     __MODULE__.Consumer.start_link([])
-  rescue
-    error -> {:error, error}
   end
 
   defp ensure_nostrum_started(token) do
@@ -3099,7 +3010,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     @transport LemonChannels.Adapters.Discord.Transport
 
-    def handle_event(event) do
+    def handle_event({_name, _payload, _ws_state} = event) do
       if pid = Process.whereis(@transport) do
         send(pid, {:discord_event, event})
       end

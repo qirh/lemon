@@ -112,7 +112,7 @@ defmodule LemonAgent.Workspace.GoalStore do
               |> Map.put(:updated_at_ms, now)
               |> Map.put(:paused_at_ms, nil)
               |> Map.put(:last_run_id, run_id)
-              |> Map.put(:continuation_count, (goal.continuation_count || 0) + 1)
+              |> Map.put(:continuation_count, goal.continuation_count + 1)
 
             with :ok <- Store.put(@table, session_key, updated) do
               emit(:goal_continuation_submitted, updated, Keyword.put(opts, :run_id, run_id))
@@ -149,7 +149,7 @@ defmodule LemonAgent.Workspace.GoalStore do
             updated =
               goal
               |> Map.put(:updated_at_ms, now)
-              |> Map.put(:meta, Map.put(goal.meta || %{}, "goalLoop", loop))
+              |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
 
             with :ok <- Store.put(@table, session_key, updated) do
               emit(:goal_loop_verdict, updated, Keyword.put(opts, :run_id, run_id))
@@ -194,7 +194,7 @@ defmodule LemonAgent.Workspace.GoalStore do
             updated =
               goal
               |> Map.put(:updated_at_ms, now)
-              |> Map.put(:meta, Map.put(goal.meta || %{}, "goalLoop", loop))
+              |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
 
             with :ok <- Store.put(@table, session_key, updated) do
               emit(:goal_loop_status, updated, Keyword.put(opts, :run_id, loop["lastRunId"]))
@@ -232,7 +232,7 @@ defmodule LemonAgent.Workspace.GoalStore do
         updated =
           goal
           |> Map.put(:updated_at_ms, now)
-          |> Map.put(:meta, Map.put(goal.meta || %{}, "goalLoop", loop))
+          |> Map.put(:meta, Map.put(goal.meta, "goalLoop", loop))
 
         with :ok <- Store.put(@table, session_key, updated) do
           emit(:goal_loop_status, updated, opts)

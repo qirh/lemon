@@ -421,6 +421,65 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
     end
 
+    @tag capture_log: true
+    test "unexpected admission callback failures crash and recover without reopening the fence" do
+      previous = Application.get_env(:lemon_router, :session_coordinator)
+      Application.put_env(:lemon_router, :session_coordinator, AdmissionOutcomeCoordinator)
+
+      on_exit(fn ->
+        restore_env(:lemon_router, :session_coordinator, previous)
+        Application.delete_env(:lemon_router, :admission_outcome)
+      end)
+
+      for outcome <- [{:raise, "admission callback bug"}, {:throw, :callback_bug}] do
+        supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: outcome)
+        run_id = "run_callback_failure_#{System.unique_integer([:positive])}"
+        on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+        Application.put_env(:lemon_router, :admission_outcome, outcome)
+
+        {:ok, orchestrator} =
+          DynamicSupervisor.start_child(supervisor, %{
+            id: RunOrchestrator,
+            start: {GenServer, :start_link, [RunOrchestrator, []]}
+          })
+
+        monitor = Process.monitor(orchestrator)
+
+        replay =
+          request(%{
+            run_id: run_id,
+            session_key: "agent:callback-failure:#{run_id}",
+            agent_id: "test",
+            prompt: "never enqueue twice"
+          })
+
+        assert catch_exit(RunOrchestrator.submit(orchestrator, replay))
+        assert_receive {:DOWN, ^monitor, :process, ^orchestrator, reason}
+
+        case outcome do
+          {:raise, message} -> assert {%RuntimeError{message: ^message}, _stack} = reason
+          {:throw, value} ->
+            assert match?({:bad_return_value, ^value}, reason) or
+                     match?({{:nocatch, ^value}, _stack}, reason)
+        end
+
+        assert %{state: "submitting"} =
+                 LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+        assert eventually(fn ->
+                 match?(
+                   [{:undefined, pid, :worker, _}] when is_pid(pid) and pid != orchestrator,
+                   DynamicSupervisor.which_children(supervisor)
+                 )
+               end)
+
+        [{:undefined, recovered, :worker, _}] = DynamicSupervisor.which_children(supervisor)
+        Application.put_env(:lemon_router, :admission_outcome, {:return, {:ok, run_id}})
+        assert {:error, :outcome_unknown} = RunOrchestrator.submit(recovered, replay)
+        assert Process.alive?(recovered)
+      end
+    end
+
     test "ambiguous submit outcomes preserve the submitting fence" do
       previous = Application.get_env(:lemon_router, :session_coordinator)
       Application.put_env(:lemon_router, :session_coordinator, AdmissionOutcomeCoordinator)
@@ -432,7 +491,6 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       for {label, outcome} <- [
             {:explicit, {:return, {:error, :outcome_unknown}}},
-            {:throw, {:throw, :uncertain}},
             {:exit, {:exit, :timeout}},
             {:malformed, {:return, :unexpected}}
           ] do

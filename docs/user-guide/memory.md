@@ -1,137 +1,118 @@
 # Memory User Guide
 
-Lemon records every run as a **memory document** — a structured summary of what was asked
-and what was done. This lets you search across past sessions, avoid repeating yourself, and
-build a persistent knowledge base about how you work.
+Lemon has two memory concepts:
+
+- **Remember** compact facts in assistant-home `USER.md` or `MEMORY.md` using the `remember`
+  tool.
+- **Recall** relevant past conversations and longer notes using `recall`. Lemon can also add a
+  bounded **Relevant memory** block to each user message automatically.
+
+These surfaces complement each other: `USER.md` and `MEMORY.md` are bootstrap context, while
+`recall` searches prior conversation summaries and notes under the workspace's `memory/` folder.
 
 ---
 
-## How Memory Works
+## Remember compact facts
 
-When a run completes, the runtime records a `MemoryDocument` with:
-
-| Field | Description |
-|---|---|
-| `prompt_summary` | Condensed version of what you asked |
-| `answer_summary` | Condensed version of what the agent did |
-| `tools_used` | List of tool names invoked during the run |
-| `outcome` | `:success`, `:partial`, `:failure`, `:aborted`, or `:unknown` |
-| `provider` / `model` | Which LLM handled the run |
-| `workspace_key` | Project directory (if bound) |
-| `session_key` | Session identifier |
-| `ingested_at_ms` | Unix timestamp (milliseconds) |
-
-The built-in provider stores memory documents in `memory.sqlite3` under the
-configured Lemon store directory. The default store directory is
-`~/.lemon/store`; set `LEMON_STORE_PATH` or `:lemon_core, LemonCore.Store`
-backend options to use another location.
-
-`LemonMemory.Providers` is the supervised provider boundary. Lemon always
-registers the local SQLite provider, and BEAM extensions can register additional
-memory providers that receive the same safety-screened `MemoryDocument` ingest
-events and participate in scoped search. Provider failures are isolated; a slow
-or broken external provider must not block run finalization or broaden search
-scope.
-
----
-
-## Searching Memory
-
-The `search_memory` and `session_search` tools are available to agents for
-no-LLM recall over past runs.
-
-For coding sessions, Lemon distinguishes between:
-
-- **Project root (`cwd`)**: the active repo or directory where commands and file edits run
-- **Assistant home**: the persistent bootstrap home at `~/.lemon/agent/workspace`
-
-`search_memory` supports both boundaries:
-
-- `scope: "current"`: search project root plus assistant home
-- `scope: "project"`: search the active `cwd` only
-- `scope: "home"`: search the assistant home only
-- `scope: "session"` / `"agent"` / `"all"`: narrower or broader search across prior runs
-
-`scope: "workspace"` is kept as a compatibility alias for `current`.
-
-`session_search` is the Hermes-compatible calling shape. It infers the mode from
-arguments:
-
-- pass `query` for discovery across durable Lemon memory documents
-- pass `session_id` plus `around_message_id` to scroll a bounded run-history
-  window in that session
-- pass no args to browse recent runs in the current session
-
-Use `session_search` when a prompt or imported workflow explicitly asks for
-Hermes-style session search. Use `search_memory` when Lemon-native scope control
-is more important.
-
-Session search is enabled by default (the `session_search` feature flag
-defaults to `"default-on"`). To turn it off, use the kill switch:
-
-```bash
-export LEMON_FEATURE_SESSION_SEARCH=off
-```
-
-or in config:
-
-```toml
-[features]
-session_search = "off"
-```
-
-Your agent can answer questions like:
-
-> "What did I use to deploy that k8s app last week?"
-> "Remind me how I configured the nginx reverse proxy."
-
-The agent automatically searches memory when it detects that a question is about past work.
-
-### Which persistence surface should agents use?
-
-Lemon has several memory-adjacent tools. They are intentionally separate:
-
-| Need | Use | Why |
-|---|---|---|
-| Recall what happened in previous runs | `search_memory` / `session_search` | Searches completed run summaries and tool traces; `session_search` also supports Hermes-style browse/scroll calls |
-| Store compact profile facts or curated quick facts | `memory` | Updates bounded assistant-home `USER.md` or `MEMORY.md` safely |
-| Store a longer durable fact, preference, decision, person, date, or project context | `memory_topic` | Creates structured topic notes under `memory/topics/` |
-| Capture a repeatable procedure, command sequence, integration, debugging playbook, or checklist | `skill_manage` | Creates or updates an audited reusable skill |
-| Track the current run's work queue | `todo` | Keeps transient progress for this session only |
-| Inspect user-editable workspace notes | `read` / `grep` | Opens `USER.md`, `MEMORY.md`, `memory/topics/*.md`, or daily notes directly |
-
-Use `memory` for short notes that are injected into the assistant prompt:
-stable facts about the human belong in `USER.md`, and curated quick facts or
-topic links belong in `MEMORY.md`. Use `memory_topic` for durable context that
-needs more structure or room, not for step-by-step procedures. Use
-`skill_manage` for procedures the agent should be able to repeat. Use `todo`
-for active work only; todos are not long-term memory.
-
-### Compact profile memory
-
-The `memory` tool operates only inside assistant home, never the active project
-root:
+The `remember` tool writes assistant-home files only; it never writes into the active project:
 
 | Target | File | Limit | Purpose |
 |---|---|---:|---|
-| `user` | `~/.lemon/agent/workspace/USER.md` | 1,375 chars | Stable profile facts and preferences about the human |
-| `memory` | `~/.lemon/agent/workspace/MEMORY.md` | 2,200 chars | Curated quick facts and links to topic notes |
+| `user` | `~/.lemon/agent/workspace/USER.md` | 1,375 chars | Stable facts and preferences about the human |
+| `memory` (default) | `~/.lemon/agent/workspace/MEMORY.md` | 2,200 chars | Curated quick facts and links |
 
-Supported actions are `read`, `add`, `replace`, and `remove`. Add rejects
-duplicates, replace/remove require a unique substring, and writes are rejected
-when they would exceed the compact file limits. Because these files are injected
-into the system prompt, writes are screened for common secret-looking strings,
-prompt-injection phrases, NUL bytes, and invisible/bidirectional control
-characters before they reach disk.
+The tool accepts `text`, `target` (`user` or `memory`, default `memory`), and `replaces`.
+Providing `text` adds a bullet; an existing duplicate is not added again. Providing both `text`
+and `replaces` replaces the unique exact passage. Providing only `replaces` removes that exact
+passage. Writes that exceed the file limit, ambiguous or missing replacement text, and invalid
+targets are rejected. Content is screened for common secrets, prompt-injection phrases, NUL bytes,
+and invisible or bidirectional control characters.
 
-Bare `USER.md`, `MEMORY.md`, and `memory/...` paths resolve to the assistant
-home for file tools when a session has `workspace_dir`; prefix with `./` if a
-repo-local file with the same name is intentionally needed.
+These files are included in the main-session workspace bootstrap context. `USER.md` is for
+stable human profile facts; `MEMORY.md` is for concise curated context. Save reusable procedures
+as skills instead of memory facts.
 
-### Maintenance CLI
+---
 
-Search is exposed to agents through the `search_memory` tool. The current
-management task exposes store maintenance commands:
+## Recall conversations and notes
+
+The read-only `recall` tool searches two sources:
+
+1. Past conversation summaries, ranked by lexical relevance.
+2. Markdown notes under `<workspace_dir>/memory/` (except `TEMPLATE.md`), matched by query terms.
+
+`USER.md` and `MEMORY.md` are not searched because they are already in the system prompt. Call
+`recall` with a non-empty `query`; `scope` is `agent` by default or `project`, and `limit` ranges
+from 1 to 10 (default 5). Agent scope searches that agent's conversation history; project scope
+searches the active workspace's history. For questions about prior work, for example “What did I
+use to deploy that app last week?”, use `recall` when the answer is not already in the supplied
+context.
+
+Conversation search uses OR/BM25 lexical matching: results may match any query term, and are
+ranked for relevance. Paraphrases that share a keyword can therefore match even when they do not
+share the full query wording. This is lexical search, not semantic search.
+
+The old `session_search` scroll/browse interface for inspecting a session's message history has
+been removed and has no replacement. The `[features] session_search` setting remains the durable
+memory ingest/search kill switch; setting it to `"off"` disables those features.
+
+### Automatic recall
+
+Automatic recall is enabled by default. Before a meaningful turn, Lemon searches local
+conversation history scoped to the session's agent/profile and attaches a **Relevant memory**
+block to the user message after the cache breakpoint, never inside the static system prefix.
+It includes the top three BM25-ranked conversations (up to five for embedders) and a bounded
+USER.md excerpt from that session's assistant workspace. Any meaningful keyword may match.
+The combined block is at most 2,048 bytes. Short queries, subagents, and sessions without an
+agent id are skipped. Missing profile files never fall back to another profile's workspace.
+
+Disable automatic recall in configuration:
+
+```toml
+[memory]
+auto_recall = false
+```
+
+Automatic recall is also disabled when `[features] session_search = "off"`. The `recall` tool
+additionally searches longer notes. Automatic recall performs no LLM pass or network request;
+completed-run ingest does not perform post-run LLM fact extraction.
+
+---
+
+## Which persistence surface should agents use?
+
+| Need | Use | Why |
+|---|---|---|
+| Save a stable profile fact or compact context | `remember` | Updates bounded assistant-home `USER.md` or `MEMORY.md` |
+| Find relevant previous conversations and longer workspace notes | `recall` | Searches past conversation summaries and `memory/` Markdown notes |
+| Capture a repeatable procedure, command sequence, integration, or checklist | `skill_manage` | Creates or updates an audited reusable skill |
+| Track the current run's work queue | `todo` | Keeps transient progress for this session only |
+| Inspect user-editable notes directly | `read` / `grep` | Opens files when direct inspection or editing is needed |
+
+Use `remember` for concise facts, `recall` for finding prior work, `skill_manage` for repeatable
+procedures, and `todo` for active work only.
+
+Bare `USER.md`, `MEMORY.md`, and `memory/...` paths resolve to assistant home for file tools when
+a session has `workspace_dir`; prefix with `./` to access a repo-local file with the same name.
+
+---
+
+## Memory management
+
+### Retention and pruning
+
+Memory documents older than the retention window are pruned automatically. Default retention is
+**30 days**, with at most **500 documents per scope** (configurable through the
+`LemonMemory.Store` application environment).
+
+```elixir
+config :lemon_memory, LemonMemory.Store,
+  path: "~/.lemon/store",
+  retention_ms: 30 * 24 * 60 * 60 * 1000,
+  max_per_scope: 500
+```
+
+Manual maintenance commands:
 
 ```bash
 mix lemon.memory stats
@@ -139,114 +120,39 @@ mix lemon.memory prune
 mix lemon.memory erase --scope <session|agent|workspace> --key <value>
 ```
 
----
-
-## Memory Management
-
-### Retention and pruning
-
-Memory documents older than the retention window are pruned automatically.
-Default retention: **30 days**, with at most **500 documents per scope**
-(both configurable through the `LemonMemory.Store` application environment).
-
-```toml
-# config/runtime.exs or application env
-config :lemon_memory, LemonMemory.Store,
-  path: "~/.lemon/store",
-  retention_ms: 30 * 24 * 60 * 60 * 1000,
-  max_per_scope: 500
-```
-
-Manual prune:
-
-```bash
-mix lemon.memory prune               # Prune expired documents
-```
-
-### Erasing a scope
-
-```bash
-mix lemon.memory erase --scope session --key <session-key>
-mix lemon.memory erase --scope agent --key <agent-id>
-mix lemon.memory erase --scope workspace --key <workspace-key>
-```
-
----
-
-## Routing Feedback
-
-Each completed run also records a **routing feedback entry** that tracks:
-
-- Task fingerprint (task family + toolset + workspace + provider + model)
-- Outcome (success/failure)
-- Duration
-
-This feedback powers the adaptive routing system. See
-[`docs/user-guide/adaptive.md`](adaptive.md) for how it's used.
-
-Routing feedback is on by default; to disable it:
-
-```toml
-[features]
-routing_feedback = "off"
-```
-
----
-
-## Skill Synthesis from Memory
-
-When `skill_synthesis_drafts` is enabled, Lemon can mine your successful runs and
-generate draft skills automatically. See [`docs/user-guide/adaptive.md`](adaptive.md)
-and [`docs/user-guide/skills.md`](skills.md#skill-drafts-synthesized-skills).
-
----
-
-## Storage Locations
+### Storage locations
 
 | Scope | Database location |
 |---|---|
 | Default local provider | `~/.lemon/store/memory.sqlite3` |
 | Custom store path | `<LEMON_STORE_PATH>/memory.sqlite3` |
 
-## Provider Diagnostics
+### Privacy and secrets
+
+Before a run is stored as a memory document, `LemonMemory.Safety` scans summaries for credential
+key-value pairs, API key patterns, AWS access keys, PEM private-key headers, and JWT-like tokens.
+The policy is **drop, not redact**: if a pattern matches, the entire run is not recorded.
 
 Support bundles include `memory_diagnostics.json`. It reports provider count,
 enabled provider count, provider ids, sources, scopes, timeout shape, and module
-load state. The same provider shape is available through read-only
-`memory.status` and. These surfaces do not include memory document
-contents, raw provider config, secret values, prompts, tool output, or provider
-error payloads.
+load state. It does not include memory document contents, raw provider config,
+secret values, prompts, tool output, or provider error payloads.
 
----
-
-## Privacy and Secrets
-
-Before a run is stored as a memory document, `LemonMemory.Safety` scans
-`prompt_summary` and `answer_summary` for five classes of secret patterns:
-
-- credential key-value pairs (`password=`, `secret:`, `api_key=`, ...)
-- API key patterns (`sk-...`)
-- AWS access keys (`AKIA...`)
-- PEM private key headers (`-----BEGIN ... PRIVATE KEY-----`)
-- JWT-like tokens (`eyJ...`)
-
-The policy is **drop, not redact**: if any pattern matches, the entire run is
-never recorded — no attempt is made to strip the secret and keep the rest. You
-can also manually delete a document if you need to remove a past entry.
-
----
-
-## Feature Flags
+### Feature flag
 
 ```toml
 [features]
-session_search         = "default-on" # full-text search across past runs (default; "off" is the kill switch)
-routing_feedback       = "default-on" # record outcome signals for adaptive routing (default)
-skill_synthesis_drafts = "default-on" # auto-generate skill drafts from memory (default)
+session_search = "default-on"
 ```
 
-`session_search` can also be disabled per-process with
-`LEMON_FEATURE_SESSION_SEARCH=off`. Run `mix lemon.doctor` to see the resolved
-feature state and memory store health (`memory.session_search` check).
+The `session_search` feature flag gates durable memory ingest and search, including automatic
+recall. Set it to `"off"` or use `LEMON_FEATURE_SESSION_SEARCH=off` to disable them.
 
-*Last reviewed: 2026-08-12*
+---
+
+## Routing feedback and skill synthesis
+
+Each completed run can also record routing feedback used by adaptive routing. When
+`skill_synthesis_drafts` is enabled, Lemon can mine successful runs and generate draft skills.
+See [`docs/user-guide/adaptive.md`](adaptive.md) and
+[`docs/user-guide/skills.md`](skills.md#skill-drafts-synthesized-skills).

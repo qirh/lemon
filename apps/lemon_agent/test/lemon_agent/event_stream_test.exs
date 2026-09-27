@@ -1148,44 +1148,36 @@ defmodule LemonAgent.EventStreamTest do
       assert result == []
     end
 
-    test "complete called multiple times" do
+    test "stream handles multiple terminal events gracefully" do
       {:ok, stream} = EventStream.start_link()
 
+      EventStream.push(stream, {:event, 1})
       EventStream.complete(stream, ["first"])
-      EventStream.complete(stream, ["second"])
 
-      # The result will be from whichever complete was processed
-      # Both should result in a successful completion
+      # These should be no-ops after completion
+      EventStream.complete(stream, ["second"])
+      EventStream.error(stream, :late_error, nil)
+
       {:ok, result} = EventStream.result(stream)
-      assert is_list(result)
+      assert result == ["first"]
     end
 
-    test "events after complete are ignored" do
+  end
+
+  describe "late calls" do
+    test "pushing to canceled stream returns error" do
       {:ok, stream} = EventStream.start_link()
 
-      EventStream.complete(stream, [])
-      EventStream.push(stream, {:ignored_event, "data"})
+      task =
+        Task.async(fn ->
+          Process.sleep(50)
+          EventStream.push(stream, {:late_event, 1})
+        end)
 
-      events = EventStream.events(stream) |> Enum.to_list()
+      EventStream.cancel(stream, :early_cancel)
 
-      # The pushed event after complete may or may not be included
-      # depending on timing, but stream should still work
-      assert {:agent_end, []} in events
-    end
-
-    test "large number of events" do
-      # Use a large enough max_queue to hold all events
-      {:ok, stream} = EventStream.start_link(max_queue: 15_000)
-
-      # Push 10000 events
-      for i <- 1..10_000 do
-        EventStream.push(stream, {:event, i})
-      end
-
-      EventStream.complete(stream, [])
-
-      events = EventStream.events(stream) |> Enum.to_list()
-      assert length(events) == 10_001
+      result = Task.await(task, 1000)
+      assert result == {:error, :canceled}
     end
   end
 end

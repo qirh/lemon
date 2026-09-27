@@ -72,21 +72,17 @@ defmodule LemonSim.Examples.Werewolf.ActionSpace do
   @spec available_actions(State.t(), String.t()) :: {:ok, [map()]}
   def available_actions(%State{} = state, actor_id) when is_binary(actor_id) do
     if get(state.world, :active_actor_id) == actor_id do
-      case tools(state, []) do
-        {:ok, tools} ->
-          {:ok,
-           Enum.map(tools, fn tool ->
-             %{
-               "name" => tool.name,
-               "label" => tool.label,
-               "description" => tool.description,
-               "parameters" => tool.parameters
-             }
-           end)}
+      {:ok, tools} = tools(state, [])
 
-        _ ->
-          {:ok, []}
-      end
+      {:ok,
+       Enum.map(tools, fn tool ->
+         %{
+           "name" => tool.name,
+           "label" => tool.label,
+           "description" => tool.description,
+           "parameters" => tool.parameters
+         }
+       end)}
     else
       {:ok, []}
     end

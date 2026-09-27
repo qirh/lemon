@@ -104,7 +104,7 @@ describe("lifecycle rendering", () => {
 
 	test("an unknown tool still renders a titled card with its result", () => {
 		const text = renderPlain(card("unknown", "success").render(80));
-		expect(text).toContain("session_search");
+		expect(text).toContain("custom_search");
 		expect(text).toContain("tui-1755");
 	});
 });

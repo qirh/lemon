@@ -79,8 +79,6 @@ defmodule LemonRouter.ToolPreview do
     else
       nil
     end
-  rescue
-    _ -> nil
   end
 
   # Elixir's inspect escapes common sequences inside quotes (e.g. \n, \t, \").

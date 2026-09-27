@@ -53,12 +53,12 @@ defmodule LemonChannels.Capabilities.Capability do
   Creates a capability from a spec.
   """
   @spec from_spec(spec()) :: t() | nil
-  def from_spec({type, opts}) when is_list(opts) do
-    new(type, opts)
-  end
-
-  def from_spec({type, features}) when is_list(features) do
-    new(type, features: features)
+  def from_spec({type, options_or_features}) when is_list(options_or_features) do
+    if Keyword.keyword?(options_or_features) do
+      new(type, options_or_features)
+    else
+      new(type, features: options_or_features)
+    end
   end
 
   def from_spec(type) when is_atom(type) do

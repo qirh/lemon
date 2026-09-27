@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.SkillsApprovalTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Methods.{SkillsInstall, SkillsUpdate}
+  alias LemonControlPlane.Methods.SkillsInstall
 
   @admin_ctx %{
     conn_id: "test-conn",
@@ -94,101 +94,6 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
     end
   end
 
-  describe "SkillsUpdate" do
-    test "requires skillKey parameter" do
-      {:error, error} = SkillsUpdate.handle(%{}, @admin_ctx)
-
-      assert {:invalid_request, "skillKey is required"} = error
-    end
-
-    test "has correct method name and scopes" do
-      assert SkillsUpdate.name() == "skills.update"
-      assert SkillsUpdate.scopes() == [:admin]
-    end
-
-    test "handles config changes without installer" do
-      # When enabled/env are provided, should use Config not Installer
-      params = %{
-        "skillKey" => "test-skill",
-        "enabled" => true,
-        "cwd" => "/tmp"
-      }
-
-      result = SkillsUpdate.handle(params, @admin_ctx)
-
-      case result do
-        {:ok, response} ->
-          assert response["skillKey"] == "test-skill"
-          # enabled may be true or the actual current value
-          assert Map.has_key?(response, "enabled")
-          assert response["summary"]["action"] == "skills.update"
-          assert response["summary"]["skillKeyReturned"] == true
-          assert response["summary"]["enabledReturned"] == true
-          assert response["summary"]["versionUpdate"] == false
-          assert response["summary"]["cleanup"]["includesApprovalContext"] == false
-
-        {:error, _} ->
-          # Config or store might not be available
-          :ok
-      end
-    end
-
-    test "handles env updates" do
-      params = %{
-        "skillKey" => "test-skill",
-        "env" => %{"API_KEY" => "super-private-value", "PUBLIC_MODE" => "on"},
-        "cwd" => "/tmp"
-      }
-
-      result = SkillsUpdate.handle(params, @admin_ctx)
-
-      case result do
-        {:ok, response} ->
-          assert response["skillKey"] == "test-skill"
-
-          assert response["env"] == %{
-                   "API_KEY" => %{"redacted" => true, "kind" => "secret"},
-                   "PUBLIC_MODE" => "on"
-                 }
-
-          assert response["summary"]["action"] == "skills.update"
-          assert response["summary"]["envKeyCount"] == 2
-          assert response["summary"]["envKeys"] == ["API_KEY", "PUBLIC_MODE"]
-          assert response["summary"]["cleanup"]["includesEnvironmentValues"] == true
-          assert response["summary"]["cleanup"]["includesSecretValues"] == false
-          refute inspect(response) =~ "super-private-value"
-
-        {:error, _} ->
-          :ok
-      end
-    end
-
-    test "version update passes approve: false for approval gating" do
-      # When no config changes, should trigger version update with approval
-      params = %{
-        "skillKey" => "update-skill",
-        "cwd" => "/tmp"
-        # No enabled or env - triggers version update
-      }
-
-      result = SkillsUpdate.handle(params, @admin_ctx)
-
-      case result do
-        {:error, {:not_implemented, _}} ->
-          # Installer not available
-          :ok
-
-        {:ok, response} ->
-          # Update succeeded
-          assert response["updated"] == true
-
-        {:error, _} ->
-          # Various error conditions possible
-          :ok
-      end
-    end
-  end
-
   describe "approval flow context propagation" do
     test "install passes session context to installer" do
       ctx = %{
@@ -208,66 +113,6 @@ defmodule LemonControlPlane.Methods.SkillsApprovalTest do
       case result do
         {:error, _} -> :ok
         {:ok, _} -> :ok
-      end
-    end
-
-    test "update passes session context to installer for version updates" do
-      ctx = %{
-        conn_id: "conn-789",
-        auth: %{role: :operator},
-        session_key: "session-def",
-        agent_id: "agent-uvw",
-        run_id: "run-012"
-      }
-
-      params = %{"skillKey" => "version-update-skill", "cwd" => "/tmp"}
-
-      result = SkillsUpdate.handle(params, ctx)
-
-      case result do
-        {:error, _} -> :ok
-        {:ok, _} -> :ok
-      end
-    end
-  end
-
-  describe "combined enable and env updates" do
-    test "updates both enabled and env in single call" do
-      params = %{
-        "skillKey" => "combined-skill",
-        "enabled" => true,
-        "env" => %{"KEY1" => "val1", "KEY2" => "val2"},
-        "cwd" => "/tmp"
-      }
-
-      result = SkillsUpdate.handle(params, @admin_ctx)
-
-      case result do
-        {:ok, response} ->
-          assert response["skillKey"] == "combined-skill"
-          assert Map.has_key?(response, "enabled")
-          assert Map.has_key?(response, "env")
-
-        {:error, _} ->
-          :ok
-      end
-    end
-
-    test "disable skill" do
-      params = %{
-        "skillKey" => "disable-skill",
-        "enabled" => false,
-        "cwd" => "/tmp"
-      }
-
-      result = SkillsUpdate.handle(params, @admin_ctx)
-
-      case result do
-        {:ok, response} ->
-          assert response["skillKey"] == "disable-skill"
-
-        {:error, _} ->
-          :ok
       end
     end
   end

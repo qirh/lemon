@@ -408,23 +408,16 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
                  {:ok, tier_id} <- pick_onboard_tier_id(payload["allowedTiers"]),
                  :ok <- ensure_project_allowed_for_tier(tier_id, configured_project_id),
                  {:ok, managed_project_id} <-
-                   onboard_user(access_token_from_secret(secret), tier_id, configured_project_id),
-                 effective_project_id <- managed_project_id || configured_project_id,
-                 project when is_binary(project) and project != "" <- effective_project_id do
+                   onboard_user(access_token_from_secret(secret), tier_id, configured_project_id) do
               updated =
                 secret
-                |> put_project_fields(configured_project_id, managed_project_id, project)
+                |> put_project_fields(configured_project_id, managed_project_id, managed_project_id)
 
               {:ok, updated, project_fields_changed?(secret, updated)}
-            else
-              nil -> {:error, project_required_message()}
-              {:error, reason} -> {:error, reason}
             end
         end
     end
   end
-
-  defp apply_project_payload(_, _), do: {:error, :invalid_code_assist_payload}
 
   defp load_code_assist(access_token, project_id)
        when is_binary(access_token) and access_token != "" do
@@ -527,8 +520,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   end
 
   defp wait_for_operation(_, payload) when is_map(payload), do: {:ok, payload}
-
-  defp wait_for_operation(_, _), do: {:error, :invalid_onboard_response}
 
   defp build_oauth_secret(token_data, email, redirect_uri, configured_project_id) do
     now = System.system_time(:millisecond)

@@ -89,8 +89,6 @@ defmodule LemonRouter.Router do
       peer_kind: msg.peer.kind,
       agent_id: meta[:agent_id] || meta["agent_id"] || "default"
     })
-  rescue
-    _ -> :ok
   end
 
   @doc """
@@ -173,10 +171,8 @@ defmodule LemonRouter.Router do
 
   defp register_abort_tombstone(run_id, reason) do
     RunOrchestrator.register_abort(run_id, reason)
-  rescue
-    _exception -> {:error, :outcome_unknown}
   catch
-    _kind, _reason -> {:error, :outcome_unknown}
+    :exit, _reason -> {:error, :outcome_unknown}
   end
 
   @doc """
@@ -260,8 +256,6 @@ defmodule LemonRouter.Router do
     {text, marker} = PendingCompaction.prepare(msg.message.text, session_key, :channel)
     meta = PendingCompaction.put_prepared_marker(meta, marker)
     {%{msg | message: Map.put(msg.message, :text, text)}, meta}
-  rescue
-    _ -> {msg, meta}
   end
 
   @doc false

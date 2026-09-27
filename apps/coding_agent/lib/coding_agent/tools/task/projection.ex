@@ -63,7 +63,7 @@ defmodule CodingAgent.Tools.Task.Projection do
             level: nil,
             action: %{
               id: stable_child_action_id(run_id, kind, title),
-              kind: normalize_kind(kind),
+              kind: kind,
               title: title,
               detail: action_detail
             }
@@ -124,16 +124,10 @@ defmodule CodingAgent.Tools.Task.Projection do
   defp normalize_phase("started"), do: :started
   defp normalize_phase("updated"), do: :updated
   defp normalize_phase("completed"), do: :completed
-  defp normalize_phase(atom) when is_atom(atom), do: atom
   defp normalize_phase(_), do: :updated
 
   defp normalize_ok("completed"), do: true
-  defp normalize_ok(:completed), do: true
   defp normalize_ok(_), do: nil
-
-  defp normalize_kind(kind) when is_binary(kind), do: kind
-  defp normalize_kind(kind) when is_atom(kind), do: Atom.to_string(kind)
-  defp normalize_kind(_), do: "tool"
 
   defp build_reasoning_event(_details, lifecycle_context, text, source, phase) do
     session_key = lifecycle_context[:session_key]

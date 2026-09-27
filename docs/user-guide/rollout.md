@@ -29,7 +29,7 @@ off ↔ default-on
 
 ```toml
 [features]
-session_search         = "default-on"  # memory ingest + session_search/search_memory tools
+session_search         = "default-on"  # durable memory ingest/search kill switch
 routing_feedback       = "default-on"  # task fingerprinting + routing feedback recording
 skill_synthesis_drafts = "default-on"  # scheduled skill-draft generation
 ```

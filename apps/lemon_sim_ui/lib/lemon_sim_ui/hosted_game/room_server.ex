@@ -177,7 +177,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     else
       false -> {:reply, {:error, :seat_taken}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
-      _ -> {:reply, {:error, :invalid_seat}, state}
     end
   end
 
@@ -217,7 +216,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     else
       false -> {:reply, {:error, :invalid_seat_kind}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
-      _ -> {:reply, {:error, :invalid_seat}, state}
     end
   end
 
@@ -1357,7 +1355,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   end
 
   defp redact_command_params(params) when is_map(params), do: Map.delete(params, "thought")
-  defp redact_command_params(_params), do: %{}
 
   defp summarize_events(events) do
     events

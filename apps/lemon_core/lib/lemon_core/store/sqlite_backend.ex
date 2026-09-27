@@ -558,7 +558,6 @@ defmodule LemonCore.Store.SqliteBackend do
       case delete(state, table, key) do
         {:ok, _state} -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
-        other -> {:halt, {:error, {:sqlite_delete_failed, other}}}
       end
     end)
   end

@@ -265,39 +265,6 @@ defmodule LemonAgent.LoopEdgeCasesTest do
   # ============================================================================
 
   describe "edge case inputs" do
-    test "turns empty assistant response into structured error" do
-      context = simple_context()
-      response = Mocks.assistant_message("")
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      events = Loop.stream([user_message("")], context, config) |> Enum.to_list()
-
-      assert {:error, {:assistant_error, "empty_assistant_response"}, %{new_messages: messages}} =
-               List.last(events)
-
-      assert %AssistantMessage{stop_reason: :error, error_message: "empty_assistant_response"} =
-               List.last(messages)
-    end
-
-    test "handles very long message content" do
-      context = simple_context()
-      long_text = String.duplicate("x", 100_000)
-      response = Mocks.assistant_message(long_text)
-
-      config =
-        simple_config(stream_fn: Mocks.mock_stream_fn_single(response))
-
-      _events = Loop.stream([user_message("Long response")], context, config) |> Enum.to_list()
-
-      {:ok, messages} =
-        Loop.agent_loop([user_message("Test")], context, config, nil, nil)
-        |> EventStream.result()
-
-      assert messages != []
-    end
-
     test "handles special characters in messages" do
       context = simple_context()
       special_text = "Unicode: \u{1F600}\u{1F4A9} Null: \0 Tab: \t Newline: \n"
