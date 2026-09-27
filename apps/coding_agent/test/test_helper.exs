@@ -46,7 +46,6 @@ Application.ensure_all_started(:lemon_skills)
 {:ok, _} = Application.ensure_all_started(:coding_agent)
 
 # Compile test support files
-Code.require_file("support/mock_ui.ex", __DIR__)
 Code.require_file("support/permission_helpers.ex", __DIR__)
 Code.require_file("support/async_helpers.ex", __DIR__)
 

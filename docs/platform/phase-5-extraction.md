@@ -22,7 +22,7 @@ The nine published packages (post-D13) are:
 Everything else in `apps/` is either a **reference-runtime** app (stays in the platform repo,
 unpublished: `lemon_control_plane`, `lemon_cli`, `lemon_web`, `lemon_automation`, `lemon_skills`,
 `lemon_browser`, `lemon_lsp`) or a **product** app slated to leave (`coding_agent`,
-`coding_agent_ui`, `lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`).
+`lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`).
 The former X/Twitter satellite was deleted from the Lemon harness under D17 and
 is no longer an extraction target.
 
@@ -37,24 +37,21 @@ and stays an in-repo dep). Any `in_umbrella` dep on a reference-runtime app that
 |---|---|---|---|
 | **lemon-sim** | `lemon_sim` | lemon_core, agent_core, ai | **none** |
 | | `lemon_sim_ui` | ai, lemon_core, **lemon_sim** | none (sim is intra-group) |
-| | `lemon_tcg` | lemon_core, agent_core, ai, **lemon_sim** | none (sim is intra-group) |
 | **coding-agent** | `coding_agent` | agent_core, ai, lemon_core, lemon_gateway, lemon_memory, lemon_platform_test*, **lemon_skills**, **lemon_browser** | **lemon_skills, lemon_browser** |
-| | `coding_agent_ui` | **coding_agent**, lemon_core | none (coding_agent is intra-group) |
 | | `lemon_mcp` | **coding_agent**, lemon_core, agent_core, **lemon_skills** | **lemon_skills** |
 | | `lemon_evals` | agent_core, ai, **coding_agent**, lemon_core, **lemon_skills** | **lemon_skills** |
 
 \* `lemon_platform_test` is a `only: :test, runtime: false` dep — the same test-only dependency
 direction a third-party engine author has; not a runtime blocker.
 
-**lemon-sim is ready now.** Every platform dep it touches is published; the only cross-app deps
-inside the group (`sim_ui → sim`, `tcg → sim`) travel together in the extraction and remain in-repo
-deps afterward. This confirms the D8 premise: sim has the cleanest profile and should be the
+**lemon-sim is ready now.** Every platform dep it touches is published; the only cross-app dep
+inside the group (`sim_ui → sim`) travels with it in the extraction and remains an in-repo
+dep afterward. This confirms the D8 premise: sim has the cleanest profile and should be the
 **first** product extracted — which means the §5 Phase 5 order (`coding-agent` first) is backwards
 and should be flipped (see §5).
 
 **coding-agent is blocked** on two reference-runtime apps, `lemon_skills` and `lemon_browser`.
-`lemon_mcp` and `lemon_evals` inherit the `lemon_skills` blocker; `coding_agent_ui` is clean once
-`coding_agent` itself moves.
+`lemon_mcp` and `lemon_evals` inherit the `lemon_skills` blocker.
 
 ## 3. Anatomy of the blocker
 
@@ -140,7 +137,7 @@ the Phase 5 timeline. The umbrella keeps building it against `in_umbrella` deps 
      flagship and nothing on the timeline forces it.
 
 Net: sim extracts on the current Phase 5 tooling now; browser and skills become published packages
-10 & 11 when coding-agent's turn comes; coding-agent, mcp, evals, and coding_agent_ui follow once
+10 & 11 when coding-agent's turn comes; coding-agent, mcp, and evals follow once
 skills' API is release-worthy. This keeps the "publish, don't invert, for shared clean-dep
 infrastructure" principle consistent with D13, and avoids bolting a 20-module behaviour onto the
 product boundary.

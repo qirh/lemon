@@ -450,8 +450,6 @@ defmodule LemonEvals.Support do
 
   def eval_event_callbacks do
     %{
-      set_working_message: fn _state, _message -> :ok end,
-      notify: fn _state, _message, _type -> :ok end,
       complete_event_streams: fn _state, _event -> :ok end,
       maybe_trigger_compaction: fn state -> state end,
       persist_message: fn state, _message -> state end

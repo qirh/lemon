@@ -361,28 +361,6 @@ was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
 the source runtime must remain persistent; already-running runtimes are never
 stopped by the TUI launcher.
 
-### Web client (`lemon-web`)
-
-```bash
-cd clients/lemon-web
-npm start
-```
-
-`npm start` runs the root `prestart` hook first, rebuilding the ignored shared
-and server entrypoints so this works from a clean checkout after dependencies
-are installed.
-
-This source command starts the Node debug bridge on `http://localhost:3939` by
-default. The packaged Phoenix Web endpoint remains `http://localhost:4080`.
-
-The separate browser monitoring client has no delegated browser-session login
-exchange today. It therefore does not receive the server's shared operator
-token and cannot connect to an authenticated control plane. Do not put that
-secret in a `VITE_*` variable or URL, and do not enable tokenless loopback
-behind a reverse proxy. Authenticated browser monitoring requires a future
-short-lived, scoped server-issued browser credential flow.
-
-
 ---
 
 ## CI smoke-test flow

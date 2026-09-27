@@ -23,14 +23,6 @@ defmodule CodingAgent.Session.EventHandlerTest do
     test_pid = self()
 
     callbacks = %{
-      set_working_message: fn _state, msg ->
-        send(test_pid, {:working_msg, msg})
-        :ok
-      end,
-      notify: fn _state, msg, type ->
-        send(test_pid, {:notify, msg, type})
-        :ok
-      end,
       complete_event_streams: fn _state, event ->
         send(test_pid, {:complete, event})
         :ok
@@ -63,26 +55,6 @@ defmodule CodingAgent.Session.EventHandlerTest do
       assert result == state
     end
 
-    test "{:tool_execution_start, id, name, args} sends working message", %{
-      state: state,
-      callbacks: callbacks
-    } do
-      EventHandler.handle({:tool_execution_start, "tc_1", "read", %{}}, state, callbacks)
-
-      assert_receive {:working_msg, "Running read..."}
-    end
-
-    test "{:tool_execution_end, id, name, result, is_error} clears working message", %{
-      state: state,
-      callbacks: callbacks
-    } do
-      result = %{content: "ok"}
-
-      EventHandler.handle({:tool_execution_end, "tc_1", "read", result, false}, state, callbacks)
-
-      assert_receive {:working_msg, nil}
-    end
-
     test "{:agent_end, messages} sets is_streaming to false", %{
       state: state,
       callbacks: callbacks
@@ -91,11 +63,10 @@ defmodule CodingAgent.Session.EventHandlerTest do
 
       assert result.is_streaming == false
       assert :queue.is_empty(result.follow_up_queue)
-      assert_receive {:working_msg, nil}
       assert_receive {:complete, {:agent_end, []}}
     end
 
-    test "{:error, reason, partial} sets is_streaming to false and notifies", %{
+    test "{:error, reason, partial} sets is_streaming to false and completes streams", %{
       state: state,
       callbacks: callbacks
     } do
@@ -103,9 +74,6 @@ defmodule CodingAgent.Session.EventHandlerTest do
 
       assert result.is_streaming == false
       assert :queue.is_empty(result.follow_up_queue)
-      assert_receive {:working_msg, nil}
-      assert_receive {:notify, msg, :error}
-      assert msg =~ "timeout"
       assert_receive {:complete, {:error, :timeout, nil}}
     end
 
@@ -117,7 +85,6 @@ defmodule CodingAgent.Session.EventHandlerTest do
 
       assert result.is_streaming == false
       assert :queue.is_empty(result.follow_up_queue)
-      assert_receive {:working_msg, nil}
       assert_receive {:complete, {:canceled, :user_abort}}
     end
 
@@ -141,7 +108,6 @@ defmodule CodingAgent.Session.EventHandlerTest do
       assert :queue.is_empty(result.steering_queue)
       assert :queue.is_empty(result.follow_up_queue)
       assert result.event_streams == %{}
-      assert_receive {:working_msg, nil}
       assert_receive {:complete, {:turn_end, ^aborted_msg, []}}
     end
 
@@ -154,7 +120,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       result = EventHandler.handle({:turn_end, normal_msg, []}, state, callbacks)
 
       assert result == state
-      refute_receive {:working_msg, _}
+      refute_receive {:complete, _}
     end
 
     test "{:turn_end} with plain map message returns state unchanged", %{
@@ -197,7 +163,6 @@ defmodule CodingAgent.Session.EventHandlerTest do
       assert :queue.is_empty(result.follow_up_queue)
       assert result.event_streams == %{}
       assert_receive {:persist, ^aborted_msg}
-      assert_receive {:working_msg, nil}
       assert_receive {:complete, {:canceled, :assistant_aborted}}
     end
 

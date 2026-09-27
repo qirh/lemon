@@ -12,8 +12,6 @@ defmodule CodingAgent.Session.EventHandler do
   alias LemonCore.Introspection
 
   @type callbacks(state) :: %{
-          required(:set_working_message) => (state, String.t() | nil -> :ok),
-          required(:notify) => (state, String.t(), CodingAgent.UI.notify_type() -> :ok),
           required(:complete_event_streams) => (state, term() -> :ok),
           required(:maybe_trigger_compaction) => (state -> state),
           required(:persist_message) => (state, term() -> state)
@@ -40,7 +38,6 @@ defmodule CodingAgent.Session.EventHandler do
     # Treat an aborted assistant turn as terminal to keep Session lifecycle consistent.
     case message do
       %LemonAi.Types.AssistantMessage{stop_reason: :aborted} ->
-        callbacks.set_working_message.(state, nil)
         callbacks.complete_event_streams.(state, {:turn_end, message, tool_results})
 
         state
@@ -70,7 +67,6 @@ defmodule CodingAgent.Session.EventHandler do
     # to avoid leaving the session in a permanently streaming state.
     case message do
       %LemonAi.Types.AssistantMessage{stop_reason: :aborted} ->
-        callbacks.set_working_message.(new_state, nil)
         callbacks.complete_event_streams.(new_state, {:canceled, :assistant_aborted})
 
         new_state
@@ -83,7 +79,7 @@ defmodule CodingAgent.Session.EventHandler do
     end
   end
 
-  def handle({:tool_execution_start, id, name, args}, state, callbacks) do
+  def handle({:tool_execution_start, id, name, args}, state, _callbacks) do
     # Execute on_tool_execution_start hooks
     Extensions.execute_hooks(state.hooks, :on_tool_execution_start, [id, name, args])
 
@@ -101,15 +97,12 @@ defmodule CodingAgent.Session.EventHandler do
       provenance: :direct
     )
 
-    callbacks.set_working_message.(state, "Running #{name}...")
     state
   end
 
-  def handle({:tool_execution_end, id, name, result, is_error}, state, callbacks) do
+  def handle({:tool_execution_end, id, name, result, is_error}, state, _callbacks) do
     # Execute on_tool_execution_end hooks
     Extensions.execute_hooks(state.hooks, :on_tool_execution_end, [id, name, result, is_error])
-
-    callbacks.set_working_message.(state, nil)
     state
   end
 
@@ -118,9 +111,6 @@ defmodule CodingAgent.Session.EventHandler do
     Extensions.execute_hooks(state.hooks, :on_agent_end, [messages])
     maybe_record_missed_skills(state, messages)
     maybe_record_missed_learning(state, messages)
-
-    # Clear working message and steering queue
-    callbacks.set_working_message.(state, nil)
 
     # Complete all event streams with the final event
     callbacks.complete_event_streams.(state, {:agent_end, messages})
@@ -136,9 +126,6 @@ defmodule CodingAgent.Session.EventHandler do
   end
 
   def handle({:error, reason, partial_state}, state, callbacks) do
-    callbacks.set_working_message.(state, nil)
-    callbacks.notify.(state, "Agent error: #{inspect(reason)}", :error)
-
     # Complete all event streams with the error event
     callbacks.complete_event_streams.(state, {:error, reason, partial_state})
 
@@ -150,8 +137,6 @@ defmodule CodingAgent.Session.EventHandler do
 
   def handle({:canceled, reason}, state, callbacks) do
     # Canceled is a terminal lifecycle event (e.g. abort) and may occur without :agent_end.
-    callbacks.set_working_message.(state, nil)
-
     # Complete all event streams with the canceled event
     callbacks.complete_event_streams.(state, {:canceled, reason})
 

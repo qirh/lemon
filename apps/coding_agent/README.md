@@ -452,8 +452,6 @@ shell history.
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.UI` | Pluggable UI abstraction (notify, working messages, approval requests) |
-| `CodingAgent.UI.Context` | UI context helpers and test support |
 | `CodingAgent.Messages` | Message type definitions and LLM format conversion |
 | `CodingAgent.BashExecutor` | Streaming shell command execution |
 | `CodingAgent.InternalUrls` | Internal URL protocol handling |
@@ -787,4 +785,4 @@ mix test apps/coding_agent/test/coding_agent/tools/read_test.exs:46
 mix test --include integration apps/coding_agent
 ```
 
-The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories, direct `start_link` (not supervised), and mock UIs via `CodingAgent.UI.Context`.
+The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories and direct `start_link` (not supervised).

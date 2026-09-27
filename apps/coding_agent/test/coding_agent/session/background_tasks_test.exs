@@ -26,9 +26,7 @@ defmodule CodingAgent.Session.BackgroundTasksTest do
       broadcast_event: fn _state, event ->
         send(parent, {:broadcast, event})
         :ok
-      end,
-      ui_set_working_message: fn _, _ -> :ok end,
-      ui_notify: fn _, _, _ -> :ok end
+      end
     }
 
     next_state = BackgroundTasks.store_branch_summary(state, "leaf-1", "summary", callbacks)

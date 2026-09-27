@@ -1018,8 +1018,6 @@ apps/coding_agent/
 |   |   +-- messages.ex                       # Message types and LLM conversion
 |   |   +-- checkpoint.ex                     # Session and filesystem checkpoint/restore store
 |   |   +-- progress.ex                       # Progress reporting
-|   |   +-- ui.ex                             # Pluggable UI abstraction
-|   |   +-- ui/context.ex                     # UI context helpers
 |   +-- mix/tasks/                            # Mix tasks
 +-- test/
 |   +-- coding_agent/
@@ -1130,7 +1128,6 @@ When a secret value is an OAuth payload, `LemonAgent.ModelRuntime.Credentials` d
 ## Testing Guidelines
 
 - Use `CodingAgent.Session.start_link/1` directly in tests (not supervised)
-- Mock UI with `CodingAgent.UI.Context` test helpers
 - Use temporary directories for file operations (clean up in `on_exit`)
 - Clean up sessions with `Process.exit(session, :normal)`
 - For tool tests: assert on both `content` and `details` in results

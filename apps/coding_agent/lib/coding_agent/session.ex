@@ -68,7 +68,6 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.{Session, SessionEntry}
-  alias CodingAgent.UI.Context, as: UIContext
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
 
@@ -85,7 +84,6 @@ defmodule CodingAgent.Session do
     :session_key,
     :agent_id,
     :settings_manager,
-    :ui_context,
     :cwd,
     :tools,
     :model,
@@ -139,7 +137,6 @@ defmodule CodingAgent.Session do
           session_key: String.t() | nil,
           agent_id: String.t(),
           settings_manager: term() | nil,
-          ui_context: UIContext.t() | nil,
           cwd: String.t(),
           tools: [AgentTool.t()],
           model: LemonAi.Types.Model.t(),
@@ -184,8 +181,6 @@ defmodule CodingAgent.Session do
         }
 
   @type event_handler_callbacks :: %{
-          required(:set_working_message) => (t(), String.t() | nil -> :ok),
-          required(:notify) => (t(), String.t(), CodingAgent.UI.notify_type() -> :ok),
           required(:complete_event_streams) => (t(), term() -> :ok),
           required(:maybe_trigger_compaction) => (t() -> t()),
           required(:persist_message) => (t(), term() -> t())
@@ -222,7 +217,6 @@ defmodule CodingAgent.Session do
     * `:session_key` - Optional logical session key used for introspection and tool provenance
     * `:agent_id` - Optional agent identifier used for introspection and tool provenance
     * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
-    * `:ui_context` - UI context for dialogs and notifications
     * `:thinking_level` - Extended reasoning level. If not provided, uses
       `default_thinking_level` from SettingsManager.
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
@@ -687,7 +681,7 @@ defmodule CodingAgent.Session do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
     else
-      state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
+      state = CompactionLifecycle.cancel_for_new_prompt(state)
       {state, recalled} = refresh_turn_context(state, text)
 
       user_message =
@@ -720,7 +714,7 @@ defmodule CodingAgent.Session do
   # and queued, while `outgoing` is the same message with this turn's recalled
   # context attached and is only ever handed to the agent.
   def handle_call({:handle_async_followup, message_or_attrs}, _from, state) do
-    state = CompactionLifecycle.cancel_for_new_prompt(state, session_callbacks())
+    state = CompactionLifecycle.cancel_for_new_prompt(state)
     message = State.build_async_followup_message(message_or_attrs)
     {state, recalled} = refresh_turn_context(state, message_skill_context(message))
     state = persist_message(state, message)
@@ -927,9 +921,6 @@ defmodule CodingAgent.Session do
     custom_summary = Keyword.get(opts, :summary)
     compaction_opts = CompactionManager.normalize_compaction_opts(state, opts)
 
-    # Show working message before compaction
-    Notifier.ui_set_working_message(state, "Compacting context...")
-
     result = CodingAgent.Compaction.compact(state.session_manager, state.model, compaction_opts)
 
     case apply_compaction_result(state, result, custom_summary) do
@@ -1095,7 +1086,7 @@ defmodule CodingAgent.Session do
     state =
       state
       |> cancel_pending_prompt()
-      |> CompactionLifecycle.cancel_for_new_prompt(session_callbacks())
+      |> CompactionLifecycle.cancel_for_new_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
       |> Map.put(:follow_up_queue, :queue.new())
 
@@ -1224,7 +1215,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_info({:auto_compaction_task_timeout, monitor_ref}, state) do
-    case CompactionLifecycle.handle_timeout(state, monitor_ref, session_callbacks()) do
+    case CompactionLifecycle.handle_timeout(state, monitor_ref) do
       {:handled, new_state} -> {:noreply, maybe_schedule_due_heartbeat(new_state)}
       :stale -> {:noreply, state}
     end
@@ -1846,9 +1837,6 @@ defmodule CodingAgent.Session do
 
   defp recalled_block?(_block, _marker), do: false
 
-  @spec ui_set_working_message(t(), String.t() | nil) :: :ok
-  defp ui_set_working_message(state, message), do: Notifier.ui_set_working_message(state, message)
-
   defp maybe_subscribe_exec_approvals(%{approval_context: approval_context})
        when is_map(approval_context) do
     LemonCore.Bus.subscribe("exec_approvals")
@@ -1888,9 +1876,6 @@ defmodule CodingAgent.Session do
   end
 
   defp map_value(_map, _key), do: nil
-
-  @spec ui_notify(t(), String.t(), CodingAgent.UI.notify_type()) :: :ok
-  defp ui_notify(state, message, type), do: Notifier.ui_notify(state, message, type)
 
   @spec handle_agent_event(LemonAgent.Types.agent_event(), t()) :: t()
   defp handle_agent_event(event, state) do
@@ -1986,8 +1971,6 @@ defmodule CodingAgent.Session do
   @spec event_handler_callbacks() :: event_handler_callbacks()
   defp event_handler_callbacks do
     %{
-      set_working_message: &ui_set_working_message/2,
-      notify: &ui_notify/3,
       complete_event_streams: &complete_event_streams/2,
       maybe_trigger_compaction: &maybe_trigger_compaction/1,
       persist_message: &persist_message/2
@@ -2024,18 +2007,12 @@ defmodule CodingAgent.Session do
     %{
       restore_messages_from_session: &restore_messages_from_session/1,
       broadcast_event: &broadcast_event/2,
-      ui_set_working_message: &ui_set_working_message/2,
-      ui_notify: &ui_notify/3,
       handle_agent_event: &handle_agent_event/2
     }
   end
 
   defp branch_summary_callbacks do
-    %{
-      broadcast_event: &broadcast_event/2,
-      ui_set_working_message: &ui_set_working_message/2,
-      ui_notify: &ui_notify/3
-    }
+    %{broadcast_event: &broadcast_event/2}
   end
 
   # ============================================================================
@@ -2055,7 +2032,7 @@ defmodule CodingAgent.Session do
 
   @spec maybe_start_overflow_recovery(t(), term(), term()) :: {:ok, t()} | :no_recovery
   defp maybe_start_overflow_recovery(state, reason, partial_state),
-    do: OverflowRecovery.maybe_start(state, reason, partial_state, self(), session_callbacks())
+    do: OverflowRecovery.maybe_start(state, reason, partial_state, self())
 
   @spec apply_compaction_result(t(), {:ok, map()} | {:error, term()}, String.t() | nil) ::
           {:ok, t()} | {:error, term(), t()}
@@ -2069,5 +2046,5 @@ defmodule CodingAgent.Session do
 
   @spec maybe_trigger_compaction(t()) :: t()
   defp maybe_trigger_compaction(state),
-    do: CompactionLifecycle.maybe_trigger(state, self(), session_callbacks())
+    do: CompactionLifecycle.maybe_trigger(state, self())
 end

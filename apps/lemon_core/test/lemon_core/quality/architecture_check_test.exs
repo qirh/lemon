@@ -278,38 +278,6 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
   end
 
   describe "namespace violation detection" do
-    test "attributes CodingAgent.UI.RPC ownership to coding_agent_ui" do
-      tmp_dir = create_tmp_umbrella()
-
-      create_app_with_namespace(tmp_dir, :coding_agent, "CodingAgent", [])
-      create_app_with_namespace(tmp_dir, :coding_agent_ui, "CodingAgentUi", [:coding_agent])
-
-      create_app_with_code(
-        tmp_dir,
-        :coding_agent,
-        "CodingAgent",
-        """
-        defmodule CodingAgent.TestReference do
-          def test do
-            CodingAgent.UI.RPC.call(%{})
-          end
-        end
-        """,
-        []
-      )
-
-      try do
-        assert {:error, report} = ArchitectureCheck.run(root: tmp_dir)
-
-        assert Enum.any?(report.issues, fn issue ->
-                 issue.code == :forbidden_namespace_reference and issue.app == :coding_agent and
-                   issue.message =~ "CodingAgent.UI.RPC"
-               end)
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
     test "uses namespace prefix ownership for normal namespaces" do
       tmp_dir = create_tmp_umbrella()
 

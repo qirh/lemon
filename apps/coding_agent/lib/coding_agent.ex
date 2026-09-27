@@ -37,7 +37,6 @@ defmodule CodingAgent do
   - `CodingAgent.Compaction` - Context compaction and summarization
   - `CodingAgent.Config` - Path and environment configuration
   - `CodingAgent.SettingsManager` - Canonical settings adapter (TOML)
-  - `CodingAgent.UI` - Pluggable UI abstraction
   """
 
   @doc """

@@ -549,7 +549,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       files: ["apps/*/lib/**/*.ex"],
       exclude: [
         "apps/coding_agent/**",
-        "apps/coding_agent_ui/**",
         "apps/lemon_mcp/**",
         "apps/lemon_evals/**"
       ]

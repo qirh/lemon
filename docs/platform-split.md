@@ -39,8 +39,8 @@ extension points; the Lemon harness does not ship an X/Twitter integration.
 
 | Repo | Takes | Why grouped |
 |---|---|---|
-| `coding-agent` | `coding_agent`, `coding_agent_ui`, `lemon_mcp`, `lemon_evals` | mcp + evals compile-depend on coding_agent |
-| `lemon-sim` | `lemon_sim` (incl. Bench), `lemon_sim_ui`, `lemon_tcg` | tcg needs sim's Kernel/LLM engines; sim_ui needs everything. **Flagship demo repo** (D8) |
+| `coding-agent` | `coding_agent`, `lemon_mcp`, `lemon_evals` | mcp + evals compile-depend on coding_agent |
+| `lemon-sim` | `lemon_sim` (incl. Bench), `lemon_sim_ui` | sim_ui needs everything. **Flagship demo repo** (D8) |
 | `showcase` | `showcase/` static site | |
 | `lemon-clients` | `clients/` TS packages | different toolchain |
 
@@ -62,7 +62,7 @@ Full details in agent reports; key facts the plan relies on:
 
 **E1 — Store/lemon_core publishability audit.** `LemonCore.Store` is an application singleton, not a library: `name: __MODULE__` hardcoded (`store.ex:40-42`), config read from `:lemon_core` app env ignoring `start_link` opts (`store.ex:472-478`), ReadCache uses fixed *public named* ETS tables that fail open on collision (`store/read_cache.ex:38-49`). Domain coupling in the hot path: `finalize_run` calls `RunHistoryStore.put/4` and `MemoryIngest.ingest/3` directly (`store.ex:906,914`); Telegram msg-id indexing at `store.ex:1048`; policy/session/telegram tables baked in (`store.ex:28-38`). Deps: `sentry` + `finch` + `exqlite` are **non-optional** (`apps/lemon_core/mix.exs:27-42`); `uuid ~> 1.1` unmaintained. Secrets crypto is sound (AES-256-GCM + HKDF) but key provisioning is macOS-Keychain-first with no non-macOS init path (`secrets/master_key.ex:47-61,216-224`). Backend behaviour itself (`store/backend.ex`) is clean and genuinely pluggable.
 
-**E2 — Bench extraction assessment.** Bench is only 2,857 LOC (~2.9% of lemon_sim), filesystem-only persistence, and near-zero coupling to sim internals — but its `Domains` registry hardcodes ~21 `LemonSim.Examples.*` module pairs (`bench/domains.ex:48+`), and **no consumer wants Bench without the sim**: lemon_tcg uses zero Bench (it uses `LemonSim.Kernel.*` + `LLM.*` engines), lemon_sim_ui uses ~9 `League`/`Domains` functions but also the kernel and five game engines. Extraction would add graph nodes for no consumer gain.
+**E2 — Bench extraction assessment.** Bench is only 2,857 LOC (~2.9% of lemon_sim), filesystem-only persistence, and near-zero coupling to sim internals — but its `Domains` registry hardcodes ~21 `LemonSim.Examples.*` module pairs (`bench/domains.ex:48+`), and **no consumer wants Bench without the sim**: lemon_sim_ui uses ~9 `League`/`Domains` functions but also the kernel and five game engines. Extraction would add graph nodes for no consumer gain.
 
 **E3 — router/gateway/channels topology.** The three apps already communicate almost entirely through indirection: router→gateway has *zero* compile-time references (behaviour injection via `LemonCore.EngineRuntime`, 4 callbacks, bound in `config/config.exs:36`); channels→router and gateway→router go through `LemonCore.RouterBridge`; the only compile-time edge is router→channels (Dispatcher/Outbox). CI already polices boundaries (`lemon_core/quality/architecture_rules_check.ex:37-51`). Blemishes: gateway hosts email/webhook transports + sms/voice (~6.7k LOC after the D12 farcaster delete) that duplicate the channels concept under a **second** transport behaviour (`LemonGateway.Transport` vs `LemonChannels.Plugin`); channels/control_plane reach back into gateway via dynamic atoms (`lemon_channels/gateway_config.ex:4`, `engine_registry.ex:13`, `control_plane/methods/transports_status.ex:139`); control_plane leaks router internals (`RunRegistry`, `RunSupervisor`, `RunOrchestrator` — 5 call sites). Gateway's coding_agent dep is 12 refs in 4 files: the in-process "lemon" engine shim (`engines/lemon.ex`, `engines/lemon/session_runner.ex`) plus `CodingAgent.Config.workspace_dir/0` and `CodingAgent.Security.ExternalContent`.
 
@@ -157,8 +157,8 @@ Per repo (`lemon-sim`, `showcase`, `lemon-clients`, `coding-agent`), in that ord
 >
 > | Product group | Blocker (unpublished dep) | Recommended action |
 > |---|---|---|
-> | **lemon-sim** (`lemon_sim`, `lemon_sim_ui`, `lemon_tcg`) | **none** — all platform deps published (core/agent/ai); sim_ui/tcg depend on sim intra-group | **Extract first** (D8 flagship, unblocked) |
-> | **coding-agent** (`coding_agent`, `coding_agent_ui`, `lemon_mcp`, `lemon_evals`) | **`lemon_skills`** (mcp/evals inherit it) + **`lemon_browser`** (coding_agent only) — both reference-runtime apps that stay behind | **Publish browser** (leaf, 818 LOC, clean); **publish skills** gated on an API-stabilization pass; **defer** coding-agent extraction until then (**D14, approved 2026-08-13**; stabilization pass + packaging landed 2026-08-13) |
+> | **lemon-sim** (`lemon_sim`, `lemon_sim_ui`) | **none** — all platform deps published (core/agent/ai); sim_ui depends on sim intra-group | **Extract first** (D8 flagship, unblocked) |
+> | **coding-agent** (`coding_agent`, `lemon_mcp`, `lemon_evals`) | **`lemon_skills`** (mcp/evals inherit it) + **`lemon_browser`** (coding_agent only) — both reference-runtime apps that stay behind | **Publish browser** (leaf, 818 LOC, clean); **publish skills** gated on an API-stabilization pass; **defer** coding-agent extraction until then (**D14, approved 2026-08-13**; stabilization pass + packaging landed 2026-08-13) |
 > | **showcase** / **lemon-clients** | none (static site / separate toolchain) | Extract any time |
 >
 > Both blocker apps have **published-only deps** (skills: core/memory/media/agent/ai; browser:
@@ -179,7 +179,7 @@ Per repo (`lemon-sim`, `showcase`, `lemon-clients`, `coding-agent`), in that ord
   > the sim endpoint too (they previously did not — `apply_sim_port/1` replaced `:http` wholesale).
   > `LemonCore.Env.Registry`'s moduledoc example no longer names `LemonSimUi.Env`.
   >
-  > Every remaining sim touchpoint outside `apps/lemon_sim*` and `apps/lemon_tcg` is now delimited
+  > Every remaining sim touchpoint outside `apps/lemon_sim*` is now delimited
   > by a greppable marker — `grep -rn "lemon-sim product block"` — so 5.1/5.6 is a delete, not a
   > hunt. Full inventory:
   >
@@ -190,7 +190,7 @@ Per repo (`lemon-sim`, `showcase`, `lemon-clients`, `coding-agent`), in that ord
   > | `config/{dev,test,prod}.exs` (1 block each) | endpoint + hosted-room settings | delete marked lines |
   > | `.github/workflows/release-smoke.yml` (15 refs) | werewolf smoke, sim Dockerfile, npm assets | whole lane moves |
   > | `.github/workflows/release.yml`, root `mix.exs` `sim_ui.assets.*` aliases | asset deploy | move |
-  > | `lemon_core/quality/architecture_{check,policy}.ex` | lint inventory of *this repo's* apps — namespace/dep tables, no code dependency | delete 3 + 3 rows |
+  > | `lemon_core/quality/architecture_{check,policy}.ex` | lint inventory of *this repo's* apps — namespace/dep tables, no code dependency | delete 2 + 2 rows |
   > | `lemon_core/lib/mix/tasks/lemon.help.ex` | task-name catalog (3 groups + 9 `@fallback` entries), reads `@shortdoc` at runtime | delete marked block |
   > | `lemon_core/runtime/profile.ex` | `:lemon_sim_ui` in the `runtime_full` release profile | delete marked line |
   > | `lemon_core/env/declarations.ex` (2), `env.ex`, `bus.ex` | `apps:` metadata on standard vars (`PHX_SERVER`, `SHELL`) + doc prose | edit in place |
@@ -201,7 +201,7 @@ Per repo (`lemon-sim`, `showcase`, `lemon-clients`, `coding-agent`), in that ord
   > `lemon_cli`'s setup wizard, `bin/lemon`, `scripts/live_cron_runtime_restart_smoke.exs` and
   > four tests), and the two lint tables stay hardcoded rather than becoming config — they are
   > supposed to enumerate the apps in the repo they police.
-- [ ] **5.4** coding-agent specifics: takes lemon_mcp + lemon_evals + coding_agent_ui; its gateway engine registers via 2.1's mechanism.
+- [ ] **5.4** coding-agent specifics: takes lemon_mcp + lemon_evals; its gateway engine registers via 2.1's mechanism.
 - [x] **5.5** The built-in X/Twitter client, adapter, tools, credentials, and release wiring were deleted from the Lemon harness. Any replacement is an external package using the existing Plugin and tool registries. *(D17, 2026-09-01)*
 - [ ] **5.6** Delete moved apps from the umbrella; platform repo keeps the reference runtime + published packages only.
 - [ ] **5.7** Cross-repo integration check: a nightly CI job in the platform repo that builds coding-agent and lemon-sim against hex releases (and optionally against `main` via git deps) — the early-warning system for accidental breakage.

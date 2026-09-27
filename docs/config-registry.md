@@ -363,22 +363,11 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | string | _(none)_ | yes | `ai` | Google Gemini CLI OAuth client secret override. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | string | _(none)_ | yes | `ai` | Google Generative AI API key (primary name). |
 | `LEMON_GEMINI_PROJECT_ID` | string | _(none)_ |  | `ai`, `lemon_cli`, `lemon_core` | Lemon-specific override for the Gemini/Vertex project id, checked before the GOOGLE_CLOUD_* names. |
-| `MAGIC_EDEN_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | Magic Eden marketplace API key. |
 | `MISTRAL_API_KEY` | string | _(none)_ | yes | `ai` | Mistral API key. |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `ai` | OpenAI Codex OAuth client id override. |
 | `OPENCODE_API_KEY` | string | _(none)_ | yes | `ai` | OpenCode provider API key. |
-| `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
-| `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
-
-### lemon_tcg wallets
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `EVM_PRIVATE_KEY` | string | _(none)_ | yes | `lemon_tcg` | EVM wallet private key used to sign on-chain transactions. |
-| `SOLANA_KEYPAIR_FILE` | string | _(none)_ | yes | `lemon_tcg` | Path to a Solana keypair JSON file used to sign wallet transactions. |
-| `SOLANA_SECRET_KEY` | string | _(none)_ | yes | `lemon_tcg` | Base58/array-encoded Solana secret key used to sign wallet transactions. |
 
 ### lemon_evals live-model opt-in checks
 
