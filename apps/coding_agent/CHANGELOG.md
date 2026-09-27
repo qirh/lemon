@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- `BashExecutor` keeps output that races an abort or timeout: a chunk that
+  arrives after the abort flag is set, or is already in the mailbox when the
+  process tree is killed, is now part of the partial result instead of being
+  dropped.
 - Tool approval requests now fail closed on exceptions, exits, throws,
   malformed responses, and unsupported scopes instead of auto-authorizing
   execution. Raw service error payloads are excluded from results and logs.

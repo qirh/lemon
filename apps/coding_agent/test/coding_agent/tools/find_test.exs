@@ -590,10 +590,13 @@ defmodule CodingAgent.Tools.FindTest do
       File.write!(Path.join(tmp_dir, ".bashrc"), "")
       File.write!(Path.join(tmp_dir, "regular.txt"), "")
 
+      # Test tmp dirs live inside the checkout, whose .gitignore ignores `.env*`
+      # (fd applies it even across a nested repo), so opt out of ignore rules
+      # to test hidden-file handling alone; ignore filtering is covered below.
       result =
         Find.execute(
           "call_1",
-          %{"pattern" => ".*", "hidden" => true},
+          %{"pattern" => ".*", "hidden" => true, "no_ignore" => true},
           nil,
           nil,
           tmp_dir,
