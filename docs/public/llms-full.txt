@@ -2894,9 +2894,8 @@ Environment variables override file values. Common overrides:
   value when it owns a fresh local runtime; persistent or existing runtimes
   require the operator to provide the same high-entropy value to both runtime
   and client. Token origin does not control process lifetime: every runtime
-  started by `./bin/lemon-tui` is stopped with the TUI. Start persistent
-  runtimes separately with `./bin/lemon --daemon`, then attach with the same
-  token.
+  started by `./bin/lemon-tui` is stopped with the TUI. Start a persistent
+  source runtime with `./bin/lemon daemon`, then attach with the same token.
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
   compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
   connections from direct loopback peers. Defaults to `false`; never enable it
@@ -9006,12 +9005,11 @@ When setup completes, start the interactive TUI and send your first message:
 $HOME/.lemon/bin/lemon
 ```
 
-The installer prints the PATH entry for its launcher. Once `~/.lemon/bin` is
-on your `PATH`, use `lemon` for this and the commands below. `lemon` starts the
-daemon when needed. If provider readiness is incomplete at a first interactive
-launch, it opens setup before starting the daemon. If it cannot open a
-terminal, it leaves the daemon stopped and tells you to run `lemon setup` from
-an interactive terminal.
+The launcher prints the PATH entry for its command. In an interactive terminal,
+invoking `lemon` with no arguments opens the TUI; without a TTY it prints usage
+and exits. The TUI runs setup when required, starts a daemon if needed, and
+then attaches. Use `lemon start` (or `lemon run`) to run the runtime in the
+foreground.
 
 ## Installer handoff and non-interactive installs
 
@@ -9184,12 +9182,13 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 ```
 
 The source wrapper follows the same setup and provider behavior described
-above. `./bin/lemon-tui` is the development TUI entry point after the source
-runtime is configured. When it starts a fresh runtime, the launcher generates
-and shares an in-memory operator token with the TUI, then stops that owned
-runtime when the TUI exits.
+above. In an interactive terminal, bare `./bin/lemon` opens the TUI; without a
+TTY it prints usage. `./bin/lemon start` (or `./bin/lemon run`) runs the runtime
+in the foreground. `./bin/lemon-tui` remains the development TUI entry point.
+When it starts a fresh runtime, the launcher generates and shares an in-memory
+operator token with the TUI, then stops that owned runtime when the TUI exits.
 
-Persistent runtimes started with `./bin/lemon --daemon` receive a private,
+Persistent runtimes started with `./bin/lemon daemon` receive a private,
 port-scoped credential at `~/.lemon/run/control-plane-<port>.token`; later TUI
 launches load it automatically after validating ownership, mode 0600, and
 format. Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are not persisted,
@@ -9209,10 +9208,9 @@ lemon web
 ```
 
 Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
-`./bin/lemon web`; invoking `./bin/lemon` beside an already healthy source
-runtime also reports and reuses it instead of registering a duplicate Erlang
-node. The browser checks the same config, secrets, provider,
-credential, and model readiness as setup. If anything is missing it lists the
+`./bin/lemon web`; the interactive no-argument source launcher opens the TUI,
+which reuses an already healthy runtime instead of registering a duplicate
+Erlang node. The browser checks the same config, secrets, provider,
 pending items, disables prompt/file submission, and points back to `lemon
 setup`; it never waits for a failed agent request to explain first-run setup.
 
@@ -9358,8 +9356,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
 | `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
-| `mix lemon.hermes.audit` | Audit Hermes data compatibility without writing files. |
-| `mix lemon.hermes.migrate` | Migrate compatible Hermes data into Lemon. |
+| Hermes migration Mix tasks | Deleted; use `lemon migrate hermes` from a release or `./bin/lemon migrate hermes` from a source checkout. |
 
 ## Secrets
 
@@ -10859,15 +10856,16 @@ under `~/.lemon`:
 
 `bin/lemon` inside every release is a launcher shim that picks the bundled
 profile and applies user-install defaults before delegating to
-`bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
-`remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
-runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
-`secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
-redacted support bundle. The sim profile does not bundle the runtime CLI, but
-does support `doctor --bundle`. With no arguments the launcher starts the TUI
-in an interactive terminal, auto-starting the daemon; non-interactive
-invocation prints usage.
-
+`bin/<profile>`. Its lifecycle commands include `tui`, `web`, `start`, `run`,
+`daemon`, `stop`, `restart`, and `status`; release VM tools are `remote`,
+`eval`, and `rpc`. The full and minimal runtime profiles dispatch `setup`,
+`model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers`,
+`blueprints`, `profile`, `backup`, `context`, `sessions`, `learn`, `update`,
+`completion`, `migrate`, `node`, and `version` through the shared CLI.
+`doctor --bundle [path]` generates a redacted support bundle. The sim profile
+does not bundle the runtime CLI, but does support `doctor --bundle`. With no
+arguments the launcher opens the TUI in an interactive terminal; without a TTY
+it prints usage and exits.
 The launcher never builds Elixir source from user input. `doctor` argv is
 forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
 `#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
@@ -11153,7 +11151,7 @@ The source launcher creates a high-entropy process-scoped operator token when
 it boots a new local runtime, shares it only through the daemon and TUI process
 environments, and stops that owned runtime when the TUI exits.
 
-Persistent runtimes started by `./bin/lemon --daemon` or installed
+Persistent runtimes started by `./bin/lemon daemon` or installed
 `lemon daemon` create a port-scoped credential under `~/.lemon/run`. A later
 TUI loads that credential automatically only when it is a regular current-user
 file with mode 0600 and a valid 256-bit token. Explicit
@@ -11164,7 +11162,7 @@ loopback access.
 
 Runtime ownership is independent of token origin: every daemon started by
 `./bin/lemon-tui` is stopped when that client exits, including when the token
-was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
+was preconfigured. Start `./bin/lemon daemon` separately before attaching if
 the source runtime must remain persistent; already-running runtimes are never
 stopped by the TUI launcher.
 
@@ -14224,7 +14222,7 @@ Initial stable 1.0 support targets:
 - source installs on machines with supported Elixir and Erlang/OTP versions
 - Linux `x86_64` release tarballs published by the Lemon release workflow
 - provider setup through documented configuration and secrets commands
-- runtime startup through `./bin/lemon`, `./bin/lemon-tui`, and release scripts
+- runtime startup through `./bin/lemon start` and `./bin/lemon daemon`, plus `./bin/lemon-tui` and release scripts
 - Web health and session pages
 - first-party text web tools such as web search/fetch when used from supported
   agent runs
@@ -17232,61 +17230,78 @@ Source: https://z80dev.github.io/lemon/user-guide/cli
 
 # Lemon command-line reference
 
-Lemon exposes the same Mix-free command families from an installed
-`lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
-Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
+The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
+same command surface. The launcher handles lifecycle commands; all other
+commands are dispatched by the CLI registry.
 
-## Learn from bounded sources
+## No-argument behavior
 
-```bash
-lemon learn '@file:docs/runbook.md' --root "$PWD" --json
-lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
-  --confirm <exact-review-digest> --json
-```
+This behavior is identical in source checkouts and packaged installs:
 
-Review is the default and never writes. Confirmation re-runs the bounded
-context selection and destination checks, then writes one canonical memory row
-and one audited skill draft only when the exact digest still matches. Responses
-omit source text, prompts, paths, URLs, secret names, and secret values. See
-[Learn from files, folders, and URLs](learn-from-sources.md).
+- In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI.
+- Without a TTY, `lemon` prints usage to stderr and exits with status 2.
+- `lemon start` and `lemon run` start the runtime in the foreground.
 
-The runtime command boundary has stable exit codes:
+Use `./bin/lemon` instead of `lemon` in the examples below when running from a
+source checkout.
 
-- `0` means the command completed successfully;
-- `1` means a safe operational or verification failure;
-- `2` means the command or its arguments are invalid.
+## Commands and availability
+
+### Launcher lifecycle commands
+
+These commands are handled by the launcher, not the CLI registry:
+
+| Command | Source checkout | Packaged release | Purpose |
+| --- | --- | --- | --- |
+| `tui [args]` | Yes | Yes | Reuse a healthy runtime; otherwise run `setup --if-required` in an interactive terminal, start the daemon, and open the TUI. |
+| `web [--no-open]` | Yes | Full profile only | Start the daemon if needed, wait for Web UI health, and print its URL; open a browser unless `--no-open` is set. |
+| `start`, `run` | Yes | Yes | Run the runtime in the foreground. |
+| `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
+| `stop`, `restart`, `status` | Yes | Yes | Manage or inspect the daemon using its pidfile. |
+| `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
+
+Source runtime options go after `start`, `run`, `daemon`, or `restart`:
+`--debug`, `--port N`, `--web-port N`, `--sim-port N`, `--name name@host`,
+`--sname name`, `--cookie C`, and `--no-distribution`. For example,
+`./bin/lemon start --no-distribution`. Runtime options are accepted after the
+relevant lifecycle command, not as bare launcher flags.
+
+### CLI commands
+
+These commands are dispatched by `LemonCli.CLI` in both source checkouts and
+packaged releases:
+
+| Command | Availability | Notes |
+| --- | --- | --- |
+| `setup` | Source and release | `setup --if-required` exits 0 if setup is complete; otherwise runs the wizard and exits 1 if setup remains incomplete. |
+| `model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers` | Source and release | Configure or inspect Lemon and its integrations. |
+| `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
+| `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
+| `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
+| `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
+| `completion` | Source and release | Generate completion for the current launcher's available commands. |
+| `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
+| `node` | Source and release | Includes `node join`. |
+| `version` | Source and release | Print the Lemon version. |
+
+### Source-only CLI commands
+
+These Mix-backed commands are available only from a source checkout and are
+omitted from packaged-release help and completion. In a release they report
+that they are source-only and exit 2:
+
+`send`, `media`, `models`, `policy`, `skill`, and `usage`.
+
+## Help and exit codes
+
+`lemon <launcher-command> --help` and `lemon help <command>` print help.
+Success exits 0, operational failures exit 1, and invalid commands or
+arguments exit 2.
 
 `--help`, `-h`, and `help` print command help without running the command body.
 Commands that support `--json` write one JSON document to stdout on success
 and one redacted JSON error document to stderr on operational failure. Invalid
 arguments remain human-readable usage errors with exit code `2`.
-
-## Runtime command families
-
-| Family | Purpose |
-| --- | --- |
-| `setup` | Complete first-run configuration |
-| `model` | Configure a model provider |
-| `gateway` | Configure Telegram or Discord |
-| `doctor` | Run diagnostics or create a support bundle |
-| `config` | Validate or show resolved configuration |
-| `secrets` | Manage encrypted credentials and inspect external read-only sources |
-| `channels` | Inspect channel configuration |
-| `providers` | Inspect provider readiness and manage routing |
-| `blueprints` | Review and exactly confirm cataloged skill automation bundles |
-| `profile` | Manage isolated specialist profiles |
-| `backup` | Create, verify, list, or restore user-state backups |
-| `context` | Preview or resolve bounded context references |
-| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
-| `sessions` | Inspect and manage durable sessions |
-| `update` | Check, non-mutating plan, exact-confirm apply/history/rollback |
-| `completion` | Generate shell completion scripts |
-
-The source and packaged launchers also expose commands specific to their own
-runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
-launcher. Completion generation detects the launcher, so it does not advertise
-packaged daemon commands in a source checkout or source-only commands in an
-installed release.
 
 ## Update lifecycle
 
@@ -17343,8 +17358,8 @@ configuration and fail-closed resolution contract.
 
 `lemon blueprints` talks only to the authenticated local control plane. It
 never accepts a filesystem root or path and never starts a scheduler in the
-one-shot CLI VM. Installed releases start the daemon when needed; from a source
-checkout, start `./bin/lemon --daemon` first.
+one-shot CLI VM. Both source and packaged launchers start the local runtime
+when it is not already healthy.
 
 ```bash
 lemon blueprints
@@ -18611,12 +18626,16 @@ preview-first: inspect the report, resolve conflicts, then apply.
 
 ## Command
 
-From the Lemon repo:
+The command works in packaged installs and source checkouts. From a source
+checkout, prefix the examples with `./bin/`:
 
 ```bash
-mix lemon.hermes.audit
-mix lemon.hermes.migrate --dry-run
-mix lemon.hermes.migrate --yes
+lemon migrate hermes audit
+lemon migrate hermes --dry-run
+lemon migrate hermes --yes
+./bin/lemon migrate hermes audit
+./bin/lemon migrate hermes --dry-run
+./bin/lemon migrate hermes --yes
 ```
 
 Common options:
@@ -18633,12 +18652,12 @@ Common options:
 | `--skill-conflict rename` | Import conflicting skills as `<name>-hermes-import`. |
 | `--no-backup` | Skip the pre-migration zip backup. |
 
-Use `mix lemon.hermes.audit --json` when you need a machine-readable
+Use `lemon migrate hermes audit --json` when you need a machine-readable
 compatibility report for automation or support review. The audit is read-only
 and reports each known Hermes surface as `compatible`, `gated`, `partial`,
 `unsupported`, `missing`, or `error`.
 
-The task always builds a preview before applying. Without `--yes`, it prompts
+The command always builds a preview before applying. Without `--yes`, it prompts
 before writing. If conflicts are present, it refuses to apply unless
 `--overwrite` is set.
 
@@ -18671,7 +18690,7 @@ Each apply writes a report directory:
   archive/
 ```
 
-Before applying, the Mix task also creates a zip backup at:
+Before applying, the command also creates a zip backup at:
 
 ```text
 <target>/backups/pre-hermes-migration-<timestamp>.zip
@@ -18754,11 +18773,10 @@ closed if it changes; delete also requires the exact profile ID. The page never
 loads derived paths or system prompts into LiveView state. Credential-safe
 export remains available through the CLI, TUI, and control-plane API.
 
-In an installed release, `profile chat` uses the authenticated local control
-plane and starts the packaged daemon when it is not already healthy. In a
-source checkout, start `./bin/lemon --daemon` first; the one-shot
-`./bin/lemon profile chat ...` process then submits to that runtime rather than
-starting a second router whose work would disappear when the CLI exits.
+Both launchers start the runtime through the launcher when it is not already
+healthy. The one-shot `profile chat` process then submits to that runtime
+rather than starting a second router whose work would disappear when the CLI
+exits.
 
 Use `--node <name>` at creation time to route canonical chat through an
 authenticated named execution node. The roster reports `local`, `online`, or
@@ -19372,7 +19390,7 @@ daemon's credential.
 
 Supplying a token does not make a runtime started by `./bin/lemon-tui`
 persistent: the launcher still stops it when the client exits. Start
-`./bin/lemon --daemon` separately, then attach with the same token, when the
+`./bin/lemon daemon` separately, then attach with the same token, when the
 runtime should outlive the TUI.
 
 ---
@@ -19611,11 +19629,9 @@ header, at least one skill, and exactly one cron automation:
 
 ### Review and activate
 
-Start the unified runtime, then use the same catalog-scoped CLI in a source
-checkout or packaged release. The packaged launcher starts its daemon when
-needed; source users run `./bin/lemon --daemon` first. With no arguments the
-family lists the bounded catalog, and a bundle ID plus `--profile` is preview
-shorthand:
+Use the same catalog-scoped CLI in a source checkout or packaged release. Both
+launchers start the daemon when needed. With no arguments the family lists the
+bounded catalog, and a bundle ID plus `--profile` is preview shorthand:
 
 ```bash
 lemon blueprints
@@ -19961,10 +19977,9 @@ repository wrapper:
 ./bin/lemon web
 ```
 
-Running `./bin/lemon` while that local runtime is already healthy is also
-idempotent: the launcher reports the existing control-plane and Web addresses
-and exits successfully instead of compiling or attempting to register a second
-`lemon@host` Erlang node.
+In a source checkout, `./bin/lemon web` reuses a healthy runtime or starts one
+when needed. In an interactive terminal, bare `./bin/lemon` opens the TUI,
+which also reuses a healthy runtime.
 
 `lemon web` requires the `lemon_runtime_full` release profile. If the launcher
 reports that the Web UI is unavailable in the minimal profile, reinstall with

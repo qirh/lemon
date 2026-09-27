@@ -58,11 +58,10 @@ closed if it changes; delete also requires the exact profile ID. The page never
 loads derived paths or system prompts into LiveView state. Credential-safe
 export remains available through the CLI, TUI, and control-plane API.
 
-In an installed release, `profile chat` uses the authenticated local control
-plane and starts the packaged daemon when it is not already healthy. In a
-source checkout, start `./bin/lemon --daemon` first; the one-shot
-`./bin/lemon profile chat ...` process then submits to that runtime rather than
-starting a second router whose work would disappear when the CLI exits.
+Both launchers start the runtime through the launcher when it is not already
+healthy. The one-shot `profile chat` process then submits to that runtime
+rather than starting a second router whose work would disappear when the CLI
+exits.
 
 Use `--node <name>` at creation time to route canonical chat through an
 authenticated named execution node. The roster reports `local`, `online`, or

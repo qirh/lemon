@@ -17,7 +17,7 @@ silent permissions.
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
-| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
+| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_channels`, `lemon_media` |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | *(none)* |
@@ -69,6 +69,7 @@ the dependency policy above, not these source-level rules:
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via `CodingAgent.Coordinator`); there is no external CLI runner registry. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
+- The shared CLI registry dispatches Mix-free command modules in their owning apps. Its `lemon_channels` and `lemon_media` references are runtime-only so setup and other one-shot commands do not start channel services through an application dependency. Source Mix tasks are thin adapters; packaged runtime profiles include the same handlers.
 
 ## Skill Source Taxonomy
 

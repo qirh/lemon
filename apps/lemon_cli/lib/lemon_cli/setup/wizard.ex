@@ -641,7 +641,7 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("To launch this profile:")
     io.info.("  MIX_ENV=prod mix release #{release_name(profile_name)}")
     io.info.("  # or in dev:")
-    io.info.("  bin/lemon")
+    io.info.("  ./bin/lemon start")
   end
 
   defp release_name(:runtime_min), do: "lemon_runtime_min"

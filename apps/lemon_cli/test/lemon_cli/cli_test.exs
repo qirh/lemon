@@ -213,6 +213,58 @@ defmodule LemonCli.CLITest do
 
       refute CLI.setup_required?()
     end
+
+    test "setup --if-required is a no-op once setup is complete" do
+      secret_name = "if_required_ready_credential"
+      write_openai_config(secret_name)
+      assert {:ok, _metadata} = Secrets.set(secret_name, "test-provider-credential")
+
+      output = capture_io(fn -> assert CLI.run(["setup", "--if-required"]) == 0 end)
+
+      refute output =~ "Setup is required"
+      refute output =~ "Welcome to Lemon setup!"
+    end
+  end
+
+  describe "launcher-aware dispatch" do
+    setup do
+      previous = System.get_env("LEMON_CLI_LAUNCHER")
+
+      on_exit(fn -> restore_env("LEMON_CLI_LAUNCHER", previous) end)
+    end
+
+    test "packaged runtime commands return usage errors through the CLI boundary" do
+      System.put_env("LEMON_CLI_LAUNCHER", "release")
+
+      capture_io(:stderr, fn ->
+        assert CLI.run(["models", "--limit", "-1"]) == 2
+        assert CLI.run(["usage", "--unexpected"]) == 2
+      end)
+    end
+
+    test "source checkouts refuse release-VM commands" do
+      System.put_env("LEMON_CLI_LAUNCHER", "source")
+
+      error = capture_io(:stderr, fn -> assert CLI.run(["eval", "1 + 1"]) == 2 end)
+
+      assert error =~ "`lemon eval` is available only in a packaged install."
+    end
+
+    test "lifecycle commands belong to the launcher script, but their help is shared" do
+      System.put_env("LEMON_CLI_LAUNCHER", "release")
+
+      error = capture_io(:stderr, fn -> assert CLI.run(["daemon"]) == 2 end)
+      assert error =~ "`lemon daemon` is handled by the lemon launcher script."
+
+      help = capture_io(fn -> assert CLI.run(["help", "daemon"]) == 0 end)
+      assert help =~ "Usage: lemon daemon [runtime options]"
+    end
+
+    test "version prints the current Lemon version" do
+      output = capture_io(fn -> assert CLI.run(["version"]) == 0 end)
+
+      assert output == LemonCore.Update.Version.current() <> "\n"
+    end
   end
 
   defp global_config_path do

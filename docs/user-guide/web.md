@@ -24,10 +24,9 @@ repository wrapper:
 ./bin/lemon web
 ```
 
-Running `./bin/lemon` while that local runtime is already healthy is also
-idempotent: the launcher reports the existing control-plane and Web addresses
-and exits successfully instead of compiling or attempting to register a second
-`lemon@host` Erlang node.
+In a source checkout, `./bin/lemon web` reuses a healthy runtime or starts one
+when needed. In an interactive terminal, bare `./bin/lemon` opens the TUI,
+which also reuses a healthy runtime.
 
 `lemon web` requires the `lemon_runtime_full` release profile. If the launcher
 reports that the Web UI is unavailable in the minimal profile, reinstall with

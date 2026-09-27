@@ -1,615 +1,42 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
-# lemon - Launch a unified Lemon runtime from source.
+# lemon - launcher for a Lemon source checkout.
 #
-# Starts a single BEAM node with the gateway + control plane + router + channels
-# and other core apps so web/TUI clients can attach to one runtime.
+# The shell owns only what cannot run inside the Mix project: locating the
+# checkout, the managed control-plane credential, secrets master-key
+# normalization, runtime lifecycle and health waits, and exec'ing the TUI.
+# Every other command is dispatched by LemonCli.CLI from
+# LemonCli.CommandRegistry -- the same registry the packaged `lemon` uses.
+# Run `./bin/lemon --help` for the command list.
 #
-# Usage:
-#   ./bin/lemon [--daemon] [--debug] [--port <control_plane_port>] [--web-port <lemon_web_port>]
-#               [--name <name@host> | --sname <name>] [--cookie <cookie>] [--no-distribution]
-#   ./bin/lemon setup runtime --non-interactive
-#   ./bin/lemon model --provider anthropic
-#   ./bin/lemon gateway setup telegram --non-interactive
-#   ./bin/lemon node join --name worker --controller wss://controller.example/ws
-#   ./bin/lemon config validate
-#   ./bin/lemon context preview '@file:README.md' --root "$PWD"
-#   ./bin/lemon sessions list --limit 20
-#   ./bin/lemon blueprints daily-note --profile operator
-#   ./bin/lemon completion zsh
-#   ./bin/lemon doctor --json
-#   ./bin/lemon backup create --json
-#   ./bin/lemon web
-#   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
-#   ./bin/lemon media
-#   ./bin/lemon models --provider anthropic
-#   ./bin/lemon providers --provider openai
-#   ./bin/lemon profile create research --name "Research"
-#   ./bin/lemon policy list
-#   ./bin/lemon secrets status
-#   ./bin/lemon skill list
-#   ./bin/lemon usage
-#   ./bin/lemon update check
-#
+#   ./bin/lemon                    # interactive terminal: TUI (starts the runtime if needed)
+#   ./bin/lemon start|run [opts]   # foreground runtime (see `./bin/lemon start --help`)
+#   ./bin/lemon daemon|stop|restart|status
+#   ./bin/lemon <command> [args]   # setup, doctor, sessions, send, node, ... via LemonCli.CLI
 
 set -euo pipefail
 
-LAUNCH_CWD="$(pwd)"
+info() { printf '\033[0;32m[lemon]\033[0m %s\n' "$1"; }
+warn() { printf '\033[0;33m[lemon]\033[0m %s\n' "$1"; }
+error() { printf '\033[0;31m[lemon]\033[0m %s\n' "$1" >&2; }
 
+LAUNCH_CWD="$(pwd)"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
   SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
   [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
-
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TUI_DIR="$LEMON_ROOT/clients/tui"
+LEMON_HOME_DIR="$HOME/.lemon"
+STATE_DIR="$LEMON_HOME_DIR/run"
+PIDFILE="$STATE_DIR/lemon.pid"
+LOG_FILE="/tmp/lemon-runtime.log"
 export LEMON_PATH="$LEMON_ROOT"
+export LEMON_CLI_LAUNCHER=source LEMON_LAUNCHER="$SCRIPT_DIR/lemon" LEMON_NODE_LAUNCH_CWD="$LAUNCH_CWD"
 
-show_help() {
-  cat << 'EOF'
-Usage: ./bin/lemon [options]
-       ./bin/lemon setup runtime --non-interactive
-       ./bin/lemon model --provider anthropic
-       ./bin/lemon gateway setup [transport] --non-interactive
-       ./bin/lemon node join --name NAME --controller wss://HOST/ws
-       ./bin/lemon channels
-       ./bin/lemon profile <list|show|create|clone|rename|export|delete|roster|chat>
-       ./bin/lemon config validate
-       ./bin/lemon context preview '@file:README.md' --root "$PWD"
-       ./bin/lemon sessions <list|search|stats|show|history|title|pin|unpin|archive|restore|export|prune|delete>
-       ./bin/lemon blueprints [list|inspect|validate|preview|activate]
-       ./bin/lemon completion <bash|zsh|fish>
-       ./bin/lemon doctor --json
-       ./bin/lemon backup create --json
-       ./bin/lemon web [--no-open]
-       ./bin/lemon send --to telegram:<chat_id> "message"
-       ./bin/lemon media
-       ./bin/lemon models --provider anthropic
-       ./bin/lemon providers --provider openai
-       ./bin/lemon policy list
-       ./bin/lemon secrets status
-       ./bin/lemon skill list
-       ./bin/lemon usage
-       ./bin/lemon update <check|plan|apply|history|rollback>
-
-Options:
-  --daemon                Run in background and print PID
-  --debug                 Enable debug logging
-  --port <port>           Control plane port (default: 4040)
-  --web-port <port>       lemon_web HTTP port (default: 4080)
-  --sim-port <port>       lemon_sim_ui HTTP port (default: 4090)
-  --name <name@host>      Start as distributed long-name node
-  --sname <name>          Start as distributed short-name node (default: lemon)
-  --cookie <cookie>       Erlang cookie (default: $LEMON_GATEWAY_NODE_COOKIE or lemon_gateway_dev_cookie)
-  --no-distribution       Disable distributed node startup
-  --help, -h              Show this help
-
-Environment fallbacks:
-  LEMON_CONTROL_PLANE_PORT
-  LEMON_CONTROL_PLANE_OPERATOR_TOKEN
-  LEMON_RUNTIME_PID_FILE (daemon launcher lifecycle handoff)
-  LEMON_WEB_PORT
-  LEMON_SIM_UI_PORT
-  LEMON_GATEWAY_HEALTH_PORT
-  LEMON_ROUTER_HEALTH_PORT
-  LEMON_GATEWAY_NODE_NAME
-  LEMON_GATEWAY_NODE_COOKIE
-  LEMON_GATEWAY_COOKIE
-  LEMON_DOTENV_DIR
-  LEMON_TELEGRAM_DEFAULT_CHAT_ID
-  LEMON_DISCORD_DEFAULT_CHANNEL_ID
-EOF
-}
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
-
-info() {
-  echo -e "${GREEN}[lemon]${NC} $1"
-}
-
-warn() {
-  echo -e "${YELLOW}[lemon]${NC} $1"
-}
-
-error() {
-  echo -e "${RED}[lemon]${NC} $1" >&2
-}
-
-run_source_runtime_cli() {
-  cd "$LEMON_ROOT"
-  # Completion and JSON session output must remain machine-clean on stdout.
-  # Compile quietly first, then use the same fixed-expression, argv-as-data
-  # boundary as packaged releases.
-  if ! mix deps.check >/dev/null 2>&1; then
-    mix deps.get >/dev/null
-  fi
-  mix compile >/dev/null
-  export LEMON_CLI_LAUNCHER=source
-  exec mix run --no-start --no-compile --no-deps-check \
-    -e 'LemonCli.CLI.main(System.argv())' -- "$@"
-}
-
-web_healthy() {
-  local body
-  body="$(curl -fsS --connect-timeout 1 --max-time 5 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
-  body="${body//[[:space:]]/}"
-  [[ "$body" == "ok" ]]
-}
-
-control_plane_healthy() {
-  local body
-  body="$(curl -fsS --connect-timeout 1 --max-time 5 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
-  body="${body//[[:space:]]/}"
-  [[ "$body" == '{"ok":true}' || "$body" == "ok" ]]
-}
-
-# Persistent daemons need a credential rendezvous that a later TUI process can
-# read without putting the bearer in argv or weakening loopback authentication.
-# Explicit operator tokens remain caller-owned and are never persisted here.
-managed_operator_token_path() {
-  printf '%s/.lemon/run/control-plane-%s.token\n' "$HOME" "$1"
-}
-
-private_file_mode() {
-  local path="$1"
-  local mode=""
-
-  if mode="$(stat -f '%Lp' "$path" 2>/dev/null)"; then
-    printf '%s\n' "$mode"
-  elif mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
-    printf '%s\n' "$mode"
-  else
-    return 1
-  fi
-}
-
-load_managed_operator_token() {
-  local port="$1"
-  local path
-  local mode
-  local token
-
-  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
-    return 0
-  fi
-
-  path="$(managed_operator_token_path "$port")"
-
-  if [[ ! -e "$path" && ! -L "$path" ]]; then
-    return 1
-  fi
-
-  if [[ -L "$path" || ! -f "$path" || ! -O "$path" ]]; then
-    error "Refusing unsafe managed control-plane credential: $path"
-    return 2
-  fi
-
-  mode="$(private_file_mode "$path")" || {
-    error "Could not verify permissions on managed control-plane credential: $path"
-    return 2
-  }
-
-  if [[ "$mode" != "600" ]]; then
-    error "Managed control-plane credential must have mode 600: $path"
-    return 2
-  fi
-
-  IFS= read -r token < "$path" || true
-
-  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
-    error "Managed control-plane credential is invalid: $path"
-    return 2
-  fi
-
-  export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$token"
-}
-
-ensure_managed_operator_token() {
-  local port="$1"
-  local status=0
-  local state_dir="$HOME/.lemon/run"
-  local path
-  local temporary
-  local token
-
-  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
-    return 0
-  fi
-
-  load_managed_operator_token "$port" || status=$?
-  if [[ "$status" == "0" ]]; then
-    return 0
-  elif [[ "$status" != "1" ]]; then
-    return "$status"
-  fi
-
-  umask 077
-  mkdir -p "$state_dir"
-  chmod 700 "$HOME/.lemon" "$state_dir"
-  path="$(managed_operator_token_path "$port")"
-  temporary="$(mktemp "$state_dir/.control-plane-${port}.XXXXXX")"
-
-  if command -v openssl >/dev/null 2>&1; then
-    token="$(openssl rand -hex 32)"
-  else
-    token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
-  fi
-
-  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
-    rm -f "$temporary"
-    error "Could not generate a secure managed control-plane credential."
-    return 2
-  fi
-
-  printf '%s\n' "$token" > "$temporary"
-  chmod 600 "$temporary"
-
-  # Linking a fully-written temporary file makes concurrent first launches
-  # converge on one credential without ever exposing a partial file.
-  if ! ln "$temporary" "$path" 2>/dev/null && [[ ! -f "$path" ]]; then
-    rm -f "$temporary"
-    error "Could not install managed control-plane credential: $path"
-    return 2
-  fi
-
-  rm -f "$temporary"
-  load_managed_operator_token "$port"
-}
-
-open_web_browser() {
-  local url="$1"
-
-  if command -v open >/dev/null 2>&1; then
-    open "$url" >/dev/null 2>&1 &
-  elif command -v xdg-open >/dev/null 2>&1; then
-    xdg-open "$url" >/dev/null 2>&1 &
-  elif command -v wslview >/dev/null 2>&1; then
-    wslview "$url" >/dev/null 2>&1 &
-  else
-    warn "No browser opener found; open the URL above manually."
-  fi
-}
-
-if [[ "${1:-}" == "web" ]]; then
-  shift
-  NO_OPEN=0
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --no-open)
-        NO_OPEN=1
-        shift
-        ;;
-      --help|-h)
-        cat <<'EOF'
-Usage: ./bin/lemon web [--no-open]
-
-Start the full local Lemon runtime if needed, wait for the Web UI, and open it.
-Set LEMON_WEB_PORT to use a port other than 4080.
-
-Options:
-  --no-open   Print the URL without opening a browser
-EOF
-        exit 0
-        ;;
-      *)
-        error "Unknown web option: $1"
-        exit 2
-        ;;
-    esac
-  done
-
-  WEB_PORT="${LEMON_WEB_PORT:-4080}"
-
-  if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]]; then
-    error "Invalid LEMON_WEB_PORT value: $WEB_PORT"
-    exit 1
-  fi
-
-  if ! web_healthy "$WEB_PORT"; then
-    info "Web UI is not running; starting Lemon"
-    "$0" --daemon --web-port "$WEB_PORT"
-
-    WEB_READY=0
-    for ((attempt = 1; attempt <= 30; attempt++)); do
-      if web_healthy "$WEB_PORT"; then
-        WEB_READY=1
-        break
-      fi
-      sleep 1
-    done
-
-    if [[ "$WEB_READY" != "1" ]]; then
-      error "Web UI did not become healthy on port $WEB_PORT within 30s"
-      error "Check /tmp/lemon-runtime.log and run ./bin/lemon doctor, then retry."
-      exit 1
-    fi
-  fi
-
-  WEB_URL="http://127.0.0.1:$WEB_PORT/"
-  info "Lemon Web: $WEB_URL"
-
-  if [[ "$NO_OPEN" != "1" ]]; then
-    OPEN_URL="$WEB_URL"
-
-    if [[ -n "${LEMON_WEB_ACCESS_TOKEN:-}" ]]; then
-      if [[ "$LEMON_WEB_ACCESS_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
-        OPEN_URL="${WEB_URL}?token=${LEMON_WEB_ACCESS_TOKEN}"
-      else
-        warn "The access token contains URL-reserved characters; open the URL and provide a URL-encoded ?token= value."
-      fi
-    fi
-
-    open_web_browser "$OPEN_URL"
-  fi
-
-  exit 0
-fi
-
-if [[ "${1:-}" == "send" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.send "$@"
-fi
-
-if [[ "${1:-}" == "setup" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-
-  if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    exec mix help lemon.setup
-  fi
-
-  exec mix lemon.setup "$@"
-fi
-
-show_model_help() {
-  cat << 'EOF'
-Usage: ./bin/lemon model [options]
-
-Configure an AI provider from a source checkout.
-
-Options:
-  --provider NAME         Provider to configure
-  --token TOKEN           Provider credential
-  --auth oauth|api_key    Authentication flow
-  --model MODEL           Model to configure
-  --set-default           Set the provider and model as defaults
-EOF
-}
-
-if [[ "${1:-}" == "model" ]]; then
-  shift
-
-  if [[ "${1:-}" == "help" || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    show_model_help
-    exit 0
-  fi
-
-  cd "$LEMON_ROOT"
-  exec mix lemon.onboard "$@"
-fi
-
-show_gateway_help() {
-  cat << 'EOF'
-Usage: ./bin/lemon gateway setup [transport] [options]
-
-Configure a gateway adapter from a source checkout.
-
-Examples:
-  ./bin/lemon gateway setup
-  ./bin/lemon gateway setup telegram
-  ./bin/lemon gateway setup --transport discord --non-interactive
-EOF
-}
-
-if [[ "${1:-}" == "gateway" ]]; then
-  shift
-  gateway_action="${1:-}"
-
-  case "$gateway_action" in
-    setup)
-      shift
-
-      if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-        show_gateway_help
-        exit 0
-      fi
-
-      cd "$LEMON_ROOT"
-      exec mix lemon.setup gateway "$@"
-      ;;
-    ""|help|--help|-h)
-      show_gateway_help
-      exit 0
-      ;;
-    *)
-      error "Unknown gateway command: $gateway_action"
-      show_gateway_help >&2
-      exit 2
-      ;;
-  esac
-fi
-
-if [[ "${1:-}" == "node" ]]; then
-  shift
-  node_action="${1:-}"
-
-  case "$node_action" in
-    join)
-      shift
-      export LEMON_NODE_LAUNCH_CWD="$LAUNCH_CWD"
-      cd "$LEMON_ROOT"
-      exec mix run --no-start -e 'CodingAgent.ExecutionNode.CLI.main(System.argv())' -- "$@"
-      ;;
-    ""|help|--help|-h)
-      cd "$LEMON_ROOT"
-      exec mix run --no-start -e 'IO.puts(CodingAgent.ExecutionNode.CLI.help())'
-      ;;
-    *)
-      error "Unknown node command: $node_action"
-      exit 2
-      ;;
-  esac
-fi
-
-if [[ "${1:-}" == "channels" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.channels "$@"
-fi
-
-if [[ "${1:-}" == "profile" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["profile" | System.argv()]))' -- "$@"
-fi
-
-if [[ "${1:-}" == "config" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.config "$@"
-fi
-
-if [[ "${1:-}" == "context" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  # Keep structured stdout parseable even when this first invocation needs to
-  # compile changed source files. Runtime application logs are silenced by the
-  # JSON command boundary itself; MIX_QUIET covers Mix's compile progress.
-  export MIX_QUIET=1
-  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["context" | System.argv()]))' -- "$@"
-fi
-
-if [[ "${1:-}" == "learn" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  export MIX_QUIET=1
-  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["learn" | System.argv()]))' -- "$@"
-fi
-
-if [[ "${1:-}" == "sessions" ]]; then
-  run_source_runtime_cli "$@"
-fi
-
-if [[ "${1:-}" == "blueprints" ]]; then
-  run_source_runtime_cli "$@"
-fi
-
-if [[ "${1:-}" == "completion" ]]; then
-  run_source_runtime_cli "$@"
-fi
-
-if [[ "${1:-}" == "doctor" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.doctor "$@"
-fi
-
-if [[ "${1:-}" == "backup" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  # Keep --json stdout machine-clean after the documented source build step;
-  # dependency checks and compilation can otherwise print before the payload.
-  exec mix run --no-start --no-compile --no-deps-check \
-    -e 'LemonCli.CLI.main(["backup" | System.argv()])' -- "$@"
-fi
-
-if [[ "${1:-}" == "media" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.media "$@"
-fi
-
-if [[ "${1:-}" == "models" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.models "$@"
-fi
-
-if [[ "${1:-}" == "providers" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  export MIX_QUIET=1
-  exec mix run --no-start \
-    -e 'System.halt(LemonCli.CLI.run(["providers" | System.argv()]))' -- "$@"
-fi
-
-if [[ "${1:-}" == "policy" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.policy "$@"
-fi
-
-if [[ "${1:-}" == "secrets" ]]; then
-  shift
-  subcommand="${1:-}"
-  case "$subcommand" in
-    sources)
-      run_source_runtime_cli "secrets" "$@"
-      ;;
-    check|delete|import-env|init|list|set|status)
-      shift
-      cd "$LEMON_ROOT"
-      mix_task="lemon.secrets.${subcommand//-/_}"
-      exec mix "$mix_task" "$@"
-      ;;
-    ""|help|--help|-h)
-      cat << 'EOF'
-Usage: ./bin/lemon secrets <command> [args]
-
-Commands:
-  status
-  init
-  set <name> <value>
-  list
-  delete <name>
-  check <name>
-  import-env
-  sources <status|test> [source-id] [--json]
-EOF
-      exit 0
-      ;;
-    *)
-      error "Unknown secrets command: $subcommand"
-      exit 2
-      ;;
-  esac
-fi
-
-if [[ "${1:-}" == "skill" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.skill "$@"
-fi
-
-if [[ "${1:-}" == "usage" ]]; then
-  shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.usage "$@"
-fi
-
-if [[ "${1:-}" == "update" ]]; then
-  shift
-
-  case "${1:-}" in
-    check|plan|apply|history|rollback|help|--help|-h)
-      run_source_runtime_cli "update" "$@"
-      ;;
-    *)
-      cd "$LEMON_ROOT"
-      exec mix lemon.update "$@"
-      ;;
-  esac
-fi
-
-DEBUG=""
-DAEMON=0
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
 SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
@@ -617,242 +44,314 @@ NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
 NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
 DISTRIBUTED=1
+DEBUG=""
 
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --daemon)
-      DAEMON=1
-      shift
-      ;;
-    --debug)
-      DEBUG="1"
-      shift
-      ;;
-    --port)
-      [[ -n "${2:-}" ]] || { error "Missing value for --port"; exit 1; }
-      PORT="$2"
-      shift 2
-      ;;
-    --web-port)
-      [[ -n "${2:-}" ]] || { error "Missing value for --web-port"; exit 1; }
-      WEB_PORT="$2"
-      shift 2
-      ;;
-    --sim-port)
-      [[ -n "${2:-}" ]] || { error "Missing value for --sim-port"; exit 1; }
-      SIM_PORT="$2"
-      shift 2
-      ;;
-    --name)
-      [[ -n "${2:-}" ]] || { error "Missing value for --name"; exit 1; }
-      NODE_MODE="name"
-      NODE_NAME="$2"
-      shift 2
-      ;;
-    --sname)
-      [[ -n "${2:-}" ]] || { error "Missing value for --sname"; exit 1; }
-      NODE_MODE="sname"
-      NODE_NAME="$2"
-      shift 2
-      ;;
-    --cookie)
-      [[ -n "${2:-}" ]] || { error "Missing value for --cookie"; exit 1; }
-      NODE_COOKIE="$2"
-      shift 2
-      ;;
-    --no-distribution)
-      DISTRIBUTED=0
-      shift
-      ;;
-    --help|-h)
-      show_help
-      exit 0
-      ;;
-    *)
-      error "Unknown option: $1"
-      show_help
-      exit 1
-      ;;
-  esac
-done
-
-if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-  error "Invalid --port value: $PORT"
-  exit 1
-fi
-
-if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]]; then
-  error "Invalid --web-port value: $WEB_PORT"
-  exit 1
-fi
-
-if ! [[ "$SIM_PORT" =~ ^[0-9]+$ ]]; then
-  error "Invalid --sim-port value: $SIM_PORT"
-  exit 1
-fi
-
-# Perform the already-running guard before compiling or registering the Erlang
-# node name. The in-VM Boot guard cannot help when distribution rejects a
-# duplicate `lemon@host` name before LemonCore.Runtime.Boot gets control.
-if control_plane_healthy "$PORT"; then
-  info "A healthy Lemon runtime is already running; reusing it."
-  info "Control plane: ws://localhost:$PORT/ws"
-
-  if web_healthy "$WEB_PORT"; then
-    info "Web UI:        http://localhost:$WEB_PORT/"
-  else
-    warn "The existing runtime is not serving a healthy Web UI on port $WEB_PORT."
+# ── Managed operator credential: lets a later TUI or CLI process authenticate
+# to a daemon without putting the bearer in argv. Explicit tokens stay
+# caller-owned and are never persisted. ──
+load_managed_token() {
+  local file="$STATE_DIR/control-plane-$PORT.token" mode token
+  [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ] || return 0
+  [[ -e "$file" || -L "$file" ]] || return 1
+  if [[ -L "$file" || ! -f "$file" || ! -O "$file" ]]; then
+    error "refusing unsafe managed control-plane credential: $file"
+    return 2
   fi
-
-  info "Run ./bin/lemon web to open the existing browser interface."
-  exit 0
-fi
-
-if [[ -z "$NODE_MODE" ]]; then
-  if [[ "$NODE_NAME" == *"@"* ]]; then
-    NODE_MODE="name"
-  else
-    NODE_MODE="sname"
+  mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode=""
+  if [ "$mode" != "600" ]; then
+    error "managed control-plane credential must have mode 600: $file"
+    return 2
   fi
-fi
-
-if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
-  error "Distributed mode requires a non-empty cookie. Pass --cookie or set LEMON_GATEWAY_NODE_COOKIE."
-  exit 1
-fi
-
-if ! ensure_managed_operator_token "$PORT"; then
-  exit 1
-fi
-
-export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
-export LEMON_CONTROL_PLANE_PORT="$PORT"
-export LEMON_WEB_PORT="$WEB_PORT"
-export LEMON_SIM_UI_PORT="$SIM_PORT"
-
-if [[ -n "$DEBUG" ]]; then
-  export LEMON_DEBUG=1
-  export LEMON_LOG_LEVEL=debug
-fi
-
-# On Linux and other non-keychain environments, prefer the canonical local
-# secrets file over whatever stale session env may have been inherited.
-if [[ "$(uname -s)" != "Darwin" ]]; then
-  LOCAL_MASTER_KEY_FILE="$HOME/.lemon/secrets_master_key"
-
-  if [[ -r "$LOCAL_MASTER_KEY_FILE" ]]; then
-    LOCAL_MASTER_KEY="$(cat "$LOCAL_MASTER_KEY_FILE")"
-
-    if [[ -n "$LOCAL_MASTER_KEY" ]]; then
-      export LEMON_SECRETS_MASTER_KEY="$LOCAL_MASTER_KEY"
-      info "Loaded secrets master key from $LOCAL_MASTER_KEY_FILE."
-    fi
+  IFS= read -r token < "$file" || true
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    error "managed control-plane credential is invalid: $file"
+    return 2
   fi
-fi
+  export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$token"
+}
 
-# Some environments deny keychain reads from long-lived BEAM processes or rely
-# on an env-provided master key. Preloading the master key before boot makes
-# secrets resolution deterministic for the unified runtime too.
-if [[ -z "${LEMON_SECRETS_MASTER_KEY:-}" ]] && command -v security >/dev/null 2>&1; then
-  KEYCHAIN_CANDIDATES=()
-
-  append_keychain_candidate() {
-    local candidate="$1"
-    local existing=""
-
-    candidate="${candidate#"${candidate%%[![:space:]]*}"}"
-    candidate="${candidate%\"}"
-    candidate="${candidate#\"}"
-
-    if [[ -z "$candidate" || ! -f "$candidate" ]]; then
-      return
-    fi
-
-    # macOS ships Bash 3.2, where expanding an empty array under `set -u`
-    # raises an unbound-variable error. Guard the expansion until populated.
-    if (( ${#KEYCHAIN_CANDIDATES[@]} > 0 )); then
-      for existing in "${KEYCHAIN_CANDIDATES[@]}"; do
-        if [[ "$existing" == "$candidate" ]]; then
-          return
-        fi
-      done
-    fi
-
-    KEYCHAIN_CANDIDATES+=("$candidate")
-  }
-
-  append_keychain_candidate "$(security default-keychain -d user 2>/dev/null | head -n 1 || true)"
-
-  while IFS= read -r keychain_line; do
-    append_keychain_candidate "$keychain_line"
-  done < <(security list-keychains -d user 2>/dev/null || true)
-
-  append_keychain_candidate "$HOME/Library/Keychains/login.keychain-db"
-
-  if (( ${#KEYCHAIN_CANDIDATES[@]} > 0 )); then
-    for keychain_path in "${KEYCHAIN_CANDIDATES[@]}"; do
-      if MASTER_KEY_FROM_KEYCHAIN="$(security find-generic-password -s "Lemon Secrets" -a default -w "$keychain_path" 2>/dev/null)"; then
-        if [[ -n "$MASTER_KEY_FROM_KEYCHAIN" ]]; then
-          export LEMON_SECRETS_MASTER_KEY="$MASTER_KEY_FROM_KEYCHAIN"
-          info "Loaded secrets master key from keychain."
-          break
-        fi
-      fi
-    done
+ensure_managed_token() {
+  local status=0 file="$STATE_DIR/control-plane-$PORT.token" temporary token old_umask
+  load_managed_token || status=$?
+  [ "$status" = 1 ] || return "$status"
+  old_umask="$(umask)"
+  umask 077
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$LEMON_HOME_DIR" "$STATE_DIR"
+  temporary="$(mktemp "$STATE_DIR/.control-plane-$PORT.XXXXXX")"
+  token="$(openssl rand -hex 32 2>/dev/null || od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  umask "$old_umask"
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    rm -f "$temporary"
+    error "could not generate a secure managed control-plane credential"
+    return 2
   fi
-fi
-
-cd "$LEMON_ROOT"
-mix deps.get
-mix compile
-
-info "Starting unified Lemon runtime"
-info "Control plane: ws://localhost:$LEMON_CONTROL_PLANE_PORT/ws"
-info "Web UI:        http://localhost:$LEMON_WEB_PORT/"
-info "Sim UI:        http://localhost:$LEMON_SIM_UI_PORT/"
-info "Dotenv dir:    $LEMON_DOTENV_DIR"
-
-# Boot logic (already-running check, port wiring, and app start) is now
-# centralised in LemonCore.Runtime.Boot. This eval is a thin wrapper.
-EVAL='LemonCore.Runtime.Boot.start!(:runtime_full)'
-
-if [[ "$DAEMON" == "1" ]]; then
-  if [[ "$DISTRIBUTED" == "1" ]]; then
-    nohup elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e "$EVAL" > /tmp/lemon-runtime.log 2>&1 &
-  else
-    nohup mix run --no-start --no-halt -e "$EVAL" > /tmp/lemon-runtime.log 2>&1 &
+  printf '%s\n' "$token" > "$temporary"
+  chmod 600 "$temporary"
+  # Linking a fully written file makes concurrent first launches converge on
+  # one credential without ever exposing a partial file.
+  if ! ln "$temporary" "$file" 2>/dev/null && [ ! -f "$file" ]; then
+    rm -f "$temporary"
+    error "could not install managed control-plane credential: $file"
+    return 2
   fi
+  rm -f "$temporary"
+  load_managed_token
+}
 
-  PID=$!
-  sleep 2
-  if kill -0 "$PID" 2>/dev/null; then
-    if [[ -n "${LEMON_RUNTIME_PID_FILE:-}" ]]; then
-      umask 077
-      printf '%s\n' "$PID" > "$LEMON_RUNTIME_PID_FILE"
-      chmod 600 "$LEMON_RUNTIME_PID_FILE"
-    fi
+# ── A 200 from /healthz is not proof that Lemon answered it; require the
+# documented bodies before reusing whatever holds the port. ──
+healthz() { curl -fsS --connect-timeout 1 --max-time 5 "http://127.0.0.1:$1/healthz" 2>/dev/null || true; }
+control_plane_healthy() {
+  local ok='"ok"[[:space:]]*:[[:space:]]*true'
+  [[ "$(healthz "$PORT")" =~ $ok ]]
+}
+web_healthy() { [ "$(healthz "$WEB_PORT" | tr -d '[:space:]')" = "ok" ]; }
 
-    info "Runtime started in background (pid: $PID)"
-    info "Logs: /tmp/lemon-runtime.log"
+wait_until() {
+  local attempt
+  for ((attempt = 0; attempt < $2; attempt++)); do
+    "$1" && return 0
+    sleep 1
+  done
+  "$1"
+}
+
+# Compile quietly first so completion and --json output stay machine-clean,
+# then pass argv as data through the same fixed expression releases use.
+run_cli() {
+  cd "$LEMON_ROOT"
+  mix deps.check >/dev/null 2>&1 || mix deps.get >/dev/null
+  mix compile >/dev/null
+  exec mix run --no-start --no-compile --no-deps-check -e 'LemonCli.CLI.main(System.argv())' -- "$@"
+}
+
+parse_runtime_options() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --debug) DEBUG=1 ;;
+      --no-distribution) DISTRIBUTED=0 ;;
+      --port|--web-port|--sim-port|--name|--sname|--cookie)
+        [ -n "${2:-}" ] || { error "missing value for $1"; exit 2; }
+        case "$1" in
+          --port) PORT="$2" ;;
+          --web-port) WEB_PORT="$2" ;;
+          --sim-port) SIM_PORT="$2" ;;
+          --name) NODE_MODE="name" NODE_NAME="$2" ;;
+          --sname) NODE_MODE="sname" NODE_NAME="$2" ;;
+          --cookie) NODE_COOKIE="$2" ;;
+        esac
+        shift
+        ;;
+      *) error "unknown runtime option: $1 (see ./bin/lemon start --help)"; exit 2 ;;
+    esac
+    shift
+  done
+}
+
+# Long-lived BEAM processes may be denied keychain reads, and stale session env
+# must not beat the canonical key file, so resolve the master key before boot.
+load_secrets_master_key() {
+  local key_file="$LEMON_HOME_DIR/secrets_master_key" key=""
+  if [ "$(uname -s)" != "Darwin" ] && [ -r "$key_file" ]; then
+    key="$(cat "$key_file")"
+    [ -z "$key" ] || { export LEMON_SECRETS_MASTER_KEY="$key"; info "Loaded secrets master key from $key_file."; }
+  fi
+  if [ -z "${LEMON_SECRETS_MASTER_KEY:-}" ] && command -v security >/dev/null 2>&1; then
+    key="$(security find-generic-password -s "Lemon Secrets" -a default -w 2>/dev/null ||
+      security find-generic-password -s "Lemon Secrets" -a default -w \
+        "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null || true)"
+    [ -z "$key" ] || { export LEMON_SECRETS_MASTER_KEY="$key"; info "Loaded secrets master key from keychain."; }
+  fi
+}
+
+# Starts the unified runtime in the foreground (exec) or background.
+start_runtime() {
+  local mode="$1" pid attempt pidfile="${LEMON_RUNTIME_PID_FILE:-$PIDFILE}"
+  local cmd=(mix run --no-start --no-halt -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
+  local port
+  for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
+    [[ "$port" =~ ^[0-9]+$ ]] || { error "invalid port value: $port"; exit 2; }
+  done
+  # Reuse guard before compiling or registering the Erlang node name: a
+  # duplicate lemon@host registration would fail before the in-VM Boot guard.
+  if control_plane_healthy; then
+    info "a healthy Lemon runtime is already running on port $PORT; reusing it"
+    if [ "$mode" = "daemon" ]; then return 0; fi
     exit 0
   fi
+  if [ "$DISTRIBUTED" = "1" ]; then
+    [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty --cookie"; exit 2; }
+    if [ -z "$NODE_MODE" ]; then
+      if [[ "$NODE_NAME" == *@* ]]; then NODE_MODE="name"; else NODE_MODE="sname"; fi
+    fi
+    cmd=(elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S "${cmd[@]}")
+  fi
+  ensure_managed_token || exit 1
+  export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}" LEMON_CONTROL_PLANE_PORT="$PORT"
+  export LEMON_WEB_PORT="$WEB_PORT" LEMON_SIM_UI_PORT="$SIM_PORT"
+  [ -z "$DEBUG" ] || export LEMON_DEBUG=1 LEMON_LOG_LEVEL=debug
+  load_secrets_master_key
 
-  error "Runtime failed to start. See /tmp/lemon-runtime.log"
-  exit 1
-fi
+  cd "$LEMON_ROOT"
+  mix deps.get
+  mix compile
+  info "Control plane: ws://localhost:$PORT/ws"
+  info "Web UI:        http://localhost:$WEB_PORT/"
+  info "Sim UI:        http://localhost:$SIM_PORT/"
+  info "Dotenv dir:    $LEMON_DOTENV_DIR"
+  [ "$DISTRIBUTED" = "1" ] || warn "Distribution disabled (--no-distribution); remote attach is unavailable."
 
-if [[ "$DISTRIBUTED" == "1" ]]; then
-  if [[ "$NODE_MODE" == "name" ]]; then
-    REMSH_TARGET="$NODE_NAME"
-  else
-    SHORT_HOST="$(hostname -s 2>/dev/null || hostname)"
-    REMSH_TARGET="${NODE_NAME}@${SHORT_HOST}"
+  if [ "$mode" = "foreground" ]; then
+    [ "$DISTRIBUTED" = "0" ] || info "Distributed node: --$NODE_MODE $NODE_NAME (attach with iex --remsh and the same cookie)"
+    exec "${cmd[@]}"
   fi
 
-  info "Distributed node: --$NODE_MODE $NODE_NAME"
-  info "Attach example: iex --sname <attach_name> --cookie <same-cookie> --remsh $REMSH_TARGET"
-  exec elixir "--$NODE_MODE" "$NODE_NAME" --cookie "$NODE_COOKIE" -S mix run --no-start --no-halt -e "$EVAL"
-else
-  warn "Distribution disabled (--no-distribution); remote attach is unavailable."
-  exec mix run --no-start --no-halt -e "$EVAL"
+  nohup "${cmd[@]}" > "$LOG_FILE" 2>&1 &
+  pid=$!
+  (umask 077 && mkdir -p "$(dirname "$pidfile")" && printf '%s\n' "$pid" > "$pidfile")
+  for ((attempt = 0; attempt < 60; attempt++)); do
+    if control_plane_healthy; then
+      info "Runtime started in background (pid: $pid); logs: $LOG_FILE"
+      return 0
+    fi
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  error "Runtime did not become healthy on port $PORT. See $LOG_FILE"
+  exit 1
+}
+
+stop_runtime() {
+  local pid attempt
+  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+  if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$PIDFILE"
+    error "not running (no live pid in $PIDFILE)"
+    return 1
+  fi
+  kill -TERM "$pid"
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+  done
+  ! kill -0 "$pid" 2>/dev/null || kill -KILL "$pid"
+  rm -f "$PIDFILE"
+  info "stopped"
+}
+
+open_browser() {
+  local url="$1" opener
+  if [ -n "${LEMON_WEB_ACCESS_TOKEN:-}" ]; then
+    if [[ "$LEMON_WEB_ACCESS_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+      url="${url}?token=$LEMON_WEB_ACCESS_TOKEN"
+    else
+      warn "The access token contains URL-reserved characters; open the URL and provide a URL-encoded ?token= value."
+    fi
+  fi
+  for opener in open xdg-open wslview; do
+    if command -v "$opener" >/dev/null 2>&1; then
+      "$opener" "$url" >/dev/null 2>&1 &
+      return 0
+    fi
+  done
+  warn "No browser opener found; open the URL above manually."
+}
+
+COMMAND="${1:-}"
+if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
+  COMMAND="tui"
+  set -- tui
 fi
+
+case "$COMMAND" in
+  tui|web|start|run|daemon|stop|restart|status)
+    case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
+    ;;
+esac
+
+case "$COMMAND" in
+  tui)
+    shift
+    command -v bun >/dev/null 2>&1 || { error "Bun is required to run the TUI; install Bun and put 'bun' on PATH."; exit 1; }
+    if [ ! -d "$TUI_DIR/node_modules" ]; then
+      info "Installing TUI dependencies..."
+      (cd "$TUI_DIR" && env -u LEMON_CONTROL_PLANE_OPERATOR_TOKEN -u LEMON_WS_TOKEN bun install --frozen-lockfile)
+    fi
+    status=0
+    [ -n "${LEMON_WS_TOKEN:-}" ] || load_managed_token || status=$?
+    [ "$status" -le 1 ] || exit 1
+    if ! control_plane_healthy; then
+      # First launch only: finish setup in one VM before starting a daemon.
+      if [ -t 0 ] && [ -t 1 ]; then
+        (run_cli setup --if-required) || exit 1
+      fi
+      start_runtime daemon
+    fi
+    if [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}${LEMON_WS_TOKEN:-}" ]; then
+      case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
+        1|true|TRUE|yes|YES) ;;
+        *)
+          error "no credential is available for the existing runtime"
+          error "start managed runtimes with './bin/lemon daemon', or set LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
+          exit 1
+          ;;
+      esac
+    fi
+    exec bun "$TUI_DIR/src/main.ts" --ws-url "ws://127.0.0.1:$PORT/ws" "$@"
+    ;;
+
+  web)
+    case "$#:${2:-}" in
+      1:|2:--no-open) ;;
+      *) error "usage: ./bin/lemon web [--no-open]"; exit 2 ;;
+    esac
+    if ! web_healthy; then
+      info "Web UI is not running; starting Lemon"
+      start_runtime daemon
+      wait_until web_healthy 30 || { error "Web UI did not become healthy on port $WEB_PORT within 30s"; exit 1; }
+    fi
+    info "Lemon Web: http://127.0.0.1:$WEB_PORT/"
+    [ "${2:-}" = "--no-open" ] || open_browser "http://127.0.0.1:$WEB_PORT/"
+    ;;
+
+  start|run)
+    shift
+    parse_runtime_options "$@"
+    start_runtime foreground
+    ;;
+
+  daemon)
+    shift
+    parse_runtime_options "$@"
+    start_runtime daemon
+    ;;
+
+  stop) stop_runtime ;;
+
+  restart)
+    shift
+    parse_runtime_options "$@"
+    stop_runtime || true
+    start_runtime daemon
+    ;;
+
+  status)
+    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
+    [ -f "$PIDFILE" ] || { echo "lemon: not running (no pidfile)"; exit 1; }
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+      echo "lemon: not running (stale pidfile: ${pid:-empty})"
+      exit 1
+    fi
+    if control_plane_healthy; then
+      echo "lemon: running (pid $pid), control-plane healthy on port $PORT"
+    else
+      echo "lemon: running (pid $pid), control-plane not reachable on port $PORT"
+    fi
+    ;;
+
+  *)
+    ensure_managed_token || exit 1
+    run_cli "$@"
+    ;;
+esac

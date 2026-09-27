@@ -6,12 +6,16 @@ preview-first: inspect the report, resolve conflicts, then apply.
 
 ## Command
 
-From the Lemon repo:
+The command works in packaged installs and source checkouts. From a source
+checkout, prefix the examples with `./bin/`:
 
 ```bash
-mix lemon.hermes.audit
-mix lemon.hermes.migrate --dry-run
-mix lemon.hermes.migrate --yes
+lemon migrate hermes audit
+lemon migrate hermes --dry-run
+lemon migrate hermes --yes
+./bin/lemon migrate hermes audit
+./bin/lemon migrate hermes --dry-run
+./bin/lemon migrate hermes --yes
 ```
 
 Common options:
@@ -28,12 +32,12 @@ Common options:
 | `--skill-conflict rename` | Import conflicting skills as `<name>-hermes-import`. |
 | `--no-backup` | Skip the pre-migration zip backup. |
 
-Use `mix lemon.hermes.audit --json` when you need a machine-readable
+Use `lemon migrate hermes audit --json` when you need a machine-readable
 compatibility report for automation or support review. The audit is read-only
 and reports each known Hermes surface as `compatible`, `gated`, `partial`,
 `unsupported`, `missing`, or `error`.
 
-The task always builds a preview before applying. Without `--yes`, it prompts
+The command always builds a preview before applying. Without `--yes`, it prompts
 before writing. If conflicts are present, it refuses to apply unless
 `--overwrite` is set.
 
@@ -66,7 +70,7 @@ Each apply writes a report directory:
   archive/
 ```
 
-Before applying, the Mix task also creates a zip backup at:
+Before applying, the command also creates a zip backup at:
 
 ```text
 <target>/backups/pre-hermes-migration-<timestamp>.zip

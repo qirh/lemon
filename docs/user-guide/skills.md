@@ -229,11 +229,9 @@ header, at least one skill, and exactly one cron automation:
 
 ### Review and activate
 
-Start the unified runtime, then use the same catalog-scoped CLI in a source
-checkout or packaged release. The packaged launcher starts its daemon when
-needed; source users run `./bin/lemon --daemon` first. With no arguments the
-family lists the bounded catalog, and a bundle ID plus `--profile` is preview
-shorthand:
+Use the same catalog-scoped CLI in a source checkout or packaged release. Both
+launchers start the daemon when needed. With no arguments the family lists the
+bounded catalog, and a bundle ID plus `--profile` is preview shorthand:
 
 ```bash
 lemon blueprints
