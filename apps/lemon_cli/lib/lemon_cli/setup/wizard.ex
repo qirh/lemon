@@ -15,7 +15,7 @@ defmodule LemonCli.Setup.Wizard do
 
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Scaffold, Verification}
-  alias LemonCore.Config.Modular
+  alias LemonCore.Config.{Automation, Modular, TomlPatch}
   alias LemonCore.Runtime.{Env, Profile}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
@@ -49,7 +49,8 @@ defmodule LemonCli.Setup.Wizard do
           non_interactive: :boolean,
           config_path: :string,
           provider: :string,
-          skip_verify: :boolean
+          skip_verify: :boolean,
+          daily_brief: :string
         ],
         aliases: [n: :non_interactive]
       )
@@ -105,8 +106,10 @@ defmodule LemonCli.Setup.Wizard do
      An explicit `:provider` forces reconfiguration.
   5. Verify the resulting provider/model/credential (offline checks always;
      live check unless `:skip_verify`).
-  6. Offer to configure the runtime profile (optional).
-  7. Print a summary that only claims completion when nothing is pending.
+  6. Offer an opt-in daily brief (default off; `--daily-brief HH:MM` in
+     non-interactive mode).
+  7. Offer to configure the runtime profile (optional).
+  8. Print a summary that only claims completion when nothing is pending.
 
   ## Options
 
@@ -115,6 +118,7 @@ defmodule LemonCli.Setup.Wizard do
     * `:provider` - force provider onboarding even when one is usable
     * `:skip_verify` - skip the post-onboarding live provider check
     * `:verifier` - injectable live-check function (testing; no network)
+    * `:daily_brief` - `HH:MM` server-local time for the opt-in daily brief
   """
   @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_full(_args, io, opts \\ []) do
@@ -131,6 +135,7 @@ defmodule LemonCli.Setup.Wizard do
       end
 
     if result == :ok do
+      step_offer_daily_brief(config_path, io, non_interactive?, opts)
       step_offer_runtime(io, non_interactive?)
     end
 
@@ -350,6 +355,112 @@ defmodule LemonCli.Setup.Wizard do
     opts
     |> Keyword.take([:verifier, :skip_verify])
     |> Keyword.put(:live_verify, true)
+  end
+
+  # The daily brief is one heartbeat cron job that `LemonAutomation.Heartbeat`
+  # reconciles from `[automation] daily_brief` when the runtime boots, so setup
+  # only has to record the choice - the runtime does not need to be running.
+  defp step_offer_daily_brief(config_path, io, non_interactive?, opts) do
+    path = Path.expand(config_path)
+    content = read_config_content(path)
+
+    case existing_daily_brief(content) do
+      time when is_binary(time) ->
+        io.info.("")
+        io.info.("Daily brief: scheduled at #{time} (edit [automation] daily_brief to change).")
+
+      nil ->
+        case requested_daily_brief(io, non_interactive?, Keyword.get(opts, :daily_brief)) do
+          {:ok, time} -> write_daily_brief(path, content, time, io)
+          :skip -> :ok
+        end
+    end
+  end
+
+  defp requested_daily_brief(io, _non_interactive?, flag) when is_binary(flag) do
+    case normalize_brief_time(flag) do
+      {:ok, time} ->
+        {:ok, time}
+
+      :error ->
+        io.error.("Ignoring --daily-brief #{inspect(flag)}: expected HH:MM (24-hour).")
+        :skip
+    end
+  end
+
+  defp requested_daily_brief(_io, true, nil), do: :skip
+
+  defp requested_daily_brief(io, false, nil) do
+    io.info.("")
+
+    if prompt_yes_no?("Get a short daily brief on your phone each morning?", false, io) do
+      prompt_brief_time(io)
+    else
+      io.info.("Skipped. Add `daily_brief = \"08:00\"` under [automation] to enable it later.")
+      :skip
+    end
+  end
+
+  defp prompt_brief_time(io) do
+    case normalize_input(io.prompt.("Daily brief time (HH:MM, this machine's time) [08:00]: ")) do
+      "" ->
+        {:ok, "08:00"}
+
+      raw ->
+        case normalize_brief_time(raw) do
+          {:ok, time} ->
+            {:ok, time}
+
+          :error ->
+            io.error.("Expected a 24-hour time such as 07:30.")
+            prompt_brief_time(io)
+        end
+    end
+  end
+
+  defp normalize_brief_time(raw) do
+    case Automation.parse_time(raw) do
+      {:ok, {hour, minute}} ->
+        {:ok, "#{pad2(hour)}:#{pad2(minute)}"}
+
+      :error ->
+        :error
+    end
+  end
+
+  defp pad2(value), do: value |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  defp write_daily_brief(path, content, time, io) do
+    patched = TomlPatch.upsert_string(content, "automation", "daily_brief", time)
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(path, patched) do
+      io.info.("Daily brief scheduled for #{time} every day (written to #{path}).")
+      io.info.("It starts when Lemon (re)starts and is sent to your paired Telegram chat;")
+      io.info.("run `lemon gateway setup telegram` if you have not paired one yet.")
+      :ok
+    else
+      {:error, reason} ->
+        io.error.("Could not write the daily brief to #{path}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp read_config_content(path) do
+    case File.read(path) do
+      {:ok, content} -> content
+      {:error, _reason} -> ""
+    end
+  end
+
+  defp existing_daily_brief(content) do
+    with {:ok, decoded} <- Toml.decode(content),
+         %{"automation" => %{"daily_brief" => time}} when is_binary(time) <- decoded,
+         {:ok, _} <- Automation.parse_time(time) do
+      String.trim(time)
+    else
+      _ -> nil
+    end
   end
 
   defp step_offer_runtime(io, non_interactive?) do

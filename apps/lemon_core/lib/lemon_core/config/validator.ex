@@ -65,6 +65,7 @@ defmodule LemonCore.Config.Validator do
     errors = validate_tools(config.tools, errors)
     errors = validate_tui(config.tui, errors)
     errors = validate_features(config.features, errors)
+    errors = validate_automation(config.automation, errors)
 
     case errors do
       [] -> :ok
@@ -574,6 +575,15 @@ defmodule LemonCore.Config.Validator do
   def validate_features(_, errors) do
     ["features: must be a map" | errors]
   end
+
+  @doc """
+  Validates the `[automation]` section.
+  """
+  @spec validate_automation(LemonCore.Config.Automation.t() | nil, [String.t()]) :: [String.t()]
+  def validate_automation(nil, errors), do: errors
+
+  def validate_automation(%LemonCore.Config.Automation{} = automation, errors),
+    do: LemonCore.Config.Automation.validate(automation, errors)
 
   @doc """
   Validates TUI configuration.

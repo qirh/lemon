@@ -5,6 +5,10 @@ defmodule LemonGateway.Tools.Cron do
   Supports actions to list, add, update, pause, resume, abort, remove, and trigger cron
   jobs, as well as viewing run history. Delegates to
   `LemonAutomation.CronManager` for persistence and scheduling.
+
+  Results are delivered to the originating Telegram/Discord chat or, for jobs
+  created from any other session (TUI, web, CLI), to the paired owner chat.
+  `deliverTo` overrides the target; `deliverTo: "none"` opts out.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -23,7 +27,7 @@ defmodule LemonGateway.Tools.Cron do
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs (not OS crontab): status, list, add, update, pause, resume, remove, run, and runs. Add/update accepts 5-field cron plus supported shorthands like 'every 30m', 'daily at 9am', and 'weekdays at 09:30'.",
+        "Manage Lemon internal cron jobs (not OS crontab): status, list, add, update, pause, resume, remove, run, and runs. Add/update accepts 5-field cron plus supported shorthands like 'every 30m', 'daily at 9am', and 'weekdays at 09:30'. Results reach the user's paired chat automatically; use once=true for one-off reminders and timezone='local' for wall-clock times.",
       parameters: tool_schema(),
       execute: &execute(&1, &2, &3, &4, session_key, agent_id)
     }
@@ -100,7 +104,18 @@ defmodule LemonGateway.Tools.Cron do
         },
         "timezone" => %{
           "type" => "string",
-          "description" => "Timezone for schedule (default: UTC)."
+          "description" =>
+            "'UTC' (default) or 'local' (the server's wall-clock time; use it for times the user states)."
+        },
+        "deliverTo" => %{
+          "type" => "string",
+          "description" =>
+            "Where results are sent (add/update). Omit for the default: the originating chat, else the user's paired chat. 'none' disables delivery; 'telegram:<chat_id>[:<topic_id>]' or 'discord:<channel_id>[:<thread_id>]' picks a chat; 'auto' restores the default."
+        },
+        "once" => %{
+          "type" => "boolean",
+          "description" =>
+            "One-shot job (add/update): runs at the next scheduled time, then is removed. Pin the date in the schedule, e.g. '30 14 28 9 *'."
         },
         "jitterSec" => %{
           "type" => "integer",
@@ -214,6 +229,8 @@ defmodule LemonGateway.Tools.Cron do
               normalize_string(
                 fetch_param(source, "memoryFile") || fetch_param(source, "memory_file")
               ),
+            deliver_to: fetch_param(source, "deliverTo") || fetch_param(source, "deliver_to"),
+            once: parse_bool(fetch_param(source, "once"), false),
             enabled: parse_bool(fetch_param(source, "enabled"), true),
             timezone: normalize_string(fetch_param(source, "timezone")) || "UTC",
             jitter_sec:
@@ -250,6 +267,9 @@ defmodule LemonGateway.Tools.Cron do
           {:ok, {:error, {:invalid_schedule, reason}}} ->
             {:error, "Invalid schedule: #{reason}"}
 
+          {:ok, {:error, {:invalid_target, reason}}} ->
+            {:error, "Invalid job: #{reason}"}
+
           {:ok, {:error, reason}} ->
             {:error, "Failed to add cron job: #{inspect(reason)}"}
 
@@ -280,6 +300,13 @@ defmodule LemonGateway.Tools.Cron do
         )
       )
       |> maybe_put(:timezone, normalize_string(fetch_param(patch_source, "timezone")))
+      |> maybe_put(
+        :deliver_to,
+        normalize_string(
+          fetch_param(patch_source, "deliverTo") || fetch_param(patch_source, "deliver_to")
+        )
+      )
+      |> maybe_put(:once, parse_bool_or_nil(fetch_param(patch_source, "once")))
       |> maybe_put(:enabled, parse_bool_or_nil(fetch_param(patch_source, "enabled")))
       |> maybe_put(
         :jitter_sec,
@@ -334,6 +361,9 @@ defmodule LemonGateway.Tools.Cron do
 
           {:ok, {:error, :not_found}} ->
             {:error, "Cron job not found: #{job_id}"}
+
+          {:ok, {:error, {:invalid_target, reason}}} ->
+            {:error, "Invalid job: #{reason}"}
 
           {:ok, {:error, reason}} ->
             {:error, "Failed to update cron job: #{inspect(reason)}"}
@@ -543,20 +573,26 @@ defmodule LemonGateway.Tools.Cron do
   end
 
   defp resolve_session_key(source, session_key, agent_id) do
-    # Prefer the opts session_key (from the current running session) over the
-    # AI-provided one. The running session key always carries the correct
-    # channel/thread routing info, while an AI-supplied sessionKey may omit
-    # the thread_id component, causing cron runs to route output to the wrong
-    # Telegram chat/topic.
+    # Prefer the running session's key over the AI-provided one: it always
+    # carries the correct channel/thread routing, while an AI-supplied
+    # sessionKey may omit the thread_id and route output to the wrong
+    # Telegram chat/topic. Clients whose session ids are not Lemon session keys
+    # (e.g. the TUI's `tui-<timestamp>`) fall back to the agent's main session;
+    # delivery then targets the paired owner chat.
     explicit =
       normalize_string(fetch_param(source, "sessionKey") || fetch_param(source, "session_key"))
 
     cond do
-      is_binary(session_key) -> session_key
+      valid_session_key?(session_key) -> session_key
       is_binary(explicit) -> explicit
       true -> LemonCore.SessionKey.main(agent_id)
     end
   end
+
+  defp valid_session_key?(session_key) when is_binary(session_key),
+    do: LemonCore.SessionKey.valid?(session_key)
+
+  defp valid_session_key?(_session_key), do: false
 
   defp default_name(prompt) do
     trimmed = normalize_string(prompt) || "job"
@@ -590,6 +626,8 @@ defmodule LemonGateway.Tools.Cron do
       "sessionKey" => Map.get(job, :session_key),
       "prompt" => Map.get(job, :prompt),
       "memoryFile" => resolved_memory_file(job),
+      "deliverTo" => Map.get(job, :deliver_to),
+      "once" => Map.get(job, :once) == true,
       "timezone" => Map.get(job, :timezone) || "UTC",
       "jitterSec" => Map.get(job, :jitter_sec) || 0,
       "timeoutMs" => Map.get(job, :timeout_ms),

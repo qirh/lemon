@@ -17,4 +17,20 @@ defmodule LemonChannels.Adapters.Telegram.TransportCommandsTest do
     assert Commands.canonicalize_portable_alias("please /reset later") == "please /reset later"
     assert Commands.canonicalize_portable_alias(nil) == nil
   end
+
+  test "reminder commands do not shadow each other" do
+    assert Commands.remind_command?("/remind in 20m check oven", "lemon_bot")
+    assert Commands.remind_command?("/remind@lemon_bot 9am stand-up", "lemon_bot")
+    refute Commands.remind_command?("/reminders", "lemon_bot")
+    refute Commands.remind_command?("/remind@other_bot 9am x", "lemon_bot")
+
+    assert Commands.reminders_command?("/reminders", "lemon_bot")
+    refute Commands.reminders_command?("/remind 9am x", "lemon_bot")
+
+    assert Commands.unremind_command?("/unremind job_1", "lemon_bot")
+    refute Commands.remind_command?("/unremind job_1", "lemon_bot")
+
+    assert Commands.telegram_command_args("/remind@lemon_bot in 20m check oven", "remind") ==
+             "in 20m check oven"
+  end
 end

@@ -99,7 +99,7 @@ and control plane authoritative:
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compress` | Compact the current session through `sessions.compact`. |
-| `/heartbeat every 10m <prompt>`, `/hb ...` | Persist one recurring prompt in the current conversation; `/heartbeat status`, `pause`, `resume`, and `clear` manage it through `sessions.heartbeat`. Due ticks wait for idle and queued user input wins. |
+| `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
 | `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |
 | `/bg list [status]` | List durable background runs, optionally filtered by lifecycle status. |
 | `/bg status <id>` | Inspect one background run without truncating its id. |

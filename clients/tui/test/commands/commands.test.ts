@@ -105,58 +105,194 @@ describe("routing commands", () => {
 	});
 });
 
-describe("session heartbeat", () => {
-	const activeHeartbeat = {
-		sessionKey: "tui-session",
-		action: "status",
-		heartbeat: {
-			configured: true,
-			status: "active",
-			prompt: "check CI and open reviews",
-			intervalSeconds: 600,
-			fireCount: 2,
-			nextInSeconds: 599,
-		},
+describe("heartbeat (cron-backed)", () => {
+	const CRON_METHODS = [
+		"cron.list",
+		"cron.add",
+		"cron.update",
+		"cron.pause",
+		"cron.resume",
+		"cron.remove",
+	];
+	const heartbeatJob = {
+		id: "hb-1",
+		name: "heartbeat-default",
+		schedule: "*/30 * * * *",
+		timezone: "local",
+		enabled: true,
+		agentId: "default",
+		sessionKey: "agent:default:main",
+		prompt: "check CI and open reviews",
+		nextRunAtMs: Date.UTC(2026, 8, 27, 12, 30),
+		meta: { heartbeat: true, agent_id: "default" },
 	};
+	// A same-agent cron job that is not the heartbeat must never be touched.
+	const otherJob = { id: "job-9", agentId: "default", enabled: true, meta: { source: "remind" } };
 
-	test("/heartbeat every sets a recurring same-session prompt", async () => {
-		harness.server.respondWith("sessions.heartbeat", activeHeartbeat);
+	const cronRequests = () =>
+		CRON_METHODS.flatMap((method) => harness.server.requestsFor(method));
 
-		await harness.run("/heartbeat every 10m check CI and open reviews");
+	test("/heartbeat every creates the agent's heartbeat job when none exists", async () => {
+		harness.server.respondWith("cron.list", { jobs: [otherJob] });
+		harness.server.respondWith("cron.add", { id: "hb-new", nextRunAtMs: heartbeatJob.nextRunAtMs });
 
-		expect(harness.server.requestsFor("sessions.heartbeat")[0].params).toEqual({
-			sessionKey: "tui-session",
-			action: "set",
-			prompt: "check CI and open reviews",
-			intervalSeconds: 600,
+		await harness.run("/heartbeat every 30m check CI and open reviews");
+
+		expect(harness.server.requestsFor("cron.list")[0].params).toEqual({
+			agentId: "default",
+			includeTargetText: false,
 		});
-		expect(harness.host.text).toContain("heartbeat set");
-		expect(harness.host.text).toContain("every 10m");
-		expect(harness.host.text).toContain("fired 2×");
+		expect(harness.server.requestsFor("cron.add")[0].params).toEqual({
+			name: "heartbeat-default",
+			schedule: "every 30m",
+			agentId: "default",
+			sessionKey: "agent:default:main",
+			prompt: "check CI and open reviews",
+			timezone: "local",
+			meta: { heartbeat: true, agent_id: "default" },
+		});
+		expect(harness.server.requestsFor("cron.update")).toHaveLength(0);
+		expect(harness.host.text).toContain("heartbeat set · every 30m");
+		expect(harness.host.text).toContain("next run 2026-09-27 12:30:00");
+		expect(harness.host.text).toContain("paired Telegram chat");
+		expect(harness.host.text).toContain("HEARTBEAT_OK is suppressed");
 	});
 
-	test("/hb is the status alias and lifecycle actions preserve the session key", async () => {
-		harness.server.respondWith("sessions.heartbeat", activeHeartbeat);
+	test("/hb every replaces the existing heartbeat job in place and re-enables it", async () => {
+		harness.server.respondWith("cron.list", {
+			jobs: [otherJob, { ...heartbeatJob, enabled: false }],
+		});
+		harness.server.respondWith("cron.update", { id: "hb-1", updated: true });
+
+		await harness.run("/hb every 2h summarize the inbox");
+
+		expect(harness.server.requestsFor("cron.update")[0].params).toEqual({
+			id: "hb-1",
+			schedule: "every 2h",
+			prompt: "summarize the inbox",
+			timezone: "local",
+			enabled: true,
+		});
+		expect(harness.server.requestsFor("cron.add")).toHaveLength(0);
+		expect(harness.host.text).toContain("heartbeat updated · every 2h");
+	});
+
+	test("maps 1d to the daily schedule and 60m to an hourly one", async () => {
+		harness.server.respondWith("cron.list", { jobs: [] });
+		harness.server.respondWith("cron.add", { id: "hb-new" });
+
+		await harness.run("/heartbeat every 1d morning brief");
+		await harness.run("/heartbeat 60m quick check");
+
+		expect(harness.server.requestsFor("cron.add").map((frame) => frame.params)).toMatchObject([
+			{ schedule: "daily" },
+			{ schedule: "every 1h" },
+		]);
+	});
+
+	test("a profile main session targets its own agent", async () => {
+		harness.stop();
+		harness = await createHarness({ sessionKey: "agent:ops:main", cwd: "/workspace/project" });
+		harness.server.respondWith("cron.list", { jobs: [] });
+		harness.server.respondWith("cron.add", { id: "hb-ops" });
+
+		await harness.run("/heartbeat every 15m watch the deploy");
+
+		expect(harness.server.requestsFor("cron.add")[0].params).toMatchObject({
+			name: "heartbeat-ops",
+			agentId: "ops",
+			sessionKey: "agent:ops:main",
+			meta: { heartbeat: true, agent_id: "ops" },
+		});
+	});
+
+	test("rejects intervals that are not cron-exact before any cron call", async () => {
+		for (const line of [
+			"/heartbeat every 45m too odd",
+			"/heartbeat every 90m too odd",
+			"/heartbeat every 5h too odd",
+			"/heartbeat every 2d too long",
+		]) {
+			await harness.run(line);
+			expect(harness.host.last?.level).toBe("error");
+			expect(harness.host.last?.text).toContain("not cron-exact");
+		}
+
+		await harness.run("/heartbeat every 30s too often");
+		expect(harness.host.last?.level).toBe("error");
+		expect(harness.host.last?.text).toContain("minimum is 1m");
+
+		expect(cronRequests()).toHaveLength(0);
+	});
+
+	test("/heartbeat status shows schedule, state, next run and prompt", async () => {
+		harness.server.respondWith("cron.list", { jobs: [otherJob, heartbeatJob] });
+
+		await harness.run("/heartbeat status");
+
+		expect(harness.server.requestsFor("cron.list")[0].params).toEqual({
+			agentId: "default",
+			includeTargetText: true,
+		});
+		expect(harness.host.text).toContain("heartbeat · enabled · */30 * * * * (local)");
+		expect(harness.host.text).toContain("next run: 2026-09-27 12:30:00");
+		expect(harness.host.text).toContain("check CI and open reviews");
+	});
+
+	test("/hb with no heartbeat configured says so", async () => {
+		harness.server.respondWith("cron.list", { jobs: [otherJob] });
 
 		await harness.run("/hb");
+
+		expect(harness.host.text).toContain("no heartbeat is configured for agent default");
+	});
+
+	test("pause, resume and clear act on the heartbeat job only", async () => {
+		harness.server.respondWith("cron.list", { jobs: [otherJob, heartbeatJob] });
+		harness.server.respondWith("cron.pause", { id: "hb-1", paused: true });
+		harness.server.respondWith("cron.resume", { id: "hb-1", resumed: true });
+		harness.server.respondWith("cron.remove", { id: "hb-1", removed: true });
+
 		await harness.run("/heartbeat pause");
 		await harness.run("/heartbeat resume");
 		await harness.run("/heartbeat off");
 
-		expect(harness.server.requestsFor("sessions.heartbeat").map((frame) => frame.params)).toEqual([
-			{ sessionKey: "tui-session", action: "status" },
-			{ sessionKey: "tui-session", action: "pause" },
-			{ sessionKey: "tui-session", action: "resume" },
-			{ sessionKey: "tui-session", action: "clear" },
+		expect(harness.server.requestsFor("cron.pause").map((frame) => frame.params)).toEqual([
+			{ id: "hb-1" },
 		]);
+		expect(harness.server.requestsFor("cron.resume").map((frame) => frame.params)).toEqual([
+			{ id: "hb-1" },
+		]);
+		expect(harness.server.requestsFor("cron.remove").map((frame) => frame.params)).toEqual([
+			{ id: "hb-1" },
+		]);
+		expect(harness.host.text).toContain("heartbeat paused");
+		expect(harness.host.text).toContain("heartbeat resumed");
+		expect(harness.host.text).toContain("heartbeat cleared");
 	});
 
-	test("rejects intervals below the durable runtime minimum locally", async () => {
-		await harness.run("/heartbeat every 59s check too often");
+	test("lifecycle actions without a heartbeat warn and mutate nothing", async () => {
+		harness.server.respondWith("cron.list", { jobs: [otherJob] });
 
-		expect(harness.server.requestsFor("sessions.heartbeat")).toHaveLength(0);
-		expect(harness.host.last?.level).toBe("error");
-		expect(harness.host.text).toContain("minimum is 60s");
+		await harness.run("/heartbeat clear");
+
+		expect(harness.host.last?.level).toBe("warning");
+		expect(harness.server.requestsFor("cron.remove")).toHaveLength(0);
+	});
+
+	test("the config-owned daily brief is never treated as the /heartbeat job", async () => {
+		const dailyBrief = {
+			...heartbeatJob,
+			id: "cron_daily_brief",
+			name: "Daily brief",
+			meta: { heartbeat: true, daily_brief: true, agent_id: "default" },
+		};
+		harness.server.respondWith("cron.list", { jobs: [dailyBrief] });
+
+		await harness.run("/heartbeat clear");
+
+		expect(harness.host.last?.level).toBe("warning");
+		expect(harness.server.requestsFor("cron.remove")).toHaveLength(0);
 	});
 });
 

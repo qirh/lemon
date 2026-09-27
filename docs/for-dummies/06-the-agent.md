@@ -253,7 +253,8 @@ composes it from multiple sources, layered in order:
    - `AGENTS.md` — project-specific agent instructions
    - `TOOLS.md` — tool configuration notes
    - `MEMORY.md` — persistent memory across sessions
-   - `HEARTBEAT.md` — heartbeat task config
+   - `HEARTBEAT.md` — checklist the scheduled heartbeat cron job works
+     through; a reply of exactly `HEARTBEAT_OK` means "nothing to report"
    - `BOOTSTRAP.md` — additional bootstrap content
 5. **Prompt template** (if configured)
 6. **Explicit system_prompt** (if provided by caller)

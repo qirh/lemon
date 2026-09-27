@@ -109,6 +109,8 @@ Subscribers:
 | 12 | webhook transport | `transports/webhook/response.ex:61,100,148` | `:run_completed` |
 | 13 | telegram plugin | `telegram/transport.ex:737` | `:run_completed`, catch-all |
 
+> **Note (2026-09-27):** `LemonAutomation.HeartbeatManager` has since been removed. Heartbeat suppression now runs synchronously in `CronManager` terminalization via `LemonAutomation.Heartbeat`, so rows and findings in this audit that cite `heartbeat_manager.ex` are historical.
+
 ### 2.2 `session:<session_key>` — 4 subscribers
 
 | Event type | Publisher | Payload | Env |

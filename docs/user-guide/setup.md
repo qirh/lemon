@@ -33,8 +33,9 @@ re-checks the state and performs only pending work:
    an existing key;
 3. onboards a provider, auth credential, and default provider/model;
 4. checks the resulting configuration and credential, including a live provider
-   check when supported; and
-5. offers optional runtime-profile configuration.
+   check when supported;
+5. offers an opt-in daily brief (default: off); and
+6. offers optional runtime-profile configuration.
 
 It does not install source dependencies, configure Telegram or Discord, start
 a gateway, or run `lemon doctor` automatically. Rerun it whenever setup is
@@ -117,6 +118,24 @@ lemon setup provider --provider anthropic --token "$ANTHROPIC_API_KEY" \
 
 Append `--skip-verify` to that command to defer only the live check.
 
+### Daily brief
+
+After the provider step, setup asks whether you want a short daily brief on
+your phone each morning (default: no) and, if so, at what time (`HH:MM`,
+24-hour, this machine's local time; default `08:00`). The answer is written as
+`daily_brief` under `[automation]` in your config and takes effect the next time
+Lemon starts. If a brief is already configured, setup only reports its time.
+
+The non-interactive setup skips the question unless you pass the time:
+
+```bash
+lemon setup --non-interactive --daily-brief 07:30
+```
+
+The brief is delivered to your paired chat, so pair Telegram (see below). To
+change or remove it, edit `[automation] daily_brief` and restart Lemon. See
+[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
+
 ## Verify and recover
 
 After setup, inspect the persisted configuration and secret state, then run
@@ -168,6 +187,11 @@ to mentions, replies, and commands unless an admin sends `/trigger all`, and eve
 file edit or shell command in a group needs an approval. Remote chats run in the
 assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
 `gateway.default_cwd` is set.
+
+The first paired Telegram chat is also your owner chat: reminders, heartbeats,
+the daily brief, and other scheduled results created outside a chat are sent
+there. In a paired chat, `/remind <when> <what>` sets a reminder. See
+[Reminders, heartbeats, and the daily brief](reminders-and-heartbeats.md).
 
 See the configured channel state with:
 

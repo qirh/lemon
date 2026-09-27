@@ -111,7 +111,7 @@ The project is an Elixir umbrella with 24 applications:
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
-| `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
+| `lemon_automation` | CronManager, heartbeats, reminders, daily brief, scheduled-result delivery |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
@@ -228,7 +228,7 @@ Four main paths through the system:
 
 2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
 
-3. **Automation**: CronManager tick → Due jobs → Router → HeartbeatManager → EventBus
+3. **Automation**: CronManager tick → Due jobs → Router → terminalization (heartbeat suppression) → EventBus + CronDelivery → originating or paired owner chat
 
 4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
    `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →

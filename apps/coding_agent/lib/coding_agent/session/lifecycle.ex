@@ -10,7 +10,6 @@ defmodule CodingAgent.Session.Lifecycle do
     BackgroundTasks,
     CompactionLifecycle,
     CompactionManager,
-    Heartbeat,
     ModelResolver,
     Notifier,
     OverflowRecovery,
@@ -261,7 +260,6 @@ defmodule CodingAgent.Session.Lifecycle do
       wasm_sidecar_pid: wasm_boot.sidecar_pid,
       wasm_tool_names: wasm_boot.wasm_tool_names,
       wasm_status: wasm_boot.wasm_status,
-      heartbeat: %Heartbeat.State{},
       auto_compaction: %CompactionLifecycle.State{},
       overflow_recovery: %OverflowRecovery.State{}
     }
@@ -333,8 +331,7 @@ defmodule CodingAgent.Session.Lifecycle do
   end
 
   @spec reset(Session.t(), non_neg_integer()) ::
-          {:ok, Session.t()}
-          | {:error, :busy | {:heartbeat_persistence_failed, term()}, Session.t()}
+          {:ok, Session.t()} | {:error, :busy, Session.t()}
   def reset(state, reset_abort_wait_ms) when is_integer(reset_abort_wait_ms) do
     was_streaming = state.is_streaming
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
@@ -362,38 +359,28 @@ defmodule CodingAgent.Session.Lifecycle do
                 state
               end
 
-            case clear_heartbeat_for_rotation(state) do
-              {:ok, state} ->
-                state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
-                :ok = LemonAgent.Agent.reset(state.agent)
+            state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
+            :ok = LemonAgent.Agent.reset(state.agent)
 
-                previous_session_id = state.session_manager.header.id
-                new_session_manager = SessionManager.new(state.cwd)
+            previous_session_id = state.session_manager.header.id
+            new_session_manager = SessionManager.new(state.cwd)
 
-                Persistence.maybe_unregister_session(
-                  previous_session_id,
-                  state.register_session,
-                  state.session_registry
-                )
+            Persistence.maybe_unregister_session(
+              previous_session_id,
+              state.register_session,
+              state.session_registry
+            )
 
-                Persistence.maybe_register_session(
-                  new_session_manager,
-                  state.cwd,
-                  state.register_session,
-                  state.session_registry,
-                  state.session_key
-                )
+            Persistence.maybe_register_session(
+              new_session_manager,
+              state.cwd,
+              state.register_session,
+              state.session_registry,
+              state.session_key
+            )
 
-                {:ok,
-                 State.reset_runtime(
-                   state,
-                   new_session_manager,
-                   System.system_time(:millisecond)
-                 )}
-
-              {:error, reason, state} ->
-                {:error, {:heartbeat_persistence_failed, reason}, state}
-            end
+            {:ok,
+             State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
 
           {:error, :busy} ->
             {:error, :busy, state}
@@ -412,11 +399,6 @@ defmodule CodingAgent.Session.Lifecycle do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
-
-  defp clear_heartbeat_for_rotation(%{heartbeat: %Heartbeat.State{config: nil}} = state),
-    do: {:ok, state}
-
-  defp clear_heartbeat_for_rotation(state), do: Heartbeat.clear(state)
 
   # Persistent Python REPL owner cleanup. The module is injectable via the
   # `:python_repl_mod` Session option; `nil` means the subsystem is not
