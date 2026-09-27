@@ -436,6 +436,13 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -496,6 +503,13 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "adaptive_thinking": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -1623,6 +1637,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1663,6 +1683,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1683,6 +1708,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1703,6 +1734,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1723,6 +1760,9 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1743,6 +1783,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1763,6 +1808,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -1783,6 +1834,10 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -1843,6 +1898,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -1883,6 +1944,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -1903,6 +1970,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -1943,6 +2015,12 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -1963,6 +2041,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -2040,6 +2123,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2060,6 +2148,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -2100,6 +2193,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text"
     ],
@@ -2139,6 +2237,11 @@
     "provider": "vercel_ai_gateway",
     "base_url": "https://ai-gateway.vercel.sh",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"

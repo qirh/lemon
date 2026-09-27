@@ -209,11 +209,6 @@ defmodule LemonAi.ErrorFailoverTest do
   end
 
   describe "transport_retry_statuses/0" do
-    test "matches RetryHelper's historical retry-in-place set" do
-      assert Error.transport_retry_statuses() ==
-               [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
-    end
-
     test "RetryHelper sources its default set from Error" do
       for status <- Error.transport_retry_statuses() do
         assert LemonAi.Providers.RetryHelper.retryable_http_status?(status)
@@ -221,7 +216,11 @@ defmodule LemonAi.ErrorFailoverTest do
 
       refute LemonAi.Providers.RetryHelper.retryable_http_status?(400)
       refute LemonAi.Providers.RetryHelper.retryable_http_status?(401)
-      refute LemonAi.Providers.RetryHelper.retryable_http_status?(529)
+    end
+
+    test "Anthropic overloaded (529) and rate limits (429) retry in place" do
+      assert LemonAi.Providers.RetryHelper.retryable_http_status?(529)
+      assert LemonAi.Providers.RetryHelper.retryable_http_status?(429)
     end
   end
 end

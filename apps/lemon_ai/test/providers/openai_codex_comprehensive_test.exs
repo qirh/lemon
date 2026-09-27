@@ -73,7 +73,8 @@ defmodule LemonAi.Providers.OpenAICodexComprehensiveTest do
       reasoning: Keyword.get(opts, :reasoning, true),
       input: Keyword.get(opts, :input, [:text, :image]),
       cost: %ModelCost{input: 2.0, output: 10.0, cache_read: 0.5, cache_write: 1.0},
-      headers: Keyword.get(opts, :headers, %{})
+      headers: Keyword.get(opts, :headers, %{}),
+      reasoning_efforts: Keyword.get(opts, :reasoning_efforts, [])
     }
   end
 
@@ -966,195 +967,50 @@ defmodule LemonAi.Providers.OpenAICodexComprehensiveTest do
       EventStream.result(stream, 1000)
     end
 
-    test "clamps minimal effort to low for gpt-5.2 models" do
-      test_pid = self()
+    test "clamps effort to the model's declared reasoning_efforts" do
+      cases = [
+        {[:low, :medium, :high, :xhigh], :minimal, "low"},
+        {[:low, :medium, :high], :xhigh, "high"},
+        {[:low, :medium, :high], :high, "high"},
+        {[:medium, :high], :xhigh, "high"},
+        {[:medium, :high], :low, "medium"},
+        {[:medium, :high], :minimal, "medium"}
+      ]
 
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.2")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :minimal}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "low"
-
-      EventStream.result(stream, 1000)
+      for {efforts, requested, expected} <- cases do
+        assert request_effort(make_model(reasoning_efforts: efforts), requested) == expected,
+               "#{inspect(efforts)} #{inspect(requested)}"
+      end
     end
 
-    test "clamps minimal effort to low for gpt-5.2-preview models" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.2-preview")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :minimal}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "low"
-
-      EventStream.result(stream, 1000)
+    test "catalog gpt-5.1 declares no xhigh, so xhigh is sent as high" do
+      model = LemonAi.Models.get_model(:"openai-codex", "gpt-5.1")
+      assert request_effort(model, :xhigh) == "high"
     end
 
-    test "clamps xhigh effort to high for gpt-5.1 models" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.1")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :xhigh}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "high"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "does not clamp high effort for gpt-5.1 models" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.1")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :high}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "high"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "clamps high/xhigh to high for gpt-5.1-codex-mini" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.1-codex-mini")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :xhigh}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "high"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "clamps lower efforts to medium for gpt-5.1-codex-mini" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.1-codex-mini")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :low}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "medium"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "clamps minimal to medium for gpt-5.1-codex-mini" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "gpt-5.1-codex-mini")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :minimal}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "medium"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "handles model IDs with provider prefix" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(id: "openai/gpt-5.2-preview")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :minimal}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      # Should clamp minimal to low for gpt-5.2
-      assert body["reasoning"]["effort"] == "low"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "does not clamp for unrecognized models" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        {:ok, raw, conn} = Plug.Conn.read_body(conn)
-        send(test_pid, {:request_body, Jason.decode!(raw)})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
+    test "passes effort through when the model declares no reasoning_efforts" do
       model = make_model(id: "gpt-6.0-turbo")
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      opts = %StreamOptions{api_key: make_jwt(), reasoning: :xhigh}
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:request_body, body}, 1000
-      assert body["reasoning"]["effort"] == "xhigh"
-
-      EventStream.result(stream, 1000)
+      assert request_effort(model, :xhigh) == "xhigh"
     end
+  end
+
+  defp request_effort(model, reasoning) do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    opts = %StreamOptions{api_key: make_jwt(), reasoning: reasoning}
+
+    {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
+
+    assert_receive {:request_body, body}, 1000
+    EventStream.result(stream, 1000)
+    body["reasoning"]["effort"]
   end
 
   # ============================================================================

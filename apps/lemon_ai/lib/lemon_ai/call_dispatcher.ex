@@ -8,8 +8,9 @@ defmodule LemonAi.CallDispatcher do
   This module acts as a coordination point that:
 
   1. Checks the circuit breaker state
-  2. Acquires a rate limit permit
-  3. Enforces per-provider concurrency limits
+  2. Enforces per-provider concurrency limits, queueing callers FIFO while
+     the provider is at its cap
+  3. Acquires a rate limit permit
   4. Returns appropriate errors when conditions aren't met
 
   ## Usage
@@ -19,14 +20,34 @@ defmodule LemonAi.CallDispatcher do
         {:ok, result} -> handle_result(result)
         {:error, :rate_limited} -> retry_later()
         {:error, :circuit_open} -> use_fallback()
-        {:error, :max_concurrency} -> queue_request()
+        # No slot freed up within the queue timeout
+        {:error, :max_concurrency} -> report_overloaded()
         {:error, reason} -> handle_error(reason)
       end
+
+  ## Concurrency queueing
+
+  When a provider already has `cap` requests in flight, `dispatch/3` does not
+  fail immediately: the caller waits in a per-provider FIFO queue until a slot
+  is released (or the cap is raised). If no slot is granted within the queue
+  timeout, the call returns `{:error, :max_concurrency}` without running the
+  callback. Pass `queue_timeout_ms: 0` to fail fast instead of waiting.
 
   ## Configuration
 
   Concurrency caps are configured per-provider via `set_concurrency_cap/2`.
   Default cap is 10 concurrent requests per provider.
+
+  The default queue timeout (120 seconds) can be overridden:
+
+      config :lemon_ai, LemonAi.CallDispatcher, queue_timeout_ms: 120_000
+
+  ## Telemetry
+
+  - `[:lemon_ai, :dispatcher, :dispatch]` - every dispatch attempt
+  - `[:lemon_ai, :dispatcher, :queued]` - the caller had to wait for a slot
+  - `[:lemon_ai, :dispatcher, :rejected]` - rejected with `reason:`
+    `:circuit_open`, `:rate_limited`, or `:max_concurrency` (queue wait timed out)
   """
 
   use GenServer
@@ -38,13 +59,17 @@ defmodule LemonAi.CallDispatcher do
   # ============================================================================
 
   @type provider :: atom()
+  # {waiter_ref, from, from_pid, timeout_timer_ref}
+  @type waiter :: {reference(), GenServer.from(), pid(), reference()}
   @type state :: %{
           concurrency_caps: %{provider() => pos_integer()},
           active_requests: %{provider() => non_neg_integer()},
-          monitors: %{reference() => provider()}
+          monitors: %{reference() => provider()},
+          waiters: %{provider() => :queue.queue(waiter())}
         }
 
   @default_concurrency_cap 10
+  @default_queue_timeout_ms 120_000
   @default_stream_result_timeout_ms 300_000
   @default_stream_cancel_reason :dispatcher_stream_timeout
 
@@ -64,16 +89,29 @@ defmodule LemonAi.CallDispatcher do
   Dispatch a request through rate limiting and circuit breaking.
 
   Returns the callback result, or an error if the request was blocked by
-  rate limiting, circuit breaker, or concurrency limits.
+  the circuit breaker, rate limiting, or concurrency limits. When the provider
+  is at its concurrency cap the caller waits (FIFO) for a free slot; a wait
+  that exceeds the queue timeout returns `{:error, :max_concurrency}`.
+
+  ## Options
+
+    * `:queue_timeout_ms` - how long to wait for a concurrency slot when the
+      provider is at its cap. `0` fails fast. Defaults to the
+      `:queue_timeout_ms` application config, or 120 seconds.
 
   ## Examples
 
       LemonAi.CallDispatcher.dispatch(:anthropic, fn ->
         LemonAi.Providers.Anthropic.call(params)
       end)
+
+      LemonAi.CallDispatcher.dispatch(:anthropic, callback, queue_timeout_ms: 0)
   """
-  @spec dispatch(provider(), (-> result)) :: result | {:error, atom()} when result: any()
-  def dispatch(provider, callback) when is_atom(provider) and is_function(callback, 0) do
+  @spec dispatch(provider(), (-> result), keyword()) :: result | {:error, atom()}
+        when result: any()
+  def dispatch(provider, callback, opts \\ [])
+      when is_atom(provider) and is_function(callback, 0) and is_list(opts) do
+    queue_timeout_ms = Keyword.get_lazy(opts, :queue_timeout_ms, &default_queue_timeout_ms/0)
     start_time = System.monotonic_time()
 
     :telemetry.execute(
@@ -99,8 +137,9 @@ defmodule LemonAi.CallDispatcher do
 
       {:error, :circuit_open}
     else
-      # Try to acquire concurrency slot and rate limit permit
-      case acquire_slot(provider) do
+      # Acquire a concurrency slot (waiting in the queue if at cap), then a
+      # rate limit permit
+      case acquire_slot(provider, queue_timeout_ms) do
         {:ok, slot_ref} ->
           case LemonAi.RateLimiter.acquire(provider) do
             :ok ->
@@ -174,6 +213,8 @@ defmodule LemonAi.CallDispatcher do
 
   @doc """
   Get dispatcher state for debugging/monitoring.
+
+  Includes per-provider caps, active request counts, and queued waiter counts.
   """
   @spec get_state() :: map()
   def get_state do
@@ -189,7 +230,8 @@ defmodule LemonAi.CallDispatcher do
     state = %{
       concurrency_caps: %{},
       active_requests: %{},
-      monitors: %{}
+      monitors: %{},
+      waiters: %{}
     }
 
     Logger.debug("CallDispatcher started")
@@ -197,19 +239,21 @@ defmodule LemonAi.CallDispatcher do
     {:ok, state}
   end
 
-  def handle_call({:acquire_slot, provider}, {from_pid, _tag}, state) do
+  @impl true
+  def handle_call({:acquire_slot, provider, queue_timeout_ms}, {from_pid, _tag} = from, state) do
     cap = Map.get(state.concurrency_caps, provider, @default_concurrency_cap)
     active = Map.get(state.active_requests, provider, 0)
 
-    if active < cap do
-      monitor_ref = Process.monitor(from_pid)
+    cond do
+      active < cap ->
+        {monitor_ref, new_state} = grant_slot(state, provider, from_pid)
+        {:reply, {:ok, monitor_ref}, new_state}
 
-      new_active = Map.update(state.active_requests, provider, 1, &(&1 + 1))
-      new_monitors = Map.put(state.monitors, monitor_ref, provider)
+      queue_timeout_ms == 0 ->
+        {:reply, {:error, :max_concurrency}, state}
 
-      {:reply, {:ok, monitor_ref}, %{state | active_requests: new_active, monitors: new_monitors}}
-    else
-      {:reply, {:error, :max_concurrency}, state}
+      true ->
+        {:noreply, enqueue_waiter(state, provider, from, from_pid, queue_timeout_ms)}
     end
   end
 
@@ -221,7 +265,7 @@ defmodule LemonAi.CallDispatcher do
   @impl true
   def handle_call({:set_concurrency_cap, provider, cap}, _from, state) do
     new_caps = Map.put(state.concurrency_caps, provider, cap)
-    {:reply, :ok, %{state | concurrency_caps: new_caps}}
+    {:reply, :ok, grant_waiters(%{state | concurrency_caps: new_caps}, provider)}
   end
 
   @impl true
@@ -241,6 +285,7 @@ defmodule LemonAi.CallDispatcher do
     info = %{
       concurrency_caps: state.concurrency_caps,
       active_requests: state.active_requests,
+      queued: Map.new(state.waiters, fn {provider, queue} -> {provider, :queue.len(queue)} end),
       default_cap: @default_concurrency_cap
     }
 
@@ -252,12 +297,35 @@ defmodule LemonAi.CallDispatcher do
     {:noreply, release_slot_by_ref(state, monitor_ref)}
   end
 
+  @impl true
+  def handle_info({:waiter_timeout, provider, waiter_ref}, state) do
+    queue = Map.get(state.waiters, provider, :queue.new())
+
+    # A waiter granted a slot just before its timer fired is no longer queued;
+    # the stale timeout message is ignored.
+    case Enum.split_with(:queue.to_list(queue), &match?({^waiter_ref, _, _, _}, &1)) do
+      {[{_waiter_ref, from, _pid, _timer_ref}], remaining} ->
+        GenServer.reply(from, {:error, :max_concurrency})
+        {:noreply, put_waiters(state, provider, :queue.from_list(remaining))}
+
+      {[], _remaining} ->
+        {:noreply, state}
+    end
+  end
+
   # ============================================================================
   # Private Helpers
   # ============================================================================
 
-  defp acquire_slot(provider) do
-    GenServer.call(__MODULE__, {:acquire_slot, provider})
+  # The client-side call timeout exceeds the queue timeout so the server's
+  # `{:error, :max_concurrency}` reply always arrives first.
+  defp acquire_slot(provider, queue_timeout_ms)
+       when is_integer(queue_timeout_ms) and queue_timeout_ms >= 0 do
+    GenServer.call(
+      __MODULE__,
+      {:acquire_slot, provider, queue_timeout_ms},
+      queue_timeout_ms + 5_000
+    )
   catch
     :exit, {:noproc, _} -> {:ok, nil}
   end
@@ -390,6 +458,14 @@ defmodule LemonAi.CallDispatcher do
     end
   end
 
+  defp default_queue_timeout_ms do
+    case Application.get_env(:lemon_ai, __MODULE__, [])
+         |> Keyword.get(:queue_timeout_ms, @default_queue_timeout_ms) do
+      value when is_integer(value) and value >= 0 -> value
+      _ -> @default_queue_timeout_ms
+    end
+  end
+
   defp record_stream_terminal_result(provider, {:ok, _message}) do
     LemonAi.CircuitBreaker.record_success(provider)
   end
@@ -432,8 +508,69 @@ defmodule LemonAi.CallDispatcher do
             max(0, count - 1)
           end)
 
-        %{state | active_requests: new_active, monitors: new_monitors}
+        grant_waiters(%{state | active_requests: new_active, monitors: new_monitors}, provider)
     end
+  end
+
+  defp grant_slot(state, provider, pid) do
+    monitor_ref = Process.monitor(pid)
+    new_active = Map.update(state.active_requests, provider, 1, &(&1 + 1))
+    new_monitors = Map.put(state.monitors, monitor_ref, provider)
+
+    {monitor_ref, %{state | active_requests: new_active, monitors: new_monitors}}
+  end
+
+  defp enqueue_waiter(state, provider, from, from_pid, queue_timeout_ms) do
+    waiter_ref = make_ref()
+
+    timer_ref =
+      Process.send_after(self(), {:waiter_timeout, provider, waiter_ref}, queue_timeout_ms)
+
+    :telemetry.execute(
+      [:lemon_ai, :dispatcher, :queued],
+      %{system_time: System.system_time()},
+      %{provider: provider}
+    )
+
+    queue = Map.get(state.waiters, provider, :queue.new())
+    waiter = {waiter_ref, from, from_pid, timer_ref}
+
+    put_waiters(state, provider, :queue.in(waiter, queue))
+  end
+
+  # Grants free slots to queued waiters in arrival order. A waiter whose
+  # process already died is still granted: monitoring a dead pid delivers an
+  # immediate `:DOWN`, which releases the slot and grants the next waiter.
+  defp grant_waiters(state, provider) do
+    cap = Map.get(state.concurrency_caps, provider, @default_concurrency_cap)
+    active = Map.get(state.active_requests, provider, 0)
+    queue = Map.get(state.waiters, provider, :queue.new())
+
+    with true <- active < cap,
+         {{:value, {_waiter_ref, from, from_pid, timer_ref}}, remaining} <- :queue.out(queue) do
+      Process.cancel_timer(timer_ref)
+
+      {monitor_ref, new_state} =
+        state
+        |> put_waiters(provider, remaining)
+        |> grant_slot(provider, from_pid)
+
+      GenServer.reply(from, {:ok, monitor_ref})
+      grant_waiters(new_state, provider)
+    else
+      _ -> state
+    end
+  end
+
+  defp put_waiters(state, provider, queue) do
+    new_waiters =
+      if :queue.is_empty(queue) do
+        Map.delete(state.waiters, provider)
+      else
+        Map.put(state.waiters, provider, queue)
+      end
+
+    %{state | waiters: new_waiters}
   end
 
   defp record_result(provider, result) do

@@ -502,7 +502,7 @@ defmodule LemonAi.Error do
     classify(reason) not in [:auth, :rate_limit, :client, :context_length]
   end
 
-  @transport_retry_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+  @transport_retry_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529]
 
   @doc """
   HTTP status codes worth retrying in place against the SAME provider (with

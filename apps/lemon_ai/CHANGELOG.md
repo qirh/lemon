@@ -22,13 +22,30 @@ what in-repo code has been using.
   a host application can add a provider without a fork.
 - Reliability layer around every call: `LemonAi.RateLimiter` (per-provider token and
   request budgets), `LemonAi.CircuitBreaker` (opens on repeated provider failure and
-  half-opens on a timer), and per-provider retry with respect for `Retry-After`.
+  half-opens on a timer), and in-provider retry for 429/529/5xx and transport errors
+  (Anthropic, OpenAI Chat Completions, Responses and Codex): 4 attempts, capped
+  exponential backoff with jitter from ~1s, honoring `retry-after`/`retry-after-ms`
+  and Anthropic rate-limit reset headers. Server waits beyond the in-provider cap are
+  returned to the caller as `AssistantMessage.retry_after_ms`
+  (`config :lemon_ai, :provider_retry`).
+- `LemonAi.CallDispatcher` queues callers FIFO when a provider is at its in-flight cap
+  and only returns `{:error, :max_concurrency}` after a bounded wait
+  (`queue_timeout_ms`, default 120s; `0` fails fast).
 - `LemonAi.CompactingClient` and `LemonAi.ContextCompactor` — context-window management
-  that summarizes and drops history rather than failing the call.
+  that truncates older history (the `:summarization` strategy currently falls back to
+  truncation) rather than failing the call.
 - `LemonAi.Tokens` and `LemonAi.Text` for token accounting and text extraction, and
   `LemonAi.calculate_cost/2` for per-call cost from the model's price table.
 - `LemonAi.Models` catalogue plus `LemonAi.ModelCache`, covering model IDs, context
-  windows, capabilities and pricing.
+  windows, capabilities and pricing — including Claude Opus 5.5 / Opus 5 / Opus 4.8 /
+  Opus 4.7 / Sonnet 5 / Fable 5.x and OpenAI GPT-5.5 / GPT-5.5 Pro / GPT-6 Astra, Sol
+  and Luna. Explicit `adaptive_thinking` and `reasoning_efforts` capability flags on
+  each model drive Anthropic adaptive thinking and reasoning-effort clamping
+  (`LemonAi.Models.reasoning_effort_for/2`) instead of model-id substring checks.
+- Anthropic tool results carry image blocks inside `tool_result.content` for vision
+  models instead of dropping them.
+- OpenAI Chat Completions and AWS Bedrock responses report cost from usage and catalog
+  pricing instead of $0.
 - `LemonAi.Env` declares the 28 environment variables this package reads — provider
   credentials, endpoint overrides and client tuning — each with a type, default,
   documentation string and a secret flag. It is self-describing on its own and

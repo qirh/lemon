@@ -53,7 +53,10 @@ defmodule LemonAi.Models.CatalogTest do
         {["headers"], [], "expected headers to be an object"},
         {["compat"], [], "expected compat to be an object"},
         {["cost", "input"], "free", "expected cost.input to be non-negative"},
-        {["cost", "output"], -1, "expected cost.output to be non-negative"}
+        {["cost", "output"], -1, "expected cost.output to be non-negative"},
+        {["adaptive_thinking"], "yes", "expected adaptive_thinking to be a boolean"},
+        {["reasoning_efforts"], "high", "expected reasoning_efforts to be an array"},
+        {["reasoning_efforts"], ["turbo"], "unsupported reasoning_efforts value"}
       ]
 
       for {path, value, expected_message} <- invalid_fields do
@@ -109,6 +112,23 @@ defmodule LemonAi.Models.CatalogTest do
 
         refute_existing_atom(unknown)
       end
+    end
+
+    test "capability flags default off and reasoning_efforts normalize to ascending order" do
+      flagged =
+        valid_entry()
+        |> Map.put("adaptive_thinking", true)
+        |> Map.put("reasoning_efforts", ["xhigh", "low", "high"])
+
+      json = Jason.encode!(%{"plain" => valid_entry(), "flagged" => flagged})
+
+      assert %{
+               "plain" => %Model{adaptive_thinking: false, reasoning_efforts: []},
+               "flagged" => %Model{
+                 adaptive_thinking: true,
+                 reasoning_efforts: [:low, :high, :xhigh]
+               }
+             } = Catalog.decode!(json, "flags.json")
     end
 
     test "normalizes every supported compatibility override" do

@@ -83,8 +83,10 @@ defmodule LemonAi.CallDispatcherTest do
       # Wait for the first request to acquire the slot
       assert_receive :slot_acquired, 1000
 
-      # Second request should be rejected due to max concurrency
-      result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)
+      # With queueing disabled, a second request is rejected immediately
+      result =
+        CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end, queue_timeout_ms: 0)
+
       assert {:error, :max_concurrency} = result
 
       # Release the first request
@@ -135,7 +137,7 @@ defmodule LemonAi.CallDispatcherTest do
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
 
       assert {:error, :max_concurrency} =
-               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end, queue_timeout_ms: 0)
 
       EventStream.complete(stream, %{stop_reason: :end_turn, content: []})
 
@@ -342,6 +344,123 @@ defmodule LemonAi.CallDispatcherTest do
     end
   end
 
+  describe "concurrency queueing" do
+    setup %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+      CallDispatcher.set_concurrency_cap(provider, 1)
+      :ok
+    end
+
+    test "dispatch at the cap waits for a slot and runs once it frees", %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+
+      waiter =
+        Task.async(fn ->
+          CallDispatcher.dispatch(provider, fn -> report_ran(parent, :waiter) end)
+        end)
+
+      wait_until(fn -> queued_count(provider) == 1 end)
+      refute_receive {:ran, :waiter}, 100
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      assert_receive {:ran, :waiter}, 1_000
+      assert {:ok, :waiter} = Task.await(waiter)
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "queued dispatch returns max_concurrency when the wait times out without leaking a slot",
+         %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+      handler_id = "test-queued-#{inspect(make_ref())}"
+
+      :telemetry.attach(
+        handler_id,
+        [:lemon_ai, :dispatcher, :queued],
+        fn event, _measurements, metadata, _config ->
+          send(parent, {:telemetry, event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:error, :max_concurrency} =
+               CallDispatcher.dispatch(provider, fn -> report_ran(parent, :timed_out) end,
+                 queue_timeout_ms: 50
+               )
+
+      assert_receive {:telemetry, [:lemon_ai, :dispatcher, :queued], %{provider: ^provider}}
+      assert queued_count(provider) == 0
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      assert CallDispatcher.get_active_requests(provider) == 0
+      refute_received {:ran, :timed_out}
+    end
+
+    test "queued waiters are granted slots in arrival order", %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+
+      first = Task.async(fn -> dispatch_holding_slot(parent, provider, :first) end)
+      wait_until(fn -> queued_count(provider) == 1 end)
+
+      second = Task.async(fn -> dispatch_holding_slot(parent, provider, :second) end)
+      wait_until(fn -> queued_count(provider) == 2 end)
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      assert_receive {:slot_acquired, :first}, 1_000
+      refute_received {:slot_acquired, :second}
+      assert queued_count(provider) == 1
+
+      send(first.pid, :release)
+      assert {:ok, :first} = Task.await(first)
+
+      assert_receive {:slot_acquired, :second}, 1_000
+      send(second.pid, :release)
+      assert {:ok, :second} = Task.await(second)
+
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "queued waiter that dies before being granted does not leak a slot",
+         %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+
+      waiter_pid =
+        spawn(fn ->
+          CallDispatcher.dispatch(provider, fn -> report_ran(parent, :dead_waiter) end)
+        end)
+
+      wait_until(fn -> queued_count(provider) == 1 end)
+      Process.exit(waiter_pid, :kill)
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      wait_until(fn ->
+        CallDispatcher.get_active_requests(provider) == 0 and queued_count(provider) == 0
+      end)
+
+      refute_received {:ran, :dead_waiter}
+
+      assert {:ok, "free"} =
+               CallDispatcher.dispatch(provider, fn -> {:ok, "free"} end, queue_timeout_ms: 0)
+    end
+  end
+
   describe "LemonAi.RateLimiter" do
     test "acquire allows requests when tokens available", %{provider: provider} do
       start_supervised!({RateLimiter, provider: provider, tokens_per_second: 10, max_tokens: 5})
@@ -475,6 +594,33 @@ defmodule LemonAi.CallDispatcherTest do
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
     end
+  end
+
+  # Starts a task whose dispatch holds a slot until it receives `:release`.
+  defp hold_slot(provider, name) do
+    parent = self()
+    task = Task.async(fn -> dispatch_holding_slot(parent, provider, name) end)
+    assert_receive {:slot_acquired, ^name}, 1_000
+    task
+  end
+
+  defp dispatch_holding_slot(parent, provider, name) do
+    CallDispatcher.dispatch(provider, fn ->
+      send(parent, {:slot_acquired, name})
+
+      receive do
+        :release -> {:ok, name}
+      end
+    end)
+  end
+
+  defp report_ran(parent, name) do
+    send(parent, {:ran, name})
+    {:ok, name}
+  end
+
+  defp queued_count(provider) do
+    Map.get(CallDispatcher.get_state().queued, provider, 0)
   end
 
   defp wait_until(fun, timeout_ms \\ 1_000, step_ms \\ 10) do

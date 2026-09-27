@@ -33,5 +33,9 @@
 # Load support files
 Code.require_file("support/integration_config.ex", __DIR__)
 
+# Provider retry backoff must not slow unit tests down; tests that assert on
+# retry timing install their own `:sleep_fun`.
+Application.put_env(:lemon_ai, :provider_retry, sleep_fun: fn _ms -> :ok end)
+
 ExUnit.configure(exclude: [:integration])
 ExUnit.start(capture_log: true)
