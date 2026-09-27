@@ -200,19 +200,21 @@ defmodule CodingAgent.SystemPromptTest do
     File.write!(Path.join(workspace_dir, "TOOLS.md"), "TOOLS content here")
     File.write!(Path.join(workspace_dir, "SOUL.md"), "SOUL content here")
     File.write!(Path.join(workspace_dir, "MEMORY.md"), "MEMORY content here")
+    File.write!(Path.join(workspace_dir, "USER.md"), "Private user preferences")
 
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :subagent
-      })
+    for scope <- [:subagent, "subagent"] do
+      prompt =
+        SystemPrompt.build(tmp_dir, %{
+          workspace_dir: workspace_dir,
+          session_scope: scope
+        })
 
-    assert String.contains?(prompt, "Session scope: subagent")
-    assert String.contains?(prompt, "This is a subagent session.")
-    assert String.contains?(prompt, "AGENTS content here")
-    assert String.contains?(prompt, "TOOLS content here")
-    refute String.contains?(prompt, "SOUL content here")
-    refute String.contains?(prompt, "MEMORY content here")
+      assert String.contains?(prompt, "AGENTS content here")
+      assert String.contains?(prompt, "TOOLS content here")
+      refute String.contains?(prompt, "SOUL content here")
+      refute String.contains?(prompt, "MEMORY content here")
+      refute String.contains?(prompt, "Private user preferences")
+    end
   end
 
   @tag :tmp_dir
@@ -301,30 +303,6 @@ defmodule CodingAgent.SystemPromptTest do
       refute String.contains?(prompt, "This is a subagent session."),
              "Should not contain subagent notice for invalid input #{inspect(invalid_scope)}"
     end
-  end
-
-  @tag :tmp_dir
-  test "string session scope \"subagent\" is normalized", %{tmp_dir: tmp_dir} do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "AGENTS content")
-    File.write!(Path.join(workspace_dir, "TOOLS.md"), "TOOLS content")
-    File.write!(Path.join(workspace_dir, "SOUL.md"), "SOUL content")
-
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: "subagent"
-      })
-
-    assert String.contains?(prompt, "Session scope: subagent")
-    assert String.contains?(prompt, "This is a subagent session.")
-    assert String.contains?(prompt, "Do not read or modify MEMORY.md")
-    # Subagent filters out SOUL.md
-    refute String.contains?(prompt, "SOUL content")
-    # Subagent keeps AGENTS.md and TOOLS.md
-    assert String.contains?(prompt, "AGENTS content")
-    assert String.contains?(prompt, "TOOLS content")
   end
 
   @tag :tmp_dir

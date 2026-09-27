@@ -49,6 +49,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
+  alias LemonAgent.ContextRegistry
   alias LemonAgent.Test.Mocks
   alias LemonAi.Types.{ImageContent, TextContent, UserMessage}
 
@@ -96,11 +97,16 @@ defmodule CodingAgent.SessionRecalledContextTest do
   @marked_close ~r"\[/lemon:recalled-context id=([0-9a-f]{32})\]"
 
   setup do
-    LemonAgent.ContextRegistry.register(:recalled_context_test, Contributor)
+    # Exercise only the contributor under test, independently of applications
+    # that register automatic recall when the full umbrella suite boots.
+    original = :persistent_term.get({ContextRegistry, :registered}, [])
+    :persistent_term.put({ContextRegistry, :registered}, [])
+    Contributor.forget()
+    ContextRegistry.register(:recalled_context_test, Contributor)
 
     on_exit(fn ->
       Contributor.forget()
-      LemonAgent.ContextRegistry.unregister(:recalled_context_test)
+      :persistent_term.put({ContextRegistry, :registered}, original)
     end)
 
     :ok
@@ -129,12 +135,12 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
     defaults = [
       cwd: cwd,
+      workspace_dir: Path.join(cwd, "workspace"),
       model: Mocks.mock_model(),
       stream_fn: capturing_stream_fn(self(), Mocks.assistant_message("ok"))
     ]
 
-    {:ok, session} = Session.start_link(Keyword.merge(defaults, opts))
-    session
+    start_supervised!({Session, Keyword.merge(defaults, opts)})
   end
 
   defp await_sent do
@@ -233,7 +239,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
     end
 
     test "no contributor registered leaves the outgoing message byte-identical" do
-      Contributor.forget()
+      ContextRegistry.unregister(:recalled_context_test)
       session = start_session()
 
       :ok = Session.prompt(session, "why is the build slow?")
@@ -309,7 +315,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       # nothing was ever attached, and a strip that recognised the delimiter
       # instead of its own marker would still cut the message back to its first
       # line — in every install, with no memory integration involved at all.
-      Contributor.forget()
+      ContextRegistry.unregister(:recalled_context_test)
       session = start_session()
       unsubscribe = Session.subscribe(session)
 
