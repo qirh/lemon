@@ -118,6 +118,11 @@ Queue-mode behavior lives here:
 - active async task/delegated auto-followups are promoted to `:steer` so completions try to reach the live parent run before falling back to a queued followup
 - `:interrupt` cancels the active run and inserts the new request at the front
 
+When the target runtime registry or lookup process is absent, steering uses the
+same queued fallback. Redirect also queues the correction as a follow-up and
+notifies the channel that it could not redirect the in-flight run. Unexpected
+runtime lookup or notification-dispatch exceptions still propagate.
+
 Pending compaction is coupled to this submission boundary. Fresh markers remain
 stored while the compacted prompt is prepared and are deleted only after the
 coordinator accepts the submission, so admission/start errors remain retryable.

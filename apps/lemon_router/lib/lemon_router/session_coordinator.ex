@@ -937,6 +937,16 @@ defmodule LemonRouter.SessionCoordinator do
     if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
       runtime.run_pid(run_id)
     end
+  rescue
+    error in ArgumentError ->
+      # Only Registry's missing-registry failure means the target is unavailable.
+      # An ArgumentError raised by the runtime callback itself must still surface.
+      case __STACKTRACE__ do
+        [{Registry, :key_info!, _, _} | _] -> nil
+        stacktrace -> reraise error, stacktrace
+      end
+  catch
+    :exit, {:noproc, {GenServer, :call, _}} -> nil
   end
 
   defp runtime_run_pid(_), do: nil
