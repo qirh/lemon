@@ -147,8 +147,28 @@ lemon gateway setup telegram
 lemon gateway setup discord
 ```
 
-Each adapter guides its required bot token and allowed conversation scope,
-stores the token in encrypted secrets, and verifies the adapter configuration.
+Both adapters store the bot token in encrypted secrets, verify it against the
+platform API, restrict the bot to your conversations, and write the config for
+you. Restart Lemon afterwards (`lemon restart`).
+
+Telegram pairs the bot with your chat. After the token check, setup asks you to
+send `/start` to the bot, waits up to two minutes (`--pair-timeout SECONDS`),
+and writes `enable_telegram = true`, `bot_token_secret`, and
+`allowed_chat_ids = [<your chat id>]`. For scripted installs pass the chat id
+instead of waiting:
+
+```bash
+lemon gateway setup telegram --non-interactive --token "$TELEGRAM_BOT_TOKEN" --chat-id 12345678
+```
+
+A Telegram bot without `allowed_chat_ids` is unpaired: it ignores every chat and
+only replies with a pairing hint. Send `/whoami` to the bot to see a chat's id
+(for example, to add a group with another `--chat-id`). Group chats respond only
+to mentions, replies, and commands unless an admin sends `/trigger all`, and every
+file edit or shell command in a group needs an approval. Remote chats run in the
+assistant home (`~/.lemon/agent/workspace`), not your home directory, unless
+`gateway.default_cwd` is set.
+
 See the configured channel state with:
 
 ```bash

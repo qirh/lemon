@@ -380,7 +380,8 @@ Outbox.stats()
 | `/checkpoint` | Preview checkpoint status/events, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
 | `/thinking` | Toggle extended thinking |
-| `/trigger` | Switch `:all` / `:mentions` mode |
+| `/trigger` | Switch `:all` / `:mentions` mode (groups default to `:mentions`) |
+| `/whoami` | Reply with chat/user/topic ids; answered in every chat, before authorization |
 | `/cwd` | Set working directory |
 | `/file` | File put/get operations |
 | `/topic` | Topic management |
@@ -434,7 +435,20 @@ Renders markdown to plain text + Telegram entities (avoids MarkdownV2 escaping):
 # opts is nil or %{entities: [...]}
 ```
 
+### Authorization (fail closed)
+
+`UpdateProcessor.chat_authorization/2` gates messages and callback queries. A
+non-empty `allowed_chat_ids` is authoritative; an empty/missing allowlist means
+the bot is unpaired and every update is dropped (`:unpaired`) unless
+`allow_all_chats: true` is configured. `Pipeline` answers `/whoami` before
+authorization and, for unpaired drops, emits at most one `:send_unpaired_notice`
+per chat per 10 minutes (`RuntimeState.claim_unpaired_notice/3`). Voice
+transcription only runs for authorized chats. `lemon doctor` fails
+`channels.telegram.allowlist` for an enabled, unpaired adapter.
+
 ### TriggerMode
+
+Group/supergroup/channel peers default to `:mentions` (same as Discord).
 
 ```elixir
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}

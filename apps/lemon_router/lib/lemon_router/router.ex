@@ -207,7 +207,17 @@ defmodule LemonRouter.Router do
           account_id: msg.account_id,
           peer: msg.peer,
           sender: msg.sender,
-          raw: msg.raw
+          raw: msg.raw,
+          # Read by LemonRouter.Policy so per-channel and group-chat tool
+          # restrictions apply to real channel ingress. Always derived from
+          # the transport-normalized message, never from caller meta.
+          channel_context: %{
+            channel_id: msg.channel_id,
+            account_id: msg.account_id,
+            peer_kind: msg.peer.kind,
+            peer_id: msg.peer.id,
+            thread_id: msg.peer.thread_id
+          }
         })
     })
   end

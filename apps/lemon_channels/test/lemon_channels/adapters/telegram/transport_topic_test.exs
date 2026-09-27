@@ -190,6 +190,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     File.mkdir_p!(cwd)
     on_exit(fn -> File.rm_rf(cwd) end)
 
+    trigger_on_all(chat_id)
+
     MockAPI.set_updates([
       topic_message_update(chat_id, topic_id, "/cwd #{cwd}", msg_id + 1),
       topic_message_update(chat_id, topic_id, "/new", msg_id + 2),
@@ -265,6 +267,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     topic_id = 103
     msg_id = System.unique_integer([:positive])
 
+    trigger_on_all(chat_id)
+
     MockAPI.set_updates([
       topic_message_update(chat_id, topic_id, "/thinking high", msg_id + 1),
       topic_message_update(chat_id, topic_id, "/new", msg_id + 2),
@@ -322,6 +326,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   test "/trigger mentions in a group requires mentions for follow-up messages" do
     chat_id = System.unique_integer([:positive])
 
+    trigger_on_all(chat_id)
+
     MockAPI.set_updates([
       group_message_update(chat_id, "/trigger mentions"),
       group_message_update(chat_id, "plain hello"),
@@ -347,13 +353,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     refute_receive {:inbound, _msg}, 250
   end
 
-  test "/trigger mentions is rejected for non-admin senders" do
+  test "/trigger all is rejected for non-admin senders" do
     chat_id = System.unique_integer([:positive])
     MockAPI.set_chat_member_status("member")
 
     MockAPI.set_updates([
-      group_message_update(chat_id, "/trigger mentions"),
-      group_message_update(chat_id, "plain hello")
+      group_message_update(chat_id, "/trigger all"),
+      group_message_update(chat_id, "plain hello"),
+      group_message_update(chat_id, "@lemonbot mentioned hello")
     ])
 
     assert {:ok, _pid} =
@@ -369,8 +376,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     assert trigger_msg == "Trigger mode can only be changed by a group admin."
 
     assert_receive {:inbound, inbound}, 1_200
-    assert inbound.message.text == "plain hello"
-    assert TriggerMode.resolve("default", chat_id, nil).mode == :all
+    assert inbound.message.text == "@lemonbot mentioned hello"
+
+    resolved = TriggerMode.resolve("default", chat_id, nil)
+    assert resolved.mode == :mentions
+    assert resolved.chat_mode == nil
+
+    refute_receive {:inbound, _msg}, 250
   end
 
   test "/trigger clear removes a topic override and falls back to the chat default" do
@@ -444,6 +456,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     )
 
     Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+  end
+
+  # Groups default to mention-only triggering; tests that send plain group text opt in.
+  defp trigger_on_all(chat_id) do
+    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    :ok = TriggerMode.set(scope, "default", :all)
   end
 
   defp set_bindings(bindings) do

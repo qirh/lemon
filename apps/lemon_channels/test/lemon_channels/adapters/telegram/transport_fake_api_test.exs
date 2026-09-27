@@ -10,6 +10,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
 
   alias LemonChannels.Telegram.FakeAPI
   alias LemonChannels.Adapters.Telegram
+  alias LemonChannels.Telegram.TriggerMode
+  alias LemonCore.ChatScope
 
   defmodule FakeApiTestRouter do
     use LemonCore.RouterBridge.Router
@@ -334,6 +336,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
     test "inbound supergroup forum-topic message carries the thread id" do
       chat_id = -100_320_002
       thread_id = 777
+
+      # Groups default to mention-only triggering; this test is about thread ids.
+      :ok =
+        TriggerMode.set(
+          %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil},
+          "default",
+          :all
+        )
 
       assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
 

@@ -3,13 +3,13 @@ defmodule LemonCli.Setup.Gateway.Adapter do
   Behaviour for gateway transport setup adapters.
 
   Each transport (Telegram, Discord, …) implements this behaviour to
-  participate in `mix lemon.setup gateway`.
+  participate in `lemon gateway setup`.
 
   An adapter is responsible for:
-  - validating that required secrets exist in the keychain
-  - verifying that the config has a minimal `[gateway.<transport>]` section
+  - storing the bot token in encrypted secrets
+  - restricting the transport to the owner's conversations (allowlist)
   - optionally running a connectivity smoke test against the transport API
-  - printing a config snippet the user can paste into config.toml
+  - writing the `[gateway.<transport>]` section to the canonical config
   """
 
   @doc "Machine-readable transport name, e.g. `\"telegram\"`."

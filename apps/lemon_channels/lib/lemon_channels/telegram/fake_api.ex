@@ -25,12 +25,17 @@ defmodule LemonChannels.Telegram.FakeAPI do
       [gateway.telegram]
       bot_token = "fake-token"
       api_mod = "LemonChannels.Telegram.FakeAPI"
+      allowed_chat_ids = [310001]   # the transport ignores every chat without an allowlist
 
   In ExUnit, pass it straight to the transport (see
   `transport_fake_api_test.exs`):
 
       LemonChannels.Adapters.Telegram.Transport.start_link(
-        config: %{bot_token: "fake-token", api_mod: LemonChannels.Telegram.FakeAPI}
+        config: %{
+          bot_token: "fake-token",
+          api_mod: LemonChannels.Telegram.FakeAPI,
+          allowed_chat_ids: [310_001]
+        }
       )
 
   ## Driving API

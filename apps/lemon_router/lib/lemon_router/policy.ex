@@ -181,6 +181,11 @@ defmodule LemonRouter.Policy do
     _ -> %{}
   end
 
+  # Tools that mutate files or execute code on the host. Group chats require
+  # an approval for each call because any member can prompt the agent.
+  # `execute_code` is bash-equivalent (it runs scripts with host permissions).
+  @group_approval_tools ~w(bash execute_code write edit patch hashline_edit)
+
   # Load channel-specific restrictions
   defp get_channel_policy(nil), do: %{}
 
@@ -195,17 +200,9 @@ defmodule LemonRouter.Policy do
         policy -> policy
       end
 
-    # Groups are typically more restricted than DMs
     group_policy =
       if peer_kind in [:group, :supergroup, :channel] do
-        %{
-          # Groups typically require more approval
-          approvals: %{
-            "bash" => :always,
-            "write" => :always,
-            "process" => :always
-          }
-        }
+        %{approvals: Map.new(@group_approval_tools, &{&1, :always})}
       else
         %{}
       end

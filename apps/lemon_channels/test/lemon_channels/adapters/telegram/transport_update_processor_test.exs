@@ -269,6 +269,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
       account_id: "default",
       dedupe_ttl_ms: 60_000,
       allowed_chat_ids: nil,
+      allow_all_chats: true,
       deny_unbound_chats: false,
       allow_queue_override: Keyword.get(opts, :allow_queue_override, false),
       debug_inbound: false,

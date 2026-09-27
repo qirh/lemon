@@ -296,6 +296,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         generation: 0
       )
 
+    trigger_on_all_group_messages(chat_id)
+
     ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
       topic_message_update(chat_id, topic_id, followup_msg_id, "after new", reply_to_id)
@@ -371,6 +373,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       )
 
     _ = StateStore.put_selected_resume({"default", chat_id, topic_id}, stale_resume)
+
+    trigger_on_all_group_messages(chat_id)
 
     ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
@@ -490,6 +494,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     first_msg_id = System.unique_integer([:positive])
     second_msg_id = System.unique_integer([:positive])
 
+    trigger_on_all_group_messages(chat_id)
+
     ParallelMockAPI.set_updates([
       topic_created_update(chat_id, topic_id, first_msg_id),
       topic_message_update(chat_id, topic_id, second_msg_id, "hello after create")
@@ -520,6 +526,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       |> Map.merge(overrides)
 
     Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+  end
+
+  # Groups default to mention-only triggering; these tests send plain topic text.
+  defp trigger_on_all_group_messages(chat_id) do
+    scope = %LemonCore.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    :ok = LemonChannels.Telegram.TriggerMode.set(scope, "default", :all)
   end
 
   defp message_update(chat_id, message_id, text) do

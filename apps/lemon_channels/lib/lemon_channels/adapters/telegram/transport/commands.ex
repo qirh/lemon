@@ -24,6 +24,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   def cwd_command?(text, bot_username), do: telegram_command?(text, "cwd", bot_username)
   def topic_command?(text, bot_username), do: telegram_command?(text, "topic", bot_username)
   def file_command?(text, bot_username), do: telegram_command?(text, "file", bot_username)
+  def whoami_command?(text, bot_username), do: telegram_command?(text, "whoami", bot_username)
 
   def checkpoint_command?(text, bot_username),
     do: telegram_command?(text, "checkpoint", bot_username)
