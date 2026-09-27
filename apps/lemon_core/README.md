@@ -164,15 +164,16 @@ ids, message bodies, proof details, credentials, or secret names.
 
 | Module | Purpose |
 |--------|---------|
-| `LemonCore.Store` | GenServer with pluggable backends and specialized APIs |
-| `LemonCore.Store.Table` | Declarative owner and policy metadata for generic Store tables |
-| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; specialized finalization is synchronous and retry-safe |
+| `LemonCore.Store` | Generic table GenServer with pluggable backends plus the serialized run lifecycle (append/finalize) |
+| `LemonCore.RunStore` | Typed run lifecycle/history wrapper over `:runs` and `:sessions_index`; finalization is synchronous and retry-safe |
+| `LemonCore.ChatStateStore` | Per-scope chat state in `:chat` with a 24h expiry |
+| `LemonCore.ProgressStore` | Progress-message → run id mapping in `:progress` |
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
-| `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
+| `LemonCore.PolicyStore` | Agent, channel, session, and runtime policies over their four tables |
 
 ### Memory
 
@@ -453,11 +454,11 @@ config :lemon_core, LemonCore.Store,
 
 ```elixir
 defmodule MyApp.WidgetStore do
-  use LemonCore.Store.Table, tables: [widgets: []]
+  @table :widgets
 
-  def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
-  def claim(id, widget), do: LemonCore.Store.put_new(:widgets, id, widget)
-  def get(id), do: LemonCore.Store.get(:widgets, id)
+  def put(id, widget), do: LemonCore.Store.put(@table, id, widget)
+  def claim(id, widget), do: LemonCore.Store.put_new(@table, id, widget)
+  def get(id), do: LemonCore.Store.get(@table, id)
 end
 
 MyApp.WidgetStore.put(id, widget)
@@ -469,55 +470,36 @@ widget = MyApp.WidgetStore.get(id)
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
 Store diagnostics hash keys for idempotency tables so caller replay secrets do not enter logs.
 
-Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized.
-
-New wrappers declare their table names with `use LemonCore.Store.Table`. The
-metadata does not generate accessors or change backend behavior. The quality
-gate parses generic Store calls and permits an owner only the exact tables it
-declares, across direct calls, `apply/3`, and both default and explicit server
-arities; aliases and module-attribute table names are resolved from the AST,
-while dynamic or cross-table access fails closed. Multi-entry operations check
-every table in the supplied entries.
+Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized. Wrappers are plain modules over the generic API; `LemonCore.Store` has no domain-specific chat-state, policy, or progress functions.
 
 ### Specialized APIs
 
 Shared-domain callers should prefer typed wrappers:
 
-- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`; owns
-  the cached `:chat` table with `:expires_at` retention metadata while the
-  specialized Store runtime continues to enforce TTL and expiry
-- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`;
-  owns cached `:runs` (`persistence: :ephemeral`) and cached `:sessions_index`
-  (`persistence: :durable`) while specialized Store lifecycle/finalization
-  remains the runtime path
+- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1` (each
+  also takes a store name first); stamps a 24h `:expires_at` on write, treats
+  expired entries as absent on read, and the store's periodic sweep removes
+  expired `:chat` entries
+- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
-- **Progress mapping**: `LemonCore.ProgressStore.put/3`, `get_run/2`
+- **Progress mapping**: `LemonCore.ProgressStore.put/3`, `get_run/2`, `delete/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
 
 `RunStore.finalize/2` returns `:ok` only after the immutable final summary and
 its session index are written. Retrying the same summary repairs a partial index
-failure without double-counting the run. Finalize hooks run after both writes
-and use at-least-once delivery, so hook implementations must be idempotent by
-run id.
+failure without double-counting the run: the session entry remembers its last
+32 indexed run ids, so its size stays fixed however many runs the session has.
+Finalize hooks run after both writes and use at-least-once delivery, so hook
+implementations must be idempotent by run id.
 
 Agent workspace coordination — goals, kanban boards, and heartbeats — is built on this Store but lives in `agent_core` as `LemonAgent.Workspace.{GoalStore, KanbanStore, HeartbeatStore}`.
 
-`LemonCore.PolicyStore` declares `:agent_policies`, `:channel_policies`,
-`:session_policies`, and `:runtime_policy` as durable version-1 tables. The
-declaration is ownership metadata only: its public functions continue to use
-the specialized policy operations provided by `LemonCore.Store`.
-
-`LemonCore.RunStore` declares cached `:runs` (`persistence: :ephemeral`) and
-cached `:sessions_index` (`persistence: :durable`). The declaration is
-ownership metadata only; runtime writes still use the specialized Store
-lifecycle path, where finalization is synchronous and retry-safe.
-
 ### ReadCache
 
-`LemonCore.Store.ReadCache` maintains public ETS tables for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`). Reads bypass the GenServer entirely for O(1) ETS lookup, while writes go through the GenServer which updates both the backend and cache atomically.
+`LemonCore.Store.ReadCache` maintains public ETS tables for hot domains (`:runs`, plus the default cached tables `:sessions_index`, `:chat`, and `:progress`, plus tables collaborators add with `register_cached_table/1`). Reads bypass the GenServer entirely for O(1) ETS lookup, while writes go through the GenServer which updates both the backend and cache atomically.
 
 ### Backend Behaviour
 

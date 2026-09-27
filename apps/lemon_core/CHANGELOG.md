@@ -14,35 +14,24 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 - Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
   `[runtime.cli]` is rejected.
+- `LemonCore.Store`'s domain functions: `put/get/delete_chat_state`, the
+  agent/channel/session/runtime `*_policy` functions, and
+  `put/delete_progress_mapping` / `get_run_by_progress`. Use
+  `LemonCore.ChatStateStore`, `LemonCore.PolicyStore`, and
+  `LemonCore.ProgressStore`, which now sit on the generic table API. The
+  `:chat_state_ttl_ms` store option is gone; chat state always expires after
+  24 hours.
 
 ### Fixed
 
 - Run finalization is now synchronous and retry-safe. A session-index failure
   is returned to the caller, retrying repairs the index without double-counting
   the run, conflicting summaries fail without exposing the original summary,
-  and finalize hooks explicitly use at-least-once delivery.
+  and finalize hooks explicitly use at-least-once delivery. The per-session
+  idempotency marker is bounded to the last 32 run ids, so a session index
+  entry no longer grows with every run the session has ever finalized.
 
 ### Added
-
-- `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
-  future cache, retention, persistence, and schema-version metadata without
-  generating CRUD functions or changing backend behavior. The existing
-  architecture quality gate parses all supported generic Store operations at
-  default and explicit server arities, including direct calls, `apply/3`, and
-  multi-entry operations, and permits owner calls only when every resolved
-  table matches the declaration.
-- `LemonCore.PolicyStore` now declares ownership metadata for the existing
-  agent, channel, session, and runtime policy tables while retaining its
-  specialized public API and Store behavior.
-
-- `LemonCore.ChatStateStore` now declares ownership of the cached `:chat` table
-  and its `:expires_at` retention policy. Its public API and the specialized
-  Store runtime that applies TTL, expiry, sweeping, and cache behavior are
-  unchanged.
-- `LemonCore.RunStore` declares `:runs` and `:sessions_index` as its owned
-  tables. The declaration records their cache and persistence intent explicitly
-  and brings the existing wrapper under the AST ownership gate without changing
-  the specialized `LemonCore.Store` run lifecycle or finalization semantics.
 
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`

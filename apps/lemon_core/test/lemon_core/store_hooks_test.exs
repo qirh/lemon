@@ -227,18 +227,18 @@ defmodule LemonCore.StoreHooksTest do
     end
   end
 
-  describe "generic API still bypasses the cache for the store's own domains" do
-    test "reads of :chat go to the backend, not the chat read cache" do
-      store = start_store(:store_intrinsic_bypass, backend: EtsBackend)
-      scope = {:intrinsic, :chat}
+  describe "chat state is an ordinary mirrored table" do
+    test "a generic delete evicts what the typed owner wrote" do
+      store = start_store(:store_chat_generic, backend: EtsBackend)
+      scope = {:generic, :chat}
 
-      :ok = Store.put_chat_state(store, scope, %{phase: :active})
-      assert %{phase: :active} = Store.get_chat_state(store, scope)
-
-      # The typed API caches; the generic API must still see the backend row.
+      :ok = LemonCore.ChatStateStore.put(store, scope, %{phase: :active})
+      assert %{phase: :active} = ReadCache.get(store, :chat, scope)
       assert %{phase: :active} = Store.get(store, :chat, scope)
+
       assert :ok = Store.delete(store, :chat, scope)
-      assert Store.get(store, :chat, scope) == nil
+      assert ReadCache.get(store, :chat, scope) == nil
+      assert LemonCore.ChatStateStore.get(store, scope) == nil
     end
   end
 
