@@ -17,25 +17,13 @@ defmodule LemonSimUi.SimManager do
   alias LemonSim.LLM.GameHelpers.Runner, as: GameRunner
   alias LemonSim.LLM.Usage
 
-  alias LemonSim.Examples.{
-    TicTacToe,
-    Skirmish,
-    StockMarket,
-    Survivor,
-    SpaceStation,
-    Auction,
-    Diplomacy,
-    DungeonCrawl,
-    TcgShop,
-    VendingBench,
-    Poker
-  }
+  alias LemonSim.Examples.{TicTacToe, VendingBench, Poker}
 
   alias LemonSim.LLM.GameHelpers.Config, as: SimConfig
   alias LemonSimUi.ProjectRoot
 
   @lobby_topic "sim:lobby"
-  @resumable_domains [:werewolf, :space_station, :stock_market, :survivor, :poker]
+  @resumable_domains [:werewolf, :poker]
   @max_persisted_resumes 5
   @runner_recovery_delay_ms 1_000
   @max_transient_recovery_failures 5
@@ -880,32 +868,18 @@ defmodule LemonSimUi.SimManager do
     initial_state = %{TicTacToe.initial_state() | sim_id: sim_id}
     modules = TicTacToe.modules()
 
-    {model, stream_options} = resolve_default_model_for_ui()
+    {model, stream_options} =
+      case Keyword.fetch(opts, :model) do
+        {:ok, model} -> {model, Keyword.get(opts, :stream_options, %{})}
+        :error -> resolve_default_model_for_ui()
+      end
 
     run_opts =
-      TicTacToe.default_opts(model: model, stream_options: stream_options)
-      |> Keyword.put(:driver_max_turns, max_turns)
-      |> Keyword.put(:persist?, true)
-      |> Keyword.put(:on_before_step, nil)
-      |> Keyword.put(:on_after_step, &on_after_step/2)
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:skirmish, sim_id, opts) do
-    max_turns = Keyword.get(opts, :max_turns, 48)
-
-    # Pass through all skirmish-specific opts (squad, map_width, map_height, map_preset, rng_seed)
-    initial_state = %{Skirmish.initial_state(opts) | sim_id: sim_id}
-
-    modules = Skirmish.modules()
-
-    {model, stream_options} = resolve_default_model_for_ui()
-
-    run_opts =
-      Skirmish.default_opts(Keyword.merge(opts, model: model, stream_options: stream_options))
+      TicTacToe.default_opts(
+        model: model,
+        stream_options: stream_options,
+        complete_fn: Keyword.get(opts, :complete_fn)
+      )
       |> Keyword.put(:driver_max_turns, max_turns)
       |> Keyword.put(:persist?, true)
       |> Keyword.put(:on_before_step, nil)
@@ -984,23 +958,6 @@ defmodule LemonSimUi.SimManager do
     e -> {:error, Exception.message(e)}
   end
 
-  defp build_initial_state(:stock_market, sim_id, opts) do
-    player_count = Keyword.get(opts, :player_count, 4)
-    model_specs = Keyword.get(opts, :model_specs, [])
-
-    initial_state = %{StockMarket.initial_state(player_count: player_count) | sim_id: sim_id}
-    modules = StockMarket.modules()
-
-    {initial_state, run_opts} =
-      build_multi_model_opts(initial_state, modules, model_specs, player_count,
-        default_opts_fn: &StockMarket.default_opts/1
-      )
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
   defp build_initial_state(:poker, sim_id, opts) do
     player_count = Keyword.get(opts, :player_count, 6)
     model_specs = Keyword.get(opts, :model_specs, [])
@@ -1020,76 +977,6 @@ defmodule LemonSimUi.SimManager do
       build_multi_model_opts(initial_state, modules, model_specs, player_count,
         default_opts_fn: &Poker.default_opts/1
       )
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:survivor, sim_id, opts) do
-    player_count = Keyword.get(opts, :player_count, 8)
-    model_specs = Keyword.get(opts, :model_specs, [])
-
-    initial_state = %{Survivor.initial_state(player_count: player_count) | sim_id: sim_id}
-    modules = Survivor.modules()
-
-    {initial_state, run_opts} =
-      build_multi_model_opts(initial_state, modules, model_specs, player_count,
-        default_opts_fn: &Survivor.default_opts/1
-      )
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:space_station, sim_id, opts) do
-    player_count = Keyword.get(opts, :player_count, 6)
-    model_specs = Keyword.get(opts, :model_specs, [])
-
-    initial_state = %{SpaceStation.initial_state(player_count: player_count) | sim_id: sim_id}
-    modules = SpaceStation.modules()
-
-    {initial_state, run_opts} =
-      build_multi_model_opts(initial_state, modules, model_specs, player_count,
-        default_opts_fn: &SpaceStation.default_opts/1
-      )
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:auction, sim_id, opts) do
-    player_count = Keyword.get(opts, :player_count, 4)
-
-    initial_state = %{Auction.initial_state(player_count: player_count) | sim_id: sim_id}
-    modules = Auction.modules()
-    run_opts = Auction.default_opts(opts)
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:diplomacy, sim_id, opts) do
-    player_count = Keyword.get(opts, :player_count, 4)
-
-    initial_state = %{Diplomacy.initial_state(player_count: player_count) | sim_id: sim_id}
-    modules = Diplomacy.modules()
-    run_opts = Diplomacy.default_opts(opts)
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:dungeon_crawl, sim_id, opts) do
-    party_size = Keyword.get(opts, :party_size, 4)
-
-    initial_state = %{DungeonCrawl.initial_state(party_size: party_size) | sim_id: sim_id}
-    modules = DungeonCrawl.modules()
-    run_opts = DungeonCrawl.default_opts(opts)
 
     {:ok, initial_state, modules, run_opts}
   rescue
@@ -1137,41 +1024,6 @@ defmodule LemonSimUi.SimManager do
       |> Keyword.put(:on_before_step, nil)
       |> Keyword.put(:on_after_step, nil)
       |> Keyword.put(:support_tool_matcher, &VendingBench.support_tool?/1)
-
-    {:ok, initial_state, modules, run_opts}
-  rescue
-    e -> {:error, Exception.message(e)}
-  end
-
-  defp build_initial_state(:tcg_shop, sim_id, opts) do
-    max_days = Keyword.get(opts, :max_days, 14)
-    max_turns = Keyword.get(opts, :max_turns, Keyword.get(opts, :driver_max_turns, 180))
-
-    config = load_project_config()
-
-    {model, stream_options} =
-      case Keyword.get(opts, :operator_model_spec) ||
-             opts |> Keyword.get(:model_specs, []) |> List.first() do
-        nil -> resolve_default_model_for_ui()
-        spec -> resolve_model_stream_options!(spec, config, "tcg shop")
-      end
-
-    initial_state =
-      TcgShop.initial_state(
-        sim_id: sim_id,
-        max_days: max_days,
-        model: model
-      )
-
-    modules = TcgShop.modules()
-
-    run_opts =
-      TcgShop.default_opts(model: model, stream_options: stream_options)
-      |> Keyword.put(:driver_max_turns, max_turns)
-      |> Keyword.put(:persist?, true)
-      |> Keyword.put(:on_before_step, nil)
-      |> Keyword.put(:on_after_step, nil)
-      |> Keyword.put(:support_tool_matcher, &TcgShop.support_tool?/1)
 
     {:ok, initial_state, modules, run_opts}
   rescue
@@ -1667,13 +1519,6 @@ defmodule LemonSimUi.SimManager do
       Map.has_key?(world, :board) or Map.has_key?(world, "board") ->
         MapHelpers.get_key(world, :current_player) == human_team
 
-      # Skirmish: human_team is "red" or "blue", active actor's team matches
-      Map.has_key?(world, :units) or Map.has_key?(world, "units") ->
-        actor_id = MapHelpers.get_key(world, :active_actor_id)
-        units = MapHelpers.get_key(world, :units) || %{}
-        actor = Map.get(units, actor_id)
-        actor && MapHelpers.get_key(actor, :team) == human_team
-
       true ->
         false
     end
@@ -1885,24 +1730,14 @@ defmodule LemonSimUi.SimManager do
   defp fetch(_map, _atom_key, _string_key, default), do: default
 
   defp generate_id(:tic_tac_toe), do: "ttt_#{random_hex(4)}"
-  defp generate_id(:skirmish), do: "skm_#{random_hex(4)}"
   defp generate_id(:werewolf), do: "ww_#{random_hex(4)}"
-  defp generate_id(:stock_market), do: "stk_#{random_hex(4)}"
-  defp generate_id(:survivor), do: "srv_#{random_hex(4)}"
-  defp generate_id(:space_station), do: "spc_#{random_hex(4)}"
   defp generate_id(:vending_bench), do: "vb_#{random_hex(4)}"
-  defp generate_id(:tcg_shop), do: "tcg_#{random_hex(4)}"
   defp generate_id(:poker), do: "pkr_#{random_hex(4)}"
   defp generate_id(_), do: "sim_#{random_hex(4)}"
 
   defp domain_from_sim_id("ww_" <> _), do: :werewolf
   defp domain_from_sim_id("ttt_" <> _), do: :tic_tac_toe
-  defp domain_from_sim_id("skm_" <> _), do: :skirmish
-  defp domain_from_sim_id("stk_" <> _), do: :stock_market
-  defp domain_from_sim_id("srv_" <> _), do: :survivor
-  defp domain_from_sim_id("spc_" <> _), do: :space_station
   defp domain_from_sim_id("vb_" <> _), do: :vending_bench
-  defp domain_from_sim_id("tcg_" <> _), do: :tcg_shop
   defp domain_from_sim_id("pkr_" <> _), do: :poker
   defp domain_from_sim_id(_), do: :unknown
 
@@ -1911,9 +1746,6 @@ defmodule LemonSimUi.SimManager do
   # persisted state alone.
   @resumable_examples %{
     werewolf: LemonSim.Examples.Werewolf,
-    space_station: SpaceStation,
-    stock_market: StockMarket,
-    survivor: Survivor,
     poker: Poker
   }
 
@@ -2032,11 +1864,7 @@ defmodule LemonSimUi.SimManager do
       :arena_domain,
       :balanced_roles?,
       :role_rotation_index,
-      :max_days,
-      :rng_seed,
-      :map_width,
-      :map_height,
-      :map_preset
+      :max_days
     ])
     |> Enum.into(%{})
   end
@@ -2278,13 +2106,12 @@ defmodule LemonSimUi.SimManager do
     {model, %{api_key: api_key}}
   end
 
-  # Shared helper for games that support multi-model assignments (stock_market, survivor, space_station).
+  # Shared helper for games that support multi-model assignments (poker).
   defp build_multi_model_opts(initial_state, _modules, model_specs, player_count, opts) do
     default_opts_fn = Keyword.fetch!(opts, :default_opts_fn)
 
-    # Assignments must be keyed by the world's actual player ids — survivor
-    # seats real names, most other domains player_N. Specs zip positionally
-    # over the sorted ids (the shared seat-order convention).
+    # Assignments must be keyed by the world's actual player ids. Specs zip
+    # positionally over the sorted ids (the shared seat-order convention).
     player_ids =
       case MapHelpers.get_key(initial_state.world, :players) do
         players when is_map(players) and map_size(players) > 0 ->

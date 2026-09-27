@@ -1,17 +1,17 @@
 defmodule LemonSimUi.SimManagerAiLoopTest do
   @moduledoc """
-  End-to-end coverage for `SimManager.run_ai_only/3`'s delegated loop
-  (task #37): drives a real game through the real, already-running
-  `LemonSimUi.SimManager` GenServer with a scripted `complete_fn`
-  (no network calls) — the behavior no other test in this app exercises;
-  `SimManager.start_sim/2` doesn't otherwise appear in any test here.
+  Durable run-lifecycle coverage for the real, already-running
+  `LemonSimUi.SimManager` GenServer: turn-budget exhaustion in the delegated
+  `run_ai_only/3` loop (driven through a Tic Tac Toe game with a scripted
+  `complete_fn`, no network calls), recovery and turn-budget limits, transient
+  recovery persistence failures, the recovery queue, final usage persistence
+  on runner teardown, operator stop, and terminal snapshot retention.
   """
 
   use ExUnit.Case, async: false
 
   alias LemonAi.Types.{AssistantMessage, Model, ToolCall}
-  alias LemonCore.MapHelpers
-  alias LemonSim.Examples.SpaceStation
+  alias LemonSim.Examples.Poker
   alias LemonSim.Kernel.Store
   alias LemonSim.LLM.Usage, as: SimUsage
   alias LemonSimUi.SimManager
@@ -26,119 +26,19 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
     end)
   end
 
-  test "the delegated loop persists+broadcasts every turn, accumulates plan_history, and cleans up on natural completion" do
-    sim_id = "auc_delegation_#{System.unique_integer([:positive])}"
-    cleanup_sim(sim_id)
-
-    complete_fn = fn _model, _context, _stream_opts ->
-      {:ok, tool_call("pass_auction", %{})}
-    end
-
-    LemonSim.Kernel.Bus.subscribe(sim_id)
-
-    assert {:ok, ^sim_id} =
-             SimManager.start_sim(:auction,
-               sim_id: sim_id,
-               player_count: 3,
-               model: fake_model(),
-               stream_options: %{},
-               complete_fn: complete_fn
-             )
-
-    states = collect_states_until_game_over(sim_id)
-    plan_history_lengths = Enum.map(states, &length(&1.plan_history))
-
-    # Monotonically non-decreasing, one plan_history entry per completed turn
-    # — the property that silently breaks if the transform hook's returned
-    # state isn't fed forward into the next `Runner.step/3` call
-    # (plan_history is a top-level State field, not part of `world`, and this
-    # only survives if `append_decision_trace/4`'s output is what the loop
-    # keeps recursing on).
-    assert plan_history_lengths == Enum.sort(plan_history_lengths)
-    assert Enum.max(plan_history_lengths) >= 5
-
-    final = List.last(states)
-    assert MapHelpers.get_key(final.world, :status) == "game_over"
-
-    errors = MapHelpers.get_key(final.world, :runner_errors) || []
-    refute Enum.any?(errors, fn e -> MapHelpers.get_key(e, :kind) == :turn_limit_exceeded end)
-
-    # Natural completion: the runner exits on its own (no stop_sim call), and
-    # SimManager's :DOWN handling / DynamicSupervisor cleanup both fire.
-    wait_until(fn -> sim_id not in SimManager.list_running() end)
-
-    stored = Store.get_state(sim_id)
-    assert MapHelpers.get_key(stored.world, :status) == "game_over"
-    assert length(stored.plan_history) == Enum.max(plan_history_lengths)
-    assert stored.meta.run.status == "completed"
-    refute stored.meta.run.resumable
-    assert stored.meta.run.turns_completed >= 5
-  end
-
-  test "a single transient step crash is retried from the last good state and the game keeps going" do
-    sim_id = "auc_retry_#{System.unique_integer([:positive])}"
-    cleanup_sim(sim_id)
-
-    {:ok, call_count} = Agent.start_link(fn -> 0 end)
-
-    complete_fn = fn _model, _context, _stream_opts ->
-      n = Agent.get_and_update(call_count, fn n -> {n + 1, n + 1} end)
-
-      if n == 2 do
-        raise "boom (simulated transient failure)"
-      else
-        {:ok, tool_call("pass_auction", %{})}
-      end
-    end
-
-    LemonSim.Kernel.Bus.subscribe(sim_id)
-
-    assert {:ok, ^sim_id} =
-             SimManager.start_sim(:auction,
-               sim_id: sim_id,
-               player_count: 3,
-               model: fake_model(),
-               stream_options: %{},
-               complete_fn: complete_fn
-             )
-
-    states = collect_states_until_game_over(sim_id, 20_000)
-
-    # Retried and recovered (not abandoned): the game still reaches game_over,
-    # plan_history never goes backwards (a `:step_crash` retry resumes from
-    # the checkpoint rather than skipping or duplicating a turn — it may
-    # re-broadcast the same length once, alongside the recorded error, before
-    # the retried turn completes and the length advances), and the crash is
-    # on record without exhausting the retry budget.
-    plan_history_lengths = Enum.map(states, &length(&1.plan_history))
-    assert plan_history_lengths == Enum.sort(plan_history_lengths)
-
-    final = List.last(states)
-    assert MapHelpers.get_key(final.world, :status) == "game_over"
-
-    errors = MapHelpers.get_key(final.world, :runner_errors) || []
-    assert Enum.any?(errors, fn e -> MapHelpers.get_key(e, :kind) == :step_crash end)
-    refute Enum.any?(errors, fn e -> MapHelpers.get_key(e, :kind) == :retry_limit_exceeded end)
-  end
-
   test "turn budget exhaustion is durable and non-resumable" do
-    sim_id = "auc_turn_limit_#{System.unique_integer([:positive])}"
+    sim_id = "ttt_turn_limit_#{System.unique_integer([:positive])}"
     cleanup_sim(sim_id)
-
-    complete_fn = fn _model, _context, _stream_opts ->
-      {:ok, tool_call("pass_auction", %{})}
-    end
 
     LemonSim.Kernel.Bus.subscribe(sim_id)
 
     assert {:ok, ^sim_id} =
-             SimManager.start_sim(:auction,
+             SimManager.start_sim(:tic_tac_toe,
                sim_id: sim_id,
-               player_count: 3,
                driver_max_turns: 1,
                model: fake_model(),
                stream_options: %{},
-               complete_fn: complete_fn
+               complete_fn: scripted_moves()
              )
 
     assert_receive %LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: ^sim_id}}, 5_000
@@ -185,7 +85,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
   end
 
   test "recovery at an exhausted turn budget is durably marked failed" do
-    sim_id = "spc_recovery_turn_budget_#{System.unique_integer([:positive])}"
+    sim_id = "pkr_recovery_turn_budget_#{System.unique_integer([:positive])}"
     cleanup_sim(sim_id)
 
     state =
@@ -194,7 +94,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
         world: %{status: "in_progress", players: %{}},
         meta: %{
           run: %{
-            domain: "space_station",
+            domain: "poker",
             status: "running",
             resumable: true,
             recovery_attempts: 0,
@@ -216,7 +116,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
   end
 
   test "transient recovery persistence failures retry and then durably terminalize" do
-    sim_id = "spc_transient_recovery_#{System.unique_integer([:positive])}"
+    sim_id = "pkr_transient_recovery_#{System.unique_integer([:positive])}"
     on_exit(fn -> Store.delete_state(sim_id) end)
 
     state =
@@ -225,7 +125,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
         world: %{status: "in_progress", players: %{}},
         meta: %{
           run: %{
-            domain: "space_station",
+            domain: "poker",
             status: "running",
             resumable: true,
             recovery_attempts: 0,
@@ -295,13 +195,13 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
 
   test "recovery queue continues after a non-resumable entry without wasting capacity" do
     suffix = System.unique_integer([:positive])
-    exhausted_id = "spc_recovery_exhausted_#{suffix}"
-    resumable_id = "spc_recovery_ready_#{suffix}"
+    exhausted_id = "pkr_recovery_exhausted_#{suffix}"
+    resumable_id = "pkr_recovery_ready_#{suffix}"
 
     exhausted_state =
-      SpaceStation.initial_state(sim_id: exhausted_id, player_count: 5)
+      Poker.initial_state(sim_id: exhausted_id, player_count: 4)
       |> with_run_metadata(%{
-        domain: "space_station",
+        domain: "poker",
         status: "running",
         resumable: true,
         recovery_attempts: 0,
@@ -310,9 +210,9 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
       })
 
     resumable_state =
-      SpaceStation.initial_state(sim_id: resumable_id, player_count: 5)
+      Poker.initial_state(sim_id: resumable_id, player_count: 4)
       |> with_run_metadata(%{
-        domain: "space_station",
+        domain: "poker",
         status: "running",
         resumable: true,
         recovery_attempts: 0,
@@ -354,14 +254,14 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
   end
 
   test "runner teardown persists final usage before the collector is stopped" do
-    sim_id = "spc_final_usage_#{System.unique_integer([:positive])}"
+    sim_id = "pkr_final_usage_#{System.unique_integer([:positive])}"
     {:ok, collector} = SimUsage.start_link(sim_id)
-    SimUsage.record_external_decision(collector, "captain", "test-model")
+    SimUsage.record_external_decision(collector, "player_1", "test-model")
 
     terminal_state =
-      SpaceStation.initial_state(sim_id: sim_id, player_count: 5)
+      Poker.initial_state(sim_id: sim_id, player_count: 4)
       |> with_run_metadata(%{
-        domain: "space_station",
+        domain: "poker",
         status: "completed",
         resumable: false,
         started_at_ms: System.system_time(:millisecond) - 1_000,
@@ -375,7 +275,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
       |> :sys.get_state()
       |> Map.merge(%{
         runners: %{
-          sim_id => %{ref: self(), domain: :space_station, usage_collector: collector}
+          sim_id => %{ref: self(), domain: :poker, usage_collector: collector}
         },
         usage_artifacts: %{},
         recovery_queue: [],
@@ -392,7 +292,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
              SimManager.handle_call({:usage, sim_id}, self(), stopped_state)
 
     assert usage.totals.decisions == 1
-    assert usage.actors["captain"].model_id == "test-model"
+    assert usage.actors["player_1"].model_id == "test-model"
     assert Store.get_state(sim_id).meta.run.usage.totals.decisions == 1
 
     on_exit(fn -> Store.delete_state(sim_id) end)
@@ -464,26 +364,14 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
     assert Store.get_state(newer_id) == nil
   end
 
-  defp collect_states_until_game_over(sim_id, timeout \\ 10_000) do
-    collect_states_until_game_over(sim_id, timeout, [])
-  end
+  # Scripted Tic Tac Toe player: every call claims the next free cell in 0..8,
+  # so it never proposes an occupied cell.
+  defp scripted_moves do
+    {:ok, agent} = Agent.start_link(fn -> Enum.to_list(0..8) end)
 
-  defp collect_states_until_game_over(sim_id, timeout, acc) do
-    assert_receive %LemonCore.Event{type: :sim_world_updated, meta: %{sim_id: ^sim_id}} = event,
-                   timeout
-
-    state =
-      case event.payload do
-        %{state: state} -> state
-        %{"state" => state} -> state
-      end
-
-    acc = acc ++ [state]
-
-    if MapHelpers.get_key(state.world, :status) == "game_over" do
-      acc
-    else
-      collect_states_until_game_over(sim_id, timeout, acc)
+    fn _model, _context, _stream_opts ->
+      cell = Agent.get_and_update(agent, fn [cell | rest] -> {cell, rest} end)
+      {:ok, tool_call("place_mark", %{"row" => div(cell, 3), "col" => rem(cell, 3)})}
     end
   end
 

@@ -16,10 +16,6 @@ defmodule LemonSimUi.SpectatorLive do
   alias LemonSimUi.Live.Components.{
     WerewolfBoard,
     VendingBenchBoard,
-    TcgShopBoard,
-    SpaceStationBoard,
-    StockMarketBoard,
-    SurvivorBoard,
     PokerBoard,
     RunLog,
     SpectatorChrome
@@ -28,14 +24,14 @@ defmodule LemonSimUi.SpectatorLive do
   @vending_bench_artifact_refresh_ms 5_000
   @usage_refresh_ms 5_000
 
-  # `LemonSim.Bench.Domains.arena_domains/0` covers the five always-on league
-  # domains; vending_bench and tcg_shop have no league adapter (not part of
-  # the arena) but spectator_live still renders them via their own board
-  # components (see `render_board/1` below, the actual board registration
-  # point). `domain_registration_test.exs` checks this list stays a superset
-  # of the arena ids and stays in sync with `render_board/1`'s case clauses.
+  # `LemonSim.Bench.Domains.arena_domains/0` covers the always-on league
+  # domains; vending_bench has no league adapter (not part of the arena) but
+  # spectator_live still renders it via its own board component (see
+  # `render_board/1` below, the actual board registration point).
+  # `domain_registration_test.exs` checks this list stays a superset of the
+  # arena ids and stays in sync with `render_board/1`'s case clauses.
   @supported_domains Enum.map(Domains.arena_domains(), &String.to_atom(&1.id)) ++
-                       [:vending_bench, :tcg_shop]
+                       [:vending_bench]
 
   @doc false
   @spec supported_domains() :: [atom()]
@@ -231,34 +227,6 @@ defmodule LemonSimUi.SpectatorLive do
                 running={@running}
                 usage={@usage}
               />
-            <% :tcg_shop -> %>
-              <.tcg_shop_spectator_view
-                state={@state}
-                sim_id={@sim_id}
-                running={@running}
-                usage={@usage}
-              />
-            <% :space_station -> %>
-              <.space_station_spectator_view
-                state={@state}
-                sim_id={@sim_id}
-                running={@running}
-                usage={@usage}
-              />
-            <% :stock_market -> %>
-              <.stock_market_spectator_view
-                state={@state}
-                sim_id={@sim_id}
-                running={@running}
-                usage={@usage}
-              />
-            <% :survivor -> %>
-              <.survivor_spectator_view
-                state={@state}
-                sim_id={@sim_id}
-                running={@running}
-                usage={@usage}
-              />
             <% :poker -> %>
               <.poker_spectator_view
                 state={@state}
@@ -331,8 +299,7 @@ defmodule LemonSimUi.SpectatorLive do
           <span class="text-fuchsia-400">{SimHelpers.domain_label(@domain_type)}</span> simulation.
         </p>
         <p class="text-slate-500 text-sm">
-          Spectator mode is currently available for Werewolf, VendingBench, TCG Shop, Space
-          Station, Stock Market, Survivor, and Poker games.
+          Spectator mode is currently available for Werewolf, VendingBench, and Poker games.
         </p>
         <a href="/" class="inline-block mt-6 glass-button px-6 py-2 rounded-lg text-sm">
           Back to Dashboard
@@ -382,225 +349,6 @@ defmodule LemonSimUi.SpectatorLive do
         <.render_board domain={:vending_bench} world={@state.world} />
         <.usage_panel usage={@usage} />
         <RunLog.render state={@state} running={@running} />
-      </div>
-    </div>
-    """
-  end
-
-  attr(:state, :map, required: true)
-  attr(:sim_id, :string, required: true)
-  attr(:running, :boolean, required: true)
-  attr(:usage, :map, default: nil)
-
-  defp tcg_shop_spectator_view(assigns) do
-    day_number = LemonCore.MapHelpers.get_key(assigns.state.world, :day_number) || 1
-    max_days = LemonCore.MapHelpers.get_key(assigns.state.world, :max_days) || 14
-    phase = LemonCore.MapHelpers.get_key(assigns.state.world, :phase) || "operator_turn"
-
-    assigns =
-      assigns
-      |> assign(:day_number, day_number)
-      |> assign(:max_days, max_days)
-      |> assign(:phase, phase)
-
-    ~H"""
-    <div class="flex flex-col min-h-screen bg-[#100d08] text-slate-200">
-      <SpectatorChrome.page_header
-        sim_id={@sim_id}
-        border_class="border-amber-900/60"
-        bg_class="bg-slate-950/75"
-        hover_class="hover:text-amber-300"
-        running={@running}
-      >
-        <:meta>
-          <SpectatorChrome.meta_line
-            label="TCG Shop"
-            label_class="text-amber-300"
-            progress={"Day #{@day_number}/#{@max_days}"}
-            phase={format_phase(@phase)}
-          />
-        </:meta>
-      </SpectatorChrome.page_header>
-
-      <div class="flex-1 overflow-y-auto overflow-x-hidden p-4" style="scrollbar-gutter: stable;">
-        <.render_board domain={:tcg_shop} world={@state.world} />
-        <.usage_panel usage={@usage} />
-        <RunLog.render state={@state} running={@running} />
-      </div>
-    </div>
-    """
-  end
-
-  attr(:state, :map, required: true)
-  attr(:sim_id, :string, required: true)
-  attr(:running, :boolean, required: true)
-  attr(:usage, :map, default: nil)
-
-  defp space_station_spectator_view(assigns) do
-    world = assigns.state.world
-    round = LemonCore.MapHelpers.get_key(world, :round) || 1
-    max_rounds = LemonCore.MapHelpers.get_key(world, :max_rounds) || 8
-    phase = LemonCore.MapHelpers.get_key(world, :phase) || "action"
-    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
-    winner = LemonCore.MapHelpers.get_key(world, :winner)
-
-    assigns =
-      assigns
-      |> assign(:round, round)
-      |> assign(:max_rounds, max_rounds)
-      |> assign(:phase, phase)
-      |> assign(:game_status, status)
-      |> assign(:winner, winner)
-
-    ~H"""
-    <div class="flex flex-col h-screen overflow-hidden bg-[#050b14] text-slate-200">
-      <SpectatorChrome.page_header
-        sim_id={@sim_id}
-        border_class="border-cyan-900/50"
-        bg_class="bg-slate-950/70"
-        hover_class="hover:text-cyan-400"
-        league_path="/arena/space_station/leaderboard"
-        winner={@winner}
-        running={@running}
-        show_stopped={@game_status != "game_over"}
-      >
-        <:meta>
-          <SpectatorChrome.meta_line
-            label="Space Station"
-            label_class="text-cyan-400"
-            progress={"Round #{@round}/#{@max_rounds}"}
-            phase={format_phase(@phase)}
-          />
-        </:meta>
-      </SpectatorChrome.page_header>
-
-      <div class="flex-1 flex flex-col overflow-hidden">
-        <div class="flex-1 overflow-hidden">
-          <.render_board domain={:space_station} world={@state.world} />
-        </div>
-
-        <.usage_panel usage={@usage} />
-
-        <SpectatorChrome.live_feed_panel
-          events={@state.recent_events}
-          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
-        />
-      </div>
-    </div>
-    """
-  end
-
-  attr(:state, :map, required: true)
-  attr(:sim_id, :string, required: true)
-  attr(:running, :boolean, required: true)
-  attr(:usage, :map, default: nil)
-
-  defp stock_market_spectator_view(assigns) do
-    world = assigns.state.world
-    round = LemonCore.MapHelpers.get_key(world, :round) || 1
-    max_rounds = LemonCore.MapHelpers.get_key(world, :max_rounds) || 10
-    phase = LemonCore.MapHelpers.get_key(world, :phase) || "discussion"
-    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
-    winner = LemonCore.MapHelpers.get_key(world, :winner)
-
-    assigns =
-      assigns
-      |> assign(:round, round)
-      |> assign(:max_rounds, max_rounds)
-      |> assign(:phase, phase)
-      |> assign(:game_status, status)
-      |> assign(:winner, winner)
-
-    ~H"""
-    <div class="flex flex-col h-screen overflow-hidden bg-[#0a0e1a] text-slate-200">
-      <SpectatorChrome.page_header
-        sim_id={@sim_id}
-        border_class="border-emerald-900/50"
-        bg_class="bg-slate-950/70"
-        hover_class="hover:text-emerald-400"
-        league_path="/arena/stock_market/leaderboard"
-        winner={@winner}
-        running={@running}
-        show_stopped={@game_status != "game_over"}
-      >
-        <:meta>
-          <SpectatorChrome.meta_line
-            label="Stock Market"
-            label_class="text-emerald-400"
-            progress={"Round #{@round}/#{@max_rounds}"}
-            phase={format_phase(@phase)}
-          />
-        </:meta>
-      </SpectatorChrome.page_header>
-
-      <div class="flex-1 flex flex-col overflow-hidden">
-        <div class="flex-1 overflow-hidden">
-          <.render_board domain={:stock_market} world={@state.world} />
-        </div>
-
-        <.usage_panel usage={@usage} />
-
-        <SpectatorChrome.live_feed_panel
-          events={@state.recent_events}
-          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
-        />
-      </div>
-    </div>
-    """
-  end
-
-  attr(:state, :map, required: true)
-  attr(:sim_id, :string, required: true)
-  attr(:running, :boolean, required: true)
-  attr(:usage, :map, default: nil)
-
-  defp survivor_spectator_view(assigns) do
-    world = assigns.state.world
-    episode = LemonCore.MapHelpers.get_key(world, :episode) || 1
-    phase = LemonCore.MapHelpers.get_key(world, :phase) || "challenge"
-    status = LemonCore.MapHelpers.get_key(world, :status) || "in_progress"
-    winner = LemonCore.MapHelpers.get_key(world, :winner)
-
-    assigns =
-      assigns
-      |> assign(:episode, episode)
-      |> assign(:phase, phase)
-      |> assign(:game_status, status)
-      |> assign(:winner, winner)
-
-    ~H"""
-    <div class="flex flex-col h-screen overflow-hidden bg-[#0a0805] text-slate-200">
-      <SpectatorChrome.page_header
-        sim_id={@sim_id}
-        border_class="border-amber-900/50"
-        bg_class="bg-slate-950/70"
-        hover_class="hover:text-amber-300"
-        league_path="/arena/survivor/leaderboard"
-        winner={@winner}
-        running={@running}
-        show_stopped={@game_status != "game_over"}
-      >
-        <:meta>
-          <SpectatorChrome.meta_line
-            label="Survivor"
-            label_class="text-amber-400"
-            progress={"Episode #{@episode}"}
-            phase={format_phase(@phase)}
-          />
-        </:meta>
-      </SpectatorChrome.page_header>
-
-      <div class="flex-1 flex flex-col overflow-hidden">
-        <div class="flex-1 overflow-hidden">
-          <.render_board domain={:survivor} world={@state.world} />
-        </div>
-
-        <.usage_panel usage={@usage} />
-
-        <SpectatorChrome.live_feed_panel
-          events={@state.recent_events}
-          wrapper_class="flex-shrink-0 border-t border-glass-border bg-slate-950/60 h-48 overflow-hidden"
-        />
       </div>
     </div>
     """
@@ -890,10 +638,6 @@ defmodule LemonSimUi.SpectatorLive do
   # `@supported_domains` via `rendered_board_domains/0` below.
   @rendered_board_domains [
     :vending_bench,
-    :tcg_shop,
-    :space_station,
-    :stock_market,
-    :survivor,
     :poker,
     :werewolf
   ]
@@ -911,14 +655,6 @@ defmodule LemonSimUi.SpectatorLive do
     <%= case @domain do %>
       <% :vending_bench -> %>
         <VendingBenchBoard.render world={@world} interactive={false} />
-      <% :tcg_shop -> %>
-        <TcgShopBoard.render world={@world} interactive={false} />
-      <% :space_station -> %>
-        <SpaceStationBoard.render world={@world} interactive={false} />
-      <% :stock_market -> %>
-        <StockMarketBoard.render world={@world} interactive={false} />
-      <% :survivor -> %>
-        <SurvivorBoard.render world={@world} interactive={false} />
       <% :poker -> %>
         <PokerBoard.render world={@world} interactive={false} />
       <% :werewolf -> %>

@@ -4,26 +4,11 @@ defmodule Mix.Tasks.Lemon.Sim.CommonTest do
   alias Mix.Tasks.Lemon.Sim.Common
 
   @migrated_tasks [
-    {"lemon.sim.auction", Mix.Tasks.Lemon.Sim.Auction},
-    {"lemon.sim.courtroom", Mix.Tasks.Lemon.Sim.Courtroom},
-    {"lemon.sim.diplomacy", Mix.Tasks.Lemon.Sim.Diplomacy},
-    {"lemon.sim.dungeon_crawl", Mix.Tasks.Lemon.Sim.DungeonCrawl},
-    {"lemon.sim.intel_network", Mix.Tasks.Lemon.Sim.IntelNetwork},
     {"lemon.sim.leaderboard", Mix.Tasks.Lemon.Sim.Leaderboard},
-    {"lemon.sim.legislature", Mix.Tasks.Lemon.Sim.Legislature},
-    {"lemon.sim.murder_mystery", Mix.Tasks.Lemon.Sim.MurderMystery},
-    {"lemon.sim.pandemic", Mix.Tasks.Lemon.Sim.Pandemic},
     {"lemon.sim.poker", Mix.Tasks.Lemon.Sim.Poker},
     {"lemon.sim.ratings", Mix.Tasks.Lemon.Sim.Ratings},
     {"lemon.sim.replay", Mix.Tasks.Lemon.Sim.Replay},
-    {"lemon.sim.skirmish", Mix.Tasks.Lemon.Sim.Skirmish},
-    {"lemon.sim.space_station", Mix.Tasks.Lemon.Sim.SpaceStation},
-    {"lemon.sim.startup_incubator", Mix.Tasks.Lemon.Sim.StartupIncubator},
-    {"lemon.sim.stock_market", Mix.Tasks.Lemon.Sim.StockMarket},
     {"lemon.sim.suite", Mix.Tasks.Lemon.Sim.Suite},
-    {"lemon.sim.supply_chain", Mix.Tasks.Lemon.Sim.SupplyChain},
-    {"lemon.sim.survivor", Mix.Tasks.Lemon.Sim.Survivor},
-    {"lemon.sim.tcg_shop", Mix.Tasks.Lemon.Sim.TcgShop},
     {"lemon.sim.tic_tac_toe", Mix.Tasks.Lemon.Sim.TicTacToe},
     {"lemon.sim.vending_bench", Mix.Tasks.Lemon.Sim.VendingBench},
     {"lemon.sim.vending_bench_replay", Mix.Tasks.Lemon.Sim.VendingBenchReplay},
@@ -118,20 +103,30 @@ defmodule Mix.Tasks.Lemon.Sim.CommonTest do
     end)
   end
 
+  test "replay requires an explicit scenario and only offers kept scenarios" do
+    assert_raise Mix.Error, ~r/^missing scenario\n.*Scenarios: poker, werewolf$/s, fn ->
+      Mix.Tasks.Lemon.Sim.Replay.run(["priv/game_logs/abc123.jsonl"])
+    end
+
+    assert_raise Mix.Error, ~r/^unknown scenario "chess"\n\nScenarios: poker, werewolf$/, fn ->
+      Mix.Tasks.Lemon.Sim.Replay.run(["chess", "priv/game_logs/abc123.jsonl"])
+    end
+  end
+
   test "representative wrappers preserve help aliases and option/model errors" do
     assert Mix.Tasks.Lemon.Sim.TicTacToe.run(["--help"]) == :ok
     assert_receive {:mix_shell, :info, [help]}
     assert help =~ "--max-driver-turns"
 
     assert_raise Mix.Error, "invalid options: [{\"--unknown\", nil}]", fn ->
-      Mix.Tasks.Lemon.Sim.Auction.run(["--unknown"])
+      Mix.Tasks.Lemon.Sim.TicTacToe.run(["--unknown"])
     end
 
     provider = "task_missing_provider_#{System.unique_integer([:positive])}"
 
     assert_raise Mix.Error,
                  ~s(unknown model "missing" for provider "#{provider}"),
-                 fn -> Mix.Tasks.Lemon.Sim.Skirmish.run(["--model", "#{provider}:missing"]) end
+                 fn -> Mix.Tasks.Lemon.Sim.TicTacToe.run(["--model", "#{provider}:missing"]) end
 
     vending_provider = "vending_missing_provider_#{System.unique_integer([:positive])}"
 

@@ -65,10 +65,7 @@ defmodule LemonSim.Examples.Rendering.VideoGeneratorTest do
     test "real domain video generators still expose the shared public API" do
       domains = [
         LemonSim.Examples.Poker.VideoGenerator,
-        LemonSim.Examples.Survivor.VideoGenerator,
-        LemonSim.Examples.Werewolf.VideoGenerator,
-        LemonSim.Examples.SpaceStation.VideoGenerator,
-        LemonSim.Examples.Skirmish.VideoGenerator
+        LemonSim.Examples.Werewolf.VideoGenerator
       ]
 
       for mod <- domains do

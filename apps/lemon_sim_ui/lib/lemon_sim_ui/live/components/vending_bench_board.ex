@@ -1036,7 +1036,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
         "Customer desk is active after refund pressure"
 
       pending_deliveries != [] ->
-        "Supply chain watch: #{length(pending_deliveries)} delivery run(s) inbound"
+        "Restock watch: #{length(pending_deliveries)} delivery run(s) inbound"
 
       performance.units_sold > 0 ->
         "Machine is moving product and banking cash"

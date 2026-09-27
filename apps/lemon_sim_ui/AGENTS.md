@@ -6,7 +6,7 @@
 
 - launching, checkpointing, retrying/terminalizing recovery, and capacity-limiting simulations via `SimManager`
 - driving the runner loop (calling `LemonSim.Kernel.Runner.step/3` in a supervised task)
-- keeping the always-on model arenas running via `Arena` (one per domain: werewolf, space_station, stock_market, survivor, poker — randomized lineups, crash resume, restart reconciliation, and durably marked league recording through `LemonSim.Bench.League`)
+- keeping the always-on model arenas running via `Arena` (one per domain: werewolf, poker — randomized lineups, crash resume, restart reconciliation, and durably marked league recording through `LemonSim.Bench.League`)
 - hosting durable human/AI Werewolf rooms via `HostedGame` and one serialized `RoomServer` per room
 - rendering live state in the browser via the public `LobbyLive`, public `LeaderboardLive`, public `ArenaLive`/`ArenaLeaderboardLive` (per-domain arena + league standings), admin `SimDashboardLive`, and public read-only `SpectatorLive` watcher
 - exposing a token-protected admin API for remote sim start/stop
@@ -32,11 +32,6 @@ lib/
       supervisor.ex                        One-for-all hosted subsystem
       room_server.ex                       Durable room lifecycle, auth, timers, commands, replay
       replay.ex                            Canonical event replay/hash verifier
-    philosopher_chat.ex                    PhilosopherChat thread coordinator + Thread struct
-    philosopher_chat/
-      supervisor.ex                        rest_for_one subsystem (Registry, ThreadSupervisor, AiTaskSupervisor, coordinator)
-      thread_server.ex                     One durable serialized GenServer per thread: pacing loop, AI turns, broadcasts
-      auth.ex                              Password login + 30-day Phoenix.Token bearer sessions, 60s SSE stream tickets, per-IP login rate limiting (ETS); not enforced since Aug 2026 (open access)
     sim_helpers.ex                         Pure helpers: domain inference, labels, colors
     werewolf_playback.ex                   Buffered live-playback helper for readable Werewolf spectator pacing
     telemetry.ex                           Bounded hosted lifecycle/latency metrics
@@ -54,32 +49,22 @@ lib/
       health_controller.ex                 Public liveness `/healthz` and dependency readiness `/readyz`
       hosted_game_session_controller.ex    Hosted form/session exchange and replay download
       metrics_controller.ex                Protected runtime metrics
-      philosopher_chat_api_controller.ex   PhilosopherChat JSON API + SSE stream (`/api/chat/*`)
     live/
       lobby_live.ex                        Public list of currently running sims
       leaderboard_live.ex                  Public benchmark suite leaderboard page
       sim_dashboard_live.ex                Admin LiveView (launch + detail)
-      spectator_live.ex                    Public read-only werewolf spectator view
+      spectator_live.ex                    Public read-only spectator view (Werewolf, Poker, VendingBench)
       hosted_werewolf_live.ex              Hosted lobby/join/host/player/public-safe views
     plugs/
       require_access_token.ex              Expiring browser-session and bearer-only API gate
-      require_chat_session.ex              Legacy Bearer-only gate for the PhilosopherChat API (not wired into the router since Aug 2026; keep for re-enabling)
-      chat_cors.ex                         CORS for `/api/chat/*` (`LEMON_PHILOSOPHER_CHAT_CORS_ORIGINS`, default `*`) + OPTIONS preflight catch-all
       components/
         event_log.ex                       Renders recent_events list
         plan_history.ex                    Renders plan_history steps
         memory_viewer.ex                   Renders LemonSim.Memory.Tools files
         tic_tac_toe_board.ex               Board for :tic_tac_toe
-        skirmish_board.ex                  Grid board for :skirmish (interactive)
         werewolf_board.ex                  Player cards for :werewolf
-        stock_market_board.ex              Portfolio display for :stock_market
-        survivor_board.ex                  Tribe/elimination for :survivor
-        space_station_board.ex             Crew status for :space_station
-        auction_board.ex                   Lot/bidder display for :auction
-        diplomacy_board.ex                 Territory/faction display for :diplomacy
-        dungeon_crawl_board.ex             Party/encounter display for :dungeon_crawl
+        poker_board.ex                     Table/stack display for :poker
         vending_bench_board.ex             Retro VendingBench machine view, generated product sprites, Arena standings, operations, supplier/fault signals, and scorecard display
-        tcg_shop_board.ex                  Local game store view for TCG Shop finances, sealed inventory, sealed openings, loose-pack inventory/sales, special-order deposits/fulfillment, supplier credit, damaged-delivery claims, supplier standing, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns, store credit, consignment payables, memberships, preorders, promotions, organized-play capacity/prize support, inventory aging, singles, market pulse, online marketplace channels, tax ledger, gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, loss prevention, local competition, shrinkage, customers, and scorecard
 test/
   lemon_sim_ui/
     live/
@@ -104,16 +89,12 @@ self-contained and must not add runtime CDN dependencies.
 | `lib/lemon_sim_ui/hosted_game.ex` | `LemonSimUi.HostedGame` | Hosted room coordinator for codes, recovery readiness, active capacity, retention, and feature kill switch |
 | `lib/lemon_sim_ui/hosted_game/room_server.ex` | `LemonSimUi.HostedGame.RoomServer` | One durable serialized room: token auth, safe projections, timers, AI/human commands, pause/replacement, export, and rematch |
 | `lib/lemon_sim_ui/hosted_game/replay.ex` | `LemonSimUi.HostedGame.Replay` | Re-ingests redacted canonical events and checks command/final hashes |
-| `lib/lemon_sim_ui/philosopher_chat.ex` | `LemonSimUi.PhilosopherChat` | PhilosopherChat coordinator: thread CRUD/validation, lazy restore, paused+closed retention pruning, per-thread memory roots |
-| `lib/lemon_sim_ui/philosopher_chat/thread_server.ex` | `LemonSimUi.PhilosopherChat.ThreadServer` | One serialized GenServer per thread: paced agent turns (monitored AI tasks with hard timeout + bounded retries: exponential backoff, stall after 3 consecutive failures via `agent_stalled` broadcast), deferred reply for user messages posted mid-turn (`user_reply_pending`), live-state re-ingest so mid-turn user messages survive, single turn timer, persisted `pending_turn`/`rng_state`, idempotent `client_msg_id` posts, bounded broadcast log with `event_seq` cursor + restart-detecting `epoch` |
-| `lib/lemon_sim_ui/philosopher_chat/auth.ex` | `LemonSimUi.PhilosopherChat.Auth` | `philosopher_chat_password` login (SHA-256 digest compare) and 30-day bearer tokens; 60s `stream_ticket`s so EventSource never puts the bearer in a URL; per-IP login bucket (5 attempts / 15 min, table owned by the chat supervisor); passwordless bypass when unconfigured outside prod. Open access since Aug 2026: the router no longer enforces it (legacy `/session` only) |
-| `lib/lemon_sim_ui/controllers/philosopher_chat_api_controller.ex` | `LemonSimUi.PhilosopherChatApiController` | Thin JSON API (`/api/chat/*`, open access since Aug 2026): rate-limited session, roster, `stream-ticket`, threads (validated bodies → 400), messages, nudge, pause/resume, memories, `events?since=` (`{events, epoch, latest_seq}`), and the SSE `stream` (accepts everyone; replays missed events since the cursor before live streaming) |
 | `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | `LemonSimUi.Hosted*Live` | Hosted room creation, joining, role-blind host, private player, and public-safe story surfaces |
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose configured VendingBench launcher presets |
 | `lib/lemon_sim_ui/live/leaderboard_live.ex` | `LemonSimUi.LeaderboardLive` | Public leaderboard for `/leaderboards`; scans configured suite roots and renders rankings, failures, token totals, and null-safe costs |
 | `lib/lemon_sim_ui/controllers/vending_bench_launch_controller.ex` | `LemonSimUi.VendingBenchLaunchController` | Public non-JS route for the fixed VendingBench launcher |
 | `lib/lemon_sim_ui/live/sim_dashboard_live.ex` | `LemonSimUi.SimDashboardLive` | Dashboard LiveView for `/admin` and `/admin/sims/:sim_id`; handles sim launch and admin/detail flows |
-| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf, VendingBench, and TCG Shop, subscribes to sim/lobby updates, refreshes CLI VendingBench runs from checkpoint artifacts, and shows live usage collector snapshots or artifact `usage.json` |
+| `lib/lemon_sim_ui/live/spectator_live.ex` | `LemonSimUi.SpectatorLive` | Public shareable watcher for `/watch/:sim_id`; supports Werewolf, Poker, and VendingBench, subscribes to sim/lobby updates, refreshes CLI VendingBench runs from checkpoint artifacts, and shows live usage collector snapshots or artifact `usage.json` |
 | `lib/lemon_sim_ui/artifact_reader.ex` | `LemonSimUi.ArtifactReader` | Reads `suite.json` and `usage.json`; keeps token/cost formatting null-safe |
 | `lib/lemon_sim_ui/werewolf_playback.ex` | `LemonSimUi.WerewolfPlayback` | Buffers exact Werewolf state snapshots and enforces minimum dwell times so live dialogue/night beats stay readable |
 | `lib/lemon_sim_ui/controllers/admin_sim_controller.ex` | `LemonSimUi.AdminSimController` | Protected JSON API for remote sim start/stop |
@@ -125,9 +106,7 @@ self-contained and must not add runtime CDN dependencies.
 | `lib/lemon_sim_ui/live/components/plan_history.ex` | `LemonSimUi.Live.Components.PlanHistory` | Stateless component; renders `plan_history` as collapsible steps |
 | `lib/lemon_sim_ui/live/components/run_log.ex` | `LemonSimUi.Live.Components.RunLog` | Stateless component; renders current status, recent events, and model-visible VendingBench tool/decision traces |
 | `lib/lemon_sim_ui/live/components/memory_viewer.ex` | `LemonSimUi.Live.Components.MemoryViewer` | Reads scoped memory files from `LemonSim.Memory.Tools.memory_root/1` |
-| `lib/lemon_sim_ui/live/components/skirmish_board.ex` | `LemonSimUi.Live.Components.SkirmishBoard` | Most complex board; full grid rendering + interactive move/attack controls |
 | `lib/lemon_sim_ui/live/components/vending_bench_board.ex` | `LemonSimUi.Live.Components.VendingBenchBoard` | Retro vending-machine broadcast view with generated product sprites, Arena standings, supplier, refund, fault, trade, and scorecard display |
-| `lib/lemon_sim_ui/live/components/tcg_shop_board.ex` | `LemonSimUi.Live.Components.TcgShopBoard` | TCG Shop dashboard for sealed lines, sealed openings, loose-pack inventory/sales, special-order deposits/fulfillment, supplier credit, damaged-delivery claims, supplier standing, financing, register cash/card tenders, bank deposits, drawer reconciliation, local returns, store credit, consignment payables, memberships, preorders, promotions, organized-play capacity/prize support, inventory aging, singles, market pulse, online marketplace channels, tax ledger, gross margin, fixed overhead, operating profit, refunds, channel costs, payroll, scheduled staffing, loss prevention, local competition, shrinkage, customers, and scorecard metrics |
 
 ## Common Modification Patterns
 
@@ -172,7 +151,7 @@ Domains that support per-seat models use `build_multi_model_opts/5` in `SimManag
 
 1. Accept `player_count` and `model_specs` in `build_initial_state/3`.
 2. Call `build_multi_model_opts/5` with a `:default_opts_fn` pointing to the domain's `default_opts/1`.
-3. Add model picker rows to the launch form in `SimDashboardLive.render/1` (already templated for the `~w(werewolf stock_market survivor space_station auction diplomacy)` guard — extend that list).
+3. Add model picker rows to the launch form in `SimDashboardLive.render/1` (already templated for the `~w(werewolf vending_bench)` guard — extend that list).
 
 For Werewolf specifically, the internal actor IDs are villager names (`"Alice"`, `"Bram"`, etc.), not `player_n` seat IDs. Any per-player metadata such as `model_assignments` or `character_profiles` must be keyed by those canonical names.
 

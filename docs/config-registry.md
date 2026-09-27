@@ -390,21 +390,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
 | `LEMON_ARENA_POKER_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the poker arena. |
 | `LEMON_ARENA_POKER_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the poker arena. |
-| `LEMON_ARENA_SPACE_STATION_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the space_station arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SPACE_STATION_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the space_station arena. |
-| `LEMON_ARENA_STOCK_MARKET_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the stock_market arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_STOCK_MARKET_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the stock_market arena. |
-| `LEMON_ARENA_SURVIVOR_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the survivor arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SURVIVOR_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the survivor arena. |
 | `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
 | `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
 | `LEMON_ARENA_WEREWOLF_MAX_GAME_RECORDS`<br>_(alias: `WEREWOLF_ARENA_MAX_GAME_RECORDS`)_ | integer | `1000` |  | `lemon_sim_ui` | Rolling number of Werewolf league game records retained on disk and included in standings. |

@@ -143,7 +143,7 @@ Durable state and outbound notifications.
 
 ## Sim & arena
 
-`lemon_sim` contributes **26** tasks. They fall into four sub-groups.
+`lemon_sim` contributes **10** tasks. They fall into four sub-groups.
 
 ### Scenario runners (self-play)
 
@@ -151,10 +151,7 @@ Each runs one scenario's self-play example. All share the common flags
 `--seed`, `--max-turns`, `--offline-strategy`, `--no-persist`, and `--sim-id`
 (run `mix help lemon.sim.<scenario>` for scenario-specific options).
 
-`auction`, `courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`,
-`legislature`, `murder_mystery`, `pandemic`, `poker`, `skirmish`,
-`space_station`, `startup_incubator`, `stock_market`, `supply_chain`,
-`survivor`, `tcg_shop`, `tic_tac_toe`, `vending_bench`, `werewolf` (19).
+`poker`, `tic_tac_toe`, `vending_bench`, `werewolf` (4).
 
 ```bash
 mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
@@ -169,11 +166,8 @@ mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_
 | `mix lemon.sim.vending_bench_replay DIR` | Build a static HTML replay browser from a VendingBench artifact directory (not a video). |
 
 `mix lemon.sim.replay` handles every video scenario through one task, backed by
-each scenario's shared `VideoGenerator`. Scenarios: `skirmish`, `auction`,
-`courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`, `legislature`,
-`murder_mystery`, `pandemic`, `poker`, `space_station`, `startup_incubator`,
-`stock_market`, `supply_chain`, `survivor`, `werewolf`. A single positional
-argument is treated as a `skirmish` log for backwards compatibility.
+each scenario's shared `VideoGenerator`. Scenarios: `poker`, `werewolf`. Both
+the scenario and the log path are required.
 
 ```bash
 mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
@@ -181,7 +175,7 @@ mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
 ```
 
 VendingBench keeps a separate task because its replay is a static HTML browser,
-not a video. `tic_tac_toe` and `tcg_shop` have no replay renderer.
+not a video. `tic_tac_toe` has no replay renderer.
 
 ### Scoring & verification
 

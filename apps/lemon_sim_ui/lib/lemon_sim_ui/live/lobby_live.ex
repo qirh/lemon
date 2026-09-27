@@ -558,7 +558,6 @@ defmodule LemonSimUi.LobbyLive do
 
   defp broadcast_title(:werewolf), do: "Werewolf"
   defp broadcast_title(:vending_bench), do: "Vending Bench"
-  defp broadcast_title(:tcg_shop), do: "TCG Shop"
   defp broadcast_title(domain), do: SimHelpers.domain_label(domain)
 
   defp player_count_label(nil), do: "Live simulation"

@@ -138,29 +138,13 @@
   }
 
   /* ── scenario ticker ─────────────────────────────────────────────────── */
-  const SCENARIOS = [
-    "werewolf",
-    "vending_bench",
-    "diplomacy",
-    "poker",
-    "survivor",
-    "auction",
-    "courtroom",
-    "supply_chain",
-    "legislature",
-    "dungeon_crawl",
-    "intel_network",
-    "murder_mystery",
-    "pandemic",
-    "space_station",
-    "startup_incubator",
-    "stock_market",
-    "skirmish",
-  ];
+  const SCENARIOS = ["werewolf", "vending_bench", "poker", "tic_tac_toe"];
   const ticker = document.getElementById("ticker");
   if (ticker) {
-    // Two copies of the list so translateX(-50%) loops seamlessly.
-    const items = [...SCENARIOS, ...SCENARIOS].map((name) => {
+    // Each half repeats the short list so one half is wider than the
+    // viewport; two identical halves let translateX(-50%) loop seamlessly.
+    const half = [...SCENARIOS, ...SCENARIOS, ...SCENARIOS];
+    const items = [...half, ...half].map((name) => {
       const span = document.createElement("span");
       span.className = "ticker__item";
       span.textContent = name;
@@ -401,7 +385,7 @@
   }
 
   /* ── arena: switchable illustrative turn feeds ───────────────────────────
-     Three domains from the always-on arenas. The rows use event-shaped
+     Three LemonSim scenarios (Werewolf, Vending Bench, Poker). The rows use event-shaped
      language from each domain, but are representative showcase data rather
      than a live feed or copied run log. */
 

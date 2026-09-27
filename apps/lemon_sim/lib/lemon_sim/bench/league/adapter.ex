@@ -10,7 +10,7 @@ defmodule LemonSim.Bench.League.Adapter do
   Two rating modes are supported:
 
     * `:team` — the game splits seats into a winning and a losing side
-      (werewolf, space station, or winner-take-all games like survivor).
+      (werewolf).
       Ratings pair every winning-side model against every losing-side model.
     * `{:ranked, direction}` — each seat produces a numeric `value`
       (e.g. final portfolio value). Ratings compare per-model mean values

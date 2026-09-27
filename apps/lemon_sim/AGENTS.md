@@ -18,7 +18,6 @@ change.
 ## Current Dogfood Examples
 
 - `LemonSim.Examples.TicTacToe` is the smallest end-to-end example.
-- `LemonSim.Examples.Skirmish` is the preferred dogfood case for more complex sims. It adds deterministic combat resolution, derived events, AP-based turn continuation, and turn advancement without making the core harness domain-specific.
 - `LemonSim.Examples.Poker` is a multi-hand no-limit hold'em example built around a pure table engine. It is the current reference for wrapping an existing deterministic game engine with LemonSim action-space/updater glue, private per-seat notes, visibility-aware projections, and benchmark-oriented performance summaries.
 - `LemonSim.Examples.Poker` also supports optional per-hand blind schedules, so short tournament-style runs can raise pressure without changing the core harness.
 - `LemonSim.Examples.Werewolf` is the showcase target for a proper watchable
@@ -89,47 +88,6 @@ change.
   `LemonSim.Examples.VendingBench.Arena.LiveRunner` runs each agent's own
   VendingBench state to a day barrier, applies queued cross-agent events through
   the updater, then recomputes shared price pressure before the next day.
-- `LemonSim.Examples.TcgShop` is the TCG-shop business benchmark: a
-  single-operator local game store with Pokemon, Yu-Gi-Oh!, One Piece, Dragon
-  Ball Super, and accessory lines. It models sealed allocations, local
-  collection buys, singles inventory, grading submissions, preorder deposits
-  and release-day fulfillment, short-run promotion campaigns, store events
-  with inventory-backed prize support and store-credit prize fallback,
-  customer special orders/holds with deposit liability and stock reservation,
-  consignment singles with consignor payables, paid league memberships with
-  deferred service liability/revenue recognition, supplier-account standing
-  that links invoice payment behavior to credit/allocation outcomes,
-  working-capital credit-line debt with interest, partial distributor allocations and fill rates, inventory-constrained
-  online-order fulfillment, backorders, stockout/service trust damage,
-  persistent customer personas with loyalty/satisfaction, operator staff-hour
-  limits, scheduled part-time staffing coverage, regular payroll,
-  overtime/backlog pressure, fatigue-driven shrinkage,
-  loss-prevention controls that reduce shrinkage risk,
-  inventory aging and stale-stock markdowns, COGS/gross-margin accounting,
-  sealed-product opening into singles inventory with EV/chase-hit tracking,
-  loose-pack preparation from sealed boxes with counter/event pack sell-through,
-  online marketplace channel/listing management with marketplace fees,
-  register cash/card tender splitting, bank deposits, and drawer reconciliation,
-  local customer returns/store-credit refunds,
-  buylist store-credit liability/redemption,
-  merchant/payment fees, shipping labels, refunds/chargebacks, distributor
-  credit terms, damaged-delivery receiving and supplier claims, accounts payable, fixed rent/utilities/insurance overhead,
-  operating-profit accounting, sanctioned organized-play capacity/no-show/turn-away economics,
-  sales-tax liability/remittance,
-  release-calendar demand spikes, deterministic market repricing, collection
-  condition/authentication risk, grade-result variance, raw/graded singles
-  liquidity, local market share, competitor reactions to stockouts and pricing,
-  realistic query-sensitive market research notes, counterparty transcript
-  artifacts for supplier/customer/staff/grading/consignment flows, explicit
-  failure-mode scorecard flags, reputation, and net-worth scoring. It supports
-  deterministic `baseline`, `pressure`, and deliberately overextended artifact runs through
-  `mix lemon.sim.tcg_shop --preset ci --offline-strategy baseline` and
-  `mix lemon.sim.tcg_shop --preset ci --offline-strategy pressure`; use
-  `mix lemon.sim.tcg_shop --preset stress --offline-strategy overextended` for
-  a realistic bad-operator trace. Bundles are compatible with
-  `mix lemon.sim.verify` and `mix lemon.sim.score`. Use
-  `--deterministic-artifacts` with fixed `--seed`, `--sim-id`, and
-  `--artifact-dir` for byte-reproducible offline bundles.
 
 ## Key Files
 
@@ -172,15 +130,9 @@ Boundary namespaces:
 | `lib/lemon_sim/kernel/store.ex` | `LemonSim.Kernel.Store` | `LemonCore.Store` persistence wrapper |
 | `lib/lemon_sim/kernel/bus.ex` | `LemonSim.Kernel.Bus` | `LemonCore.Bus` topic helpers |
 | `lib/lemon_sim/llm/memory/tools.ex` | `LemonSim.LLM.Memory.Tools` | Scoped memory file tools (`memory_*`) |
-| `lib/lemon_sim/examples/skirmish.ex` | `LemonSim.Examples.Skirmish` | Tactical combat dogfood example for phased/derived-event sims |
 | `lib/lemon_sim/examples/werewolf/replay_storyboard.ex` | `LemonSim.Examples.Werewolf.ReplayStoryboard` | Builds audience-omniscient Werewolf replay beats, including explicit night actions and vote swings |
 | `lib/lemon_sim/examples/werewolf/transcript_logger.ex` | `LemonSim.Examples.Werewolf.TranscriptLogger` | Builds action-aware transcript entries so last-turn phase transitions do not hide statements, votes, or night actions |
 | `lib/lemon_sim/examples/werewolf/performance.ex` | `LemonSim.Examples.Werewolf.Performance` | Produces role-aware benchmark metrics for hidden-information reasoning, vote quality, and night-action execution |
-| `lib/lemon_sim/examples/survivor/performance.ex` | `LemonSim.Examples.Survivor.Performance` | Produces objective Survivor metrics for challenge conversion, whisper volume, vote quality, idol usage, and jury outcomes |
-| `lib/lemon_sim/examples/diplomacy/performance.ex` | `LemonSim.Examples.Diplomacy.Performance` | Produces Diplomacy-lite metrics for negotiation volume, support usage, territory capture, and final board conversion |
-| `lib/lemon_sim/examples/space_station/performance.ex` | `LemonSim.Examples.SpaceStation.Performance` | Produces Space Station Crisis metrics for crew utility, sabotage pressure, vote accuracy, and special-role usage |
-| `lib/lemon_sim/examples/stock_market/performance.ex` | `LemonSim.Examples.StockMarket.Performance` | Produces Stock Market Arena metrics for call accuracy, whisper activity, trade execution, and portfolio returns |
-| `lib/lemon_sim/examples/tcg_shop.ex` | `LemonSim.Examples.TcgShop` | Single-operator TCG shop benchmark facade and projector configuration |
 
 ## Design Boundaries
 
@@ -214,7 +166,6 @@ Boundary namespaces:
 - `Runner.ingest_events/4` should report invalid coalescers as `{:error, {:invalid_coalescer, module}}`, not raise.
 - VendingBench supplier orders are command/fact based: model-facing tools emit `place_supplier_order`, and the updater quotes suppliers and emits `supplier_order_placed`; do not trust model-origin payloads for cost, delivery day, substitutions, or affordability.
 - VendingBench artifact files must be written atomically with `LemonSim.Bench.Artifacts.AtomicFile`. The artifact registry is mutable only through `VendingBench.ArtifactRegistry`, which serializes updates and writes atomically.
-- TCG Shop should keep business rules in `examples/tcg_shop/*`; UI components may render scorecards and world snapshots but must not decide economics.
 - `State.version` tracks all state mutations, not just appended events.
 - When sim code reads world maps that may have string or atom keys, prefer `LemonCore.MapHelpers.get_key/2`.
 - After event payloads are normalized into internal world state, prefer atom-keyed access in reducers and benchmark loops instead of repeated mixed-key fallback.
@@ -236,11 +187,6 @@ Boundary namespaces:
 - Private meeting preferences are submitted with Night actions. Mutual requests resolve first, then the resolver honors non-conflicting directed requests and exposes the final pair without a separate selection phase. Doctors cannot protect the same target on consecutive nights.
 - Arena Werewolf uses fixed roles by sorted seat plus rotating model specs so every model covers every role over a full attempt cycle. Failed attempts advance rotation and appear in model completion rates without affecting game ratings. Treat ratings as provisional until role coverage is complete; compare role-adjusted win rate and role-execution value alongside team results.
 - Werewolf model turns cap output at 768 tokens, require tool use, and disable ZAI-style reasoning for GLM seats. After one failed retry, AI-only Werewolf runs record a missed decision and apply a deterministic legal fallback. Persisted private thoughts remain capped at 600 characters.
-- Survivor challenge resolution should depend on strategy matchups, not per-seat randomness. If strategy choice does not matter, the sim stops measuring planning quality.
-- Survivor benchmark output should include more than the winner. Favor signals such as challenge wins, whisper volume, correct elimination votes, idol usage, and jury vote conversion.
-- Diplomacy benchmark output should include negotiation and execution signals such as messages sent, submitted/support orders, territories captured, and final territory count, not just the nominal winner.
-- Space Station Crisis should remain a social-deduction benchmark, not a pure attrition sim. Keep public observables legible (room visits, round reports, revealed ejections), allow enough discussion for accusation updates, and end the game immediately when the crew ejects the saboteur.
-- Stock Market Arena should make public talk mechanically relevant. Public calls should move sentiment, accurate calls should feed trader reputation, bearish views should be actionable via shorting/covering, private tips should stay asymmetric, and benchmark output should emphasize directional accuracy, profitable execution, and information-sharing choices rather than just final winner.
 
 ## Testing
 
@@ -248,6 +194,6 @@ Boundary namespaces:
 mix test apps/lemon_sim
 ```
 
-Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the skirmish example's action space/updater/RNG path. `test/lemon_sim/examples/seeded_determinism_test.exs` plays full Werewolf and Poker games twice per seed with `:rand` perturbed between steps and asserts identical final-state hashes.
+Current tests cover state normalization/windowing, runner orchestration, the default tool-result adapter, memory tool filesystem safety, tool-loop decider behavior, and the TicTacToe, Werewolf, Poker, and VendingBench scenarios. `test/lemon_sim/examples/seeded_determinism_test.exs` plays full Werewolf and Poker games twice per seed with `:rand` perturbed between steps and asserts identical final-state hashes.
 
 Poker coverage also exercises side pots, heads-up blind/button rules, multi-hand progression, rejection fallback auto-folding, and projection privacy boundaries.

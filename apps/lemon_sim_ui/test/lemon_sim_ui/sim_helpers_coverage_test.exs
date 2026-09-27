@@ -5,10 +5,8 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
   alias LemonSimUi.SimHelpers
 
   test "infers domains from atom and string keyed worlds" do
-    assert SimHelpers.infer_domain_type(state(%{mode: "tcg_shop"})) == :tcg_shop
     assert SimHelpers.infer_domain_type(state(%{"arena_agents" => []})) == :vending_bench
-    assert SimHelpers.infer_domain_type(state(%{systems: %{}})) == :space_station
-    assert SimHelpers.infer_domain_type(state(%{"rooms" => []})) == :dungeon_crawl
+    assert SimHelpers.infer_domain_type(state(%{"machine" => %{}})) == :vending_bench
     assert SimHelpers.infer_domain_type(state(%{players: %{}})) == :werewolf
 
     # Poker also carries a :players map, so its :table/:player_stats check
@@ -25,12 +23,10 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
              "X's turn (3 moves)"
 
     assert summary(%{board: [], winner: "O"}) == "Winner: O"
-    assert summary(%{rooms: [], current_room: 2}) == "Room 3/5"
-    assert summary(%{rooms: [], current_room: 4, status: "lost"}) == "Party Wiped (Room 5)"
-    assert summary(%{disease_params: %{}, round: 12, status: "won"}) == "Pandemic Contained!"
-
-    assert summary(%{mode: "tcg_shop", day_number: 4, max_days: 14, bank_balance: 123.4}) ==
+    assert summary(%{machine: %{}, day_number: 4, max_days: 14, bank_balance: 123.4}) ==
              "Day 4/14 - $123.40"
+
+    assert summary(%{machine: %{}, day_number: 6, status: "bankrupt"}) == "Bankrupt (Day 6)"
   end
 
   test "sim summary includes event count and last event timestamp" do
@@ -57,10 +53,10 @@ defmodule LemonSimUi.SimHelpersCoverageTest do
   end
 
   test "labels, status colors, and timestamps have deterministic fallbacks" do
-    assert SimHelpers.domain_label(:intel_network) == "Intel Network"
+    assert SimHelpers.domain_label(:vending_bench) == "Vending Bench"
     assert SimHelpers.domain_label(:poker) == "Poker"
     assert SimHelpers.domain_label(:missing) == "Unknown"
-    assert SimHelpers.domain_badge_color(:pandemic) =~ "red"
+    assert SimHelpers.domain_badge_color(:werewolf) =~ "fuchsia"
     assert SimHelpers.domain_badge_color(:missing) =~ "gray"
     assert SimHelpers.status_color("lost") == "text-red-400"
     assert SimHelpers.status_color(nil) == "text-gray-500"

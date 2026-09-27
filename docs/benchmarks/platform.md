@@ -114,7 +114,7 @@ The LiveView app also exposes:
 - `/leaderboards` for verified suite leaderboards
 - `/admin` and `/admin/sims/:sim_id` for private admin surfaces when an access token is configured
 
-The spectator route supports VendingBench, Werewolf, and TCG Shop. For
+The spectator route supports VendingBench, Werewolf, and Poker. For
 artifact-backed VendingBench runs, it can refresh from `final_world.json` and
 render `usage.json` totals.
 
