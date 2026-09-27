@@ -287,8 +287,6 @@ defmodule CodingAgent.Session.WasmBridge do
     end
   end
 
-  defp extract_secret_name(_), do: {:error, :invalid_secret_name}
-
   defp extract_text_from_tool_result(content) when is_list(content) do
     content
     |> Enum.map(fn

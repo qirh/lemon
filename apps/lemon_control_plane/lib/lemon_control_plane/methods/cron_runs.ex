@@ -262,12 +262,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
     :exit, _ -> []
   end
 
-  defp get_meta_value(meta, key) when is_map(meta) and is_atom(key) do
-    Map.get(meta, key) || Map.get(meta, Atom.to_string(key))
-  rescue
-    _ -> nil
-  end
-
   defp get_meta_value(meta, key) when is_map(meta) and is_binary(key) do
     Map.get(meta, key) ||
       case safe_to_existing_atom(key) do

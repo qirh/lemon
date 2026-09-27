@@ -212,8 +212,6 @@ defmodule LemonControlPlane.SessionModel do
     end
   end
 
-  defp get_field(_map, _key), do: nil
-
   defp normalize_string(value) when is_binary(value) do
     case String.trim(value) do
       "" -> nil

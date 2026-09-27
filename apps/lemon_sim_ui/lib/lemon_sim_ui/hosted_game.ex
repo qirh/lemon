@@ -507,7 +507,7 @@ defmodule LemonSimUi.HostedGame do
       rules_preset not in ["story", "classic"] ->
         {:error, :invalid_rules_preset}
 
-      not is_nil(seed) and (not is_integer(seed) or seed < 1 or seed > 2_147_483_647) ->
+      not is_nil(seed) and (seed < 1 or seed > 2_147_483_647) ->
         {:error, :invalid_seed}
 
       true ->

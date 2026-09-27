@@ -1628,11 +1628,6 @@ defmodule LemonSimUi.SimManager do
     broadcast_lobby()
   end
 
-  defp broadcast_update(sim_id) when is_binary(sim_id) do
-    LemonSim.Kernel.Bus.broadcast_world_update(sim_id, %{})
-    broadcast_lobby()
-  end
-
   defp broadcast_lobby do
     event = LemonCore.Event.new(:sim_lobby_changed, %{})
     LemonCore.Bus.broadcast(@lobby_topic, event)

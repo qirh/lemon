@@ -344,8 +344,7 @@ defmodule LemonSim.Examples.Werewolf.FrameRenderer do
       status = to_string(get(player_info, :status, if(is_dead, do: "dead", else: "alive")))
       is_dead = is_dead or status == "dead"
 
-      show_role = true
-      revealed_role = if show_role, do: role, else: nil
+      revealed_role = role
       display_name = player_display_name(player_id, player_info)
 
       render_player_seat(

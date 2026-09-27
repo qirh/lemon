@@ -12,8 +12,6 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   `CodingAgent.Session.CompactionLifecycle.State`.
   """
 
-  require Logger
-
   alias CodingAgent.Session.CompactionManager
 
   defmodule State do
@@ -128,10 +126,6 @@ defmodule CodingAgent.Session.CompactionLifecycle do
                 task_timeout_ref: task_meta.timeout_ref
               }
           }
-
-        {:error, reason} ->
-          Logger.warning("Auto compaction task failed to start: #{inspect(reason)}")
-          state
       end
     else
       state

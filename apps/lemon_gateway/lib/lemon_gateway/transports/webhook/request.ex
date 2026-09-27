@@ -400,8 +400,6 @@ defmodule LemonGateway.Transports.Webhook.Request do
     ] or String.ends_with?(host, ".localhost")
   end
 
-  defp localhost_variant?(_), do: false
-
   defp resolve_host_ips(host, opts) when is_binary(host) and is_list(opts) do
     resolver = Keyword.get(opts, :dns_resolver, &default_dns_resolver/1)
 
@@ -531,8 +529,6 @@ defmodule LemonGateway.Transports.Webhook.Request do
       _ -> nil
     end
   end
-
-  defp parse_ip(_), do: nil
 
   defp canonicalize_host(host) when is_binary(host) do
     host

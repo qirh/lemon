@@ -1574,8 +1574,6 @@ defmodule LemonAutomation.CronManager do
     |> Enum.sort()
   end
 
-  defp mutable_patch_fields(_), do: []
-
   defp cron_update_action(%CronJob{enabled: true}, %CronJob{enabled: false}, params)
        when is_map(params),
        do: :job_paused

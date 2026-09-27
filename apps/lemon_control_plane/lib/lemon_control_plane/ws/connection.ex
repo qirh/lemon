@@ -206,10 +206,6 @@ defmodule LemonControlPlane.WS.Connection do
       {:error, {:unauthorized, _message} = error} ->
         # For auth errors, we still send a res frame with the error
         {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
-
-      {:error, _reason} ->
-        error = Errors.unauthorized()
-        {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
     end
   end
 
@@ -249,17 +245,13 @@ defmodule LemonControlPlane.WS.Connection do
       :async ->
         connection_pid = self()
 
-        case Task.start(fn ->
-               result = safe_async_dispatch(method, params, ctx)
-               send(connection_pid, {:method_result, id, result})
-             end) do
-          {:ok, _pid} ->
-            {:ok, state}
+        {:ok, _pid} =
+          Task.start(fn ->
+            result = safe_async_dispatch(method, params, ctx)
+            send(connection_pid, {:method_result, id, result})
+          end)
 
-          {:error, _reason} ->
-            error = Errors.unavailable("Method could not be started")
-            {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
-        end
+        {:ok, state}
 
       :inline ->
         result = Registry.dispatch(method, params, ctx)

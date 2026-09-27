@@ -121,7 +121,7 @@ defmodule CodingAgent.Session.ModelResolver do
           # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
           # then strip the provider prefix for a direct registry lookup.
           LemonAi.Models.get_model(provider_atom, model_id) ||
-            case model_id && String.split(model_id, ":", parts: 2) do
+            case String.split(model_id, ":", parts: 2) do
               [_prefix, bare_id] when bare_id != "" ->
                 LemonAi.Models.get_model(provider_atom, bare_id)
 
@@ -394,8 +394,6 @@ defmodule CodingAgent.Session.ModelResolver do
     end)
     |> Enum.uniq()
   end
-
-  defp routing_candidate_providers(_, _, _), do: []
 
   # A committed fallback pin (see LemonAgent.ModelRuntime.SessionPins) leads
   # the candidate order on later resolutions for the same session. Best-effort:
