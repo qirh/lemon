@@ -1845,7 +1845,7 @@ defmodule LemonRouter.RunOrchestratorTest do
                  })
                )
 
-      assert_receive {:captured_job, job}, 500
+      assert_receive {:captured_job, _job}, 500
       assert LemonCore.PolicyStore.get_session(session_key) == session_policy
     end
   end

@@ -194,76 +194,78 @@ defmodule LemonRouter.SurfaceManager do
 
   @spec finalize_answer(map(), Event.t(), map()) :: :ok | {:error, term()}
   def finalize_answer(state, %Event{} = event, extra_meta) when is_map(extra_meta) do
-    with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
-      resume =
-        event
-        |> CompactionTrigger.extract_completed_resume()
-        |> CompactionTrigger.normalize_resume_token()
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        resume =
+          event
+          |> CompactionTrigger.extract_completed_resume()
+          |> CompactionTrigger.normalize_resume_token()
 
-      final_text =
-        case CompactionTrigger.extract_completed_answer(event) do
-          answer when is_binary(answer) and answer != "" ->
-            answer
+        final_text =
+          case CompactionTrigger.extract_completed_answer(event) do
+            answer when is_binary(answer) and answer != "" ->
+              answer
 
-          _ ->
-            case CompactionTrigger.extract_completed_ok_and_error(event) do
-              {false, err} -> "Run failed: #{RetryHandler.format_run_error(err)}"
-              _ -> nil
+            _ ->
+              case CompactionTrigger.extract_completed_ok_and_error(event) do
+                {false, err} -> "Run failed: #{RetryHandler.format_run_error(err)}"
+                _ -> nil
+              end
+          end
+
+        meta =
+          state
+          |> coalescer_meta()
+          |> maybe_put_resume(resume)
+          |> Map.merge(extra_meta)
+
+        if state[:saw_delta] == true do
+          resolved_final_text = streamed_final_text(state, channel_id, final_text)
+
+          record_finalize_dispatch(state, :direct_stream_finalize)
+
+          with :ok <- dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta) do
+            case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
+                   meta: meta,
+                   final_text: resolved_final_text,
+                   dispatch?: false
+                 ) do
+              :ok ->
+                :ok
+
+              {:error, reason} ->
+                record_finalize_dispatch(state, :fallback_stream_finalize)
+                dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
+
+                maybe_dispatch_fallback_final_text(
+                  state,
+                  channel_id,
+                  resolved_final_text,
+                  meta,
+                  reason
+                )
             end
-        end
-
-      meta =
-        state
-        |> coalescer_meta()
-        |> maybe_put_resume(resume)
-        |> Map.merge(extra_meta)
-
-      if state[:saw_delta] == true do
-        resolved_final_text = streamed_final_text(state, channel_id, final_text)
-
-        record_finalize_dispatch(state, :direct_stream_finalize)
-
-        with :ok <- dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta) do
-          case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
+          end
+        else
+          case stream_coalescer().finalize_run(
+                 state.session_key,
+                 channel_id,
+                 state.run_id,
                  meta: meta,
-                 final_text: resolved_final_text,
-                 dispatch?: false
+                 final_text: final_text
                ) do
             :ok ->
+              record_finalize_dispatch(state, :coalescer_finalize)
               :ok
 
             {:error, reason} ->
-              record_finalize_dispatch(state, :fallback_stream_finalize)
-              dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
-
-              maybe_dispatch_fallback_final_text(
-                state,
-                channel_id,
-                resolved_final_text,
-                meta,
-                reason
-              )
+              record_finalize_dispatch(state, :fallback_final_text)
+              dispatch_fallback_final_answer(state, channel_id, final_text, meta, reason)
           end
         end
-      else
-        case stream_coalescer().finalize_run(
-               state.session_key,
-               channel_id,
-               state.run_id,
-               meta: meta,
-               final_text: final_text
-             ) do
-          :ok ->
-            record_finalize_dispatch(state, :coalescer_finalize)
-            :ok
 
-          {:error, reason} ->
-            record_finalize_dispatch(state, :fallback_final_text)
-            dispatch_fallback_final_answer(state, channel_id, final_text, meta, reason)
-        end
-      end
-    else
-      :error -> :ok
+      :error ->
+        :ok
     end
   end
 

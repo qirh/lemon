@@ -38,24 +38,26 @@ defmodule LemonRouter.DeliveryRouteResolver do
   def resolve(_session_key, _fallback_channel_id, _meta), do: :error
 
   defp from_meta(channel_id, meta) when is_map(meta) do
-    with peer when is_map(peer) or is_list(peer) <- meta[:peer] || meta["peer"] || %{} do
-      peer_kind = normalize_peer_kind(peer[:kind] || peer["kind"])
-      peer_id = peer[:id] || peer["id"]
+    case meta[:peer] || meta["peer"] || %{} do
+      peer when is_map(peer) or is_list(peer) ->
+        peer_kind = normalize_peer_kind(peer[:kind] || peer["kind"])
+        peer_id = peer[:id] || peer["id"]
 
-      if peer_kind in [:dm, :group, :channel] and is_binary(peer_id) and peer_id != "" do
-        {:ok,
-         %DeliveryRoute{
-           channel_id: channel_id,
-           account_id: (meta[:account_id] || meta["account_id"] || "default") |> to_string(),
-           peer_kind: peer_kind,
-           peer_id: peer_id,
-           thread_id: peer[:thread_id] || peer["thread_id"]
-         }}
-      else
+        if peer_kind in [:dm, :group, :channel] and is_binary(peer_id) and peer_id != "" do
+          {:ok,
+           %DeliveryRoute{
+             channel_id: channel_id,
+             account_id: (meta[:account_id] || meta["account_id"] || "default") |> to_string(),
+             peer_kind: peer_kind,
+             peer_id: peer_id,
+             thread_id: peer[:thread_id] || peer["thread_id"]
+           }}
+        else
+          :error
+        end
+
+      _ ->
         :error
-      end
-    else
-      _ -> :error
     end
   rescue
     _ in [ArgumentError, Protocol.UndefinedError] -> :error
