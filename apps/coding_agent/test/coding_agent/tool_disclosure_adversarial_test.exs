@@ -462,48 +462,11 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
   end
 
   # ==========================================================================
-  # execute_code interaction
+  # Disclosed order
   # ==========================================================================
 
-  describe "execute_code" do
-    test "stays disclosed and validated rather than deferred", %{tmp_dir: tmp_dir} do
-      settings_manager =
-        Map.put(settings(), :tools, %{execute_code: %{enabled: true}})
-
-      result =
-        ExtensionLifecycle.initialize(
-          cwd: tmp_dir,
-          settings_manager: settings_manager,
-          tool_opts: [
-            settings_manager: settings_manager,
-            mcp_tools: [mcp("mcp_fixture_alpha")],
-            tool_disclosure: [budget_tokens: 1]
-          ]
-        )
-
-      tool_names = names(result.tools)
-
-      assert "execute_code" in tool_names
-      refute "execute_code" in result.tool_disclosure.hidden_names
-
-      # It is a builtin, so free-text search (which only walks the hidden set)
-      # must not offer it as if it were deferred.
-      search = find(result.tools, "tool_search")
-      assert search.execute.("id", %{"query" => "execute_code"}, nil, nil).details.matched == []
-
-      # It is still in the frozen catalog, so the bridge validates against its
-      # real schema instead of running an unchecked script.
-      invoke = find(result.tools, "tool_invoke")
-
-      assert {:error, message} =
-               invoke.execute.("id", %{"name" => "execute_code", "args" => %{}}, nil, nil)
-
-      assert message =~ "missing required parameter: script"
-    end
-
-    test "disclosure does not change the disclosed prefix when execute_code is off", %{
-      tmp_dir: tmp_dir
-    } do
+  describe "disclosed order" do
+    test "disclosure does not change the order of the disclosed prefix", %{tmp_dir: tmp_dir} do
       tool_opts = [mcp_tools: [mcp("mcp_fixture_alpha")]]
 
       baseline = names(ToolRegistry.get_tools(tmp_dir, tool_opts))

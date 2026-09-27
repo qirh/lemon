@@ -117,7 +117,7 @@ runner ever selects or replaces the Gateway executor.
 
 Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, XMTP and email are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
 
-Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See `docs/platform/transport-unification.md`.
+Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See decision D2 in `docs/platform-split.md`.
 
 Webhook submissions use a caller-fixed run ID. If the router cannot confirm
 whether a submission took effect, the HTTP request receives a `200` receipt
@@ -246,7 +246,7 @@ in-process subagents.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Tools.Cron` | `tools/cron.ex` | Manage cron jobs and active cron runs via `LemonAutomation.CronManager` |
+| `LemonGateway.Tools.Cron` | `tools/cron.ex` | Manage cron jobs and active cron runs via `LemonAutomation.CronManager`; add/update accept `deliverTo` (`"none"`, `"telegram:<chat>[:<topic>]"`, `"discord:<channel>[:<thread>]"`, `"auto"`), `once` (one-shot), and `timezone: "local"`. Non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
 | `LemonGateway.Tools.SmsGetInboxNumber` | `tools/sms_get_inbox_number.ex` | Get the Twilio inbox phone number |
 | `LemonGateway.Tools.SmsWaitForCode` | `tools/sms_wait_for_code.ex` | Block until a matching SMS verification code arrives |
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |

@@ -3,9 +3,9 @@ defmodule LemonChannels.Adapters.Email do
   Email channel adapter (Phase 2.4/B3).
 
   Email is the one gateway ingress surface that is genuinely message-shaped, so
-  it is the one ported to `LemonChannels.Plugin`; see
-  `docs/platform/transport-unification.md` for why webhook, SMS and voice are
-  staying in `lemon_gateway`.
+  it is the one ported to `LemonChannels.Plugin`; the "Transports" section of
+  `apps/lemon_gateway/README.md` explains why webhook, SMS and voice stay in
+  `lemon_gateway` (decision D2 in `docs/platform-split.md`).
 
   Both halves are here: inbound parses a provider webhook payload into a
   `LemonCore.InboundMessage`, and `deliver/1` sends the reply over SMTP through

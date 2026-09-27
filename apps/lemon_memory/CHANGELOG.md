@@ -9,6 +9,14 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 First release. `lemon_memory` is a new package, carved out of `lemon_core`,
 where durable memory had been eight modules with no boundary of their own.
 
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained, and requires
+  `lemon_core` as `~> 0.2`.
+
 ### Added
 
 - Automatic local recall now carries agent-scoped, BM25-ranked conversation

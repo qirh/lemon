@@ -180,7 +180,7 @@ not a video. `tic_tac_toe` has no replay renderer.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle. |
+| `mix lemon.sim.verify PATH` | Verify a run artifact bundle: hashes, event replay (VendingBench, Werewolf, Poker), and scorecard recompute. Exits non-zero on failure. |
 
 ```bash
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
@@ -197,8 +197,9 @@ mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 
 ## Not a mix task
 
-`scripts/release_package` is a shell **script**, not a `mix` task — invoke it
-directly (`scripts/release_package <package>`). It is not listed by
+`scripts/release_package` and `scripts/verify_packages` are shell **scripts**,
+not `mix` tasks — invoke them directly (`scripts/release_package <package>
+<version>`; see `docs/release/hex-packages.md`). They are not listed by
 `mix lemon.help`.
 
 `./bin/lemon node join` is also a source wrapper, not a Mix task. It starts a

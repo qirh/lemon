@@ -1,45 +1,37 @@
 defmodule LemonSim.Bench.Artifacts.Verifier do
-  @moduledoc false
+  @moduledoc """
+  Verifies `lemon_sim.run.v1` artifact bundles.
 
+  A bundle verifies only when `manifest.json` and `hashes.json` are present
+  and every hashed file matches, the domain's required files are hashed,
+  domains with replay support re-fold `inputs.jsonl` into `events.jsonl` and
+  `final_world.json` (`LemonSim.Bench.Artifacts.Replay`), and registered
+  scorecards recompute from the final world. There is no unhashed fallback:
+  bundles without a manifest or hashes fail.
+  """
+
+  alias LemonSim.Bench.Artifacts.{Bundle, Replay}
   alias LemonSim.Bench.Scorecard.Registry
 
   def verify_run(artifact_dir) when is_binary(artifact_dir) do
-    case {read_json(Path.join(artifact_dir, "manifest.json")),
-          read_json(Path.join(artifact_dir, "hashes.json"))} do
-      {{:ok, manifest}, {:ok, hashes}} ->
-        with :ok <- verify_schema(manifest),
-             :ok <- verify_hashes_schema(hashes),
-             :ok <- verify_expected_files(manifest, hashes),
-             :ok <- verify_manifest_integrity(manifest, hashes),
-             :ok <- verify_hashes(artifact_dir, hashes),
-             {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
-             :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
-          {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard}}
-        end
-
-      {{:error, {:read_json_failed, _path, :enoent}}, _} ->
-        verify_legacy_run(artifact_dir)
-
-      {_, {:error, {:read_json_failed, _path, :enoent}}} ->
-        verify_legacy_run(artifact_dir)
-
-      {{:error, reason}, _} ->
-        {:error, reason}
-
-      {_, {:error, reason}} ->
-        {:error, reason}
+    with {:ok, manifest} <- read_bundle_json(artifact_dir, "manifest.json"),
+         {:ok, hashes} <- read_bundle_json(artifact_dir, "hashes.json"),
+         :ok <- verify_schema(manifest),
+         :ok <- verify_hashes_schema(hashes),
+         :ok <- verify_expected_files(manifest, hashes),
+         :ok <- verify_manifest_integrity(manifest, hashes),
+         :ok <- verify_hashes(artifact_dir, hashes),
+         {:ok, replay} <- Replay.verify_bundle(artifact_dir, manifest),
+         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")),
+         :ok <- verify_scorecard(artifact_dir, manifest, scorecard) do
+      {:ok, %{manifest: manifest, hashes: hashes, scorecard: scorecard, replay: replay}}
     end
   end
 
-  defp verify_legacy_run(artifact_dir) do
-    manifest = %{
-      "schema_version" => "lemon_sim.run.legacy",
-      "sim" => %{"id" => "vending_bench"}
-    }
-
-    with {:ok, _world} <- read_json(Path.join(artifact_dir, "final_world.json")),
-         {:ok, scorecard} <- read_json(Path.join(artifact_dir, "scorecard.json")) do
-      {:ok, %{manifest: manifest, hashes: %{"files" => %{}}, scorecard: scorecard, legacy: true}}
+  defp read_bundle_json(artifact_dir, file) do
+    case read_json(Path.join(artifact_dir, file)) do
+      {:error, {:read_json_failed, _path, :enoent}} -> {:error, {:missing_bundle_file, file}}
+      other -> other
     end
   end
 
@@ -61,12 +53,19 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
 
   defp verify_expected_files(manifest, %{"files" => files}) do
     required_files(manifest)
+    |> Kernel.++(replay_files(manifest))
     |> Enum.find(fn file -> not Map.has_key?(files, file) end)
     |> case do
       nil -> :ok
       missing -> {:error, {:missing_required_hashed_file, missing}}
     end
   end
+
+  defp replay_files(%{"sim" => %{"id" => sim_id}}) do
+    if Replay.supported?(sim_id), do: Replay.required_files(), else: []
+  end
+
+  defp replay_files(_manifest), do: []
 
   defp required_files(%{"sim" => %{"id" => "vending_bench"}}) do
     [
@@ -90,24 +89,6 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
     ]
   end
 
-  defp required_files(%{"sim" => %{"id" => "tcg_shop"}}) do
-    [
-      "final_world.json",
-      "events.jsonl",
-      "actions.jsonl",
-      "scorecard.json",
-      "config.json",
-      "commands.jsonl",
-      "facts.jsonl",
-      "market.json",
-      "inventory.json",
-      "counterparty_transcript.json",
-      "replay.json",
-      "replay.html",
-      "report.md"
-    ]
-  end
-
   defp required_files(%{"sim" => %{"id" => "vending_bench_arena"}}) do
     [
       "final_world.json",
@@ -120,8 +101,7 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
     ]
   end
 
-  defp required_files(%{"sim" => %{"id" => sim_id}})
-       when sim_id in ["pandemic", "poker", "stock_market"] do
+  defp required_files(%{"sim" => %{"id" => sim_id}}) when sim_id in ["poker", "werewolf"] do
     [
       "final_world.json",
       "events.jsonl",
@@ -248,8 +228,13 @@ defmodule LemonSim.Bench.Artifacts.Verifier do
     end
   end
 
+  # Encode through `Bundle.jsonable/1`, the same key/value normalization every
+  # bundle writer applies before `Jason.encode!/1`. Plain `Jason.encode!/1`
+  # diverges on e.g. a `nil` map key (`"nil"` vs the writer's `""`), which a
+  # scorecard grouping model-less seats under `nil` produces.
   defp canonical_json(value) do
     value
+    |> Bundle.jsonable()
     |> Jason.encode!()
     |> Jason.decode!()
   end

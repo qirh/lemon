@@ -317,15 +317,15 @@ token is persisted back to the secrets store.
 
 ## Context Compaction
 
-When a conversation gets too long for the model's context window, the
-`ContextCompactor` can handle it:
+`lemon_ai` itself does not compact anything: a context-length error is
+classified as `:context_length` by `LemonAi.Error` and surfaced to the caller
+instead of walking the provider fallback chain.
 
-1. **Truncation** — drop the oldest messages (sliding window)
-2. **Summarization** — use the LLM itself to summarize old messages
-3. **Hybrid** — summarize then truncate if still too long
-
-This is triggered automatically by coding_agent when a context-length error
-is detected.
+Coding sessions own the recovery. `CodingAgent.Compaction` finds a safe cut
+point (never between a tool call and its result), asks the model to summarize
+the older messages, and keeps the recent tail. It runs proactively when the
+context nears the window, and `CodingAgent.Session.OverflowRecovery` runs it
+once and retries the turn when a provider reports a context-length error.
 
 ---
 

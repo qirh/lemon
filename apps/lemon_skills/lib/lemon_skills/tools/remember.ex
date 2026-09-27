@@ -18,8 +18,7 @@ defmodule LemonSkills.Tools.Remember do
     * `replaces` alone deletes one exact existing passage.
 
   Its read-side counterpart is `LemonSkills.Tools.Recall`. Registered as a
-  builtin tool in `CodingAgent.ToolRegistry` and exposed through the
-  `CodingAgent.Tools` factories.
+  builtin tool in `CodingAgent.ToolRegistry`.
   """
 
   alias LemonAgent.AbortSignal

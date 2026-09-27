@@ -29,14 +29,6 @@ defmodule LemonCore.Config.Tools do
       auto_build = true
       default_memory_limit = 10485760
 
-      [runtime.tools.execute_code]
-      enabled = false
-      timeout_ms = 120000
-      kernel_mode = "per_call"
-      kernel_idle_timeout_ms = 1800000
-      max_live_kernels = 16
-      max_queued_cells_per_kernel = 8
-
       # Hide the MCP/extension/WASM long tail behind tool_search/tool_invoke
       # once the catalog's estimated schema cost exceeds budget_tokens.
       [runtime.tools.disclosure]
@@ -49,10 +41,6 @@ defmodule LemonCore.Config.Tools do
   - `LEMON_WEB_SEARCH_ENABLED`, `LEMON_WEB_SEARCH_PROVIDER`
   - `LEMON_WEB_FETCH_ENABLED`, `LEMON_WEB_FETCH_MAX_CHARS`
   - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
-  - `LEMON_EXECUTE_CODE_ENABLED`, `LEMON_EXECUTE_CODE_TIMEOUT_MS`,
-    `LEMON_EXECUTE_CODE_KERNEL_MODE`, `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`,
-    `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS`, `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL`,
-    `LEMON_EXECUTE_CODE_MAX_TEXT_BYTES`, `LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC`
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
     `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`
 
@@ -70,7 +58,6 @@ defmodule LemonCore.Config.Tools do
     :auto_resize_images,
     :web,
     :wasm,
-    :execute_code,
     :disclosure
   ]
 
@@ -131,22 +118,6 @@ defmodule LemonCore.Config.Tools do
           max_tool_invoke_depth: integer()
         }
 
-  @type execute_code_config :: %{
-          enabled: boolean(),
-          python_path: String.t(),
-          timeout_ms: integer(),
-          max_rpc_calls: integer(),
-          max_rpc_result_bytes: integer(),
-          max_output_bytes: integer(),
-          max_text_bytes: pos_integer(),
-          max_parallel_rpc: pos_integer(),
-          tools: [String.t()],
-          kernel_mode: String.t(),
-          kernel_idle_timeout_ms: pos_integer(),
-          max_live_kernels: pos_integer(),
-          max_queued_cells_per_kernel: pos_integer()
-        }
-
   @type disclosure_config :: %{
           enabled: boolean(),
           budget_tokens: pos_integer(),
@@ -162,7 +133,6 @@ defmodule LemonCore.Config.Tools do
             cache: web_cache_config()
           },
           wasm: wasm_config(),
-          execute_code: execute_code_config(),
           disclosure: disclosure_config()
         }
 
@@ -179,7 +149,6 @@ defmodule LemonCore.Config.Tools do
       auto_resize_images: resolve_auto_resize(tools_settings),
       web: resolve_web(tools_settings),
       wasm: resolve_wasm(tools_settings),
-      execute_code: resolve_execute_code(tools_settings),
       disclosure: resolve_disclosure(tools_settings)
     }
   end
@@ -410,121 +379,6 @@ defmodule LemonCore.Config.Tools do
     end
   end
 
-  # Programmatic tool calling (`execute_code`): a per-tool runtime capability
-  # gated exactly like `[runtime.tools.wasm]`, default-off because the script
-  # runs arbitrary code with host permissions. `tools` narrows the RPC
-  # allowlist the generated python shim exposes; `[]` means "the full
-  # allowlist" and the coding_agent-side loader resolves it. The `kernel_*`
-  # settings configure the optional persistent-interpreter mode:
-  # `kernel_mode = "session"` keeps Python state across calls while
-  # `"per_call"` (the default) keeps today's fresh-process behavior, and the
-  # three bounds cap idle reaping, concurrent live kernels, and queued cells
-  # per kernel.
-  defp resolve_execute_code(settings) do
-    ec = settings["execute_code"] || %{}
-
-    %{
-      enabled:
-        Env.get(:lemon_execute_code_enabled,
-          default: if(is_nil(ec["enabled"]), do: false, else: ec["enabled"])
-        ),
-      python_path: Env.get(:lemon_execute_code_python_path, default: ec["python_path"] || ""),
-      timeout_ms: Env.get(:lemon_execute_code_timeout_ms, default: ec["timeout_ms"] || 120_000),
-      max_rpc_calls:
-        Env.get(:lemon_execute_code_max_rpc_calls, default: ec["max_rpc_calls"] || 100),
-      max_rpc_result_bytes:
-        Env.get(:lemon_execute_code_max_rpc_result_bytes,
-          default: ec["max_rpc_result_bytes"] || 5_242_880
-        ),
-      max_output_bytes:
-        Env.get(:lemon_execute_code_max_output_bytes, default: ec["max_output_bytes"] || 50_000),
-      max_text_bytes:
-        resolve_execute_code_bound(
-          "LEMON_EXECUTE_CODE_MAX_TEXT_BYTES",
-          ec["max_text_bytes"],
-          65_536
-        ),
-      max_parallel_rpc:
-        resolve_execute_code_bound(
-          "LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC",
-          ec["max_parallel_rpc"],
-          4
-        ),
-      tools: resolve_execute_code_tools(ec),
-      kernel_mode: resolve_execute_code_kernel_mode(ec),
-      kernel_idle_timeout_ms:
-        resolve_execute_code_bound(
-          "LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS",
-          ec["kernel_idle_timeout_ms"],
-          1_800_000
-        ),
-      max_live_kernels:
-        resolve_execute_code_bound(
-          "LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS",
-          ec["max_live_kernels"],
-          16
-        ),
-      max_queued_cells_per_kernel:
-        resolve_execute_code_bound(
-          "LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL",
-          ec["max_queued_cells_per_kernel"],
-          8
-        )
-    }
-  end
-
-  defp resolve_execute_code_tools(ec) do
-    # Note: intentionally not `Env.get/2` -- see the comment on
-    # `LemonCore.Config.Agent.resolve_extension_paths/1`.
-    env_tools = Env.list("LEMON_EXECUTE_CODE_TOOLS")
-
-    if env_tools != [] do
-      env_tools
-    else
-      ec["tools"] || []
-    end
-  end
-
-  # Only the exact spellings "per_call"/"session" (after trimming) select a
-  # mode. Anything else fails closed to "per_call": a malformed env override
-  # never defers to a lower-precedence source, so persistence can only ever
-  # be enabled by an unambiguous valid value. Like `LEMON_EXECUTE_CODE_TOOLS`
-  # above, this is a raw (undeclared) env read.
-  defp resolve_execute_code_kernel_mode(ec) do
-    raw = Env.string("LEMON_EXECUTE_CODE_KERNEL_MODE") || ec["kernel_mode"]
-
-    normalize_execute_code_kernel_mode(raw) || "per_call"
-  end
-
-  defp normalize_execute_code_kernel_mode(mode) when is_binary(mode) do
-    case String.trim(mode) do
-      "per_call" -> "per_call"
-      "session" -> "session"
-      _ -> nil
-    end
-  end
-
-  defp normalize_execute_code_kernel_mode(_), do: nil
-
-  # Kernel bounds must stay positive integers: a zero/negative/garbage value
-  # would read downstream as "no limit" or "reap immediately", so an invalid
-  # value at one precedence level is skipped and the next valid level (env >
-  # TOML > hardcoded default) wins instead.
-  defp resolve_execute_code_bound(env_var, toml_value, default) do
-    # Raw (undeclared) typed read; `Env.int/1` yields 0 (an invalid bound)
-    # when unset, empty, or unparseable.
-    env_value = Env.int(env_var)
-
-    cond do
-      positive_int?(env_value) -> env_value
-      positive_int?(toml_value) -> toml_value
-      true -> default
-    end
-  end
-
-  defp positive_int?(value) when is_integer(value) and value > 0, do: true
-  defp positive_int?(_), do: false
-
   # Progressive tool-schema disclosure: once the resolved catalog's schema cost
   # exceeds `budget_tokens`, `CodingAgent.ToolDisclosure` hides the
   # MCP/extension/WASM long tail behind a `tool_search` / `tool_invoke` bridge
@@ -618,21 +472,6 @@ defmodule LemonCore.Config.Tools do
         "cache_compiled" => true,
         "cache_dir" => "",
         "max_tool_invoke_depth" => 4
-      },
-      "execute_code" => %{
-        "enabled" => false,
-        "python_path" => "",
-        "timeout_ms" => 120_000,
-        "max_rpc_calls" => 100,
-        "max_rpc_result_bytes" => 5_242_880,
-        "max_output_bytes" => 50_000,
-        "tools" => [],
-        "kernel_mode" => "per_call",
-        "kernel_idle_timeout_ms" => 1_800_000,
-        "max_live_kernels" => 16,
-        "max_text_bytes" => 65_536,
-        "max_parallel_rpc" => 4,
-        "max_queued_cells_per_kernel" => 8
       },
       "disclosure" => %{
         "enabled" => true,

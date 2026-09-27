@@ -503,12 +503,12 @@ defmodule LemonSim.Bench.SuiteTest do
 
   defp write_poker_bundle!(artifact_dir, sim_id, seed) do
     state = Poker.initial_state(sim_id: sim_id, player_count: 2, max_hands: 1, seed: seed)
-    events = [%{kind: "hand_started", payload: %{hand: 1}, ts_ms: 123}]
 
     assert {:ok, _paths} =
-             PokerArtifacts.write_run_artifacts(state, events, [],
+             PokerArtifacts.write_run_artifacts(state, [], [],
                artifact_dir: artifact_dir,
-               deterministic_artifacts?: true
+               deterministic_artifacts?: true,
+               replay: %{config: PokerArtifacts.replay_config(state), batches: []}
              )
   end
 

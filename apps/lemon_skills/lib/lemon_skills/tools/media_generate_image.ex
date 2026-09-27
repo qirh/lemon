@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   @moduledoc """
   Supervised image-generation preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local SVG previews,
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local SVG previews,
   OpenAI image generation (OpenAI credentials) and Vertex AI Imagen (Google
   service-account credentials).
   """

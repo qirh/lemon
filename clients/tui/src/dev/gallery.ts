@@ -182,7 +182,7 @@ export function renderDiffSection(width: number): string[] {
 			label: "  server diff from the edit tool (real line numbers, two hunks)",
 			path: "lib/run.ex",
 			text: serverDiffToRows(
-				" 11\tdef start(job) do\n-12\t  {:ok, pid} = Runner.start_link(job)\n+12\t  {:ok, pid} = Runner.start_link(job, timeout: :infinity)\n 13\t  Registry.register(job.id, pid)\n...\n 40\tdef stop(pid) do\n+41\t  Logger.info(\"stopping\")\n 41\t  GenServer.stop(pid)",
+				' 11\tdef start(job) do\n-12\t  {:ok, pid} = Runner.start_link(job)\n+12\t  {:ok, pid} = Runner.start_link(job, timeout: :infinity)\n 13\t  Registry.register(job.id, pid)\n...\n 40\tdef stop(pid) do\n+41\t  Logger.info("stopping")\n 41\t  GenServer.stop(pid)',
 			),
 		},
 		{

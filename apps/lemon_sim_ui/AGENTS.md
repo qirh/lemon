@@ -25,6 +25,7 @@ lib/
     router.ex                              Public, no-store hosted, private admin, and protected API routes
     artifact_reader.ex                     Suite/usage JSON readers and formatting helpers
     sim_manager.ex                         GenServer: owns all running sim tasks
+    demo.ex                                Keyless demo start helper (`start_werewolf/1`, watch URL)
     arena.ex                               GenServer per domain: always-on league scheduler + recorder
     arena_domains.ex                       Presentation config for arena domains
     hosted_game.ex                         Room creation, recovery, capacity, retention, kill switch
@@ -65,6 +66,8 @@ lib/
         werewolf_board.ex                  Player cards for :werewolf
         poker_board.ex                     Table/stack display for :poker
         vending_bench_board.ex             Retro VendingBench machine view, generated product sprites, Arena standings, operations, supplier/fault signals, and scorecard display
+  mix/tasks/
+    lemon.sim.demo.ex                      `mix lemon.sim.demo`: boot UI + offline Werewolf game, print watch URL
 test/
   lemon_sim_ui/
     live/
@@ -86,9 +89,10 @@ self-contained and must not add runtime CDN dependencies.
 | File | Module | Purpose |
 |---|---|---|
 | `lib/lemon_sim_ui/sim_manager.ex` | `LemonSimUi.SimManager` | Central GenServer; durable start/stop/abandon/resume, lifecycle and final-usage checkpoints, bounded recovery queue with transient backoff/terminalization, retention, and auto-loop controls |
+| `lib/lemon_sim_ui/demo.ex` | `LemonSimUi.Demo` | `start_werewolf/1` starts a keyless offline Werewolf game (`offline_strategy: "heuristic"`) through `SimManager`; used by `mix lemon.sim.demo` |
 | `lib/lemon_sim_ui/hosted_game.ex` | `LemonSimUi.HostedGame` | Hosted room coordinator for codes, recovery readiness, active capacity, retention, and feature kill switch |
 | `lib/lemon_sim_ui/hosted_game/room_server.ex` | `LemonSimUi.HostedGame.RoomServer` | One durable serialized room: token auth, safe projections, timers, AI/human commands, pause/replacement, export, and rematch |
-| `lib/lemon_sim_ui/hosted_game/replay.ex` | `LemonSimUi.HostedGame.Replay` | Re-ingests redacted canonical events and checks command/final hashes |
+| `lib/lemon_sim_ui/hosted_game/replay.ex` | `LemonSimUi.HostedGame.Replay` | Re-folds redacted canonical events from the room seed via `LemonSim.Bench.Artifacts.Replay.fold/4` and checks command/final hashes |
 | `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | `LemonSimUi.Hosted*Live` | Hosted room creation, joining, role-blind host, private player, and public-safe story surfaces |
 | `lib/lemon_sim_ui/live/lobby_live.ex` | `LemonSimUi.LobbyLive` | Public lobby for `/`; lists running sims, links to spectator pages, and can expose configured VendingBench launcher presets |
 | `lib/lemon_sim_ui/live/leaderboard_live.ex` | `LemonSimUi.LeaderboardLive` | Public leaderboard for `/leaderboards`; scans configured suite roots and renders rankings, failures, token totals, and null-safe costs |
@@ -112,7 +116,7 @@ self-contained and must not add runtime CDN dependencies.
 
 ### Adding a New Simulation Domain
 
-1. Implement the domain in `lemon_sim` (state, modules, updater, projector, action space, runner opts).
+1. Implement the domain in `lemon_sim` (state, modules, updater, projector, action space, runner opts), declare its `terminal_statuses/0`, and list it in `LemonSim.Examples`.
 2. Add a `build_initial_state/3` clause in `SimManager` for the new domain atom.
 3. Add `generate_id/1` clause in `SimManager`.
 4. Add domain detection in `SimHelpers.infer_domain_type/1` (key a unique world map field).
@@ -162,6 +166,8 @@ Edit `provider_options/0`, `model_options_for_provider/1`, and the default provi
 ## Design Boundaries
 
 - Do not add simulation logic here. Game rules, event shapes, and world state mutations belong in `lemon_sim`.
+- A run is finished only when `LemonSim.Examples.terminal?/1` says so. SimManager lifecycle (`completed` marking, recovery eligibility, resume refusal as `{:error, :finished}`, retention pruning), Arena recording, auto-loop restart, spectator redirects, and lobby REPLAY badges all use it; never compare world status with `"game_over"` outside a single-scenario board.
+- Offline strategies are keyless SimManager runs: `offline_strategy` selects a decider from `@offline_deciders` (today only Werewolf `"heuristic"`, i.e. `LemonSim.Examples.Werewolf.OfflineRunner`; never add a second copy of a lemon_sim heuristic here), `run_offline/3` owns persistence, traces, turn budget, and lifecycle, and resume rebuilds the same decider from persisted `start_opts`. Never resolve models or provider keys on that path.
 - Board components must remain stateless function components. Do not convert them to LiveComponents unless there is a strong rendering-isolation reason.
 - `SimManager` owns model-simulation runner PIDs. Hosted AI work is owned by `HostedGame.RoomServer` under the dedicated bounded `HostedGame.AiTaskSupervisor`; do not use the shared task supervisor for provider fanout.
 - The omniscient `WerewolfBoard` is only for model admin/broadcast surfaces. Never reuse it for hosted humans. Hosted player/public/host data must come from role-safe projections; hiding markup after sending raw state is not sufficient.

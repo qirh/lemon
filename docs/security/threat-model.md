@@ -77,7 +77,7 @@ resolution and error semantics are in
 store but does not hold the master key. **What is not:**
 
 - **No key rotation.** Re-encrypting existing secrets under a new master key is
-  not implemented. This is a *known, documented gap* (item 1.5 in
+  not implemented. This is a *known, documented gap* ("Known gaps" in
   `docs/platform-split.md`, and the `LemonCore.Secrets` moduledoc), not an
   oversight — if the master key is exposed, rotation today means re-entering
   secrets, not an in-place re-wrap.
@@ -98,15 +98,16 @@ tarball and published to a public registry. This nearly happened.
 The guard is `exclude_patterns` in each publishable package's `mix.exs`:
 
 ```elixir
-# apps/lemon_channels/mix.exs
-files: ~w(lib priv mix.exs README.md CHANGELOG.md LICENSE),
+# apps/lemon_ai/mix.exs
+files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
 exclude_patterns: [~r/\.env/, ~r/node_modules/],
 ```
 
 **Reviewer checklist for any new published package:** the `files` list should be
 an allowlist (not `.`), and if it includes `priv`, `exclude_patterns` must
-exclude `\.env` and any local-only build artifacts. `mix hex.build` and the
-tarball-audit lane verify the shipped file set. Never assume `.gitignore`
+exclude `\.env` and any local-only build artifacts. `scripts/verify_packages`
+(`mix hex.build --unpack`, then a consumer build from the unpacked tree) shows the
+shipped file set. Never assume `.gitignore`
 protects a published tarball — it does not.
 
 ## 3. Inbound webhooks — the internet-facing surface
@@ -243,7 +244,7 @@ compile-time edge.
 
 ## Known gaps (tracked)
 
-- **Secret key rotation** is not implemented (`docs/platform-split.md` item 1.5).
+- **Secret key rotation** is not implemented (`docs/platform-split.md`, "Known gaps").
 - **Prompt injection** via untrusted content is mitigated, not solved (§5).
 - **Local host compromise** is out of the threat model — anything that can read
   the master key source can decrypt secrets (§1).

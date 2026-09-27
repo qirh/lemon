@@ -1,192 +1,3 @@
-defmodule LemonMCP.ClientTest.SSEFixture do
-  use Plug.Router
-
-  plug(:match)
-  plug(:dispatch)
-
-  get "/sse" do
-    session = Integer.to_string(System.unique_integer([:positive]))
-    store = conn.assigns.store
-    stream_pid = self()
-
-    Agent.update(store, &Map.put(&1, session, stream_pid))
-
-    conn =
-      conn
-      |> put_resp_content_type("text/event-stream")
-      |> send_chunked(200)
-
-    {:ok, conn} = chunk(conn, "event: endpoint\ndata: /messages/#{session}\n\n")
-    stream_loop(conn)
-  end
-
-  post "/messages/:session" do
-    store = conn.assigns.store
-    {:ok, body, conn} = Plug.Conn.read_body(conn)
-    request = Jason.decode!(body)
-
-    if response = response_for(request) do
-      pid = Agent.get(store, &Map.fetch!(&1, session))
-      send(pid, {:sse_message, Jason.encode!(response)})
-    end
-
-    send_resp(conn, 202, "")
-  end
-
-  match _ do
-    send_resp(conn, 404, "not found")
-  end
-
-  @impl true
-  def init(opts), do: opts
-
-  @impl true
-  def call(conn, opts) do
-    conn
-    |> Plug.Conn.assign(:store, Keyword.fetch!(opts, :store))
-    |> super(opts)
-  end
-
-  defp stream_loop(conn) do
-    receive do
-      {:sse_message, data} ->
-        case chunk(conn, "event: message\ndata: #{data}\n\n") do
-          {:ok, conn} -> stream_loop(conn)
-          {:error, _reason} -> conn
-        end
-
-      :stop ->
-        conn
-    after
-      30_000 ->
-        conn
-    end
-  end
-
-  defp response_for(%{"method" => "initialize", "id" => id}) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{
-        "protocolVersion" => LemonMCP.protocol_version(),
-        "capabilities" => %{"tools" => %{}, "resources" => %{}, "prompts" => %{}},
-        "serverInfo" => %{"name" => "SSE Fixture", "version" => "1.0.0"}
-      }
-    }
-  end
-
-  defp response_for(%{"method" => "notifications/initialized"}), do: nil
-
-  defp response_for(%{"method" => "tools/list", "id" => id}) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{
-        "tools" => [
-          %{
-            "name" => "echo",
-            "description" => "Echo a message",
-            "inputSchema" => %{
-              "type" => "object",
-              "properties" => %{"message" => %{"type" => "string"}},
-              "required" => ["message"]
-            }
-          },
-          %{
-            "name" => "fail",
-            "description" => "Return a planned tool error",
-            "inputSchema" => %{"type" => "object", "properties" => %{}}
-          }
-        ]
-      }
-    }
-  end
-
-  defp response_for(%{
-         "method" => "tools/call",
-         "id" => id,
-         "params" => %{"name" => "echo", "arguments" => args}
-       }) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{
-        "content" => [%{"type" => "text", "text" => "echo:" <> Map.get(args, "message", "")}],
-        "isError" => false
-      }
-    }
-  end
-
-  defp response_for(%{"method" => "tools/call", "id" => id, "params" => %{"name" => "fail"}}) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{
-        "content" => [%{"type" => "text", "text" => "planned failure"}],
-        "isError" => true
-      }
-    }
-  end
-
-  defp response_for(%{"method" => "resources/list", "id" => id}) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{"resources" => [%{"uri" => "fixture://status", "name" => "Status"}]}
-    }
-  end
-
-  defp response_for(%{
-         "method" => "resources/read",
-         "id" => id,
-         "params" => %{"uri" => "fixture://status"}
-       }) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{
-        "contents" => [%{"uri" => "fixture://status", "text" => "status:ok"}]
-      }
-    }
-  end
-
-  defp response_for(%{"method" => "prompts/list", "id" => id}) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{"prompts" => [%{"name" => "brief", "description" => "Write a brief"}]}
-    }
-  end
-
-  defp response_for(%{
-         "method" => "prompts/get",
-         "id" => id,
-         "params" => %{"name" => "brief", "arguments" => args}
-       }) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "result" => %{
-        "description" => "Write a brief",
-        "messages" => [
-          %{
-            "role" => "user",
-            "content" => %{"type" => "text", "text" => "brief:" <> Map.get(args, "topic", "")}
-          }
-        ]
-      }
-    }
-  end
-
-  defp response_for(%{"id" => id}) do
-    %{
-      "jsonrpc" => "2.0",
-      "id" => id,
-      "error" => %{"code" => -32_601, "message" => "Method not found"}
-    }
-  end
-end
-
 defmodule LemonMCP.ClientTest.StreamableHTTPFixture do
   use Plug.Router
 
@@ -1288,24 +1099,6 @@ defmodule LemonMCP.ClientTest do
     end
   end
 
-  def handle_http_tool("echo", args) do
-    {:ok,
-     %Protocol.ToolCallResult{
-       content: [%{type: "text", text: "echo:" <> Map.get(args, "message", "")}],
-       isError: false
-     }}
-  end
-
-  def handle_http_tool("fail", _args) do
-    {:ok,
-     %Protocol.ToolCallResult{
-       content: [%{type: "text", text: "planned failure"}],
-       isError: true
-     }}
-  end
-
-  def handle_http_tool(_name, _args), do: {:error, :unknown_tool}
-
   defp sampling_fixture_node do
     """
     const readline = require('readline');
@@ -1348,68 +1141,14 @@ defmodule LemonMCP.ClientTest do
   end
 
   defp start_http_transport do
-    port = free_port()
-
-    start_supervised!(
-      {LemonMCP.Transport.HTTP,
-       [
-         port: port,
-         server_name: "HTTP Fixture",
-         server_version: "1.0.0",
-         tools: [
-           %Protocol.Tool{
-             name: "echo",
-             description: "Echo a message",
-             inputSchema: %{
-               "type" => "object",
-               "properties" => %{"message" => %{"type" => "string"}},
-               "required" => ["message"]
-             }
-           },
-           %Protocol.Tool{
-             name: "fail",
-             description: "Return a planned tool error",
-             inputSchema: %{"type" => "object", "properties" => %{}}
-           }
-         ],
-         tool_handler: &__MODULE__.handle_http_tool/2,
-         resources: [%{"uri" => "fixture://status", "name" => "Status"}],
-         resource_handler: fn
-           "fixture://status" ->
-             {:ok, [%{"uri" => "fixture://status", "text" => "status:ok"}]}
-
-           _ ->
-             {:error, :unknown_resource}
-         end,
-         prompts: [%{"name" => "brief", "description" => "Write a brief"}],
-         prompt_handler: fn
-           "brief", args ->
-             {:ok,
-              %{
-                "description" => "Write a brief",
-                "messages" => [
-                  %{
-                    "role" => "user",
-                    "content" => %{
-                      "type" => "text",
-                      "text" => "brief:" <> Map.get(args, "topic", "")
-                    }
-                  }
-                ]
-              }}
-
-           _, _ ->
-             {:error, :unknown_prompt}
-         end
-       ]}
-    )
-
-    port
+    start_bandit({LemonMCP.TestSupport.HTTPFixture, server_name: "HTTP Fixture"})
   end
 
   defp start_sse_transport do
     {:ok, store} = start_supervised({Agent, fn -> %{} end})
-    port = start_bandit({LemonMCP.ClientTest.SSEFixture, store: store})
+
+    port =
+      start_bandit({LemonMCP.TestSupport.SSEFixture, store: store, server_name: "SSE Fixture"})
 
     {port, store}
   end
@@ -1436,13 +1175,6 @@ defmodule LemonMCP.ClientTest do
     store
     |> Agent.get(&Map.values/1)
     |> Enum.each(&send(&1, :stop))
-  end
-
-  defp free_port do
-    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
-    {:ok, port} = :inet.port(socket)
-    :gen_tcp.close(socket)
-    port
   end
 
   defp start_bandit(plug) do

@@ -13,20 +13,19 @@ a `%LemonAi.Types.Model{}` at any provider and the rest of your code stays ident
 
 ## Install
 
-`lemon_ai` is not yet on Hex. Add it as a git dependency for now:
-
 ```elixir
 def deps do
   [
-    {:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
+    {:lemon_ai, "~> 0.2"}
   ]
 end
 ```
 
-Once published, this becomes:
+`0.2.0` is the first installable release line; the `0.1.0` release on Hex cannot be
+installed and is retired. Until `0.2.0` is on Hex, depend on the repository instead:
 
 ```elixir
-{:lemon_ai, "~> 0.1"}
+{:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
 ```
 
 The OTP application is named `:lemon_ai`, so you call it as `LemonAi.*`. It starts its own
@@ -248,11 +247,6 @@ caller can schedule its own retry.
 config :lemon_ai, :provider_retry,
   max_attempts: 4, base_delay_ms: 1_000, max_delay_ms: 30_000, max_retry_after_ms: 60_000
 ```
-
-### Context compaction
-
-`LemonAi.CompactingClient` wraps a call and, on a `ContextLengthExceeded` error,
-automatically compacts the conversation and retries instead of failing outright.
 
 ### Token estimation
 

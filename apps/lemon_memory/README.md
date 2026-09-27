@@ -46,7 +46,7 @@ inside one transaction.
 
 ```elixir
 def deps do
-  [{:lemon_memory, "~> 0.1"}]
+  [{:lemon_memory, "~> 0.2"}]
 end
 ```
 

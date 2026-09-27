@@ -29,10 +29,8 @@ RUN mix local.hex --force && mix local.rebar --force
 
 # The whole umbrella is copied, not just the apps named in the release: Mix
 # compiles every child under apps/, and rel/overlays supplies the `bin/lemon`
-# launcher shim that lands in the assembled release. hex_package.exs must come
-# along too — every publishable app's mix.exs requires it, so without it Mix
-# cannot even read the project.
-COPY mix.exs mix.lock hex_package.exs ./
+# launcher shim that lands in the assembled release.
+COPY mix.exs mix.lock ./
 COPY config config
 COPY rel rel
 COPY apps apps

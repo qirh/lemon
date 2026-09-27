@@ -91,8 +91,11 @@ defmodule CodingAgent.SessionRedirectTest do
     end
   end
 
-  # First call streams slowly (notifying the test per chunk); later calls
-  # return `retry_response` immediately.
+  # The first call streams (notifying the test per chunk) until its stream is
+  # canceled, then reports `:first_call_canceled`; later calls return
+  # `retry_response` immediately. Streaming until canceled, rather than for a
+  # fixed time, keeps the call in flight however long the session takes to
+  # deliver the redirect under load.
   defp slow_then_quick_stream_fn(parent, retry_response) do
     counter = :counters.new(1, [:atomics])
 
@@ -106,15 +109,7 @@ defmodule CodingAgent.SessionRedirectTest do
         Task.start(fn ->
           response = assistant_message("Partial before redirect")
           LemonAi.EventStream.push(stream, {:start, response})
-
-          for i <- 1..30 do
-            send(parent, {:streaming_chunk, i})
-            Process.sleep(30)
-            LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
-          end
-
-          LemonAi.EventStream.push(stream, {:done, :stop, response})
-          LemonAi.EventStream.complete(stream, response)
+          stream_until_canceled(parent, stream, response, 1)
         end)
 
         {:ok, stream}
@@ -122,6 +117,30 @@ defmodule CodingAgent.SessionRedirectTest do
         {:ok, response_to_event_stream(retry_response)}
       end
     end
+  end
+
+  # Bounded (~9s) so a redirect that never cancels the call ends in a completed
+  # call, and a failed `:first_call_canceled` assertion, rather than a hang.
+  defp stream_until_canceled(_parent, stream, response, i) when i > 300 do
+    LemonAi.EventStream.push(stream, {:done, :stop, response})
+    LemonAi.EventStream.complete(stream, response)
+  end
+
+  defp stream_until_canceled(parent, stream, response, i) do
+    send(parent, {:streaming_chunk, i})
+    Process.sleep(30)
+
+    case push_unless_gone(stream, {:text_delta, 0, "chunk #{i}", response}) do
+      :ok -> stream_until_canceled(parent, stream, response, i + 1)
+      {:error, _reason} -> send(parent, :first_call_canceled)
+    end
+  end
+
+  # The stream may stop mid-call when the consumer cancels it.
+  defp push_unless_gone(stream, event) do
+    LemonAi.EventStream.push(stream, event)
+  catch
+    :exit, _reason -> {:error, :gone}
   end
 
   defp start_session(opts \\ []) do
@@ -194,6 +213,9 @@ defmodule CodingAgent.SessionRedirectTest do
       assert_receive {:streaming_chunk, 2}, 3000
 
       :ok = Session.redirect(session, "Actually, switch approach")
+
+      # The in-flight model call is canceled rather than streamed to completion.
+      assert_receive :first_call_canceled, 5_000
 
       wait_for_streaming_complete(session)
 

@@ -290,4 +290,29 @@ defmodule LemonAutomation.CronScheduleTest do
       assert parsed.weekday == [1]
     end
   end
+
+  describe "local timezone" do
+    test "next run lands on the requested server wall-clock minute" do
+      next_ms = CronSchedule.next_run_ms("30 8 * * *", "local")
+      assert is_integer(next_ms)
+
+      assert {_date, {8, 30, 0}} = :calendar.system_time_to_local_time(next_ms, :millisecond)
+      assert next_ms > System.system_time(:millisecond)
+      assert next_ms - System.system_time(:millisecond) <= 25 * 60 * 60 * 1_000
+    end
+
+    test "next_runs yields strictly increasing local occurrences" do
+      runs = CronSchedule.next_runs("0 12 * * *", "local", count: 3)
+      assert length(runs) == 3
+
+      assert Enum.all?(runs, fn run ->
+               {_date, {12, 0, 0}} =
+                 :calendar.system_time_to_local_time(DateTime.to_unix(run), :second)
+
+               true
+             end)
+
+      assert runs == Enum.sort(runs, DateTime)
+    end
+  end
 end

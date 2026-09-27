@@ -43,11 +43,13 @@ defmodule Mix.Tasks.Lemon.Sim.WerewolfTest do
     assert opts[:sim_id] == "ww_test"
     assert opts[:transcript_path] == "/tmp/werewolf-task-test/ww_test.jsonl"
 
+    # Seat names come from Werewolf.initial_world(player_count: 5, seed: 42),
+    # the same seeded world the run starts from.
     assert opts[:model_assignments] == %{
-             "Cora" => {%{provider: :test, id: "alpha"}, "key:alpha"},
+             "Alice" => {%{provider: :test, id: "alpha"}, "key:alpha"},
              "Felix" => {%{provider: :test, id: "beta"}, "key:beta"},
-             "Jude" => {%{provider: :test, id: "gamma"}, "key:gamma"},
-             "Kira" => {%{provider: :test, id: "delta"}, "key:delta"},
+             "Lena" => {%{provider: :test, id: "gamma"}, "key:gamma"},
+             "Milo" => {%{provider: :test, id: "delta"}, "key:delta"},
              "Pia" => {%{provider: :test, id: "epsilon"}, "key:epsilon"}
            }
   end

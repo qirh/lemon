@@ -23,6 +23,12 @@ change.
 - `LemonSim.Examples.Werewolf` is the showcase target for a proper watchable
   social-deduction game: readable phases, hidden-information discipline,
   replay/storyboard artifacts, and objective role/model metrics.
+  `mix lemon.sim.werewolf --offline-strategy heuristic` (and
+  `mix lemon.sim.poker --offline-strategy heuristic`) play every seat with a
+  deterministic keyless heuristic (`*/offline_runner.ex`) and write
+  replay-verifiable `lemon_sim.run.v1` bundles; live runs write the same
+  bundle when given `--artifact-dir`. Both have `werewolf`/`poker` suite
+  adapters.
 - `LemonSim.Examples.VendingBench` is the Vending-Bench 1.0 target: a full
   nested-agent business simulation with operator strategy, physical worker
   execution, suppliers, inventory, demand, incidents, UI, replay, and
@@ -51,8 +57,6 @@ change.
   steps use the same missed-turn fallback after the outer step timeout, which
   the CLI can tune with `--live-step-timeout-ms` for stalled provider proof
   runs.
-  A checked-in deterministic replay fixture lives under
-  `priv/fixtures/vending_bench/ci_replay/`.
   Supplier discovery now includes deterministic `research_suppliers` support,
   `research_market` demand/price/risk notes, and terminal
   `send_supplier_message` / `send_supplier_email` actions with inbox/outbox
@@ -124,6 +128,7 @@ Boundary namespaces:
 | `lib/lemon_sim/llm/game_helpers/config.ex` | `LemonSim.LLM.GameHelpers.Config` | Shared model and provider credential resolution for sim runners |
 | `lib/lemon_sim/llm/game_helpers/provider_throttle.ex` | `LemonSim.LLM.GameHelpers.ProviderThrottle` | Shared provider request throttling with explicit process stop |
 | `lib/mix/tasks/lemon.sim.common.ex` | `Mix.Tasks.Lemon.Sim.Common` | Ordinary shared functions for Mix-task startup, bounded provider/model lookup, and optional keyword construction |
+| `lib/lemon_sim/examples.ex` | `LemonSim.Examples` | Scenario registry; union of per-scenario `terminal_statuses/0` and the shared `terminal?/1` finished-run predicate |
 | `lib/lemon_sim/examples/game_log.ex` | `LemonSim.Examples.GameLog` | Shared JSONL lifecycle, entry envelopes, event normalization, and JSON-safe encoding for scenario logs |
 | `lib/lemon_sim/llm/deciders/tool_loop_decider.ex` | `LemonSim.LLM.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/kernel/runner.ex` | `LemonSim.Kernel.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
@@ -143,8 +148,18 @@ Boundary namespaces:
 - Keep updater logic deterministic and side-effect free aside from explicit persistence calls. Updaters and world bootstrap never touch the process-global `:rand` state (`:rand.uniform/0,1`, `Enum.random/1`, `Enum.shuffle/1`, `Enum.take_random/2`); other `:rand` consumers in the same process must not be able to change a game.
 - Seeded RNG contract: a scenario that needs randomness takes a `:seed` option in `initial_world/1` (generating and recording one when omitted), stores it as `world.seed`, and carries `world.rng_state = LemonSim.Kernel.Rng.new(seed)` advanced past setup draws. Every draw goes through `LemonSim.Kernel.Rng` (`uniform/1,2`, `pick/2`, `shuffle/2`, `take_random/3`, each returning `{value, rng}`), and the updater writes the returned state back to `world.rng_state` in the same world update. `Rng.fetch!/1` raises when a world has no generator instead of falling back to `:rand`. `rng_state` is a two-integer list, so it survives JSON and `term_to_binary` round trips. A replay verifier rebuilds the initial state from the recorded seed (`Werewolf.initial_state(seed: seed, player_count: n, ...)`; add `player_ids:` for hosted rematches), re-folds the recorded events through the updater, and compares final-state hashes.
 - Werewolf follows that contract: roles, names, traits, and connections are drawn at setup, and evidence, wander sightings, village events, and items draw from `world.rng_state` during night resolution and elimination. Poker needs no `rng_state`: hand `k` shuffles `Deck.new()` from `world.base_seed + k - 1`, and `Table.start_hand/2` returns `{:error, :missing_seed}` without a `:seed` or explicit `:deck`. Tic-tac-toe rules are deterministic; only its offline random strategy draws, from its own `:rand.seed_s/2` state.
+- Every scenario facade declares `terminal_statuses/0` (the world `:status` values that end it) and is listed in `LemonSim.Examples`. Code outside a scenario that decides whether a run is finished (SimManager lifecycle/recovery, arenas, spectators, lobbies) must use `LemonSim.Examples.terminal?/1`, never a literal such as `"game_over"`: Tic Tac Toe ends `won`/`draw` and VendingBench `complete`/`bankrupt`.
 - Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
 - Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
+- `mix lemon.sim.verify` has no unhashed fallback: bundles without
+  `manifest.json`/`hashes.json` fail. Replay-capable domains (vending_bench,
+  werewolf, poker; `LemonSim.Bench.Artifacts.Replay.@domains`) must record
+  every updater input batch in `inputs.jsonl` plus setup in `config.json`;
+  the verifier rebuilds the initial state from the seed, re-folds the inputs,
+  and requires `events.jsonl` and `final_world.json` to match. Record inputs
+  with `Replay.apply_batch/3` (offline loops), `Replay.Recorder.record/3`, or
+  `Replay.Recorder.wrap_opts/2` / `with_bundle/5` (runner-driven live runs), and
+  keep `:on_after_step` callbacks notify-only in replay-verified games.
 - Put reusable model/provider/tool-loop mechanics under `LemonSim.LLM`.
 - Keep scenario-specific game-log modules focused on domain metadata and their
   existing public APIs. File lifecycle, JSONL reading/writing, timestamps,

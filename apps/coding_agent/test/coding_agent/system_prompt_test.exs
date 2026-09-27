@@ -2,7 +2,7 @@ defmodule CodingAgent.SystemPromptTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.SystemPrompt
-  alias CodingAgent.Tools
+  alias CodingAgent.ToolRegistry
 
   @tag :tmp_dir
   test "injects workspace files into prompt", %{tmp_dir: tmp_dir} do
@@ -49,7 +49,7 @@ defmodule CodingAgent.SystemPromptTest do
     assert referenced == ["recall", "remember"]
 
     for removed <- @removed_memory_tools do
-      refute prompt =~ "`#{removed}`", "prompt still names removed tool #{removed}"
+      refute removed in SystemPrompt.referenced_tool_names(prompt)
     end
 
     refute prompt =~ "Hermes"
@@ -94,7 +94,11 @@ defmodule CodingAgent.SystemPromptTest do
       })
 
     referenced_tools = SystemPrompt.referenced_tool_names(prompt)
-    default_tool_names = Tools.coding_tools(tmp_dir) |> Enum.map(& &1.name) |> MapSet.new()
+    default_tool_names =
+      tmp_dir
+      |> ToolRegistry.get_tools(include_extensions: false, include_mcp: false)
+      |> Enum.map(& &1.name)
+      |> MapSet.new()
 
     assert "read_skill" in referenced_tools
     assert "remember" in referenced_tools

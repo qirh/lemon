@@ -36,6 +36,10 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         "Use Lemon",
         (
             ("user-guide/memory.md", "Durable local memory and recall behavior."),
+            (
+                "user-guide/reminders-and-heartbeats.md",
+                "Telegram reminders, scheduled-result delivery, heartbeats, and the daily brief.",
+            ),
             ("user-guide/skills.md", "Discover, install, audit, and use skills."),
             ("user-guide/adaptive.md", "Opt-in learning, synthesis, and rollout controls."),
             ("user-guide/honcho.md", "Configure the optional Honcho memory provider."),
@@ -48,7 +52,6 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         "Tools and interfaces",
         (
             ("tools/web.md", "Web search, fetch, and browser automation tools."),
-            ("tools/execute-code.md", "Persistent Python RPC execution over allowlisted agent tools."),
             ("tools/media.md", "Media generation and artifact workflows."),
             ("tools/lsp.md", "Language-server diagnostics."),
             ("tools/acp.md", "ACP-shaped editor integration."),

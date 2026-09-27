@@ -183,8 +183,7 @@ defmodule LemonRouter.Policy do
 
   # Tools that mutate files or execute code on the host. Group chats require
   # an approval for each call because any member can prompt the agent.
-  # `execute_code` is bash-equivalent (it runs scripts with host permissions).
-  @group_approval_tools ~w(bash execute_code write edit patch hashline_edit)
+  @group_approval_tools ~w(bash write edit patch hashline_edit)
 
   # Load channel-specific restrictions
   defp get_channel_policy(nil), do: %{}

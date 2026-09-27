@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.Kanban do
   @moduledoc """
   Durable kanban board tool backed by LemonAgent.Workspace.KanbanStore.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. No external service or credentials are
+  Wired into CodingAgent.ToolRegistry's builtin tool list. No external service or credentials are
   required; boards and tasks persist in the workspace KanbanStore.
   """
 

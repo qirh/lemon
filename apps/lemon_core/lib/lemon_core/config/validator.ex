@@ -66,6 +66,7 @@ defmodule LemonCore.Config.Validator do
     errors = validate_tui(config.tui, errors)
     errors = validate_features(config.features, errors)
     errors = validate_memory(config.memory, errors)
+    errors = validate_automation(config.automation, errors)
 
     case errors do
       [] -> :ok
@@ -585,6 +586,15 @@ defmodule LemonCore.Config.Validator do
   end
 
   def validate_memory(_memory, errors), do: errors
+
+  @doc """
+  Validates the `[automation]` section.
+  """
+  @spec validate_automation(LemonCore.Config.Automation.t() | nil, [String.t()]) :: [String.t()]
+  def validate_automation(nil, errors), do: errors
+
+  def validate_automation(%LemonCore.Config.Automation{} = automation, errors),
+    do: LemonCore.Config.Automation.validate(automation, errors)
 
   @doc """
   Validates TUI configuration.

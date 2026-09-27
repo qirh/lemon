@@ -33,8 +33,9 @@ There are four scenarios in this app:
   multi-game league system (`LemonSim.Bench.League` + per-scenario adapters,
   alongside `Poker`): randomized model-to-seat match planning, per-game
   records, and per-model/per-role standings with Bradley-Terry ratings. The
-  `lemon_sim_ui` arenas run them around the clock when configured. It needs
-  provider credentials to run.
+  `lemon_sim_ui` arenas run them around the clock when configured. Model play
+  needs provider credentials; `mix lemon.sim.demo` (below) plays a keyless
+  heuristic game in the spectator UI.
 - `Poker` is a multi-hand no-limit hold'em session with per-seat model
   assignment; it is the second league/arena scenario (ranked mode on final
   chip stacks). It needs provider credentials to run.
@@ -58,6 +59,31 @@ mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
 mix lemon.sim.score apps/lemon_sim/priv/game_logs/vending_bench/vb_ci_baseline
 ```
+
+### Keyless demo
+
+One command boots the spectator UI and starts a live offline Werewolf game with
+no provider API keys or model configuration:
+
+```bash
+mix lemon.sim.demo
+mix lemon.sim.demo --seed 42 --player-count 7 --step-delay-ms 600
+```
+
+The task (in `apps/lemon_sim_ui`) starts `lemon_sim_ui` with its HTTP endpoint
+unless it is already running in the same VM, starts the game through
+`LemonSimUi.SimManager` with `offline_strategy: "heuristic"`, prints the
+spectator URL (`http://localhost:4090/watch/<sim_id>` by default), and keeps
+serving until interrupted. Every seat is played by the same heuristic as
+`mix lemon.sim.werewolf --offline-strategy heuristic`
+(`LemonSim.Examples.Werewolf.OfflineRunner.decide/2`): it picks a legal action
+from `Werewolf.ActionSpace` with a `:rand` state seeded from the world seed, and
+builds the event through `ActionSpace.execute_action/4`, so the same seed replays
+the same game. `--step-delay-ms` (default 1200) paces turns for watching; the run
+is persisted, resumable, and marked completed when the game ends. If another node
+already serves the sim UI port, call `LemonSimUi.Demo.start_werewolf/1` from that
+node's IEx shell or set `LEMON_SIM_UI_PORT`. Build browser assets once with
+`mix sim_ui.assets.setup && mix sim_ui.assets.build`.
 
 Live model runs require configured providers and credentials:
 
@@ -232,7 +258,11 @@ The standard anatomy is:
 - optional `performance.ex`, `game_log.ex`, `frame_renderer.ex`, or
   `video_generator.ex` when the scenario needs scoring or replay media
 
-Keep scenario-specific rules in `LemonSim.Examples.*`. Shared runner,
+Keep scenario-specific rules in `LemonSim.Examples.*`. Each scenario declares
+the world `:status` values that end it via `terminal_statuses/0` and is listed
+in `LemonSim.Examples`; runners, arenas, and UIs decide "finished" only through
+`LemonSim.Examples.terminal?/1` (Tic Tac Toe ends `won`/`draw`, VendingBench
+`complete`/`bankrupt`, Werewolf and Poker `game_over`). Shared runner,
 model-loop, artifact, and verification logic belongs in `Kernel`, `LLM`, or
 `Bench`. Mix-task-only startup and option plumbing belongs in the ordinary
 functions in `Mix.Tasks.Lemon.Sim.Common`, not in scenario modules or task

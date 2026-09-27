@@ -89,7 +89,7 @@ attachment policy.
   the bridge. These commands do not wait for synchronous application by every
   target run process.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd` (channel-origin runs default to the assistant home, not `$HOME`).
-- Channel ingress sets `meta.channel_context`, so group chats require approval for every `bash`, `execute_code`, `write`, `edit`, `patch`, and `hashline_edit` call.
+- Channel ingress sets `meta.channel_context`, so group chats require approval for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from
   `action.detail.result_meta`, including `error_type`, tool name, timeout,

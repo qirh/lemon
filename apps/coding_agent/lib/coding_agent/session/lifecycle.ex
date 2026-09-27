@@ -10,7 +10,6 @@ defmodule CodingAgent.Session.Lifecycle do
     BackgroundTasks,
     CompactionLifecycle,
     CompactionManager,
-    Heartbeat,
     ModelResolver,
     Notifier,
     OverflowRecovery,
@@ -25,7 +24,6 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
   alias CodingAgent.SystemPrompt.Environment, as: SystemPromptEnvironment
-  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
   alias CodingAgent.Workspace
 
   @spec initialize(keyword(), pid()) ::
@@ -44,7 +42,6 @@ defmodule CodingAgent.Session.Lifecycle do
     workspace_dir = Keyword.get(opts, :workspace_dir, CodingAgent.Config.workspace_dir())
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
-    python_repl_mod = Keyword.get(opts, :python_repl_mod, CodingAgent.PythonRepl)
 
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
@@ -57,16 +54,7 @@ defmodule CodingAgent.Session.Lifecycle do
         session_manager.header.parent_session
       )
 
-    injected_settings_manager = Keyword.get(opts, :settings_manager)
-
-    settings_manager =
-      injected_settings_manager || CodingAgent.SettingsManager.load(cwd)
-
-    # The session owns this full validated snapshot because stale tool closures
-    # must also pick up changed bounds and helper policy, not only the mode.
-    # An injected settings manager is immutable for this session.
-    settings_manager_static = not is_nil(injected_settings_manager)
-    execute_code_effective = effective_execute_code(cwd, settings_manager)
+    settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
 
     run_id = Keyword.get(opts, :run_id)
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
@@ -269,9 +257,6 @@ defmodule CodingAgent.Session.Lifecycle do
       session_file: session_file,
       register_session: register_session,
       session_registry: session_registry,
-      python_repl_mod: python_repl_mod,
-      execute_code_effective: execute_code_effective,
-      settings_manager_static: settings_manager_static,
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       tool_policy: tool_policy,
@@ -282,7 +267,6 @@ defmodule CodingAgent.Session.Lifecycle do
       wasm_sidecar_pid: wasm_boot.sidecar_pid,
       wasm_tool_names: wasm_boot.wasm_tool_names,
       wasm_status: wasm_boot.wasm_status,
-      heartbeat: %Heartbeat.State{},
       auto_compaction: %CompactionLifecycle.State{},
       overflow_recovery: %OverflowRecovery.State{}
     }
@@ -354,8 +338,7 @@ defmodule CodingAgent.Session.Lifecycle do
   end
 
   @spec reset(Session.t(), non_neg_integer()) ::
-          {:ok, Session.t()}
-          | {:error, :busy | {:heartbeat_persistence_failed, term()}, Session.t()}
+          {:ok, Session.t()} | {:error, :busy, Session.t()}
   def reset(state, reset_abort_wait_ms) when is_integer(reset_abort_wait_ms) do
     was_streaming = state.is_streaming
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
@@ -363,62 +346,46 @@ defmodule CodingAgent.Session.Lifecycle do
 
     case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
       :ok ->
-        # The agent is confirmed idle. Before rotating the session identity,
-        # synchronously dispose every persistent Python kernel owned by this
-        # session PID: the identity encodes into kernel keys, so kernels that
-        # survive rotation would be unreachable garbage until reaped.
-        case detach_owner_for_reset(state.python_repl_mod, self()) do
-          :ok ->
-            state =
-              if was_streaming do
-                Notifier.broadcast_event(state, {:canceled, :reset})
-                Notifier.complete_event_streams(state, {:canceled, :reset})
+        state =
+          if was_streaming do
+            Notifier.broadcast_event(state, {:canceled, :reset})
+            Notifier.complete_event_streams(state, {:canceled, :reset})
 
-                if not had_pending_prompt do
-                  BackgroundTasks.flush_queued_agent_events()
-                end
-
-                %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
-              else
-                state
-              end
-
-            case clear_heartbeat_for_rotation(state) do
-              {:ok, state} ->
-                state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
-                :ok = LemonAgent.Agent.reset(state.agent)
-
-                previous_session_id = state.session_manager.header.id
-                new_session_manager = SessionManager.new(state.cwd)
-
-                Persistence.maybe_unregister_session(
-                  previous_session_id,
-                  state.register_session,
-                  state.session_registry
-                )
-
-                Persistence.maybe_register_session(
-                  new_session_manager,
-                  state.cwd,
-                  state.register_session,
-                  state.session_registry,
-                  state.session_key
-                )
-
-                {:ok,
-                 State.reset_runtime(
-                   state,
-                   new_session_manager,
-                   System.system_time(:millisecond)
-                 )}
-
-              {:error, reason, state} ->
-                {:error, {:heartbeat_persistence_failed, reason}, state}
+            if not had_pending_prompt do
+              BackgroundTasks.flush_queued_agent_events()
             end
 
-          {:error, :busy} ->
-            {:error, :busy, state}
-        end
+            %{state | is_streaming: false, event_streams: %{}, steering_queue: :queue.new()}
+          else
+            state
+          end
+
+        state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
+        :ok = LemonAgent.Agent.reset(state.agent)
+
+        previous_session_id = state.session_manager.header.id
+        new_session_manager = SessionManager.new(state.cwd)
+
+        Persistence.maybe_unregister_session(
+          previous_session_id,
+          state.register_session,
+          state.session_registry
+        )
+
+        Persistence.maybe_register_session(
+          new_session_manager,
+          state.cwd,
+          state.register_session,
+          state.session_registry,
+          state.session_key
+        )
+
+        {:ok,
+         State.reset_runtime(
+           state,
+           new_session_manager,
+           System.system_time(:millisecond)
+         )}
 
       {:error, :timeout} ->
         Logger.warning("Timed out waiting for agent abort during reset")
@@ -434,181 +401,6 @@ defmodule CodingAgent.Session.Lifecycle do
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
 
-  defp clear_heartbeat_for_rotation(%{heartbeat: %Heartbeat.State{config: nil}} = state),
-    do: {:ok, state}
-
-  defp clear_heartbeat_for_rotation(state), do: Heartbeat.clear(state)
-
-  # Persistent Python REPL owner cleanup. The module is injectable via the
-  # `:python_repl_mod` Session option; `nil` means the subsystem is not
-  # running and there is nothing to detach.
-  @doc false
-  @spec detach_owner_for_reset(module() | nil, pid()) :: :ok | {:error, :busy}
-  def detach_owner_for_reset(python_repl_mod, owner_pid) when is_pid(owner_pid) do
-    case safe_detach_owner(python_repl_mod, owner_pid) do
-      :ok ->
-        :ok
-
-      {:error, :registry_unavailable} ->
-        # The REPL supervisor is :one_for_all over the worker supervisor and
-        # registry. A down registry therefore means its workers are already
-        # being disposed by supervision.
-        Logger.warning(
-          "Python REPL registry unavailable during session reset; " <>
-            "relying on subsystem supervision to dispose owned kernels"
-        )
-
-        :ok
-
-      {:error, reason} ->
-        # A kernel may still be alive for this owner. Do not rotate the
-        # identity that is part of its key until cleanup has succeeded.
-        Logger.warning(
-          "Failed to detach Python REPL kernels during session reset: #{inspect(reason)}; " <>
-            "keeping current session identity"
-        )
-
-        {:error, :busy}
-    end
-  end
-
-  # The session adopts a non-persistent config only after owner detachment has
-  # succeeded. On failure the old snapshot remains authoritative and a later
-  # reload retries the same transition.
-  @doc false
-  @spec apply_execute_code_config_transition(Session.t(), pid()) :: Session.t()
-  def apply_execute_code_config_transition(state, session_pid) when is_pid(session_pid) do
-    case reload_execute_code_effective(state) do
-      {:ok, new_effective} ->
-        if session_kernels_retained?(state.execute_code_effective) and
-             not session_kernels_retained?(new_effective) do
-          detach_owner_for_transition(state, new_effective, session_pid)
-        else
-          %{state | execute_code_effective: new_effective}
-        end
-
-      {:error, reason} ->
-        # A settings source that fails to load must not lie about the
-        # session's effective state; the next reload event retries.
-        Logger.warning(
-          "Failed to recompute execute_code config after config reload: " <>
-            "#{inspect(reason)}; keeping previous effective state"
-        )
-
-        state
-    end
-  end
-
-  defp session_kernels_retained?(%ExecuteCodeConfig{
-         enabled: true,
-         kernel_mode: "session"
-       }),
-       do: true
-
-  defp session_kernels_retained?(_effective), do: false
-
-  defp detach_owner_for_transition(state, new_effective, session_pid) do
-    case safe_detach_owner(state.python_repl_mod, session_pid) do
-      :ok ->
-        %{state | execute_code_effective: new_effective}
-
-      {:error, :registry_unavailable} ->
-        # The REPL supervisor is :one_for_all over the worker supervisor and
-        # registry, so a down registry means owned workers are already being
-        # disposed by supervision; adopting the new state lies about nothing.
-        Logger.warning(
-          "Python REPL registry unavailable during execute_code config transition; " <>
-            "relying on subsystem supervision to dispose owned kernels"
-        )
-
-        %{state | execute_code_effective: new_effective}
-
-      {:error, reason} ->
-        # A detach error means the registry did not accept the logical
-        # ownership transition. Keep the prior state so the next reload
-        # retries instead of lying about the session's identity.
-        Logger.warning(
-          "Failed to detach Python REPL kernels during execute_code config transition: " <>
-            "#{inspect(reason)}; keeping previous effective state for retry"
-        )
-
-        state
-    end
-  end
-
-  defp reload_execute_code_effective(%{
-         settings_manager_static: true,
-         execute_code_effective: effective
-       }),
-       do: {:ok, effective}
-
-  defp reload_execute_code_effective(state) do
-    settings_manager = CodingAgent.SettingsManager.load(state.cwd)
-    {:ok, effective_execute_code(state.cwd, settings_manager)}
-  rescue
-    error -> {:error, error}
-  end
-
-  defp effective_execute_code(cwd, settings_manager),
-    do: ExecuteCodeConfig.load(cwd, settings_manager)
-
-  @doc false
-  @spec detach_owner_on_terminate(module() | nil, pid(), non_neg_integer()) :: :ok
-  def detach_owner_on_terminate(nil, owner_pid, timeout_ms)
-      when is_pid(owner_pid) and is_integer(timeout_ms) and timeout_ms >= 0,
-      do: :ok
-
-  def detach_owner_on_terminate(python_repl_mod, owner_pid, timeout_ms)
-      when is_pid(owner_pid) and is_integer(timeout_ms) and timeout_ms >= 0 do
-    # The facade ultimately makes an unbounded registry call. Keep reset on
-    # the synchronous path above, but bound termination so later cleanup can
-    # still run within the supervisor shutdown budget. The registry continues
-    # any call already in flight and its owner monitor observes this process
-    # exiting after terminate/2 returns.
-    task = Task.async(fn -> safe_detach_owner(python_repl_mod, owner_pid) end)
-    Process.unlink(task.pid)
-
-    result =
-      case Task.yield(task, timeout_ms) do
-        {:ok, result} ->
-          result
-
-        {:exit, reason} ->
-          {:error, {:detach_task_exit, reason}}
-
-        nil ->
-          _ = Task.shutdown(task, :brutal_kill)
-          {:error, :timeout}
-      end
-
-    case result do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        # Termination must not fail because the registry's owner monitor is
-        # still the crash-cleanup fallback.
-        Logger.warning(
-          "Best-effort Python REPL owner detach failed during session termination: " <>
-            "#{inspect(reason)}; relying on registry owner monitor"
-        )
-
-        :ok
-    end
-  end
-
-  defp safe_detach_owner(nil, _owner_pid), do: :ok
-
-  defp safe_detach_owner(python_repl_mod, owner_pid) do
-    case python_repl_mod.detach_owner(owner_pid) do
-      :ok -> :ok
-      {:error, %{reason: reason}} -> {:error, reason}
-      {:error, reason} when is_atom(reason) -> {:error, reason}
-      result -> {:error, {:unexpected_result, result}}
-    end
-  catch
-    kind, reason -> {:error, {kind, reason}}
-  end
 
   defp load_or_create_session(cwd, nil, session_id, parent_session) do
     SessionManager.new(cwd, id: session_id, parent_session: parent_session)

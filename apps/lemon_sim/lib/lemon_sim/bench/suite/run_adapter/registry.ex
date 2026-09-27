@@ -1,12 +1,13 @@
 defmodule LemonSim.Bench.Suite.RunAdapter.Registry do
   @moduledoc false
 
-  alias LemonSim.Bench.Suite.RunAdapter.Adapters.{TcgShop, VendingBench, VendingBenchArena}
+  alias LemonSim.Bench.Suite.RunAdapter.Adapters.{Poker, VendingBench, VendingBenchArena, Werewolf}
 
   @adapters %{
-    "tcg_shop" => TcgShop,
+    "poker" => Poker,
     "vending_bench" => VendingBench,
-    "vending_bench_arena" => VendingBenchArena
+    "vending_bench_arena" => VendingBenchArena,
+    "werewolf" => Werewolf
   }
 
   def all, do: @adapters

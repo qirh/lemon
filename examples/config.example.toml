@@ -134,41 +134,6 @@ base_delay_ms = 1000
 # caller's file/URL/archive/page/item/time limits. See
 # docs/user-guide/context-references.md for the bounded flags and defaults.
 
-# Programmatic tool calling: the model submits a python3 script that can call a fixed
-# allowlist of agent tools (read, grep, find, ls, webfetch). The result comes back
-# through text() blocks; everything the script prints to stdout/stderr is returned as a
-# labeled diagnostics tail (a script that never calls text() keeps the stdout-only
-# result). The script runs as HOST CODE with bash-equivalent permissions — this is not
-# a sandbox. Default-off; requires python3 (or python_path) plus, on GNU/Linux, GNU
-# mktemp and a local-filesystem TMPDIR for the private workspace.
-# See docs/tools/execute-code.md before enabling.
-#
-# [runtime.tools.execute_code]
-# enabled = false
-# python_path = ""              # empty = find python3 on PATH
-# timeout_ms = 120000           # wall-time cap per run
-# max_rpc_calls = 100           # helper calls per run
-# max_rpc_result_bytes = 5242880
-# max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
-# max_text_bytes = 65536        # total text() result-block bytes per run
-# max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
-# tools = []                    # helper subset; empty = full fixed allowlist
-#
-# kernel_mode = "per_call"      # "per_call" (default): every run is a fresh process.
-#                               # "session": opt-in persistent interpreter per
-#                               # session/cwd/interpreter/helper identity. State is live
-#                               # process memory only — never durable — and is lost on
-#                               # session close/reset, idle reap, eviction, or restart.
-# kernel_idle_timeout_ms = 1800000   # idle kernels reaped after 30 minutes
-# max_live_kernels = 16              # strict cap; idle-only LRU eviction
-# max_queued_cells_per_kernel = 8    # serialized cells; full queue = busy error
-#
-# Env overrides: LEMON_EXECUTE_CODE_ENABLED, LEMON_EXECUTE_CODE_PYTHON_PATH,
-# LEMON_EXECUTE_CODE_TIMEOUT_MS, LEMON_EXECUTE_CODE_MAX_RPC_CALLS,
-# LEMON_EXECUTE_CODE_MAX_TEXT_BYTES, LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC,
-# LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS, LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS,
-# LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL
-
 [tui]
 theme = "lemon"
 debug = false
@@ -308,7 +273,6 @@ queue_mode = "collect"
 # LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
 # BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
 # FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
-# LEMON_CUA_DRIVER_CMD optionally selects the cua-driver used by computer_use.
 
 # --- WASM Tool Configuration ---
 

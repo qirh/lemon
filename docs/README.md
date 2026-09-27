@@ -25,6 +25,7 @@ into profiles, reusable skills, and automation as you need them.
 
 - **Make it yours:** [profiles](user-guide/profiles.md), [skills](user-guide/skills.md), and [memory](user-guide/memory.md).
 - **Choose your interface:** [terminal commands](user-guide/cli.md), [browser](user-guide/web.md), or [Telegram and Discord setup](user-guide/setup.md#optional-telegram-or-discord).
+- **Let Lemon reach out:** [reminders, heartbeats, and the daily brief](user-guide/reminders-and-heartbeats.md).
 - **Keep your work safe:** [backups](user-guide/backups.md), [updates and rollback](user-guide/updates.md), and [the safety model](security/safety.md).
 - **Build on Lemon:** [architecture](architecture/overview.md), [extensions](extensions.md), and [testing](testing.md).
 - **Explore LemonSim:** [benchmark quickstart](benchmarks/quickstart.md) and [platform guarantees](benchmarks/platform.md).
@@ -51,6 +52,7 @@ it before your first chat.
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
 | [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, portable profile automation bundles, and synthesized drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
+| [user-guide/reminders-and-heartbeats.md](user-guide/reminders-and-heartbeats.md) | Telegram `/remind`, where scheduled results are delivered, heartbeats, and the opt-in daily brief |
 | [user-guide/adaptive.md](user-guide/adaptive.md) | Adaptive routing, routing feedback, skill synthesis pipeline |
 | [user-guide/rollout.md](user-guide/rollout.md) | Feature promotion gates, rollback procedure, promotion checklist |
 
@@ -74,6 +76,8 @@ it before your first chat.
 | [user-guide/updates.md](user-guide/updates.md) | Non-mutating update plans, exact-confirm apply, receipts, and receipt-bound rollback |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
 | [release/release_checklist_and_support_policy.md](release/release_checklist_and_support_policy.md) | 1.0 release-candidate checklist, rollback checklist, and support boundaries |
+| [release/hex-packages.md](release/hex-packages.md) | Publishing the five Hex packages, proving their tarballs (`scripts/verify_packages`), retiring 0.1.0 |
+| [platform-split.md](platform-split.md) | Which packages are published, what stays in-repo, the decision log, and known gaps |
 | [security/safety.md](security/safety.md) | Plain-language Lemon safety model, recommended defaults, and support-bundle guidance |
 | [security/agent-safety-contract.md](security/agent-safety-contract.md) | Agent safety layers: tool policies, approvals, memory screening, skill audits, telemetry |
 

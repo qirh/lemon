@@ -2,6 +2,14 @@
 
 Elixir library for building AI agents with multi-turn conversations, tool execution, and streaming events.
 
+**Hex package.** `lemon_agent` is one of the five published packages
+(`docs/release/hex-packages.md`). Its `mix.exs` ships verbatim in the tarball, so
+it must stay self-contained — no `Code.require_file`, nothing read outside the app
+directory — and sibling Lemon deps stay `in_umbrella: true` inside
+`lemon_deps/1`, which rewrites them to `~> 0.2` outside the umbrella.
+`scripts/verify_packages` builds a consumer from the tarball; run it after
+touching `mix.exs`. User-visible `lib/` changes need a `CHANGELOG.md` entry.
+
 ## Purpose and Responsibilities
 
 LemonAgent provides the runtime foundation for AI agents in the Lemon project:

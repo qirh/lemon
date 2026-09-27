@@ -20,6 +20,7 @@
 ## Use Lemon
 
 - [Memory User Guide](https://z80dev.github.io/lemon/user-guide/memory): Durable local memory and recall behavior.
+- [Reminders, heartbeats, and the daily brief](https://z80dev.github.io/lemon/user-guide/reminders-and-heartbeats): Telegram reminders, scheduled-result delivery, heartbeats, and the daily brief.
 - [Skills User Guide](https://z80dev.github.io/lemon/user-guide/skills): Discover, install, audit, and use skills.
 - [Adaptive Behavior User Guide](https://z80dev.github.io/lemon/user-guide/adaptive): Opt-in learning, synthesis, and rollout controls.
 - [Honcho Memory User Guide](https://z80dev.github.io/lemon/user-guide/honcho): Configure the optional Honcho memory provider.
@@ -30,7 +31,6 @@
 ## Tools and interfaces
 
 - [Web and Browser Tools](https://z80dev.github.io/lemon/tools/web): Web search, fetch, and browser automation tools.
-- [Execute Code (executecode)](https://z80dev.github.io/lemon/tools/execute-code): Persistent Python RPC execution over allowlisted agent tools.
 - [Media Tools](https://z80dev.github.io/lemon/tools/media): Media generation and artifact workflows.
 - [LSP Diagnostics](https://z80dev.github.io/lemon/tools/lsp): Language-server diagnostics.
 - [ACP Preview](https://z80dev.github.io/lemon/tools/acp): ACP-shaped editor integration.

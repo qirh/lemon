@@ -31,6 +31,10 @@ lemon_sim_ui
 
 `SimManager` owns the runner lifecycle for active sims. It runs tasks under a dedicated supervisor, writes lifecycle checkpoints after each step, resumes supported games after runner or service restarts, and publishes `LemonCore.Bus` events so LiveView receives push updates without polling. Boot recovery keeps retrying through store outages; transient resume failures use bounded exponential backoff and are durably marked failed if exhausted. Final token, cost-availability, and model-call latency usage is persisted before a runner's collector is stopped and restored into resumed collectors, so league accounting survives process and service restarts. Operator stops and arena abandonment are durable, and `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` queues persisted recovery instead of allowing an unbounded model-call fanout. For Werewolf specifically, push updates carry the exact state snapshot that changed, which lets the UI buffer fast backend turns and play them back at a readable pace instead of skipping straight to the latest phase.
 
+A run is finished when its world reaches one of its scenario's terminal statuses (`LemonSim.Examples.terminal?/1`: Tic Tac Toe `won`/`draw`, VendingBench `complete`/`bankrupt`, Werewolf and Poker `game_over`). Finished runs are marked `completed` and non-resumable, are never picked up by crash or boot recovery (`resume_sim/1` returns `{:error, :finished}`), count toward retention pruning, and show as REPLAY in the lobby; arenas, auto-loop restarts, and spectator redirects use the same predicate.
+
+`SimManager.start_sim(:werewolf, offline_strategy: "heuristic", seed: seed)` runs a keyless game: `LemonSim.Examples.Werewolf.OfflineRunner` (the same heuristic as `mix lemon.sim.werewolf --offline-strategy heuristic`) picks each seat's legal action from a `:rand` state seeded from the world seed, so no model or provider key is resolved. `offline_step_delay_ms` paces turns for spectators; the offline strategy is persisted in `start_opts`, so crash recovery resumes with the same decider.
+
 The LiveView transport is websocket-only. `LemonSimUi.Endpoint` disables the `/live/longpoll` transport, and the browser client connects without enabling a long-poll fallback.
 
 `SimDashboardLive` subscribes to two topics:
@@ -113,7 +117,7 @@ For Tic Tac Toe, the user can select a side at launch. On human turns:
 | `LemonSimUi.HostedGame` | `lib/lemon_sim_ui/hosted_game.ex` | Hosted-room creation, join-code reservation, recovery/readiness, capacity, retention, and kill-switch coordinator |
 | `LemonSimUi.HostedGame.Supervisor` | `lib/lemon_sim_ui/hosted_game/supervisor.ex` | One-for-all boundary for room registry, room supervisor, bounded AI tasks, and recovery coordinator |
 | `LemonSimUi.HostedGame.RoomServer` | `lib/lemon_sim_ui/hosted_game/room_server.ex` | Durable serialized room lifecycle, authorization, timers, AI/human commands, projections, reconnects, replay, and rematches |
-| `LemonSimUi.HostedGame.Replay` | `lib/lemon_sim_ui/hosted_game/replay.ex` | Replays canonical redacted events and verifies per-command/final state hashes |
+| `LemonSimUi.HostedGame.Replay` | `lib/lemon_sim_ui/hosted_game/replay.ex` | Replays canonical redacted events from the room seed via `LemonSim.Bench.Artifacts.Replay.fold/4` and verifies per-command/final state hashes |
 | `LemonSimUi.HostedLobbyLive`, `HostedJoinLive`, `HostedHostLive`, `HostedPlayerLive`, `HostedWatchLive` | `lib/lemon_sim_ui/live/hosted_werewolf_live.ex` | Responsive hosted room creation, joining, role-blind host control, private player action, and public-safe viewing |
 | `LemonSimUi.HostedGameSessionController` | `lib/lemon_sim_ui/controllers/hosted_game_session_controller.ex` | Validates hosted forms, exchanges tokens into bounded signed sessions, and downloads replay exports |
 | `LemonSimUi.AdminSessionController` | `lib/lemon_sim_ui/controllers/admin_session_controller.ex` | CSRF-protected admin login/logout, safe return-to handling, and signed-session renewal |
@@ -186,6 +190,15 @@ iex -S mix phx.server
 The public lobby is available at `http://localhost:4090/`, hosted Werewolf at `http://localhost:4090/play`, public suite leaderboards at `http://localhost:4090/leaderboards`, and the admin dashboard at `http://localhost:4090/admin` (port configured in `config/dev.exs`). Configure `LEMON_SIM_UI_ACCESS_TOKEN` before opening `/admin`; unauthenticated browsers are redirected to `/admin/login`, where the token is submitted as a CSRF-protected form body rather than a query parameter. Set `LEMON_SIM_UI_BIND_IP=0.0.0.0` to bind the development server on all interfaces, for example when browsing over Tailscale, but only expose admin over HTTPS. Set `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true` to expose the lobby VendingBench launcher.
 
 Configure benchmark suite discovery with `config :lemon_sim_ui, :suite_roots, ["/tmp/vending-suite"]`. Each root may be a suite directory containing `suite.json` directly or a parent directory containing one suite per child directory.
+
+### Keyless Demo
+
+```bash
+mix lemon.sim.demo
+mix lemon.sim.demo --seed 42 --player-count 7 --step-delay-ms 600
+```
+
+`mix lemon.sim.demo` boots this app with its HTTP endpoint (unless it is already started in the same VM), starts an offline Werewolf game via `LemonSimUi.Demo.start_werewolf/1`, prints its `/watch/<sim_id>` URL, and keeps serving until interrupted. It needs no provider API keys. From an already running `iex -S mix phx.server`, call `LemonSimUi.Demo.start_werewolf()` and open `LemonSimUi.Demo.watch_url(sim_id)`. The task refuses to start when another process already listens on the sim UI port.
 
 ### Starting a Simulation from the Dashboard
 

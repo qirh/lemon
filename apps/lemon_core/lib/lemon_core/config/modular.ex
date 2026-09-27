@@ -36,12 +36,14 @@ defmodule LemonCore.Config.Modular do
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
   - `LemonCore.Config.Providers` - LLM provider configurations
   - `LemonCore.Config.Memory` - Memory behaviour (`[memory]`)
+  - `LemonCore.Config.Automation` - Opt-in proactive automation (daily brief)
 
   See `LemonCore.Config` for the legacy configuration interface.
   """
 
   alias LemonCore.Config.{
     Agent,
+    Automation,
     Features,
     Gateway,
     Logging,
@@ -63,7 +65,8 @@ defmodule LemonCore.Config.Modular do
     :providers,
     :secrets,
     :features,
-    :memory
+    :memory,
+    :automation
   ]
 
   @type t :: %__MODULE__{
@@ -75,7 +78,8 @@ defmodule LemonCore.Config.Modular do
           providers: Providers.t(),
           secrets: Secrets.t(),
           features: Features.t(),
-          memory: Memory.t()
+          memory: Memory.t(),
+          automation: Automation.t()
         }
 
   @doc """
@@ -250,7 +254,8 @@ defmodule LemonCore.Config.Modular do
       providers: Providers.resolve(settings),
       secrets: Secrets.resolve(settings),
       features: Features.resolve(settings),
-      memory: Memory.resolve(settings)
+      memory: Memory.resolve(settings),
+      automation: Automation.resolve(settings)
     }
   end
 
