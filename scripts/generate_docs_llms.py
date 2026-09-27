@@ -100,7 +100,6 @@ FULL_ROOT_FILES = {
     "model-selection-decoupling.md",
     "runtime-hot-reload.md",
     "skills.md",
-    "skills_v2.md",
     "subagent-parent-questions.md",
     "support.md",
     "telemetry.md",
@@ -110,7 +109,6 @@ FULL_ROOT_FILES = {
 FULL_DIRECTORIES = (
     "architecture/",
     "benchmarks/",
-    "for-dummies/",
     "getting-started/",
     "platform/",
     "reference/",

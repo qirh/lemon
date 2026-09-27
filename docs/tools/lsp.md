@@ -100,38 +100,15 @@ The manager records both push diagnostics from
 `textDocument/diagnostic` responses. Public status keeps only URI hashes,
 diagnostic counts, severity counts, and timestamps.
 
-## Proof Lanes
+## Focused Test Coverage
 
-Focused LSP coverage:
-
-```bash
-mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs --seed 1
-```
-
-Broader preview lane:
+From the umbrella root:
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
-  apps/lemon_core/test/lemon_core/doctor/lsp_diagnostics_test.exs \
-  apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
-  apps/lemon_core/test/lemon_core/application_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs \
-  apps/lemon_web/test/lemon_web_test.exs \
-  apps/coding_agent/test/coding_agent/tools/write_test.exs \
-  apps/coding_agent/test/coding_agent/tools/edit_test.exs \
-  apps/coding_agent/test/coding_agent/tools/patch_test.exs \
-  apps/coding_agent/test/coding_agent/tools_test.exs \
-  apps/coding_agent/test/coding_agent/tool_registry_test.exs \
-  apps/coding_agent/test/coding_agent_test.exs --seed 1
+  apps/lemon_lsp/test --seed 1
 ```
 
-The latest broader preview lane passed locally on 2026-05-16 with `404 tests,
-0 failures`.
-
+Exercise supervised server startup, framing, document diagnostics, timeout cleanup
+and wrapper-child termination. These are local checks, not proof that a particular
+language server is installed or correctly configured on an operator's machine.

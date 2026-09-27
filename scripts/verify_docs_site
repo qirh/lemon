@@ -17,10 +17,13 @@ trap cleanup EXIT
 mkdir -p "$DOCS_COPY"
 cp -a "$ROOT/docs/." "$DOCS_COPY/"
 rm -rf "$DOCS_COPY/node_modules" "$DOCS_COPY/.vitepress/dist"
+mkdir -p "$WORK_ROOT/scripts"
+cp "$ROOT/scripts/generate_docs_llms.py" "$WORK_ROOT/scripts/"
 
 cd "$DOCS_COPY"
 
 npm ci
+npm test
 npm run build
 
 for asset in llms.txt llms-full.txt; do
@@ -32,11 +35,6 @@ done
 
 cd "$ROOT/docs"
 
-find . -name "*.md" \
-  ! -path "./.vitepress/*" \
-  ! -path "./node_modules/*" \
-  | xargs "$DOCS_COPY/node_modules/.bin/markdown-link-check" \
-      --config .mlc.json \
-      --quiet
+LEMON_DOCS_LINK_CHECK_BIN="$DOCS_COPY/node_modules/.bin/markdown-link-check" npm run link-check
 
 echo "docs site verification passed"

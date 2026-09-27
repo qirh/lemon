@@ -412,13 +412,17 @@ This static site deploys independently of Lemon runtime releases.
 ### Verify and publish
 
 ```bash
-python3 scripts/generate_docs_llms.py
 scripts/verify_docs_site
 ```
 
-The `Docs Site` workflow builds, audits tooling, and checks links. With repository
-variable `ENABLE_PAGES_DEPLOY=true` and GitHub Pages configured to use GitHub
-Actions, docs changes pushed to `main` deploy automatically. To redeploy manually:
+The verifier builds in an isolated temporary copy. Both `npm --prefix docs run
+build` and dev startup generate the ignored `llms.txt` and `llms-full.txt` assets
+from Markdown before VitePress copies them to the site root. Do not commit these
+files or require a clean-tree generated diff. Python 3 is required alongside Node.
+
+The `Docs Site` workflow runs the same npm build and recursive link-check commands.
+With repository variable `ENABLE_PAGES_DEPLOY=true` and GitHub Pages configured to
+use GitHub Actions, docs changes pushed to `main` deploy automatically. To redeploy:
 
 ```bash
 gh workflow run docs-site.yml --ref main -f deploy=true

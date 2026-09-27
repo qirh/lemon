@@ -1,379 +1,147 @@
 # Architecture Overview
 
-Lemon is a BEAM-native stack for LLM interactions: a layered set of Elixir/OTP
-libraries (`ai` → `agent_core` → product apps) with two products on top — a
-multi-channel personal assistant and **LemonSim**, a deterministic
-model-vs-model simulation arena. This document covers the system architecture,
-key design decisions, and component responsibilities.
+Lemon has two products in one Elixir umbrella: a multi-channel assistant and
+LemonSim. Both use `lemon_agent` and `lemon_ai`; shared config, storage and
+boundary contracts live in `lemon_core`. A session is a durable conversation;
+a run is one submitted unit of work. A conversation key identifies work that
+must be serialized, including requests resuming the same native session.
 
-For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/README.md`.
+## Message journey
 
----
-
-## Core Philosophy
-
-1. **Agents as Processes** — each AI agent is a GenServer with isolated state, a
-   mailbox, and an independent lifecycle. Multiple sessions never share state.
-
-2. **Streaming as Events** — LLM responses are modeled as event streams, enabling
-   reactive UIs, parallel processing, and backpressure handling.
-
-3. **Fault Tolerance** — OTP supervision trees isolate failures. A crashing tool
-   does not kill the agent session; a network error during streaming is recoverable.
-
-4. **Live Steering** — users can inject messages mid-execution because the BEAM
-   can send a message to any process at any time.
-
-5. **Multi-Provider Abstraction** — unified interface for 26 LLM providers with
-   automatic model configuration and cost tracking.
-
-6. **Native Execution** — every product run uses Lemon's executor. Local runs
-   stay in-process; named-node runs cross an authenticated WebSocket and enter
-   the same native executor on the destination. There are no external CLI
-   runners.
-
----
-
-## System Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Clients                                                      │
-│  TUI (TypeScript)  ·  Web (React)  ·  Browser (Playwright)  │
-└───────────────────────┬─────────────────────────────────────┘
-                        │ JSON-RPC / WebSocket
-┌───────────────────────▼────────────────────┐
-│ LemonControlPlane  (112+ RPC methods)       │
-└───────────────────────┬────────────────────┘
-                        │
-┌───────────────────────▼────────────────────┐
-│ LemonRouter            RunOrchestrator      │
-│  · model selection     · policy enforcement │
-│  · routing feedback    · approval gating    │
-└────────┬──────────────────────┬────────────┘
-         │                      │
-┌────────▼───────┐   ┌──────────▼──────────┐
-│ LemonGateway   │   │ LemonChannels        │
-│ native executor│   │  Telegram, Discord, │
-└────────┬───────┘   │ XMTP, WhatsApp, email│
-         │           └──────────────────────┘
-┌────────▼───────────────────────────────────┐
-│ CodingAgent.Session                         │
-│  · 23 built-in tools                        │
-│  · context compaction                       │
-│  · extension system                         │
-└────────┬───────────────────────────────────┘
-         │
-┌────────▼──────────────┬──────────────────┐
-│ LemonCore             │ LemonSkills       │
-│  · EventBus           │  · skill catalog  │
-│  · MemoryStore        │  · audit engine   │
-│  · TaskFingerprint    │  · synthesis      │
-│  · Config/Secrets     │  · installer      │
-└───────────────────────┴──────────────────┘
-         │
-┌────────▼──────────────────────────────────┐
-│ LemonAi  (provider abstraction layer)           │
-│  26 providers: Anthropic, OpenAI, Google,  │
-│  Azure, AWS Bedrock, xAI, Mistral, …       │
-└───────────────────────────────────────────┘
+```text
+Telegram / Discord / other adapters → lemon_channels ─┐
+TUI / one-shot CLI → lemon_control_plane ──────────────┤
+Phoenix assistant UI → lemon_web ─────────────────────┤
+Cron / goal / kanban work → lemon_automation ──────────┤
+                                                     ↓
+                                                lemon_router
+                                                     ↓
+                                                lemon_gateway
+                                                     ↓
+                                           CodingAgent.Executor
+                                                     ↓
+                                      coding_agent → lemon_agent → lemon_ai
 ```
 
-See `docs/diagrams/architecture.svg` for the full visual diagram.
-
-The diagram's `CodingAgent.Session` box can be local or destination-side.
-`CodingAgent.Executor` chooses the local `SessionRunner` unless request metadata
-names a live execution node. In that case `RemoteSessionRunner` routes through
-`LemonCore.NodeRegistry` and the control-plane WebSocket to a native
-destination `CodingAgent.Executor`.
-
----
-
-## Application Map
-
-The project is an Elixir umbrella with 22 applications:
-
-**Stack (bottom-up):**
-
-| App | Role |
-|---|---|
-| `lemon_ai` | Provider abstraction, streaming, cost tracking (published; no umbrella deps) |
-| `lemon_core` | EventBus, Store, config, secrets, boundary contracts (published; no umbrella deps) |
-| `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
-| `lemon_agent` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics (published) |
-| `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Store backend, event, memory-provider and channel Plugin implementations (published; `PluginCase` needs the in-repo `lemon_channels`) |
-
-**Assistant product:**
-
-| App | Role |
-|---|---|
-| `coding_agent` | Session management, compaction, JSONL persistence, tools |
-| `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
-| `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
-| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
-| `lemon_automation` | CronManager, heartbeats, reminders, daily brief, scheduled-result delivery |
-| `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
-| `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
-| `lemon_mcp` | MCP protocol server |
-| `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
-| `lemon_web` | Phoenix LiveView web UI |
-| `lemon_evals` | Eval harness for assistant behavior |
-| `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
-
-**Capability apps (extracted from lemon_core):**
-
-| App | Role |
-|---|---|
-| `lemon_browser` | Local browser automation server, artifacts, route policy |
-| `lemon_media` | Media jobs, worker, supervisor |
-| `lemon_lsp` | LSP server manager |
-
-**Arena product:**
-
-| App | Role |
-|---|---|
-| `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
-| `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
-
-### Package dependency graph
-
-The graph below is the compile-time dependency structure of the platform tier,
-drawn from the `in_umbrella` deps in `apps/*/mix.exs` (the same source behind
-[`architecture_boundaries.md`](../architecture_boundaries.md)). Solid arrows are
-compile-time dependencies; dashed arrows are runtime-only seams where two
-packages talk through a behaviour or bridge with **no** compile-time edge —
-which is exactly what keeps `router`, `gateway` and `channels` independently
-replaceable.
-
-```mermaid
-%% Source of truth: apps/*/mix.exs in_umbrella deps (see docs/architecture_boundaries.md).
-%% Solid = compile-time dependency. Dashed = runtime-only seam (no compile edge).
-graph TD
-    subgraph published["Published packages · Hex (the five)"]
-        core["lemon_core"]
-        ai["lemon_ai"]
-        agent["lemon_agent"]
-        mem["lemon_memory"]
-        kit["lemon_platform_test"]
-    end
-
-    subgraph reference["Reference runtime · in-repo, unpublished"]
-        router["lemon_router"]
-        gw["lemon_gateway"]
-        chan["lemon_channels"]
-        media["lemon_media"]
-        cp["lemon_control_plane"]
-        cli["lemon_cli"]
-        web["lemon_web"]
-        auto["lemon_automation"]
-        skills["lemon_skills"]
-        browser["lemon_browser"]
-        lsp["lemon_lsp"]
-    end
-
-    subgraph products["Products · in-repo"]
-        ca["coding_agent"]
-        mcp["lemon_mcp"]
-        evals["lemon_evals"]
-        sim["lemon_sim"]
-        simui["lemon_sim_ui"]
-    end
-
-    %% Platform compile edges (full fidelity from mix.exs)
-    agent --> ai
-    agent --> core
-    mem --> core
-    media --> core
-    chan --> core
-    chan --> agent
-    chan --> media
-    router --> core
-    router --> ai
-    router --> agent
-    router --> mem
-    router --> media
-    gw --> core
-    gw --> agent
-    kit --> core
-    kit --> agent
-    kit --> ai
-    kit -->|"PluginCase · umbrella only"| chan
-    kit --> mem
-
-    %% The one allowed router->channels compile edge
-    router -->|"facade · the one allowed compile edge"| chan
-
-    %% Runtime-only seams: no compile edge exists in either direction
-    chan -.->|"LemonCore.RouterBridge"| router
-    router -.->|"LemonCore.EngineRuntime behaviour · fixed native executor"| gw
-
-    %% One-way consumption into the platform (representative real edges)
-    cp --> router
-    ca --> gw
-```
-
-Consumption is one-directional: reference-runtime, product, and satellite apps
-depend on the platform packages, and no platform package depends back on any of
-them. Only one representative consume-edge per tier is drawn; the invariant is
-that no arrow runs from `published` into the outer three tiers, except
-`lemon_platform_test`'s umbrella-only edge to `lemon_channels` (its Hex package
-does not carry it).
-
----
-
-## Data Flow
-
-Four main paths through the system:
-
-1. **Control Plane (TUI)**: WebSocket → ControlPlane → Router → Orchestrator → Gateway → Native executor
-
-2. **Channel (Telegram etc.)**: Message → LemonChannels → Router → StreamCoalescer → Outbox
-
-3. **Automation**: CronManager tick → Due jobs → Router → terminalization (heartbeat suppression) → EventBus + CronDelivery → originating or paired owner chat
-
-4. **Named execution node**: `agent(node: NAME)` → Router → Gateway →
-   `CodingAgent.Executor.RemoteSessionRunner` → `LemonCore.NodeRegistry` →
-   authenticated control-plane WebSocket → destination `CodingAgent.Executor`
-
-See `docs/diagrams/data-flow.svg` for the full diagram.
-
----
-
-## Run Lifecycle
-
-```
-User message
-  → Session routing (canonical session key)
-    → RunOrchestrator.start_run/1
-      → ModelSelection.resolve/1  (explicit → meta → session → profile → history → default)
-      → Lane selection (main/subagent/background)
-      → Native execution (`ExecutionCommand` → `ExecutionRequest` → `CodingAgent.Executor`)
-        → local `SessionRunner`, or named `RemoteSessionRunner` → destination native session
-          → Tool execution (isolated Task processes)
-          → LLM streaming (event stream per response)
-      → Outcome recording (RunOutcome → MemoryDocument)
-      → Routing feedback entry
-```
-
-### Execution contracts and provenance
-
-Top-level execution is a single native path:
-
-```
-RunRequest → ExecutionCommand → ExecutionRequest → CodingAgent.Executor
-```
-
-Those request shapes contain no vendor execution-runner selector, `Job`
-adapter, or execution catalog. An optional node placement lives in request
-metadata and chooses local execution or a live named destination without
-changing the executor implementation. `LemonCore.EngineRuntime` remains the name of the runtime
-boundary, but it resolves only the fixed native executor. Run events and durable
-results retain `engine: "lemon"` as provenance:
-it records how a run was executed; it does not select how a future top-level run
-will execute.
-
-`ResumeToken.engine` remains part of the persisted token format. The router
-accepts only native (`"lemon"`) tokens for explicit or automatic top-level
-resume. It retains older `ChatState.last_engine` and token values for history and
-rollback, but quarantines non-native values from resumption.
-
-The `task` tool and `@name` personas execute as native in-process child
-`CodingAgent.Session` processes coordinated by `CodingAgent.Coordinator`. The
-`agent` tool instead delegates through the router, where placement can remain
-local or select a named native destination.
-
-The `agent` tool is the placement boundary for named delegation. Omitted
-`node` / `node: "local"` stays on the controller host; another name resolves
-through the live registry. Omitted cwd becomes the destination worker's
-default, while explicit cwd is resolved on the destination. Only JSON-safe
-request/result fields cross the WebSocket: provider credentials, callbacks,
-executor options, and source BEAM state remain local. Node names are durably
-unique per controller and executable only while authenticated and live.
-Explicit aborts emit targeted cancellation; disconnects fail pending
-invocations. The destination strips the node selector before running, which
-prevents recursive remote selection. Remote steer and redirect are unsupported.
-
-### Lane scheduling
-
-| Lane | Default cap | Purpose |
-|---|---|---|
-| `main` | 4 | User-initiated runs |
-| `subagent` | 8 | Agent-spawned subagents |
-| `background` | 2 | Cron jobs, automations |
-
-### Model selection precedence
-
-```
-explicit_model        # per-message /model override
-  → meta_model        # metadata field in request
-    → session_model   # /model set for this session
-      → profile_model # config [profiles.X] model field
-        → history_model  # best model for this task fingerprint (routing_feedback)
-          → default_model  # config [defaults] model
-```
-
----
-
-## Key Abstractions
-
-### TaskFingerprint
-
-Classifies every run into a canonical key used for routing feedback and skill synthesis:
-
-```
-<task_family>|<toolset>|<workspace>|<provider>|<model>
-```
-
-Task families: `:code`, `:query`, `:file_ops`, `:chat`, `:unknown`
-
-Context key (for history lookup): `<task_family>|<toolset>|<workspace>`
-
-### MemoryDocument
-
-Durable record of a completed run:
-
-```
-doc_id, run_id, session_key, agent_id, workspace_key, scope,
-started_at_ms, ingested_at_ms,
-prompt_summary, answer_summary, tools_used,
-provider, model, outcome, meta
-```
-
-### Feature Flags
-
-All non-trivial features are gated behind flags in `[features]` TOML section.
-Code reads flags via `LemonCore.Config.Features.enabled?(features, :flag_name)`.
-
-Current flags: `session_search` (default `"default-on"`; disable with
-`LEMON_FEATURE_SESSION_SEARCH=off`), `routing_feedback`, and
-`skill_synthesis_drafts` (both default `"default-on"`; disable with
-`LEMON_FEATURE_ROUTING_FEEDBACK=off` / `LEMON_FEATURE_SKILL_SYNTHESIS_DRAFTS=off`).
-
----
-
-## Why BEAM?
-
-| Concern | BEAM advantage |
-|---|---|
-| Millions of concurrent agents | Lightweight processes (microseconds to start, ~2KB memory) |
-| Live steering mid-run | Message to any process at any time |
-| Tool crash isolation | OTP supervision; supervisor restarts failed child |
-| Streaming responses | Process-per-stream with backpressure |
-| Session persistence across restarts | Durable state in ETS + SQLite |
-| Hot code reload | BEAM code upgrade without restart |
-| Multi-node future | Native Erlang distribution built in |
-
----
-
-## Further Reading
-
-| Document | Topic |
-|---|---|
-| [`docs/architecture_boundaries.md`](../architecture_boundaries.md) | Dependency policy between apps |
-| [`docs/beam_agents.md`](../beam_agents.md) | BEAM agent architecture deep-dive |
-| [`docs/context.md`](../context.md) | Context management and compaction |
-| [`docs/model-selection-decoupling.md`](../model-selection-decoupling.md) | Model selection design |
-| [`docs/assistant_bootstrap_contract.md`](../assistant_bootstrap_contract.md) | Session bootstrap sequence |
-| `apps/*/README.md` | Per-application documentation |
-
-*Last reviewed: 2026-08-10*
+1. An ingress authorizes and normalizes input into shared request contracts.
+   Messaging channels use `LemonCore.RouterBridge` without a compile dependency
+   on the router. Acceptance requires a non-empty run ID; a lost acknowledgement
+   is an unknown outcome, not permission to retry a possible side effect.
+2. Router resolves session, policy, model, cwd and native resume state.
+   `SessionCoordinator` serializes a conversation and owns collect/follow-up/
+   steer/interrupt semantics. Gateway does not implement a second conversation
+   queue policy.
+3. Router submits `LemonCore.ExecutionCommand` through `LemonCore.EngineRuntime`.
+   Gateway adapts it to private `ExecutionRequest`, grants a concurrency slot and
+   owns worker/run/launch-lock lifecycle.
+4. The configured `CodingAgent.Executor` starts/resumes a native session. The
+   session composes bounded context and tools, the agent loop coordinates tool
+   tasks/model turns, and `lemon_ai` handles provider protocols and streaming.
+5. Gateway events flow through `LemonCore.Bus` to router and interested clients.
+   Router coalesces semantic `DeliveryIntent` output; channels choose send/edit,
+   truncation, buttons, media batching and platform message IDs through the outbox.
+6. Completion persists history/resume state, releases owned resources and advances
+   queued work. Public management projections are bounded/redacted, not raw events.
+
+Plaintext transport data, tool output and external skill content are untrusted.
+Authorization, tool policy/approvals and the pre-model trust boundary remain
+separate layers; successful execution does not make content authoritative.
+
+## Execution placement
+
+All top-level runs use the native executor. `engine: "lemon"` in run history is
+provenance, not an engine selector. Historical vendor resume tokens remain
+readable but cannot select or resume top-level execution.
+
+`task` and `@name` personas spawn native in-process child sessions through
+`CodingAgent.Coordinator`. `agent` delegates through router and can name a live
+execution node. Omitted node or `"local"` stays local. A named node runs the same
+native executor on its destination through an authenticated control-plane socket.
+
+Only JSON-safe request data crosses that boundary. Destination cwd and provider
+credentials stay destination-local; callbacks, source credentials and process
+state never cross. Names are durably unique and executable only while authenticated
+and live. Cancellation and bounded steer/redirect bind the same invocation/run/
+node session and require destination acknowledgement. Disconnects and stale
+sessions fail closed. The destination strips the placement selector to prevent
+recursive remote delegation.
+
+A2A is a different seam: independently authenticated peer agents exchange durable
+tasks through the optional separate listener. Peers are not execution nodes or
+operator sockets. See [A2A](../user-guide/a2a-peers.md).
+
+## Application responsibilities
+
+| App(s) | Responsibility |
+| --- | --- |
+| `lemon_ai` | Provider APIs, model catalog, streaming and admission; no umbrella deps |
+| `lemon_core` | Bus/events, Store, config/secrets and shared contracts; no umbrella deps |
+| `lemon_agent` | Agent/tool loop, model runtime/credentials, workspace goal/kanban state |
+| `coding_agent` | Native coding sessions, JSONL history, tools, compaction and delegation |
+| `lemon_router` | Conversation queues, run orchestration and semantic delivery |
+| `lemon_gateway` | Native execution lifecycle/slots and opt-in SMS/voice/webhook ingress |
+| `lemon_channels` | Messaging adapters, platform authorization/rendering and outbox |
+| `lemon_control_plane` | Authenticated client API, named-node transport and A2A listener |
+| `lemon_cli` | Shared source/release command dispatch, setup and operator workflows |
+| `lemon_web` | Assistant Phoenix chat and management interface |
+| `lemon_memory` | Scoped durable memory, ingest/search and lifecycle management |
+| `lemon_skills` | Skill catalog/install/audit/curation and assistant-platform tools |
+| `lemon_automation` | Cron/reminders/heartbeat policy, goal loops, kanban and blueprints |
+| `lemon_browser`, `lemon_media`, `lemon_lsp` | Supervised browser, media and language-server capabilities |
+| `lemon_mcp` | Client library for external MCP tools/resources/prompts |
+| `lemon_honcho` | Optional satellite registering external memory/context/tools |
+| `lemon_evals`, `lemon_platform_test` | Evaluation harness and extension contract tests |
+| `lemon_sim`, `lemon_sim_ui` | Simulation kernel/scenarios/artifacts and Phoenix control room |
+
+The Bun TUI and browser automation node live under `clients/`. The assistant Web
+interface is Phoenix; it is not a separate React workspace.
+
+Five packages are in the publish set: ai, core, agent, memory and platform-test.
+Their repository version is 0.2.0, not yet published. The old Hex 0.1.0 tarballs
+are not installable. Everything else ships as the in-repository reference runtime
+and products. See [platform status](../platform-split.md).
+
+## Persistent state and configuration
+
+- Generic Store backends support ephemeral ETS and durable SQLite/JSONL. Domain
+  wrappers own tables; consumers use lifecycle services for operator mutations.
+- Config provides defaults with environment > project > user precedence. Current
+  per-session/route/chat overrides live in `PolicyStore`, not another config plane.
+  Model resolution considers explicit/meta/session/profile/history/default policy;
+  details belong in [model selection](../model-selection-decoupling.md).
+- Native session history is JSONL with branching and compaction entries. Router
+  run/session inventory and profile/memory stores have their own typed ownership;
+  UI clients must not create competing stores.
+- `remember` edits assistant workspace preferences/memory, while `recall` searches
+  scoped historical runs and notes. Automatic recall is bounded local context on
+  the current user turn. Durable ingest is gated by `session_search`; unsafe
+  secret-bearing ingest is withheld, not merely redacted and stored. See
+  [memory](../user-guide/memory.md).
+- Heartbeats are ordinary cron jobs distinguished by metadata; completed exact
+  `HEARTBEAT_OK` output is suppressed but remains in history. Daily brief uses the
+  same scheduler, not another heartbeat timer/store.
+- Skills contribute stable bounded metadata; full content is explicitly loaded.
+  Installation/learning uses audit and exact-confirmation boundaries. See
+  [skills](../skills.md) and [source learning](../user-guide/learn-from-sources.md).
+
+## Supervision and guarantees
+
+BEAM processes isolate sessions and supervised tasks isolate model/tool work.
+That does not make arbitrary retries safe, imply lossless subscriber replay or
+make ETS durable. Owners reconcile durable state after restart and preserve
+idempotency/lease boundaries for mutations. Direct event fanout is fire-and-forget;
+bounded streams provide explicit overflow/timeout behavior. See
+[BEAM invariants](../beam_agents.md) and [telemetry](../telemetry.md).
+
+LemonSim keeps deterministic event updaters and RNG separate from LLM decisions.
+Replay-verified bundles record setup/seed, input batches, events and final state.
+The control room owns runner capacity, hosted-room privacy and presentation,
+not game rules. Hosted ownership is single-node, not a horizontally replicated
+service. Start with [benchmarks](../benchmarks/quickstart.md).
+
+## Further reading
+
+- [Exact dependency policy](../architecture_boundaries.md), derived from `mix.exs`
+- [Config reference](../config.md), [context](../context.md) and [bootstrap](../assistant_bootstrap_contract.md)
+- [Contributor/app guide index](../../AGENTS.md#ownership-and-app-guides)
+- [Testing](../testing.md), [safety](../security/safety.md) and [backups](../user-guide/backups.md)

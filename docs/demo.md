@@ -4,6 +4,24 @@ A good first task is small enough to inspect and useful enough to keep. Explore
 a repository, ask a follow-up, then return to the conversation from your session
 list. These walkthroughs show what to look for at each step.
 
+## Keyless LemonSim demo
+
+To try the simulation product without configuring a provider, use a source
+checkout with dependencies installed:
+
+```bash
+mix sim_ui.assets.setup
+mix sim_ui.assets.build
+mix lemon.sim.demo --seed 42
+```
+
+Open the printed spectator URL. This is a deterministic heuristic Werewolf game,
+not a model-backed agent run; no API keys are required. The server stays up until
+Ctrl+C twice. If its port is occupied, set `LEMON_SIM_UI_PORT` or start the game
+inside the existing UI node. See the [control room guide](../apps/lemon_sim_ui/README.md#keyless-demo)
+and [benchmark quickstart](benchmarks/quickstart.md) for replay-verifiable offline
+bundles and model-backed runs.
+
 ## Before you begin
 
 Complete the [quickstart](getting-started/quickstart.md) to install Lemon and

@@ -14,12 +14,16 @@ on:
   pull_request:
     paths:
       - "docs/**"
+      - "scripts/generate_docs_llms.py"
+      - "scripts/verify_docs_site"
       - ".github/workflows/docs-site.yml"
   push:
     branches:
       - main
     paths:
       - "docs/**"
+      - "scripts/generate_docs_llms.py"
+      - "scripts/verify_docs_site"
       - ".github/workflows/docs-site.yml"
   workflow_dispatch:
     inputs:
@@ -47,6 +51,11 @@ jobs:
         with:
           fetch-depth: 0   # VitePress uses git history for lastUpdated
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -66,22 +75,14 @@ jobs:
         working-directory: docs
         run: npm run build
 
+      - name: Verify generated assets
+        run: |
+          test -s docs/.vitepress/dist/llms.txt
+          test -s docs/.vitepress/dist/llms-full.txt
+
       - name: Check internal markdown links
         working-directory: docs
-        run: |
-          # Check all docs/**/*.md files for broken relative links.
-          # Uses markdown-link-check installed in the docs package.
-          find . -name "*.md" \
-            ! -path "./.vitepress/*" \
-            ! -path "./node_modules/*" \
-            | xargs npx markdown-link-check \
-                --config .mlc.json \
-                --quiet \
-                2>&1 | tee /tmp/link-check.log
-          if grep -q "ERROR:" /tmp/link-check.log; then
-            echo "::error::Broken links found. See output above."
-            exit 1
-          fi
+        run: npm run link-check
       - name: Upload build artifact (for deployment)
         if: >
           vars.ENABLE_PAGES_DEPLOY == 'true' &&

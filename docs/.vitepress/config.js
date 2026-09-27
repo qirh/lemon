@@ -103,7 +103,7 @@ export default {
         collapsed: true,
         items: [
           { text: "Skills Overview", link: "/skills" },
-          { text: "Skills v2", link: "/skills_v2" },
+          { text: "Manifest Reference", link: "/reference/skill-manifest-v2" },
         ],
       },
       {
@@ -117,21 +117,6 @@ export default {
           { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },
           { text: "ACP", link: "/tools/acp" },
           { text: "WASM", link: "/tools/wasm" },
-        ],
-      },
-      {
-        text: "Understand the runtime",
-        collapsed: true,
-        link: "/for-dummies/README",
-        items: [
-          { text: "Big Picture", link: "/for-dummies/01-big-picture" },
-          { text: "Message Journey", link: "/for-dummies/02-message-journey" },
-          { text: "Front Door", link: "/for-dummies/03-the-front-door" },
-          { text: "Traffic Cop", link: "/for-dummies/04-the-traffic-cop" },
-          { text: "Engine Room", link: "/for-dummies/05-the-engine-room" },
-          { text: "The Agent", link: "/for-dummies/06-the-agent" },
-          { text: "Talking to LLMs", link: "/for-dummies/07-talking-to-llms" },
-          { text: "Foundation", link: "/for-dummies/08-the-foundation" },
         ],
       },
       {
