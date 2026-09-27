@@ -55,18 +55,4 @@ defmodule LemonCore.Runtime.ReleaseProfileTest do
     end
   end
 
-  describe "mix.exs releases/0 parity" do
-    # Guards that mix.exs release definitions stay in sync with Profile.
-    # We can't easily eval mix.exs in a unit test, so we compare at the
-    # module level instead.
-
-    test "lemon_core is a dependency of every profile" do
-      # lemon_core is always :permanent in releases; it starts first.
-      # Its runtime modules must be accessible from any profile.
-      assert Code.ensure_loaded?(LemonCore.Runtime.Boot)
-      assert Code.ensure_loaded?(LemonCore.Runtime.Profile)
-      assert Code.ensure_loaded?(LemonCore.Runtime.Health)
-      assert Code.ensure_loaded?(LemonCore.Runtime.Env)
-    end
-  end
 end

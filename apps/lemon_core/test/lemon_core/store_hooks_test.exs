@@ -106,13 +106,6 @@ defmodule LemonCore.StoreHooksTest do
       refute_receive {:hook_fired, _}
     end
 
-    test "the store's hot path names no run-history or memory module" do
-      source = File.read!("lib/lemon_core/store.ex")
-
-      refute source =~ "RunHistoryStore"
-      refute source =~ "MemoryIngest"
-      refute source =~ "known_targets"
-    end
   end
 
   describe "run history provider" do

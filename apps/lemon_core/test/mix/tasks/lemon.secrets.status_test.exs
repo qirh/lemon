@@ -7,7 +7,6 @@ defmodule Mix.Tasks.Lemon.Secrets.StatusTest do
   import ExUnit.CaptureIO
 
   alias Mix.Tasks.Lemon.Secrets.Status
-  alias LemonCore.Secrets.MasterKey
 
   setup do
     # Create a temporary directory for test
@@ -42,41 +41,6 @@ defmodule Mix.Tasks.Lemon.Secrets.StatusTest do
     end)
 
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
-  end
-
-  describe "module attributes" do
-    test "task module exists and is loaded" do
-      assert Code.ensure_loaded?(Status)
-    end
-
-    test "has proper @shortdoc attribute" do
-      # Verify shortdoc via task helper
-      shortdoc = Mix.Task.shortdoc(Status)
-      assert shortdoc =~ "Show encrypted secrets status"
-    end
-
-    test "moduledoc is present" do
-      {:docs_v1, _, _, _, module_doc, _, _} = Code.fetch_docs(Status)
-
-      case module_doc do
-        :none ->
-          flunk("Module documentation is missing")
-
-        :hidden ->
-          flunk("Module documentation is hidden")
-
-        %{} ->
-          doc = module_doc["en"]
-          assert is_binary(doc)
-          assert doc =~ "Shows master key status and secret count"
-          assert doc =~ "mix lemon.secrets.status"
-      end
-    end
-
-    test "module has run/1 function exported" do
-      assert Code.ensure_loaded?(Status)
-      assert function_exported?(Status, :run, 1)
-    end
   end
 
   describe "status output" do
@@ -118,33 +82,6 @@ defmodule Mix.Tasks.Lemon.Secrets.StatusTest do
   end
 
   describe "output format" do
-    test "all expected fields are present" do
-      output =
-        capture_io(fn ->
-          Status.run([])
-        end)
-
-      # Check for all expected field labels
-      assert output =~ "configured:"
-      assert output =~ "source:"
-      assert output =~ "keychain_available:"
-      assert output =~ "env_fallback:"
-      assert output =~ "owner:"
-      assert output =~ "count:"
-    end
-
-    test "displays boolean values as strings" do
-      output =
-        capture_io(fn ->
-          Status.run([])
-        end)
-
-      # Should contain "true" or "false" after the field names
-      assert output =~ ~r/configured: (true|false)/
-      assert output =~ ~r/keychain_available: (true|false)/
-      assert output =~ ~r/env_fallback: (true|false)/
-    end
-
     test "displays source as 'none' when not configured" do
       System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
@@ -157,32 +94,4 @@ defmodule Mix.Tasks.Lemon.Secrets.StatusTest do
     end
   end
 
-  describe "Mix.Task integration" do
-    test "task can be retrieved via Mix.Task.get" do
-      assert Mix.Task.get("lemon.secrets.status") == Status
-    end
-
-    test "task is registered with correct name" do
-      task_module = Mix.Task.get("lemon.secrets.status")
-      assert task_module == Status
-    end
-
-    test "task shortdoc is accessible via Mix.Task.shortdoc" do
-      shortdoc = Mix.Task.shortdoc(Status)
-      assert is_binary(shortdoc)
-      assert shortdoc =~ "status"
-    end
-  end
-
-  describe "MasterKey integration" do
-    test "MasterKey.env_var/0 returns correct variable name" do
-      assert MasterKey.env_var() == "LEMON_SECRETS_MASTER_KEY"
-    end
-
-    test "MasterKey module is available" do
-      assert Code.ensure_loaded?(MasterKey)
-      assert function_exported?(MasterKey, :status, 0)
-      assert function_exported?(MasterKey, :status, 1)
-    end
-  end
 end

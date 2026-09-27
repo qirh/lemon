@@ -4,28 +4,6 @@ defmodule AgentCoreTest do
 
   alias LemonAgent.Test.Mocks
 
-  describe "LemonAgent module" do
-    test "module exists" do
-      assert Code.ensure_loaded?(LemonAgent)
-    end
-
-    test "exposes Types submodule" do
-      assert Code.ensure_loaded?(LemonAgent.Types)
-    end
-
-    test "exposes EventStream submodule" do
-      assert Code.ensure_loaded?(LemonAgent.EventStream)
-    end
-
-    test "exposes Loop submodule" do
-      assert Code.ensure_loaded?(LemonAgent.Loop)
-    end
-
-    test "exposes Agent submodule" do
-      assert Code.ensure_loaded?(LemonAgent.Agent)
-    end
-  end
-
   describe "new_agent/1" do
     test "accepts top-level initial state options" do
       model = Mocks.mock_model(id: "agentcore-top-level")

@@ -763,31 +763,6 @@ defmodule LemonGateway.TransportSupervisorTest do
     end
   end
 
-  # ============================================================================
-  # 15. Module Interface Verification
-  # ============================================================================
-
-  describe "module interface verification" do
-    test "start_link/1 exists and works" do
-      # `function_exported?/3` does not auto-load modules.
-      assert Code.ensure_loaded?(TransportSupervisor)
-      assert function_exported?(TransportSupervisor, :start_link, 1)
-
-      setup_app([MockTransportA])
-      assert Process.alive?(Process.whereis(TransportSupervisor))
-    end
-
-    test "implements Supervisor callbacks" do
-      setup_app([MockTransportA])
-
-      # init/1 callback works (verified by supervisor being alive)
-      assert Process.alive?(Process.whereis(TransportSupervisor))
-
-      # Standard Supervisor functions work
-      children = Supervisor.which_children(TransportSupervisor)
-      assert is_list(children)
-    end
-  end
 
   # ============================================================================
   # 16. Child Termination

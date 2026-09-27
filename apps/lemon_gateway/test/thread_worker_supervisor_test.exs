@@ -932,36 +932,6 @@ defmodule LemonGateway.ThreadWorkerSupervisorTest do
   end
 
   # ============================================================================
-  # 13. Module Interface Verification
-  # ============================================================================
-
-  describe "module interface verification" do
-    test "start_link/1 exists and works" do
-      assert function_exported?(ThreadWorkerSupervisor, :start_link, 1)
-    end
-
-    test "supervisor implements DynamicSupervisor callbacks" do
-      assert Process.alive?(Process.whereis(ThreadWorkerSupervisor))
-
-      children = DynamicSupervisor.count_children(ThreadWorkerSupervisor)
-      assert is_map(children)
-    end
-
-    test "standard DynamicSupervisor functions work" do
-      # which_children
-      children = DynamicSupervisor.which_children(ThreadWorkerSupervisor)
-      assert is_list(children)
-
-      # count_children
-      counts = DynamicSupervisor.count_children(ThreadWorkerSupervisor)
-      assert Map.has_key?(counts, :active)
-      assert Map.has_key?(counts, :specs)
-      assert Map.has_key?(counts, :supervisors)
-      assert Map.has_key?(counts, :workers)
-    end
-  end
-
-  # ============================================================================
   # 14. Child Spec Verification
   # ============================================================================
 

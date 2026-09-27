@@ -58,10 +58,6 @@ defmodule LemonCore.Release.SmokeTest do
   end
 
   describe "runtime modules" do
-    test "Boot module is accessible" do
-      assert Code.ensure_loaded?(LemonCore.Runtime.Boot)
-    end
-
     test "Env module resolves without crashing" do
       env = Env.resolve()
       assert is_integer(env.control_port) and env.control_port > 0

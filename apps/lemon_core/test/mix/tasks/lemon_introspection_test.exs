@@ -18,35 +18,6 @@ defmodule Mix.Tasks.Lemon.IntrospectionTest do
     :ok
   end
 
-  # ── module metadata ──────────────────────────────────────────────────────────
-
-  describe "module attributes" do
-    test "task module exists and exports run/1" do
-      assert Code.ensure_loaded?(Task)
-      assert function_exported?(Task, :run, 1)
-    end
-
-    test "has @shortdoc" do
-      shortdoc = Mix.Task.shortdoc(Task)
-      assert is_binary(shortdoc)
-      assert shortdoc =~ "introspection"
-    end
-
-    test "has @moduledoc covering supported options" do
-      {:docs_v1, _, _, _, module_doc, _, _} = Code.fetch_docs(Task)
-      doc = module_doc["en"]
-      assert doc =~ "--run-id"
-      assert doc =~ "--session-key"
-      assert doc =~ "--event-type"
-      assert doc =~ "--limit"
-      assert doc =~ "--since"
-    end
-
-    test "is registered with Mix under 'lemon.introspection'" do
-      assert Mix.Task.get("lemon.introspection") == Task
-    end
-  end
-
   # ── empty results ─────────────────────────────────────────────────────────
 
   describe "empty results" do

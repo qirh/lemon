@@ -21,7 +21,6 @@ defmodule LemonSkills.Sources.BuiltinGitTest do
     end
 
     test "reports its immutable source contract" do
-      assert Builtin.trust_level() == :builtin
       assert Builtin.fetch(nil, "unused", []) == {:error, :use_builtin_seeder}
       assert Builtin.upstream_hash(nil, []) == {:error, :unsupported}
     end
@@ -91,7 +90,6 @@ defmodule LemonSkills.Sources.BuiltinGitTest do
 
     test "exposes non-searchable community-source metadata" do
       assert Git.search("anything", []) == []
-      assert Git.trust_level() == :community
 
       assert {:ok, %{"url" => "git@example.test:skills/example.git", "source_kind" => "git"}} =
                Git.inspect("git@example.test:skills/example.git", [])

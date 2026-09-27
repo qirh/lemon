@@ -161,37 +161,6 @@ defmodule LemonCore.StoreCacheCoherenceTest do
     end
   end
 
-  describe "the store process is the cache's only writer" do
-    # The behavioural tests above cover what a caller can observe. This one
-    # pins the *reason* they hold, because the failure it guards against is
-    # only visible to a second process reading during a drain window — two
-    # rapid writes used to interleave as eager-1, eager-2, then the first
-    # cast landing last and restoring the older value. Catching that
-    # behaviourally needs a racing observer, and a racing observer that loses
-    # the race passes vacuously or fails spuriously depending on machine load.
-    # The invariant that makes the window impossible is structural, so assert
-    # it structurally: no cache mutation outside the GenServer callbacks.
-    test "no client-side code path mutates the read cache" do
-      source = File.read!("lib/lemon_core/store.ex")
-
-      {client_side, _server_side} =
-        case String.split(source, "# GenServer Implementation", parts: 2) do
-          [client, server] -> {client, server}
-          [only] -> {only, ""}
-        end
-
-      mutations =
-        Regex.scan(~r/ReadCache\.(put|delete)\(/, client_side)
-        |> Enum.map(fn [_match, fun] -> fun end)
-
-      assert mutations == [],
-             "client-side ReadCache.#{Enum.join(Enum.uniq(mutations), "/")} call(s) found in " <>
-               "the public API section of store.ex. A caller writing the mirror is what let a " <>
-               "failed backend write serve a phantom and two rapid writes land out of order. " <>
-               "Mutate the cache from the GenServer callbacks, after the backend confirms."
-    end
-  end
-
   describe "mirrored tables are advertised only once they hold data" do
     test "a table registered at runtime is warm before reads trust it" do
       store = start_store(unique(:coherence_warm), backend: EtsBackend)

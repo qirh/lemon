@@ -168,25 +168,6 @@ defmodule LemonCore.ApplicationTest do
     end
   end
 
-  describe "logging setup" do
-    test "maybe_add_file_handler is called during startup" do
-      # The logging module should be loaded and the function should exist
-      assert Code.ensure_loaded?(LemonCore.Logging)
-      assert function_exported?(LemonCore.Logging, :maybe_add_file_handler, 0)
-    end
-  end
-
-  describe "application callbacks" do
-    test "start/2 callback is exported" do
-      assert function_exported?(LemonCore.Application, :start, 2)
-    end
-
-    test "application module uses Application behaviour" do
-      assert function_exported?(LemonCore.Application, :start, 2)
-      assert function_exported?(LemonCore.Application, :stop, 1)
-    end
-  end
-
   describe "integration" do
     test "all children can communicate via PubSub" do
       # Subscribe to a test topic
