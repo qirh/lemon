@@ -197,6 +197,26 @@ defmodule CodingAgent.Session.RunTranslator do
     emit_approval_action(t, event)
   end
 
+  def handle_event(%__MODULE__{} = t, {:provider_retry, details}) when is_map(details) do
+    attempt = Map.get(details, :attempt, 1)
+    max_retries = Map.get(details, :max_retries, attempt)
+    seconds = Float.round(Map.get(details, :delay_ms, 0) / 1000, 1)
+
+    text =
+      "Provider request failed (#{Map.get(details, :category, :transient)}); " <>
+        "retrying in #{seconds}s (attempt #{attempt}/#{max_retries})"
+
+    emit_action_event(t, %{
+      id: "provider_retry_#{attempt}_#{System.unique_integer([:positive])}",
+      kind: :note,
+      title: text,
+      phase: :completed,
+      level: :warning,
+      message: Map.get(details, :reason),
+      detail: %{text: text, retry: details}
+    })
+  end
+
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
     answer = Presentation.extract_answer(messages, t.accumulated_text)
     usage = Presentation.build_usage(messages)

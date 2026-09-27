@@ -91,6 +91,7 @@ defmodule CodingAgent.Session do
     :model,
     :thinking_level,
     :system_prompt,
+    :prompt_environment,
     :relevant_skill_keys,
     :explicit_system_prompt,
     :prompt_template,
@@ -145,6 +146,7 @@ defmodule CodingAgent.Session do
           model: LemonAi.Types.Model.t(),
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
+          prompt_environment: String.t() | nil,
           relevant_skill_keys: [String.t()],
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
@@ -234,19 +236,27 @@ defmodule CodingAgent.Session do
     * `:name` - GenServer name for registration
     * `:python_repl_mod` - Persistent Python REPL facade to use for owner cleanup
       (default: `CodingAgent.PythonRepl`; set to `nil` when the subsystem is unavailable)
+    * `:max_tool_turns` - Cap on tool-using assistant turns per prompt. Defaults to
+      `[runtime] max_tool_turns`, which is unlimited (`:infinity`) unless configured.
+
+  Transient provider failures (rate limits, overloads, 5xx, network errors) that
+  arrive before any output are retried by `CodingAgent.Session.ProviderRetry`
+  under `[runtime.retry]`; each retry is broadcast as `{:provider_retry, details}`.
 
   ## System Prompt Composition
 
   The final system prompt is composed from multiple sources, joined with newlines.
-  Components are included in this order (most specific first):
+  Components are included in this order (static first, volatile last):
 
   1. Explicit `:system_prompt` option (if provided)
   2. Prompt template content loaded via `:prompt_template` (if provided)
-  3. Lemon base prompt (workspace bootstrap + skills)
+  3. Lemon base prompt (coding rules for the session's tools + skills + workspace bootstrap)
   4. CLAUDE.md/AGENTS.md content from ResourceLoader (auto-loaded from cwd)
+  5. Environment block (cwd, platform, shell, git snapshot, date), captured once at start
 
   Empty strings are filtered out before joining.
-  The composed prompt is refreshed before each user prompt to pick up workspace/memory file edits.
+  The composed prompt is refreshed before each user prompt to pick up workspace/memory file edits;
+  the environment block is reused unchanged so the prompt stays cache-stable.
 
   ## Examples
 
@@ -1317,6 +1327,14 @@ defmodule CodingAgent.Session do
     {:noreply, Lifecycle.apply_execute_code_config_transition(state, self())}
   end
 
+  # Sent by `CodingAgent.Session.ProviderRetry` from the provider stream task
+  # just before it waits to retry a transient failure. Subscribers see
+  # `{:provider_retry, details}` so a UI can show "retrying in Ns".
+  def handle_info({:provider_retry, details}, state) when is_map(details) do
+    Notifier.broadcast_event(state, {:provider_retry, details})
+    {:noreply, state}
+  end
+
   def handle_info(_msg, state) do
     {:noreply, state}
   end
@@ -1660,7 +1678,9 @@ defmodule CodingAgent.Session do
              session_key: state.session_key,
              session_id: state.session_manager && state.session_manager.header.id,
              agent_id: state.agent_id,
-             contributed_sections: system_sections
+             contributed_sections: system_sections,
+             tool_names: Enum.map(state.tools || [], & &1.name),
+             environment: state.prompt_environment
            }
          ) do
       :unchanged ->

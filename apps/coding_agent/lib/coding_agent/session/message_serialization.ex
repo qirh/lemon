@@ -69,21 +69,38 @@ defmodule CodingAgent.Session.MessageSerialization do
     Enum.map(content, &serialize_content_block/1)
   end
 
+  # Provider signatures travel with their blocks so a resumed session replays
+  # them: Anthropic thinking signatures, OpenAI Responses reasoning items and
+  # message ids (stored as signature JSON / ids), and Gemini thought
+  # signatures. Without them, a restored transcript degrades signed thinking to
+  # plain text and drops encrypted reasoning items.
   @spec serialize_content_block(map()) :: map()
-  def serialize_content_block(%LemonAi.Types.TextContent{text: text}) do
-    %{"type" => "text", "text" => text}
+  def serialize_content_block(%LemonAi.Types.TextContent{text: text, text_signature: signature}) do
+    put_signature(%{"type" => "text", "text" => text}, "text_signature", signature)
   end
 
   def serialize_content_block(%LemonAi.Types.ImageContent{data: data, mime_type: mime_type}) do
     %{"type" => "image", "data" => data, "mime_type" => mime_type}
   end
 
-  def serialize_content_block(%LemonAi.Types.ThinkingContent{thinking: thinking}) do
-    %{"type" => "thinking", "thinking" => thinking}
+  def serialize_content_block(%LemonAi.Types.ThinkingContent{
+        thinking: thinking,
+        thinking_signature: signature
+      }) do
+    put_signature(%{"type" => "thinking", "thinking" => thinking}, "thinking_signature", signature)
   end
 
-  def serialize_content_block(%LemonAi.Types.ToolCall{id: id, name: name, arguments: arguments}) do
-    %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments}
+  def serialize_content_block(%LemonAi.Types.ToolCall{
+        id: id,
+        name: name,
+        arguments: arguments,
+        thought_signature: signature
+      }) do
+    put_signature(
+      %{"type" => "tool_call", "id" => id, "name" => name, "arguments" => arguments},
+      "thought_signature",
+      signature
+    )
   end
 
   def serialize_content_block(%CodingAgent.Messages.TextContent{text: text}) do
@@ -215,25 +232,37 @@ defmodule CodingAgent.Session.MessageSerialization do
   end
 
   @spec deserialize_content_block(map()) :: map()
-  def deserialize_content_block(%{"type" => "text", "text" => text}) do
-    %LemonAi.Types.TextContent{type: :text, text: text}
+  def deserialize_content_block(%{"type" => "text", "text" => text} = block) do
+    %LemonAi.Types.TextContent{type: :text, text: text, text_signature: block["text_signature"]}
   end
 
   def deserialize_content_block(%{"type" => "image", "data" => data, "mime_type" => mime_type}) do
     %LemonAi.Types.ImageContent{type: :image, data: data, mime_type: mime_type}
   end
 
-  def deserialize_content_block(%{"type" => "thinking", "thinking" => thinking}) do
-    %LemonAi.Types.ThinkingContent{type: :thinking, thinking: thinking}
+  def deserialize_content_block(%{"type" => "thinking", "thinking" => thinking} = block) do
+    %LemonAi.Types.ThinkingContent{
+      type: :thinking,
+      thinking: thinking,
+      thinking_signature: block["thinking_signature"]
+    }
   end
 
-  def deserialize_content_block(%{
-        "type" => "tool_call",
-        "id" => id,
-        "name" => name,
-        "arguments" => arguments
-      }) do
-    %LemonAi.Types.ToolCall{type: :tool_call, id: id, name: name, arguments: arguments}
+  def deserialize_content_block(
+        %{
+          "type" => "tool_call",
+          "id" => id,
+          "name" => name,
+          "arguments" => arguments
+        } = block
+      ) do
+    %LemonAi.Types.ToolCall{
+      type: :tool_call,
+      id: id,
+      name: name,
+      arguments: arguments,
+      thought_signature: block["thought_signature"]
+    }
   end
 
   def deserialize_content_block(block), do: block
@@ -268,6 +297,13 @@ defmodule CodingAgent.Session.MessageSerialization do
   def deserialize_trust(:trusted), do: :trusted
   def deserialize_trust("trusted"), do: :trusted
   def deserialize_trust(_), do: :trusted
+
+  # Unsigned blocks keep their historical shape: the key is written only when
+  # there is a signature to replay.
+  defp put_signature(map, key, signature) when is_binary(signature) and signature != "",
+    do: Map.put(map, key, signature)
+
+  defp put_signature(map, _key, _signature), do: map
 
   defp normalize_map_keys(nil), do: nil
 

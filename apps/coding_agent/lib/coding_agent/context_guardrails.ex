@@ -96,16 +96,31 @@ defmodule CodingAgent.ContextGuardrails do
   defp guard_thinking_block(%ThinkingContent{thinking: thinking} = block, opts) do
     maxb = opts.max_thinking_bytes
 
-    if byte_size(thinking) <= maxb do
-      [block]
-    else
-      {tr, meta} =
-        truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
+    cond do
+      byte_size(thinking) <= maxb ->
+        [block]
 
-      Logger.warning("Thinking block truncated: #{inspect(meta)}")
-      [%{block | thinking: tr}]
+      # A provider signature covers the exact thinking text (Anthropic rejects
+      # a modified signed block), so an oversized signed block is dropped whole
+      # rather than replayed truncated under a signature that no longer matches.
+      signed?(block) ->
+        Logger.warning(
+          "Signed thinking block dropped: #{byte_size(thinking)} bytes exceeds #{maxb}"
+        )
+
+        []
+
+      true ->
+        {tr, meta} =
+          truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
+
+        Logger.warning("Thinking block truncated: #{inspect(meta)}")
+        [%{block | thinking: tr}]
     end
   end
+
+  defp signed?(%ThinkingContent{thinking_signature: signature}),
+    do: is_binary(signature) and signature != ""
 
   defp guard_tool_call_args(args, opts) when is_map(args) do
     maxb = opts.max_tool_call_arg_string_bytes

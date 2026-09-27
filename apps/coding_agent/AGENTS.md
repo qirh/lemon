@@ -617,16 +617,23 @@ CodingAgent.Workspace.ensure_workspace()
 
 ### System Prompt Composition
 
-The final system prompt is built in this order (later parts are appended):
+`CodingAgent.Session.PromptComposer` joins these parts in order, static first and volatile last so provider prompt caches keep the longest prefix:
 
-1. `CodingAgent.SystemPrompt.build/2` -- base Lemon prompt (workspace bootstrap + skills list)
+1. Explicit `:system_prompt` option
 2. Prompt template content (if `:prompt_template` option given -- loaded from `.lemon/prompts/`, `.claude/prompts/`, `~/.lemon/agent/prompts/`)
-3. Explicit `:system_prompt` option
+3. `CodingAgent.SystemPrompt.build/2` -- identity, `## Working on code` rules (read before edit, prefer `edit` over `write`, verify with tests, git safety), skills list, memory workflow, workspace bootstrap files. Each coding rule names the tools it needs and is omitted when the session lacks them (`:tool_names` build opt; one-shot builds assume the default core set).
 4. `CodingAgent.ResourceLoader.load_instructions/1` -- CLAUDE.md/AGENTS.md from cwd hierarchy
+5. `CodingAgent.SystemPrompt.Environment.capture/2` -- cwd, platform, shell, git branch + status snapshot, date. Captured once in `Session.Lifecycle` and stored in `state.prompt_environment`; every refresh reuses it, so a file edit or a new day does not change the prompt bytes mid-session.
 
 The composed prompt is refreshed before each user prompt to pick up edits to workspace/memory files.
 
 The available-skills listing is part of the cacheable system prefix, but turn-specific relevance results are not. `CodingAgent.Session` keeps displayable selected keys in turn-local state for missed-skill introspection and emits relevance-render telemetry without persisting or presenting a synthetic relevance message. This keeps the system prompt byte-stable across unrelated turns while retaining telemetry about skills the model could have loaded.
+
+### Agent Loop Defaults
+
+- **Tool turns**: sessions pass `max_tool_turns` from `[runtime] max_tool_turns` (unset/0 = `:infinity`) to `LemonAgent.Agent`; the `:max_tool_turns` session option overrides it. The `LemonAgent.Agent` library default (25) only applies to direct library users.
+- **Provider retry**: `CodingAgent.Session.ProviderRetry` wraps the session stream fn outside `ProviderFallback`. Pre-output failures classified `:rate_limit`/`:transient`/`:server` (plus local `:max_concurrency`/`:circuit_open`) retry with exponential backoff + jitter under `[runtime.retry]` (`SettingsManager.get_retry_settings/1`); a retry hint in the error (`rate_limit_info.retry_after`, or text such as "Please retry in 7s") replaces the backoff, and hints over 120 s surface the error instead. Each retry is broadcast as `{:provider_retry, details}` and translated to a `:note` action by `RunTranslator`. Failures after output has started are not retried.
+- **Signatures on resume**: `Session.MessageSerialization` persists `thinking_signature`, `text_signature`, and `thought_signature`, so resumed Anthropic sessions replay signed thinking and OpenAI Responses reasoning items / Gemini thought signatures survive. `ContextGuardrails` drops an oversized *signed* thinking block instead of truncating it under its signature.
 
 ## Budget Tracking
 

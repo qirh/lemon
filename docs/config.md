@@ -54,6 +54,9 @@ reserve_tokens = 16384
 keep_recent_tokens = 20000
 
 [runtime.retry]
+# Session-level retry of transient provider failures (429, 5xx, overloaded,
+# network) that happen before any output. Exponential backoff with jitter from
+# base_delay_ms; a retry-after hint from the provider replaces the backoff.
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
@@ -61,6 +64,8 @@ base_delay_ms = 1000
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
 extension_paths = []
+# Optional cap on tool-using turns per prompt. Unset or 0 = unlimited (default).
+# max_tool_turns = 200
 
 [runtime.extensions]
 # Disable all extension code execution while keeping manifest diagnostics available.
@@ -1000,7 +1005,8 @@ details.
 - `runtime.tools.execute_code`: programmatic tool calling (python3 scripts, helper allowlist, optional persistent kernels).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
-- `runtime.retry`: retry settings.
+- `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
+- `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.
