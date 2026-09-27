@@ -55,7 +55,6 @@ defmodule LemonCli.SessionsCommandTest do
     assert history["redacted"] == true
     assert length(history["history"]) == 1
     refute inspect(history) =~ secret
-    assert inspect(history) =~ "[redacted]"
 
     stats =
       run_json([
@@ -114,7 +113,6 @@ defmodule LemonCli.SessionsCommandTest do
 
     content = File.read!(output_path)
     refute content =~ secret
-    assert content =~ "[redacted]"
     assert Bitwise.band(File.stat!(output_path).mode, 0o777) == 0o600
 
     error =

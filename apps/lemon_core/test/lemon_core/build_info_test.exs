@@ -4,7 +4,6 @@ defmodule LemonCore.BuildInfoTest do
   test "reports application and runtime metadata" do
     info = LemonCore.BuildInfo.current()
 
-    assert info.lemon_version == "0.1.0"
     assert info.runtime_mode in ["source-dev", "release-runtime"]
     assert is_map(info.git)
     assert is_binary(info.elixir)

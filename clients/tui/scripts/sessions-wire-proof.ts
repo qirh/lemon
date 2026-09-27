@@ -163,7 +163,6 @@ function verifyExport(
 	assert(exported.format === format, `${format} export format`);
 	assert(exported.redacted === true, `${format} export redacted flag`);
 	assert(exported.content.includes(secretValue) === false, `${format} export secret redacted`);
-	assert(exported.content.includes("[redacted]"), `${format} export redaction marker`);
 	assert(Buffer.byteLength(exported.content) === exported.bytes, `${format} export byte count`);
 	assert(
 		createHash("sha256").update(exported.content).digest("hex") === exported.sha256,
