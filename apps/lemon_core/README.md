@@ -134,6 +134,20 @@ limits are exceeded.
 | `LemonCore.Secrets.Keychain` | macOS Keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution chain (keychain -> env var) |
 
+`LemonCore.Redact` is the common credential policy: `text/1` masks assignments,
+Bearer/Basic authorization, provider keys, JWTs, and PEM private keys; `map/1`
+also masks sensitive-key values recursively through maps, structs, lists, and
+tuples. Structs become plain maps. `sensitive_key?/1` accepts atom/string keys.
+Redaction is idempotent and does not truncate output.
+
+Use `text(text, count: true)` for `{redacted_text, replacement_count}`,
+`drop_keys: true` when secret names must also be omitted, and `strict: true`
+for portable profile/config exports that also omit full sensitive assignment
+lines and unlabelled hex keys. Keep caller-specific content allowlists, URL/path
+omission, collection/depth/byte bounds, and bounded error summaries: credential
+redaction alone does not make arbitrary data safe to export. Redact before
+truncating so partial credentials cannot escape.
+
 ### Storage
 
 | Module | Purpose |

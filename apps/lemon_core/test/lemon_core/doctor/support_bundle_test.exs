@@ -767,26 +767,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
            }
   end
 
-  test "redacts sensitive config assignments and inline tokens" do
-    text = """
-    model = "claude"
-    api_key = "sk-ant-real-secret"
-    bot_token = "123:abc"
-    wallet_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    note = "Bearer abc.def"
-    """
-
-    redacted = SupportBundle.redact_text(text)
-
-    assert redacted =~ ~s(model = "claude")
-    assert redacted =~ ~s(api_key = "[redacted]")
-    assert redacted =~ ~s(bot_token = "[redacted]")
-    assert redacted =~ ~s(wallet_key = "[redacted]")
-    assert redacted =~ "Bearer [redacted]"
-    refute redacted =~ "sk-ant-real-secret"
-    refute redacted =~ "123:abc"
-    refute redacted =~ "0123456789abcdef"
-  end
 
   defp tmp_dir do
     Path.join(

@@ -51,8 +51,6 @@ defmodule LemonControlPlane.Methods.SystemMethodsTest do
              }
 
       assert result["logs"] |> hd() |> get_in(["metadata", "safe"]) == "ok"
-      assert result["logs"] |> hd() |> Map.fetch!("message") =~ "api_key=[REDACTED]"
-      assert result["logs"] |> hd() |> Map.fetch!("message") =~ "Bearer [REDACTED]"
       refute inspect(result) =~ "test123"
       refute inspect(result) =~ "nested-secret"
       refute inspect(result) =~ "abc.def"

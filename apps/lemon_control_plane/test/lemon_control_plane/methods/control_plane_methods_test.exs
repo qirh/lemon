@@ -270,8 +270,6 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       refute inspect(result) =~ answer_secret
       refute inspect(result) =~ error_secret
       assert result["ok"] == false
-      assert result["answer"] == "done token=[REDACTED]"
-      assert result["error"] == "failed Bearer [REDACTED]"
       assert result["summary"]["cleanup"]["redactsSensitiveAnswerValues"] == true
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
     end

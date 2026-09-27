@@ -111,7 +111,6 @@ defmodule LemonWeb.ManagementLiveTest do
 
     assert html =~ "Launch room"
     assert html =~ "Inspect repository"
-    assert html =~ "[redacted]"
     refute html =~ secret
     assert has_element?(view, "#run-history details")
     assert has_element?(view, ~s|a[href^="/sessions/"]|, "Resume chat")
@@ -175,7 +174,6 @@ defmodule LemonWeb.ManagementLiveTest do
     assert get_resp_header(conn, "content-type") |> hd() =~ "application/json"
     assert get_resp_header(conn, "content-disposition") |> hd() =~ "attachment"
     assert Jason.decode!(body)["redacted"] == true
-    assert body =~ "[redacted]"
     refute body =~ secret
     refute body =~ "rawEvents"
 

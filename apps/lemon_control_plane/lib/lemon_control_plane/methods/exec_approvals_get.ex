@@ -108,7 +108,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
     Map.new(map, fn {key, value} ->
       string_key = to_string(key)
 
-      if sensitive_key?(string_key) do
+      if LemonCore.Redact.sensitive_key?(string_key) do
         {string_key, %{"redacted" => true, "kind" => "secret"}}
       else
         {string_key, redact_action(value)}
@@ -119,11 +119,5 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
   defp redact_action(list) when is_list(list), do: Enum.map(list, &redact_action/1)
   defp redact_action(value), do: value
 
-  defp sensitive_key?(key) do
-    normalized = String.downcase(key)
-
-    Enum.any?(["token", "secret", "password", "api_key", "apikey", "credential", "cookie"], fn
-      marker -> String.contains?(normalized, marker)
-    end)
-  end
+  
 end

@@ -41,7 +41,6 @@ defmodule LemonCore.ConfigReloader do
         }
 
   @default_sources [:files, :env, :secrets]
-  @redact_patterns ~w(token secret api_key password)
 
   # ---------------------------------------------------------------------------
   # Client API
@@ -444,12 +443,10 @@ defmodule LemonCore.ConfigReloader do
   @doc false
   @spec redact_value(String.t(), term()) :: term()
   def redact_value(key, value) do
-    key_lower = String.downcase(key)
-
-    if Enum.any?(@redact_patterns, &String.contains?(key_lower, &1)) do
+    if LemonCore.Redact.sensitive_key?(key) do
       "[REDACTED]"
     else
-      value
+      LemonCore.Redact.map(value)
     end
   end
 

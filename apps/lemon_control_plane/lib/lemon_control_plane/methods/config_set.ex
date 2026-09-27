@@ -42,7 +42,7 @@ defmodule LemonControlPlane.Methods.ConfigSet do
   end
 
   defp summary(key, value) do
-    sensitive? = sensitive_key?(key)
+    sensitive? = LemonCore.Redact.sensitive_key?(key)
 
     %{
       "key" => key,
@@ -57,19 +57,12 @@ defmodule LemonControlPlane.Methods.ConfigSet do
   end
 
   defp response_value(key, value) do
-    if sensitive_key?(key) and not is_nil(value) do
+    if LemonCore.Redact.sensitive_key?(key) and not is_nil(value) do
       %{"redacted" => true, "kind" => "secret"}
     else
       value
     end
   end
 
-  defp sensitive_key?(key) do
-    normalized = key |> to_string() |> String.downcase()
-
-    Enum.any?(
-      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
-      fn marker -> String.contains?(normalized, marker) end
-    )
-  end
+  
 end

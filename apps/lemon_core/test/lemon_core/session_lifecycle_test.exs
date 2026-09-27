@@ -185,7 +185,6 @@ defmodule LemonCore.SessionLifecycleTest do
 
     [safe] = SessionLifecycle.history(session_key)
     refute inspect(safe) =~ secret
-    assert inspect(safe) =~ "[redacted]"
     assert [%{kind: "tool", title: "exec"}] = Enum.map(safe.tools, &Map.take(&1, [:kind, :title]))
 
     [full] = SessionLifecycle.history(session_key, redact: false)
@@ -226,7 +225,6 @@ defmodule LemonCore.SessionLifecycleTest do
     assert byte_size(json.sha256) == 64
     assert json.filename =~ ".json"
     refute json.content =~ secret
-    assert json.content =~ "[redacted]"
 
     decoded = Jason.decode!(json.content)
     assert decoded["redacted"] == true

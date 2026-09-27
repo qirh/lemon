@@ -13,6 +13,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Fixed
 
+- Shared `LemonCore.Redact` text, nested-data, and sensitive-key APIs now provide
+  one credential policy for session/config/profile exports and diagnostics,
+  including complete private-key blocks and quoted assignment values. Export
+  allowlists and size limits remain owned by their callers.
 - Installable from Hex. The `0.1.0` release's `mix.exs` began with
   `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
   the package, so it failed to load in every consumer project; `0.1.0` is
