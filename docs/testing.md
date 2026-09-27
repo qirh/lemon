@@ -42,6 +42,12 @@ name. Add `--validate-config` to also validate the runtime config.
 dependencies; set `LEMON_TEST_REUSE_NODE_MODULES=1` to reuse existing
 `node_modules` in local loops.
 
+Product and packaged-boot smokes isolate their home/store directories and use
+valid, test-only 32-byte secrets keys; no live provider credential is needed.
+For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
+`--single TARBALL --profile PROFILE` mode against both locally assembled
+`lemon_runtime_min` and `lemon_runtime_full` tarballs.
+
 ## CI mapping
 
 | Workflow | Trigger | What it runs |

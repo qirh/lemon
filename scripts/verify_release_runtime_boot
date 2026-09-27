@@ -353,7 +353,7 @@ boot_one_profile() {
   local env_vars=(
     "HOME=$home_dir"
     "LEMON_STORE_PATH=$store_dir"
-    "LEMON_SECRETS_MASTER_KEY=runtime-boot-dummy-key-32-chars"
+    "LEMON_SECRETS_MASTER_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
     "LEMON_CONTROL_PLANE_PORT=$control_port"
     "LEMON_WEB_PORT=$web_port"
     "LEMON_SIM_UI_PORT=$sim_port"
