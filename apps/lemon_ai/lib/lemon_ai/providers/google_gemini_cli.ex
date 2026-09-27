@@ -38,8 +38,6 @@ defmodule LemonAi.Providers.GoogleGeminiCli do
     Usage
   }
 
-  require Logger
-
   @default_endpoint "https://cloudcode-pa.googleapis.com"
   @antigravity_daily_endpoint "https://daily-cloudcode-pa.sandbox.googleapis.com"
 

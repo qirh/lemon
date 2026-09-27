@@ -82,8 +82,6 @@ defmodule LemonCore.Contract do
     end)
   end
 
-  defp valid_callbacks?(_callbacks), do: false
-
   defp loadable(module) do
     case Code.ensure_loaded(module) do
       {:module, ^module} -> :ok

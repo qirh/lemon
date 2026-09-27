@@ -265,10 +265,6 @@ defmodule LemonAgent.Loop.Streaming do
        when is_struct(partial, AssistantMessage),
        do: partial
 
-  defp get_partial_from_event({_type, _idx, _tool_call, partial})
-       when is_struct(partial, AssistantMessage),
-       do: partial
-
   defp get_partial_from_event(_), do: nil
 
   defp default_stream_fn(model, context, options) do

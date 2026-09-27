@@ -93,7 +93,7 @@ defmodule LemonSkills.Sources.Github do
   end
 
   @impl true
-  def trust_level, do: :community
+  def trust_for_ref(_id), do: :community
 
   # ---------------------------------------------------------------------------
   # Private

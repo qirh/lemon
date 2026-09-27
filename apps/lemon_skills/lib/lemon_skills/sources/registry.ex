@@ -91,9 +91,6 @@ defmodule LemonSkills.Sources.Registry do
     end
   end
 
-  @impl true
-  def trust_level, do: :official
-
   @doc """
   Derive the trust level from the namespace of a registry ref.
 
@@ -108,6 +105,7 @@ defmodule LemonSkills.Sources.Registry do
       iex> LemonSkills.Sources.Registry.trust_for_ref("community/tools/my-skill")
       :community
   """
+  @impl true
   @spec trust_for_ref(String.t()) :: LemonSkills.Entry.trust_level()
   def trust_for_ref(ref) when is_binary(ref) do
     ref

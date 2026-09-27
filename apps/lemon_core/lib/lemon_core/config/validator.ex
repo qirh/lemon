@@ -611,13 +611,9 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_non_empty_string(errors, value, path) when is_atom(value) do
+  defp validate_non_empty_string(errors, value, _path) when is_atom(value) do
     # Atoms are valid for enum-like fields (thinking_level, provider, etc.)
-    if value == nil do
-      ["#{path}: cannot be nil" | errors]
-    else
-      errors
-    end
+    errors
   end
 
   defp validate_non_empty_string(errors, _value, path) do

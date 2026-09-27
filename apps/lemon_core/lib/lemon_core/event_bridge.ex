@@ -116,7 +116,7 @@ defmodule LemonCore.EventBridge do
   defp dispatch(fun, args) do
     mod = current_impl()
 
-    if is_atom(mod) and Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
       _ = apply(mod, fun, args)
       :ok
     else

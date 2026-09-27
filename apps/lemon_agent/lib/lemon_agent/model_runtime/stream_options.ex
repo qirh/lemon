@@ -258,8 +258,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     end)
   end
 
-  defp first_non_empty_binary(_), do: nil
-
   defp normalize_option_key(key) when is_binary(key) do
     try do
       String.to_existing_atom(key)

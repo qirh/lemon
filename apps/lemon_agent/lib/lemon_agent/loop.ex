@@ -384,7 +384,7 @@ defmodule LemonAgent.Loop do
     # the model call is canceled mid-stream and retried with the correction.
     # Clearing after the drain would swallow that second case silently.
     AbortSignal.clear_redirect(signal)
-    pending_messages = get_steering_messages(config, signal) || []
+    pending_messages = get_steering_messages(config, signal)
 
     Logger.debug("LemonAgent.Loop run_loop pending_steering=#{length(pending_messages)}")
 
@@ -443,7 +443,7 @@ defmodule LemonAgent.Loop do
 
     if continue_outer do
       # Check for follow-up messages
-      follow_up_messages = get_follow_up_messages(config) || []
+      follow_up_messages = get_follow_up_messages(config)
 
       Logger.debug(
         "LemonAgent.Loop do_run_loop continue_outer follow_up=#{length(follow_up_messages)}"
@@ -548,7 +548,7 @@ defmodule LemonAgent.Loop do
             EventStream.push(stream, {:turn_end, message, []})
             AbortSignal.clear_redirect(signal)
 
-            pending_messages = get_steering_messages(config, signal) || []
+            pending_messages = get_steering_messages(config, signal)
 
             if aborted?(signal) do
               transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
@@ -640,7 +640,7 @@ defmodule LemonAgent.Loop do
                   steering_after_tools
                 else
                   AbortSignal.clear_redirect(signal)
-                  get_steering_messages(config, signal) || []
+                  get_steering_messages(config, signal)
                 end
 
               if aborted?(signal) do

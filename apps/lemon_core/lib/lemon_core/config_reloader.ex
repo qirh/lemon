@@ -351,10 +351,8 @@ defmodule LemonCore.ConfigReloader do
   end
 
   defp compute_source_digest(:secrets, _cwd) do
-    case LemonCore.Secrets.list() do
-      {:ok, metadata_list} -> Digest.secrets_digest(metadata_list)
-      _ -> Digest.secrets_digest([])
-    end
+    {:ok, metadata_list} = LemonCore.Secrets.list()
+    Digest.secrets_digest(metadata_list)
   end
 
   # ---------------------------------------------------------------------------

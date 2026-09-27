@@ -669,8 +669,6 @@ defmodule LemonAi.Providers.Bedrock do
     end)
   end
 
-  defp summarize_messages(_), do: []
-
   defp summarize_content_types(content) when is_list(content) do
     content
     |> Enum.map(fn
@@ -915,7 +913,7 @@ defmodule LemonAi.Providers.Bedrock do
     if byte_size(buffer) < message_length do
       :incomplete
     else
-      <<frame_data::binary-size(message_length), remaining::binary>> = buffer
+      {frame_data, remaining} = :erlang.split_binary(buffer, message_length)
 
       # Extract headers and payload
       # Frame structure: prelude(8) + prelude_crc(4) + headers + payload + message_crc(4)

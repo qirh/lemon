@@ -554,8 +554,6 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end
   end
 
-  defp resolve_raw_secret_api_key(_), do: nil
-
   defp resolve_anthropic_raw_secret_api_key(secret_name) when is_binary(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} when is_binary(value) and value != "" ->
@@ -580,8 +578,6 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         nil
     end
   end
-
-  defp resolve_anthropic_raw_secret_api_key(_), do: nil
 
   defp resolve_openai_codex_onboarding_access_token(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
@@ -748,13 +744,9 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end)
   end
 
-  defp env_first(_), do: nil
-
   defp first_non_empty_binary(list) when is_list(list) do
     Enum.find(list, &present_value?/1)
   end
-
-  defp first_non_empty_binary(_), do: nil
 
   defp non_empty_binary(value) when is_binary(value) do
     if String.trim(value) == "", do: nil, else: value
