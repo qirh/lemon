@@ -117,7 +117,6 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonChannels.Doctor.Checks.Channels` | Channel readiness checks built from redacted channel diagnostics, shared launch-gate readiness and proof reason kinds (lives in `lemon_channels`; registers through `config :lemon_core, :doctor_checks`) |
 | `LemonCore.Doctor.Checks.Media` | Media readiness checks for provider-backed image/TTS/STT/vision/video proof, including OpenAI or Vertex image evidence, OpenAI/ElevenLabs/Google TTS evidence, and OpenAI or Vertex Veo video evidence, with copy-ready live proof commands, target-provider `--provider` reruns for failed/skipped multi-provider lanes, default `.lemon/proofs/media-*-smoke-latest.json` paths, and bounded permission/quota/payment remediation hints |
 | `LemonCore.Doctor.Checks.Usage` | Usage aggregate and quota-pressure check backed by redacted shared usage diagnostics |
-| LemonCore.LoggerSetup (internal) | Logger configuration helpers |
 
 `media_diagnostics.json` in support bundles mirrors the provider-backed media
 launch lanes with redacted image/TTS/STT/vision/video status, safe reason

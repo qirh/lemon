@@ -135,7 +135,6 @@ share a group and are never delivered concurrently to prevent reordering.
 |------|-------------|
 | `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
 | `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
-| `telegram/fake_api.ex` | In-process fake of `telegram/api.ex` for hermetic transport tests: update queue with real getUpdates offset semantics, `simulate_message`/`simulate_callback_query` builders, outbound-call capture with `sent/0`/`await_send/2`. Select via `[gateway.telegram] api_mod = "LemonChannels.Telegram.FakeAPI"`. |
 | `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
 | `telegram/known_target_store.ex` | Typed wrapper for Telegram known-target chat/topic metadata. |
 | `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
@@ -649,6 +648,8 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.
 | `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
 | `gateway_config_test.exs` | Config merging |
 | `application_test.exs` | App startup |
+
+`test/support/telegram_fake_api.ex` (`LemonChannels.Telegram.FakeAPI`, compiled only under `MIX_ENV=test`) is an in-process fake of `telegram/api.ex` for hermetic transport tests: update queue with real getUpdates offset semantics, `simulate_message`/`simulate_callback_query` builders, outbound-call capture with `sent/0`/`await_send/2`. Pass it as the transport's `api_mod` (see `telegram/transport_fake_api_test.exs`).
 
 ### Test Patterns
 

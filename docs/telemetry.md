@@ -303,15 +303,12 @@ bounded measurements and categorical metadata — no run/session/key identity or
 per-phase counts, owner and fork counts, reap settings). There is no control-plane API
 for kernel management.
 
-### Session recovery and rate limiting — `[:coding_agent, ...]`
+### Session recovery — `[:coding_agent, :session, :overflow_recovery, ...]`
 
-All four families build the last segment at runtime.
+The last segment is built at runtime.
 
 | Event | Suffix values | Measurements | Metadata |
 |---|---|---|---|
-| `[:coding_agent, :rate_limit_pause, <event>]` | `:paused`, `:resumed` | `retry_after_ms`, `time_to_resume` | `session_id` and pause context ([`rate_limit_pause.ex:265`](../apps/coding_agent/lib/coding_agent/rate_limit_pause.ex)) |
-| `[:coding_agent, :rate_limit_healer, <event>]` | `:probe_attempt`, `:probe_success`, `:probe_rate_limited`, `:probe_error`, `:healed`, `:failed`, `:stopped` | caller-supplied | `session_id`, `provider`, `model`, `healing_state`, `probe_count` ([`rate_limit_healer.ex:566`](../apps/coding_agent/lib/coding_agent/rate_limit_healer.ex)) |
-| `[:coding_agent, :session_fork, <event>]` | `:fork_completed`, `:fork_failed`, `:original_terminated` | `%{}` (empty) | caller map plus `original_session_id`, `timestamp` ([`session_fork.ex:175`](../apps/coding_agent/lib/coding_agent/session_fork.ex)) |
 | `[:coding_agent, :session, :overflow_recovery, <stage>]` | `:attempt`, `:success`, `:failure` | `count: 1` | recovery context including `duration_ms` ([`session/compaction_manager.ex:209`](../apps/coding_agent/lib/coding_agent/session/compaction_manager.ex)) |
 
 ### Skills — `[:lemon_skills, :skill, ...]`
@@ -503,11 +500,10 @@ Three things bite when you do this, all of them consequences of items in
   A single `unit: {:native, :millisecond}` applied across the board silently produces
   numbers that are wrong by six orders of magnitude on the `_us` events.
 - **`counter/2` still needs a measurement key that exists.**
-  `[:coding_agent, :tool_call, :name_normalized]` and `[:coding_agent, :session_fork, _]`
-  emit empty measurement maps, so they cannot be counted without first adding a measurement
-  at the emit site.
+  `[:coding_agent, :tool_call, :name_normalized]` emits an empty measurement map, so it
+  cannot be counted without first adding a measurement at the emit site.
 - **Runtime-suffixed events cannot be declared with a wildcard.** `Telemetry.Metrics` needs
-  a concrete event name, so each value of the nine dynamic families has to be listed
+  a concrete event name, so each value of the five dynamic families has to be listed
   individually; the known values are in the catalog above.
 
 For an interactive view instead of a scrape endpoint, `phoenix_live_dashboard` consumes the
@@ -519,24 +515,13 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Events that exist as code but never fire.**
-`CodingAgent.RateLimitRecovery.emit_recovery_telemetry/3`
-([`rate_limit_recovery.ex:217`](../apps/coding_agent/lib/coding_agent/rate_limit_recovery.ex))
-is public with no callers, so `[:coding_agent, :rate_limit_recovery, _]` never fires. This is
-the last remaining dead emitter. (The run-span helpers `run_start` / `run_first_token` /
-`run_stop` and `cron_tick` were previously listed here as dead; they are in fact live — see
-their catalog entries above — and the genuinely dead `run_exception/3` helper was removed.)
-
-**Eight families build their final segment at runtime**, so they cannot be discovered by
+**Five families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
 advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
-`[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
-`[:coding_agent, :rate_limit_healer, _]`, `[:coding_agent, :rate_limit_recovery, _]`,
-`[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
+`[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
 `[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
-**Measurement gaps.** `[:coding_agent, :session_fork, _]` emits an empty measurement map, so
-it cannot drive a counter without a synthetic measurement. `[:lemon_agent, :loop, :end]`
+**Measurement gaps.** `[:lemon_agent, :loop, :end]`
 reports `duration: nil` when the process-dictionary start time is missing. The scheduler
 family emits empty metadata, so slot pressure cannot be attributed to a run, session, or
 engine.

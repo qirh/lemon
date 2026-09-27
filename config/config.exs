@@ -42,10 +42,6 @@ config :coding_agent, :lane_caps,
 
 config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 
-# The gateway writes channel-bound files into the agent's workspace, but must
-# not depend on the agent product; the reference runtime forwards the value.
-config :lemon_gateway, :workspace_dir, {CodingAgent.Config, :workspace_dir, []}
-
 # The native executor is owned by coding_agent. The gateway looks this up
 # dynamically through LemonGateway.Executor, so this wiring creates no gateway
 # dependency on the agent product.

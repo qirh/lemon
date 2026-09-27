@@ -29,7 +29,7 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 +-----------------------------------------------------------------------------+
 |                        Session Supervision Tree                              |
 +-----------------------------------------------------------------------------+
-|  CodingAgent.SessionRootSupervisor (permanent)                               |
+|  CodingAgent.Supervisor (CodingAgent.Application, one_for_one)              |
 |  +-- CodingAgent.SessionSupervisor (dynamic, one_for_one)                   |
 |  |   +-- CodingAgent.Session processes (temporary restart)                  |
 |  +-- CodingAgent.SessionRegistry (via Registry)                             |
@@ -55,7 +55,6 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 | `CodingAgent.Session.Heartbeat` | Durable same-session recurring prompt state, idle scheduling, fire claims, and clear tombstones |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
 | `CodingAgent.SessionRegistry` | Registry for persisted-ID lookup plus ambiguity-safe logical session-key lookup from registration metadata |
-| `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
 | `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
 | `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
 | `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, durable-node-ID-keyed local session and recovery credential storage with legacy-name migration |
@@ -772,7 +771,7 @@ Session and EventHandler emit introspection events via `LemonCore.Introspection.
 |---|---|---|
 | `:tool_call_dispatched` | `handle({:tool_execution_start, id, name, args})` | `tool_name`, `tool_call_id` |
 
-## Slash Commands and @Mentions
+## Slash Commands and Subagents
 
 ### Slash Commands
 
@@ -788,17 +787,16 @@ Argument placeholders: `$1`, `$2`, ..., `$ARGUMENTS`.
 CodingAgent.Commands.list(cwd)
 ```
 
-### @Mention Subagents
+### Subagents
 
-Subagents are lightweight personas invoked with `@name prompt` syntax.
+Subagents are lightweight personas selected by id.
 
 Built-in subagents: `research`, `implement`, `review`, `test`.
 Custom definitions: `.lemon/subagents.json` or `~/.lemon/agent/subagents.json` (JSON array of `{id, description, prompt}`).
 
 ```elixir
 CodingAgent.Subagents.list(cwd)
-CodingAgent.Mentions.parse("@research find auth endpoints", cwd)
-# => {:ok, %{agent: "research", prompt: "find auth endpoints", ...}}
+CodingAgent.Subagents.get(cwd, "research")
 ```
 
 The `Task` and `Agent` tools can use `Subagents` to prepend a role prompt before execution.
@@ -963,7 +961,6 @@ apps/coding_agent/
 |   |   +-- session_manager.ex               # JSONL persistence
 |   |   +-- session_supervisor.ex            # DynamicSupervisor
 |   |   +-- session_registry.ex              # Process registry
-|   |   +-- session_root_supervisor.ex       # Top-level supervisor
 |   |   +-- tool_executor.ex                 # Approval gating
 |   |   +-- tool_registry.ex                 # Dynamic resolution + ETS extension cache
 |   |   +-- tool_policy.ex                   # Policy profiles and checks
@@ -1001,7 +998,7 @@ apps/coding_agent/
 |   |   +-- resource_loader.ex                # CLAUDE.md/AGENTS.md hierarchy loader
 |   |   +-- settings_manager.ex               # TOML config adapter
 |   |   +-- config.ex                         # Path/env configuration
-|   |   +-- subagents.ex, mentions.ex         # Subagent definitions and @mention parsing
+|   |   +-- subagents.ex                      # Subagent definitions
 |   |   +-- commands.ex                       # Slash command loading
 |   |   +-- coordinator.ex                    # Concurrent subagent orchestration
 |   |   +-- executor.ex                       # Local/named-node native runner selection

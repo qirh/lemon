@@ -1076,7 +1076,7 @@ Lemon can run as an XMTP bot through the `lemon_channels` XMTP adapter.
 ./bin/lemon-xmtp-bootstrap
 ```
 
-This installs bridge dependencies in `apps/lemon_gateway/priv/node_modules` (where `xmtp_bridge.mjs` resolves imports).
+This installs bridge dependencies in `apps/lemon_channels/priv/node_modules`, next to `xmtp_bridge.mjs`, where Node resolves its imports.
 
 ### 2. Configure gateway XMTP
 

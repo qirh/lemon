@@ -15,23 +15,21 @@ defmodule LemonChannels.Telegram.FakeAPI do
 
   State lives in a lazily started, unlinked GenServer registered under this
   module's name, so no supervision-tree change is required — the first call
-  from any process (ExUnit test, transport init, or a live release) boots it.
+  from any process (ExUnit test or transport init) boots it.
+
+  This module lives in `test/support` and is compiled only when
+  `MIX_ENV=test`; it is never part of a release.
 
   ## Selecting the fake
 
-  In TOML config (a running release picks this up like any other
-  `[gateway.telegram]` key — unknown keys pass through atomized):
-
-      [gateway.telegram]
-      bot_token = "fake-token"
-      api_mod = "LemonChannels.Telegram.FakeAPI"
-
-  In ExUnit, pass it straight to the transport (see
-  `transport_fake_api_test.exs`):
+  Pass it straight to the transport (see `transport_fake_api_test.exs`):
 
       LemonChannels.Adapters.Telegram.Transport.start_link(
         config: %{bot_token: "fake-token", api_mod: LemonChannels.Telegram.FakeAPI}
       )
+
+  Under `MIX_ENV=test`, a `[gateway.telegram] api_mod =
+  "LemonChannels.Telegram.FakeAPI"` string in TOML resolves to it as well.
 
   ## Driving API
 
@@ -75,19 +73,6 @@ defmodule LemonChannels.Telegram.FakeAPI do
   `get_updates/3` returns queued updates with `update_id >= offset`
   immediately when any exist; otherwise it long-polls, bounded by
   `min(timeout_ms, 1000ms)`, so pollers stay responsive and never hang.
-
-  ## Driving a live instance
-
-  With `api_mod = "LemonChannels.Telegram.FakeAPI"` configured, a running
-  node can be driven from a shell without touching Telegram:
-
-      elixir --sname probe --cookie <cookie> \\
-        --rpc-eval lemon_bot@myhost \\
-        'LemonChannels.Telegram.FakeAPI.simulate_message(4242, "/status") |> inspect() |> IO.puts()'
-
-      elixir --sname probe --cookie <cookie> \\
-        --rpc-eval lemon_bot@myhost \\
-        'LemonChannels.Telegram.FakeAPI.await_send(:send_message, 10_000) |> inspect() |> IO.puts()'
   """
 
   use GenServer

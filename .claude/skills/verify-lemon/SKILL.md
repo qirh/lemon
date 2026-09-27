@@ -218,9 +218,9 @@ markdown chunking/rendering, poller offset semantics, file transfer — all
 without real-TG flakiness, rate limits, or credentials.
 
 `LemonChannels.Telegram.FakeAPI`
-(`apps/lemon_channels/lib/lemon_channels/telegram/fake_api.ex`) mirrors every
-api_mod function the real transport calls. Select it exactly like an operator
-would:
+(`apps/lemon_channels/test/support/telegram_fake_api.ex`, compiled only under
+`MIX_ENV=test`) mirrors every api_mod function the real transport calls. In a
+`MIX_ENV=test` node, select it exactly like an operator would:
 
 ```toml
 [gateway.telegram]

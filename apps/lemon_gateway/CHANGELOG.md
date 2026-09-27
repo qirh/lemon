@@ -13,8 +13,6 @@ scheduler and lifecycle owner rather than a selectable engine host.
 
 - `LemonGateway.Executor`, the four-callback contract used by the single
   configured top-level executor.
-- `LemonGateway.Workspace`, which reads
-  `config :lemon_gateway, :workspace_dir` without depending on CodingAgent.
 - `LemonGateway.Config.replacement_config/0`, so the application that owns an
   environment key is the one that reads it.
 

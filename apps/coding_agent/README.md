@@ -13,7 +13,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
 - **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
-- **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, @mentions, and project-local CLAUDE.md/AGENTS.md
+- **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, and project-local CLAUDE.md/AGENTS.md
 - **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
 
 ## Architecture
@@ -112,7 +112,6 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.SessionManager` | JSONL persistence engine with tree-structured entries (branching, compaction, labels), atomic writes, append-only incremental saves, and version migrations (v1-v3) |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes with health check and list capabilities |
 | `CodingAgent.SessionRegistry` | Registry wrapper for session lookup by ID |
-| `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infrastructure (currently delegated into `Application`) |
 | `CodingAgent.Executor` | Selects the normal local runner or a named-node remote runner from execution request metadata |
 | `CodingAgent.Executor.RemoteSessionRunner` | Bridges one local gateway execution to one live named node and propagates completion/cancellation |
 
@@ -420,7 +419,6 @@ writes a redacted proof without raw commands, logs, or process ids.
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Subagents` | Subagent definition loading (built-in: `research`, `implement`, `review`, `test`; custom: `.lemon/subagents.json`) |
-| `CodingAgent.Mentions` | `@name prompt` parsing for subagent invocation |
 | `CodingAgent.Commands` | Slash command discovery from `.lemon/command/*.md` and `~/.lemon/agent/command/*.md` with YAML frontmatter |
 
 ### Harness and Checkpointing
@@ -460,7 +458,6 @@ shell history.
 | `CodingAgent.InternalUrls.NotesProtocol` | `notes://` protocol handler |
 | `CodingAgent.Progress` | Progress reporting utilities |
 | `CodingAgent.Utils.Http` | HTTP utility functions |
-| `CodingAgent.Project.Codexignore` | `.codexignore` file parsing |
 
 ### Mix Tasks
 

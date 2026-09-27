@@ -11,7 +11,6 @@ defmodule LemonChannels.Adapters.Xmtp.PortServer do
     label: "xmtp",
     event_tag: :xmtp_bridge_event,
     script_filename: "xmtp_bridge.mjs",
-    adapter_dir: __DIR__,
     log_module: __MODULE__
   }
 
