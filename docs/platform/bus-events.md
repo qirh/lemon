@@ -51,12 +51,9 @@ every subscriber inside a single app (or a single matched app pair). They should
 shapes in their owning app, not `LemonCore.Events.*` structs. Putting sim or kanban payload types
 in `lemon_core` would re-domain the package that Phase 1 just spent ten items de-domaining. See §3.
 
-**R4 — Two control-plane methods make typed payloads unenforceable until they are narrowed.**
-`events.ingest` and `system-event` accept an arbitrary JSON object and broadcast it, under a
-caller-chosen event type from a 20-atom allowlist, to a caller-chosen `run:<id>` / `session:<key>`
-/ `system` / `cron` / `exec_approvals` / `goals` / `nodes` / `presence` topic. A remote client can
-inject `%{"foo" => 1}` as a `:delta` into any live run. Restrict both to `:custom_event`, or
-validate against the Events registry, *before* the first struct ships. See §6.8.
+**R4 — Keep event payload validation at the publisher boundary.**
+The control plane no longer exposes arbitrary event injection; registered
+payloads are validated before the bus broadcasts them. See §6.8.
 
 **R5 — Fix the three real bugs the catalog surfaced as their own commits, before typing.**
 They are independent of this phase and each is a few lines: the raw-map `:run_failed` (§6.1), the
@@ -160,9 +157,6 @@ not a subscription.)
 | `:config_reloaded` | `lemon_core/config_reloader.ex:260` | `%{reload_id, reason, changed_sources, changed_paths, diff}` | E |
 | `:config_reload_failed` | `lemon_core/config_reloader.ex:316` | `%{reload_id, reason, error}` | E |
 | `:secret_changed` | `lemon_core/secrets.ex:432` | `%{owner, name, action}` | E |
-| `:talk_mode_changed` | `control_plane/methods/talk_mode.ex:66` | `%{session_key, mode}` | E |
-| `:voicewake_changed` | `control_plane/methods/voicewake_set.ex:40` | voicewake settings | E |
-| `:device_pair_requested` / `_resolved` | `device_pair_request.ex:51`, `_approve.ex:82`, `_reject.ex:51` | pairing record | E |
 
 Subscriber: `EventBridge` only — and it has **no mapping clause for the first three**, so
 `:config_reloaded`, `:config_reload_failed` and `:secret_changed` are published into a topic where
@@ -378,8 +372,7 @@ Compatibility for one release cycle rests on two mechanisms:
 
 1. **`from_map/1` on every struct.** A consumer that receives a legacy map coerces it:
    `payload = Events.RunCompleted.from_map(payload)`. This is how a *new* consumer tolerates an
-   *old* publisher — needed because publishers migrate one at a time and because
-   `events.ingest` can inject a bare map at any moment.
+   *old* publisher while publishers migrate one at a time.
 
 2. **`Access` implemented on every Events struct** (`fetch/2`, `get_and_update/3`, `pop/2`,
    delegating to `Map`). This is how an *old* consumer tolerates a *new* publisher, and it is what
@@ -453,7 +446,6 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 - **P2.** Fix `extract_heartbeat_output/1` (§6.13) — 1 file.
 - **P3.** Replace the four `Process.whereis(LemonCore.PubSub)` gates with `Bus.pubsub?/0`-agnostic
   publishing (§6.6) — `checkpoint.ex`, `goal_store.ex`, `kanban_store.ex`, `stream_coalescer.ex`.
-- **P4.** Narrow `events.ingest` and `system-event` (R4/§6.8) — **blocks everything after S3.**
 - **P5.** Fold `heartbeat_manager`'s four hand-built cron events into `LemonAutomation.Events`
   (§6.10) — **blocks S5.**
 - **P6.** Delete the `kanban`/`kanban:<id>` publishes, and `channels`/`logs` from the Bus
@@ -466,7 +458,7 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 | S1 | `LemonCore.Events` scaffold + `registry/0` + `Access` shim + `from_map/1` contract | — | No behaviour change; the kit lands with it |
 | S2 | `routing_feedback` | 1 | **The pilot.** The consumer already destructures exact keys; this proves the mechanism end-to-end in ~40 lines |
 | S3 | `goals` | 1 | Cross-app, one `EventBridge` clause |
-| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed`) | 1 | Decide drop-vs-map for the first three (§6.5) as part of it |
+| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`) | 1 | Decide drop-vs-map for the first three (§6.5) as part of it |
 | S5 | `cron` (7 types) | 2 | After P5. Largest *publisher* count (13 sites), small consumer count |
 | S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | 6 | First multi-app consumer set; `pending` is shared with `ExecApprovalStore`, so the store's read path migrates with it |
 | S7 | `run:*` — `:run_phase_changed` | **0** | Free: published twice per transition and consumed by nobody (§6.4). Retires `LemonCore.RunPhaseEvent` |
@@ -571,17 +563,9 @@ requester) is unchanged; only the delivery of the request moved off the bus. Fai
 hanging for the full timeout), `{:error, :client_down}` (handler died mid-request, caught via
 monitor), `{:error, :timeout}`.
 
-**6.8 The control plane can inject arbitrary payloads under real event types.**
-`events.ingest` (scope `:write`) accepts any JSON object and broadcasts it to `system`, `channels`,
-`cron`, `exec_approvals`, `goals`, `nodes`, `presence`, or **any** `run:<id>` / `session:<key>`
-topic, typed as `:custom_event`, `:heartbeat`, `:metrics` or `:log`. `system-event` (scope
-`:admin`) does the same across a **20-atom allowlist that includes `:delta`, `:run_completed`,
-`:approval_requested`, `:approval_resolved`, `:cron_run_started` and `:cron_run_completed`**. A
-client with admin scope can therefore inject a malformed `:run_completed` into any live run, and
-`run_process` will forward it to the session topic and every channel subscriber. Typed payloads
-are advisory until this is narrowed — `events.ingest` to `:custom_event` only, and `system-event`
-either to `:custom_event` or to payloads validated through `Events.registry/0`. This is why P4
-blocks the run-topic work.
+**6.8 Control-plane event injection is not supported.**
+Event payloads are validated at the publisher boundary before the bus broadcasts
+registered typed events.
 
 **6.9 A second wire shape exists behind an optional-dependency check.**
 `DependencyManager.build_event/3` (`dependency_manager.ex:84`) returns `{event_type, payload}` —
@@ -658,7 +642,7 @@ Landed 2026-08-10, after the design above was reviewed.
 | S1 | `LemonCore.Events` registry, `Events.Payload` macro, `Access` shim, `Bus.broadcast_event/4` | done |
 | S2 | `routing_feedback` | done — publisher and consumer both typed, consumer keeps a legacy-map clause |
 | S3 | `goals` | done |
-| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`, `:talk_mode_changed`) | done |
+| S4 | `system` (`:config_reloaded`, `:config_reload_failed`, `:secret_changed`) | done |
 | S5 | `cron` (7 types) | done |
 | S6 | `exec_approvals` (3 types incl. `ApprovalPending`) | done — also aligned the control-plane publisher, which used `created_at_ms` where core uses `requested_at_ms` and omitted the top-level `approval_id` |
 | S7 | `:run_phase_changed` | done — `LemonCore.RunPhaseEvent` now delegates to `Events.RunPhaseChanged` and is deprecated |
@@ -691,7 +675,6 @@ platform's own registry at
 
 | Item | What changed |
 |---|---|
-| P4 (§6.8) | **Validate, don't ban.** Both injectors keep their full allowlist, but a type registered in `LemonCore.Events` must now supply a payload that coerces into its struct or the call is refused with `{:invalid_request, ...}` naming the coercion failure. A well-formed injection still works and is indistinguishable from a real event — which is the point — while a malformed `run_completed` never reaches a subscriber. Unregistered types (`shutdown`, `tick`, node/device pairing, `custom_*`) have no declared shape and keep their pass-through behaviour. Implemented with a new `LemonCore.Events.cast/2`, the strict counterpart to `coerce/2`. |
 | P6 (§6.11) | The `kanban` and `kanban:<board_id>` broadcasts are deleted — zero subscribers repo-wide, and the durable record was always the `Introspection.record/3` call beside them, which stays. The `LemonCore.Bus` moduledoc's topic contract is rewritten: it now separates the seven typed contract topics from the app-internal ones, and says plainly that `channels` and `logs` never had a publisher. |
 | §6.4 | The gateway no longer publishes `:run_phase_changed`; `LemonRouter.PhasePublisher` is the single publisher, since the router owns the phase graph. The gateway keeps tracking and validating its own transitions (`maybe_track_phase/2`) because that is what surfaces an out-of-order phase in its logs — it just no longer broadcasts a duplicate. |
 | §6.2 | `LemonGateway.DependencyManager.build_event/3`'s unreachable `{event_type, payload}` tuple fallback is gone, and with it the tuple receive clauses in `RunCompletionWaiter` and `webhook/response.ex` that existed only to catch it. `RunCompletionWaiter` also loses its two envelope-less `%{completed: ...}` clauses and its two pre-P1 `:run_failed` shapes, going from seven receive clauses to four. The remaining bare-map clauses (`%{type: ..., payload: ...}`) are kept deliberately: an envelope-less map is the documented legacy shape and stays accepted for one cycle, whereas a tuple never was. |
@@ -851,8 +834,9 @@ real send. It gates on `Bus.running?/0` per §6.6, and emits a
 `[:lemon, :channels, :dispatch]` telemetry twin (see `docs/telemetry.md`).
 
 **Fanout.** `EventBridge` maps `:channel_delivery` → `channel.delivery`
-(`topic_for_event("channel.delivery") → ["channels"]`), `Frames.supported_events/0` lists the
-name, and `events.subscribe` already allowed the `channels` topic.
+(`topic_for_event("channel.delivery") → ["channels"]`), and
+`Frames.supported_events/0` lists the event. All non-node clients receive
+events without topic subscriptions.
 
 **Kit.** `LemonPlatformTest.EventsFixtures.channel_delivery/1` builds the payload; the
 compliance suite covers the module through the registry as with every other typed payload.

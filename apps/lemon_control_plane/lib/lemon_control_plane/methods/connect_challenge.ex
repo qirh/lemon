@@ -2,8 +2,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   @moduledoc """
   Handler for the connect.challenge control plane method.
 
-  Handles challenge-response authentication for connections.
-  This is typically used for secure device pairing or node authentication.
+  Handles challenge-response authentication for paired execution nodes.
 
   ## Token Lifecycle
 
@@ -19,9 +18,9 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   alias LemonControlPlane.Protocol.Errors
   alias LemonControlPlane.Auth.TokenStore
-  alias LemonControlPlane.{DevicePairingStore, NodeStore}
+  alias LemonControlPlane.NodeStore
 
-  # Token TTL: 7 days (node/device sessions are long-lived)
+  # Token TTL: 7 days (node sessions are long-lived)
   @token_ttl_ms 7 * 24 * 60 * 60 * 1000
 
   @impl true
@@ -100,38 +99,7 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
 
   defp session_generation(_identity), do: {:error, :invalid_session_generation}
 
-  defp verify_challenge(challenge, ctx) do
-    # Check if this is a device pairing verification
-    case DevicePairingStore.take_challenge(challenge) do
-      nil ->
-        # Check if it's a node pairing verification
-        verify_node_challenge(challenge, ctx)
-
-      pairing_info when is_map(pairing_info) ->
-        # Verify the challenge matches a pending pairing
-        expires_at = pairing_info[:expires_at_ms] || pairing_info["expires_at_ms"]
-
-        if expires_at && expires_at > System.system_time(:millisecond) do
-          {:ok,
-           %{
-             "type" => "device",
-             "deviceId" => pairing_info[:device_id] || pairing_info["device_id"],
-             "deviceName" => pairing_info[:device_name] || pairing_info["device_name"]
-           }}
-        else
-          {:error, "Challenge expired"}
-        end
-
-      {:error, _reason} ->
-        {:error, "Challenge store unavailable"}
-
-      _ ->
-        verify_node_challenge(challenge, ctx)
-    end
-  end
-
-  defp verify_node_challenge(challenge, _ctx) do
-    # Check against stored node challenges
+  defp verify_challenge(challenge, _ctx) do
     case NodeStore.take_challenge(challenge) do
       nil ->
         {:error, "Invalid challenge"}
@@ -164,6 +132,5 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
   end
 
   defp identity_id(%{"nodeId" => node_id}), do: node_id
-  defp identity_id(%{"deviceId" => device_id}), do: device_id
   defp identity_id(_), do: nil
 end

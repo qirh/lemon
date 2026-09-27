@@ -466,7 +466,7 @@ failure without double-counting the run: the session entry remembers its last
 Finalize hooks run after both writes and use at-least-once delivery, so hook
 implementations must be idempotent by run id.
 
-Agent workspace coordination — goals, kanban boards, and heartbeats — is built on this Store but lives in `agent_core` as `LemonAgent.Workspace.{GoalStore, KanbanStore, HeartbeatStore}`.
+Agent workspace coordination — goals and kanban boards — is built on this Store but lives in `lemon_agent` as `LemonAgent.Workspace.{GoalStore, KanbanStore}`. Heartbeats use automation cron jobs and cron history.
 
 ### ReadCache
 

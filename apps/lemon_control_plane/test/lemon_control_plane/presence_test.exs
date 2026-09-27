@@ -140,18 +140,11 @@ defmodule LemonControlPlane.PresenceTest do
         pid: self()
       })
 
-      Presence.register("dev_#{System.unique_integer()}", %{
-        role: :device,
-        client_id: "d1",
-        pid: self()
-      })
-
       counts = Presence.counts()
 
-      assert counts.total >= 4
+      assert counts.total >= 3
       assert counts.operators >= 2
       assert counts.nodes >= 1
-      assert counts.devices >= 1
     end
   end
 

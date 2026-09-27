@@ -48,8 +48,3 @@ connections, requires constant-time token authentication on discovery and both
 WebSocket paths, hides Chrome-internal pages, multiplexes tab debugger sessions,
 and acknowledges rather than forwards `Browser.close`.
 
-For remote controller clients, Lemon also provides the stricter
-`browser.controller.*` control-plane protocol: an authenticated operator mints
-a short-lived single-use ticket bound to controller, profile, session, run, and
-allowlisted capabilities; only the exact registered WebSocket may return
-results.

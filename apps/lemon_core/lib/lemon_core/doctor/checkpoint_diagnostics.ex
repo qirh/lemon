@@ -87,22 +87,11 @@ defmodule LemonCore.Doctor.CheckpointDiagnostics do
   defp rollback_controls(checkpoint_id) when is_binary(checkpoint_id) and checkpoint_id != "" do
     %{
       tui_diff: "/checkpoint diff #{checkpoint_id}",
-      tui_restore: "/checkpoint restore #{checkpoint_id}",
-      control_plane_diff: control_plane_command("checkpoint.diff", checkpoint_id),
-      control_plane_restore: control_plane_command("checkpoint.restore", checkpoint_id)
+      tui_restore: "/checkpoint restore #{checkpoint_id}"
     }
   end
 
   defp rollback_controls(_checkpoint_id), do: nil
-
-  defp control_plane_command(method, checkpoint_id) do
-    Jason.encode!(%{
-      "method" => method,
-      "params" => %{
-        "checkpointId" => checkpoint_id
-      }
-    })
-  end
 
   defp timestamps(entries) do
     entries

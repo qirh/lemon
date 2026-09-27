@@ -32,7 +32,7 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
       # Store an expired token
       LemonCore.Store.put(:session_tokens, token, %{
         token: token,
-        identity: %{"type" => "device", "deviceId" => "dev-123"},
+        identity: %{"type" => "node", "nodeId" => "node-123"},
         issued_at_ms: System.system_time(:millisecond) - 60_000,
         # Expired
         expires_at_ms: System.system_time(:millisecond) - 1000
@@ -64,8 +64,8 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
       # Store a valid token
       {:ok, _} =
         TokenStore.store(token, %{
-          "type" => "device",
-          "deviceId" => "dev-456"
+          "type" => "node",
+          "nodeId" => "node-456"
         })
 
       {:ok, auth_ctx} =
@@ -73,8 +73,9 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
           "auth" => %{"token" => token}
         })
 
-      assert auth_ctx.role == :device
-      assert :control in auth_ctx.scopes
+      assert auth_ctx.role == :node
+      assert :invoke in auth_ctx.scopes
+      assert :event in auth_ctx.scopes
     end
 
     test "empty token falls through to params-based auth" do
@@ -119,7 +120,7 @@ defmodule LemonControlPlane.Auth.AuthorizeExpirationTest do
       # Store with string keys (simulates JSONL reload)
       LemonCore.Store.put(:session_tokens, token, %{
         "token" => token,
-        "identity" => %{"type" => "device"},
+        "identity" => %{"type" => "node"},
         "issued_at_ms" => System.system_time(:millisecond) - 60_000,
         "expires_at_ms" => System.system_time(:millisecond) - 1000
       })

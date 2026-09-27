@@ -183,11 +183,11 @@ mutation semantics separate from these local filesystem claims.
 file diagnostics with graceful fallback when a checker is unavailable, and
 `write`, `edit`, and `patch` can opt into post-edit baseline/delta diagnostics.
 Operator status is exposed without paths, file contents, workspace roots, or
-diagnostic output through `lsp.diagnostics.status` and support bundle
-`lsp_diagnostics.json`. `LemonLsp.ServerManager` owns redacted
+diagnostic output in support bundle `lsp_diagnostics.json`. `LemonLsp.ServerManager` owns redacted
 language-server registry, stdio session lifecycle status, initialize
 orchestration, document open/change/close notifications, JSON-RPC request
 framing, and diagnostic notification counters.
+
 
 `kanban` is implemented in `LemonSkills.Tools` and is the model-facing durable board tool. It creates/lists boards,
 creates/lists/updates/comments tasks, and reads from `LemonAgent.Workspace.KanbanStore` so
@@ -798,9 +798,9 @@ Non-loopback controllers require `wss://`. `--allow-insecure-controller` (or
 development or when the entire path is already authenticated and encrypted by
 a verified overlay such as Tailscale.
 
-Node names are trimmed and durably unique per controller. `node.list` reports
-paired identities with online/offline status derived from the live registry;
-only an authenticated live connection is executable. The worker advertises
+Node names are trimmed and durably unique per controller. Paired identities
+with online/offline status are derived from the live registry; only an
+authenticated live connection is executable. The worker advertises
 `coding_agent.run` version 1, invocation-bound steer/redirect, and targeted
 cancellation. It accepts only that run method, strips `meta.node` before local
 execution, and validates the selected local working directory.
