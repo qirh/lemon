@@ -57,6 +57,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
   }
 
   alias LemonAi.EventStream
+  alias LemonAi.Providers.OpenCodeGoSession
 
   require Logger
 
@@ -225,6 +226,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
       |> Enum.map(fn {k, v} -> {String.downcase(to_string(k)), v} end)
       |> Map.new()
 
+    # OpenCode Go requires a stable per-conversation session header
+    session_headers = OpenCodeGoSession.headers(model, context, opts)
+
     # Add Copilot-specific headers
     copilot_headers =
       if model.provider in [:github_copilot, "github-copilot"] do
@@ -241,6 +245,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
     # Merge headers - later entries override earlier ones
     base_headers
+    |> Map.merge(session_headers)
     |> Map.merge(model_headers)
     |> Map.merge(copilot_headers)
     |> Map.merge(opts_headers)

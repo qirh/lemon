@@ -22,7 +22,7 @@ defmodule LemonAi.Providers.Anthropic do
   @behaviour LemonAi.Provider
 
   alias LemonAi.EventStream
-  alias LemonAi.Providers.{HttpTrace, RetryHelper}
+  alias LemonAi.Providers.{HttpTrace, OpenCodeGoSession, RetryHelper}
   import LemonAi.Providers.AssistantMessageHelper
 
   alias LemonAi.Types.{
@@ -93,7 +93,10 @@ defmodule LemonAi.Providers.Anthropic do
 
       url = "#{base_url}/v1/messages"
 
-      headers = build_headers(api_key, model.headers, opts.headers, model.provider)
+      model_headers =
+        Map.merge(OpenCodeGoSession.headers(model, context, opts), model.headers || %{})
+
+      headers = build_headers(api_key, model_headers, opts.headers, model.provider)
       {body, history_info} = build_request_body(model, context, opts, api_key)
       trace_id = HttpTrace.new_trace_id("anthropic")
       messages = Map.get(body, "messages", [])
