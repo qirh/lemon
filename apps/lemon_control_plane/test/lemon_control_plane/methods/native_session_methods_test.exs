@@ -384,7 +384,13 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
           "role" => "assistant",
           "content" => [
             %{"type" => "thinking", "thinking" => "private thought"},
-            %{"type" => "text", "text" => "retained answer"}
+            %{"type" => "text", "text" => "retained answer"},
+            %{
+              "type" => "tool_call",
+              "id" => "read-1",
+              "name" => "read",
+              "arguments" => %{"path" => "README.md"}
+            }
           ]
         }
       },
@@ -392,16 +398,33 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
         type: :message,
         id: "tool",
         timestamp: 4,
-        message: %{"role" => "tool_result", "content" => "private tool result"}
+        message: %{
+          "role" => "tool_result",
+          "tool_call_id" => "read-1",
+          "tool_name" => "read",
+          "content" => [%{"type" => "text", "text" => "retained tool output"}],
+          "is_error" => false
+        }
       }
     ]
 
     Process.put(:history_result, {:ok, entries})
     assert {:ok, before_rewind} = Registry.dispatch("chat.history", params, ctx([:read]))
-    assert Enum.map(before_rewind["messages"], & &1["id"]) == ["u1", "a1"]
 
-    assert Enum.map(before_rewind["messages"], & &1["content"]) ==
-             ["retained prompt", "retained answer"]
+    assert [
+             %{"id" => "u1", "content" => "retained prompt"},
+             %{"id" => "a1", "content" => "retained answer"},
+             %{"role" => "tool_use", "toolCallId" => "read-1"} = call,
+             %{
+               "id" => "tool",
+               "role" => "tool_result",
+               "toolCallId" => "read-1",
+               "content" => "retained tool output"
+             } = result
+           ] = before_rewind["messages"]
+
+    assert call["arguments"] == %{"path" => "README.md"}
+    assert result["arguments"] == call["arguments"]
 
     refute inspect(before_rewind) =~ "private"
     refute inspect(before_rewind) =~ "abandoned"
@@ -410,12 +433,13 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, page} =
              Registry.dispatch("chat.history", Map.put(params, "limit", 1), ctx([:read]))
 
-    assert [%{"id" => "a1", "timestampMs" => 3}] = page["messages"]
+    assert [%{"id" => "tool", "timestampMs" => 4, "toolCallId" => "read-1"}] = page["messages"]
 
     assert {:ok, after_user} =
              Registry.dispatch("chat.history", Map.put(params, "beforeId", "u1"), ctx([:read]))
 
-    assert [%{"id" => "a1"}] = after_user["messages"]
+    assert Enum.map(after_user["messages"], & &1["role"]) ==
+             ["assistant", "tool_use", "tool_result"]
 
     Process.put(
       :rewind_result,

@@ -212,8 +212,9 @@ silently rebound. Metadata patches still refuse unknown session IDs by default.
 
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch
-after rewind. Only visible user/assistant text is projected; abandoned turns,
-thought blocks, tool results, and structural tree entries are excluded.
+after rewind. Visible user/assistant text and sanitized native tool calls/results
+are projected, preserving call identity and actual output for resumed tool cards.
+Abandoned turns, thought blocks, and structural tree entries are excluded.
 `limit`, `beforeId`, and `includeFullText` remain available. Native pages are
 chronological, defaulting to the latest messages; a `beforeId` cursor selects
 messages following that entry, matching the existing cursor contract.
