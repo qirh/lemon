@@ -444,8 +444,8 @@ defmodule LemonAgent.Types do
   - `{:turn_start}` - New turn has started
   - `{:turn_end, message, tool_results}` - Turn completed
   - `{:loop_budget_exhausted, details}` - Tool loop budget exhausted with terminal fallback
-  - `{:retry_start, details}` - Transient provider retry scheduled, including delay and attempt
-  - `{:retry_end, details}` - Retry sequence succeeded, failed, or was canceled
+  - `{:provider_retry, details}` - Transient provider retry scheduled, including delay and attempt
+  - `{:provider_retry_end, details}` - Retry sequence succeeded, failed, or was canceled
 
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
@@ -470,8 +470,8 @@ defmodule LemonAgent.Types do
           | {:turn_end, message :: agent_message(),
              tool_results :: [LemonAi.Types.ToolResultMessage.t()]}
           | {:loop_budget_exhausted, details :: map()}
-          | {:retry_start, details :: map()}
-          | {:retry_end, details :: map()}
+          | {:provider_retry, details :: map()}
+          | {:provider_retry_end, details :: map()}
           | {:message_start, message :: agent_message()}
           | {:message_update, message :: agent_message(), assistant_event :: term()}
           | {:message_end, message :: agent_message()}

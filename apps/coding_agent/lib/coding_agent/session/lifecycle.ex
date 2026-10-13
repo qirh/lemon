@@ -16,7 +16,6 @@ defmodule CodingAgent.Session.Lifecycle do
     Persistence,
     PromptComposer,
     ProviderFallback,
-    ProviderRetry,
     State,
     WasmBridge
   }
@@ -175,12 +174,9 @@ defmodule CodingAgent.Session.Lifecycle do
       |> ProviderFallback.maybe_wrap(model, settings_manager, cwd,
         session_id: session_manager.header.id
       )
-      |> ProviderRetry.wrap(
-        SettingsManager.get_retry_settings(settings_manager),
-        notify: fn details -> send(session_pid, {:provider_retry, details}) end
-      )
 
     agent_registry_key = {session_manager.header.id, :main, 0}
+    retry_settings = SettingsManager.get_retry_settings(settings_manager)
 
     {:ok, agent} =
       LemonAgent.Agent.start_link(
@@ -201,6 +197,8 @@ defmodule CodingAgent.Session.Lifecycle do
         # (or the user interrupts); `[runtime] max_tool_turns` or an explicit
         # `:max_tool_turns` option installs a cap.
         max_tool_turns: Keyword.get(opts, :max_tool_turns, settings_manager.max_tool_turns),
+        max_retries: if(retry_settings.enabled, do: retry_settings.max_retries, else: 0),
+        retry_base_delay_ms: retry_settings.base_delay_ms,
         name: LemonAgent.AgentRegistry.via(agent_registry_key)
       )
 
