@@ -117,8 +117,8 @@ defmodule CodingAgent.SystemPrompt do
   # not have.
   @coding_rules [
     {~w(read edit),
-     "Read before you edit: open the relevant part of a file with `read` before changing it, " <>
-       "and read it again if `edit` reports that it changed on disk."},
+     "Read before you edit: open the relevant part of a file with `read`. Prefer snapshot-anchored " <>
+       "`edit` with the returned snapshot and numbered line ranges; re-read after stale-file errors."},
     {~w(read),
      "Use `read` with `skill://<skill-key>` to open a skill's SKILL.md on demand, or " <>
        "`skill://<skill-key>/<relative-path>` for a supporting file. " <>
