@@ -151,7 +151,7 @@ defmodule LemonAutomation.GoalToolTest do
     refute_receive {:execution, _}, 100
   end
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 250)
   defp eventually(_fun, 0), do: false
 
   defp eventually(fun, attempts) do

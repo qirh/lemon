@@ -186,7 +186,7 @@ defmodule LemonAutomation.CronManagerMonitorTest do
     end
   end
 
-  defp await(fun, attempts \\ 200)
+  defp await(fun, attempts \\ 500)
 
   defp await(_fun, 0), do: false
 

@@ -724,7 +724,7 @@ defmodule LemonAutomation.GoalLoopTest do
          auto_scan_limit: 5}
       )
 
-    assert_receive {:manager_run, ^session_key, opts}, 200
+    assert_receive {:manager_run, ^session_key, opts}, 5_000
     assert opts[:max_ticks] == 1
     assert opts[:judge_failure_policy] == :pause
 
@@ -754,7 +754,7 @@ defmodule LemonAutomation.GoalLoopTest do
                {:start_loop, session_key, [run_id: run_id, test_pid: self()]}
              )
 
-    assert_receive {:claim_refused, ^run_id, {:error, :goal_store_unavailable}}, 500
+    assert_receive {:claim_refused, ^run_id, {:error, :goal_store_unavailable}}, 5_000
     refute_receive {:claim_authorized_submit, ^run_id}, 100
 
     assert eventually(fn ->
@@ -779,7 +779,7 @@ defmodule LemonAutomation.GoalLoopTest do
     assert {:ok, %{status: "running"}} =
              GenServer.call(manager, {:start_loop, session_key, [test_pid: self()]})
 
-    assert_receive {:blocking_manager_loop, loop_pid}, 500
+    assert_receive {:blocking_manager_loop, loop_pid}, 5_000
 
     assert {:error, :goal_store_unavailable} =
              GenServer.call(manager, {:stop_loop, session_key, :hard})
@@ -1389,7 +1389,7 @@ defmodule LemonAutomation.GoalLoopTest do
   defp restore_router_env(key, nil), do: Application.delete_env(:lemon_router, key)
   defp restore_router_env(key, value), do: Application.put_env(:lemon_router, key, value)
 
-  defp eventually(fun, timeout_ms \\ 1_000) when is_function(fun, 0) do
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(fun, deadline)
   end

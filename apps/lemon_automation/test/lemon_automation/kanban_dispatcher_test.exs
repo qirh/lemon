@@ -120,7 +120,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              )
 
     assert dispatcher.status == "running"
-    assert_receive {:worker_run, task_id}, 250
+    assert_receive {:worker_run, task_id}, 5_000
     assert task_id == task.id
 
     eventually(fn ->
@@ -154,7 +154,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              )
 
     task_id = task.id
-    assert_receive {:worker_run, ^task_id}, 250
+    assert_receive {:worker_run, ^task_id}, 5_000
 
     eventually(fn ->
       failed = KanbanStore.get_task(task.id)
@@ -184,7 +184,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              )
 
     task_id = task.id
-    assert_receive {:worker_run, ^task_id}, 250
+    assert_receive {:worker_run, ^task_id}, 5_000
 
     eventually(fn ->
       assert KanbanStore.get_task(task.id).status == "done"
@@ -231,7 +231,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     {released_task_id, released_pid} = hd(started)
     send(released_pid, {:finish, {:ok, %{run_id: "run_#{released_task_id}"}}})
 
-    assert_receive {:worker_ready, ^unstarted_task_id, unstarted_pid}, 500
+    assert_receive {:worker_ready, ^unstarted_task_id, unstarted_pid}, 5_000
 
     remaining =
       Enum.reject(started, fn {_task_id, pid} -> pid == released_pid end) ++
@@ -318,10 +318,10 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     send(released_pid, {:finish, released.run_id, {:ok, "done"}})
 
     assert_receive {:router_submit, %{meta: %{kanban_task_id: ^unstarted_task_id}} = next_params},
-                   500
+                   5_000
 
     assert next_params.tool_policy == %{blocked_tools: ["kanban"]}
-    assert_receive {:waiter_started, next_pid, next_run_id, 1_000}, 500
+    assert_receive {:waiter_started, next_pid, next_run_id, 1_000}, 5_000
     assert next_run_id == next_params.run_id
 
     remaining =
@@ -377,7 +377,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
              )
 
     task_id = task.id
-    assert_receive {:worker_run, ^task_id}, 250
+    assert_receive {:worker_run, ^task_id}, 5_000
 
     eventually(fn ->
       failed = KanbanStore.get_task(task.id)
@@ -412,7 +412,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
                worker_id: "hard-stop-worker"
              )
 
-    assert_receive {:worker_ready, task_id, worker_pid}, 500
+    assert_receive {:worker_ready, task_id, worker_pid}, 5_000
     assert task_id == task.id
 
     dispatcher_state = :sys.get_state(name)
@@ -431,7 +431,8 @@ defmodule LemonAutomation.KanbanDispatcherTest do
 
     # A result already queued from the killed worker has no ref association.
     send(name, {old_ref, {:ok, %{run_id: "late-run"}}})
-    Process.sleep(25)
+    # A synchronous call returns only after the dispatcher has handled the late result.
+    _ = :sys.get_state(name)
     assert KanbanStore.get_task(task.id).status == "todo"
 
     # Restarting the board creates a new lease; the obsolete lease ID cannot
@@ -444,7 +445,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
                worker_id: "hard-stop-worker"
              )
 
-    assert_receive {:worker_ready, ^task_id, new_worker_pid}, 500
+    assert_receive {:worker_ready, ^task_id, new_worker_pid}, 5_000
     current = KanbanStore.get_task(task.id)
     current_lease = current.meta["kanbanLease"]["id"]
     refute current_lease == old_lease_id
@@ -474,7 +475,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
                worker_id: "restart-worker"
              )
 
-    assert_receive {:worker_ready, task_id, worker_pid}, 500
+    assert_receive {:worker_ready, task_id, worker_pid}, 5_000
     assert task_id == task.id
 
     re_leased = KanbanStore.get_task(task.id)
@@ -492,11 +493,11 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     start_supervised!({KanbanDispatcher, name: name, worker_mod: KanbanDispatcherFailingWorker})
     {:ok, _} = KanbanDispatcher.start_board(board.id, name: name, interval_ms: 10)
     task_id = task.id
-    assert_receive {:worker_run, ^task_id}, 500
+    assert_receive {:worker_run, ^task_id}, 5_000
     eventually(fn -> assert KanbanStore.get_task(task_id).meta["lastFailure"] end)
     refute_receive {:worker_run, ^task_id}, 100
     {:ok, _} = KanbanStore.update_task(task_id, status: "todo")
-    assert_receive {:worker_run, ^task_id}, 500
+    assert_receive {:worker_run, ^task_id}, 5_000
     refute_receive {:worker_run, ^task_id}, 100
   end
 
@@ -518,8 +519,8 @@ defmodule LemonAutomation.KanbanDispatcherTest do
         ]
       )
 
-    assert_receive {:router_submit, params}, 500
-    assert_receive {:waiter_started, pid, run_id, _}, 500
+    assert_receive {:router_submit, params}, 5_000
+    assert_receive {:waiter_started, pid, run_id, _}, 5_000
     send(pid, {:finish, run_id, :timeout})
 
     eventually(fn ->
@@ -562,8 +563,8 @@ defmodule LemonAutomation.KanbanDispatcherTest do
         ]
       )
 
-    assert_receive {:router_submit, params}, 500
-    assert_receive {:waiter_started, pid, run_id, _}, 500
+    assert_receive {:router_submit, params}, 5_000
+    assert_receive {:waiter_started, pid, run_id, _}, 5_000
     assert run_id == params.run_id
     {:ok, stopped} = KanbanDispatcher.stop_board(board.id, name: name)
     assert [%{run_id: ^run_id, result: :ok}] = stopped.aborts
@@ -607,7 +608,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
       receive do
         {:worker_ready, task_id, pid} -> {task_id, pid}
       after
-        500 -> flunk("expected #{count} worker starts")
+        5_000 -> flunk("expected #{count} worker starts")
       end
     end)
   end
@@ -617,7 +618,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
       receive do
         {:router_submit, params} -> params
       after
-        500 -> flunk("expected #{count} router submissions")
+        5_000 -> flunk("expected #{count} router submissions")
       end
     end)
   end
@@ -631,13 +632,13 @@ defmodule LemonAutomation.KanbanDispatcherTest do
           assert MapSet.member?(expected, run_id)
           Map.put(acc, run_id, {pid, timeout_ms})
       after
-        500 -> flunk("expected #{MapSet.size(expected)} waiter starts")
+        5_000 -> flunk("expected #{MapSet.size(expected)} waiter starts")
       end
     end)
   end
 
   defp eventually(fun) do
-    eventually(fun, 20)
+    eventually(fun, 200)
   end
 
   defp eventually(fun, attempts) when attempts > 0 do

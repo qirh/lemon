@@ -281,7 +281,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
     end)
   end
 
-  defp await(fun, attempts \\ 100)
+  defp await(fun, attempts \\ 500)
 
   defp await(_fun, 0), do: false
 

@@ -11,6 +11,13 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
 
   alias LemonControlPlane.Methods.{SessionDetail, SessionsList}
 
+  # `session.detail` reads the router's session directory, and `test_helper.exs` leaves
+  # `lemon_router` stopped, so the result otherwise depends on which module ran earlier.
+  setup_all do
+    {:ok, _} = Application.ensure_all_started(:lemon_router)
+    :ok
+  end
+
   defp fresh_key, do: "session_routing_#{System.unique_integer([:positive])}"
 
   describe "sessions.list" do
