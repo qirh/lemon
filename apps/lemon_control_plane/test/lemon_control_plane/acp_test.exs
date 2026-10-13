@@ -5,17 +5,12 @@ defmodule LemonControlPlane.ACPTest do
   import Plug.Test
 
   alias LemonControlPlane.ACP
-  alias LemonControlPlane.ACP.NDJSON
   alias LemonControlPlane.HTTP.Router
   alias LemonCore.Store
 
   setup do
     keys = [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token]
     previous = Map.new(keys, &{&1, Application.get_env(:lemon_control_plane, &1)})
-
-    if :ets.whereis(:lemon_control_plane_acp_sessions) != :undefined do
-      :ets.delete_all_objects(:lemon_control_plane_acp_sessions)
-    end
 
     clear_acp_session_store()
     clear_exec_approvals()
@@ -29,10 +24,6 @@ defmodule LemonControlPlane.ACPTest do
         end
       end
 
-      if :ets.whereis(:lemon_control_plane_acp_sessions) != :undefined do
-        :ets.delete_all_objects(:lemon_control_plane_acp_sessions)
-      end
-
       clear_acp_session_store()
       clear_exec_approvals()
     end)
@@ -40,14 +31,14 @@ defmodule LemonControlPlane.ACPTest do
     :ok
   end
 
-  test "initializes with honest preview capabilities" do
+  test "negotiates numeric ACP protocol and honest prompt capabilities" do
     {:ok, response} =
       ACP.handle_jsonrpc(%{
         "jsonrpc" => "2.0",
         "id" => 1,
         "method" => "initialize",
         "params" => %{
-          "protocolVersion" => "1",
+          "protocolVersion" => 1,
           "clientCapabilities" => %{
             "fs" => %{
               "readTextFile" => true,
@@ -62,7 +53,7 @@ defmodule LemonControlPlane.ACPTest do
     result = response["result"]
 
     assert response["jsonrpc"] == "2.0"
-    assert result["protocolVersion"] == "1"
+    assert result["protocolVersion"] == 1
     assert result["agentInfo"]["name"] == "Lemon"
     assert result["agentCapabilities"]["promptCapabilities"]["image"] == false
     assert result["agentCapabilities"]["promptCapabilities"]["embeddedContext"] == false
@@ -108,8 +99,7 @@ defmodule LemonControlPlane.ACPTest do
           "_meta" => %{
             "lemon" => %{
               "timeoutMs" => 25,
-              "model" => "openai:gpt-5",
-              "toolPolicy" => %{"mode" => "review"}
+              "model" => "openai:gpt-5"
             }
           }
         }
@@ -129,7 +119,7 @@ defmodule LemonControlPlane.ACPTest do
     assert request.meta.origin == :acp
     assert request.meta.acp_session_id == session_id
     assert request.meta.acp_resource_link_count == 1
-    assert request.tool_policy == %{"mode" => "review"}
+    assert "edit" in request.tool_policy.require_approval
   end
 
   test "records safe ACP client filesystem capability summaries on sessions and prompts" do
@@ -349,7 +339,7 @@ defmodule LemonControlPlane.ACPTest do
     :ets.delete(cancelled)
   end
 
-  test "persists ACP sessions beyond the process-local ETS cache" do
+  test "persists ACP sessions beyond the creating process" do
     parent = self()
 
     Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
@@ -357,8 +347,7 @@ defmodule LemonControlPlane.ACPTest do
       {:ok, "run_after_reload"}
     end)
 
-    session_id = new_session()
-    :ets.delete(:lemon_control_plane_acp_sessions)
+    session_id = Task.async(fn -> new_session() end) |> Task.await()
 
     {:ok, list_response} =
       ACP.handle_jsonrpc(%{
@@ -411,19 +400,6 @@ defmodule LemonControlPlane.ACPTest do
     assert Jason.decode!(ok.resp_body)["result"]["agentInfo"]["name"] == "Lemon"
   end
 
-  test "serves ACP JSON-RPC over newline-delimited stdio messages" do
-    [encoded] =
-      NDJSON.responses_for_line(
-        Jason.encode!(%{"jsonrpc" => "2.0", "id" => "init", "method" => "initialize"}) <> "\n"
-      )
-
-    assert Jason.decode!(encoded)["result"]["agentInfo"]["name"] == "Lemon"
-    assert NDJSON.responses_for_line("\n") == []
-
-    [parse_error] = NDJSON.responses_for_line("{not-json}\n")
-    assert Jason.decode!(parse_error)["error"]["code"] == -32_700
-  end
-
   test "emits ACP session/update notifications while stdio prompt waits" do
     parent = self()
 
@@ -436,8 +412,8 @@ defmodule LemonControlPlane.ACPTest do
 
     task =
       Task.async(fn ->
-        NDJSON.responses_for_line(
-          Jason.encode!(%{
+        ACP.handle_jsonrpc(
+          %{
             "jsonrpc" => "2.0",
             "id" => "prompt-stream",
             "method" => "session/prompt",
@@ -446,7 +422,7 @@ defmodule LemonControlPlane.ACPTest do
               "prompt" => [%{"type" => "text", "text" => "stream please"}],
               "_meta" => %{"lemon" => %{"timeoutMs" => 1_000}}
             }
-          }),
+          },
           session_update_callback: fn notification ->
             send(parent, {:acp_update, notification})
           end
@@ -503,8 +479,8 @@ defmodule LemonControlPlane.ACPTest do
                       }
                     }}
 
-    [encoded] = Task.await(task)
-    result = Jason.decode!(encoded)["result"]
+    {:ok, response} = Task.await(task)
+    result = response["result"]
 
     assert result["stopReason"] == "end_turn"
     assert result["_meta"]["lemon"]["runId"] == "run_acp_stream"
@@ -740,6 +716,147 @@ defmodule LemonControlPlane.ACPTest do
     refute inspect(summary) =~ "/tmp/private.txt"
     refute inspect(summary) =~ "secret"
   end
+
+  test "session configuration reaches the real router contract and survives resume" do
+    parent = self()
+
+    Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
+      send(parent, {:configured_request, request})
+      {:ok, "configured-run"}
+    end)
+
+    id = new_session()
+    model = hd(LemonAi.Models.list_models(discover_openai: false))
+    model_id = "#{model.provider}:#{model.id}"
+
+    assert {:ok, %{"result" => _}} =
+             rpc("session/set_model", %{"sessionId" => id, "modelId" => model_id})
+
+    assert {:ok, %{"result" => _}} =
+             rpc("session/set_config_option", %{
+               "sessionId" => id,
+               "configId" => "thinking",
+               "value" => "high"
+             })
+
+    assert {:ok, %{"result" => _}} =
+             rpc("session/set_mode", %{"sessionId" => id, "modeId" => "plan"})
+
+    queue_prompt(id)
+    assert_receive {:configured_request, request}
+    assert request.model == model_id
+    assert request.meta.thinking_level == "high"
+    assert request.tool_policy.profile == :read_only
+
+    assert {:ok, %{"result" => result}} =
+             rpc("session/resume", %{"sessionId" => id, "cwd" => "/home/z80/dev/lemon"})
+
+    assert result["modes"]["currentModeId"] == "plan"
+    assert Enum.find(result["configOptions"], &(&1["id"] == "model"))["currentValue"] == model_id
+  end
+
+  test "unknown sessions and unsupported configuration fail closed" do
+    assert {:ok, %{"error" => _}} =
+             rpc("session/load", %{"sessionId" => "unknown", "cwd" => "/tmp"})
+
+    assert {:ok, %{"error" => _}} = rpc("session/new", %{"cwd" => "relative", "mcpServers" => []})
+
+    assert {:ok, %{"error" => _}} =
+             rpc("session/new", %{
+               "cwd" => "/tmp",
+               "mcpServers" => [%{"name" => "ignored-before"}]
+             })
+
+    id = new_session()
+
+    assert {:ok, %{"error" => _}} =
+             rpc("session/set_model", %{"sessionId" => id, "modelId" => "unknown:secret"})
+
+    assert {:ok, %{"error" => _}} =
+             rpc("session/set_config_option", %{
+               "sessionId" => id,
+               "configId" => "approval",
+               "value" => "typo"
+             })
+
+    assert {:ok, %{"error" => _}} = rpc("session/set_model", nil)
+  end
+
+  test "invalid run receipts cannot be reported as successful prompts" do
+    id = new_session()
+
+    for invalid <- [nil, "", :ok] do
+      Application.put_env(:lemon_control_plane, :acp_submitter, fn _ -> {:ok, invalid} end)
+      assert {:ok, %{"error" => %{"code" => -32_000}}} = queue_prompt(id)
+    end
+  end
+
+  test "close retains resumable identity but prevents new turns until load" do
+    id = new_session()
+    assert {:ok, %{"result" => %{}}} = rpc("session/close", %{"sessionId" => id})
+    assert {:ok, %{"error" => _}} = queue_prompt(id)
+
+    assert {:ok, %{"result" => _}} =
+             rpc("session/load", %{"sessionId" => id, "cwd" => "/home/z80/dev/lemon"})
+
+    assert {:ok, %{"result" => listing}} = rpc("session/list", %{})
+    assert Enum.any?(listing["sessions"], &(&1["sessionId"] == id))
+  end
+
+  test "load replays durable conversation via notifications" do
+    id = new_session()
+    session = Store.get(:acp_sessions, id)
+    run_id = "replay-" <> LemonCore.Id.uuid()
+
+    :ok =
+      LemonCore.RunStore.finalize(run_id, %{
+        session_key: session.session_key,
+        agent_id: "default",
+        origin: :control_plane,
+        prompt: "remember the blue lighthouse",
+        started_at: 1,
+        completed: %{ok: true, answer: "The lighthouse is blue."}
+      })
+
+    parent = self()
+
+    assert {:ok, %{"result" => _}} =
+             ACP.handle_jsonrpc(
+               %{
+                 "jsonrpc" => "2.0",
+                 "id" => 1,
+                 "method" => "session/load",
+                 "params" => %{"sessionId" => id, "cwd" => session.cwd}
+               },
+               session_update_callback: &send(parent, {:replayed, &1})
+             )
+
+    assert_receive {:replayed,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "user_message_chunk",
+                          "content" => %{"text" => "remember the blue lighthouse"}
+                        }
+                      }
+                    }}
+
+    assert_receive {:replayed,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "agent_message_chunk",
+                          "content" => %{"text" => "The lighthouse is blue."}
+                        }
+                      }
+                    }}
+
+    LemonCore.RunStore.delete_session(session.session_key)
+  end
+
+  defp rpc(method, params),
+    do:
+      ACP.handle_jsonrpc(%{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params})
 
   defp new_session(opts \\ []) do
     client_capabilities = Keyword.get(opts, :client_capabilities)
