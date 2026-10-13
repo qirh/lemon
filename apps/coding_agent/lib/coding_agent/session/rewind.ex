@@ -327,6 +327,16 @@ defmodule CodingAgent.Session.Rewind do
     do: %{display: "[shell command unavailable in persisted history]", complete?: false}
 
   defp restoration_plan(session, suffix) do
+    mutating_calls =
+      Enum.flat_map(suffix, fn entry ->
+        case field(entry.message, :content) do
+          blocks when is_list(blocks) -> Enum.filter(blocks, &mutating_call?/1)
+          _ -> []
+        end
+      end)
+
+    mutating_ids = MapSet.new(mutating_calls, &field(&1, :id))
+
     {paths, unavailable} =
       Enum.reduce(suffix, {%{}, []}, fn entry, {paths, unavailable} ->
         message = entry.message || %{}
@@ -355,6 +365,10 @@ defmodule CodingAgent.Session.Rewind do
                   {paths, [name || "unknown" | unavailable]}
               end
 
+            name == "ast_grep" and MapSet.member?(mutating_ids, field(message, :tool_call_id)) ->
+              # A failed multi-file AST replacement may already have written some paths.
+              {paths, [name | unavailable]}
+
             name in @mutation_tools and field(message, :is_error) != true ->
               {paths, [name | unavailable]}
 
@@ -369,24 +383,23 @@ defmodule CodingAgent.Session.Rewind do
     result_ids = MapSet.new(suffix, fn entry -> field(entry.message, :tool_call_id) end)
 
     interrupted =
-      Enum.flat_map(suffix, fn entry ->
-        case field(entry.message, :content) do
-          blocks when is_list(blocks) ->
-            Enum.flat_map(blocks, fn block ->
-              if field(block, :type) in [:tool_call, "tool_call"] and
-                   field(block, :name) in @mutation_tools and
-                   not MapSet.member?(result_ids, field(block, :id)),
-                 do: [field(block, :name)],
-                 else: []
-            end)
-
-          _ ->
-            []
-        end
+      Enum.flat_map(mutating_calls, fn call ->
+        if MapSet.member?(result_ids, field(call, :id)),
+          do: [],
+          else: [field(call, :name)]
       end)
 
     {paths |> Map.values() |> Enum.sort_by(& &1.path),
      (Enum.reverse(unavailable) ++ interrupted) |> Enum.uniq()}
+  end
+
+  defp mutating_call?(call) do
+    arguments = field(call, :arguments)
+
+    field(call, :type) in [:tool_call, "tool_call"] and
+      (field(call, :name) in @mutation_tools or
+         (field(call, :name) == "ast_grep" and field(arguments, :action) == "replace" and
+            field(arguments, :dry_run) == false))
   end
 
   defp checkpoint_files(id, cwd) do

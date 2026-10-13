@@ -179,8 +179,10 @@ invalidates the previous token. Previews and receipts include redacted
 effects of M shell commands are not reverted” and list those commands before
 confirmation. A successful partial restoration returns `partialRestore: true`.
 Missing non-shell checkpoints, unavailable/truncated command text, or more than
-100 shell invocations cannot be bypassed with partial consent. Other shell
-effects are never undone or represented as restored.
+100 shell invocations cannot be bypassed with partial consent. Applied AST
+rewrites require checkpoints even after interruption or failure; AST search and
+dry-run previews remain read-only. Other shell effects are never undone or
+represented as restored.
 
 `sessions.fork` requires `operator.write` and accepts only the source
 `sessionKey` and `cwd`. The server generates an independent canonical child key,
@@ -210,8 +212,9 @@ silently rebound. Metadata patches still refuse unknown session IDs by default.
 
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch
-after rewind. Only visible user/assistant text is projected; abandoned turns,
-thought blocks, tool results, and structural tree entries are excluded.
+after rewind. Visible user/assistant text and sanitized native tool calls/results
+are projected, preserving call identity and actual output for resumed tool cards.
+Abandoned turns, thought blocks, and structural tree entries are excluded.
 `limit`, `beforeId`, and `includeFullText` remain available. Native pages are
 chronological, defaulting to the latest messages; a `beforeId` cursor selects
 messages following that entry, matching the existing cursor contract.

@@ -1,3 +1,4 @@
+import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import {
 	commandPaletteEntries,
 	discoverPaletteResources,
@@ -9,6 +10,8 @@ import {
 import type { CommandContext } from "../../commands/registry.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import { PickerOverlay } from "../components/pickers.ts";
+
+export type CommandPaletteMode = "discovery" | "typed-slash";
 
 export interface CommandPaletteHost {
 	/** Resolve at open and selection time so capabilities/session never go stale. */
@@ -22,8 +25,8 @@ export interface CommandPaletteHost {
 	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
 
-// Only read-only actions and existing draft-preserving UI entrypoints execute
-// directly. Having no usage alone must not make /reset, /quit or /clear execute.
+// Discovery selections execute only read-only actions and existing
+// draft-preserving UI entrypoints, never /reset, /quit or /clear.
 const IMMEDIATE_COMMANDS: Record<string, true> = {
 	profiles: true,
 	tree: true,
@@ -55,6 +58,7 @@ export class CommandPalette {
 	#draft = "";
 	#sessionKey = "";
 	#loading = false;
+	#mode: CommandPaletteMode = "discovery";
 
 	constructor(host: CommandPaletteHost) {
 		this.#host = host;
@@ -64,14 +68,15 @@ export class CommandPalette {
 		return this.#overlay;
 	}
 
-	/** Open from Ctrl+P, or when a leading slash is typed. Never clears the editor. */
-	async open(filter?: string): Promise<void> {
+	/** Only a slash typed in an empty editor opts into direct command submission. */
+	async open(filter?: string, mode: CommandPaletteMode = "discovery"): Promise<void> {
 		this.close();
 		const generation = this.#generation;
 		const ctx = this.#host.context();
 		this.#draft = this.#host.getDraft();
 		this.#sessionKey = ctx.session.key;
 		this.#resources = { entries: [], issues: [] };
+		this.#mode = mode;
 		this.#entries = commandPaletteEntries(ctx);
 		this.#loading = true;
 		const query = filter ?? this.#draft.match(/^\s*\/([^\s/]*)/)?.[1] ?? "";
@@ -81,17 +86,41 @@ export class CommandPalette {
 			filter: query,
 			// Ranking includes aliases and gives exact aliases priority.
 			remoteFilter: true,
-			footer: "enter inserts / opens action · esc keeps draft",
+			footer:
+				mode === "typed-slash"
+					? "enter submits exact command / inserts match · esc keeps typed query"
+					: "enter inserts / opens action · esc keeps draft",
 			detail: () =>
 				this.#loading ? "Discovering local skills and prompts…" : this.#resources.issues,
 			onFilterChange: (value) => {
+				const prefix = value.match(/^(\S+)\s/);
+				if (
+					this.#mode === "typed-slash" &&
+					prefix &&
+					this.#host.context().registry.has(prefix[1])
+				) {
+					this.#restoreTypedQuery(value);
+					return;
+				}
 				this.#overlay?.setItems(rankPaletteEntries(this.#entries, value), value);
 				this.#host.repaint();
+			},
+			onKey: (data) => {
+				if (this.#mode !== "typed-slash" || !matchesKey(data, "enter")) return false;
+				const item = this.#overlay?.selected;
+				if (item) void this.#select(item.value, true);
+				return true;
 			},
 			onSelect: (item) => {
 				void this.#select(item.value);
 			},
-			onCancel: () => this.close(),
+			onCancel: () => {
+				if (this.#mode === "typed-slash") {
+					this.#restoreTypedQuery(this.#overlay?.filter ?? "");
+				} else {
+					this.close();
+				}
+			},
 		});
 		this.#close = this.#host.present(this.#overlay);
 		try {
@@ -123,20 +152,33 @@ export class CommandPalette {
 		this.#overlay = undefined;
 	}
 
-	async #select(value: string): Promise<void> {
+	#checkDraft(ctx: CommandContext): boolean {
+		if (ctx.session.key === this.#sessionKey && this.#host.getDraft() === this.#draft) return true;
+		this.close();
+		this.#host.notice(
+			"Draft or session changed; reopen the command palette to insert safely.",
+			"warning",
+		);
+		return false;
+	}
+
+	#restoreTypedQuery(query: string): void {
+		if (!this.#checkDraft(this.#host.context())) return;
+		this.close();
+		this.#host.setDraft(`/${query}`);
+		this.#host.repaint();
+	}
+
+	async #select(value: string, submitTyped = false): Promise<void> {
 		const entry = this.#entries.find((candidate) => candidate.value === value);
 		if (!entry) return;
 		const ctx = this.#host.context();
-		if (ctx.session.key !== this.#sessionKey || this.#host.getDraft() !== this.#draft) {
-			this.close();
-			this.#host.notice(
-				"Draft or session changed; reopen the command palette to insert safely.",
-				"warning",
-			);
-			return;
-		}
+		if (!this.#checkDraft(ctx)) return;
+		const query = this.#overlay?.filter ?? "";
+		const direct = submitTyped && entry.command && ctx.registry.get(query) === entry.command;
+		const name = direct ? query.toLowerCase() : entry.name;
 		const availability = entry.command
-			? ctx.registry.availability(entry.command, { ...ctx, name: entry.name, rest: "" })
+			? ctx.registry.availability(entry.command, { ...ctx, name, rest: "" })
 			: entry;
 		if (!availability.available) {
 			this.#host.notice(
@@ -146,6 +188,11 @@ export class CommandPalette {
 			return;
 		}
 		this.close();
+		if (direct) {
+			this.#host.setDraft("");
+			await ctx.registry.dispatch(`/${query}`, ctx);
+			return;
+		}
 		if (entry.command && !entry.command.usage && IMMEDIATE_COMMANDS[entry.name]) {
 			// Remove only an exact palette query, not arguments or a prose draft.
 			if (/^\s*\/[^\s/]*$/.test(this.#draft)) this.#host.setDraft("");

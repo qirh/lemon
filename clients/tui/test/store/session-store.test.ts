@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { SessionStore } from "../../src/store/session-store.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
 
@@ -195,6 +195,64 @@ describe("SessionStore tools", () => {
 		expect(completed.ok).toBe(true);
 		expect(completed.message).toBe("exit 0");
 		expect(session.blocks.filter((b) => b.kind === "tool")).toHaveLength(1);
+	});
+
+	test("freezes the observed terminal time for success, failure and cancellation", () => {
+		let clock = 1000;
+		const now = spyOn(Date, "now").mockImplementation(() => clock);
+		try {
+			for (const outcome of ["success", "failure", "cancelled"]) {
+				clock = 1000;
+				const session = new SessionStore("s");
+				const action = { id: outcome, kind: "tool", title: "read", detail: null };
+				const block = session.upsertTool(action, "started");
+				expect(block.at).toBe(1000);
+				expect(block.completedAt).toBeUndefined();
+
+				clock = 1020;
+				session.upsertTool(action, "updated");
+				expect(block.at).toBe(1000);
+				expect(block.completedAt).toBeUndefined();
+
+				clock = 1042;
+				const terminal = {
+					...action,
+					detail: {
+						name: "read",
+						result: outcome,
+						details: { cancelled: outcome === "cancelled" },
+					},
+				};
+				session.upsertTool(terminal, "completed", { ok: outcome === "success" });
+				expect(block.completedAt).toBe(1042);
+
+				clock += 600_000;
+				session.upsertTool(terminal, "completed", { ok: outcome === "success" });
+				session.upsertTool(action, "started");
+				session.upsertTool(action, "updated");
+				expect(block.at).toBe(1000);
+				expect(block.completedAt).toBe(1042);
+			}
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	test("an already-completed receipt never acquires an invented duration on replay", () => {
+		let clock = 1000;
+		const now = spyOn(Date, "now").mockImplementation(() => clock);
+		try {
+			const session = new SessionStore("s");
+			const action = { id: "receipt", kind: "tool", title: "read", detail: null };
+			const block = session.upsertTool(action, "completed", { ok: true });
+			expect(block.completedAt).toBeUndefined();
+			clock += 600_000;
+			session.upsertTool(action, "started");
+			session.upsertTool(action, "completed", { ok: false });
+			expect(block.completedAt).toBeUndefined();
+		} finally {
+			now.mockRestore();
+		}
 	});
 
 	test("a phase never regresses once the action completed", () => {

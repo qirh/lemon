@@ -139,9 +139,6 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#block: ToolBlock;
 	#view: ToolView;
 	#compact: boolean;
-	#startedAt: number;
-	/** Set once, at the first completed phase; freezes the elapsed reading. */
-	#completedAt: number | undefined;
 	#spinnerFrame: number | undefined;
 	#spinnerTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -161,7 +158,6 @@ export class ToolCardComponent implements ToolBlockComponent {
 		this.#requestRender = options.requestRender;
 		this.#now = options.now ?? (() => Date.now());
 		this.#compact = options.compact ?? false;
-		this.#startedAt = block.at || this.#now();
 		this.#accordion = new AccordionComponent(
 			options.accordion ?? resolveAccordionState(this.#view.kind),
 			{ indent: 2 },
@@ -188,21 +184,22 @@ export class ToolCardComponent implements ToolBlockComponent {
 	 * them, but the guard is repeated here because this is the component that
 	 * would actually rewrite the bytes: a card that has reported finalized may
 	 * already be in native scrollback, where nothing can be rewritten. The test
-	 * is against this card's own recorded completion, not `block.phase` — the
+	 * is against this card's previous derived state, not `block.phase` — the
 	 * store hands back the same mutable block object, so reading the phase off
 	 * the argument would just re-read what the store already decided.
 	 */
 	update(block: ToolBlock): void {
 		if (
-			(this.#view.state === "success" || this.#view.state === "error" ||
-				this.#view.state === "cancelled" || this.#completedAt !== undefined) &&
+			(this.#view.state === "success" ||
+				this.#view.state === "error" ||
+				this.#view.state === "cancelled" ||
+				this.#view.state === "unknown") &&
 			block.phase !== "completed"
-		) return;
+		) {
+			return;
+		}
 		this.#block = block;
 		this.#view = buildToolView(block);
-		if (block.phase === "completed" && this.#completedAt === undefined) {
-			this.#completedAt = this.#now();
-		}
 		this.#applyView();
 	}
 
@@ -257,7 +254,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 				this.#block,
 				this.#view,
 				this.#accordion.state === "collapsed",
-				this.#block.durationMs ?? (this.#block.historical ? undefined : (this.#completedAt ?? this.#now()) - this.#startedAt),
+				this.#elapsedMs(),
 			);
 			this.#nativeVersion = version;
 		}
@@ -324,8 +321,12 @@ export class ToolCardComponent implements ToolBlockComponent {
 		);
 		const badge =
 			this.#view.kind && this.#view.kind !== "tool" ? theme.fg("dim", ` (${this.#view.kind})`) : "";
-		const outcome = this.#view.state === "cancelled" ? " [cancelled]" :
-			this.#view.state === "unknown" ? " [outcome unknown]" : "";
+		const outcome =
+			this.#view.state === "cancelled"
+				? " [cancelled]"
+				: this.#view.state === "unknown"
+					? " [outcome unknown]"
+					: "";
 		const left = `${icon} ${title}${badge}${theme.fg("dim", outcome)}`;
 		const elapsed = this.#elapsedLabel();
 		if (elapsed.length === 0) return truncateToWidth(left, width);
@@ -336,13 +337,18 @@ export class ToolCardComponent implements ToolBlockComponent {
 		return `${left}${" ".repeat(gap)}${right}`;
 	}
 
+	#elapsedMs(): number | undefined {
+		if (this.#block.durationMs !== undefined) return this.#block.durationMs;
+		if (this.#block.historical || this.#view.state === "streaming") return undefined;
+		const end = this.#block.phase === "completed" ? this.#block.completedAt : this.#now();
+		if (end === undefined) return undefined;
+		const elapsed = end - this.#block.at;
+		return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined;
+	}
+
 	#elapsedLabel(): string {
-		if (this.#view.state === "streaming") return "";
-		if (this.#block.durationMs !== undefined) return formatElapsed(this.#block.durationMs);
-		if (this.#block.historical) return "";
-		const end = this.#completedAt ?? this.#now();
-		const elapsed = formatElapsed(end - this.#startedAt);
-		return elapsed;
+		const elapsed = this.#elapsedMs();
+		return elapsed === undefined ? "" : formatElapsed(elapsed);
 	}
 
 	/** Rebuild the body and re-evaluate whether the card should be animating. */
@@ -372,7 +378,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 		const before = this.#accordion.version;
 		this.#accordion.setLines(lines);
 		this.#accordion.setSummary(summary.length > 0 ? theme.fg("toolDetail", summary) : "");
-		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#completedAt ?? "-"}|${this.#block.durationMs ?? "-"}|${this.#block.historical ?? false}`;
+		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#block.at}|${this.#block.completedAt ?? "-"}|${this.#block.durationMs ?? "-"}|${this.#block.historical ?? false}`;
 		if (headerKey !== this.#headerKey || this.#accordion.version !== before) {
 			this.#headerKey = headerKey;
 			this.#version++;
@@ -381,7 +387,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	#syncAnimation(): void {
-		const live = this.#block.phase !== "completed" && !this.#block.historical && !isNativeRendering();
+		const live =
+			this.#block.phase !== "completed" && !this.#block.historical && !isNativeRendering();
 		if (live && this.#requestRender && this.#spinnerTimer === undefined) {
 			this.#spinnerFrame = sharedSpinnerFrame(getTheme().spinnerFrames.length, this.#now());
 			this.#spinnerTimer = setInterval(() => {

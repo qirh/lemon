@@ -3,6 +3,10 @@ defmodule LemonControlPlane.Methods.ModelsList do
   Handler for the models.list method.
 
   Returns a list of available AI models.
+
+  The internal `:lemon_control_plane, :model_catalog` callback accepts the same
+  options as `ModelCatalog.available_models/1`, allowing boundary tests to supply
+  deterministic account-available models without credentials or network access.
   """
 
   @behaviour LemonControlPlane.Method
@@ -30,8 +34,15 @@ defmodule LemonControlPlane.Methods.ModelsList do
     discover_openai = Map.get(params, "discoverOpenAI", true)
 
     if Code.ensure_loaded?(LemonAgent.ModelRuntime.ModelCatalog) do
+      catalog =
+        Application.get_env(
+          :lemon_control_plane,
+          :model_catalog,
+          &LemonAgent.ModelRuntime.ModelCatalog.available_models/1
+        )
+
       models =
-        LemonAgent.ModelRuntime.ModelCatalog.available_models(
+        catalog.(
           discover_openai: discover_openai,
           force_refresh: Map.get(params, "forceRefresh", false)
         )

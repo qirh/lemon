@@ -248,6 +248,65 @@ defmodule CodingAgent.SessionRewindTest do
     assert preview["canAllowPartialRestore"]
   end
 
+  test "AST search and previews stay read-only, but missing applied-rewrite checkpoints fail closed",
+       %{
+         session: session
+       } do
+    target = user(session, "Rewrite syntax")
+
+    for {arguments, mutating?} <- [
+          {%{"action" => "search"}, false},
+          {%{"action" => "replace"}, false},
+          {%{"action" => "replace", "dry_run" => true}, false},
+          {%{"action" => "replace", "dry_run" => false}, true}
+        ],
+        outcome <- [:interrupted, :failed] do
+      called =
+        SessionManager.append_message(target, %{
+          "role" => "assistant",
+          "content" => [
+            %{
+              "type" => "tool_call",
+              "id" => "ast",
+              "name" => "ast_grep",
+              "arguments" => arguments
+            }
+          ]
+        })
+
+      full =
+        if outcome == :failed do
+          SessionManager.append_message(called, %{
+            "role" => "tool_result",
+            "tool_name" => "ast_grep",
+            "tool_call_id" => "ast",
+            "is_error" => true,
+            "content" => [%{"type" => "text", "text" => "replacement failed"}]
+          })
+        else
+          called
+        end
+
+      {:ok, preview, _} =
+        Rewind.run(full, target.leaf_id, restore_files: true, allow_partial_restore: true)
+
+      if mutating? do
+        assert preview["unrestorableTools"] == ["ast_grep"]
+        refute preview["canAllowPartialRestore"]
+
+        assert {:error, :checkpoint_missing} =
+                 Rewind.run(full, target.leaf_id,
+                   restore_files: true,
+                   allow_partial_restore: true,
+                   dry_run: false,
+                   confirmation_token: preview["confirmationToken"]
+                 )
+      else
+        assert preview["unrestorableTools"] == []
+      end
+    end
+  end
+
   defp shell_call(session, command) do
     id = "shell-#{System.unique_integer([:positive])}"
 
