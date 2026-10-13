@@ -989,10 +989,44 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def merge_usage(acc, usage) do
-    Map.merge(acc, usage, fn _k, v1, v2 ->
-      if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
-    end)
+    merged =
+      Map.merge(acc, usage, fn _k, v1, v2 ->
+        if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
+      end)
+
+    previous_cost = Map.get(acc, :cost) || Map.get(acc, "cost")
+    current_cost = Map.get(usage, :cost) || Map.get(usage, "cost")
+
+    if is_map(previous_cost) or is_map(current_cost) do
+      merged |> Map.delete("cost") |> Map.put(:cost, merge_cost(previous_cost, current_cost))
+    else
+      merged
+    end
   end
+
+  defp merge_cost(previous, current) do
+    Enum.reduce(
+      [:input, :output, :cache_read, :cache_write, :cache_write_long, :total],
+      %{},
+      fn key, cost ->
+        first = cost_component(previous, key)
+        second = cost_component(current, key)
+
+        if is_nil(first) and is_nil(second),
+          do: cost,
+          else: Map.put(cost, key, (first || 0) + (second || 0))
+      end
+    )
+  end
+
+  defp cost_component(cost, key) when is_map(cost) do
+    case Map.get(cost, key, Map.get(cost, Atom.to_string(key))) do
+      value when is_number(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp cost_component(_cost, _key), do: nil
 
   defp new_reasoning_block(idx, partial, %ReasoningAccumulator{} = acc) do
     seq = acc.seq + 1
