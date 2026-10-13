@@ -5,41 +5,12 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Coordinator
   alias CodingAgent.Session
-  alias CodingAgent.SessionManager
   alias CodingAgent.Subagents
   alias CodingAgent.Tools.Task.Result
 
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
-
-  @spec execute_via_coordinator(term(), String.t(), String.t(), String.t() | nil) ::
-          AgentToolResult.t() | {:error, String.t()}
-  def execute_via_coordinator(coordinator, prompt, description, role_id) do
-    task_run_id = generate_task_run_id()
-
-    case Coordinator.run_subagent(coordinator,
-           prompt: prompt,
-           subagent: role_id,
-           description: description
-         ) do
-      {:ok, result_text} ->
-        %AgentToolResult{
-          content: [%TextContent{text: result_text}],
-          details: %{
-            task_run_id: task_run_id,
-            description: description,
-            status: "completed",
-            role: role_id,
-            via_coordinator: true
-          }
-        }
-
-      {:error, {status, error}} ->
-        {:error, "Task #{status}: #{inspect(error)}"}
-    end
-  end
 
   @spec start_session_with_prompt(
           keyword(),
@@ -62,6 +33,7 @@ defmodule CodingAgent.Tools.Task.Runner do
     case CodingAgent.start_session(start_opts) do
       {:ok, session} ->
         session_id = Session.get_stats(session).session_id
+        on_update = with_session_id(on_update, session_id)
         unsubscribe = Session.subscribe(session)
         session_ref = Process.monitor(session)
         timeout_ms = task_session_timeout_ms(opts)
@@ -72,6 +44,10 @@ defmodule CodingAgent.Tools.Task.Runner do
         try do
           case Session.prompt(session, prompt) do
             :ok ->
+              if task_id = opts[:task_id] do
+                CodingAgent.Tools.Task.Control.attach_session(task_id, session)
+              end
+
               case await_result(
                      session,
                      session_ref,
@@ -81,7 +57,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                      description,
                      "",
                      "",
-                     nil,
                      role_id,
                      timeout_ms,
                      deadline_ms,
@@ -95,9 +70,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                       status: "completed",
                       role: role_id
                     }
-                    |> maybe_put_reasoning(
-                      Result.reasoning_details(thinking, "assistant_thinking", "completed")
-                    )
 
                   %AgentToolResult{
                     content: Result.build_update_content(text, thinking),
@@ -112,6 +84,7 @@ defmodule CodingAgent.Tools.Task.Runner do
               {:error, "Task session is already running"}
           end
         after
+          drain_session(session, session_ref, session_id)
           Process.demonitor(session_ref, [:flush])
 
           if is_function(unsubscribe, 0) do
@@ -147,7 +120,6 @@ defmodule CodingAgent.Tools.Task.Runner do
          description,
          last_text,
          last_thinking,
-         last_tool_text,
          role_id,
          timeout_ms,
          deadline_ms,
@@ -155,13 +127,7 @@ defmodule CodingAgent.Tools.Task.Runner do
        ) do
     receive do
       {:DOWN, ^session_ref, :process, _pid, reason} ->
-        maybe_finalize_from_fallback(
-          nil,
-          format_session_exit(reason),
-          last_text,
-          last_thinking,
-          last_tool_text
-        )
+        {:error, format_session_exit(reason)}
 
       {:session_event, ^session_id, {:tool_execution_start, _id, name, args}} ->
         maybe_emit_action_update(
@@ -182,7 +148,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          last_tool_text,
           role_id,
           timeout_ms,
           deadline_ms,
@@ -208,22 +173,19 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          last_tool_text,
           role_id,
           timeout_ms,
           deadline_ms,
           poll_ms
         )
 
-      {:session_event, ^session_id, {:tool_execution_end, _id, name, result, _is_error}} ->
-        last_tool_text = extract_tool_result_text(result) || last_tool_text
-
+      {:session_event, ^session_id, {:tool_execution_end, _id, name, result, is_error}} ->
         maybe_emit_action_update(
           on_update,
           description,
-          "Completed: #{internal_tool_title(name, %{})}",
+          "#{if is_error, do: "Failed", else: "Completed"}: #{name}",
           internal_tool_kind(name),
-          "completed",
+          if(is_error, do: "error", else: "completed"),
           %{name: name, result: result}
         )
 
@@ -236,7 +198,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          last_tool_text,
           role_id,
           timeout_ms,
           deadline_ms,
@@ -269,7 +230,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          last_tool_text,
           role_id,
           timeout_ms,
           deadline_ms,
@@ -301,7 +261,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          last_tool_text,
           role_id,
           timeout_ms,
           deadline_ms,
@@ -309,16 +268,25 @@ defmodule CodingAgent.Tools.Task.Runner do
         )
 
       {:session_event, ^session_id, {:agent_end, messages}} ->
-        {:ok, Result.extract_final_payload(messages, last_text, last_thinking)}
+        last =
+          messages |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1)) |> List.last()
+
+        cond do
+          AbortSignal.aborted?(signal) ->
+            {:error, "Task aborted"}
+
+          last && last.stop_reason in [:error, :aborted, :length] ->
+            {:error, last.error_message || "Task stopped: #{last.stop_reason}"}
+
+          true ->
+            {:ok, Result.extract_final_payload(messages, last_text, last_thinking)}
+        end
 
       {:session_event, ^session_id, {:error, reason, _partial_state}} ->
-        maybe_finalize_from_fallback(
-          session,
-          reason,
-          last_text,
-          last_thinking,
-          last_tool_text
-        )
+        {:error, reason}
+
+      {:session_event, ^session_id, {:canceled, _reason}} ->
+        {:error, "Task aborted"}
 
       {:session_event, ^session_id, _event} ->
         await_result(
@@ -330,7 +298,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           description,
           last_text,
           last_thinking,
-          last_tool_text,
           role_id,
           timeout_ms,
           deadline_ms,
@@ -344,19 +311,8 @@ defmodule CodingAgent.Tools.Task.Runner do
         else
           case remaining_task_session_ms(deadline_ms) do
             remaining when remaining <= 0 ->
-              case maybe_timeout_fallback_payload(
-                     session,
-                     last_text,
-                     last_thinking,
-                     last_tool_text
-                   ) do
-                {:ok, payload} ->
-                  {:ok, payload}
-
-                :error ->
-                  Session.abort(session)
-                  {:error, task_session_timeout_error(timeout_ms)}
-              end
+              Session.abort(session)
+              {:error, task_session_timeout_error(timeout_ms)}
 
             _remaining ->
               await_result(
@@ -368,7 +324,6 @@ defmodule CodingAgent.Tools.Task.Runner do
                 description,
                 last_text,
                 last_thinking,
-                last_tool_text,
                 role_id,
                 timeout_ms,
                 deadline_ms,
@@ -411,113 +366,6 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp task_session_timeout_error(timeout_ms) do
     "Task session timed out after #{timeout_ms}ms waiting for completion"
-  end
-
-  defp maybe_timeout_fallback_payload(session, last_text, last_thinking, last_tool_text) do
-    case recover_fallback_payload(session, last_text, last_thinking, last_tool_text) do
-      nil ->
-        :error
-
-      payload ->
-        Session.abort(session)
-        {:ok, payload}
-    end
-  end
-
-  defp maybe_finalize_from_fallback(session, reason, last_text, last_thinking, last_tool_text) do
-    case recover_fallback_payload(session, last_text, last_thinking, last_tool_text) do
-      nil -> {:error, reason}
-      payload -> {:ok, payload}
-    end
-  end
-
-  defp recover_fallback_payload(session, last_text, last_thinking, last_tool_text) do
-    session_payload = session && extract_session_payload(session)
-
-    cond do
-      is_map(session_payload) and payload_present?(session_payload) ->
-        session_payload
-
-      payload_present?(%{text: last_text, thinking: last_thinking}) ->
-        %{text: last_text || "", thinking: last_thinking || ""}
-
-      is_binary(last_tool_text) and last_tool_text != "" ->
-        %{text: last_tool_text, thinking: ""}
-
-      true ->
-        nil
-    end
-  end
-
-  defp extract_session_payload(session) do
-    with true <- is_pid(session) and Process.alive?(session),
-         state when is_map(state) <- Session.get_state(session),
-         session_manager when not is_nil(session_manager) <- Map.get(state, :session_manager),
-         %{messages: messages} <- SessionManager.build_session_context(session_manager),
-         %{text: text, thinking: thinking} = payload <- extract_assistant_payload(messages),
-         true <- payload_present?(%{text: text, thinking: thinking}) do
-      payload
-    else
-      _ -> nil
-    end
-  rescue
-    _ -> nil
-  catch
-    _, _ -> nil
-  end
-
-  defp extract_assistant_payload(messages) when is_list(messages) do
-    messages
-    |> Enum.reverse()
-    |> Enum.find_value(fn
-      %{"role" => "assistant", "content" => content} ->
-        %{text: extract_serialized_text(content), thinking: extract_serialized_thinking(content)}
-
-      _ ->
-        nil
-    end)
-  end
-
-  defp extract_assistant_payload(_), do: nil
-
-  defp extract_serialized_text(content) when is_binary(content), do: content
-
-  defp extract_serialized_text(content) when is_list(content) do
-    content
-    |> Enum.map(fn
-      %{"type" => "text", "text" => text} when is_binary(text) -> text
-      %{"text" => text} when is_binary(text) -> text
-      %{text: text} when is_binary(text) -> text
-      _ -> ""
-    end)
-    |> Enum.join("")
-  end
-
-  defp extract_serialized_text(_), do: ""
-
-  defp extract_serialized_thinking(content) when is_list(content) do
-    content
-    |> Enum.map(fn
-      %{"type" => "thinking", "thinking" => text} when is_binary(text) -> text
-      %{"type" => "thinking", "text" => text} when is_binary(text) -> text
-      %{type: "thinking", thinking: text} when is_binary(text) -> text
-      %{type: "thinking", text: text} when is_binary(text) -> text
-      _ -> ""
-    end)
-    |> Enum.join("")
-  end
-
-  defp extract_serialized_thinking(_), do: ""
-
-  defp extract_tool_result_text(%AgentToolResult{content: content}),
-    do: Result.extract_text(content)
-
-  defp extract_tool_result_text(%{content: content}), do: Result.extract_text(content)
-  defp extract_tool_result_text(text) when is_binary(text), do: text
-  defp extract_tool_result_text(_), do: nil
-
-  defp payload_present?(%{text: text, thinking: thinking}) do
-    (is_binary(text) and text != "") or (is_binary(thinking) and thinking != "")
   end
 
   defp format_session_exit(:normal), do: "Task session exited before completion"
@@ -571,12 +419,12 @@ defmodule CodingAgent.Tools.Task.Runner do
          text,
          thinking,
          last_text,
-         last_thinking,
+         _last_thinking,
          description,
          session_id,
          role_id
        ) do
-    if (text != "" or thinking != "") and (text != last_text or thinking != last_thinking) do
+    if text != "" and text != last_text do
       details =
         %{
           session_id: session_id,
@@ -584,9 +432,6 @@ defmodule CodingAgent.Tools.Task.Runner do
           status: "running",
           role: role_id
         }
-        |> maybe_put_reasoning(
-          Result.reasoning_details(thinking, "assistant_thinking", "updated")
-        )
 
       on_update.(%AgentToolResult{
         content: Result.build_update_content(text, thinking),
@@ -597,8 +442,36 @@ defmodule CodingAgent.Tools.Task.Runner do
     {text, thinking}
   end
 
-  defp maybe_put_reasoning(details, nil), do: details
-  defp maybe_put_reasoning(details, reasoning), do: Map.put(details, :reasoning, reasoning)
+  defp with_session_id(nil, _session_id), do: nil
+
+  defp with_session_id(callback, session_id) do
+    fn result ->
+      callback.(%{result | details: Map.put(result.details || %{}, :session_id, session_id)})
+    end
+  end
+
+  defp drain_session(session, session_ref, session_id) do
+    if Process.alive?(session) and Session.get_state(session).is_streaming do
+      Session.abort(session)
+      await_shutdown(session_ref, session_id, System.monotonic_time(:millisecond) + 1_000)
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp await_shutdown(session_ref, session_id, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:DOWN, ^session_ref, :process, _, _} -> :ok
+      {:session_event, ^session_id, {:agent_end, _}} -> :ok
+      {:session_event, ^session_id, {:canceled, _}} -> :ok
+      {:session_event, ^session_id, {:error, _, _}} -> :ok
+      {:session_event, ^session_id, _} -> await_shutdown(session_ref, session_id, deadline)
+    after
+      remaining -> :ok
+    end
+  end
 
   defp stop_session(session) when is_pid(session) do
     try do
@@ -762,8 +635,4 @@ defmodule CodingAgent.Tools.Task.Runner do
   end
 
   defp stringify_keys(_), do: %{}
-
-  defp generate_task_run_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-  end
 end
