@@ -6,6 +6,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] - 2026-10-13
+
 First release as a standalone package. `lemon_ai` was extracted from the Lemon
 umbrella, where it lives as the `:lemon_ai` application; the OTP application name and
 every `LemonAi.*` module name are unchanged, so only the `mix.exs` line differs from
