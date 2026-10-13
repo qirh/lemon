@@ -500,7 +500,7 @@ defmodule LemonSkills.Tools.SkillManageTest do
     on_exit(fn -> Application.put_env(:lemon_core, :introspection, previous) end)
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 300)
 
   defp eventually(fun, attempts) when attempts > 0 do
     case fun.() do

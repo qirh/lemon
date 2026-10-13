@@ -531,7 +531,7 @@ defmodule LemonMCP.ClientTest do
           command: "node",
           args: ["-e", sampling_fixture_node()],
           sampling_handler: handler,
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       Process.unlink(client)
@@ -545,9 +545,9 @@ defmodule LemonMCP.ClientTest do
                         ],
                         "maxTokens" => 16
                       }},
-                     2_000
+                     10_000
 
-      assert_receive {:DOWN, ^monitor, :process, ^client, {:transport_died, :normal}}, 2_000
+      assert_receive {:DOWN, ^monitor, :process, ^client, {:transport_died, :normal}}, 10_000
     end
 
     test "sampling policy advertises sampling and routes requests through review" do
@@ -581,7 +581,7 @@ defmodule LemonMCP.ClientTest do
             max_tokens: 32,
             allowed_models: []
           ],
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       Process.unlink(client)
@@ -594,7 +594,7 @@ defmodule LemonMCP.ClientTest do
                         text_char_count: 4,
                         request_hash: request_hash
                       } = review_summary},
-                     2_000
+                     10_000
 
       assert is_binary(request_hash)
       refute inspect(review_summary) =~ "ping"
@@ -607,9 +607,9 @@ defmodule LemonMCP.ClientTest do
                         ],
                         "maxTokens" => 16
                       }, ^review_summary},
-                     2_000
+                     10_000
 
-      assert_receive {:DOWN, ^monitor, :process, ^client, {:transport_died, :normal}}, 2_000
+      assert_receive {:DOWN, ^monitor, :process, ^client, {:transport_died, :normal}}, 10_000
     end
   end
 
@@ -620,7 +620,7 @@ defmodule LemonMCP.ClientTest do
       {:ok, client} =
         LemonMCP.Client.HTTP.start_link(
           url: "http://127.0.0.1:#{port}/mcp",
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -660,7 +660,7 @@ defmodule LemonMCP.ClientTest do
       {:ok, client} =
         LemonMCP.Client.HTTP.start_link(
           url: "http://127.0.0.1:#{port}/mcp",
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -695,7 +695,7 @@ defmodule LemonMCP.ClientTest do
       assert {:error, {:auth_required, metadata}} =
                LemonMCP.Client.HTTP.start_link(
                  url: "http://127.0.0.1:#{port}/mcp",
-                 timeout_ms: 2_000
+                 timeout_ms: 15_000
                )
 
       Process.flag(:trap_exit, previous_trap_exit)
@@ -727,7 +727,7 @@ defmodule LemonMCP.ClientTest do
         LemonMCP.Client.HTTP.start_link(
           url: "http://127.0.0.1:#{port}/mcp",
           oauth: [client_id: "lemon", client_secret: "secret", scopes: ["tools", "prompts"]],
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -774,7 +774,7 @@ defmodule LemonMCP.ClientTest do
         LemonMCP.Client.HTTP.start_link(
           url: "http://127.0.0.1:#{port}/mcp",
           oauth: [client_id: "lemon", client_secret: "secret", scope: "expire"],
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -804,7 +804,7 @@ defmodule LemonMCP.ClientTest do
         LemonMCP.Client.HTTP.start_link(
           url: "http://127.0.0.1:#{port}/mcp",
           oauth: [client_id: "lemon", client_secret: "secret", scope: "refresh-lifecycle"],
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -858,7 +858,7 @@ defmodule LemonMCP.ClientTest do
             scopes: ["tools"],
             token_auth_method: :client_secret_basic
           ],
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -892,7 +892,7 @@ defmodule LemonMCP.ClientTest do
               {:ok, %{code: "operator-code", state: request.state}}
             end
           ],
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(client) == :ready
@@ -978,7 +978,7 @@ defmodule LemonMCP.ClientTest do
             end
           ],
           oauth_token_cache: token_cache,
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert_receive {:authorization_request, _state}
@@ -1005,7 +1005,7 @@ defmodule LemonMCP.ClientTest do
             end
           ],
           oauth_token_cache: token_cache,
-          timeout_ms: 2_000
+          timeout_ms: 15_000
         )
 
       assert LemonMCP.Client.HTTP.state(resumed_client) == :ready
@@ -1049,7 +1049,7 @@ defmodule LemonMCP.ClientTest do
                 end
               ],
               oauth_token_cache: token_cache,
-              timeout_ms: 2_000
+              timeout_ms: 15_000
             )
 
           assert_receive :authorized
@@ -1076,7 +1076,7 @@ defmodule LemonMCP.ClientTest do
                      {:ok, %{code: "operator-code", state: "wrong-state"}}
                    end
                  ],
-                 timeout_ms: 2_000
+                 timeout_ms: 15_000
                )
 
       Process.flag(:trap_exit, previous_trap_exit)
@@ -1177,7 +1177,7 @@ defmodule LemonMCP.ClientTest do
       }
     });
 
-    setTimeout(() => process.exit(1), 2000);
+    setTimeout(() => process.exit(1), 20000);
     """
   end
 

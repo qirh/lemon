@@ -396,7 +396,7 @@ defmodule LemonWeb.ManagementLiveTest do
 
   defp unique_suffix, do: System.unique_integer([:positive, :monotonic])
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 600)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

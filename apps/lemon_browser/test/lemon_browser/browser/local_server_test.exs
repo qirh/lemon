@@ -95,7 +95,7 @@ defmodule LemonBrowser.LocalServerTest do
     end
 
     test "returns configured driver missing error", %{server: server} do
-      with_env("LEMON_BROWSER_DRIVER_PATH", "/nonexistent/path/driver.js", fn ->
+      with_driver_env("/nonexistent/path/driver.js", fn ->
         assert {:error, message} =
                  LocalServer.request(
                    server,
@@ -112,7 +112,7 @@ defmodule LemonBrowser.LocalServerTest do
     end
 
     test "returns not built error when cwd has no driver", %{server: server} do
-      with_env("LEMON_BROWSER_DRIVER_PATH", nil, fn ->
+      with_driver_env(nil, fn ->
         with_cwd(System.tmp_dir!(), fn ->
           assert {:error, message} =
                    LocalServer.request(
@@ -131,21 +131,19 @@ defmodule LemonBrowser.LocalServerTest do
   describe "line handling" do
     test "keeps incomplete data in buffer", %{pid: pid} do
       send(pid, {nil, {:data, "partial "}})
-      Process.sleep(20)
       assert :sys.get_state(pid).buffer == "partial "
     end
 
     test "clears buffer after receiving complete line", %{pid: pid} do
       send(pid, {nil, {:data, "partial "}})
-      Process.sleep(20)
+      :sys.get_state(pid)
       send(pid, {nil, {:data, "line\n"}})
-      Process.sleep(20)
       assert :sys.get_state(pid).buffer == ""
     end
 
     test "ignores malformed JSON lines without crashing", %{pid: pid} do
       send(pid, {nil, {:data, "not valid json\n"}})
-      Process.sleep(20)
+      :sys.get_state(pid)
       assert Process.alive?(pid)
       assert :sys.get_state(pid).pending == %{}
     end
@@ -153,7 +151,7 @@ defmodule LemonBrowser.LocalServerTest do
     test "ignores responses for unknown ids", %{pid: pid} do
       unknown_response = ~s({"id":"unknown-id","ok":true,"result":{}})
       send(pid, {nil, {:data, unknown_response <> "\n"}})
-      Process.sleep(20)
+      :sys.get_state(pid)
       assert Process.alive?(pid)
       assert :sys.get_state(pid).pending == %{}
     end
@@ -162,9 +160,8 @@ defmodule LemonBrowser.LocalServerTest do
   describe "state resets" do
     test "resets port and buffer on port exit", %{pid: pid} do
       send(pid, {nil, {:data, "partial "}})
-      Process.sleep(20)
+      :sys.get_state(pid)
       send(pid, {nil, {:exit_status, 1}})
-      Process.sleep(20)
 
       state = :sys.get_state(pid)
       assert state.port == nil
@@ -175,7 +172,7 @@ defmodule LemonBrowser.LocalServerTest do
 
     test "ignores timeout message for unknown request id", %{pid: pid} do
       send(pid, {:request_timeout, "missing-id"})
-      Process.sleep(20)
+      :sys.get_state(pid)
       assert Process.alive?(pid)
       assert :sys.get_state(pid).pending == %{}
     end
@@ -198,6 +195,27 @@ defmodule LemonBrowser.LocalServerTest do
       else
         System.put_env(var, original)
       end
+    end
+  end
+
+  # The driver is resolved after `node` is found on PATH, so these tests need a
+  # `node` that exists regardless of what the host has installed. It is never
+  # spawned: every case here fails before the port is opened.
+  defp with_driver_env(driver_path, fun) when is_function(fun, 0) do
+    dir =
+      Path.join(System.tmp_dir!(), "local_server_fake_node_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(dir)
+    node = Path.join(dir, "node")
+    File.write!(node, "#!/bin/sh\nexit 0\n")
+    File.chmod!(node, 0o755)
+
+    try do
+      with_env("PATH", dir <> ":" <> System.get_env("PATH", ""), fn ->
+        with_env("LEMON_BROWSER_DRIVER_PATH", driver_path, fun)
+      end)
+    after
+      File.rm_rf!(dir)
     end
   end
 

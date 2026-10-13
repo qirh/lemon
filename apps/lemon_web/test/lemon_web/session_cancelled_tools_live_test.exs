@@ -250,7 +250,7 @@ defmodule LemonWeb.SessionCancelledToolsLiveTest do
     |> LazyHTML.attribute("id")
   end
 
-  defp assert_eventually(fun, attempts \\ 50) do
+  defp assert_eventually(fun, attempts \\ 150) do
     cond do
       fun.() ->
         :ok

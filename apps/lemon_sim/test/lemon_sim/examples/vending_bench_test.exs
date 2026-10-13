@@ -1813,9 +1813,12 @@ defmodule LemonSim.Examples.VendingBenchTest do
   end
 
   test "live arena soft day timeout preserves completed turns before auto-wait" do
+    # The soft budget must lapse inside the first step, while the runner's hard
+    # kill (twice the budget, at least 100ms) must stay far enough away that a
+    # slow scheduler cannot reach it first and discard the partial day.
     on_after_step = fn _turn, result ->
       if result.state.world.arena_agent_id == "alex" do
-        Process.sleep(5)
+        Process.sleep(350)
       end
     end
 
@@ -1826,7 +1829,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                seed: 1,
                arena_agents: 2,
                persist?: false,
-               arena_day_budget_ms: 1,
+               arena_day_budget_ms: 300,
                on_after_step: on_after_step,
                arena_agent_opts: [
                  live_agent_opts([

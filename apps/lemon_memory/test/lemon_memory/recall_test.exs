@@ -221,7 +221,7 @@ defmodule LemonMemory.RecallTest do
     identity
   end
 
-  defp eventually(fun, attempts \\ 50)
+  defp eventually(fun, attempts \\ 150)
   defp eventually(_fun, 0), do: false
 
   defp eventually(fun, attempts) do

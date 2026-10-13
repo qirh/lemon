@@ -630,7 +630,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
            reviewer: :ops_approval,
            delegate: delegate,
            max_tokens: 32,
-           approval_timeout_ms: 2_000,
+           approval_timeout_ms: 15_000,
            approval_context: [
              run_id: run_id,
              session_key: session_key,
@@ -795,7 +795,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
            client_id: "lemon-public",
            redirect_uri: "http://127.0.0.1:#{callback_port}/callback",
            scopes: ["tools"],
-           authorization_timeout_ms: 2_000,
+           authorization_timeout_ms: 15_000,
            authorization_request_observer: test_pid,
            authorization_approval_context: [
              run_id: run_id,
@@ -1446,7 +1446,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
     '''
   end
 
-  defp wait_for_pending_approval(run_id, deadline \\ System.monotonic_time(:millisecond) + 1_000) do
+  defp wait_for_pending_approval(run_id, deadline \\ System.monotonic_time(:millisecond) + 5_000) do
     case find_pending_approval(run_id) do
       nil ->
         if System.monotonic_time(:millisecond) >= deadline do

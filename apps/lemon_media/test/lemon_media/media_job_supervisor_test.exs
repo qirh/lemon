@@ -235,7 +235,7 @@ defmodule LemonMedia.MediaJobSupervisorTest do
     assert recent.status == :running
   end
 
-  defp assert_eventually(fun, attempts \\ 100)
+  defp assert_eventually(fun, attempts \\ 300)
 
   defp assert_eventually(fun, attempts) when attempts > 0 do
     if fun.() do

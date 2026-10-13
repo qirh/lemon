@@ -1,5 +1,7 @@
 defmodule LemonSkills.BuiltinSeederTest do
-  use ExUnit.Case, async: true
+  # Mutates the process-global HOME, which every global-skills lookup reads, so
+  # it cannot run alongside async modules.
+  use ExUnit.Case, async: false
 
   alias LemonSkills.{BuiltinSeeder, Config}
 

@@ -1,6 +1,8 @@
 defmodule LemonSimUi.ArenaTest do
   use ExUnit.Case, async: false
 
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+
   alias LemonSim.Bench.League
   alias LemonSim.Kernel.State
   alias LemonSimUi.Arena
@@ -274,6 +276,7 @@ defmodule LemonSimUi.ArenaTest do
         }
       )
 
+    assert_eventually(fn -> Arena.current_sim_id(arena) == "ww_existing" end)
     refute_receive {:start_sim, _}, 300
     assert Arena.current_sim_id(arena) == "ww_existing"
   end
