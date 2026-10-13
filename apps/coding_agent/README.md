@@ -175,6 +175,9 @@ Input, extraction, preview, and displayed-output limits bound memory use.
 **Structural search and replacement.** Install the genuine ast-grep CLI (for
 example `brew install ast-grep`) to enable `ast_grep`. It matches syntax trees,
 supports `$NAME` and `$$$ARGS` captures, and never substitutes text search.
+For `action:"search"`, omitted/null `paths` search the current directory;
+omitted/null `language` infers from extensions, and `rewrite` must be omitted/null.
+Replacement always requires explicit paths; a null scope never enables a write.
 Use `action:"replace"`, explicit `paths`, `pattern`, `rewrite`, and
 `dry_run:true` to preview; apply with `dry_run:false` and `expected_matches`
 equal to the full preview count. Count mismatches, overlapping ranges, stale
