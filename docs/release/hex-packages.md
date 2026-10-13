@@ -42,18 +42,17 @@ does not handle it, but its `mix.exs` is self-contained the same way (package
 metadata, MIT license, links, files `lib templates mix.exs README.md CHANGELOG.md
 LICENSE`, nothing read from outside `installer/`), so `mix hex.build` works in
 that directory and `mix archive.install hex lemon_new` will work once an owner
-runs `mix hex.publish` there. It has no dependencies. Until the five packages
-are on hex.pm, `mix lemon.new --hex` generates a project whose `mix deps.get`
-cannot resolve.
+publishes it. It has no dependencies. A first publish of a new package needs a
+key with API write; the package-scoped keys below cannot create packages.
 
-## Retiring the 0.1.0 releases (owner action, not yet done)
+## Retired 0.1.0 releases
 
 Every `0.1.0` tarball shipped a `mix.exs` whose first line was
 `Code.require_file("../../hex_package.exs", __DIR__)`, a file that is not in the
 tarball, so `mix compile` fails with `Code.LoadError` for any consumer. Ten
 packages were published that way; `lemon_skills` and `lemon_browser` never were.
 Retiring keeps the releases resolvable for anyone who locked them but warns on
-every `mix deps.get`. Run as a package owner:
+every `mix deps.get`. All ten were retired on 2026-10-13 with:
 
 ```bash
 # The five that continue from 0.2.0.
@@ -72,6 +71,21 @@ mix hex.retire lemon_cli_runners 0.1.0 invalid \
 ```
 
 Check with `curl -s https://hex.pm/api/packages/<pkg> | jq .retirements`.
+
+## Hex credentials
+
+Hex 2FA applies to interactive logins. API keys sent as `HEX_API_KEY` do not
+prompt, so automation uses keys scoped to the `lemon_*` packages, created on the
+hex.pm dashboard (Settings → Keys) with an expiry:
+
+- CI: the `HEX_API_KEY` repository secret, used by `publish.yml`.
+- Local owner commands: a key kept in the macOS login Keychain, never in the repo:
+
+  ```bash
+  security add-generic-password -U -s hex-api-key -a <hex-user> -w   # prompts for the key
+  HEX_API_KEY="$(security find-generic-password -s hex-api-key -a <hex-user> -w)" \
+    mix hex.retire <pkg> <version> <reason> --message "..."
+  ```
 
 ## How a package's mix.exs stays self-contained
 

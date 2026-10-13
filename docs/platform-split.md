@@ -85,16 +85,12 @@ tarballs so this class of break fails CI.
 
 ## Known gaps
 
-- **0.1.0 is not retired yet**, and 0.2.0 is not published. Both are owner
-  actions; the commands are in [`release/hex-packages.md`](release/hex-packages.md).
-- **The generator's `--hex` mode cannot resolve yet.** `mix lemon.new --hex`
-  emits `~> 0.2` Hex requirements for the published packages and needs no
-  checkout, but `mix deps.get` on its output works only once 0.2.0 is on
-  hex.pm. The default (path dependencies on a checkout) and `--packages-path`
-  are unchanged. `installer/` is publishable as `lemon_new` the same
-  self-contained way as the five packages (package metadata, nothing required
-  from outside its directory) but has not been published; that is an owner
-  action alongside the 0.2.0 releases ([`release/hex-packages.md`](release/hex-packages.md)).
+- **`lemon_new` is not on Hex.** The five packages are published at 0.2.0 and
+  every 0.1.0 release is retired, so `mix lemon.new --hex` output resolves.
+  `installer/` is publishable as `lemon_new` the same self-contained way, but
+  publishing a new package needs an owner key with API write
+  ([`release/hex-packages.md`](release/hex-packages.md)); until then the
+  generator is built from a checkout.
 - **`--channel` is checkout-only.** It depends on `lemon_channels`, which is not
   published; so does `PluginCase`. `--hex --channel` is refused with that
   explanation instead of generating a project that cannot resolve.

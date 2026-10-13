@@ -64,7 +64,7 @@ overview and the app guides below, rather than keeping a second runtime catalog.
 - [Product versioning/channels](release/versioning_and_channels.md) and [deployment flows](release/deployment_flows.md)
 - [Release/support checklist](release/release_checklist_and_support_policy.md)
 - [Five-package status](platform-split.md) and [Hex publication](release/hex-packages.md)
-  — repository 0.2.0 is not yet published
+  — 0.2.0 is published; 0.1.0 is retired
 - [Public repository practices](contributor/public_repo_basics.md) and [ownership](contributor/ownership.md)
 
 ## Documentation site

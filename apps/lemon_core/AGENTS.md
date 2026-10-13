@@ -100,7 +100,7 @@ From the umbrella root: `mix test apps/lemon_core/test`.
 Use existing isolated store/testing helpers; test crash/restart and concurrent
 mutation boundaries with explicit synchronization. Restore global config/env.
 
-Core is one of five package targets. Repository 0.2.0 is not yet published;
+Core is one of five published packages (0.2.0 on Hex);
 keep package metadata self-contained and optional dependencies optional.
 `scripts/verify_packages` exercises consumers of actual tarballs. See
 [package status](../../docs/platform-split.md).

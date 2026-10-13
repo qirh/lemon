@@ -97,8 +97,8 @@ The Bun TUI and browser automation node live under `clients/`. The assistant Web
 interface is Phoenix; it is not a separate React workspace.
 
 Five packages are in the publish set: ai, core, agent, memory and platform-test.
-Their repository version is 0.2.0, not yet published. The old Hex 0.1.0 tarballs
-are not installable. Everything else ships as the in-repository reference runtime
+They are published on Hex at 0.2.0; the old 0.1.0 tarballs are retired as
+uninstallable. Everything else ships as the in-repository reference runtime
 and products. See [platform status](../platform-split.md).
 
 ## Persistent state and configuration
