@@ -69,13 +69,23 @@ remains a legacy client-side alias; it does not configure the daemon.
   without discarding a correction in the editor (autocomplete gets Escape first).
   Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
   pastes remain recoverable after later submissions.
-- Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
-  prompt, close), per-session drafts, unread badges, history hydration.
+- Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
+  across stored sessions, new-with-prompt, close), per-session drafts, unread
+  badges, history hydration. Search results are not restricted to the initially
+  loaded recent sessions; failed searches never leave stale rows selectable.
+  Picker filters accept bracketed paste as text, including copied model names
+  and session searches.
 - Durable session lifecycle: `/sessions` adds server-backed text, agent,
   pin, and archive filters to the draft-preserving picker; `/session` can
   inspect, resume, title, pin, archive, preview, privately export, prune, and
   delete through the authenticated server-owned lifecycle. Prune and delete
   are preview-confirm workflows, and offline mutations never claim success.
+- `/tree` inspects active and preserved branches; `/rewind` picks an earlier
+  active user prompt, previews the change, then requires confirmation bound to
+  that exact preview. History-only rewind leaves files untouched; `--files`
+  explicitly requests checkpoint restoration. Cancel is the default. Success
+  reloads the active branch and recalls the selected prompt into the editor
+  without sending it. `/name` gives the current session a durable title.
 - Ctrl+O model picker (two-stage, draft-preserving, provider-qualified routing),
   Shift+Tab thinking picker (`/think` or `/reasoning` also opens it),
   capability-aware slash commands with
@@ -190,6 +200,9 @@ and control plane authoritative:
 | `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
 | `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
+| `/tree` | Browse the paginated native session tree, including preserved branches and bounded redacted user/assistant previews. |
+| `/rewind [--files]` | Select an active user prompt, preview history-only or checkpointed-file rewind, then explicitly confirm the exact preview. Refused or stale confirmation preserves the local draft and transcript. |
+| `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
 | `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
 
@@ -250,7 +263,7 @@ The daemon derives that boundary from the validated profile ID. The only path
 accepted by the profile UX is the output destination for the credential-safe
 `/profile export` operation, matching the control-plane export contract.
 
-Session list, status, picker, and error views intentionally render lifecycle
+Session roster, status, and lifecycle error views intentionally render lifecycle
 metadata only—never prompts, responses, credentials, raw server details, or
 local paths. Export content comes from the server's redacted contract; the TUI
 then verifies its key, format, byte count, and SHA-256 before a private write.

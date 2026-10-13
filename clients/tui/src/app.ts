@@ -234,6 +234,7 @@ export class AppShell {
 			events: this.events,
 			tui: this.tui,
 			editor: this.#editor,
+			cwd: this.#cwd,
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
@@ -875,6 +876,7 @@ export class AppShell {
 						description: item.description,
 					})),
 					footer: spec.footer,
+					detail: () => spec.detail,
 					onSelect: (item) => {
 						this.selectors.close();
 						void spec.onSelect(item);
@@ -948,6 +950,7 @@ export class AppShell {
 			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
 			forgetDeletedSession: (sessionKey: string) => this.sessions.forgetDeleted(sessionKey),
 			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
+			reloadSession: (sessionKey: string) => this.sessions.reload(sessionKey),
 			focusQueue: () => this.focusQueue(),
 			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),
 			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),
