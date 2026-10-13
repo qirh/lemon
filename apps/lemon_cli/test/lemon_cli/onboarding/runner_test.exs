@@ -39,11 +39,17 @@ defmodule LemonCli.Onboarding.RunnerTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", mock_home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
 
     on_exit(fn ->
+      if original_secrets_config,
+        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 
       if original_master_key,
@@ -151,6 +157,47 @@ defmodule LemonCli.Onboarding.RunnerTest do
     assert is_integer(code_index)
     assert prompt_index < open_index
     assert prompt_index < code_index
+  end
+
+  test "Codex CLI import is explicit and rejects token and path conflicts", %{tmp_dir: tmp_dir} do
+    spec = LemonCli.Onboarding.Providers.fetch!("openai-codex")
+    assert spec.default_auth_mode == :oauth
+    assert :codex_cli in spec.auth_modes
+    io = build_io(self(), [], [])
+    config_path = Path.join(tmp_dir, "config.toml")
+    base_args = ["--config-path", config_path, "--non-interactive"]
+
+    for label <- ["codex-cli", "codex_cli", "CODEX-CLI", "oauth", "OAUTH"] do
+      assert_raise Mix.Error, ~r/Cannot combine --token/, fn ->
+        Runner.run(base_args ++ ["--auth", label, "--token", "synthetic"], spec, io: io)
+      end
+    end
+
+    for args <- [[], ["--auth", "oauth"], ["--auth", "api-key"]] do
+      assert_raise Mix.Error, ~r/Non-interactive provider setup requires/, fn ->
+        Runner.run(base_args ++ args, spec, io: io)
+      end
+    end
+
+    assert_raise Mix.Error, ~r/--codex-auth-path requires --auth codex-cli/, fn ->
+      Runner.run(base_args ++ ["--codex-auth-path", "never-read"], spec, io: io)
+    end
+
+    assert_raise Mix.Error, ~r/does not support codex_cli/, fn ->
+      Runner.run(
+        base_args ++ ["--auth", "codex-cli"],
+        LemonCli.Onboarding.Providers.fetch!("openai"), io: io)
+    end
+
+    assert_raise Mix.Error, ~r/:enoent/, fn ->
+      Runner.run(
+        base_args ++
+          ["--auth", "codex-cli", "--codex-auth-path", Path.join(tmp_dir, "missing-auth.json")],
+        spec, io: io)
+    end
+
+    refute File.exists?(config_path)
+    assert LemonCore.Store.list(Secrets.table()) == []
   end
 
   defp build_io(test_pid, prompts, secrets) do

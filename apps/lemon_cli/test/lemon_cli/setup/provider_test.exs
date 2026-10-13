@@ -32,12 +32,18 @@ defmodule LemonCli.Setup.ProviderTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", home)
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
     clear_secrets_table()
 
     on_exit(fn ->
+      if original_secrets_config,
+        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 
       if original_master_key,

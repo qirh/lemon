@@ -102,6 +102,7 @@ defmodule CodingAgent.Tools.Task.Result do
     %{
       parent_run_id: context[:parent_run_id],
       parent_session_id: context[:parent_session_id],
+      name: context[:name],
       agent: context[:role]
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
@@ -520,6 +521,7 @@ defmodule CodingAgent.Tools.Task.Result do
         :parent_session_id,
         :session_id,
         :agent,
+        :name,
         :description,
         :status,
         :output,

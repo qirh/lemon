@@ -37,7 +37,7 @@ defmodule LemonCore.Update.RemoteTest do
 
     write_executable!(
       Path.join(src, "bin/lemon"),
-      "#!/bin/sh\nif [ \"$1\" = version ]; then echo #{version}; else echo hi; fi\n"
+      fixture_launcher(version)
     )
 
     Enum.each(extra_files, fn {relative, contents} ->
@@ -139,7 +139,7 @@ defmodule LemonCore.Update.RemoteTest do
 
     write_executable!(
       Path.join(release_root, "bin/lemon"),
-      "#!/bin/sh\nif [ \"$1\" = version ]; then echo #{release_version}; else echo old; fi\n"
+      fixture_launcher(release_version)
     )
 
     File.ln_s!(release_version, Path.join([state, "versions", "current"]))
@@ -156,6 +156,59 @@ defmodule LemonCore.Update.RemoteTest do
       release_root: release_root,
       current_version: Path.basename(release_root)
     ]
+  end
+
+  defp fixture_launcher(version, snapshot \\ "stopped", restart_status \\ 0) do
+    """
+    #!/bin/sh
+    [ -z "${RELEASE_ROOT:-}${RELEASE_VSN:-}${RELEASE_NAME:-}" ] || exit 91
+    case "$1:$2" in
+      version:) echo #{version} ;;
+      __update-daemon:snapshot) echo #{snapshot} ;;
+      __update-daemon:restart)
+        root="$(cd "$(dirname "$0")/.." && pwd -P)"
+        state="$(dirname "$(dirname "$root")")"
+        selected="$(cd "$root/../current" && pwd -P)"
+        [ "$root" = "$selected" ] || exit 92
+        [ "$3" = "#{snapshot}" ] || exit 93
+        [ -x "$4/bin/lemon" ] || exit 94
+        [ -d "$state/updates/receipts" ] || exit 95
+        printf '%s\\n' "#{version}" >> "$state/restarts"
+        exit #{restart_status}
+        ;;
+      *) exit 96 ;;
+    esac
+    """
+  end
+
+  defp lifecycle_fixture(tmp_dir, snapshot, new_status \\ 0, old_status \\ 0) do
+    {bytes, sha256, size} =
+      build_fixture_tarball(tmp_dir, "2099.01.0", %{
+        "bin/lemon" => fixture_launcher("2099.01.0", snapshot, new_status)
+      })
+
+    artifacts = [artifact("pkg.tar.gz", "test_profile", "test-platform", sha256, size)]
+    body = manifest("2099.01.0", artifacts)
+
+    base_url =
+      start_server(artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", bytes))
+
+    {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
+
+    write_executable!(
+      Path.join(release_root, "bin/lemon"),
+      fixture_launcher("2020.01.0", snapshot, old_status)
+    )
+
+    {remote_opts(base_url, home, release_root), state}
+  end
+
+  defp rollback_opts(opts, state, receipt) do
+    opts
+    |> Keyword.put(:release_root, Path.join([state, "versions", "2099.01.0"]))
+    |> Keyword.put(:current_version, "2099.01.0")
+    |> Keyword.put(:receipt, receipt["id"])
+    |> Keyword.put(:confirm, receipt["rollback_digest"])
   end
 
   defp apply_confirmed(opts) do
@@ -209,6 +262,27 @@ defmodule LemonCore.Update.RemoteTest do
   defp digest_bytes(bytes), do: :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower)
 
   describe "check/1" do
+    test "update artifact host overrides the shared installer host without app config" do
+      names = ~w(LEMON_UPDATE_BASE_URL LEMON_INSTALL_BASE_URL)
+      previous = Map.take(System.get_env(), names)
+
+      on_exit(fn ->
+        Enum.each(names, &System.delete_env/1)
+        System.put_env(previous)
+      end)
+
+      installer = start_server(manifest_router(manifest("2098.01.0", [])))
+      updater = start_server(manifest_router(manifest("2099.01.0", [])))
+      System.put_env("LEMON_INSTALL_BASE_URL", installer)
+      System.put_env("LEMON_UPDATE_BASE_URL", updater)
+
+      assert {:ok, %{latest: "2099.01.0"}} = Remote.check(channel: "stable")
+      assert {:ok, %{latest: "2098.01.0"}} = Remote.check(base_url: installer, channel: "stable")
+
+      System.delete_env("LEMON_UPDATE_BASE_URL")
+      assert {:ok, %{latest: "2098.01.0"}} = Remote.check(channel: "stable")
+    end
+
     test "rejects a manifest that does not declare schema 2" do
       body = manifest("2020.01.0", [], 1)
       base_url = start_server(manifest_router(body))
@@ -603,7 +677,8 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = apply_confirmed(opts)
+      assert {:ok, %{staged: "2099.01.0", restart_required: false, restart: "not_running"}} =
+               apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       assert File.dir?(Path.join(versions_dir, "2099.01.0"))
@@ -639,7 +714,8 @@ defmodule LemonCore.Update.RemoteTest do
         release_root: release_root
       ]
 
-      assert {:ok, %{staged: "2099.01.0", restart_required: true}} = apply_confirmed(opts)
+      assert {:ok, %{staged: "2099.01.0", restart_required: false, restart: "not_running"}} =
+               apply_confirmed(opts)
 
       versions_dir = Path.join(state, "versions")
       assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
@@ -773,6 +849,128 @@ defmodule LemonCore.Update.RemoteTest do
       ]
 
       assert {:ok, %{staged: nil, restart_required: false}} = apply_confirmed(opts)
+    end
+  end
+
+  describe "managed daemon lifecycle" do
+    test "apply and rollback restart the selected release only after commit", %{tmp_dir: tmp_dir} do
+      {opts, state} = lifecycle_fixture(tmp_dir, String.duplicate("a", 64))
+      inherited = Map.take(System.get_env(), ~w(RELEASE_ROOT RELEASE_VSN RELEASE_NAME))
+      System.put_env("RELEASE_ROOT", opts[:release_root])
+      System.put_env("RELEASE_VSN", "2020.01.0")
+      System.put_env("RELEASE_NAME", "test_profile")
+
+      on_exit(fn ->
+        Enum.each(~w(RELEASE_ROOT RELEASE_VSN RELEASE_NAME), &System.delete_env/1)
+        System.put_env(inherited)
+      end)
+
+      assert {:ok, %{restart: "restarted", restart_required: false, receipt: receipt}} =
+               apply_confirmed(opts)
+
+      assert File.read!(Path.join(state, "restarts")) == "2099.01.0\n"
+
+      assert {:ok, %{active: "2020.01.0", restart: "restarted", restart_required: false}} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert File.read!(Path.join(state, "restarts")) == "2099.01.0\n2020.01.0\n"
+    end
+
+    test "a stopped installation stays stopped after both apply and rollback", %{tmp_dir: tmp_dir} do
+      {opts, state} = lifecycle_fixture(tmp_dir, "stopped")
+
+      assert {:ok, %{restart: "not_running", restart_required: false, receipt: receipt}} =
+               apply_confirmed(opts)
+
+      assert {:ok, %{restart: "not_running", restart_required: false}} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      refute File.exists?(Path.join(state, "restarts"))
+    end
+
+    test "unverifiable ownership refuses the update without moving the pointer", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state} = lifecycle_fixture(tmp_dir, "foreign")
+      assert {:error, :daemon_ownership_unverified} = apply_confirmed(opts)
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute File.exists?(Path.join(state, "restarts"))
+      refute File.exists?(Path.join([state, "versions", "2099.01.0"]))
+      assert {:ok, []} = Remote.history(opts)
+    end
+
+    test "rollback refuses newly foreign ownership before changing selection", %{tmp_dir: tmp_dir} do
+      {opts, state} = lifecycle_fixture(tmp_dir, "stopped")
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      write_executable!(
+        Path.join([state, "versions", "2099.01.0", "bin/lemon"]),
+        fixture_launcher("2099.01.0", "foreign")
+      )
+
+      assert {:error, :daemon_ownership_unverified} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      refute File.exists?(Path.join(state, "restarts"))
+    end
+
+    test "restart failure preserves committed apply result and rollback authorization", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state} = lifecycle_fixture(tmp_dir, String.duplicate("a", 64), 1)
+
+      assert {:error, {:daemon_restart_failed, result}} = apply_confirmed(opts)
+      assert result.restart == "failed"
+      assert result.restart_required
+      assert result.staged == "2099.01.0"
+      assert result.receipt["rollback_digest"]
+      assert {:ok, "2099.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+      assert {:ok, [receipt]} = Remote.history(opts)
+      assert receipt == result.receipt
+      assert receipt["status"] == "applied"
+    end
+
+    test "restart failure after rollback does not undo its committed pointer or receipt", %{
+      tmp_dir: tmp_dir
+    } do
+      {opts, state} = lifecycle_fixture(tmp_dir, String.duplicate("a", 64), 0, 1)
+      assert {:ok, %{receipt: receipt}} = apply_confirmed(opts)
+
+      assert {:error, {:daemon_restart_failed, result}} =
+               Remote.rollback(rollback_opts(opts, state, receipt))
+
+      assert result.active == "2020.01.0"
+      assert result.restart_required
+      assert result.receipt["status"] == "rolled_back"
+      assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+    end
+
+    test "download and checksum failures never invoke the restart hook", %{tmp_dir: tmp_dir} do
+      for failure <- [:download, :checksum] do
+        dir = Path.join(tmp_dir, to_string(failure))
+        File.mkdir_p!(dir)
+        {opts, state} = lifecycle_fixture(dir, String.duplicate("a", 64))
+
+        bad_artifact =
+          artifact("pkg.tar.gz", "test_profile", "test-platform", String.duplicate("0", 64), 1)
+
+        body = manifest("2099.01.0", [bad_artifact])
+
+        router =
+          if failure == :download,
+            do: manifest_router(body),
+            else: artifact_router(body, "/releases/download/v2099.01.0/pkg.tar.gz", "x")
+
+        result = apply_confirmed(Keyword.put(opts, :base_url, start_server(router)))
+
+        if failure == :download,
+          do: assert({:error, {:download_http_status, 404}} = result),
+          else: assert({:error, {:checksum_mismatch, _}} = result)
+
+        assert {:ok, "2020.01.0"} = File.read_link(Path.join([state, "versions", "current"]))
+        refute File.exists?(Path.join(state, "restarts"))
+      end
     end
   end
 
