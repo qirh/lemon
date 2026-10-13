@@ -2,7 +2,10 @@ defmodule CodingAgent.Tools.TodoRead do
   @moduledoc """
   Task-list read tool for the coding agent.
 
-  Reads the stored todo list for the current session.
+  Reads the complete stored todo list for the current session. Results expose
+  string-keyed canonical entries in `details.todos` and an ordered full ACP/TUI
+  plan in `details.plan.entries`, including completed tasks. Plan entries contain
+  string content/status/priority values, with no IDs or extra store metadata.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -44,13 +47,14 @@ defmodule CodingAgent.Tools.TodoRead do
       if session_id == "" do
         {:error, "Session id not available"}
       else
-        todos = TodoStore.get(session_id)
+        details = session_id |> TodoStore.get() |> TodoStore.result_details()
+        todos = details.todos
         output = Jason.encode!(todos, pretty: true)
         open_count = Enum.count(todos, fn todo -> todo["status"] != "completed" end)
 
         %AgentToolResult{
           content: [%TextContent{text: output}],
-          details: %{title: "#{open_count} todos", todos: todos}
+          details: Map.put(details, :title, "#{open_count} todos")
         }
       end
     end
