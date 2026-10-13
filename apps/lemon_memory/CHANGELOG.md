@@ -6,6 +6,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] - 2026-10-13
+
 First release. `lemon_memory` is a new package, carved out of `lemon_core`,
 where durable memory had been eight modules with no boundary of their own.
 
