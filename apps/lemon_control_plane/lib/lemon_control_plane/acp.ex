@@ -17,6 +17,8 @@ defmodule LemonControlPlane.ACP do
   Permission requests retain the native tool-call identity and bounded target
   preview; approval summaries never persist raw tool arguments. Client calls
   are concurrent so terminal exit waits cannot block output or cancellation.
+  Resolution is bound atomically to the exact pending record shown to the client;
+  a changed or expired request cannot reuse an earlier approval.
   Remembered approval is scoped to the same tool and action arguments within
   the session, not a blanket grant to that tool.
   Historical interrupted tools are reconciled against finalized run events:
@@ -1396,8 +1398,8 @@ defmodule LemonControlPlane.ACP do
                request["params"],
                timeout
              ) do
-          {:ok, response} -> resolve_approval_from_response(approval_id, response)
-          _ -> deny_if_pending(approval_id)
+          {:ok, response} -> resolve_approval_from_response(approval_id, pending, response)
+          _ -> deny_if_pending(approval_id, pending)
         end
       end)
 
@@ -1406,7 +1408,7 @@ defmodule LemonControlPlane.ACP do
 
   defp perform_approval_request(result, pending, _callback) do
     approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
-    deny_if_pending(approval_id)
+    deny_if_pending(approval_id, pending)
 
     add_client_request_result(result, %{
       "method" => "session/request_permission",
@@ -1419,12 +1421,12 @@ defmodule LemonControlPlane.ACP do
   # gated call cannot run. `{:error, :not_pending}` (already resolved,
   # cancelled, or timed out) leaves nothing to deny, so the outcome is
   # deliberately dropped.
-  defp deny_if_pending(approval_id) when is_binary(approval_id) do
-    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+  defp deny_if_pending(approval_id, pending) when is_binary(approval_id) do
+    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny, expected_pending: pending)
     :ok
   end
 
-  defp deny_if_pending(_approval_id), do: :ok
+  defp deny_if_pending(_approval_id, _pending), do: :ok
 
   defp permission_tool_call(result, pending) do
     tool = map_get(pending, :tool) || "tool"
@@ -1484,7 +1486,8 @@ defmodule LemonControlPlane.ACP do
     ]
   end
 
-  defp resolve_approval_from_response(approval_id, response) when is_binary(approval_id) do
+  defp resolve_approval_from_response(approval_id, pending, response)
+       when is_binary(approval_id) do
     outcome = response |> response_result() |> map_get(:outcome) |> ensure_map()
 
     decision =
@@ -1494,15 +1497,14 @@ defmodule LemonControlPlane.ACP do
         _ -> :deny
       end
 
-    # `:not_pending` means the prompt was cancelled or timed out before the
-    # client's answer arrived — the record is gone and there is nothing
-    # left to resolve, so the outcome is deliberately dropped.
-    _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
+    # Gone, expired, or changed snapshots cannot grant approval. Core owns the
+    # atomic comparison and leaves a replacement request untouched.
+    _ = LemonCore.ExecApprovals.resolve(approval_id, decision, expected_pending: pending)
 
     :ok
   end
 
-  defp resolve_approval_from_response(_approval_id, _response), do: :ok
+  defp resolve_approval_from_response(_approval_id, _pending, _response), do: :ok
 
   defp safe_client_request(callback, request) do
     callback.(request)
