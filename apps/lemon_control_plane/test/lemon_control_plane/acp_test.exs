@@ -873,6 +873,15 @@ defmodule LemonControlPlane.ACPTest do
 
   test "session configuration reaches the real router contract and survives resume" do
     start_plan_runtime()
+    previous_api_key = System.get_env("OPENAI_API_KEY")
+    System.put_env("OPENAI_API_KEY", "acp-model-selection-test-key")
+
+    on_exit(fn ->
+      if previous_api_key,
+        do: System.put_env("OPENAI_API_KEY", previous_api_key),
+        else: System.delete_env("OPENAI_API_KEY")
+    end)
+
     parent = self()
 
     Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
@@ -881,8 +890,7 @@ defmodule LemonControlPlane.ACPTest do
     end)
 
     id = new_session()
-    model = hd(LemonAi.Models.list_models(discover_openai: false))
-    model_id = "#{model.provider}:#{model.id}"
+    model_id = "openai:gpt-4o"
 
     assert {:ok, %{"result" => _}} =
              rpc("session/set_model", %{"sessionId" => id, "modelId" => model_id})
@@ -896,6 +904,12 @@ defmodule LemonControlPlane.ACPTest do
 
     assert {:ok, %{"result" => _}} =
              rpc("session/set_mode", %{"sessionId" => id, "modeId" => "plan"})
+
+    assert {:ok, %{"error" => %{"code" => -32_602}}} =
+             rpc("session/set_model", %{
+               "sessionId" => id,
+               "modelId" => "minimax:MiniMax-M2.7-highspeed"
+             })
 
     queue_prompt(id)
     assert_receive {:configured_request, request}

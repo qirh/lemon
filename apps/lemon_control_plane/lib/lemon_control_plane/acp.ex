@@ -7,6 +7,8 @@ defmodule LemonControlPlane.ACP do
   without deleting that history. Session configuration is applied to the next
   prompt through the router boundary. Raw media is rejected. Client MCP servers
   are connection-owned, session-scoped, and never stored with durable sessions.
+  Model choices use the canonical runtime availability catalog, including its
+  credential and provider-health constraints, instead of the static registry.
 
   `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
   load the selected workspace skill. Native resume identities survive the chat
@@ -585,13 +587,13 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp model_options do
-    LemonAi.Models.list_models(discover_openai: false)
-    |> Enum.map(fn model ->
+    for group <- LemonAgent.ModelRuntime.ModelCatalog.available_catalog(),
+        model <- group.models do
       %{
         "value" => "#{model.provider}:#{model.id}",
         "name" => "#{model.name || model.id} (#{model.provider})"
       }
-    end)
+    end
     |> Enum.uniq_by(& &1["value"])
     |> Enum.sort_by(& &1["value"])
   end
@@ -1754,9 +1756,14 @@ defmodule LemonControlPlane.ACP do
   defp session_context_window(session) do
     model_id = Map.get(session, :model) || LemonCore.Config.cached().agent.default_model
 
-    Enum.find_value(LemonAi.Models.list_models(discover_openai: false), fn model ->
-      if "#{model.provider}:#{model.id}" == model_id, do: model.context_window
-    end)
+    with [provider, id] <- String.split(model_id || "", ":", parts: 2),
+         provider_atom when not is_nil(provider_atom) <-
+           Enum.find(LemonAi.Models.get_providers(), &(Atom.to_string(&1) == provider)),
+         %{context_window: window} <- LemonAi.Models.get_model(provider_atom, id) do
+      window
+    else
+      _ -> nil
+    end
   end
 
   defp prompt_usage(usage) when is_map(usage) do
