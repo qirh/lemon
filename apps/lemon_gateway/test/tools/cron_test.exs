@@ -3,11 +3,21 @@ defmodule LemonGateway.Tools.CronTest do
 
   alias LemonGateway.Tools.Cron
 
+  defmodule AbortRouter do
+    def abort_run(_id, _reason), do: :ok
+  end
+
   setup do
+    previous_router = Application.get_env(:lemon_automation, :cron_router_mod)
+    Application.put_env(:lemon_automation, :cron_router_mod, AbortRouter)
     {:ok, _} = Application.ensure_all_started(:lemon_automation)
     clear_cron_data()
 
     on_exit(fn ->
+      if previous_router,
+        do: Application.put_env(:lemon_automation, :cron_router_mod, previous_router),
+        else: Application.delete_env(:lemon_automation, :cron_router_mod)
+
       clear_cron_data()
     end)
 
@@ -203,6 +213,68 @@ defmodule LemonGateway.Tools.CronTest do
 
     assert %{error: true} = rejected.details
     assert LemonAgent.get_text(rejected) =~ "deliver_to must be"
+  end
+
+  test "prompt jobs inherit cwd and accept explicit add and update targets" do
+    cwd = System.tmp_dir!()
+    tool = Cron.tool(cwd, session_key: "agent:default:main")
+    params = %{"action" => "add", "schedule" => "hourly", "prompt" => "edit repository"}
+
+    inherited = call_tool(tool, params)
+    assert inherited.details["cwd"] == Path.expand(cwd)
+
+    explicit =
+      call_tool(
+        tool,
+        Map.put(params, "job", %{
+          "schedule" => "hourly",
+          "prompt" => "edit another repository",
+          "cwd" => "/tmp/explicit-cron-repo",
+          "model" => "provider:model"
+        })
+      )
+
+    assert explicit.details["cwd"] == "/tmp/explicit-cron-repo"
+    assert explicit.details["model"] == "provider:model"
+
+    id = inherited.details["id"]
+
+    updated =
+      call_tool(tool, %{
+        "action" => "update",
+        "id" => id,
+        "patch" => %{"cwd" => "/tmp/updated-cron-repo"}
+      })
+
+    assert updated.details["updated"] == true
+    assert LemonAutomation.CronStore.get_job(id).cwd == "/tmp/updated-cron-repo"
+
+    assert tool.parameters["properties"]["cwd"]["type"] == "string"
+  end
+
+  test "run history exposes coding links and bounded reconciliation status" do
+    tool = Cron.tool(".", session_key: "agent:default:main")
+    added = call_tool(tool, %{"action" => "add", "schedule" => "hourly", "prompt" => "work"})
+    job_id = added.details["id"]
+
+    run =
+      job_id
+      |> LemonAutomation.CronRun.new(:schedule)
+      |> LemonAutomation.CronRun.start("router_owned")
+
+    run = %{
+      run
+      | meta: %{outcome_unknown: true, router_session_key: "agent:default:main:sub:cron_owned"}
+    }
+
+    LemonAutomation.CronStore.put_run(run)
+
+    result = call_tool(tool, %{"action" => "runs", "id" => job_id})
+    assert [entry] = result.details["runs"]
+    assert entry["routerRunId"] == "router_owned"
+    assert entry["sessionKey"] == "agent:default:main:sub:cron_owned"
+    assert entry["outcomeUnknown"] == true
+    assert entry["reconciling"] == true
   end
 
   defp call_tool(tool, params) do

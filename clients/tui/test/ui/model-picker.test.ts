@@ -9,6 +9,7 @@ import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { createHarness, type Harness } from "../helpers/command-harness.ts";
 import { renderPlain } from "../helpers/memory-terminal.ts";
+import { waitFor } from "../helpers/wait.ts";
 
 const ESC = "\x1b";
 const ENTER = "\r";
@@ -75,7 +76,10 @@ describe("stages", () => {
 		await picker.open();
 		current().handleInput(ENTER);
 		expect(picker.stage).toBe("model");
-		expect(current().items.map((item) => item.value)).toEqual(["claude-sonnet-4", "claude-opus-4"]);
+		expect(current().items.map((item) => item.value)).toEqual([
+			"anthropic:claude-sonnet-4",
+			"anthropic:claude-opus-4",
+		]);
 		expect(renderPlain(current().render(70))).toContain("anthropic");
 	});
 
@@ -108,7 +112,7 @@ describe("stages", () => {
 		const picker = makePicker();
 		await picker.open();
 		expect(picker.stage).toBe("model");
-		expect(current().items.map((item) => item.value)).toEqual(["gpt-4o"]);
+		expect(current().items.map((item) => item.value)).toEqual(["openai:gpt-4o"]);
 	});
 
 	test("nothing to choose from is said, not shown", async () => {
@@ -129,9 +133,9 @@ describe("applying", () => {
 		await Bun.sleep(20);
 		expect(harness.server.requestsFor("sessions.patch")[0].params).toEqual({
 			sessionKey: "tui-session",
-			model: "claude-sonnet-4",
+			model: "anthropic:claude-sonnet-4",
 		});
-		expect(harness.store.focused.model).toBe("claude-sonnet-4");
+		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
 		expect(harness.host.statusRefreshes).toBeGreaterThan(0);
 	});
 
@@ -163,6 +167,32 @@ describe("applying", () => {
 		expect(current().items[0].label).toContain("(current)");
 	});
 
+	test("provider search does not contaminate the model search or back navigation", async () => {
+		const picker = makePicker();
+		await picker.open();
+		current().handleInput("anthropic");
+		current().handleInput(ENTER);
+		expect(current().filter).toBe("");
+		current().handleInput("sonnet");
+		expect(renderPlain(current().render(80))).toContain("claude-sonnet-4");
+		current().handleInput(ESC);
+		expect(current().filter).toBe("");
+	});
+
+	test("switching models replaces stale context and provider metadata", async () => {
+		harness.store.focused.setModel(
+			{ model: "openai:gpt-4o", provider: "openai", contextWindow: 128_000 },
+			"run",
+		);
+		const picker = makePicker();
+		await picker.open();
+		current().handleInput(ENTER);
+		current().handleInput(ENTER);
+		await waitFor(() => harness.store.focused.modelSource === "local", { what: "model patch" });
+		expect(harness.store.focused.contextWindow).toBe(200_000);
+		expect(harness.store.focused.provider).toBe("anthropic");
+	});
+
 	test("hints describe the model", async () => {
 		const picker = makePicker();
 		await picker.open();
@@ -171,4 +201,18 @@ describe("applying", () => {
 		expect(text).toContain("200k ctx");
 		expect(text).toContain("thinking");
 	});
+});
+
+test("an exact model ID ranks before a longer sibling even when marked current", async () => {
+	harness.server.respondWith("models.list", {
+		models: [
+			{ id: "gpt-5.5-pro", provider: "openai-codex" },
+			{ id: "gpt-5.5", provider: "openai-codex" },
+		],
+	});
+	harness.store.focused.model = "openai-codex:gpt-5.5";
+	const picker = makePicker();
+	await picker.open();
+	current().handleInput("gpt-5.5");
+	expect(current().selected?.value).toBe("openai-codex:gpt-5.5");
 });

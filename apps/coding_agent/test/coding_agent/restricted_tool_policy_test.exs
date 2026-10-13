@@ -5,7 +5,7 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @restricted_profiles [:read_only, :safe_mode, :subagent_restricted]
-  @restricted_tools ["write", "edit", "patch", "remember", "task", "agent", "kill_process"]
+  @restricted_tools ~w(write edit patch remember task agent kill_process goal kanban cron)
 
   test "restricted profiles deny every built-in editor, memory writer, and delegation tool" do
     for profile <- @restricted_profiles, name <- @restricted_tools do
@@ -13,6 +13,14 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
 
       refute ToolPolicy.allowed?(policy, name), "#{profile} must deny #{name}"
       assert is_binary(ToolPolicy.denial_reason(policy, name))
+    end
+  end
+
+  test "leaf workers cannot create indirect automation delegates" do
+    policy = ToolPolicy.from_profile(:leaf_worker)
+
+    for name <- ~w(task agent goal kanban cron) do
+      refute ToolPolicy.allowed?(policy, name)
     end
   end
 

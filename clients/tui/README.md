@@ -38,7 +38,11 @@ remains a legacy client-side alias; it does not configure the daemon.
 ## Features
 
 - Streaming markdown transcript committed to native terminal scrollback
-  mid-stream (pi-tui `FinalizableBlock` seam), 30fps grapheme-safe reveal.
+  mid-stream, with separate chronological text segments around thinking and
+  tools so later answers never repaint above already-committed tool history.
+  Text uses a 30fps grapheme-safe reveal.
+  Ordinary chats run in the directory where the TUI was launched; canonical
+  profile chats retain their daemon-owned workspace.
 - Tool cards with per-tool formatters for Lemon's native tools (read, write,
   edit, patch, bash incl. background runs / `bash_output` / `kill_process`,
   grep, find, ls, todo, task/agent, `browser_*`, webfetch/websearch; anything
@@ -47,6 +51,9 @@ remains a legacy client-side alias; it does not configure the daemon.
   full result (~32 KB) and structured details, so edits render the tool's own
   diff with real file line numbers. Against an older daemon that only sends
   500-char previews, cards fall back to the preview and to unnumbered diffs.
+  Native patch receipts use their actual changed-file list (including Lemon's
+  `*** Update File` format). Child task progress has one independently updated
+  card per task, separate from the completed parent launch receipt.
 - The model's thinking is its own dimmed transcript block, collapsed to its
   first line (up to 16 KB of reasoning is available when expanded).
 - Ctrl+R expands/collapses the latest tool card or thinking block (a merged
@@ -58,14 +65,30 @@ remains a legacy client-side alias; it does not configure the daemon.
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
   replies keep their partial text.
-- Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
-  prompt, close), per-session drafts, unread badges, history hydration.
+  The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
+  without discarding a correction in the editor (autocomplete gets Escape first).
+  Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
+  pastes remain recoverable after later submissions.
+- Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
+  across stored sessions, new-with-prompt, close), per-session drafts, unread
+  badges, history hydration. Search results are not restricted to the initially
+  loaded recent sessions; failed searches never leave stale rows selectable.
+  Picker filters accept bracketed paste as text, including copied model names
+  and session searches.
 - Durable session lifecycle: `/sessions` adds server-backed text, agent,
   pin, and archive filters to the draft-preserving picker; `/session` can
   inspect, resume, title, pin, archive, preview, privately export, prune, and
   delete through the authenticated server-owned lifecycle. Prune and delete
   are preview-confirm workflows, and offline mutations never claim success.
-- Ctrl+O model picker (two-stage, draft-preserving), capability-aware slash commands with
+- `/tree` inspects active and preserved branches; `/rewind` picks an earlier
+  active user prompt, previews the change, then requires confirmation bound to
+  that exact preview. History-only rewind leaves files untouched; `--files`
+  explicitly requests checkpoint restoration. Cancel is the default. Success
+  reloads the active branch and recalls the selected prompt into the editor
+  without sending it. `/name` gives the current session a durable title.
+- Ctrl+O model picker (two-stage, draft-preserving, provider-qualified routing),
+  Shift+Tab thinking picker (`/think` or `/reasoning` also opens it),
+  capability-aware slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
   Ctrl+G `$EDITOR` handoff. Captured shell escapes have a bounded deadline and
   terminate their complete POSIX process group on timeout so descendants cannot
@@ -88,10 +111,45 @@ remains a legacy client-side alias; it does not configure the daemon.
   before every mutation, never queues activation offline, preserves the profile
   draft after refusal, and reports create-once or unchanged replay without
   retaining manifest prose or executable/source content.
-- Progressive-disclosure status bar (model + context gauge pinned), git
-  branch, connection state, session counters.
+- Progressive-disclosure status bar: model and context gauge stay pinned;
+  last-run token usage and reported USD cost are separate from context size,
+  followed by git branch, connection state, submission mode and session counters.
+  Unknown cost is omitted, never estimated.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
   support in overlays.
+- Native terminal integration: Tern pane detection, prompt/reply navigation
+  marks (OSC 133), clickable URL and file references (OSC 8, including `#L42`
+  line anchors), a session/status title, turn-completion and approval desktop
+  notifications, and an indeterminate progress indicator while working.
+
+### Tern and modern terminals
+
+Run `lemon` in a Tern pane as in any terminal. The TUI detects `TERN_PANE` or
+`TERM_PROGRAM=Tern`; its transcript marks stay attached to prompt/reply rows
+as they enter native scrollback, enabling Tern's command/reply navigation.
+Markdown URLs, inline-code file references such as `src/app.ts:42`, and file
+tool-card titles are clickable. File targets are absolute `file://` URLs with
+an optional `#L42` fragment; paths with spaces and special characters are
+URL-encoded.
+
+The title shows the focused session key and current status. `lemon_session`
+and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
+terminal client intentionally does **not** claim `tern_acp_session`, which is
+reserved for native ACP chats. Notifications contain only generic status,
+never prompts, answers, commands, or tool arguments. Tern receives OSC 9;
+other terminals receive OSC 9 or OSC 777 according to their identity.
+
+pi-tui negotiates kitty keyboard support with a capability query rather than
+assuming it from environment variables, preserving the parent keyboard flags.
+Exit and external-editor handoff restore the keyboard, cursor and raw mode,
+clear the progress indicator and remove the session markers. The title is
+restored where the terminal supports the xterm title stack, otherwise cleared
+so an exited client never leaves a stale working/approval status.
+`LEMON_TUI_NOTIFICATIONS=0` disables desktop notifications.
+`LEMON_TUI_TERMINAL_INTEGRATION=0` disables Lemon's terminal side channels and
+transcript marks. `PI_NO_HYPERLINKS=1` disables links; pi-tui's multiplexer
+capability policy remains authoritative. Non-TTY and `TERM=dumb` output do not
+emit Lemon's side channels.
 
 ## Hermes-compatible commands
 
@@ -107,6 +165,7 @@ and control plane authoritative:
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
+| `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compress` | Compact the current session through `sessions.compact`. |
 | `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
@@ -125,6 +184,9 @@ and control plane authoritative:
 | `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
 | `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
+| `/tree` | Browse the paginated native session tree, including preserved branches and bounded redacted user/assistant previews. |
+| `/rewind [--files]` | Select an active user prompt, preview history-only or checkpointed-file rewind, then explicitly confirm the exact preview. Refused or stale confirmation preserves the local draft and transcript. |
+| `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
 | `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
 
@@ -165,7 +227,7 @@ The daemon derives that boundary from the validated profile ID. The only path
 accepted by the profile UX is the output destination for the credential-safe
 `/profile export` operation, matching the control-plane export contract.
 
-Session list, status, picker, and error views intentionally render lifecycle
+Session roster, status, and lifecycle error views intentionally render lifecycle
 metadata only—never prompts, responses, credentials, raw server details, or
 local paths. Export content comes from the server's redacted contract; the TUI
 then verifies its key, format, byte count, and SHA-256 before a private write.

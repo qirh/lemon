@@ -2,13 +2,13 @@ defmodule LemonAutomation.KanbanDispatcher do
   @moduledoc """
   Supervised dispatcher for durable Kanban task leases.
 
-  `stop_board/2` is a hard stop: owned worker processes are killed, their exact
-  lease IDs are reclaimed immediately, and their monitor associations are
-  removed before the call returns. Late replies are ignored, and guarded store
-  updates prevent an obsolete worker from terminalizing a newer lease.
+  `stop_board/2` kills owned waiters and aborts their claimed router runs.
+  Unsubmitted leases are reclaimed; ambiguous submissions and aborts retain
+  durable run ownership until reconciliation. Exact-lease terminal writes
+  prevent an obsolete worker from terminalizing a newer lease.
 
-  Starting a board reconciles unexpired leases left by the same dispatcher
-  worker ID, which makes manager restart recovery independent of lease expiry.
+  Starting a board reclaims only unsubmitted leases left by the same worker
+  ID. Tracked invocations reconcile against durable run completion instead.
   """
 
   use GenServer
@@ -85,6 +85,27 @@ defmodule LemonAutomation.KanbanDispatcher do
     end
   end
 
+  def handle_call({:claim_run, task_id, lease_id, run_id, attrs}, _from, state) do
+    owner =
+      Enum.find(state.refs, fn {_ref, worker} ->
+        worker.task_id == task_id and worker.lease_id == lease_id
+      end)
+
+    reply =
+      case owner do
+        nil ->
+          {:error, :lease_not_owned}
+
+        _ ->
+          case KanbanStore.track_leased_run(task_id, lease_id, run_id, attrs) do
+            {:ok, _task} -> :ok
+            {:error, reason} -> {:error, reason}
+          end
+      end
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:stop_board, board_id}, _from, state) do
     case Map.get(state.boards, board_id) do
       nil ->
@@ -98,22 +119,46 @@ defmodule LemonAutomation.KanbanDispatcher do
           |> Enum.reduce(state, fn {ref, worker}, acc ->
             Process.exit(worker.pid, :kill)
             Process.demonitor(ref, [:flush])
-            _ = KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
+            task = KanbanStore.get_task(worker.task_id)
+
+            if not tracked_run?(task),
+              do: KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
+
             update_in(acc.refs, &Map.delete(&1, ref))
           end)
           |> update_in([:boards], &Map.delete(&1, board_id))
 
-        {:reply, {:ok, public_dispatcher(%{dispatcher | status: "stopped", running: %{}})}, state}
+        aborts =
+          KanbanStore.list_tasks(board_id, limit: 10_000)
+          |> Enum.filter(&tracked_run?/1)
+          |> Enum.map(fn task ->
+            result = request_abort(task, dispatcher.worker_opts)
+
+            if result == :ok do
+              KanbanStore.fail_leased_task(task.id, lease_id(task), "cancelled")
+            end
+
+            %{run_id: task.run_id, result: result}
+          end)
+
+        if Enum.any?(aborts, &(&1.result == :outcome_unknown)),
+          do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
+
+        stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
+        {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
     end
   end
 
   def handle_call({:status, board_id}, _from, state) do
     dispatcher = Map.get(state.boards, board_id)
+    reconcile_board(board_id, if(dispatcher, do: dispatcher.running, else: %{}))
 
     {:reply,
      {:ok,
       %{
         running: not is_nil(dispatcher),
+        reconciling_count:
+          length(unowned_runs(board_id, if(dispatcher, do: dispatcher.running, else: %{}))),
         dispatcher: dispatcher && public_dispatcher(dispatcher)
       }}, state}
   end
@@ -128,13 +173,24 @@ defmodule LemonAutomation.KanbanDispatcher do
     {:noreply, state}
   end
 
-  def handle_info({ref, result}, state) do
+  def handle_info({ref, result}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
     {:noreply, finish_worker(ref, result, state)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    {:noreply, finish_worker(ref, {:error, reason}, state)}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    {:noreply, finish_worker(ref, {:worker_down, :worker_crashed}, state)}
+  end
+
+  def handle_info({:reconcile_stopped, board_id}, state) do
+    if not Map.has_key?(state.boards, board_id) do
+      reconcile_board(board_id, %{})
+
+      if unowned_runs(board_id, %{}) != [],
+        do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
+    end
+
+    {:noreply, state}
   end
 
   defp dispatch_board(state, board_id) do
@@ -143,8 +199,12 @@ defmodule LemonAutomation.KanbanDispatcher do
         state
 
       dispatcher ->
+        reconcile_board(board_id, dispatcher.running)
         {:ok, _reclaimed} = KanbanStore.reclaim_expired_leases(board_id)
-        available = max(dispatcher.max_concurrency - map_size(dispatcher.running), 0)
+        reconciling = length(unowned_runs(board_id, dispatcher.running))
+
+        available =
+          max(dispatcher.max_concurrency - map_size(dispatcher.running) - reconciling, 0)
 
         if available > 0 do
           Enum.reduce(1..available, state, fn _, acc -> maybe_start_worker(acc, board_id) end)
@@ -164,11 +224,18 @@ defmodule LemonAutomation.KanbanDispatcher do
       {:ok, task} ->
         lease_id = lease_id(task)
 
+        owner = self()
+
+        worker_opts =
+          Keyword.put(dispatcher.worker_opts, :on_submitting, fn run_id, attrs ->
+            GenServer.call(owner, {:claim_run, task.id, lease_id, run_id, attrs})
+          end)
+
         case start_task(
                state.task_supervisor,
                dispatcher.worker_mod,
                task,
-               dispatcher.worker_opts
+               worker_opts
              ) do
           {:ok, task_ref} ->
             worker = %{task_id: task.id, lease_id: lease_id, pid: task_ref.pid}
@@ -221,16 +288,95 @@ defmodule LemonAutomation.KanbanDispatcher do
           {:ok, _value} ->
             KanbanStore.complete_leased_task(task_id, lease_id)
 
-          {:error, reason} ->
-            KanbanStore.fail_leased_task(task_id, lease_id, inspect(reason, limit: 120))
+          {:outcome_unknown, _run_id} ->
+            mark_unknown(task_id, lease_id)
 
-          other ->
-            KanbanStore.fail_leased_task(task_id, lease_id, inspect(other, limit: 120))
+          {:worker_down, reason} ->
+            if tracked_run?(KanbanStore.get_task(task_id)) do
+              mark_unknown(task_id, lease_id)
+            else
+              KanbanStore.fail_leased_task(task_id, lease_id, Atom.to_string(reason))
+            end
+
+          {:error, reason} ->
+            KanbanStore.fail_leased_task(task_id, lease_id, failure_class(reason))
+
+          _other ->
+            KanbanStore.fail_leased_task(task_id, lease_id, "invalid_worker_result")
         end
 
         state
     end
   end
+
+  defp reconcile_board(board_id, running) do
+    unowned_runs(board_id, running)
+    |> Enum.each(fn task ->
+      case LemonCore.RunStore.get(task.run_id) do
+        %{summary: summary} when not is_nil(summary) ->
+          case LemonAutomation.RunCompletionWaiter.extract_output_from_completion(summary) do
+            {:ok, output} ->
+              KanbanStore.complete_leased_task(task.id, lease_id(task),
+                run_id: task.run_id,
+                output: output
+              )
+
+            {:error, _reason} ->
+              KanbanStore.fail_leased_task(task.id, lease_id(task), "run_failed")
+          end
+
+        _ ->
+          :ok
+      end
+    end)
+  end
+
+  defp unowned_runs(board_id, running) do
+    active = MapSet.new(Enum.map(running, fn {_ref, worker} -> worker.task_id end))
+
+    KanbanStore.list_tasks(board_id, limit: 10_000)
+    |> Enum.filter(&(tracked_run?(&1) and not MapSet.member?(active, &1.id)))
+  end
+
+  defp mark_unknown(task_id, lease_id) do
+    task = KanbanStore.get_task(task_id)
+    attrs = Map.put(task.meta["kanbanRun"], "status", "outcome_unknown")
+    KanbanStore.track_leased_run(task_id, lease_id, task.run_id, attrs)
+  end
+
+  defp request_abort(task, opts) do
+    run = task.meta["kanbanRun"]
+
+    if run["abortRequested"] do
+      :outcome_unknown
+    else
+      attrs = run |> Map.put("abortRequested", true) |> Map.put("status", "outcome_unknown")
+
+      case KanbanStore.track_leased_run(task.id, lease_id(task), task.run_id, attrs) do
+        {:ok, _} -> abort_run(task.run_id, opts)
+        _ -> :outcome_unknown
+      end
+    end
+  end
+
+  defp tracked_run?(task),
+    do: get_in(task, [:meta, "kanbanRun", "status"]) in ["running", "outcome_unknown"]
+
+  defp abort_run(run_id, opts) do
+    router = Keyword.get(opts, :router_mod, LemonRouter)
+
+    case router.abort_run(run_id, :kanban_board_stop) do
+      :ok -> :ok
+      _ -> :outcome_unknown
+    end
+  rescue
+    _ -> :outcome_unknown
+  catch
+    _, _ -> :outcome_unknown
+  end
+
+  defp failure_class(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp failure_class(_reason), do: "run_failed"
 
   defp schedule_tick(state, board_id, interval_ms \\ nil) do
     case Map.get(state.boards, board_id) do

@@ -176,6 +176,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     Application.put_env(:lemon_router, :event_bridge_test_pid, self())
     Application.put_env(:lemon_router, :engine_runtime, SessionCoordinatorRuntime)
     :ok = LemonCore.EventBridge.configure(SessionCoordinatorEventBridgeStub)
+    Enum.each(~w(run1 run2 run3 run4), &LemonCore.Store.delete(:runs, &1))
 
     on_exit(fn ->
       restore_event_bridge_impl(original_bridge_impl)
@@ -459,7 +460,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run2) != [] end)
   end
 
-  test "an unrelated suspended run cannot block idle submission", %{run_supervisor: run_supervisor} do
+  test "an unrelated suspended run cannot block idle submission", %{
+    run_supervisor: run_supervisor
+  } do
     unrelated_run = "run-unrelated-suspended-#{System.unique_integer([:positive])}"
 
     unrelated_pid =
@@ -506,6 +509,47 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     assert_receive {:bridge_unsubscribed, "run2"}, 500
     refute_receive {:bridge_unsubscribed, "run3"}, 100
+  end
+
+  test "merged followups and queued aborts have durable terminal receipts", %{
+    run_supervisor: run_supervisor
+  } do
+    key = {:session, unique_session_key()}
+    active = "active-receipts-#{System.unique_integer([:positive])}"
+    merged = "merged-receipt-#{System.unique_integer([:positive])}"
+    replacement = "replacement-receipt-#{System.unique_integer([:positive])}"
+    cancelled = "cancelled-receipt-#{System.unique_integer([:positive])}"
+
+    :ok = submit(key, active, "hold", :collect, run_supervisor)
+    assert_receive {:started, ^active, _}, 500
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(merged))
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(cancelled))
+    :ok = submit(key, merged, "part1", :followup, run_supervisor)
+    :ok = submit(key, replacement, "part2", :followup, run_supervisor)
+
+    assert_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^merged}}, 500
+
+    assert %{
+             summary: %{
+               completed: %{
+                 ok: false,
+                 error: %{type: :superseded, replacement_run_id: ^replacement}
+               }
+             }
+           } =
+             LemonCore.RunStore.get(merged)
+
+    :ok = submit(key, cancelled, "cancel me", :collect, run_supervisor)
+    [{pid, _}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
+    assert GenServer.call(pid, :pending_count) == 2
+    :ok = SessionCoordinator.abort_run(cancelled)
+    assert_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^cancelled}}, 500
+
+    assert %{summary: %{completed: %{ok: false, error: :user_requested, run_id: ^cancelled}}} =
+             LemonCore.RunStore.get(cancelled)
+
+    assert GenServer.call(pid, :pending_count) == 1
+    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^cancelled}}, 50
   end
 
   test "queued runs that fail to start later are unsubscribed", %{run_supervisor: run_supervisor} do

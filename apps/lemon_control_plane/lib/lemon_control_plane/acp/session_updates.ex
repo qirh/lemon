@@ -13,6 +13,8 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   at six levels. Rendered tool content and plan entries share a 64 KiB encoded
   collection limit. Typed diffs contain complete snapshots only, up to 16 KiB per
   side; larger edits use the bounded textual diff rather than a fabricated file.
+  Starts and permission cards show proposed edits as labeled text fragments, never
+  invented whole-file snapshots; complete typed diffs come from actual tool results.
   """
 
   @text_limit 4_000
@@ -264,7 +266,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp action_event(state, payload) do
     action = get(payload, :action) || %{}
     detail = get(action, :detail) || %{}
-    id = get(action, :id)
+    id = get(detail, :tool_call_id) || get(action, :id)
     kind = to_string(get(action, :kind) || "")
     phase = to_string(get(payload, :phase) || "")
 
@@ -430,6 +432,43 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     if is_binary(get(args, :command)) or is_binary(get(args, :code)),
       do: [text_content(title(name, args, nil))],
       else: []
+  end
+
+  defp start_content("edit", args) do
+    old = get(args, :old_text) || get(args, :old_string)
+    new = get(args, :new_text) || get(args, :new_string)
+
+    if is_binary(old) and is_binary(new) do
+      [
+        text_content(
+          "Requested replacement fragments (not complete file contents):\nOLD:\n" <>
+            utf8_prefix(preview(old), 1_800) <> "\nNEW:\n" <> utf8_prefix(preview(new), 1_800)
+        )
+      ]
+    else
+      []
+    end
+  end
+
+  defp start_content("write", args) do
+    case get(args, :content) do
+      content when is_binary(content) ->
+        [
+          text_content(
+            "Proposed file content (existing contents not read):\n" <> preview(content)
+          )
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp start_content(name, args) when name in ["patch", "apply_patch"] do
+    case get(args, :patch_text) || get(args, :patch) do
+      patch when is_binary(patch) -> [text_content("Requested patch:\n" <> preview(patch))]
+      _ -> []
+    end
   end
 
   defp start_content(_name, _args), do: []

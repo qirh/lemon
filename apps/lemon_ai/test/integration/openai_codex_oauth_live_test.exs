@@ -29,9 +29,7 @@ defmodule LemonAi.Integration.OpenAICodexOAuthLiveTest do
     assert is_binary(token)
     assert token != ""
 
-    model =
-      Models.get_model(:"openai-codex", "gpt-5.2") ||
-        Models.get_model(:"openai-codex", "gpt-5.2-codex")
+    model = Models.get_model(:"openai-codex", "gpt-5.5")
 
     assert model != nil
 
@@ -68,6 +66,11 @@ defmodule LemonAi.Integration.OpenAICodexOAuthLiveTest do
 
         assert is_binary(text)
         assert String.trim(text) != ""
+        assert msg.usage.input > 0
+        assert msg.usage.output > 0
+
+        assert msg.usage.total_tokens ==
+                 msg.usage.input + msg.usage.output + msg.usage.cache_read + msg.usage.cache_write
 
       {:error, %AssistantMessage{} = msg} ->
         flunk("Codex call failed: #{msg.error_message}")

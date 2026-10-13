@@ -58,7 +58,11 @@ describe("AppShell", () => {
 		await app.submit("what is the status?");
 
 		const frame = server.requestsFor("chat.send")[0];
-		expect(frame.params).toEqual({ sessionKey: "tui-session-a", prompt: "what is the status?" });
+		expect(frame.params).toEqual({
+			sessionKey: "tui-session-a",
+			prompt: "what is the status?",
+			cwd: process.cwd(),
+		});
 		expect(chatText(app)).toContain("what is the status?");
 	});
 

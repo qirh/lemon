@@ -1010,7 +1010,7 @@ defmodule LemonControlPlane.ACP do
         "toolCall" => %{
           "toolCallId" => approval_id || "approval_#{short_hash(inspect(pending))}",
           "title" => "Approve #{tool}",
-          "kind" => acp_tool_kind(tool),
+          "kind" => LemonControlPlane.ACP.SessionUpdates.tool_kind(tool),
           "status" => "pending",
           "content" => approval_content(pending)
         },
@@ -1296,18 +1296,6 @@ defmodule LemonControlPlane.ACP do
       }
     }
   end
-
-  defp acp_tool_kind(kind) when kind in [:read, "read"], do: "read"
-
-  defp acp_tool_kind(kind) when kind in [:edit, "edit", :write, "write", :patch, "patch"],
-    do: "edit"
-
-  defp acp_tool_kind(kind) when kind in [:delete, "delete"], do: "delete"
-  defp acp_tool_kind(kind) when kind in [:move, "move"], do: "move"
-  defp acp_tool_kind(kind) when kind in [:search, "search"], do: "search"
-  defp acp_tool_kind(kind) when kind in [:exec, "exec", :process, "process"], do: "execute"
-  defp acp_tool_kind(kind) when kind in [:fetch, "fetch", :web, "web"], do: "fetch"
-  defp acp_tool_kind(_kind), do: "other"
 
   defp prompt_text(blocks) do
     blocks

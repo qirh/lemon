@@ -61,25 +61,23 @@ Before a scheduled launch, CronManager checks the persisted run table for
 pending/running runs for the same job, then claims a deterministic scheduled-run
 slot through `LemonCore.Store.put_new/3`. It skips duplicate scheduled starts
 while an active run exists, and competing dispatchers claiming the same scheduled
-slot preserve the first persisted run instead of overwriting it. Active runs
-older than the job's `timeout_ms` are recovered through the normal terminalizer
-as `:timeout`, including monitor suppression, forwarding, audit, and retry
-policy, so a crashed runtime cannot leave the job locked forever. On
-`CronManager` restart, persisted jobs are reloaded and the same active-run
-recovery path runs during initialization, so a manager crash cannot immediately
-double-submit a scheduled job that already has a pending/running persisted run.
-Scheduled failures and timeouts can retry when `max_retries` is greater than
-zero. The terminal source run persists retry due time, attempt, and root/source
+slot preserve the first persisted run instead of overwriting it. Prompt runs
+claim their fixed router ID before submission. A timeout, worker death after
+submission, or lost acknowledgement retains that invocation as active and
+reconciling: it is not a retry-safe failure. Recovery checks durable router
+completion before releasing ownership, including after manager restart.
+Unsubmitted work and local command jobs use their normal terminalization path.
+Definite scheduled failures can retry when `max_retries` is greater than zero.
+The terminal source run persists retry due time, attempt, and root/source
 lineage. Restart rebuilds the wake timer from that state, while a deterministic
 retry ID and atomic claim enforce one run per `{root, attempt}`. Retries are
 separate `CronRun` records with `triggered_by: :retry`; manual and wake runs do
-not retry by default. Cron workers are monitored supervised tasks, so
-supervisor start failures and worker `:DOWN` messages terminalize immediately.
-An unsupervised fallback is available only in explicit standalone mode.
-Operators can abort an active cron run by cron run id. The abort path calls the
-underlying LemonRouter run cancellation when the router run is still active,
-persists the cron run as `:aborted`, emits the normal completion event, and
-ignores late submitter completions.
+not retry by default. Workers are monitored supervised tasks; standalone
+fallback is explicit.
+Operators can abort an active cron run by cron run ID. Cancellation uses the
+claimed router ID and records abort intent before dispatch. Unknown outcomes
+remain under reconciliation and are not automatically retried. Confirmed
+abort terminalizes once and ignores late submitter completions.
 Cron lifecycle actions also record durable audit events in `:cron_audit_events`
 through `CronStore.record_audit/2`. The audit stream covers job lifecycle
 changes, manual run requests, run start/abort/retry/stale recovery, and
@@ -92,13 +90,14 @@ IDs, and reasons.
 `:cron_run_submitter` used by CronManager (normally RunSubmitter ->
 LemonRouter), and routes completion back through CronManager.
 
-**GoalContinuationManager** is the preview persistent-goal runner. It accepts one
-active session goal at a time, starts the work through `TaskSupervisor`, submits
-a `LemonRouter` request with `origin: :goal` and `queue_mode: :followup`, then
-records the router run id back into `LemonAgent.Workspace.GoalStore`.
+**GoalContinuationManager** runs persistent-goal continuations. It accepts one
+active session goal at a time and starts work through `TaskSupervisor` with
+`origin: :goal` and `queue_mode: :followup`. Goal targets persist their `cwd`;
+continuations and the read-only judge use that directory rather than daemon cwd.
+The goal records the accepted router run ID and bounded completion result.
 
 **GoalLoopManager** runs conservative goal loops. `run_once/2` performs one
-preview judge tick. `start_loop/2` starts one bounded supervised loop per
+judge tick. `start_loop/2` starts one bounded supervised loop per
 session, waits for each submitted continuation to emit `:run_completed`, and
 stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 `auto: true` persists opt-in auto-loop intent in `LemonAgent.Workspace.GoalStore`; the
@@ -134,6 +133,13 @@ deterministic runtime. Set `LEMON_GOAL_JUDGE_MODEL` to pin the judge run model.
 Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
 
+The session-scoped `goal` agent tool exposes set/status/start/stop/pause/resume
+and a bounded asynchronous run-once action. Prompt `cron` jobs created by the
+agent tool inherit the current repository cwd and accept an explicit model pin.
+Neither automatically creates a worktree: use a dedicated target directory
+when other editors are active. See the
+[coding automation workflow](../../docs/user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
+
 Every automation path that both submits and waits uses
 `RunCompletionWaiter.submit_and_wait/2`. Cron, goal judge, autonomous goal
 continuation, and Kanban worker runs subscribe to their fixed
@@ -143,25 +149,44 @@ submission; rejection prevents the router call.
 A router run-id mismatch is an explicit error rather than a late subscription
 to a replacement id, because a synchronous completion may already have fired.
 
-**KanbanDispatcher** is the first supervised fleet-work layer for durable boards.
-It scans `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
-dependency-unblocked tasks, runs a worker module under `TaskSupervisor`, and
-records task completion or failure back into durable state. Focused dispatcher
-coverage proves bounded multi-worker leasing, completion, explicit worker
-failure, crashed-worker failure marking, expired-lease reclaim, and a
-production-shaped bounded-concurrency path through the real `KanbanRunWorker`
-with router/waiter stubs. The default `KanbanRunWorker` submits leased work
-through `LemonRouter` with `origin: :kanban`, board/task metadata, a blocked
-`kanban` tool policy, and an isolated git worktree cwd when the board workspace
-is a git repository. The worktree layer creates
-`<repo>/.worktrees/kanban-<task_id>` on a
-`lemon-kanban/<task_id>` branch before submitting the router run, so broad
-multi-agent execution does not share one mutable checkout.
-Stopping a board is a hard cancellation: worker pids are killed and their exact
-lease IDs are reclaimed before return. Completion/failure writes require the
-same lease ID, so late worker results cannot mutate a newer lease. Starting a
-board reconciles unexpired leases left by the same dispatcher worker ID after a
-manager restart.
+**KanbanDispatcher** runs durable coding tasks through the same router and native
+coding sessions as interactive work. From a CLI or TUI coding session, ask the
+agent to use the `kanban` tool:
+
+1. `board_create` with `name` and a repository `workspace` (defaults to the
+   current project), then `task_create` with a concrete coding task.
+2. `dispatch_start` with `board_id`, optional `max_concurrency` (1–8, default 1)
+   and optional `model` (`provider:model`).
+3. `task_get` or `board_get` to inspect progress and results;
+   `dispatch_status` to inspect worker and reconciliation counts.
+4. `dispatch_stop` to stop leasing and cancel the board's router runs.
+
+Workers lease dependency-unblocked cards and execute with `origin: :kanban`.
+The `kanban` tool is blocked inside workers to prevent recursive dispatch. A
+Git-backed board gets a separate `<repo>/.worktrees/kanban-<task_id>` checkout
+on `lemon-kanban/<task_id>` for each task. Changes stay there for review: they
+are **not** automatically committed or merged into your checkout. Inspect
+`task.meta.kanbanRun.cwd` and `.branch` to find them. Tasks without an assignee
+use the default agent, not the dispatcher's lease-owner ID.
+
+Before router submission, the exact lease records the fixed `run_id`, session,
+worktree location and `kanbanRun.status = "running"`. Completion marks the card
+done and persists the bounded result summary at `task.meta.kanbanRun.output`;
+the full conversation remains available under the linked session/run.
+
+Failures record a sanitized `lastFailure` and stop that card from being leased
+again, even on boards without a `blocked` column. Correct the cause, then
+explicitly `task_update` its status back to the board's first column to retry.
+There is no unbounded automatic retry loop.
+
+A timeout, lost waiter or ambiguous submission retains its run ID and lease
+with `kanbanRun.status = "outcome_unknown"`. It occupies a concurrency slot
+until durable completion is reconciled; expiry and manager restart cannot
+launch a second editor in the same worktree. Restart the dispatcher for a board
+after a runtime restart to resume reconciliation. Hard stop aborts claimed
+router runs once, not just waiter processes. Unknown abort outcomes retain
+their leases for reconciliation and are reported in the stop result's `aborts`.
+Late terminal writes require the original lease ID.
 
 **Heartbeat** (`LemonAutomation.Heartbeat`) is Lemon's one heartbeat
 mechanism: a cron job whose `meta` has `heartbeat: true` (atom or string key).

@@ -79,7 +79,7 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
   test "submits through router and waits for the expected run" do
     {:ok, task} = sample_task()
 
-    assert {:ok, %{run_id: "run_expected"}} =
+    assert {:ok, %{run_id: "run_expected", output: "done"}} =
              KanbanRunWorker.run(task,
                router_mod: KanbanRouterOk,
                waiter_mod: KanbanWaiterOk,
@@ -118,7 +118,7 @@ defmodule LemonAutomation.KanbanRunWorkerTest do
   test "rejects a router run id mismatch without opening a racy second wait" do
     {:ok, task} = sample_task()
 
-    assert {:error, {:unexpected_run_id, "run_expected", "run_other"}} =
+    assert {:outcome_unknown, "run_expected"} =
              KanbanRunWorker.run(task,
                router_mod: KanbanRouterOtherRun,
                waiter_mod: KanbanWaiterOk,

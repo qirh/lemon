@@ -185,4 +185,32 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     persisted = KanbanStore.get_task(task.id)
     assert persisted.meta["kanbanLease"]["id"] == leased.meta["kanbanLease"]["id"]
   end
+
+  test "tracked coding runs survive expiry and restart until exact lease completion" do
+    {:ok, board} = KanbanStore.create_board("Tracked work")
+    {:ok, task} = KanbanStore.create_task(board.id, "Code")
+    {:ok, leased} = KanbanStore.lease_task(board.id, "dispatcher", lease_ms: 1)
+    assert leased.assignee == nil
+    lease_id = leased.meta["kanbanLease"]["id"]
+
+    assert {:error, :stale_lease} =
+             KanbanStore.track_leased_run(task.id, "old-lease", "run_stale")
+
+    {:ok, tracked} =
+      KanbanStore.track_leased_run(task.id, lease_id, "run_live", %{
+        "cwd" => "/scratch/worktree",
+        "branch" => "lemon-kanban/task"
+      })
+
+    assert tracked.run_id == "run_live"
+    Process.sleep(2)
+    assert {:ok, []} = KanbanStore.reclaim_expired_leases(board.id)
+    assert {:ok, []} = KanbanStore.reclaim_worker_leases(board.id, "dispatcher")
+    assert {:error, :no_available_task} = KanbanStore.lease_task(board.id, "other")
+    {:ok, done} = KanbanStore.complete_leased_task(task.id, lease_id, output: "Verified change")
+    assert done.meta["kanbanRun"]["output"] == "Verified change"
+    assert done.meta["kanbanRun"]["cwd"] == "/scratch/worktree"
+    assert done.meta["kanbanRun"]["status"] == "completed"
+    refute done.meta["kanbanLease"]
+  end
 end

@@ -102,7 +102,8 @@ defmodule LemonCli.Setup.WizardTest do
     } do
       io = recording_io()
 
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
 
       # Config scaffold was created.
       assert File.exists?(config_path)
@@ -131,14 +132,19 @@ defmodule LemonCli.Setup.WizardTest do
       key_file: key_file
     } do
       io = recording_io()
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
+
       drain_events([])
 
       {:ok, config_before} = File.read(config_path)
       {:ok, key_before} = File.read(key_file)
 
       io = recording_io()
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
 
       assert File.read!(config_path) == config_before
       assert File.read!(key_file) == key_before
@@ -165,7 +171,8 @@ defmodule LemonCli.Setup.WizardTest do
 
       io = recording_io()
 
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
 
       # The user's config is never overwritten and no key is initialized.
       assert File.read!(config_path) == original_config
@@ -258,14 +265,14 @@ defmodule LemonCli.Setup.WizardTest do
       config_path: config_path
     } do
       assert Wizard.run(["--non-interactive", "--config-path", config_path], recording_io()) ==
-               :ok
+               {:error, :setup_incomplete}
 
       refute File.read!(config_path) =~ "daily_brief"
 
       assert Wizard.run(
                ["--non-interactive", "--config-path", config_path, "--daily-brief", "6:45"],
                recording_io()
-             ) == :ok
+             ) == {:error, :setup_incomplete}
 
       assert %{"automation" => %{"daily_brief" => "06:45"}} =
                config_path |> File.read!() |> Toml.decode!()
@@ -276,12 +283,46 @@ defmodule LemonCli.Setup.WizardTest do
     test "top-level flags drive the non-interactive full wizard", %{config_path: config_path} do
       io = recording_io()
 
-      assert Wizard.run(["--non-interactive", "--config-path", config_path], io) == :ok
+      assert Wizard.run(["--non-interactive", "--config-path", config_path], io) ==
+               {:error, :setup_incomplete}
 
       assert File.exists?(config_path)
 
       events = drain_events([])
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
+    end
+
+    test "full setup stores credentials and selects a default without prompts", %{
+      config_path: path
+    } do
+      io = %{recording_io() | prompt: fn _ -> flunk("non-interactive setup prompted") end}
+
+      assert :ok =
+               Wizard.run(
+                 [
+                   "--non-interactive",
+                   "--provider",
+                   "openai",
+                   "--token",
+                   "wizard-test-token",
+                   "--model",
+                   "gpt-5",
+                   "--skip-verify",
+                   "--config-path",
+                   path
+                 ],
+                 io
+               )
+
+      settings = Toml.decode_file!(path)
+      assert settings["defaults"]["provider"] == "openai"
+      assert settings["defaults"]["model"] == "openai:gpt-5"
+
+      assert {:ok, "wizard-test-token"} =
+               Secrets.get(settings["providers"]["openai"]["api_key_secret"],
+                 prefer_env: false,
+                 env_fallback: false
+               )
     end
   end
 

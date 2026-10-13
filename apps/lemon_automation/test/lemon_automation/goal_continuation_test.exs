@@ -19,6 +19,14 @@ defmodule LemonAutomation.GoalContinuationTest do
     def submit(_params), do: {:error, :busy}
   end
 
+  defmodule GoalRouterWrongId do
+    def submit(_params), do: {:ok, "unexpected"}
+  end
+
+  defmodule GoalWaiterOk do
+    def wait_already_subscribed(_run_id, _timeout, _opts), do: {:ok, "implemented"}
+  end
+
   setup do
     session_key = "goal-continuation-test-#{System.unique_integer([:positive])}"
     on_exit(fn -> GoalStore.clear(session_key) end)
@@ -26,7 +34,8 @@ defmodule LemonAutomation.GoalContinuationTest do
   end
 
   test "submits a goal continuation and records the run", %{session_key: session_key} do
-    assert {:ok, goal} = GoalStore.set(session_key, "Ship Hermes parity", agent_id: "agent_1")
+    assert {:ok, goal} =
+             GoalStore.set(session_key, "Ship Hermes parity", agent_id: "agent_1", cwd: ".")
 
     params =
       goal
@@ -37,6 +46,8 @@ defmodule LemonAutomation.GoalContinuationTest do
     assert params.session_key == session_key
     assert params.agent_id == "agent_1"
     assert params.queue_mode == :followup
+    assert params.cwd == Path.expand(".")
+    assert params.tool_policy.blocked_tools == ["goal"]
     assert params.run_id == "run_preview"
     assert params.meta.goal_id == goal.id
     assert params.prompt =~ "Ship Hermes parity"
@@ -93,5 +104,31 @@ defmodule LemonAutomation.GoalContinuationTest do
     goal = GoalStore.get(session_key)
     assert goal.continuation_count == 0
     refute goal.last_run_id == "run_failed"
+  end
+
+  test "waited completion persists result and counts acceptance once", %{session_key: key} do
+    assert {:ok, _} = GoalStore.set(key, "Implement")
+
+    assert {:ok, %{goal: goal, completion: {:ok, "implemented"}}} =
+             GoalContinuation.continue_once(key,
+               await_completion: true,
+               run_id: "run_completed",
+               router_mod: GoalRouterOk,
+               waiter_mod: GoalWaiterOk,
+               meta: %{test_pid: self()}
+             )
+
+    assert goal.continuation_count == 1
+    assert goal.meta["lastResult"]["output"] == "implemented"
+    assert GoalStore.get(key).meta["lastResult"]["status"] == "completed"
+  end
+
+  test "one-shot submission never adopts a different run id", %{session_key: key} do
+    assert {:ok, _} = GoalStore.set(key, "Fixed identity")
+
+    assert {:error, {:submission_outcome_unknown, "fixed"}} =
+             GoalContinuation.continue_once(key, run_id: "fixed", router_mod: GoalRouterWrongId)
+
+    assert GoalStore.get(key).continuation_count == 0
   end
 end

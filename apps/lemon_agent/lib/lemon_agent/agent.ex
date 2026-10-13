@@ -92,6 +92,10 @@ defmodule LemonAgent.Agent do
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           max_tool_turns: pos_integer() | :infinity | nil,
+          max_tool_concurrency: pos_integer() | :infinity | nil,
+          max_retries: non_neg_integer(),
+          retry_base_delay_ms: non_neg_integer(),
+          retry_max_delay_ms: non_neg_integer(),
           tool_timeout_ms: pos_integer() | :infinity | nil,
           queue_call_timeout: timeout(),
           waiters: list(waiter())
@@ -109,6 +113,10 @@ defmodule LemonAgent.Agent do
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           max_tool_turns: pos_integer() | :infinity | nil,
+          max_tool_concurrency: pos_integer() | :infinity | nil,
+          max_retries: non_neg_integer(),
+          retry_base_delay_ms: non_neg_integer(),
+          retry_max_delay_ms: non_neg_integer(),
           tool_timeout_ms: pos_integer() | :infinity | nil,
           queue_call_timeout: timeout(),
           name: GenServer.name()
@@ -135,6 +143,10 @@ defmodule LemonAgent.Agent do
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
   - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback, or `:infinity`
     (default: 25; `CodingAgent.Session` passes `:infinity` unless `[runtime] max_tool_turns` is set)
+  - `:max_tool_concurrency` - Maximum overlapping calls for tools marked `parallel_safe`
+  - `:max_retries` - Transient provider retries per response (default: 3; 0 disables)
+  - `:retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
+  - `:retry_max_delay_ms` - Backoff cap (default: 30,000ms; explicit retry-after honored up to 120s)
   - `:tool_timeout_ms` - Optional per-tool task timeout in milliseconds
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
@@ -528,6 +540,10 @@ defmodule LemonAgent.Agent do
       thinking_budgets: Keyword.get(opts, :thinking_budgets, %{}),
       stream_options: stream_options,
       max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
+      max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency),
+      max_retries: Keyword.get(opts, :max_retries, 3),
+      retry_base_delay_ms: Keyword.get(opts, :retry_base_delay_ms, 2_000),
+      retry_max_delay_ms: Keyword.get(opts, :retry_max_delay_ms, 30_000),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
       queue_call_timeout: queue_call_timeout,
       waiters: []
@@ -691,7 +707,7 @@ defmodule LemonAgent.Agent do
 
   # Handle steering/follow-up message requests from the loop task
   def handle_call({:get_steering_messages, abort_ref}, _from, state) do
-    if state.abort_ref == abort_ref or match?({:aborted, ^abort_ref}, state.abort_ref) do
+    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
       {messages, new_queue} = consume_queue(state.steering_queue, state.steering_mode)
       {:reply, messages, %{state | steering_queue: new_queue}}
     else
@@ -699,8 +715,12 @@ defmodule LemonAgent.Agent do
     end
   end
 
+  def handle_call({:has_steering_messages, abort_ref}, _from, state) do
+    {:reply, state.abort_ref == abort_ref and state.steering_queue != [], state}
+  end
+
   def handle_call({:get_follow_up_messages, abort_ref}, from, state) do
-    if state.abort_ref == abort_ref or match?({:aborted, ^abort_ref}, state.abort_ref) do
+    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
       if state.follow_up_queue != [] do
         {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
         {:reply, messages, %{state | follow_up_queue: new_queue}}
@@ -853,10 +873,6 @@ defmodule LemonAgent.Agent do
     {:noreply, state}
   end
 
-  defp abort_ref_matches?(state_abort_ref, abort_ref) do
-    state_abort_ref == abort_ref or state_abort_ref == {:aborted, abort_ref}
-  end
-
   defp queued_message(message, opts) do
     case Keyword.get(opts, :system_prompt) do
       prompt when is_binary(prompt) and prompt != "" -> %{message: message, system_prompt: prompt}
@@ -953,10 +969,17 @@ defmodule LemonAgent.Agent do
       get_steering_messages: fn ->
         GenServer.call(agent_pid, {:get_steering_messages, abort_ref}, queue_call_timeout)
       end,
+      has_steering_messages: fn ->
+        GenServer.call(agent_pid, {:has_steering_messages, abort_ref}, queue_call_timeout)
+      end,
       get_follow_up_messages: fn ->
         GenServer.call(agent_pid, {:get_follow_up_messages, abort_ref}, queue_call_timeout)
       end,
       max_tool_turns: state.max_tool_turns,
+      max_tool_concurrency: state.max_tool_concurrency,
+      max_retries: state.max_retries,
+      retry_base_delay_ms: state.retry_base_delay_ms,
+      retry_max_delay_ms: state.retry_max_delay_ms,
       tool_timeout_ms: state.tool_timeout_ms,
       stream_options: stream_options,
       stream_fn: state.stream_fn
@@ -1174,6 +1197,10 @@ defmodule LemonAgent.Agent do
     %{state | agent_state: new_agent_state}
   end
 
+  defp handle_agent_event({:provider_retry, _details}, state) do
+    %{state | agent_state: %{state.agent_state | stream_message: nil, error: nil}}
+  end
+
   defp handle_agent_event(_event, state), do: state
 
   @spec handle_task_completion(term(), state()) :: state()
@@ -1298,7 +1325,7 @@ defmodule LemonAgent.Agent do
 
     case state.follow_up_poll do
       %{from: from, abort_ref: poll_abort_ref} = poll ->
-        if abort_ref_matches?(state.abort_ref, poll_abort_ref) do
+        if state.abort_ref == poll_abort_ref and not AbortSignal.aborted?(poll_abort_ref) do
           if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
           {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
           GenServer.reply(from, messages)

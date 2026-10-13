@@ -62,8 +62,9 @@ leaves existing jobs untouched. `daily_brief_sync: false` keeps tests isolated.
   guard into an error state requiring explicit restart, not another automatic tick.
 - Judge failures pause by default; `continue_once` is an explicit policy choice.
 - Kanban task terminal writes require the exact lease ID. Stale results cannot
-  overwrite a re-leased task. Restart reclaims the same worker's old leases;
-  hard stop kills owned workers and reclaims their exact leases before returning.
+  overwrite a re-leased task. Restart reclaims only unsubmitted old leases;
+  tracked router invocations must reconcile before re-leasing. Hard stop kills
+  owned waiters, aborts claimed runs once, and retains ambiguous run ownership.
 - Git-backed board workers use isolated `.worktrees/kanban-<task_id>` checkouts
   and `lemon-kanban/<task_id>` branches. Never run concurrent editors in one cwd.
 

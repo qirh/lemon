@@ -14,6 +14,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
   @ctx %{conn_id: "goal-test", auth: %{role: :operator}}
 
   setup do
+    {:ok, _} = Application.ensure_all_started(:lemon_automation)
     session_key = "goal-methods-test-#{System.unique_integer([:positive])}"
     on_exit(fn -> GoalStore.clear(session_key) end)
     {:ok, session_key: session_key}
@@ -26,6 +27,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
                  "sessionKey" => session_key,
                  "objective" => "Finish parity",
                  "agentId" => "default",
+                 "cwd" => System.tmp_dir!(),
                  "maxContinuations" => 2
                },
                @ctx
@@ -36,6 +38,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     refute Map.has_key?(set, "objective")
     assert set["status"] == "active"
     assert set["budget"]["maxContinuations"] == 2
+    assert GoalStore.get(session_key).cwd == Path.expand(System.tmp_dir!())
     assert set["summary"]["objectiveReturned"] == false
     assert set["summary"]["cleanup"]["includesObjectiveText"] == false
 
@@ -104,6 +107,24 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
 
     assert {:error, {:invalid_request, "sessionKey is required", nil}} =
              GoalResume.handle(%{}, @ctx)
+  end
+
+  test "cannot replace a goal while its run outcome is unresolved", %{session_key: key} do
+    {:ok, _} = GoalSet.handle(%{"sessionKey" => key, "objective" => "Original"}, @ctx)
+    run_id = "run_goal_rpc_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      GoalStore.record_loop_status(key, :reconciling, run_id: run_id, run_kind: :continuation)
+
+    on_exit(fn ->
+      LemonCore.RunStore.finalize(run_id, %{completed: %{ok: false, error: :aborted}})
+      LemonAutomation.GoalLoopManager.status(key)
+    end)
+
+    assert {:error, {:conflict, _, nil}} =
+             GoalSet.handle(%{"sessionKey" => key, "objective" => "Replacement"}, @ctx)
+
+    assert GoalStore.get(key).objective == "Original"
   end
 
   test "method names and scopes" do
