@@ -44,6 +44,11 @@ on:
         type: boolean
         required: true
         default: false
+      skip_preflight:
+        description: "Skip the test-lane preflight (fast/quality/eval/clients); artifacts are still verified"
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
   group: product-release
@@ -170,7 +175,7 @@ jobs:
     needs: validate
     # Tag-ref dispatches and tag pushes skip `prepare`; the implicit success()
     # check covers skipped ancestors, so every downstream job gates explicitly.
-    if: ${{ !cancelled() && needs.validate.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && !inputs.skip_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -224,7 +229,7 @@ jobs:
   preflight-clients:
     name: Preflight clients
     needs: validate
-    if: ${{ !cancelled() && needs.validate.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && !inputs.skip_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -262,7 +267,7 @@ jobs:
     name: Build ${{ matrix.profile }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
 
     strategy:
       fail-fast: false
@@ -422,7 +427,7 @@ jobs:
     name: Build lemon_tui
     runs-on: ubuntu-24.04
     needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
 
     env:
       LEMON_VERSION: ${{ needs.validate.outputs.version }}
@@ -571,7 +576,7 @@ jobs:
     name: Docker ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     needs: [validate, preflight-beam, preflight-clients]
-    if: ${{ !cancelled() && needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success' }}
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
 
     permissions:
       contents: read
