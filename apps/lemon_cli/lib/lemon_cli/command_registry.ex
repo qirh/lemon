@@ -64,6 +64,26 @@ defmodule LemonCli.CommandRegistry do
 
   @commands [
     %{
+      name: "run",
+      summary: "Run a prompt non-interactively (-p, --print)",
+      usage: "lemon run [PROMPT] [--output text|json|stream-json] [options]",
+      subcommands: [],
+      options: [
+        option("--output FORMAT", ["--output"], "text, json, or stream-json"),
+        option("--model MODEL", ["--model"], "Provider:model override"),
+        option("--cwd PATH", ["--cwd"], "Working directory"),
+        option("--session KEY", ["--session"], "Resume a session"),
+        option("--continue", ["--continue"], "Continue the latest CLI session"),
+        option(
+          "--approval-policy deny|allow",
+          ["--approval-policy"],
+          "Deny or allow approval requests"
+        ),
+        option("--allowed-tools LIST", ["--allowed-tools"], "Comma-separated tool allowlist"),
+        option("--denied-tools LIST", ["--denied-tools"], "Comma-separated tool denylist")
+      ]
+    },
+    %{
       name: "setup",
       summary: "Run first-time setup and configuration",
       usage: "lemon setup [provider|runtime|gateway|doctor] [options]",
@@ -516,9 +536,6 @@ defmodule LemonCli.CommandRegistry do
       @both_launchers,
       [@runtime_options_detail]
     ),
-    lifecycle("run", "lemon run [runtime options]", "Alias for start", @both_launchers, [
-      @runtime_options_detail
-    ]),
     lifecycle(
       "daemon",
       "lemon daemon [runtime options]",
