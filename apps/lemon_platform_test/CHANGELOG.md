@@ -6,6 +6,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] - 2026-10-13
+
 First release. This package is new: if you are implementing one of Lemon's
 extension behaviours, add it as a test-only dependency and the platform's own
 compliance suite runs against your module.
