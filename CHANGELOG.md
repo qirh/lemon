@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.1]
+
 ### Added
 
 - **Current model catalogs.** Bundled catalogs gain the latest models from
