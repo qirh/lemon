@@ -404,8 +404,17 @@ defmodule LemonControlPlane.ACPTest do
     parent = self()
 
     Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
+      LemonCore.Bus.broadcast(
+        LemonCore.Bus.run_topic(request.run_id),
+        LemonCore.Event.new(:engine_action, %{
+          action: %{id: "tool_1", kind: :exec, title: "Run command"},
+          phase: :started
+        })
+      )
+
       send(parent, {:submitted_streaming, request})
-      {:ok, "run_acp_stream"}
+
+      {:ok, request.run_id}
     end)
 
     session_id = new_session()
@@ -431,15 +440,14 @@ defmodule LemonControlPlane.ACPTest do
 
     assert_receive {:submitted_streaming, request}
     assert request.prompt == "stream please"
-    Process.sleep(20)
 
     LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_stream"),
+      LemonCore.Bus.run_topic(request.run_id),
       LemonCore.Event.new(:delta, %{text: "hello"})
     )
 
     LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_stream"),
+      LemonCore.Bus.run_topic(request.run_id),
       LemonCore.Event.new(:engine_action, %{
         action: %{id: "tool_1", kind: :exec, title: "Run command"},
         phase: :completed,
@@ -449,7 +457,7 @@ defmodule LemonControlPlane.ACPTest do
     )
 
     LemonCore.Bus.broadcast(
-      LemonCore.Bus.run_topic("run_acp_stream"),
+      LemonCore.Bus.run_topic(request.run_id),
       LemonCore.Event.new(:run_completed, %{
         completed: %{ok: true, answer: "done", error: nil}
       })
@@ -471,9 +479,19 @@ defmodule LemonControlPlane.ACPTest do
                     %{
                       "params" => %{
                         "update" => %{
+                          "sessionUpdate" => "tool_call",
+                          "toolCallId" => "tool_1",
+                          "kind" => "execute"
+                        }
+                      }
+                    }}
+
+    assert_receive {:acp_update,
+                    %{
+                      "params" => %{
+                        "update" => %{
                           "sessionUpdate" => "tool_call_update",
                           "toolCallId" => "tool_1",
-                          "kind" => "execute",
                           "status" => "failed"
                         }
                       }
@@ -483,7 +501,7 @@ defmodule LemonControlPlane.ACPTest do
     result = response["result"]
 
     assert result["stopReason"] == "end_turn"
-    assert result["_meta"]["lemon"]["runId"] == "run_acp_stream"
+    assert result["_meta"]["lemon"]["runId"] == request.run_id
     assert result["_meta"]["lemon"]["status"] == "completed"
     assert result["_meta"]["lemon"]["answer"] == "done"
   end
@@ -852,6 +870,24 @@ defmodule LemonControlPlane.ACPTest do
                     }}
 
     LemonCore.RunStore.delete_session(session.session_key)
+  end
+
+  test "uncertain submission preserves the fixed run ID and forbids retry" do
+    parent = self()
+
+    Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
+      send(parent, {:uncertain_run, request.run_id})
+      {:error, :outcome_unknown}
+    end)
+
+    id = new_session()
+
+    assert {:ok, %{"error" => %{"data" => %{"runId" => run_id, "retrySafe" => false}}}} =
+             queue_prompt(id)
+
+    assert is_binary(run_id) and run_id != ""
+    assert_receive {:uncertain_run, ^run_id}
+    assert Store.get(:acp_sessions, id).last_run_id == run_id
   end
 
   defp rpc(method, params),
