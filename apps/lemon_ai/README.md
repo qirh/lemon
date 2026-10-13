@@ -374,6 +374,27 @@ Existing integration exclusions remain in effect even when the reference catalog
 still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-preview`
 and `gemini-3.1-pro-preview` are not advertised by Lemon.
 
+Lemon's runtime model picker uses account-scoped Codex discovery, not every
+bundled Codex SKU. The ChatGPT `/codex/models?client_version=0.153.0` result is
+cached for five minutes by account and endpoint; tokens, account identifiers and
+login files are not stored in that cache. Refreshing the picker may explicitly
+bypass the cache (`models.list` with `forceRefresh: true`). A discovery failure
+does not advertise unverified Codex models. Known hidden models remain usable
+when the account advertises support; `visibility` is not an authorization flag.
+
+```elixir
+LemonAi.Models.list_models(
+  discover_codex: true,
+  codex_access_token: concrete_chatgpt_token
+)
+```
+
+Runtime role selectors (`@smol`, `@slow`, custom roles) are checked against the
+same account cache once a concrete ChatGPT credential is available. Unsupported
+roles fail before submitting a model request and identify the role, rejected
+model and supported alternatives; change `[model_roles]` or choose a model from
+the picker. Static registry lookups remain network-free for metadata and tests.
+
 
 You can also skip the registry entirely and hand-build a `%LemonAi.Types.Model{}` — the
 registry is a convenience, not a requirement.
