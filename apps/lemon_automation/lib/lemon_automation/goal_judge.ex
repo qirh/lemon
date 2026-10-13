@@ -90,6 +90,15 @@ defmodule LemonAutomation.GoalJudge do
   defp normalize_with_source(verdict, opts) do
     case normalize(verdict) do
       {:ok, normalized} ->
+        normalized =
+          case verdict do
+            %{run_id: run_id} when is_binary(run_id) and run_id != "" ->
+              Map.put(normalized, :run_id, run_id)
+
+            _ ->
+              normalized
+          end
+
         source = normalized.source || ""
 
         if source == "" or source == "manual" do

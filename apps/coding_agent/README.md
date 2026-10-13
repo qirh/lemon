@@ -196,18 +196,20 @@ browser-context cookies, current-page local/session storage, and buffered events
 by default; pass `clearCookies`, `clearStorage`, or `clearEvents` to narrow it.
 
 `remember` is implemented as `LemonSkills.Tools.Remember`. It saves compact
-assistant-home facts to `USER.md` or `MEMORY.md` using `text`, `target`
-(`user` or `memory`), and `replaces`; exact replacement text is required for
-replace/remove. Duplicate additions are ignored, file limits are enforced, and
-writes are screened for secrets and unsafe content.
+assistant-home facts to `USER.md` or `MEMORY.md`, or scoped repository learnings
+with target `project`, using `text` and exact `replaces` mutations. Duplicate
+additions are ignored, storage limits are enforced, and writes are screened for
+secrets and unsafe content. Successful turns and compactions also capture bounded
+project facts in the background; explicit saves do not depend on that extraction.
 
 `recall` is the read-only search tool, implemented as `LemonSkills.Tools.Recall`.
 It searches past conversation summaries and longer workspace notes under
 `memory/`. Conversation results use OR/BM25 lexical search, so paraphrases that
-share a keyword can match. Lemon may also attach a bounded **Relevant memory**
-block to each user message automatically; `[memory] auto_recall = false`
-disables it, as does `[features] session_search = "off"`. The old scroll/browse
-interface for session messages is removed and has no replacement.
+share a keyword can match. Automatic **Relevant memory** is stricter: project
+learnings and relevant prior outcomes must stay within the repository, agent,
+and assistant-home boundary. It never injects previous user prompts or performs
+a model/network call. See the [memory guide](../../docs/user-guide/memory.md) for
+bounds, configuration, capture behavior, and isolation.
 
 
 The media tools are implemented in `LemonSkills.Tools` and registered by
@@ -533,6 +535,8 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Native identities remain unchanged in their headers; oversized or path-unsafe
+identities use deterministic portable journal filenames inside the session directory.
 Usage checkpoints preserve response costs and cache-write durations as well as
 token counts, so reopening a session does not reset its recorded cost. Rewinding
 a live branch preserves the selected provider API, including ChatGPT/Codex models.

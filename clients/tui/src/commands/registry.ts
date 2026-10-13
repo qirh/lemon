@@ -84,6 +84,8 @@ export interface CommandHost {
 	openSessionSwitcher?(): void;
 	/** Focus another session, hydrating it if cold. */
 	switchSession?(sessionKey: string): void | Promise<void>;
+	/** Open an already-durable fork in a Tern split, or focus it in this client. */
+	openFork?(sessionKey: string): Promise<void>;
 	/** Remember one server-confirmed profile route and open its canonical chat. */
 	openProfile?(profileId: string, sessionKey: string): void | Promise<void>;
 	/** Forget a route after the server deletes that profile. */

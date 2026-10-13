@@ -1,25 +1,20 @@
 /**
  * A streaming assistant reply.
  *
- * Skeleton cribbed from omp's `AssistantMessageComponent`, reduced to what the
- * lemon protocol actually carries: one text stream per run (no thinking blocks,
- * no citations, no inline images). What survives verbatim in spirit is the
- * FinalizableBlock protocol the {@link TranscriptContainer} reads:
- *
- *   - `isTranscriptBlockFinalized()` — false while streaming, so the container
- *     keeps the block inside the repaintable live region;
- *   - `getTranscriptBlockVersion()` — bumped by every mutation, including the
- *     post-finalize ones (a late error line), so the container's committed-row
- *     replay bypass cannot serve stale bytes;
- *   - `getTranscriptBlockSettledRows()` — the rendered *frozen token prefix* of
- *     the streaming markdown, and nothing else. Those rows are byte-provably
- *     final at this width, which is what lets a long reply's scrolled-off head
- *     reach native scrollback mid-stream. Under-declaring only delays a commit;
- *     over-declaring strands stale bytes in terminal history forever.
+ * Stable Markdown source boundaries, rather than physical row offsets, identify
+ * the streamed head eligible for history. Each publication must remain a byte
+ * prefix at every width; pi-tui retires only publications above the live tail.
  */
 
+import {
+	isRowPrefix,
+	type TranscriptStableRow,
+	trimBlankEdges,
+} from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
 import { Text } from "@oh-my-pi/pi-tui/components/text";
+import { col } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { TranscriptMarks, type TranscriptPhase } from "../../terminal/marks.ts";
 import { getTheme } from "../theme/theme.ts";
@@ -45,16 +40,29 @@ export class AssistantMessageComponent extends Container {
 	readonly #clamp = new WidthClamp();
 	readonly #marks = new TranscriptMarks();
 	#phase: TranscriptPhase = "running";
+	#native: NativeNode | undefined;
+	#nativeVersion = -1;
 
 	#text = "";
 	#finalized = false;
 	#transient = true;
 	#version = 0;
+	readonly transcriptBlockMode = "appendOnly";
+	readonly #prefixMarkdown: Markdown;
+	readonly #prefixClamp = new WidthClamp();
+	readonly #prefixMarks = new TranscriptMarks();
+	#stableText = "";
+	#stableEnds: number[] = [];
+	#stableRows: TranscriptStableRow[] = [];
+	#stableRender: { width: number; count: number; rows: readonly string[] } | undefined;
 
 	constructor(text = "") {
 		super();
 		const theme = getTheme();
 		this.#markdown = new Markdown(text, 1, 0, getMarkdownTheme(), {
+			color: (value) => theme.fg("assistantText", value),
+		});
+		this.#prefixMarkdown = new Markdown("", 1, 0, getMarkdownTheme(), {
 			color: (value) => theme.fg("assistantText", value),
 		});
 		// Streaming renders bypass the markdown module LRU and expose a frozen
@@ -108,14 +116,53 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	override describe(): NativeNode {
+		if (this.#nativeVersion !== this.#version || !this.#native) {
+			// These semantic roles are Tern's chat/transcript contract, shared
+			// by Carly's wait/transcript API and native reply navigation.
+			this.#native = col(this.children, { role: "omp.assistant" });
+			this.#nativeVersion = this.#version;
+		}
+		return this.#native;
+	}
+
 	override render(width: number): readonly string[] {
 		// Markdown keeps its horizontal padding at any width, so very narrow
 		// renders would otherwise emit rows wider than requested.
-		return this.#marks.apply(this.#clamp.apply(super.render(width), width), this.#phase);
+		const rows = this.#marks.apply(this.#clamp.apply(super.render(width), width), this.#phase);
+		if (!this.#finalized && this.#transient) {
+			const text = this.#markdown.getLastRenderStableText();
+			if (text.length > this.#stableText.length && text.startsWith(this.#stableText)) {
+				const previous = this.renderTranscriptStableRows(this.#stableEnds.length, width);
+				this.#prefixMarkdown.setText(text);
+				const prefix = trimBlankEdges(
+					this.#prefixMarks.apply(
+						this.#prefixClamp.apply(this.#prefixMarkdown.render(width), width),
+						"running",
+					),
+				);
+				// Keep the final row mutable: finalization can attach OSC 133 D.
+				if (
+					prefix.length > previous.length &&
+					prefix.length < trimBlankEdges(rows).length &&
+					isRowPrefix(previous, prefix) &&
+					isRowPrefix(prefix, trimBlankEdges(rows))
+				) {
+					this.#stableText = text;
+					this.#stableEnds.push(text.length);
+					this.#stableRows.push({ key: `text:${text.length}` });
+					this.#stableRender = { width, count: this.#stableEnds.length, rows: prefix };
+				}
+			}
+		}
+		return rows;
 	}
 
 	override invalidate(): void {
 		this.#clamp.reset();
+		this.#prefixClamp.reset();
+		this.#prefixMarkdown.invalidate();
+		this.#stableRender = undefined;
 		super.invalidate();
 	}
 
@@ -129,13 +176,31 @@ export class AssistantMessageComponent extends Container {
 		return this.#version;
 	}
 
-	getTranscriptBlockSettledRows(): number {
-		// A finalized block commits wholly through the finalized-block path; a
-		// non-transient render exposes no frozen prefix to reason about.
-		if (this.#finalized || !this.#transient) return 0;
-		// The markdown is child 0 with paddingY 0, so its settled row count is
-		// already in this component's raw render coordinates. Anything below it
-		// (the error footer) can only appear after finalize.
-		return this.#marks.settledRows(this.#markdown.getLastRenderSettledRows());
+	getTranscriptStableRows(): readonly TranscriptStableRow[] {
+		return this.#stableRows;
+	}
+
+	renderTranscriptStableRows(count: number, width: number): readonly string[] {
+		const end = this.#stableEnds[Math.min(Math.trunc(count), this.#stableEnds.length) - 1];
+		if (end === undefined) return [];
+		if (this.#stableRender?.width === width && this.#stableRender.count === count) {
+			return this.#stableRender.rows;
+		}
+		this.#prefixMarkdown.setText(this.#stableText.slice(0, end));
+		const rows = trimBlankEdges(
+			this.#prefixMarks.apply(
+				this.#prefixClamp.apply(this.#prefixMarkdown.render(width), width),
+				"running",
+			),
+		);
+		this.#stableRender = { width, count, rows };
+		return rows;
+	}
+
+	resetTranscriptStableRows(): void {
+		this.#stableText = "";
+		this.#stableEnds = [];
+		this.#stableRows = [];
+		this.#stableRender = undefined;
 	}
 }

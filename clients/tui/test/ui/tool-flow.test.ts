@@ -18,6 +18,7 @@ import { accordionSettings } from "../../src/ui/components/accordion.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-tools";
@@ -108,7 +109,7 @@ describe("tool cards in the transcript", () => {
 
 		app.chatContainer.render(100);
 		// Still mutating: nothing below it may commit to native scrollback.
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeDefined();
+		expect(unfinalizedBlocks(app.chatContainer).length).toBeGreaterThan(0);
 	});
 
 	test("the completed result replaces the card body in place", async () => {
@@ -171,7 +172,7 @@ describe("reasoning at the end of a run", () => {
 		await waitFor(
 			() => {
 				app.chatContainer.render(100);
-				return app.chatContainer.getNativeScrollbackLiveRegionStart() === undefined;
+				return unfinalizedBlocks(app.chatContainer).length === 0;
 			},
 			{ what: "the seam to close" },
 		);
@@ -261,7 +262,7 @@ describe("shelf merging", () => {
 		await waitFor(
 			() => {
 				app.chatContainer.render(100);
-				return app.chatContainer.getNativeScrollbackLiveRegionStart() === undefined;
+				return unfinalizedBlocks(app.chatContainer).length === 0;
 			},
 			{ what: "the seam to close" },
 		);
@@ -313,7 +314,7 @@ describe("replayed frames", () => {
 		await waitFor(
 			() => {
 				app.chatContainer.render(100);
-				return app.chatContainer.getNativeScrollbackLiveRegionStart() === undefined;
+				return unfinalizedBlocks(app.chatContainer).length === 0;
 			},
 			{ what: "the seam to close" },
 		);
@@ -330,7 +331,7 @@ describe("replayed frames", () => {
 		expect(transcript(app)).toBe(sealed);
 		expect(transcript(app)).toContain("biome.json");
 		app.chatContainer.render(100);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 });
 

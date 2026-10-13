@@ -20,6 +20,38 @@ defmodule LemonCore.SessionLifecycleTest do
     def history(_session_key, _opts), do: []
   end
 
+  test "history preserves action identity across newest-first tool phases" do
+    suffix = unique_suffix()
+    key = "agent:lifecycle_action_#{suffix}:main"
+    run_id = "run-action-#{suffix}"
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    events =
+      for phase <- [:started, :updated, :completed] do
+        %{
+          __event__: :action_event,
+          action: %{
+            id: "same-action",
+            title: "Inspect source",
+            kind: :tool,
+            detail: %{name: "read"}
+          },
+          phase: phase,
+          ok: phase == :completed
+        }
+      end
+
+    seed_session(key, run_id, "Inspect source", "Finished", events)
+    assert [history] = SessionLifecycle.history(key)
+
+    assert Enum.map(history.tools, &{&1.action_id, &1.phase}) ==
+             [
+               {"same-action", "completed"},
+               {"same-action", "updated"},
+               {"same-action", "started"}
+             ]
+  end
+
   test "lists, filters, pins, archives, and searches metadata plus redacted history" do
     suffix = unique_suffix()
     first = "agent:lifecycle_#{suffix}:web:browser:unknown:first"

@@ -19,13 +19,13 @@
  * The shelf's *shape* changes as it grows: entry one is a full card until entry
  * two arrives, at which point both collapse to single lines. Rewriting rows
  * that already reached native scrollback would strand stale copies in immutable
- * terminal history, so an unsealed shelf reports itself unfinalized **and**
- * pins the live region (`isNativeScrollbackLiveRegionPinned`), keeping every row
- * off the tape until the shape is final. This is the same displaceable-snapshot
- * contract omp's task blocks use; the transcript container's belt-and-braces
- * `sealCommittedSnapshot` pass seals us anyway if a row ever does commit.
+ * terminal history, so an unsealed shelf reports itself unfinalized. The
+ * semantic retirement ledger keeps it and everything following it mutable
+ * until the controller seals the shelf at a transcript barrier.
  */
 
+import { col } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import type { Block, ToolBlock } from "../../store/transcript-model.ts";
 import { type AccordionState, accordionSettings, resolveAccordionState } from "./accordion.ts";
@@ -68,6 +68,8 @@ export class ToolShelfComponent implements Component {
 	#cachedKey = "";
 	#cachedWidth = -1;
 	#cached: readonly string[] = [];
+	#native: NativeNode | undefined;
+	#nativeSize = -1;
 
 	constructor(cardOptions: ToolCardOptions = {}) {
 		// Cards live inside the shelf, not directly under a root child, so their
@@ -157,7 +159,7 @@ export class ToolShelfComponent implements Component {
 
 	/**
 	 * Freeze the shelf as history: no further entries, no animation, rows become
-	 * commit-eligible. Idempotent — the container may call it too.
+	 * commit-eligible. Idempotent.
 	 */
 	seal(): void {
 		if (this.#sealed) return;
@@ -183,23 +185,21 @@ export class ToolShelfComponent implements Component {
 		);
 	}
 
-	isDisplaceableBlock(): boolean {
-		return !this.isTranscriptBlockFinalized();
-	}
 
-	/**
-	 * Keep an unsealed shelf's rows off the tape: they re-shape when the run
-	 * grows, and committed rows are immutable.
-	 */
-	isNativeScrollbackLiveRegionPinned(): boolean {
-		return !this.isTranscriptBlockFinalized();
-	}
 
 	getTranscriptBlockVersion(): number {
 		return this.#version + this.#entryVersions();
 	}
 
 	// -- render --------------------------------------------------------------
+
+	describe(): NativeNode {
+		if (!this.#native || this.#nativeSize !== this.#entries.length) {
+			this.#native = col(this.#entries.slice());
+			this.#nativeSize = this.#entries.length;
+		}
+		return this.#native;
+	}
 
 	render(width: number): readonly string[] {
 		const key = `${this.#version}|${this.#entryVersions()}|${this.#entries.length}`;

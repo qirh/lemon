@@ -209,6 +209,41 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "mcp",
+      summary: "Manage and test named MCP servers",
+      usage:
+        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list|remove NAME|test NAME [options]",
+      subcommands: subcommands(~w(add list remove test)),
+      options: [
+        option(
+          "--global",
+          ["--global"],
+          "Use the global agent MCP file instead of project config"
+        ),
+        option("--cwd PATH", ["--cwd"], "Project root (default: current directory)"),
+        option("--stdio COMMAND", ["--stdio"], "Executable; pass its arguments after --"),
+        option("--http URL", ["--http"], "Streamable HTTP MCP endpoint"),
+        option("--env KEY=VALUE", ["--env"], "Stdio environment entry (repeatable)"),
+        option("--header KEY=VALUE", ["--header"], "HTTP header (repeatable)"),
+        option(
+          "--approval always|never",
+          ["--approval"],
+          "Server approval default (add: always)"
+        ),
+        option(
+          "--tool-approval TOOL=always|never",
+          ["--tool-approval"],
+          "Exact remote tool override (repeatable)"
+        ),
+        option(
+          "--replace",
+          ["--replace"],
+          "Replace a unique existing name, preserving extensions"
+        ),
+        option("--json", ["--json"], "Emit redacted JSON")
+      ]
+    },
+    %{
       name: "secrets",
       summary: "Manage encrypted secrets",
       usage: "lemon secrets <command> [args]",
