@@ -14,6 +14,10 @@ import type { TUI } from "@oh-my-pi/pi-tui/tui";
 
 export const LEMON_KEYBINDINGS = {
 	"lemon.picker.model": { defaultKeys: "ctrl+o", description: "Pick a model" },
+	"lemon.picker.thinking": {
+		defaultKeys: "shift+tab",
+		description: "Pick the session thinking level",
+	},
 	"lemon.sessions.switch": { defaultKeys: "ctrl+x", description: "Switch session" },
 	"lemon.editor.external": { defaultKeys: "ctrl+g", description: "Edit the draft in $EDITOR" },
 	"lemon.transcript.clear": { defaultKeys: "ctrl+l", description: "Clear the transcript" },
@@ -35,6 +39,7 @@ export interface InputControllerOptions {
 	/** True while a picker/switcher owns the keyboard. */
 	hasOverlay: () => boolean;
 	openModelPicker: () => void | Promise<void>;
+	openThinkingPicker?: () => void | Promise<void>;
 	openSessionSwitcher?: () => void | Promise<void>;
 	openExternalEditor?: () => void | Promise<void>;
 	clearTranscript?: () => void;
@@ -74,6 +79,10 @@ export class InputController {
 			if (this.#options.hasOverlay()) return undefined;
 			if (this.#matches(data, "lemon.picker.model")) {
 				void this.#options.openModelPicker();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.picker.thinking")) {
+				void this.#options.openThinkingPicker?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.sessions.switch")) {

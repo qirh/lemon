@@ -21,7 +21,10 @@ import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { getTheme } from "../theme/theme.ts";
 import { getSelectListTheme } from "../theme/tui-adapters.ts";
 
-export interface PickerItem extends SelectItem {}
+export interface PickerItem extends SelectItem {
+	/** Undecorated identifier, when the label includes a current/installed badge. */
+	searchValue?: string;
+}
 
 export interface PickerOptions {
 	title: string;
@@ -32,6 +35,9 @@ export interface PickerOptions {
 	maxVisible?: number;
 	/** Prefilled filter text. */
 	filter?: string;
+	/** Search supplied by a server; the returned rows must not be filtered again. */
+	remoteFilter?: boolean;
+	onFilterChange?: (filter: string) => void;
 	onSelect: (item: PickerItem) => void;
 	onCancel?: () => void;
 	/**
@@ -51,7 +57,7 @@ export interface PickerOptions {
 	 * switcher renders its inline "new session" prompt here; returning undefined
 	 * leaves the row out entirely rather than drawing a blank one.
 	 */
-	detail?: () => string | undefined;
+	detail?: () => string | readonly string[] | undefined;
 }
 
 /**
@@ -61,11 +67,22 @@ export interface PickerOptions {
 export function filterItems(items: readonly PickerItem[], query: string): PickerItem[] {
 	const trimmed = query.trim();
 	if (trimmed.length === 0) return [...items];
-	return fuzzyRank(
+	const exact: PickerItem[] = [];
+	const fuzzy: PickerItem[] = [];
+	const normalized = trimmed.toLowerCase();
+	for (const entry of fuzzyRank(
 		[...items],
 		trimmed,
 		(item) => `${item.label} ${item.value} ${item.description ?? ""}`,
-	).map((entry) => entry.item);
+	)) {
+		const item = entry.item;
+		const match =
+			item.searchValue?.toLowerCase() === normalized ||
+			item.label.toLowerCase() === normalized ||
+			item.value.toLowerCase() === normalized;
+		(match ? exact : fuzzy).push(item);
+	}
+	return exact.concat(fuzzy);
 }
 
 export class PickerOverlay implements Component, MouseRoutable {
@@ -90,7 +107,9 @@ export class PickerOverlay implements Component, MouseRoutable {
 		this.#options = options;
 		this.#filter = options.filter ?? "";
 		this.#maxVisible = options.maxVisible ?? 12;
-		this.#filtered = filterItems(options.items, this.#filter);
+		this.#filtered = options.remoteFilter
+			? options.items
+			: filterItems(options.items, this.#filter);
 		this.#list = this.#buildList();
 	}
 
@@ -114,9 +133,12 @@ export class PickerOverlay implements Component, MouseRoutable {
 	setFilter(filter: string): void {
 		if (filter === this.#filter) return;
 		this.#filter = filter;
-		this.#filtered = filterItems(this.#options.items, filter);
+		this.#filtered = this.#options.remoteFilter
+			? this.#options.items
+			: filterItems(this.#options.items, filter);
 		this.#list = this.#buildList();
 		this.#invalidateCache();
+		this.#options.onFilterChange?.(filter);
 	}
 
 	/** Replace the hint line (a mode change inside one overlay). */
@@ -130,7 +152,7 @@ export class PickerOverlay implements Component, MouseRoutable {
 	setItems(items: PickerItem[], filter = ""): void {
 		this.#options.items = items;
 		this.#filter = filter;
-		this.#filtered = filterItems(items, filter);
+		this.#filtered = this.#options.remoteFilter ? items : filterItems(items, filter);
 		this.#list = this.#buildList();
 		this.#invalidateCache();
 	}
@@ -172,6 +194,14 @@ export class PickerOverlay implements Component, MouseRoutable {
 	}
 
 	handleInput(data: string): void {
+		if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+			const pasted = data.slice(6, -6).replace(/\r\n|\r|\n/g, " ");
+			if (isPrintable(pasted)) {
+				if (!this.#options.onKey?.(pasted)) this.setFilter(this.#filter + pasted);
+				this.#invalidateCache();
+			}
+			return;
+		}
 		// Mouse reports arrive on the same channel as keys; they are never filter
 		// text and must not reach the list's own key handling. The screen row is
 		// the frame-local row because overlays are mounted at the window origin
@@ -245,8 +275,10 @@ export class PickerOverlay implements Component, MouseRoutable {
 
 		const detail = this.#options.detail?.();
 		if (detail !== undefined) {
-			const text = truncateToWidth(detail, inner);
-			line(text, theme.fg("info", text));
+			for (const value of typeof detail === "string" ? [detail] : detail) {
+				const text = truncateToWidth(value, inner);
+				line(text, theme.fg("info", text));
+			}
 		}
 		// Where the list body starts, for pointer hit-testing.
 		this.#listTopRow = rows.length;

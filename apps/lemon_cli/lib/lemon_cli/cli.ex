@@ -129,7 +129,9 @@ defmodule LemonCli.CLI do
     with {:ok, entry} <- CommandRegistry.fetch(command),
          true <- CommandRegistry.available?(entry, CommandRegistry.launcher()) do
       cond do
-        help_requested?(rest) ->
+        help_requested?(
+          if(command == "mcp", do: Enum.take_while(rest, &(&1 != "--")), else: rest)
+        ) ->
           print_command_usage(entry)
           @exit_ok
 
@@ -177,13 +179,13 @@ defmodule LemonCli.CLI do
   defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
   defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
   defp run_command("run", args), do: LemonCli.PrintCommand.run(args)
-
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
   defp run_command("gateway", args), do: run_gateway(args)
   defp run_command("doctor", args), do: doctor(args)
   defp run_command("config", args), do: run_config(args)
   defp run_command("secrets", args), do: run_secrets(args)
+  defp run_command("mcp", args), do: LemonCli.McpCommand.run(args)
   defp run_command("channels", args), do: run_channels(args)
   defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
 
@@ -358,7 +360,16 @@ defmodule LemonCli.CLI do
       true ->
         ensure_apps_started!([:lemon_core])
 
-        report = Doctor.report(Keyword.take(opts, [:project_dir]))
+        external_runtime? =
+          LemonCore.Runtime.Health.running?(LemonCore.Runtime.Env.resolve().control_port,
+            timeout_ms: 500
+          )
+
+        report =
+          opts
+          |> Keyword.take([:project_dir])
+          |> Keyword.put(:external_runtime?, external_runtime?)
+          |> Doctor.report()
 
         if opts[:json] do
           IO.puts(Report.to_json(report))

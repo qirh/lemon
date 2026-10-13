@@ -58,9 +58,41 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  def session_tree(session_key, cwd, opts) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
+          {:ok, CodingAgent.Session.Rewind.tree(session, opts)}
+        end
+
+      pid ->
+        CodingAgent.Session.tree(pid, opts)
+    end
+  end
+
+  def session_rewind(session_key, cwd, entry_id, opts) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd) do
+          :global.trans({{__MODULE__, path}, self()}, fn ->
+            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                 {:ok, result, _session} <-
+                   CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
+              {:ok, result}
+            end
+          end)
+        end
+
+      pid ->
+        CodingAgent.Session.rewind(pid, entry_id, opts)
+    end
+  end
+
   @doc "Fork native history and bind the independent resume token to a new logical session."
   def session_fork(source_key, cwd, destination_key) do
-    with nil <- LemonCore.ChatStateStore.get(destination_key),
+    with :ok <- ensure_idle(source_key),
+         nil <- LemonCore.ChatStateStore.get(destination_key),
          {:ok, source_path} <- native_session_path(source_key, cwd) do
       id = LemonCore.Id.uuid()
       destination_path = CodingAgent.Session.Presentation.session_file_path(id, cwd)
@@ -80,6 +112,16 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   def tool_policy(profile), do: CodingAgent.ToolPolicy.from_profile(profile)
+
+  defp ensure_idle(session_key) do
+    case live_session(session_key) do
+      nil ->
+        :ok
+
+      pid ->
+        if CodingAgent.Session.get_state(pid).is_streaming, do: {:error, :busy}, else: :ok
+    end
+  end
 
   defp native_session_path(session_key, cwd) do
     case LemonCore.ChatStateStore.get(session_key) do

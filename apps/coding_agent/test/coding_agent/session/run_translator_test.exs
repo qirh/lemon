@@ -21,7 +21,10 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     def emit_delta(pid, _text, _meta), do: pid
 
     @impl true
-    def emit_completed(pid, _fields), do: pid
+    def emit_completed(pid, fields) do
+      send(pid, {:completed, fields})
+      pid
+    end
   end
 
   defp translator do
@@ -42,6 +45,19 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     assert_receive {:action_event, %{phase: :started}}
     assert_receive {:action_event, %{phase: :completed, detail: detail}}
     detail
+  end
+
+  test "completion counts actual assistant turns and failed tools" do
+    result = %AgentToolResult{content: [%TextContent{text: "failed"}], details: %{exit_code: 1}}
+
+    translator()
+    |> RunTranslator.handle_event({:turn_start})
+    |> RunTranslator.handle_event({:tool_execution_end, "failed", "bash", result, true})
+    |> RunTranslator.handle_event({:turn_end, nil, []})
+    |> RunTranslator.handle_event({:turn_end, nil, []})
+    |> RunTranslator.handle_event({:agent_end, []})
+
+    assert_receive {:completed, %{usage: %{turns: 2, tool_errors: 1}}}
   end
 
   describe "completed tool actions" do

@@ -106,8 +106,8 @@ attachment policy.
 
 `SessionCoordinator` serializes by conversation key:
 
-- `{:resume, engine, token}` when a structured resume token is available
-- `{:session, session_key}` otherwise
+- `{:resume, engine, token}` for explicit shared resume tokens
+- `{:session, session_key}` for ordinary sessions, including automatic resume
 
 Queue-mode behavior lives here:
 
@@ -122,6 +122,27 @@ When the target runtime registry or lookup process is absent, steering uses the
 same queued fallback. Redirect also queues the correction as a follow-up and
 notifies the channel that it could not redirect the in-flight run. Unexpected
 runtime lookup or notification-dispatch exceptions still propagate.
+
+Conversation backlogs are bounded to 128 queued/pending submissions and 1 MiB
+of pending prompt text. A new submission exceeding either bound returns
+`:session_queue_full` without mutating the queue or interrupting the active run;
+replaying an already retained fixed run ID remains an acknowledgement lookup.
+Gateway admission additionally bounds launch queues and global slot waiters.
+
+Each accepted submission retains a durable terminal receipt even if it never
+starts an executor. A merged followup ends with `error.type: :superseded` and its
+`replacement_run_id`; the replacement executes the merged prompt in order.
+An accepted steer ends with `ok: true`, `meta.disposition: :steered` and its
+`active_run_id`; that active run owns the eventual answer. Queued cancellation
+publishes a failed completion with the cancellation reason. These receipts are
+persisted before terminal notifications, so `agent.wait` also works after the
+event was delivered. Queue counts reflect live coordinator backlogs, not
+submit/start telemetry that can drift after merges or cancellation.
+
+Queued automatic-resume requests resolve their native token again when they
+start, after the prior turn persisted its resume state. They retain the session
+conversation owner while the backlog drains, preventing split queues and fresh
+sessions caused by a token that was unavailable at enqueue time.
 
 Pending compaction is coupled to this submission boundary. Fresh markers remain
 stored while the compacted prompt is prepared and are deleted only after the
