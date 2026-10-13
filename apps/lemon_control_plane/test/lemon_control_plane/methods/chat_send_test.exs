@@ -18,6 +18,13 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     def submit(params), do: {:error, {:rejected, params}}
   end
 
+  defmodule UnknownRouterStub do
+    def submit(params) do
+      send(self(), {:submitted, params})
+      {:error, :outcome_unknown}
+    end
+  end
+
   setup do
     root =
       Path.join(
@@ -162,6 +169,17 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
     assert result == {:error, {:internal_error, "Chat submission failed", nil}}
     refute inspect(result) =~ @png_data
+  end
+
+  test "uncertain mutation acknowledgement retains the fixed run identity" do
+    assert {:error, {:unavailable, "Chat submission outcome is unknown", details}} =
+             ChatSend.handle(params(%{"images" => [image()]}), %{router_mod: UnknownRouterStub})
+
+    assert_receive {:submitted, %{run_id: id}}
+    assert details["code"] == "SUBMISSION_OUTCOME_UNKNOWN"
+    assert details["runId"] == id
+    assert details["retrySafe"] == false
+    refute inspect(details) =~ @png_data
   end
 
   test "JSON image arrays pass the chat request validation boundary" do
