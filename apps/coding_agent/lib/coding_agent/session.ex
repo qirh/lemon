@@ -86,6 +86,8 @@ defmodule CodingAgent.Session do
     :model,
     :thinking_level,
     :system_prompt,
+    :base_system_prompt,
+    :base_tools,
     :prompt_environment,
     :relevant_skill_keys,
     :explicit_system_prompt,
@@ -136,6 +138,8 @@ defmodule CodingAgent.Session do
           model: LemonAi.Types.Model.t(),
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
+          base_system_prompt: String.t(),
+          base_tools: [AgentTool.t()],
           prompt_environment: String.t() | nil,
           relevant_skill_keys: [String.t()],
           explicit_system_prompt: String.t() | nil,
@@ -173,6 +177,7 @@ defmodule CodingAgent.Session do
 
   @type event_handler_callbacks :: %{
           required(:complete_event_streams) => (t(), term() -> :ok),
+          required(:broadcast_event) => (t(), term() -> :ok),
           required(:maybe_trigger_compaction) => (t() -> t()),
           required(:persist_message) => (t(), term() -> t())
         }
@@ -512,6 +517,14 @@ defmodule CodingAgent.Session do
     GenServer.call(session, {:compact, opts}, :infinity)
   end
 
+  @doc "Inspect or explicitly transition the native planning lifecycle."
+  def plan(session, action \\ :status, opts \\ []) do
+    GenServer.call(session, {:plan, action, opts}, :infinity)
+  end
+
+  @doc "Current context usage and the configured automatic-compaction budget."
+  def context_budget(session), do: GenServer.call(session, :context_budget)
+
   @doc """
   Navigate to a different point in the session tree.
 
@@ -628,6 +641,35 @@ defmodule CodingAgent.Session do
 
   @spec handle_call(term(), GenServer.from(), t()) :: {:reply, term(), t()}
   @impl true
+  def handle_call(:context_budget, _from, state) do
+    budget =
+      CodingAgent.Session.ContextBudget.measure(state, LemonAgent.Agent.get_state(state.agent))
+
+    {:reply, {:ok, budget}, state}
+  end
+
+  def handle_call({:plan, action, opts}, _from, state) do
+    if action != :status and (state.is_streaming or state.auto_compaction.in_progress) do
+      {:reply, {:error, :busy}, state}
+    else
+      case CodingAgent.Session.Planning.transition(state.session_manager, action, opts) do
+        {:ok, plan, manager} ->
+          state =
+            if action == :status do
+              state
+            else
+              %{state | session_manager: manager}
+              |> CodingAgent.Session.Planning.refresh()
+            end
+
+          {:reply, {:ok, plan}, state}
+
+        {:error, _} = error ->
+          {:reply, error, state}
+      end
+    end
+  end
+
   def handle_call({:prompt, text, opts}, _from, state) do
     if state.is_streaming do
       {:reply, {:error, :already_streaming}, state}
@@ -1103,8 +1145,6 @@ defmodule CodingAgent.Session do
   def handle_info({:agent_event, {:message_end, _message} = raw_event}, state) do
     event = strip_recalled_context_from_event(raw_event)
     state = handle_agent_event(event, state)
-    # An observed completed message must already be recoverable after SIGKILL.
-    Notifier.broadcast_event(state, event)
     {:noreply, state}
   end
 
@@ -1587,7 +1627,7 @@ defmodule CodingAgent.Session do
            state.prompt_template,
            state.workspace_dir,
            state.session_scope,
-           state.system_prompt,
+           state.base_system_prompt,
            skill_context,
            %{
              run_id: state.run_id,
@@ -1600,11 +1640,11 @@ defmodule CodingAgent.Session do
            }
          ) do
       :unchanged ->
-        state
+        CodingAgent.Session.Planning.refresh(state)
 
       {:changed, next_prompt} ->
-        :ok = LemonAgent.Agent.set_system_prompt(state.agent, next_prompt)
-        %{state | system_prompt: next_prompt}
+        %{state | base_system_prompt: next_prompt}
+        |> CodingAgent.Session.Planning.refresh()
     end
   end
 
@@ -1829,6 +1869,7 @@ defmodule CodingAgent.Session do
   defp event_handler_callbacks do
     %{
       complete_event_streams: &complete_event_streams/2,
+      broadcast_event: &broadcast_event/2,
       maybe_trigger_compaction: &maybe_trigger_compaction/1,
       persist_message: &persist_message/2
     }
@@ -1931,5 +1972,6 @@ defmodule CodingAgent.Session do
         model: model,
         thinking_level: context.thinking_level
     }
+    |> CodingAgent.Session.Planning.refresh()
   end
 end

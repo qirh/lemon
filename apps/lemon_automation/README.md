@@ -164,9 +164,9 @@ agent to use the `kanban` tool:
 Workers lease dependency-unblocked cards and execute with `origin: :kanban`.
 The `kanban` tool is blocked inside workers to prevent recursive dispatch. A
 Git-backed board gets a separate `<repo>/.worktrees/kanban-<task_id>` checkout
-on `lemon-kanban/<task_id>` for each task. Changes stay there for review: they
-are **not** automatically committed or merged into your checkout. Inspect
-`task.meta.kanbanRun.cwd` and `.branch` to find them. Tasks without an assignee
+on `lemon-kanban/<task_id>` for each task. By default, changes stay there for
+manual review and are **not** automatically committed, pushed, or merged.
+Inspect `task.meta.kanbanRun.cwd` and `.branch` to find them. Tasks without an assignee
 use the default agent, not the dispatcher's lease-owner ID.
 
 Before router submission, the exact lease records the fixed `run_id`, session,
@@ -186,6 +186,56 @@ launch a second editor in the same worktree. Restart the dispatcher for a board
 after a runtime restart to resume reconciliation. Hard stop aborts claimed
 router runs once, not just waiter processes. Unknown abort outcomes retain
 their leases for reconciliation and are reported in the stop result's `aborts`.
+
+### Reviewed commits and optional publication
+
+Set `coding_workflow: {}` on `kanban` `board_create` to opt into a coding →
+independent reviewer → local commit workflow. Omit it (or use `false`) to retain
+the coding-only behavior above. This requires an isolated Git worktree and an
+explicitly configured Git author/committer identity; Lemon never invents one.
+
+The registered `reviewer` persona receives the task and exact staged diff in a
+separate, read-only session. `reviewModel` can pin its model. A blocking review
+gets one corrective coding pass; a second rejection or invalid verdict blocks
+the card. Neither an editor's successful run nor manually moving the card to
+`done` bypasses review. Binary/submodule diffs and oversized diffs fail closed.
+The controller commits only the approved tree and refuses changes made after
+review. It does not run commit hooks, merge into your checkout, or push by default.
+
+Publication requires explicit configuration, for example:
+
+```json
+{
+  "action": "board_create",
+  "name": "Reviewed fixes",
+  "workspace": "/absolute/path/to/repo",
+  "coding_workflow": {
+    "publish": {
+      "mode": "pull_request",
+      "remote": "origin",
+      "repository": "owner/repository",
+      "base": "main",
+      "draft": true
+    }
+  }
+}
+```
+
+Use `"mode": "branch"` with `"remote": "origin"` to push only the reviewed
+commit without opening a PR; a local bare Git remote is suitable for testing.
+PR mode requires an installed, authenticated `gh` CLI and pushes the reviewed
+branch before `gh pr create`. No force-push is used. `draft` defaults to true.
+An existing PR is accepted only when its repository/head/base and head commit
+match. Ambiguous push/PR outcomes keep the lease and are reconciled by read-only
+queries: Lemon never retries a possibly successful remote mutation.
+
+`task_get` exposes `meta.codingWorkflow`: phase, coding/review run and session
+IDs, reviewed tree, branch, commit SHA, approval, publication status, and `prUrl`.
+The Work dashboard shows the phase, approval, commit and PR link while keeping
+instructions and review findings private. Stop records cancellation before
+terminating workers; it cannot undo an already-created commit or remote update.
+Restart the board dispatcher after a runtime restart to resume the same
+checkpoint without replaying a completed editor or reviewer.
 Late terminal writes require the original lease ID.
 
 **Heartbeat** (`LemonAutomation.Heartbeat`) is Lemon's one heartbeat

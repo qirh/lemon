@@ -308,8 +308,8 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.Compaction` | Context compaction engine -- finds valid cut points, generates LLM summaries, preserves file context |
 | `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
 | `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
-| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + stable available-skills metadata + memory workflow + runtime metadata) |
-| `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd hierarchy up to root, then home directory; also loads prompts, themes, and skills |
+| `CodingAgent.SystemPrompt` | Builds coding-first, tool-aware working rules, skills and memory guidance, and existing assistant-home context; omitted or empty bootstrap files are not injected |
+| `CodingAgent.ResourceLoader` | Loads global CLAUDE.md/AGENTS.md first, then ancestors root→cwd with directory scope and local precedence; physical-file aliases appear once. Also loads prompts, themes, and skills |
 
 ### Extensions and WASM
 
@@ -560,6 +560,39 @@ seam, binding forked files to independent native resume tokens. Its manual
 compaction adapter accepts `cwd:` and also works for an idle saved session after
 the previous run's process has exited.
 
+### Planning and context budget
+
+`Session.plan/3` and the `sessions.plan` RPC share one branch-aware lifecycle:
+`enter` makes the session read-only; a successful planning turn saves its final
+Markdown response as an immutable review artifact under native session storage.
+The journal records the full proposal, so restart, branch navigation and compaction
+do not lose it. Planning tools are restricted to `read`, `read_skill`, `recall`,
+`grep`, `find` and `ls`, further restricted by the session's existing policy.
+
+Approval is an explicit user operation with the exact reviewed revision. A stale
+revision or edited/missing artifact is rejected. Selecting code mode is not
+approval. Approval restores the original permitted tools and includes the approved
+plan in subsequent model context; it does not itself submit an execution prompt.
+`discard` exits without approval. The TUI exposes `/plan enter`, `/plan`,
+`/plan approve` and `/plan discard`; ACP uses the same native lifecycle.
+Proposals are bounded to 32 KiB. Entering before the first run durably binds the
+native journal to the logical session key, rather than creating parallel client state.
+
+Manual `/compact [focus]` (alias `/compress`) forwards focus instructions and cwd
+to native compaction, including after the previous runtime has exited. Its
+structured handoff preserves exact changed paths, decisions and rationale, open
+work, failing tests/blockers, verification commands/results and still-relevant
+previous-summary facts. Observed results remain distinct from proposed or
+unverified work; transcript/tool instructions are treated as untrusted data.
+
+`Session.context_budget/1` reports current request tokens, model window, reserve,
+automatic-compaction threshold and headroom before that threshold. It shares the
+automatic trigger's estimator, using the latest successful provider usage plus
+newer message estimates—not cumulative run spending. Sources are `usage`,
+`usage+estimate` or `estimate`. Compaction and planning-context changes invalidate
+older usage anchors. A cold read without a valid measured anchor reports
+unavailable rather than omitting unknown system/tool overhead.
+
 ### Tool Execution
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
@@ -667,7 +700,7 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `AGENTS.md` | main + subagent | Project guidelines for AI agents |
+| `AGENTS.md` | main + subagent | Assistant-wide operating guidelines, separate from repository-local rules |
 | `SOUL.md` | main only | Agent personality/identity |
 | `TOOLS.md` | main + subagent | Tool documentation |
 | `IDENTITY.md` | main only | Identity configuration |
@@ -675,6 +708,17 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 | `HEARTBEAT.md` | main only | Checklist the scheduled heartbeat cron job reads (`HEARTBEAT_OK` = nothing to report) |
 | `BOOTSTRAP.md` | main only | Startup instructions |
 | `MEMORY.md` | main only | Persistent memory (optional) |
+
+### Coding Session Context
+
+The default prompt treats Lemon as a coding agent: inspect relevant code before editing, use the tools actually available to the session, preserve user changes, finish the requested behavior, and report only verification that was observed. Behavioral changes call for focused checks and relevant edge cases—not an unrelated full-suite sweep. Read-only requests stay read-only. One-off coding tasks do not require creating skills or saving temporary facts merely to finalize.
+
+Repository instructions load from global home locations first, followed by ancestors from filesystem root to the working directory. Each directory includes its root, `.claude/`, and `.lemon/` `AGENTS.md`/`CLAUDE.md` files. Source headers state the applicable directory scope; deeper instructions override broader guidance. Duplicate symlink or hard-link aliases load once using their most specific location.
+
+At session start, Lemon captures the actual Git worktree root, branch/status, a bounded top-level layout, and descendant instruction-file paths. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
+
+This environment snapshot is appended after the stable prompt and reused across turns to preserve provider caching. It does not update as files or branches change; use tools for fresh state when needed. Assistant-home identity and memory remain separate from repository context, missing/empty bootstrap files are omitted, and subagents still receive only the allowed `AGENTS.md`/`TOOLS.md` workspace files.
+
 
 ## Usage Examples
 

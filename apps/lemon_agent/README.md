@@ -126,6 +126,10 @@ The `{:agent_end, new_messages}` event contains only messages created during the
 
 `LemonAgent.AbortSignal` uses an ETS table with `read_concurrency: true`. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal stays set until this drain finishes. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
 
+Every started or queued tool call receives a paired terminal result before the canceled event. Cooperative tools retain their actual final output, trust and details. If a worker must be terminated without returning a final result, its last observed output snapshot is preserved and the result explicitly states that the mutation outcome is unknown (`details.cancelled: true`, `details.outcome: :unknown`). Calls that never started use `outcome: :not_started`. Cancellation is not evidence that a mutation was rolled back.
+
+Canceled event streams drain already accepted events in FIFO order before their single cancellation terminal. Consumers that attach after cancellation still receive the buffered tool results and original cancellation reason; late producer pushes are rejected.
+
 ### Steering and Follow-up Queues
 
 The Agent GenServer provides two message queues:
@@ -138,6 +142,8 @@ Both queues support two consumption modes: `:one_at_a_time` (default) or `:all`.
 ### Provider Recovery
 
 The loop retries transient provider failures with capped exponential backoff, including failures after partial text or tool-call output. A retry reuses the pre-attempt context, re-resolves credentials, and never executes tools from a failed response. Failed attempts are not committed as assistant messages. The loop emits `{:provider_retry, details}` before each wait and `{:provider_retry_end, details}` on success, exhaustion, or cancellation; clients can show the attempt count and delay without treating a retry as a terminal failure.
+
+Retry decisions and retry-after delays use the provider's structured `AssistantMessage.error_details` when available, not only the user-facing error string. Opaque transport messages can therefore recover without making authentication or quota failures retryable.
 
 Direct agents default to three retries, starting at 2 seconds and capped at 30 seconds (`max_retries`, `retry_base_delay_ms`, `retry_max_delay_ms`). `max_retries: 0` disables retries. Explicit provider retry-after hints are honored up to 120 seconds rather than shortened to the backoff cap. Coding sessions use their existing `[runtime.retry]` settings, with one session-level retry budget rather than stacked retry wrappers.
 
