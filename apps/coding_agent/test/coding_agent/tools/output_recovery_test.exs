@@ -87,10 +87,21 @@ defmodule CodingAgent.Tools.OutputRecoveryTest do
 
     await_exit(id, 100)
     result = BashOutput.execute("output", %{"process_id" => id}, nil, nil, cwd, session_id: owner)
-    assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+    assert %AgentToolResult{content: content, details: details} = result
     assert details.dropped_lines > 0
-    assert text =~ details.full_output_path
-    assert File.read!(details.full_output_path) |> String.starts_with?("first\n")
+    assert Enum.any?(content, &String.contains?(&1.text, details.artifact_uri))
+
+    assert %AgentToolResult{content: [%TextContent{text: recovered}], trust: :untrusted} =
+             CodingAgent.Tools.Read.execute(
+               "recover",
+               %{"path" => details.artifact_uri, "offset" => 1, "limit" => 1},
+               nil,
+               nil,
+               cwd,
+               session_id: owner
+             )
+
+    assert recovered =~ "first"
     ProcessStore.delete(id)
     refute File.exists?(details.full_output_path)
   end
