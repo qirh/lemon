@@ -43,6 +43,7 @@ defmodule LemonGateway.Run do
   @engine_provenance "lemon"
   @max_logged_error_bytes 4_096
   @executor_start_error_banner_bytes 1_024
+  @cancel_drain_timeout_ms 15_000
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
@@ -114,6 +115,8 @@ defmodule LemonGateway.Run do
       last_resume: request.resume,
       current_phase: nil,
       cancelled: false,
+      cancel_reason: nil,
+      cancel_timeout_ref: nil,
       delta_seq: 0,
       start_ts_ms: System.system_time(:millisecond),
       accumulated_text: "",
@@ -371,6 +374,11 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
+    event =
+      if state.cancelled and is_completed(event),
+        do: %{event | ok: false, error: state.cancel_reason},
+        else: event
+
     RunStore.append_event(state.run_id, event)
 
     state =
@@ -485,7 +493,13 @@ defmodule LemonGateway.Run do
     finalize_executor_down(state, reason)
   end
 
+  def handle_info(:cancel_timeout, %{cancelled: true, completed: false} = state) do
+    finalize_cancel(state)
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp finalize_executor_down(%{cancelled: true} = state, _reason), do: finalize_cancel(state)
 
   defp finalize_executor_down(state, reason) do
     completed =
@@ -535,34 +549,36 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
-    if state.completed do
+    if state.completed or state.cancelled do
       {:noreply, state}
     else
-      Logger.warning(
-        "Gateway run cancel run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
-      )
+      state = %{state | cancelled: true, cancel_reason: reason || :user_requested}
 
-      if state.executor do
-        _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
+      if state.executor &&
+           safe_executor_control(state.executor, :cancel, state.control_ctx) == :ok &&
+           is_pid(state.executor_pid) do
+        timer = Process.send_after(self(), :cancel_timeout, @cancel_drain_timeout_ms)
+        {:noreply, %{state | cancel_timeout_ref: timer}}
+      else
+        finalize_cancel(state)
       end
-
-      resume = state.last_resume || state.execution_request.resume
-
-      completed =
-        Event.completed(%{
-          engine: @engine_provenance,
-          resume: resume,
-          ok: false,
-          error: reason,
-          answer: "",
-          run_id: state.run_id,
-          session_key: state.session_key
-        })
-
-      state = %{state | cancelled: true}
-      finalize(state, completed)
-      {:stop, :normal, %{state | completed: true}}
     end
+  end
+
+  defp finalize_cancel(state) do
+    completed =
+      Event.completed(%{
+        engine: @engine_provenance,
+        resume: state.last_resume || state.execution_request.resume,
+        ok: false,
+        error: state.cancel_reason,
+        answer: state.accumulated_text,
+        run_id: state.run_id,
+        session_key: state.session_key
+      })
+
+    finalize(state, completed)
+    {:stop, :normal, %{state | completed: true}}
   end
 
   defp handle_steer(kind, submission_run_id, prompt, worker_pid, state) do
@@ -661,6 +677,8 @@ defmodule LemonGateway.Run do
 
   @impl true
   def terminate(_reason, state) do
+    if state.cancel_timeout_ref, do: Process.cancel_timer(state.cancel_timeout_ref)
+
     if not state.completed and state.executor do
       _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
     end
