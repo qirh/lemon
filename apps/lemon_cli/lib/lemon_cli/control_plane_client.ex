@@ -143,6 +143,8 @@ defmodule LemonCli.ControlPlaneClient do
     :exit, {:noproc, _} -> {:error, :disconnected}
     :exit, {:normal, _} -> {:error, :disconnected}
     :exit, {:timeout, _} -> {:error, :control_plane_timeout}
+    :exit, {_reason, {WebSockex, :call, _args}} -> {:error, :disconnected}
+    :exit, {:remote, _code, _message} -> {:error, :disconnected}
   end
 
   defp receive_frame(ref, timeout_ms) do
