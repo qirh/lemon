@@ -694,9 +694,9 @@ defmodule LemonControlPlane.ACPTest do
         LemonCore.ExecApprovals.request(%{
           run_id: "run_acp_approval",
           session_key: request.session_key,
-          tool: "edit",
-          action: %{"path" => "/tmp/private.txt", "content" => "secret"},
-          rationale: "Tool execution: edit",
+          tool: "bash",
+          action: %{"command" => "printf secret"},
+          rationale: "Tool execution: bash",
           expires_in_ms: 1_000
         })
       end)
@@ -707,7 +707,7 @@ defmodule LemonControlPlane.ACPTest do
                       "params" => %{
                         "sessionId" => ^session_id,
                         "toolCall" => %{
-                          "kind" => "edit",
+                          "kind" => "execute",
                           "status" => "pending"
                         },
                         "options" => options
@@ -731,7 +731,6 @@ defmodule LemonControlPlane.ACPTest do
     assert summary["method"] == "session/request_permission"
     assert summary["outcome"] == "selected"
     assert summary["optionId"] == "allow-once"
-    refute inspect(summary) =~ "/tmp/private.txt"
     refute inspect(summary) =~ "secret"
   end
 
