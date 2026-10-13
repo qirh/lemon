@@ -83,6 +83,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- The agent `cron` tool moved from `lemon_gateway` to `lemon_automation`, which
+  registers it with `LemonAgent.ToolRegistry` at boot; the gateway no longer
+  references automation. The tool's name, schema and results are unchanged. As
+  with every registered tool it is now subject to session tool policy and
+  approval (so cron-run prompt sessions, which block `cron`, no longer see it).
 - Source and packaged launchers now share command dispatch, help, completion,
   and lifecycle semantics. Running `lemon` in a terminal opens the TUI;
   `lemon start` starts the foreground runtime. Non-interactive

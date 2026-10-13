@@ -1,7 +1,7 @@
-defmodule LemonGateway.Tools.CronTest do
+defmodule LemonAutomation.Tools.CronTest do
   use ExUnit.Case, async: false
 
-  alias LemonGateway.Tools.Cron
+  alias LemonAutomation.Tools.Cron
 
   defmodule AbortRouter do
     def abort_run(_id, _reason), do: :ok
@@ -157,6 +157,28 @@ defmodule LemonGateway.Tools.CronTest do
 
     assert %{error: true} = result.details
     assert LemonAgent.get_text(result) =~ "Unknown action"
+  end
+
+  test "the application registers the tool with the agent tool registry" do
+    assert {:cron, Cron} in LemonAgent.ToolRegistry.all()
+
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+    assert tool.name == "cron"
+    assert tool.parameters["required"] == ["action"]
+  end
+
+  test "returns an unavailable error while the scheduler is not running" do
+    :ok = Supervisor.terminate_child(LemonAutomation.Supervisor, LemonAutomation.CronManager)
+
+    on_exit(fn ->
+      Supervisor.restart_child(LemonAutomation.Supervisor, LemonAutomation.CronManager)
+    end)
+
+    tool = Cron.tool(".", session_key: LemonCore.SessionKey.main("default"))
+    result = call_tool(tool, %{"action" => "list"})
+
+    assert %{error: true} = result.details
+    assert LemonAgent.get_text(result) =~ "Cron scheduler is unavailable"
   end
 
   test "a job added from a non-Lemon session id (TUI) targets the agent main session" do

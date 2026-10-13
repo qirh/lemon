@@ -1,4 +1,4 @@
-defmodule LemonGateway.Tools.Cron do
+defmodule LemonAutomation.Tools.Cron do
   @moduledoc """
   LemonAgent tool for managing Lemon internal cron/scheduled jobs.
 
@@ -9,10 +9,21 @@ defmodule LemonGateway.Tools.Cron do
   Results are delivered to the originating Telegram/Discord chat or, for jobs
   created from any other session (TUI, web, CLI), to the paired owner chat.
   `deliverTo` overrides the target; `deliverTo: "none"` opts out.
+
+  ## Registration
+
+  `LemonAutomation.Application` registers this module under `:cron` with
+  `LemonAgent.ToolRegistry` once the cron scheduler is up, so the coding agent
+  offers it to every session without the platform naming this app. Like any
+  registered tool it goes through the session's tool policy and approval
+  wrapping. `tool/2` reads `:session_key` and `:agent_id` from the session's
+  tool options; calls return an error result, never raise, while
+  `LemonAutomation.CronManager` is not running.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias LemonAutomation.{CronJob, CronManager, CronMemory}
 
   @actions ~w(status list add update pause resume abort remove run runs)
   @default_timeout_ms 300_000
@@ -536,49 +547,22 @@ defmodule LemonGateway.Tools.Cron do
   end
 
   defp ensure_scheduler_started do
-    manager = cron_manager()
-
-    cond do
-      is_pid(Process.whereis(manager)) ->
-        :ok
-
-      true ->
-        case LemonGateway.DependencyManager.ensure_app(:lemon_automation) do
-          :ok ->
-            if is_pid(Process.whereis(manager)) do
-              :ok
-            else
-              {:error, "Cron scheduler is unavailable (LemonAutomation.CronManager not started)."}
-            end
-
-          {:error, reason} ->
-            {:error, "Failed to start lemon_automation: #{inspect(reason)}"}
-        end
+    if is_pid(Process.whereis(CronManager)) do
+      :ok
+    else
+      {:error, "Cron scheduler is unavailable (LemonAutomation.CronManager not started)."}
     end
-  rescue
-    e ->
-      {:error, "Failed to start cron scheduler: #{Exception.message(e)}"}
   end
 
   defp cron_call(function, args) do
-    manager = cron_manager()
+    {:ok, apply(CronManager, function, args)}
+  catch
+    :exit, {:noproc, _} ->
+      {:error, "Cron scheduler is not running."}
 
-    if LemonGateway.DependencyManager.exports?(manager, function, length(args)) do
-      try do
-        {:ok, apply(manager, function, args)}
-      catch
-        :exit, {:noproc, _} ->
-          {:error, "Cron scheduler is not running."}
-
-        :exit, reason ->
-          {:error, "Cron scheduler call failed: #{inspect(reason)}"}
-      end
-    else
-      {:error, "Cron scheduler is unavailable."}
-    end
+    :exit, reason ->
+      {:error, "Cron scheduler call failed: #{inspect(reason)}"}
   end
-
-  defp cron_manager, do: Module.concat([LemonAutomation, CronManager])
 
   defp require_job_id(params) do
     case resolve_job_id(params) do
@@ -837,19 +821,8 @@ defmodule LemonGateway.Tools.Cron do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp resolved_memory_file(job) do
-    memory_mod = Module.concat([LemonAutomation, CronMemory])
-
-    cond do
-      Code.ensure_loaded?(memory_mod) and function_exported?(memory_mod, :memory_file, 1) ->
-        memory_mod.memory_file(job)
-
-      true ->
-        Map.get(job, :memory_file)
-    end
-  rescue
-    _ -> Map.get(job, :memory_file)
-  end
+  defp resolved_memory_file(%CronJob{} = job), do: CronMemory.memory_file(job)
+  defp resolved_memory_file(job), do: Map.get(job, :memory_file)
 
   defp truthy?(value), do: value not in [false, nil]
 end

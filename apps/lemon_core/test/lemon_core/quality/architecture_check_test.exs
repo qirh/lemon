@@ -93,7 +93,7 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
       refute :lemon_gateway in current.lemon_control_plane
 
       assert current.lemon_gateway == [:lemon_agent, :lemon_core]
-      assert exceptions.lemon_gateway == [:lemon_ai, :lemon_automation]
+      assert exceptions.lemon_gateway == [:lemon_ai]
       refute :lemon_gateway in current.lemon_platform_test
 
       assert target.lemon_ai == []
@@ -198,7 +198,6 @@ defmodule LemonCore.Quality.ArchitectureCheckTest do
           alias LemonAi.Types.TextContent
 
           def content(text), do: %TextContent{text: text}
-          def cron_manager, do: Module.concat([LemonAutomation, CronManager])
         end
         """,
         [:lemon_agent, :lemon_core]

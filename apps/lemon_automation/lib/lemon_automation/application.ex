@@ -20,7 +20,19 @@ defmodule LemonAutomation.Application do
         ]
 
     opts = [strategy: :one_for_one, name: LemonAutomation.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    with {:ok, pid} <- Supervisor.start_link(children, opts) do
+      register_tools()
+      {:ok, pid}
+    end
+  end
+
+  # The cron tool is contributed to the platform's runtime tool registry rather
+  # than named by the gateway or coding agent, so builds without this app never
+  # offer it. `LemonAgent.ToolRegistry` is a dependency of this app, so no
+  # presence guard is needed.
+  defp register_tools do
+    LemonAgent.ToolRegistry.register(:cron, LemonAutomation.Tools.Cron)
   end
 
   # Reconcile the opt-in `[automation] daily_brief` job once CronManager is up.
