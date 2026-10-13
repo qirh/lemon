@@ -46,6 +46,11 @@ export interface ToolBlock extends BlockBase {
 	title: string;
 	detail: Record<string, unknown> | undefined;
 	phase: ToolPhase;
+	/**
+	 * Client-observed terminal time, frozen when a live block completes.
+	 * Absent for receipts with no observed start; `at` alone is not a duration.
+	 */
+	completedAt?: number;
 	ok: boolean | undefined;
 	message: string | undefined;
 }

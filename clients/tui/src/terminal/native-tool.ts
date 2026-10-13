@@ -17,7 +17,7 @@ export function nativeTool(
 	block: ToolBlock,
 	view: ToolView,
 	collapsed: boolean,
-	elapsed: number,
+	elapsed: number | undefined,
 ): NativeNode {
 	const args = toolArgs(block);
 	const command = typeof args.command === "string" ? args.command : undefined;
@@ -47,7 +47,11 @@ export function nativeTool(
 			href: path ? fileTarget(path) : undefined,
 			meta: view.summary ? [view.summary] : undefined,
 			status: STATUS[view.state],
-			...(block.phase === "completed" ? { took: elapsed } : { age: elapsed }),
+			...(elapsed === undefined
+				? {}
+				: block.phase === "completed"
+					? { took: elapsed }
+					: { age: elapsed }),
 			collapsible: body.length > 0,
 			collapsed,
 			frame: "inline",

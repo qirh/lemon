@@ -472,7 +472,7 @@ export function fixturePhases(fixture: ToolFixture, state: ToolCardState): Fixtu
 export function fixtureBlock(
 	fixture: ToolFixture,
 	state: ToolCardState,
-	options: { at?: number; runId?: string } = {},
+	options: { at?: number; completedAt?: number; runId?: string } = {},
 ): ToolBlock {
 	const session = new SessionStore("gallery");
 	const runId = options.runId ?? "run-gallery";
@@ -491,8 +491,15 @@ export function fixtureBlock(
 		});
 	}
 	if (!block) throw new Error(`fixture ${fixture.name} produced no block`);
-	// A deterministic start time keeps the gallery's elapsed readings stable.
-	if (options.at !== undefined) block.at = options.at;
+	// A deterministic clock override must replace both endpoints, not combine
+	// a fixture start with the real clock used while replaying its phases.
+	if (options.at !== undefined) {
+		block.at = options.at;
+		block.completedAt = undefined;
+	}
+	if (block.phase === "completed" && options.completedAt !== undefined) {
+		block.completedAt = options.completedAt;
+	}
 	return block;
 }
 

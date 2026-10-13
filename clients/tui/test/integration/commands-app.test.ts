@@ -14,6 +14,7 @@ import { MemoryTerminal, renderPlain, stripAnsi } from "../helpers/memory-termin
 import { waitFor } from "../helpers/wait.ts";
 
 const CTRL_O = "\x0f";
+const CTRL_P = "\x10";
 
 const teardown: Array<() => void> = [];
 
@@ -94,7 +95,9 @@ describe("slash commands in the app", () => {
 	test("/model applies to the session and shows in the status bar", async () => {
 		const { app, server } = await bootApp();
 		await app.submit("/model gpt-4o");
-		expect(server.requestsFor("sessions.patch")[0].params).toMatchObject({ model: "gpt-4o" });
+		expect(server.requestsFor("sessions.patch")[0].params).toMatchObject({
+			model: "openai:gpt-4o",
+		});
 		expect(stripAnsi(app.statusBar.render(120)[0])).toContain("gpt-4o");
 	});
 
@@ -132,11 +135,95 @@ describe("slash commands in the app", () => {
 			prompt: "inspect the workspace",
 			sessionKey: "durable-tui-session",
 			cwd: process.cwd(),
-			model: "gpt-4o",
+			model: "openai:gpt-4o",
 			thinkingLevel: "high",
 		});
 		expect(chatText(app)).toContain(id);
 		expect(chatText(app)).toContain("Background work finished.");
+	});
+});
+
+describe("typed slash input and command discovery", () => {
+	test.each(["quit", "exit"])("/%s exits with the first Enter", async (name) => {
+		const { app, terminal, exits, server } = await bootApp();
+		terminal.sendInput("/");
+		expect(app.selectors.isOpen).toBe(true);
+		// MemoryTerminal delivers parsed keys, not the raw PTY byte stream.
+		for (const key of `${name}\r`) terminal.sendInput(key);
+		expect(exits).toEqual([0]);
+		expect(app.selectors.isOpen).toBe(false);
+		expect(app.editor.getText()).toBe("");
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test("command arguments transfer to the editor and submit only on Enter", async () => {
+		const { app, terminal, server } = await bootApp();
+		for (const key of "/model") terminal.sendInput(key);
+		expect(app.selectors.isOpen).toBe(true);
+		terminal.sendInput(" gpt-4");
+		expect(app.selectors.isOpen).toBe(false);
+		expect(app.tui.getFocused()).toBe(app.editor);
+		expect(app.editor.getText()).toBe("/model gpt-4");
+		terminal.sendInput("o");
+		expect(app.editor.getText()).toBe("/model gpt-4o");
+		expect(server.requestsFor("sessions.patch")).toHaveLength(0);
+		terminal.sendInput("\r");
+		await waitFor(() => stripAnsi(app.statusBar.render(120)[0]).includes("gpt-4o"), {
+			what: "the model typed through slash input",
+		});
+		expect(server.requestsFor("sessions.patch")[0].params).toMatchObject({
+			model: "openai:gpt-4o",
+		});
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test.each([
+		["qui", "quit"],
+		["quit", "quit"],
+		["rese", "reset"],
+		["reset", "reset"],
+	])("Ctrl+P query %s only inserts /%s and retains the draft", async (query, name) => {
+		const { app, terminal, exits, server } = await bootApp();
+		app.editor.setText("unfinished\n  draft");
+		terminal.sendInput(CTRL_P);
+		terminal.sendInput(query);
+		terminal.sendInput("\r");
+		expect(app.selectors.isOpen).toBe(false);
+		expect(app.editor.getText()).toBe(`/${name} unfinished\n  draft`);
+		expect(exits).toEqual([]);
+		expect(server.requestsFor("sessions.reset")).toHaveLength(0);
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+	});
+
+	test("Escape retains the typed slash query but Ctrl+P preserves the original draft", async () => {
+		const { app, terminal, exits } = await bootApp();
+		for (const key of "/qui") terminal.sendInput(key);
+		terminal.sendInput("\x1b");
+		expect(app.selectors.isOpen).toBe(false);
+		expect(app.editor.getText()).toBe("/qui");
+		terminal.sendInput(CTRL_P);
+		terminal.sendInput("t");
+		terminal.sendInput("\x1b");
+		expect(app.editor.getText()).toBe("/qui");
+		expect(exits).toEqual([]);
+	});
+
+	test("a slash inside an existing draft stays ordinary editor input", async () => {
+		const { app, terminal } = await bootApp();
+		app.editor.handleInput("unfinished");
+		terminal.sendInput("/");
+		expect(app.selectors.isOpen).toBe(false);
+		expect(app.editor.getText()).toBe("unfinished/");
+	});
+
+	test("/palette keeps its explicit query in safe discovery mode", async () => {
+		const { app, terminal, exits } = await bootApp();
+		await app.submit("/palette quit");
+		expect(app.selectors.isOpen).toBe(true);
+		terminal.sendInput("\r");
+		expect(app.selectors.isOpen).toBe(false);
+		expect(app.editor.getText()).toBe("/quit ");
+		expect(exits).toEqual([]);
 	});
 });
 

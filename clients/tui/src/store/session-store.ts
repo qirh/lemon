@@ -334,6 +334,12 @@ export class SessionStore {
 			// not just the phase — a `started` frame carries the pre-result detail,
 			// so merging it would erase the result from an already-sealed card.
 			if (existing.phase === "completed" && phase !== "completed") return existing;
+			// Time belongs to the session, not a mounted card. Only an observed
+			// live → terminal transition supplies both endpoints; a receipt first
+			// seen already completed has unknown duration, even when replayed.
+			if (existing.phase !== "completed" && phase === "completed") {
+				existing.completedAt = Date.now();
+			}
 			existing.phase = phase;
 			existing.title = toolTitle(action) || existing.title;
 			if (detail !== undefined) existing.detail = detail;

@@ -1,0 +1,134 @@
+diff --git a/node_modules/@oh-my-pi/pi-tui/.bun-tag-a30b6e59e9e4f660 b/.bun-tag-a30b6e59e9e4f660
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/src/render/render-utils.ts b/src/render/render-utils.ts
+index c47b39ef83bee9fed3b37a9fa1e7242b4af55757..dcb99b1839616e391c89a71a40dc27e8f7fa4c46 100644
+--- a/src/render/render-utils.ts
++++ b/src/render/render-utils.ts
+@@ -7,7 +7,7 @@
+ 
+ import * as os from "node:os";
+ import * as path from "node:path";
+-import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
++import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
+ import type { Ellipsis } from "@oh-my-pi/pi-natives";
+ import { expandWindowsLongPath, getWindowsShortPath } from "@oh-my-pi/pi-natives/path";
+ import { pluralize, sanitizeText } from "@oh-my-pi/pi-utils";
+diff --git a/src/terminal.ts b/src/terminal.ts
+index db01987077f917f92e247b2da754b508cffcf1c6..3b8b633ec6c9bd9da06981fca3f9b5aa749b21ee 100644
+--- a/src/terminal.ts
++++ b/src/terminal.ts
+@@ -295,8 +295,8 @@ export class StdoutStallWatchdog {
+  * Minimal terminal interface for TUI
+  */
+ 
+-// Track if a terminal was ever started (for emergency restore logic)
+-let terminalEverStarted = false;
++// Remains armed until the terminal's raw mode and escape modes have been restored.
++let terminalNeedsRestore = false;
+ // Whether the alternate screen buffer is currently active (mirrors the TUI's
+ // overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
+ // 1049 must never be written blindly, because Windows' shared VT dispatcher
+@@ -325,6 +325,38 @@ const ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200;
+ /** UTF-8 codepage id for SetConsoleCP/SetConsoleOutputCP. */
+ const CP_UTF8 = 65001;
+ 
++function openTermiosLibrary() {
++	return dlopen(process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
++		tcgetattr: { args: [FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
++		tcsetattr: { args: [FFIType.i32, FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
++		cfmakeraw: { args: [FFIType.ptr], returns: FFIType.void },
++	});
++}
++
++let termiosLibrary: ReturnType<typeof openTermiosLibrary> | undefined;
++
++/** Bun restores with TCSADRAIN, which can wait forever on a paused PTY reader. */
++function enterImmediateRawInput(fd: number): (() => void) | undefined {
++	if (process.platform !== "darwin" && process.platform !== "linux") return undefined;
++	const library = termiosLibrary ??= openTermiosLibrary();
++	// Opaque libc termios storage on supported Darwin/glibc targets; libc owns the layout.
++	const state = new Uint8Array(process.platform === "darwin" ? 72 : 60);
++	if (library.symbols.tcgetattr(fd, ptr(state)) !== 0) {
++		throw new Error("Could not capture terminal input mode");
++	}
++	const raw = new Uint8Array(state);
++	library.symbols.cfmakeraw(ptr(raw));
++	if (library.symbols.tcsetattr(fd, 0, ptr(raw)) !== 0) {
++		throw new Error("Could not enter terminal raw mode");
++	}
++	return () => {
++		// TCSANOW restores the complete saved mode without waiting for output to drain.
++		if (library.symbols.tcsetattr(fd, 0, ptr(state)) !== 0) {
++			throw new Error("Could not restore terminal input mode");
++		}
++	};
++}
++
+ /**
+  * Lazily-initialized closure re-asserting the UTF-8 console codepage, or
+  * `null` when unavailable (non-win32, FFI failure, console detached).
+@@ -414,9 +446,9 @@ export function emergencyTerminalRestore(): void {
+ 				terminal.write(`${keyboardExit}\x1b[?1049l`);
+ 				altScreenActive = false;
+ 			}
+-			terminal.stop();
+ 			terminal.showCursor(true);
+-		} else if (terminalEverStarted && !isTerminalHeadless()) {
++			terminal.stop();
++		} else if (terminalNeedsRestore && !isTerminalHeadless()) {
+ 			// Blind restore only if we know a terminal was started but lost track of it
+ 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
+ 			process.stdout.write(
+@@ -776,6 +808,7 @@ export interface ProcessTerminalOptions {
+  */
+ export class ProcessTerminal implements Terminal {
+ 	#wasRaw = false;
++	#restoreInputMode: (() => void) | undefined;
+ 	#inputHandler?: (data: string) => void;
+ 	#resizeHandler?: () => void;
+ 	/** True between a `deferInput` start() and enableInput(). */
+@@ -1048,7 +1081,7 @@ export class ProcessTerminal implements Terminal {
+ 		// Own stdout: out-of-band writers route through this terminal, and the
+ 		// emergency restore finds it on crash.
+ 		setActiveTerminal(this);
+-		terminalEverStarted = true;
++		terminalNeedsRestore = true;
+ 		// Own the blocking write(2) on a pump thread (unix TTYs only). A stale
+ 		// prebuilt natives module without the export falls back to direct writes.
+ 		// Test suites spy on `process.stdout.write` with a faked isTTY, so the
+@@ -1114,7 +1147,9 @@ export class ProcessTerminal implements Terminal {
+ 		this.#wasRaw = process.stdin.isRaw || false;
+ 		if (process.stdin.setRawMode) {
+ 			try {
+-				process.stdin.setRawMode(true);
++				this.#restoreInputMode = enterImmediateRawInput(process.stdin.fd);
++				if (this.#restoreInputMode) process.stdin.isRaw = true;
++				else process.stdin.setRawMode(true);
+ 			} catch (err) {
+ 				this.#markTerminalDisconnected("stdin raw mode setup failed", err);
+ 				return;
+@@ -2365,7 +2400,14 @@ export class ProcessTerminal implements Terminal {
+ 		// live terminal the failure still surfaces - swallowing it would silently
+ 		// leave stdin in raw mode.
+ 		try {
+-			process.stdin.setRawMode?.(this.#wasRaw);
++			const restore = this.#restoreInputMode;
++			this.#restoreInputMode = undefined;
++			if (restore) {
++				restore();
++				process.stdin.isRaw = this.#wasRaw;
++			} else if ((process.stdin.isRaw || false) !== this.#wasRaw) {
++				process.stdin.setRawMode?.(this.#wasRaw);
++			}
+ 		} catch (err) {
+ 			if (!this.#dead) throw err;
+ 		}
+@@ -2374,6 +2416,7 @@ export class ProcessTerminal implements Terminal {
+ 		// After stop() the terminal is shared with other writers; visibility
+ 		// tracking is only meaningful while this instance owns the TTY.
+ 		this.#cursorVisible = undefined;
++		terminalNeedsRestore = false;
+ 	}
+ 
+ 	#ensureStdoutErrorHandler(): void {

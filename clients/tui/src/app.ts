@@ -25,11 +25,13 @@
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
+import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
+import { newSessionKey } from "./session-key.ts";
 import {
 	ComposerDrafts,
 	type ComposerSubmission,
@@ -82,7 +84,7 @@ export interface AppShellOptions {
 	url: string;
 	/** Shared control-plane operator credential. Never displayed or logged. */
 	operatorToken?: string;
-	/** Session to talk to. Defaults to a fresh `tui-<timestamp>` key. */
+	/** Session to talk to. Defaults to a fresh canonical TUI channel-peer key. */
 	sessionKey?: string;
 	version?: string;
 	/** Injection points for tests. */
@@ -102,10 +104,6 @@ export interface AppShellOptions {
 	 * terminal's OSC 11 reports for as long as the client runs.
 	 */
 	themePreference?: ThemePreference;
-}
-
-export function defaultSessionKey(now: Date = new Date()): string {
-	return `tui-${now.toISOString().replace(/[-:.]/g, "").slice(0, 15)}`;
 }
 
 export class AppShell {
@@ -153,6 +151,7 @@ export class AppShell {
 	readonly #terminalIntegration: TerminalIntegration;
 
 	#disposers: Array<() => void> = [];
+	#unregisterTerminalCleanup: (() => void) | undefined;
 	readonly #drainingSessions = new Set<string>();
 	#started = false;
 	#sessionReady = false;
@@ -178,7 +177,7 @@ export class AppShell {
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
-		this.store = new AppStore(options.sessionKey ?? defaultSessionKey());
+		this.store = new AppStore(options.sessionKey ?? newSessionKey());
 		this.#terminalIntegration = new TerminalIntegration(
 			this.tui.terminal,
 			this.store,
@@ -342,7 +341,7 @@ export class AppShell {
 			focusQueue: () => this.focusQueue(),
 			toggleLatest: () => this.events.toggleLatestBlock(),
 			cycleDetail: () => this.events.cycleAccordionOverride(),
-			openCommandPalette: () => this.#palette.open(),
+			openCommandPalette: (mode) => this.#palette.open(undefined, mode),
 			isComposerEmpty: () => this.#editor.getText().length === 0,
 			toggleTaskTree: () => this.#toggleTaskTree(),
 			toggleToolOutputs: () => {
@@ -443,6 +442,7 @@ export class AppShell {
 			() => this.#toolInspector.close(),
 		);
 		this.tui.start();
+		this.#registerTerminalCleanup();
 		this.#terminalIntegration.start();
 		// After tui.start(), so the terminal is listening when pi-tui's OSC 11
 		// query comes back with the background color.
@@ -461,12 +461,21 @@ export class AppShell {
 	}
 
 	stop(): void {
+		this.#unregisterTerminalCleanup?.();
+		this.#unregisterTerminalCleanup = undefined;
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.events.dispose();
 		this.client.close();
 		this.#terminalIntegration.stop();
 		if (this.#started) this.tui.stop();
 		this.#started = false;
+	}
+
+	#registerTerminalCleanup(): void {
+		// Reverse-order signal cleanup must stop app writers before pi-tui's output pump,
+		// including after an external editor has registered a new pi-tui cleanup.
+		this.#unregisterTerminalCleanup?.();
+		this.#unregisterTerminalCleanup = postmortem.register("lemon-tui", () => this.stop());
 	}
 
 	// -- ui -----------------------------------------------------------------
@@ -788,6 +797,7 @@ export class AppShell {
 					},
 					start: () => {
 						this.tui.start();
+						this.#registerTerminalCleanup();
 						this.#terminalIntegration.resume();
 					},
 				},
