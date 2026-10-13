@@ -45,6 +45,7 @@ export class ReasoningComponent implements Component {
 		this.#nativeBody = new Markdown("", 2, 0, getMarkdownTheme(), {
 			color: (text) => getTheme().fg("dim", text),
 		});
+		this.#nativeBody.transientRenderCache = true;
 		this.#accordion = new AccordionComponent(
 			options.accordion ?? resolveAccordionState("reasoning"),
 			{ indent: 2, wrap: true, moreHint: (hidden) => `+${hidden} more lines` },
@@ -67,6 +68,7 @@ export class ReasoningComponent implements Component {
 		if (block.text === this.#text && live === this.#live) return;
 		this.#text = block.text;
 		this.#live = live;
+		this.#nativeBody.transientRenderCache = live;
 		this.#applyText();
 	}
 

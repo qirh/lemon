@@ -93,7 +93,10 @@ describe("authoritative cancellation", () => {
 		},
 	);
 
-	test("preserves real failures instead of treating every failed run as cancellation", async () => {
+	test.each([
+		"Provider unavailable",
+		{ code: "provider_failure", message: "Provider unavailable" },
+	])("preserves real failure receipts instead of treating them as cancellation", async (error) => {
 		const { app, server } = await boot();
 		server.pushEvent("agent", {
 			type: "completed",
@@ -101,12 +104,13 @@ describe("authoritative cancellation", () => {
 			sessionKey: SESSION,
 			ok: false,
 			cancelled: false,
-			error: "Provider unavailable",
+			error,
 			answer: "",
 		});
 		await waitFor(() => app.store.focused.assistantFor("failed")?.status === "error");
 		expect(transcript(app)).toContain("Provider unavailable");
 		expect(transcript(app)).not.toContain("[interrupted]");
+		expect(transcript(app)).not.toContain("[object Object]");
 	});
 });
 
