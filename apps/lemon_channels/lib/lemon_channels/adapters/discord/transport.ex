@@ -16,7 +16,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     ModelPolicyAdapter,
     Outbound,
     SlashCommands,
-    StatusRenderer,
     TriggerMode
   }
 
@@ -32,7 +31,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonCore.{
     ChatStateStore,
     Event,
-    Events,
     InboundMessage,
     ProjectBindingStore,
     ResumeToken,
@@ -272,7 +270,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   # Approval requests
   def handle_info(%LemonCore.Event{type: :approval_requested, payload: payload}, state) do
-    _ = spawn(fn -> maybe_send_approval_request(state, payload) end)
+    _ = LemonChannels.Adapters.Discord.Approval.send(state, payload)
     {:noreply, state}
   end
 
@@ -777,26 +775,34 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp handle_component_interaction(interaction, state) do
     custom_id = interaction |> map_get(:data) |> map_get(:custom_id)
+    custom_id = if is_binary(custom_id), do: custom_id, else: ""
     values = interaction |> map_get(:data) |> map_get(:values) || []
 
     cond do
-      String.starts_with?(custom_id || "", @cancel_callback_prefix <> ":") ->
+      String.starts_with?(custom_id, @cancel_callback_prefix <> ":") ->
         handle_cancel_component(interaction, custom_id)
         state
 
-      String.starts_with?(custom_id || "", @idle_keepalive_continue_prefix) ->
+      String.starts_with?(custom_id, @idle_keepalive_continue_prefix) ->
         handle_keepalive_component(interaction, custom_id, :continue)
         state
 
-      String.starts_with?(custom_id || "", @idle_keepalive_stop_prefix) ->
+      String.starts_with?(custom_id, @idle_keepalive_stop_prefix) ->
         handle_keepalive_component(interaction, custom_id, :cancel)
         state
 
-      String.starts_with?(custom_id || "", @model_callback_prefix) ->
+      String.starts_with?(custom_id, @model_callback_prefix) ->
         handle_model_component(interaction, state, custom_id, values)
 
       true ->
-        handle_approval_component(interaction, custom_id)
+        case LemonChannels.Adapters.Discord.Approval.handle(state, interaction) do
+          :ok ->
+            acknowledge_interaction(interaction)
+
+          _ ->
+            respond_ephemeral(interaction, "Approval rejected or unavailable; request unchanged")
+        end
+
         state
     end
   end
@@ -1542,7 +1548,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         author: agent_id,
         worker_id: agent_id,
         workspace: BindingResolver.resolve_cwd(scope),
-        meta: %{transport: "discord"}
+        meta: %{
+          "notificationSessionKey" => interaction_session_key(interaction, state),
+          transport: "discord"
+        }
       )
     )
 
@@ -2052,104 +2061,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
        do: author_id == bot_id
 
   defp reply_to_bot?(_inbound, _state), do: false
-
-  # ============================================================================
-  # Approval Handling
-  # ============================================================================
-
-  # `:approval_requested` payloads are `Events.ApprovalRequested` structs carrying an
-  # `Events.ApprovalPending`; a legacy map is coerced into that pair so the whole record is
-  # read by field. A payload that will not coerce drops out of the `with` as a no-op.
-  defp maybe_send_approval_request(state, payload) when is_map(payload) do
-    with %Events.ApprovalRequested{approval_id: approval_id, pending: pending} <-
-           Events.coerce(:approval_requested, payload),
-         %Events.ApprovalPending{session_key: session_key, tool: tool, action: action} <-
-           pending,
-         true <- is_binary(approval_id) and is_binary(session_key),
-         %{
-           kind: :channel_peer,
-           channel_id: "discord",
-           account_id: account_id,
-           peer_id: peer_id,
-           thread_id: _thread_id
-         } <-
-           SessionKey.parse(session_key),
-         true <- is_nil(account_id) or account_id == state.account_id,
-         channel_id when is_integer(channel_id) <- parse_id(peer_id) do
-      text = "**Approval requested:** #{tool}\n**Action:** #{format_action(action)}"
-
-      components = [
-        StatusRenderer.action_row([
-          StatusRenderer.button("Approve once", "#{approval_id}|once", style: :success),
-          StatusRenderer.button("Deny", "#{approval_id}|deny", style: :danger)
-        ]),
-        StatusRenderer.action_row([
-          StatusRenderer.button("Session", "#{approval_id}|session", style: :primary),
-          StatusRenderer.button("Agent", "#{approval_id}|agent", style: :primary),
-          StatusRenderer.button("Global", "#{approval_id}|global", style: :primary)
-        ])
-      ]
-
-      _ = Outbound.send_with_components(channel_id, text, components)
-    end
-
-    :ok
-  end
-
-  defp maybe_send_approval_request(_state, _payload), do: :ok
-
-  defp handle_approval_component(interaction, custom_id) do
-    case parse_approval_callback(custom_id) do
-      {approval_id, decision} when is_binary(approval_id) ->
-        if Code.ensure_loaded?(LemonCore.ExecApprovals) and
-             function_exported?(LemonCore.ExecApprovals, :resolve, 2) do
-          _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
-        end
-
-        update_interaction(interaction, "Approval: #{decision_label(decision)}", [])
-
-      _ ->
-        acknowledge_interaction(interaction)
-    end
-  end
-
-  defp parse_approval_callback(data) when is_binary(data) do
-    case String.split(data, "|", parts: 2) do
-      [id, decision] when id != "" and decision != "" ->
-        parsed =
-          case decision do
-            "once" -> :approve_once
-            "deny" -> :deny
-            "session" -> :approve_session
-            "agent" -> :approve_agent
-            "global" -> :approve_global
-            _ -> nil
-          end
-
-        if parsed, do: {id, parsed}, else: {nil, nil}
-
-      _ ->
-        {nil, nil}
-    end
-  end
-
-  defp parse_approval_callback(_), do: {nil, nil}
-
-  defp decision_label(:approve_once), do: "Approved (once)"
-  defp decision_label(:deny), do: "Denied"
-  defp decision_label(:approve_session), do: "Approved (session)"
-  defp decision_label(:approve_agent), do: "Approved (agent)"
-  defp decision_label(:approve_global), do: "Approved (global)"
-
-  defp format_action(action) when is_map(action) do
-    cond do
-      is_binary(action["cmd"]) -> action["cmd"]
-      is_binary(action[:cmd]) -> action[:cmd]
-      true -> inspect(action)
-    end
-  end
-
-  defp format_action(other), do: inspect(other)
 
   # ============================================================================
   # Rendering Helpers

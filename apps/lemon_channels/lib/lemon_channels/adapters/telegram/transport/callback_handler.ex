@@ -36,7 +36,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
   def handle_callback_query(state, cb) when is_map(state) and is_map(cb) do
     cb_id = cb["id"]
-    data = cb["data"] || ""
+    data = if is_binary(cb["data"]), do: cb["data"], else: ""
 
     cond do
       String.starts_with?(data, @idle_keepalive_continue_callback_prefix) ->
@@ -95,29 +95,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
         :ok
 
       true ->
-        {approval_id, decision} = parse_approval_callback(data)
-
-        if is_binary(approval_id) and decision do
-          _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
-          _ = answer_callback_query(state, cb_id, "Recorded")
-
-          msg = cb["message"] || %{}
-          chat_id = parse_int(get_in(msg, ["chat", "id"]))
-          message_id = parse_int(msg["message_id"])
-
-          if is_integer(chat_id) and is_integer(message_id) do
-            _ =
-              edit_message_text(
-                state,
-                chat_id,
-                message_id,
-                "Approval: #{decision_label(decision)}",
-                %{"reply_markup" => %{"inline_keyboard" => []}}
-              )
-          end
-        else
-          _ = answer_callback_query(state, cb_id, "Unknown")
-        end
+        _ = LemonChannels.Adapters.Telegram.Transport.ApprovalRequest.handle_callback(state, cb)
 
         :ok
     end
@@ -287,23 +265,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   end
 
   defp parse_model_callback(_), do: nil
-
-  defp parse_approval_callback(data) when is_binary(data) do
-    case String.split(data, "|", parts: 2) do
-      [approval_id, "once"] -> {approval_id, :approve_once}
-      [approval_id, "session"] -> {approval_id, :approve_session}
-      [approval_id, "agent"] -> {approval_id, :approve_agent}
-      [approval_id, "global"] -> {approval_id, :approve_global}
-      [approval_id, "deny"] -> {approval_id, :deny}
-      _ -> {nil, nil}
-    end
-  end
-
-  defp decision_label(:approve_once), do: "approve once"
-  defp decision_label(:approve_session), do: "approve session"
-  defp decision_label(:approve_agent), do: "approve agent"
-  defp decision_label(:approve_global), do: "approve global"
-  defp decision_label(:deny), do: "deny"
 
   defp render_model_picker_text(session_model, future_model) do
     session_line = if is_binary(session_model), do: session_model, else: "(not set)"
