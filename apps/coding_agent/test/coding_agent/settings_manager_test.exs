@@ -650,6 +650,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert result == %{
                default_model: default_model,
+               model_roles: %{},
                default_thinking_level: :high
              }
     end

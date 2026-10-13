@@ -1,20 +1,17 @@
 defmodule LemonRouter.RunCountTracker do
   @moduledoc """
-  Tracks run lifecycle counters via telemetry for the `RunOrchestrator.counts/0` API.
+  Tracks today's terminal runs via `[:lemon, :run, :stop]` telemetry.
 
-  Attaches to:
-  - `[:lemon, :run, :submit]` — increments `queued` on submission
-  - `[:lemon, :run, :start]`  — decrements `queued`, no-ops for `active` (DynamicSupervisor owns that)
-  - `[:lemon, :run, :stop]`   — increments `completed_today`
+  The queued count is read from live session coordinators, not reconstructed
+  from submit/start telemetry: merged followups, accepted steers and pre-start
+  cancellation can terminalize without an executor-start event.
 
   A midnight reset timer clears `completed_today` at the start of each UTC day.
   """
 
   use GenServer
 
-  # Counter indices inside :counters ref
-  @idx_queued 1
-  @idx_completed_today 2
+  @idx_completed_today 1
 
   # ── Client API ──────────────────────────────────────────────────────────
 
@@ -28,8 +25,7 @@ defmodule LemonRouter.RunCountTracker do
   """
   @spec queued() :: non_neg_integer()
   def queued do
-    ref = counter_ref()
-    max(:counters.get(ref, @idx_queued), 0)
+    LemonRouter.SessionCoordinator.pending_count()
   end
 
   @doc """
@@ -45,7 +41,7 @@ defmodule LemonRouter.RunCountTracker do
 
   @impl true
   def init(_opts) do
-    ref = :counters.new(2, [:write_concurrency])
+    ref = :counters.new(1, [:write_concurrency])
     :persistent_term.put({__MODULE__, :counters}, ref)
 
     attach_telemetry()
@@ -57,32 +53,17 @@ defmodule LemonRouter.RunCountTracker do
   @impl true
   def handle_info(:midnight_reset, state) do
     :counters.put(state.counter_ref, @idx_completed_today, 0)
-    :counters.put(state.counter_ref, @idx_queued, 0)
     schedule_midnight_reset()
     {:noreply, state}
   end
 
   @impl true
   def terminate(_reason, _state) do
-    :telemetry.detach("lemon_router.run_count_tracker.submit")
-    :telemetry.detach("lemon_router.run_count_tracker.start")
     :telemetry.detach("lemon_router.run_count_tracker.stop")
     :ok
   end
 
   # ── Telemetry handlers (module function refs — required by :telemetry) ──
-
-  @doc false
-  def handle_submit(_event, _measurements, _metadata, _config) do
-    :counters.add(counter_ref(), @idx_queued, 1)
-  end
-
-  @doc false
-  def handle_start(_event, _measurements, _metadata, _config) do
-    ref = counter_ref()
-    # Decrement queued; floor at 0 to avoid negative drift.
-    :counters.sub(ref, @idx_queued, 1)
-  end
 
   @doc false
   def handle_stop(_event, _measurements, _metadata, _config) do
@@ -96,20 +77,6 @@ defmodule LemonRouter.RunCountTracker do
   end
 
   defp attach_telemetry do
-    :telemetry.attach(
-      "lemon_router.run_count_tracker.submit",
-      [:lemon, :run, :submit],
-      &__MODULE__.handle_submit/4,
-      nil
-    )
-
-    :telemetry.attach(
-      "lemon_router.run_count_tracker.start",
-      [:lemon, :run, :start],
-      &__MODULE__.handle_start/4,
-      nil
-    )
-
     :telemetry.attach(
       "lemon_router.run_count_tracker.stop",
       [:lemon, :run, :stop],

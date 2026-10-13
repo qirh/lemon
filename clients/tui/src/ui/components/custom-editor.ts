@@ -21,8 +21,13 @@
  */
 
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
-import { Editor, type EditorTheme } from "@oh-my-pi/pi-tui/components/editor";
+import {
+	Editor,
+	type EditorTheme,
+	type NativeEditorLayout,
+} from "@oh-my-pi/pi-tui/components/editor";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 
 /** Window in which a second Ctrl+C quits. */
@@ -36,6 +41,8 @@ export interface CustomEditorOptions {
 	theme: EditorTheme;
 	/** The one submission seam. Slash/shell handling happens downstream of it. */
 	onSubmit: (text: string) => void | Promise<void>;
+	/** Native automation cannot submit until the connection and modal state allow it. */
+	canSubmit?: () => boolean;
 	/** Abort the run in flight. Return true when there was one. */
 	onAbort?: () => boolean;
 	onQuit?: (code: number) => void;
@@ -67,6 +74,7 @@ export class CustomEditor extends Editor {
 	#stashed = "";
 	#exitArmedAt = 0;
 	#escapeAt = 0;
+	#nativeSubmitting = false;
 
 	constructor(options: CustomEditorOptions) {
 		super(options.theme);
@@ -110,12 +118,46 @@ export class CustomEditor extends Editor {
 	}
 
 	/** Push a prompt onto the recall ring without sending it. */
-	rememberDraft(text: string): void {
+	#rememberPrompt(text: string): void {
 		const trimmed = text.trim();
 		if (trimmed.length === 0) return;
 		if (this.#history[this.#history.length - 1] === text) return;
 		this.#history.push(text);
 		if (this.#history.length > HISTORY_LIMIT) this.#history.shift();
+	}
+
+	protected override get nativeSendable(): boolean {
+		return !this.disableSubmit && !this.#nativeSubmitting && (this.#options.canSubmit?.() ?? true);
+	}
+
+	// Tern discovers the delegatable composer by this role, not merely by an
+	// editable node: ordinary picker/search fields must never receive prompts.
+	override describeLayout = (input: NativeNode): NativeEditorLayout => ({
+		role: "omp.editor",
+		children: [input],
+		caret: "input",
+	});
+
+	override handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "send") {
+			super.handleNativeEvent(event);
+			return;
+		}
+		if (!event.text.trim() || !this.nativeSendable) return;
+		// Carly's prompt is atomic: a human's unsent draft belongs in recall,
+		// never concatenated with the delegated prompt.
+		this.#rememberPrompt(this.getExpandedText());
+		this.setText("");
+		this.#nativeSubmitting = true;
+		this.#options.requestRender?.();
+		void this.#submit(event.text)
+			.catch((error: unknown) => {
+				this.#options.notice?.(`Prompt failed: ${String(error)}`, "error");
+			})
+			.finally(() => {
+				this.#nativeSubmitting = false;
+				this.#options.requestRender?.();
+			});
 	}
 
 	override handleInput(data: string): void {
@@ -163,7 +205,7 @@ export class CustomEditor extends Editor {
 		const draft = this.getExpandedText();
 		if (draft.length > 0) {
 			// Not lost: a cleared draft is still recallable with ↑.
-			this.rememberDraft(draft);
+			this.#rememberPrompt(draft);
 			this.setText("");
 			this.#historyIndex = undefined;
 			this.#exitArmedAt = 0;
@@ -193,7 +235,7 @@ export class CustomEditor extends Editor {
 		}
 		const now = this.#now();
 		if (now - this.#escapeAt < ESC_DISCARD_MS && this.getText().length > 0) {
-			this.rememberDraft(this.getExpandedText());
+			this.#rememberPrompt(this.getExpandedText());
 			this.setText("");
 			this.#historyIndex = undefined;
 			this.#escapeAt = 0;
@@ -235,7 +277,7 @@ export class CustomEditor extends Editor {
 		this.#historyIndex = undefined;
 		this.disarm();
 		if (text.trim().length === 0) return;
-		this.rememberDraft(text);
+		this.#rememberPrompt(text);
 		this.addToHistory(text);
 		await this.#options.onSubmit(text);
 	}

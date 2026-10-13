@@ -18,6 +18,7 @@ defmodule LemonCore.Config do
   require Logger
 
   defstruct providers: %{},
+            model_roles: %{},
             agent: %{},
             tui: %{},
             logging: %{},
@@ -38,6 +39,7 @@ defmodule LemonCore.Config do
         }
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => provider_config()},
+          model_roles: %{optional(String.t()) => String.t()},
           agent: map(),
           tui: map(),
           logging: map(),
@@ -158,6 +160,7 @@ defmodule LemonCore.Config do
   def to_map(%__MODULE__{} = config) do
     %{
       providers: config.providers,
+      model_roles: config.model_roles,
       agent: config.agent,
       tui: config.tui,
       logging: config.logging,
@@ -177,6 +180,7 @@ defmodule LemonCore.Config do
   defp from_modular(modular, profiles, defaults) do
     %__MODULE__{
       providers: convert_providers(modular.providers),
+      model_roles: modular.model_roles,
       agent: convert_agent(modular.agent, modular.tools),
       tui: convert_tui(modular.tui),
       logging: convert_logging(modular.logging),
@@ -438,6 +442,7 @@ defmodule LemonCore.Config do
 
     %__MODULE__{
       providers: deep_merge_values(config.providers, overrides["providers"]),
+      model_roles: merge_model_roles(config.model_roles, overrides["model_roles"]),
       agent: deep_merge_values(config.agent, overrides["agent"]),
       tui: deep_merge_values(config.tui, overrides["tui"]),
       logging: deep_merge_values(config.logging, overrides["logging"]),
@@ -447,6 +452,14 @@ defmodule LemonCore.Config do
       secrets: config.secrets
     }
   end
+
+  # Role names are metadata strings, not atom-keyed config fields.
+  defp merge_model_roles(base, nil), do: base
+
+  defp merge_model_roles(base, override) when is_map(base) and is_map(override),
+    do: Map.merge(base, override)
+
+  defp merge_model_roles(_base, override), do: override
 
   # Deep merge a value into existing config, handling nil override gracefully
   defp deep_merge_values(base, nil), do: base

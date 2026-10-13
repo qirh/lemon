@@ -209,11 +209,11 @@ describe("render contract", () => {
 		}
 	});
 
-	test("declares no settled rows — a card commits whole or not at all", () => {
+	test("a mutable card does not publish append-only history", () => {
 		const component = card("bash", "running") as unknown as {
-			getTranscriptBlockSettledRows?: () => number;
+			transcriptBlockMode?: "appendOnly";
 		};
-		expect(component.getTranscriptBlockSettledRows).toBeUndefined();
+		expect(component.transcriptBlockMode).toBeUndefined();
 	});
 
 	test("never animates without a render hook (tests and the gallery stay clean)", () => {
