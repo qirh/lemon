@@ -257,7 +257,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 				this.#block,
 				this.#view,
 				this.#accordion.state === "collapsed",
-				(this.#completedAt ?? this.#now()) - this.#startedAt,
+				this.#block.durationMs ?? (this.#block.historical ? undefined : (this.#completedAt ?? this.#now()) - this.#startedAt),
 			);
 			this.#nativeVersion = version;
 		}

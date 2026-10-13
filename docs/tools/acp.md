@@ -107,6 +107,20 @@ subagent lifecycle events use native notices, compaction and subagent updates.
 The runtime preserves message and tool ids so a client can append streams and
 update cards rather than duplicating them.
 
+Cancelled tools retain their actual terminal receipt and any real partial output
+in ACP, terminal and web history. Unknown mutation outcomes stay explicitly
+unknown; a missing receipt is not replayed as a successful operation or as a
+new live tool. Retained finalized answers can fill a missing native transcript
+suffix only when the exact prompt and recorded turn interval match uniquely.
+Recovery stays within that turn and never rewrites the native journal.
+
+Clients advertising `clientCapabilities.elicitation.form` receive an `ask` tool
+while their run's client bridge is connected. It issues the native
+`elicitation/create` form request with `requestedSchema`, choices and an optional
+custom answer. Accepted answers are the user's actual selections; decline,
+cancel, disconnection and timeout never select a recommendation automatically.
+Clients without form support do not advertise `ask`.
+
 Negotiated client filesystem support lets model-facing coding tools read and
 write editor-managed text buffers through the existing ACP client bridge. Raw
 client capability blobs and editor contents are not copied into management

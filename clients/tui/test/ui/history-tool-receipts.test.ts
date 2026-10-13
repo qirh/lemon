@@ -93,7 +93,7 @@ describe("native history tool receipts", () => {
 		const component = card(block);
 		const before = renderPlain(component.render(120));
 		synthesizeHistory(session, [call(), cancelled(), call()]);
-		session.upsertTool({ id: "native-call-id", kind: "tool", title: "stale start" }, "started");
+		session.upsertTool({ id: "native-call-id", kind: "tool", title: "stale start", detail: undefined }, "started");
 		component.update(block);
 		component.update({ ...block, phase: "started", detail: undefined });
 		expect(session.blocks).toHaveLength(1);

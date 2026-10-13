@@ -862,6 +862,9 @@ defmodule LemonControlPlane.ACP do
         state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
 
         entries
+        |> LemonControlPlane.ACP.History.reconcile_answers(
+          LemonCore.RunStore.history(session.session_key, limit: 200)
+        )
         |> Enum.reduce(state, &replay_native_entry(session_id, &1, opts, &2))
         |> replay_unfinished_tools(session, opts)
 
@@ -1517,6 +1520,7 @@ defmodule LemonControlPlane.ACP do
     params = payload |> map_get(:params) |> ensure_map()
     request = client_request(method, Map.put(params, "sessionId", session_id))
     capabilities = session_id |> get_session() |> session_client_capabilities()
+
     exchange =
       if method == "elicitation/create" and not capabilities.elicitation.form,
         do: {:error, :form_not_negotiated},
@@ -1525,8 +1529,12 @@ defmodule LemonControlPlane.ACP do
     {summary, response} =
       case exchange do
         {:error, :form_not_negotiated} ->
-          {%{"method" => method, "status" => "failed", "reason" => "form elicitation not negotiated"},
-           %{"error" => %{"message" => "Client did not negotiate form elicitation"}}}
+          {%{
+             "method" => method,
+             "status" => "failed",
+             "reason" => "form elicitation not negotiated"
+           }, %{"error" => %{"message" => "Client did not negotiate form elicitation"}}}
+
         {:ok, response} ->
           {summarize_client_response(method, response), response}
 
@@ -1599,6 +1607,7 @@ defmodule LemonControlPlane.ACP do
 
   defp summarize_client_response("elicitation/create", response) do
     action = response |> response_result() |> map_get(:action)
+
     %{"method" => "elicitation/create", "status" => response_status(response)}
     |> Map.put("action", if(action in ["accept", "decline", "cancel"], do: action))
     |> reject_nil_values()
@@ -1912,6 +1921,7 @@ defmodule LemonControlPlane.ACP do
         "renameFile" => capabilities.fs.rename_file
       }
     }
+
     if capabilities.elicitation.form,
       do: Map.put(result, "elicitation", %{"form" => %{}}),
       else: result

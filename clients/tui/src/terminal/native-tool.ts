@@ -10,6 +10,8 @@ const STATUS = {
 	running: "running",
 	success: "done",
 	error: "error",
+	cancelled: "error",
+	unknown: "error",
 } as const satisfies Record<ToolCardState, string>;
 
 /** Keep native calls semantic so Tern can render and Carly can read their metadata. */
@@ -17,7 +19,7 @@ export function nativeTool(
 	block: ToolBlock,
 	view: ToolView,
 	collapsed: boolean,
-	elapsed: number,
+	elapsed: number | undefined,
 ): NativeNode {
 	const args = toolArgs(block);
 	const command = typeof args.command === "string" ? args.command : undefined;
@@ -48,7 +50,7 @@ export function nativeTool(
 			href: location ? fileTarget(location.path, location.line) : undefined,
 			meta: view.summary ? [view.summary] : undefined,
 			status: STATUS[view.state],
-			...(block.phase === "completed" ? { took: elapsed } : { age: elapsed }),
+			...(elapsed === undefined ? {} : block.phase === "completed" ? { took: elapsed } : { age: elapsed }),
 			collapsible: body.length > 0,
 			collapsed,
 			frame: "inline",

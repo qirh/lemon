@@ -42,11 +42,13 @@ defmodule LemonWeb.SessionCancelledToolsLiveTest do
 
   test "live cancellation and reload retain one terminal receipt and full real output", ctx do
     {:ok, view, _html} = live(build_conn(), "/sessions/#{ctx.key}")
+
     detail = %{
       name: "bash",
       tool_call_id: "native_bash",
       args: %{command: "printf STARTED; sleep 30"}
     }
+
     started = action("call_bash", :started, detail)
     publish(ctx, started)
     assert_eventually(fn -> has_element?(view, "details[data-status=running]", "bash") end)
@@ -100,21 +102,30 @@ defmodule LemonWeb.SessionCancelledToolsLiveTest do
     {:ok, view, _html} = live(build_conn(), "/sessions/#{ctx.key}")
 
     terminal =
-      action("call_partial", "completed", %{
-        "name" => "bash",
-        "result" => "cancelled preview",
-        "partial_result" => %{
-          "content" => [
-            %{"type" => "text", "text" => "STARTED partial"},
-            %{"type" => "thinking", "thinking" => "PRIVATE_REASONING", "text" => "HIDDEN_TEXT"}
-          ],
-          "details" => %{"private" => "HIDDEN_METADATA"}
+      action(
+        "call_partial",
+        "completed",
+        %{
+          "name" => "bash",
+          "result" => "cancelled preview",
+          "partial_result" => %{
+            "content" => [
+              %{"type" => "text", "text" => "STARTED partial"},
+              %{"type" => "thinking", "thinking" => "PRIVATE_REASONING", "text" => "HIDDEN_TEXT"}
+            ],
+            "details" => %{"private" => "HIDDEN_METADATA"}
+          },
+          "details" => %{"error_type" => "aborted", "outcome" => "unknown"}
         },
-        "details" => %{"error_type" => "aborted", "outcome" => "unknown"}
-      }, false)
+        false
+      )
 
     publish(ctx, terminal)
-    assert_eventually(fn -> has_element?(view, "details[data-status=cancelled]", "STARTED partial") end)
+
+    assert_eventually(fn ->
+      has_element?(view, "details[data-status=cancelled]", "STARTED partial")
+    end)
+
     persist(ctx, [terminal], %{ok: false, error: %{reason: :acp_cancel}})
     {:ok, reloaded, _html} = live(build_conn(), "/sessions/#{ctx.key}")
     assert has_element?(reloaded, "#transcript", "Run stopped.")
@@ -145,10 +156,15 @@ defmodule LemonWeb.SessionCancelledToolsLiveTest do
       action("call_ok", :completed, %{name: "read", result: "READ_OK"}, true),
       action("call_error", :completed, %{name: "read", result: "ENOENT"}, false),
       action("call_unknown", :completed, %{name: "unknown"}),
-      action("call_not_started", :completed, %{
-        name: "write",
-        details: %{cancelled: true, outcome: "not_started", started: false, partial: false}
-      }, false)
+      action(
+        "call_not_started",
+        :completed,
+        %{
+          name: "write",
+          details: %{cancelled: true, outcome: "not_started", started: false, partial: false}
+        },
+        false
+      )
     ]
 
     {:ok, view, _html} = live(build_conn(), "/sessions/#{ctx.key}")
@@ -161,7 +177,13 @@ defmodule LemonWeb.SessionCancelledToolsLiveTest do
       assert has_element?(receipt, "details[data-status=done]", "READ_OK")
       assert has_element?(receipt, "details[data-status=failed]", "ENOENT")
       assert has_element?(receipt, "details[data-status=completed]", "unknown")
-      assert has_element?(receipt, "details[data-status=cancelled]", "Cancelled before the tool started.")
+
+      assert has_element?(
+               receipt,
+               "details[data-status=cancelled]",
+               "Cancelled before the tool started."
+             )
+
       refute has_element?(receipt, "details[data-status=cancelled] pre")
       refute has_element?(receipt, "details .animate-pulse")
     end
@@ -203,7 +225,14 @@ defmodule LemonWeb.SessionCancelledToolsLiveTest do
   end
 
   defp assert_cancelled_receipt(view, output) do
-    assert has_element?(view, "details[data-status=cancelled] pre", String.trim(output))
+    visible =
+      view
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query("details[data-status=cancelled] pre")
+      |> LazyHTML.text()
+
+    assert visible =~ String.trim(output)
     assert has_element?(view, "details[data-status=cancelled]", "its final outcome is unknown")
     assert has_element?(view, "#transcript", "Run stopped.")
     assert length(card_ids(view)) == 1

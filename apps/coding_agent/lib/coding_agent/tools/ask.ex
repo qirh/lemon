@@ -18,6 +18,7 @@ defmodule CodingAgent.Tools.Ask do
 
   def available?(opts) do
     run_id = Keyword.get(opts, :run_id)
+
     Keyword.get(opts, :acp_client_elicitation_form, false) == true and
       is_binary(run_id) and not is_nil(ACPClientBridge.whereis(run_id))
   rescue
@@ -28,23 +29,33 @@ defmodule CodingAgent.Tools.Ask do
     %AgentTool{
       name: "ask",
       label: "Ask User",
-      description: "Ask the user for clarification or a decision. Supply questions with choices, or an empty options list for free text. The user can provide a custom answer, decline, or cancel. Do not ask for credentials or secrets.",
+      description:
+        "Ask the user for clarification or a decision. Supply questions with choices, or an empty options list for free text. The user can provide a custom answer, decline, or cancel. Do not ask for credentials or secrets.",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "questions" => %{
-            "type" => "array", "minItems" => 1, "maxItems" => @max_questions,
+            "type" => "array",
+            "minItems" => 1,
+            "maxItems" => @max_questions,
             "items" => %{
               "type" => "object",
               "properties" => %{
                 "id" => %{"type" => "string", "maxLength" => 128},
                 "question" => %{"type" => "string", "maxLength" => 3_000},
                 "header" => %{"type" => "string", "maxLength" => 1_000},
-                "options" => %{"type" => "array", "maxItems" => @max_options,
-                  "items" => %{"type" => "object", "properties" => %{
-                    "label" => %{"type" => "string", "maxLength" => 256},
-                    "description" => %{"type" => "string", "maxLength" => 1_000}
-                  }, "required" => ["label"]}},
+                "options" => %{
+                  "type" => "array",
+                  "maxItems" => @max_options,
+                  "items" => %{
+                    "type" => "object",
+                    "properties" => %{
+                      "label" => %{"type" => "string", "maxLength" => 256},
+                      "description" => %{"type" => "string", "maxLength" => 1_000}
+                    },
+                    "required" => ["label"]
+                  }
+                },
                 "multi" => %{"type" => "boolean"},
                 "recommended" => %{"type" => "integer", "minimum" => 0}
               },
@@ -54,7 +65,9 @@ defmodule CodingAgent.Tools.Ask do
         },
         "required" => ["questions"]
       },
-      execute: fn id, params, signal, on_update -> execute(id, params, signal, on_update, opts) end
+      execute: fn id, params, signal, on_update ->
+        execute(id, params, signal, on_update, opts)
+      end
     }
   end
 
@@ -63,8 +76,13 @@ defmodule CodingAgent.Tools.Ask do
          :ok <- not_aborted(signal),
          {:ok, questions} <- questions(params),
          :ok <- announce_waiting(on_update),
-         {:ok, response} <- ACPClientBridge.request(Keyword.fetch!(opts, :run_id),
-           "elicitation/create", request(questions), Keyword.get(opts, :elicitation_timeout_ms, 300_000)),
+         {:ok, response} <-
+           ACPClientBridge.request(
+             Keyword.fetch!(opts, :run_id),
+             "elicitation/create",
+             request(questions),
+             Keyword.get(opts, :elicitation_timeout_ms, 300_000)
+           ),
          :ok <- not_aborted(signal) do
       response_result(questions, response)
     else
@@ -84,6 +102,7 @@ defmodule CodingAgent.Tools.Ask do
     callback.(%AgentToolResult{content: [], details: %{status: "waiting_for_user"}})
     :ok
   end
+
   defp announce_waiting(_callback), do: :ok
 
   defp questions(%{"questions" => questions}) when is_list(questions) do
@@ -91,9 +110,12 @@ defmodule CodingAgent.Tools.Ask do
       Enum.reduce_while(questions, {:ok, [], MapSet.new()}, fn question, {:ok, valid, ids} ->
         case validate_question(question) do
           {:ok, question} ->
-            if MapSet.member?(ids, question["id"]), do: {:halt, {:error, "question ids must be unique"}},
+            if MapSet.member?(ids, question["id"]),
+              do: {:halt, {:error, "question ids must be unique"}},
               else: {:cont, {:ok, [question | valid], MapSet.put(ids, question["id"])}}
-          error -> {:halt, error}
+
+          error ->
+            {:halt, error}
         end
       end)
       |> case do
@@ -104,25 +126,32 @@ defmodule CodingAgent.Tools.Ask do
       {:error, "questions must contain between 1 and #{@max_questions} entries"}
     end
   end
+
   defp questions(_params), do: {:error, "questions is required"}
 
   defp validate_question(question) when is_map(question) do
     options = question["options"]
     multi = Map.get(question, "multi", false)
     recommended = question["recommended"]
+
     with :ok <- text(question["id"], "id", 128),
          :ok <- text(question["question"], "question", 3_000),
          :ok <- optional_text(question["header"], "header", 1_000),
          true <- is_boolean(multi),
          true <- is_list(options) and length(options) <= @max_options,
          :ok <- validate_options(options),
-         true <- is_nil(recommended) or (is_integer(recommended) and recommended >= 0 and recommended < length(options)) do
-      {:ok, Map.take(question, ["id", "question", "header", "options", "multi", "recommended"]) |> Map.put("multi", multi)}
+         true <-
+           is_nil(recommended) or
+             (is_integer(recommended) and recommended >= 0 and recommended < length(options)) do
+      {:ok,
+       Map.take(question, ["id", "question", "header", "options", "multi", "recommended"])
+       |> Map.put("multi", multi)}
     else
       false -> {:error, "multi, options or recommended has an invalid value"}
       error -> error
     end
   end
+
   defp validate_question(_question), do: {:error, "each question must be an object"}
 
   defp validate_options(options) do
@@ -143,45 +172,82 @@ defmodule CodingAgent.Tools.Ask do
     end
   end
 
-  defp text(value, _name, max_bytes) when is_binary(value) and byte_size(value) in 1..max_bytes do
+  defp text(value, _name, max_bytes)
+       when is_binary(value) and byte_size(value) > 0 and byte_size(value) <= max_bytes do
     if String.valid?(value), do: :ok, else: {:error, "question text must be UTF-8"}
   end
-  defp text(_value, name, max_bytes), do: {:error, "#{name} must be nonempty text of at most #{max_bytes} UTF-8 bytes"}
+
+  defp text(_value, name, max_bytes),
+    do: {:error, "#{name} must be nonempty text of at most #{max_bytes} UTF-8 bytes"}
+
   defp optional_text(nil, _name, _max), do: :ok
   defp optional_text("", _name, _max), do: :ok
   defp optional_text(value, name, max), do: text(value, name, max)
 
   defp request(questions) do
-    properties = questions |> Enum.with_index() |> Enum.reduce(%{}, fn {question, index}, properties ->
-      key = "q#{index}"
-      labels = Enum.map(question["options"], fn option ->
-        %{"const" => option["label"], "title" => option["label"]}
-        |> put_optional("description", option["description"])
+    properties =
+      questions
+      |> Enum.with_index()
+      |> Enum.reduce(%{}, fn {question, index}, properties ->
+        key = "q#{index}"
+
+        labels =
+          Enum.map(question["options"], fn option ->
+            %{"const" => option["label"], "title" => option["label"]}
+            |> put_optional("description", option["description"])
+          end)
+
+        properties =
+          if labels == [] do
+            properties
+          else
+            property =
+              if question["multi"] do
+                %{"type" => "array", "items" => %{"anyOf" => labels}}
+              else
+                %{"type" => "string", "oneOf" => labels}
+                |> put_optional(
+                  "default",
+                  if(is_integer(question["recommended"]),
+                    do: Enum.at(question["options"], question["recommended"])["label"]
+                  )
+                )
+              end
+
+            property =
+              property
+              |> Map.put("title", question["question"])
+              |> put_optional("description", question["header"])
+
+            Map.put(properties, key, property)
+          end
+
+        Map.put(properties, key <> "__other", %{
+          "type" => "string",
+          "title" => "Other (type your own)"
+        })
       end)
-      properties = if labels == [] do
-        properties
-      else
-        property = if question["multi"] do
-          %{"type" => "array", "items" => %{"anyOf" => labels}}
-        else
-          %{"type" => "string", "oneOf" => labels}
-          |> put_optional("default", if(is_integer(question["recommended"]), do: Enum.at(question["options"], question["recommended"])["label"]))
-        end
-        property = property |> Map.put("title", question["question"]) |> put_optional("description", question["header"])
-        Map.put(properties, key, property)
-      end
-      Map.put(properties, key <> "__other", %{"type" => "string", "title" => "Other (type your own)"})
-    end)
-    message = if length(questions) == 1, do: hd(questions)["question"], else: "Answer #{length(questions)} questions"
-    %{"mode" => "form", "message" => message, "requestedSchema" => %{"type" => "object", "properties" => properties}}
+
+    message =
+      if length(questions) == 1,
+        do: hd(questions)["question"],
+        else: "Answer #{length(questions)} questions"
+
+    %{
+      "mode" => "form",
+      "message" => message,
+      "requestedSchema" => %{"type" => "object", "properties" => properties}
+    }
   end
 
   defp response_result(questions, response) do
-    result = case response do
-      %{"result" => result} when is_map(result) -> result
-      result when is_map(result) -> result
-      _ -> %{}
-    end
+    result =
+      case response do
+        %{"result" => result} when is_map(result) -> result
+        result when is_map(result) -> result
+        _ -> %{}
+      end
+
     case result["action"] do
       "accept" -> accepted(questions, result["content"])
       "decline" -> failure(:declined)
@@ -191,23 +257,50 @@ defmodule CodingAgent.Tools.Ask do
   end
 
   defp accepted(questions, content) when is_map(content) do
-    questions |> Enum.with_index() |> Enum.reduce_while({:ok, []}, fn {question, index}, {:ok, answers} ->
+    questions
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {question, index}, {:ok, answers} ->
       key = "q#{index}"
       labels = Enum.map(question["options"], & &1["label"])
       selected = content[key]
       custom = content[key <> "__other"]
-      custom = if is_binary(custom) and String.trim(custom) != "", do: String.trim(custom)
-      selected = cond do
-        question["multi"] and is_list(selected) -> selected
-        not question["multi"] and is_binary(selected) and is_nil(custom) -> [selected]
-        is_nil(selected) or is_binary(custom) -> []
-        true -> :invalid
-      end
-      if is_list(selected) and length(selected) <= @max_options and Enum.all?(selected, &(&1 in labels)) and
-           (is_nil(custom) or (byte_size(custom) <= @answer_bytes and String.valid?(custom))) and
-           (selected != [] or is_binary(custom)) do
-        answer = %{"id" => question["id"], "question" => question["question"], "options" => labels,
-          "multi" => question["multi"], "selectedOptions" => Enum.uniq(selected)} |> put_optional("customInput", custom)
+
+      custom =
+        cond do
+          is_nil(custom) -> nil
+          is_binary(custom) -> if(String.trim(custom) == "", do: nil, else: String.trim(custom))
+          true -> :invalid
+        end
+
+      custom =
+        if labels == [] and is_nil(custom) and is_binary(selected),
+          do: String.trim(selected),
+          else: custom
+
+      selected =
+        cond do
+          labels == [] and is_binary(selected) -> []
+          question["multi"] and is_list(selected) -> selected
+          not question["multi"] and is_binary(selected) and is_nil(custom) -> [selected]
+          is_nil(selected) or is_binary(custom) -> []
+          true -> :invalid
+        end
+
+      if is_list(selected) and length(selected) <= @max_options and
+           Enum.all?(selected, &(&1 in labels)) and
+           (is_nil(custom) or
+              (is_binary(custom) and byte_size(custom) <= @answer_bytes and String.valid?(custom))) and
+           (selected != [] or (is_binary(custom) and custom != "")) do
+        answer =
+          %{
+            "id" => question["id"],
+            "question" => question["question"],
+            "options" => labels,
+            "multi" => question["multi"],
+            "selectedOptions" => Enum.uniq(selected)
+          }
+          |> put_optional("customInput", custom)
+
         {:cont, {:ok, [answer | answers]}}
       else
         {:halt, {:error, :invalid_response}}
@@ -216,22 +309,49 @@ defmodule CodingAgent.Tools.Ask do
     |> case do
       {:ok, answers} ->
         answers = Enum.reverse(answers)
-        %AgentToolResult{content: [%TextContent{text: Jason.encode!(%{results: answers})}], details: %{status: "answered", results: answers}}
-      {:error, reason} -> failure(reason)
+
+        %AgentToolResult{
+          content: [%TextContent{text: Jason.encode!(%{results: answers})}],
+          details: %{status: "answered", results: answers}
+        }
+
+      {:error, reason} ->
+        failure(reason)
     end
   end
+
   defp accepted(_questions, _content), do: failure(:invalid_response)
 
   defp failure(reason) do
-    {message, details} = case reason do
-      :declined -> {"The user declined to answer the questions.", %{status: "declined", error_type: "user_declined"}}
-      :cancelled -> {"The user cancelled the questions; no answer was selected.", %{status: "cancelled", cancelled: true, error_type: "aborted"}}
-      :timeout -> {"The user question timed out; no recommendation was selected.", %{status: "timed_out", error_type: "timeout"}}
-      :no_client -> {"No form-capable ACP client is connected to this run.", %{error_type: "client_unavailable"}}
-      :client_down -> {"The ACP client disconnected before answering.", %{error_type: "client_unavailable"}}
-      :invalid_response -> {"The client did not supply a valid answer for every question.", %{error_type: "invalid_client_response"}}
-      message when is_binary(message) -> {message, %{error_type: "invalid_arguments"}}
-    end
+    {message, details} =
+      case reason do
+        :declined ->
+          {"The user declined to answer the questions.",
+           %{status: "declined", error_type: "user_declined"}}
+
+        :cancelled ->
+          {"The user cancelled the questions; no answer was selected.",
+           %{status: "cancelled", cancelled: true, error_type: "aborted"}}
+
+        :timeout ->
+          {"The user question timed out; no recommendation was selected.",
+           %{status: "timed_out", error_type: "timeout"}}
+
+        :no_client ->
+          {"No form-capable ACP client is connected to this run.",
+           %{error_type: "client_unavailable"}}
+
+        :client_down ->
+          {"The ACP client disconnected before answering.", %{error_type: "client_unavailable"}}
+
+        :invalid_response ->
+          {"The client did not supply a valid answer for every question.",
+           %{error_type: "invalid_client_response"}}
+
+        message when is_binary(message) ->
+          {message, %{error_type: "invalid_arguments"}}
+      end
+
     %AgentToolResult{content: [%TextContent{text: message}], details: details, is_error: true}
   end
 
