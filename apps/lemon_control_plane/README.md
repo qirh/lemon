@@ -102,7 +102,7 @@ queue the intact request as a followup, and `steer_backlog` queues it as collect
 Queued attachment data has an independent 16 MiB encoded-memory budget.
 
 A lost mutation acknowledgement does not prove failure. In particular,
-`profile.chat` may return `UNAVAILABLE` with its fixed run ID and
+`chat.send` and `profile.chat` may return `UNAVAILABLE` with the fixed run ID and
 `retrySafe: false`; reconcile instead of blindly submitting again. Session delete,
 prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
