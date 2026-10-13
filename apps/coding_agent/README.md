@@ -361,6 +361,16 @@ Sender identity is authenticated from captured session options, never supplied m
 
 The `wait` tool (also `task action=wait`) blocks until the first owned native child returns a result, including failure or cancellation, without stopping siblings. With no `task_ids`, it includes already-finished but unobserved children, then marks only the returned winner observed; the next implicit wait consumes the next result. Explicit `task_ids` restrict the set and may revisit an earlier result. No outstanding/unobserved children is an immediate error. Waiting uses existing join cancellation, parent-question yielding, and winner-only followup suppression; this primitive does not wait on shell/background-process jobs.
 
+For example, after launching a child named `Reviewer`, the parent can make these separate tool calls (the message receipt does not replace waiting for the child's result):
+
+```json
+{"tool": "read", "arguments": {"path": "agent://"}}
+{"tool": "agent_message", "arguments": {"to": "agent://Reviewer", "message": "Focus on cancellation and report concrete failure cases."}}
+{"tool": "wait", "arguments": {}}
+```
+
+The child can reply with `agent_message` addressed to `agent://parent`; siblings can exchange findings through their roster names or stable task IDs. Use explicit `task_ids` on `wait` when the next result must come from a particular subset rather than any unobserved child.
+
 Task progress is delivered directly to parent session subscribers even after the launch tool call ends, with `details.task_id`, `run_id`, `description`, `status`, child `session_id` when allocated, and optional `current_action` (`title`, `kind`, `phase`). Receipts, progress, and result rows also carry available `parent_run_id`, `parent_session_id`, and named persona `agent`; tree consumers can index children by `run_id` and attach them to `parent_run_id` without guessing from completion order. A final progress update settles each child as `completed`, `error`, or `aborted`. Join results include structured visible `output` and `error` per child; hidden reasoning is not included.
 
 Translated operator/run events keep the completed launch action separate from each child: child action IDs are `task_<task_id>`, with the launcher recorded in parent-action metadata. Actual child terminal status emits a completed phase with success/failure and visible output; later stale progress cannot reopen it or complete a still-running sibling.
