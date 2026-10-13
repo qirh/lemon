@@ -12,6 +12,7 @@ defmodule LemonCore.Doctor.Checks.Runtime do
     env = Env.resolve()
 
     [
+      Check.pass("runtime.build", LemonCore.Update.Version.describe()),
       check_control_port(env),
       check_lemon_root(env)
     ]

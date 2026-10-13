@@ -103,6 +103,7 @@ defmodule LemonCore.ExecApprovals do
             session_key: session_key,
             agent_id: agent_id,
             tool: tool,
+            tool_call_id: params[:tool_call_id],
             action: action,
             rationale: rationale,
             requested_at_ms: LemonCore.Clock.now_ms(),

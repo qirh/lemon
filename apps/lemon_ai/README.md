@@ -184,9 +184,23 @@ LemonAi.Models.supports_xhigh(model)
 
 Codex accepts a ChatGPT access token through `api_key`, including Lemon's configured
 API-key authentication mode. The account header is derived from the URL-safe JWT
-claims; an OpenAI API key is not a ChatGPT token. `session_id` supplies the stable
-prompt-cache key and session header. Sampling temperature and output-token caps are
-deliberately omitted because the Codex endpoint rejects them.
+claims; an OpenAI API key is not a ChatGPT token. Reuse `session_id` across turns
+and resumes: it supplies the prompt-cache key and matching `session_id`,
+`conversation_id` and `x-client-request-id` affinity headers. IDs longer than
+64 wire bytes become deterministic SHA-256-derived keys; IDs are never truncated
+or replaced with a per-request random identity. Native coding sessions supply their
+persisted session ID automatically. Provider cache hits appear in `usage.cache_read`;
+hits depend on the provider's prefix length, retention and routing, not merely on
+sending a key. Sampling temperature and output-token caps are deliberately omitted
+because the Codex endpoint rejects them.
+
+Lemon onboarding can explicitly import an existing Codex CLI ChatGPT login with
+`lemon setup --provider openai-codex --auth codex-cli --non-interactive`.
+This copies refreshable OAuth credentials into Lemon's encrypted secret store;
+it neither refreshes during import nor writes the Codex login file. Import is a
+snapshot, not continuous synchronization or a separate browser login. Subsequent
+refreshes persist only Lemon's secret, and persistence failure is surfaced rather
+than reporting success with lost rotating credentials.
 
 For Responses and Codex, `thinking_budgets: %{summary: "auto", service_tier: "priority"}`
 selects reasoning summaries and a service tier (`"auto"`, `"default"`, `"flex"` or
@@ -284,6 +298,17 @@ or subscription quotas are not retried in place. Quota exhaustion remains
 HTTP tuples, parsed error maps, transport failures and terminal assistant messages.
 Responses streams that disconnect or time out before a terminal event are errors,
 not successful empty/truncated replies. Both CRLF and multiline SSE data are parsed.
+Terminal `AssistantMessage.error_details` carries the canonical classification,
+retry eligibility, HTTP status and server retry hints; `error_message` is only
+display text. Call `Error.retryable?(message)` on the whole terminal message.
+Req, Finch and Mint closed/reset/timeout failures retain typed reasons through
+Responses parsing and are transient even when their display text is opaque.
+Structured metadata survives JSON session persistence without creating atoms
+from external category names.
+Generic resource exhaustion/throttling remains retryable under the bounded policy;
+only explicit account, credit, billing or depleted-quota evidence makes it permanent.
+Legacy provider wrappers using status `0` for closed connections classify as
+transport failures, not malformed HTTP requests.
 
 
 ### Token estimation
@@ -334,6 +359,9 @@ GPT-5.5 / GPT-5.6 Luna, Sol and Terra / GPT-6 Astra, Claude Opus 4.8 and Claude 
 families, and Gemini 3.1 Pro through Gemini 3.8 Flash. Limits and per-million-token
 prices track the local omp catalog; unsupported realtime/audio/image-generation
 protocols are not advertised through the text coding APIs.
+Existing integration exclusions remain in effect even when the reference catalog
+still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-preview`
+and `gemini-3.1-pro-preview` are not advertised by Lemon.
 
 
 You can also skip the registry entirely and hand-build a `%LemonAi.Types.Model{}` — the

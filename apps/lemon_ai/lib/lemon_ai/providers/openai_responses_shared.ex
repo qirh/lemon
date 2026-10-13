@@ -58,6 +58,20 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   # ============================================================================
 
   @doc """
+  Stable OpenAI prompt-cache/routing identity, bounded to 64 wire bytes.
+  Long session IDs are hashed rather than truncated, so distinct sessions keep
+  their affinity across turns and resumed calls. Missing IDs do not invent a
+  per-request identity.
+  """
+  @spec normalize_prompt_cache_key(String.t() | nil) :: String.t() | nil
+  def normalize_prompt_cache_key(id) when id in [nil, ""], do: nil
+
+  def normalize_prompt_cache_key(id) when is_binary(id) and byte_size(id) <= 64, do: id
+
+  def normalize_prompt_cache_key(id) when is_binary(id),
+    do: "pc_" <> Base.url_encode64(:crypto.hash(:sha256, id), padding: false)
+
+  @doc """
   Fast deterministic hash to shorten long strings.
   Used for truncating message IDs to fit OpenAI's 64-char limit.
   """
@@ -745,7 +759,10 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         _final_state -> {:error, "Connection closed before the provider completed the response"}
       end
     rescue
-      e -> {:error, Exception.message(e)}
+      e ->
+        if LemonAi.Error.classify(e) == :transient,
+          do: {:error, e},
+          else: {:error, Exception.message(e)}
     catch
       :throw, {:stream_error, reason} -> {:error, reason}
       :throw, reason -> {:error, reason}

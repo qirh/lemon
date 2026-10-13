@@ -859,7 +859,7 @@ defmodule CodingAgent.ToolRegistry do
         tool_name,
         params,
         fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        approval_context
+        Map.put(approval_context, :tool_call_id, tool_call_id)
       )
     end
 

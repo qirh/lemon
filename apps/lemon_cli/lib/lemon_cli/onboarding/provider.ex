@@ -1,7 +1,7 @@
 defmodule LemonCli.Onboarding.Provider do
   @moduledoc false
 
-  @type auth_mode :: :oauth | :api_key
+  @type auth_mode :: :oauth | :api_key | :codex_cli
 
   @enforce_keys [
     :id,

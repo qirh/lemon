@@ -8,8 +8,31 @@ defmodule LemonControlPlane.ACPTest do
   alias LemonControlPlane.HTTP.Router
   alias LemonCore.Store
 
+  defmodule InterruptedHistory do
+    def session_history(_session_key, _cwd) do
+      {:ok,
+       [
+         %{
+           type: :message,
+           id: "assistant_interrupted",
+           message: %{
+             role: "assistant",
+             content: [
+               %{
+                 type: "tool_call",
+                 id: "call_interrupted",
+                 name: "bash",
+                 arguments: %{"command" => "sleep 90"}
+               }
+             ]
+           }
+         }
+       ]}
+    end
+  end
+
   setup do
-    keys = [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token]
+    keys = [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token, :agent_runtime_provider]
     previous = Map.new(keys, &{&1, Application.get_env(:lemon_control_plane, &1)})
 
     clear_acp_session_store()
@@ -651,6 +674,66 @@ defmodule LemonControlPlane.ACPTest do
     refute inspect(summaries) =~ "/tmp/editor-buffer.txt"
   end
 
+  test "prompt deadline withdraws a permission callback and fails closed" do
+    parent = self()
+
+    Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
+      send(parent, {:permission_deadline_run, request})
+      {:ok, request.run_id}
+    end)
+
+    session_id = new_session()
+
+    prompt =
+      Task.async(fn ->
+        ACP.prompt(
+          %{
+            "sessionId" => session_id,
+            "prompt" => [%{"type" => "text", "text" => "wait for permission"}],
+            "_meta" => %{"lemon" => %{"timeoutMs" => 300}}
+          },
+          client_request_callback: fn _request ->
+            send(parent, {:permission_blocked, self()})
+
+            receive do
+              :never -> %{}
+            end
+          end
+        )
+      end)
+
+    assert_receive {:permission_deadline_run, request}
+
+    approval =
+      Task.async(fn ->
+        LemonCore.ExecApprovals.request(%{
+          run_id: request.run_id,
+          session_key: request.session_key,
+          tool: "bash",
+          tool_call_id: "native_wait",
+          action: %{"command" => "true"}
+        })
+      end)
+
+    assert_receive {:permission_blocked, callback}
+
+    pending =
+      Enum.find_value(LemonCore.ExecApprovalStore.list_pending(), fn {_id, pending} ->
+        if pending.run_id == request.run_id, do: pending
+      end)
+
+    LemonCore.Bus.broadcast(
+      "exec_approvals",
+      LemonCore.Event.new(:approval_requested, %{pending: pending})
+    )
+
+    refute_receive {:permission_blocked, _duplicate_callback}
+    monitor = Process.monitor(callback)
+    assert {:error, -32_001, _} = Task.await(prompt, 1_000)
+    assert_receive {:DOWN, ^monitor, :process, ^callback, :killed}
+    assert {:ok, :denied} = Task.await(approval, 1_000)
+  end
+
   test "bridges matching exec approval requests to ACP session request permission" do
     parent = self()
 
@@ -695,6 +778,7 @@ defmodule LemonControlPlane.ACPTest do
           run_id: "run_acp_approval",
           session_key: request.session_key,
           tool: "bash",
+          tool_call_id: "call_permission_identity",
           action: %{"command" => "printf secret"},
           rationale: "Tool execution: bash",
           expires_in_ms: 1_000
@@ -707,6 +791,9 @@ defmodule LemonControlPlane.ACPTest do
                       "params" => %{
                         "sessionId" => ^session_id,
                         "toolCall" => %{
+                          "toolCallId" => "call_permission_identity",
+                          "title" => "$ printf secret",
+                          "rawInput" => %{"command" => "printf secret"},
                           "kind" => "execute",
                           "status" => "pending"
                         },
@@ -869,6 +956,81 @@ defmodule LemonControlPlane.ACPTest do
                     }}
 
     LemonCore.RunStore.delete_session(session.session_key)
+  end
+
+  test "replay reconciles interrupted tools only from finalized durable runs" do
+    :ok = LemonControlPlane.AgentRuntime.register(InterruptedHistory)
+    id = new_session()
+    session = Store.get(:acp_sessions, id)
+    run_id = LemonCore.Id.run_id()
+    parent = self()
+    on_exit(fn -> LemonCore.RunStore.delete_session(session.session_key) end)
+
+    :ok =
+      LemonCore.RunStore.append_event(run_id, %{
+        __event__: :action_event,
+        phase: :updated,
+        action: %{
+          id: "tool_call_interrupted",
+          kind: :command,
+          title: "sleep 90",
+          detail: %{
+            name: "bash",
+            args: %{"command" => "sleep 90"},
+            partial_result: %{content: [%{type: "text", text: "STARTED\n"}], details: %{}}
+          }
+        }
+      })
+
+    params = %{"sessionId" => id, "cwd" => session.cwd, "mcpServers" => []}
+
+    assert {:ok, _} =
+             ACP.resume_session(params,
+               replay: true,
+               session_update_callback: &send(parent, {:active_replay, &1})
+             )
+
+    assert_receive {:active_replay,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "tool_call",
+                          "toolCallId" => "call_interrupted"
+                        }
+                      }
+                    }}
+
+    refute_receive {:active_replay, %{"params" => %{"update" => %{"status" => "failed"}}}}
+
+    :ok =
+      LemonCore.RunStore.finalize(run_id, %{
+        session_key: session.session_key,
+        agent_id: "default",
+        origin: :control_plane,
+        prompt: "run sleep",
+        started_at: 1,
+        completed: %{ok: false, answer: "", error: :acp_cancel}
+      })
+
+    assert {:ok, _} =
+             ACP.resume_session(params,
+               replay: true,
+               session_update_callback: &send(parent, {:ended_replay, &1})
+             )
+
+    assert_receive {:ended_replay,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "tool_call_update",
+                          "toolCallId" => "call_interrupted",
+                          "status" => "failed",
+                          "content" => content
+                        }
+                      }
+                    }}
+
+    assert Enum.any?(content, &(get_in(&1, ["content", "text"]) == "STARTED\n"))
   end
 
   test "uncertain submission preserves the fixed run ID and forbids retry" do

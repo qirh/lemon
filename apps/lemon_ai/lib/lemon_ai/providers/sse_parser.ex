@@ -71,7 +71,7 @@ defmodule LemonAi.Providers.SSEParser do
                   end)
 
                 {:error, reason} ->
-                  throw({:stream_error, "Connection failed: #{inspect(reason)}"})
+                  throw({:stream_error, reason})
 
                 :unknown ->
                   {[], state}

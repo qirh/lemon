@@ -128,7 +128,10 @@ defmodule LemonCli.UpdateCommand do
     IO.puts("Plan digest: #{plan.digest}")
 
     if plan.action == "apply" do
-      IO.puts("Apply with: lemon update apply --confirm #{plan.digest}")
+      IO.puts(
+        "Apply with: lemon update apply --version #{plan.target} --channel #{plan.channel} " <>
+          "--confirm #{plan.digest}"
+      )
     else
       IO.puts("No update will be applied.")
     end
@@ -139,7 +142,7 @@ defmodule LemonCli.UpdateCommand do
   end
 
   defp report(:apply, result, false) do
-    IO.puts("Staged #{result.staged}. Restart Lemon to use it.")
+    IO.puts("Selected #{result.staged}. #{restart_message(result)}")
     IO.puts("Receipt: #{result.receipt["id"]}")
     IO.puts("Rollback digest: #{result.receipt["rollback_digest"]}")
   end
@@ -158,9 +161,12 @@ defmodule LemonCli.UpdateCommand do
   end
 
   defp report(:rollback, result, false) do
-    IO.puts("Rolled back to #{result.active}. Restart Lemon to use it.")
+    IO.puts("Rolled back to #{result.active}. #{restart_message(result)}")
     IO.puts("Receipt: #{result.receipt["id"]}")
   end
+
+  defp restart_message(%{restart: "restarted"}), do: "Managed daemon restarted."
+  defp restart_message(%{restart: "not_running"}), do: "No daemon was running; none was started."
 
   defp sanitize_result(result) when is_map(result) do
     result
@@ -178,6 +184,13 @@ defmodule LemonCli.UpdateCommand do
       IO.puts(:stderr, Jason.encode!(%{"ok" => false, "error" => error}))
     else
       IO.puts(:stderr, "Update failed (#{error["kind"]}): #{error["message"]}")
+
+      if receipt = get_in(error, ["result", "receipt"]) do
+        IO.puts(:stderr, "Receipt: #{receipt["id"]}")
+
+        if digest = receipt["rollback_digest"],
+          do: IO.puts(:stderr, "Rollback digest: #{digest}")
+      end
     end
   end
 
@@ -186,6 +199,16 @@ defmodule LemonCli.UpdateCommand do
       "kind" => "confirmation_required",
       "message" => "Run a fresh plan and provide its exact digest.",
       "confirm" => digest
+    }
+  end
+
+  defp error_payload({:daemon_restart_failed, result}) do
+    %{
+      "kind" => "daemon_restart_failed",
+      "message" =>
+        "The version selection and receipt were committed, but the daemon restart failed. " <>
+          "Inspect lemon status and the runtime log before recovering or rolling back.",
+      "result" => sanitize_result(result)
     }
   end
 
@@ -204,6 +227,9 @@ defmodule LemonCli.UpdateCommand do
   defp safe_message(:unsupported_layout), do: "This is not an installer-managed Lemon release."
   defp safe_message(:update_locked), do: "Another update operation is active."
   defp safe_message(:receipt_not_found), do: "The update receipt was not found."
+
+  defp safe_message(:daemon_ownership_unverified),
+    do: "The runtime is foreign or its ownership could not be verified; no daemon was stopped."
 
   defp safe_message(:stale_current_version),
     do: "The active version no longer matches the receipt."

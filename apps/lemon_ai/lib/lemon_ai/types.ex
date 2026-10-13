@@ -87,6 +87,7 @@ defmodule LemonAi.Types do
             usage: LemonAi.Types.Usage.t(),
             stop_reason: stop_reason(),
             error_message: String.t() | nil,
+            error_details: LemonAi.Error.parsed_error() | nil,
             retry_after_ms: non_neg_integer() | nil,
             timestamp: integer()
           }
@@ -100,6 +101,7 @@ defmodule LemonAi.Types do
               usage: nil,
               stop_reason: nil,
               error_message: nil,
+              error_details: nil,
               retry_after_ms: nil,
               timestamp: 0
   end
