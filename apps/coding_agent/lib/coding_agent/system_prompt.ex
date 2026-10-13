@@ -155,7 +155,9 @@ defmodule CodingAgent.SystemPrompt do
      "Treat existing uncommitted changes as the user's work. Do not overwrite them, commit, push, " <>
        "or run destructive git commands unless explicitly authorized."},
     {~w(todo),
-     "Use `todo` only when a multi-step task benefits from tracking; keep it out of trivial work."},
+     "Use `todo` only when a multi-step task benefits from tracking; keep it out of trivial work. " <>
+       "Create or update the full task list and its statuses with `action: \"write\"`; " <>
+       "`action: \"progress\"` only reads completion counts."},
     {~w(task),
      "Use `task` for substantial independent subtasks with clear scope and acceptance criteria. " <>
        "Keep small or tightly dependent work inline; integrate delegated results and verify the combined change once."},
