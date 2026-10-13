@@ -60,6 +60,8 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   @codex_url "https://chatgpt.com/backend-api/codex/responses"
   @jwt_claim_path "https://api.openai.com/auth"
   @affinity_headers ["session_id", "conversation_id", "x-client-request-id"]
+  @client_version "0.153.0"
+  @controlled_headers ["version" | @affinity_headers]
 
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
@@ -110,6 +112,15 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
       # Build request
       body = build_request_body(model, context, opts)
+
+      if is_function(opts.on_payload, 2) do
+        opts.on_payload.(body, %{
+          provider: :"openai-codex",
+          model: model.id,
+          session_id: opts.session_id
+        })
+      end
+
       headers = build_headers(model, opts, account_id, api_key)
 
       EventStream.push_async(stream, {:start, output})
@@ -124,7 +135,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
            ) do
         {:ok, event_stream} ->
           # Map codex events to standard OpenAI Responses events
-          mapped_events = map_codex_events(event_stream)
+          mapped_events = event_stream |> observe_usage(model, opts) |> map_codex_events()
 
           case OpenAIResponsesShared.process_stream(mapped_events, output, stream, model, %{
                  service_tier: Map.get(opts.thinking_budgets || %{}, :service_tier),
@@ -183,7 +194,11 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     # Add tools if present
     body =
       if context.tools && context.tools != [] do
-        Map.put(body, "tools", OpenAIResponsesShared.convert_tools(context.tools, %{strict: nil}))
+        Map.put(
+          body,
+          "tools",
+          OpenAIResponsesShared.convert_tools(context.tools, %{strict: false})
+        )
       else
         body
       end
@@ -232,13 +247,14 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     # Get OS info for user agent
     {os_name, os_version} = get_os_info()
     arch = :erlang.system_info(:system_architecture) |> to_string()
-    user_agent = "pi (#{os_name} #{os_version}; #{arch})"
+    user_agent = "pi/#{@client_version} (#{os_name} #{os_version}; #{arch})"
 
     base_headers = %{
       "Authorization" => "Bearer #{token}",
       "chatgpt-account-id" => account_id,
       "OpenAI-Beta" => "responses=experimental",
       "originator" => "pi",
+      "version" => @client_version,
       "User-Agent" => user_agent,
       "Accept" => "text/event-stream",
       "Content-Type" => "application/json"
@@ -248,7 +264,8 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       base_headers
       |> Map.merge(model.headers || %{})
       |> Map.merge(opts.headers || %{})
-      |> Map.reject(fn {key, _} -> String.downcase(to_string(key)) in @affinity_headers end)
+      |> Map.reject(fn {key, _} -> String.downcase(to_string(key)) in @controlled_headers end)
+      |> Map.put("version", @client_version)
 
     # The wire cache key and routing identity must agree across every turn.
     Enum.reduce(@affinity_headers, headers, fn key, headers ->
@@ -454,6 +471,29 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   # ============================================================================
   # Event Mapping
   # ============================================================================
+
+  defp observe_usage(events, model, opts) do
+    if is_function(opts.on_usage, 2) do
+      metadata = %{provider: :"openai-codex", model: model.id, session_id: opts.session_id}
+
+      Stream.transform(events, false, fn
+        %{"type" => type, "response" => %{"usage" => usage}} = event, false
+        when type in [
+               "response.completed",
+               "response.incomplete",
+               "response.done",
+               "response.failed"
+             ] and is_map(usage) ->
+          opts.on_usage.(usage, metadata)
+          {[event], true}
+
+        event, seen ->
+          {[event], seen}
+      end)
+    else
+      events
+    end
+  end
 
   defp map_codex_events(events) do
     Stream.flat_map(events, fn event ->
