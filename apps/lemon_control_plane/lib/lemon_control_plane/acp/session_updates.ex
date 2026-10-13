@@ -10,7 +10,8 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
 
   Tool data is untrusted. Text previews are capped at 4,000 bytes, raw envelopes
   have a shared 32 KiB budget, collections are capped at 100 entries and nesting
-  at six levels. Typed diffs contain complete snapshots only, up to 16 KiB per
+  at six levels. Rendered tool content and plan entries share a 64 KiB encoded
+  collection limit. Typed diffs contain complete snapshots only, up to 16 KiB per
   side; larger edits use the bounded textual diff rather than a fabricated file.
   """
 
@@ -29,7 +30,8 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     message_id: nil,
     message_seq: 0,
     text_emitted: false,
-    completed: false
+    completed: false,
+    cancelled: false
   ]
 
   def new(session_id, opts \\ []) do
@@ -39,6 +41,23 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       context_window: Keyword.get(opts, :context_window),
       message_id: "message_#{System.unique_integer([:positive, :monotonic])}"
     }
+  end
+
+  @doc "Build the same bounded tool card used for live starts and permission requests."
+  def tool_call(session_id, id, name, args, opts \\ []) do
+    state = new(session_id, opts)
+
+    notification(
+      state,
+      start_update(
+        state,
+        id,
+        name,
+        args,
+        Keyword.get(opts, :intent),
+        Keyword.get(opts, :status, "pending")
+      )
+    )
   end
 
   def tool_kind(name, args \\ %{}) do
@@ -110,8 +129,10 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   def map_event(state, {:compaction_complete, info}), do: compaction(state, info, "completed")
   def map_event(state, {:compaction_failed, info}), do: compaction(state, info, "failed")
 
+  def map_event(state, {:cancel_requested}), do: {[], %{state | cancelled: true}}
+
   def map_event(state, {:error, reason, _partial_state}),
-    do: chunks(state, "agent_message_chunk", readable(reason))
+    do: error_notice(state, %{error: reason})
 
   def map_event(state, {:agent_end, messages}) do
     message = messages |> Enum.reverse() |> Enum.find(&assistant?/1)
@@ -346,15 +367,21 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       }
       |> put_nonempty(
         "content",
-        Enum.uniq(start_content(name, args) ++ result_content(state, result))
+        Enum.uniq(start_content(name, args) ++ result_content(state, result)) |> bounded_content()
       )
       |> put_nonempty("locations", result_locations(state, result, args, name))
 
     updates = [update]
     todos = todo_entries(name, args, result)
+    plan_entries = get(get(get(result, :details), :plan), :entries)
 
     updates =
-      if status == "completed" and is_list(todos), do: updates ++ [plan(todos)], else: updates
+      cond do
+        status != "completed" -> updates
+        is_list(plan_entries) -> updates ++ [plan(plan_entries)]
+        is_list(todos) -> updates ++ [plan(todos)]
+        true -> updates
+      end
 
     updates =
       if name in ["task", "agent"] do
@@ -449,7 +476,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
           end
       end
 
-    Enum.uniq(diffs ++ rich ++ terminal ++ fallback) |> bounded_content()
+    diffs ++ rich ++ terminal ++ fallback
   end
 
   defp bounded_content(content) do
@@ -606,13 +633,15 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
               _ -> "pending"
             end
 
-          [%{"content" => preview(content), "priority" => "medium", "status" => status}]
+          priority = scalar_string(get(todo, :priority))
+          priority = if priority in ["high", "medium", "low"], do: priority, else: "medium"
+          [%{"content" => preview(content), "priority" => priority, "status" => status}]
         else
           []
         end
       end)
 
-    %{"sessionUpdate" => "plan", "entries" => entries}
+    %{"sessionUpdate" => "plan", "entries" => bounded_content(entries)}
   end
 
   defp retry_update(state, details) when is_map(details) do
@@ -717,13 +746,27 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
 
     {errors, state} =
       if get(payload, :ok) == false,
-        do: chunks(state, "agent_message_chunk", readable(get(payload, :error))),
+        do: error_notice(state, payload),
         else: {[], state}
 
     {usage, state} =
       emit_many(state, usage_updates(get(payload, :usage) || %{}, state.context_window))
 
     {answer ++ errors ++ usage, %{state | completed: true}}
+  end
+
+  defp error_notice(state, payload) do
+    if state.cancelled or get(payload, :cancelled) == true or get(payload, :canceled) == true or
+         get(payload, :error) in [:acp_cancel, :user_requested] do
+      {[], state}
+    else
+      emit(state, %{
+        "sessionUpdate" => "notice",
+        "severity" => "error",
+        "title" => "Run failed",
+        "description" => readable(get(payload, :error))
+      })
+    end
   end
 
   defp usage_updates(usage, context_window) do
@@ -874,6 +917,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   end
 
   defp readable(nil), do: ""
+  defp readable(value) when is_atom(value), do: Atom.to_string(value)
   defp readable(value), do: value |> bounded() |> Jason.encode!() |> preview()
 
   defp get(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
