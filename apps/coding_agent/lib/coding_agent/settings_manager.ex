@@ -7,6 +7,7 @@ defmodule CodingAgent.SettingsManager do
   """
 
   alias LemonCore.Config, as: LemonConfig
+  alias LemonAgent.ModelRuntime.ModelRoles
 
   @type thinking_level :: :off | :minimal | :low | :medium | :high | :xhigh
 
@@ -18,7 +19,8 @@ defmodule CodingAgent.SettingsManager do
 
   @type t :: %__MODULE__{
           # Model settings
-          default_model: model_config() | nil,
+          default_model: model_config() | String.t() | nil,
+          model_roles: ModelRoles.roles(),
           default_thinking_level: thinking_level(),
 
           # Provider settings
@@ -68,6 +70,7 @@ defmodule CodingAgent.SettingsManager do
   defstruct [
     # Model settings
     default_model: nil,
+    model_roles: %{},
     default_thinking_level: :medium,
 
     # Provider settings
@@ -124,6 +127,11 @@ defmodule CodingAgent.SettingsManager do
 
     default_model = parse_model_spec(provider, model)
 
+    case ModelRoles.validate(config.model_roles) do
+      :ok -> :ok
+      {:error, reason} -> raise ArgumentError, reason
+    end
+
     compaction = Map.get(agent, :compaction, %{})
     retry = Map.get(agent, :retry, %{})
     provider_routing = Map.get(agent, :provider_routing, %{})
@@ -133,6 +141,7 @@ defmodule CodingAgent.SettingsManager do
 
     %__MODULE__{
       default_model: default_model,
+      model_roles: config.model_roles,
       default_thinking_level: Map.get(agent, :default_thinking_level, :medium),
       providers: config.providers || %{},
       provider_routing:
@@ -193,12 +202,14 @@ defmodule CodingAgent.SettingsManager do
   Get model settings as a map.
   """
   @spec get_model_settings(t()) :: %{
-          default_model: model_config() | nil,
+          default_model: model_config() | String.t() | nil,
+          model_roles: ModelRoles.roles(),
           default_thinking_level: thinking_level()
         }
   def get_model_settings(%__MODULE__{} = settings) do
     %{
       default_model: settings.default_model,
+      model_roles: settings.model_roles,
       default_thinking_level: settings.default_thinking_level
     }
   end
@@ -222,6 +233,7 @@ defmodule CodingAgent.SettingsManager do
   # ============================================================================
 
   defp parse_model_spec(nil, nil), do: nil
+  defp parse_model_spec(_provider, "@" <> _role = selector), do: selector
 
   defp parse_model_spec(provider, model) when is_binary(model) do
     # Try colon separator first (Lemon's current format)

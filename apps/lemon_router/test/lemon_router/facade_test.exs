@@ -35,6 +35,82 @@ defmodule LemonRouter.FacadeTest do
       end
     end
 
+    test "enumerating a real active run returns metadata without terminating it" do
+      run_id = "facade-live-#{System.unique_integer([:positive])}"
+      session_key = "agent:facade-test:main"
+
+      command = %LemonCore.ExecutionCommand{
+        run_id: run_id,
+        session_key: session_key,
+        conversation_key: {:session, session_key},
+        prompt: "private prompt that is not management metadata",
+        meta: %{agent_id: "facade-test", private: "private metadata"}
+      }
+
+      pid =
+        start_supervised!(
+          {LemonRouter.RunProcess,
+           run_id: run_id,
+           session_key: session_key,
+           execution_request: command,
+           submit_to_gateway?: false}
+        )
+
+      ref = Process.monitor(pid)
+
+      assert %{
+               run_id: ^run_id,
+               session_key: ^session_key,
+               agent_id: "facade-test",
+               engine: "lemon",
+               started_at_ms: started
+             } =
+               Enum.find(LemonRouter.active_runs(), &(&1.run_id == run_id))
+
+      assert is_integer(started)
+      assert Process.alive?(pid)
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 50
+      refute inspect(LemonRouter.active_runs()) =~ "private"
+    end
+
+    test "metadata timeout leaves a busy active run alive and inspectable" do
+      run_id = "facade-busy-#{System.unique_integer([:positive])}"
+      session_key = "agent:facade-busy:main"
+
+      command = %LemonCore.ExecutionCommand{
+        run_id: run_id,
+        session_key: session_key,
+        conversation_key: {:session, session_key},
+        prompt: "hold"
+      }
+
+      pid =
+        start_supervised!(
+          {LemonRouter.RunProcess,
+           run_id: run_id,
+           session_key: session_key,
+           execution_request: command,
+           submit_to_gateway?: false}
+        )
+
+      :ok = :sys.suspend(pid)
+
+      try do
+        started = System.monotonic_time(:millisecond)
+
+        assert %{run_id: ^run_id, started_at_ms: nil} =
+                 Enum.find(LemonRouter.active_runs(), &(&1.run_id == run_id))
+
+        assert System.monotonic_time(:millisecond) - started < 1_000
+        assert Process.alive?(pid)
+      after
+        :sys.resume(pid)
+      end
+
+      assert %{engine: "lemon"} = GenServer.call(pid, :get_metadata)
+      assert Process.alive?(pid)
+    end
+
     test "active_run_count/0 counts supervised runs" do
       assert LemonRouter.active_run_count() >= 0
     end

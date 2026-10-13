@@ -33,7 +33,9 @@ defmodule CodingAgent.Session.RunTranslator do
     started_emitted: false,
     completed_emitted: false,
     delta_seq: 0,
-    first_token_emitted: false
+    first_token_emitted: false,
+    turns: 0,
+    tool_errors: 0
   ]
 
   def new(opts) do
@@ -128,6 +130,11 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:tool_execution_end, id, name, result, is_error}) do
+    t =
+      if Presentation.action_ok?(name, result, is_error),
+        do: t,
+        else: %{t | tool_errors: t.tool_errors + 1}
+
     action_id = "tool_#{id}"
 
     case Map.get(t.pending_actions, action_id) do
@@ -283,7 +290,7 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
     answer = Presentation.extract_answer(messages, t.accumulated_text)
-    usage = Presentation.build_usage(messages)
+    usage = with_metrics(Presentation.build_usage(messages), t)
 
     emit_completed_ok(t, answer, usage)
   end
@@ -305,7 +312,7 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:turn_start}), do: t
-  def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: t
+  def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: %{t | turns: t.turns + 1}
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:message_end, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:extension_status_report, _report}), do: t
@@ -423,7 +430,7 @@ defmodule CodingAgent.Session.RunTranslator do
     if t.completed_emitted do
       t
     else
-      usage = Presentation.build_failure_usage(t.emitter_state, partial_state)
+      usage = with_metrics(Presentation.build_failure_usage(t.emitter_state, partial_state), t)
 
       emitter_state =
         t.emitter.emit_completed(t.emitter_state, %{
@@ -438,6 +445,9 @@ defmodule CodingAgent.Session.RunTranslator do
       %{t | emitter_state: emitter_state, completed_emitted: true}
     end
   end
+
+  defp with_metrics(usage, t),
+    do: Map.merge(usage || %{}, %{turns: t.turns, tool_errors: t.tool_errors})
 
   defp emit_action_event(%__MODULE__{} = t, fields) do
     fields =

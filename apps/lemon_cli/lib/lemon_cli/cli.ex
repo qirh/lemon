@@ -360,7 +360,16 @@ defmodule LemonCli.CLI do
       true ->
         ensure_apps_started!([:lemon_core])
 
-        report = Doctor.report(Keyword.take(opts, [:project_dir]))
+        external_runtime? =
+          LemonCore.Runtime.Health.running?(LemonCore.Runtime.Env.resolve().control_port,
+            timeout_ms: 500
+          )
+
+        report =
+          opts
+          |> Keyword.take([:project_dir])
+          |> Keyword.put(:external_runtime?, external_runtime?)
+          |> Doctor.report()
 
         if opts[:json] do
           IO.puts(Report.to_json(report))
