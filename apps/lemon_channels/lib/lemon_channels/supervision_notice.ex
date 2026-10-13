@@ -75,7 +75,7 @@ defmodule LemonChannels.SupervisionNotice do
       text =
         value
         |> LemonCore.Redact.text(strict: true)
-        |> String.replace(~r/[\p{C}<>`*_~\\\[\]]/u, " ")
+        |> String.replace(~r/\p{C}/u, " ")
         |> String.replace(~r/\s+/u, " ")
         |> String.trim()
         |> bound(limit)

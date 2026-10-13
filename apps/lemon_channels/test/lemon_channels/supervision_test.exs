@@ -307,6 +307,12 @@ defmodule LemonChannels.SupervisionTest do
     refute text =~ "sk-private-value"
   end
 
+  test "coding summaries preserve operators and test identifiers" do
+    summary = "multiply(a, b) returns a * b; a < b; test_maths.py: REMOTE_APPROVED_CODING_OK"
+    assert {:ok, _, text} = SupervisionNotice.render(Map.put(notice(), :summary, summary))
+    assert text =~ summary
+  end
+
   defp worker(opts \\ []) do
     parent = self()
 
