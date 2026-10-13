@@ -357,7 +357,8 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
         Anthropic.stream(m, context, %StreamOptions{api_key: "sk-test", reasoning: :high})
 
       assert_receive {:body, body}, 1000
-      assert body["thinking"] == %{"type" => "enabled", "budget_tokens" => 32_000}
+      assert body["thinking"] == %{"type" => "enabled", "budget_tokens" => 4096}
+      assert body["max_tokens"] == 8192
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
@@ -403,7 +404,14 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
       assert_receive {:body, body}, 1000
       [msg] = body["messages"]
       assert msg["role"] == "user"
-      assert msg["content"] == "Hello world"
+
+      assert msg["content"] == [
+               %{
+                 "type" => "text",
+                 "text" => "Hello world",
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
@@ -593,7 +601,7 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
              }
 
       assert user_body["role"] == "user"
-      assert user_body["content"] == "Continue"
+      assert [%{"type" => "text", "text" => "Continue"}] = user_body["content"]
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
@@ -652,7 +660,7 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
       assert_receive {:body, body}, 1000
       # Whitespace-only messages are filtered, only "Hello" remains
       assert length(body["messages"]) == 1
-      assert hd(body["messages"])["content"] == "Hello"
+      assert [%{"type" => "text", "text" => "Hello"}] = hd(body["messages"])["content"]
 
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
@@ -934,9 +942,6 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
     end
 
     test "returns error on non-200 HTTP response" do
-      # Note: with Req's `into:` streaming callback, resp.body is empty for
-      # error responses since data is consumed by the callback. The error
-      # message will reflect the HTTP status code.
       Req.Test.stub(__MODULE__, fn conn ->
         Plug.Conn.send_resp(conn, 400, "bad request")
       end)
@@ -948,6 +953,7 @@ defmodule LemonAi.Providers.Anthropic.ComprehensiveTest do
                EventStream.result(stream, 2000)
 
       assert msg =~ "400"
+      assert msg =~ "bad request"
     end
 
     test "returns error on 500 HTTP response" do

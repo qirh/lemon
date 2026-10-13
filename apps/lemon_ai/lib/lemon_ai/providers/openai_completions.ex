@@ -892,7 +892,7 @@ defmodule LemonAi.Providers.OpenAICompletions do
 
             retry_delay =
               if RetryHelper.retry_allowed?(attempt, policy) and
-                   RetryHelper.retryable_http_status?(response.status) do
+                   RetryHelper.retryable_http_error?(response.status, error_body) do
                 http_retry_delay_ms(attempt, policy, error_body, response.headers)
               else
                 :give_up

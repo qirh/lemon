@@ -364,7 +364,8 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedExtendedTest do
             "type" => "message",
             "content" => [%{"type" => "output_text", "text" => "Hello, world!"}]
           }
-        }
+        },
+        %{"type" => "response.completed", "response" => %{"status" => "completed"}}
       ]
 
       output = base_output()
@@ -397,7 +398,8 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedExtendedTest do
             "type" => "message",
             "content" => [%{"type" => "refusal", "refusal" => "I cannot do that."}]
           }
-        }
+        },
+        %{"type" => "response.completed", "response" => %{"status" => "completed"}}
       ]
 
       output = base_output()
@@ -444,7 +446,8 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedExtendedTest do
             "name" => "read_file",
             "arguments" => "{\"path\": \"/test.txt\"}"
           }
-        }
+        },
+        %{"type" => "response.completed", "response" => %{"status" => "completed"}}
       ]
 
       output = base_output()
@@ -491,7 +494,8 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedExtendedTest do
               %{"text" => "Then solve it."}
             ]
           }
-        }
+        },
+        %{"type" => "response.completed", "response" => %{"status" => "completed"}}
       ]
 
       output = base_output()
