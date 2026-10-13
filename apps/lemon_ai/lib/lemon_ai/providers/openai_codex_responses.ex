@@ -25,7 +25,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   ## Usage
 
       model = %Model{
-        id: "gpt-5.2",
+        id: "gpt-5.5",
         api: :openai_codex_responses,
         provider: :"openai-codex",
         reasoning: true
