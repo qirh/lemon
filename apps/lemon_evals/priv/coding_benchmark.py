@@ -69,6 +69,7 @@ def main():
     for case in tasks():
         with tempfile.TemporaryDirectory(prefix='lemon-coding-bench-') as tmp:
             root = Path(tmp)
+            (root / '.gitignore').write_text('__pycache__/\n*.py[cod]\n')
             for name, content in case['files'].items():
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,6 +105,12 @@ def main():
                 failure = 'timeout'
             except OSError:
                 failure = 'invocation_failed'
+            usage = result.get('usage') or {}
+            metrics = result.get('metrics') or {}
+            tool_errors = metrics.get('tool_errors', usage.get('tool_errors'))
+            if case['name'] == 'tool_failure_recovery' and not failure:
+                if not isinstance(tool_errors, int) or tool_errors < 1:
+                    failure = 'recovery_not_observed'
             if failure and args.failure_dir:
                 bundle = Path(args.failure_dir) / case['name']
                 bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
@@ -113,12 +120,10 @@ def main():
                     if completed is not None:
                         (bundle / (label + '.stdout')).write_text(completed.stdout)
                         (bundle / (label + '.stderr')).write_text(completed.stderr)
-            usage = result.get('usage') or {}
-            metrics = result.get('metrics') or {}
             rows.append({'task': case['name'], 'passed': failure is None, 'failure': failure,
                          'turns': metrics.get('turns', usage.get('turns')),
                          'tokens': usage.get('totalTokens'), 'wall_seconds': round(time.monotonic()-started, 2),
-                         'tool_errors': metrics.get('tool_errors', usage.get('tool_errors'))})
+                         'tool_errors': tool_errors})
             print(f"{case['name']}: {'PASS' if failure is None else 'FAIL ('+failure+')'}", flush=True)
     report = {'schema_version': 1, 'suite': 'live_agentic_coding', 'model': args.model,
               'passed': sum(row['passed'] for row in rows), 'total': len(rows), 'results': rows}

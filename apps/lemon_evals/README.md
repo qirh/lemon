@@ -39,6 +39,8 @@ feature implementation with tests, reading and answering, bash debugging,
 targeted editing of a 12,000-entry file, repository-wide search/migration, and
 recovery after a failing tool. A verifier outside each repository checks real
 behavior, and applicable tasks must also pass their repository's unittest suite.
+The recovery task also requires at least one observed failed tool call, so simply
+skipping the requested failure cannot earn a pass.
 Runs explicitly allow requested tool approvals; use an isolated runtime and do
 not point this benchmark at a sensitive workspace.
 
