@@ -46,6 +46,22 @@ defmodule LemonCore.RunStore do
     |> Enum.map(fn {session_key, entry} -> {session_key, public_session_entry(entry)} end)
   end
 
+  @doc "Create an empty durable session index without manufacturing a completed run."
+  @spec create_session_index(String.t(), String.t(), atom()) :: :ok | {:error, term()}
+  def create_session_index(session_key, agent_id, origin) do
+    now = System.system_time(:millisecond)
+
+    Store.put_new(:sessions_index, session_key, %{
+      session_key: session_key,
+      agent_id: agent_id,
+      origin: origin,
+      created_at_ms: now,
+      updated_at_ms: now,
+      run_count: 0,
+      __recent_run_ids__: []
+    })
+  end
+
   @spec delete_session_index(term()) :: :ok
   def delete_session_index(session_key), do: Store.delete(:sessions_index, session_key)
 
