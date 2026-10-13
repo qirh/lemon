@@ -1,8 +1,15 @@
 defmodule CodingAgent.Tools.Edit do
   @moduledoc """
-  Edit (text replacement) tool for the coding agent.
+  Snapshot-anchored line editing and unique text replacement.
 
-  Replaces one unique occurrence of `old_text` in a file.
+  Prefer `path`, `snapshot`, and `edits`: copy the tag from `read` and describe
+  inclusive 1-based original line ranges, without reproducing `old_text`.
+  All edits are preflighted against one complete-file snapshot. Supported
+  operations are `replace`, `insert_before`, `insert_after`, and `delete`.
+  Disjoint edits may share a call; changed snapshots or overlapping ranges
+  fail without writing. Whole-line replacement text may omit its final LF.
+
+  Alternatively, `old_text` and `new_text` replace one unique text occurrence.
 
   ## Matching
 
@@ -37,6 +44,7 @@ defmodule CodingAgent.Tools.Edit do
   alias CodingAgent.FileReadTracker
   alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.AnchoredEdit
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
@@ -58,9 +66,11 @@ defmodule CodingAgent.Tools.Edit do
     %AgentTool{
       name: "edit",
       description:
-        "Replace text in a file. old_text must identify exactly one location: an exact match is " <>
-          "preferred; otherwise lines are matched ignoring indentation and whitespace differences. " <>
-          "Read the file first; if it changed on disk since your last read, re-read it.",
+        "Edit a text file. Prefer snapshot-anchored line edits after read: copy its snapshot tag and " <>
+          "send edits [{start_line, end_line, new_text, operation}]. Lines are 1-based and inclusive; " <>
+          "every edit uses the ORIGINAL read snapshot. operation is replace (default), insert_before, " <>
+          "insert_after, or delete. No old text is needed. Re-read if the snapshot changed. " <>
+          "Alternatively supply unique old_text and new_text for text matching.",
       label: "Edit File",
       parameters: %{
         "type" => "object",
@@ -71,6 +81,39 @@ defmodule CodingAgent.Tools.Edit do
             "description" => "The exact text to find and replace (must be unique in the file)"
           },
           "new_text" => %{"type" => "string", "description" => "The replacement text"},
+          "snapshot" => %{
+            "type" => "string",
+            "description" => "Copy the 16-character file tag from read's [path#SNAPSHOT] header",
+            "pattern" => "^[0-9A-Fa-f]{16}$"
+          },
+          "edits" => %{
+            "type" => "array",
+            "minItems" => 1,
+            "maxItems" => 100,
+            "description" =>
+              "Non-overlapping edits using original read line numbers. Replacement/insertion new_text contains whole lines; a final newline is optional. Original file line endings/final newline are preserved.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "operation" => %{
+                  "type" => "string",
+                  "enum" => ["replace", "insert_before", "insert_after", "delete"]
+                },
+                "start_line" => %{"type" => "integer", "minimum" => 1},
+                "end_line" => %{
+                  "type" => "integer",
+                  "minimum" => 1,
+                  "description" =>
+                    "Inclusive final line; defaults to start_line. Insertions target just start_line."
+                },
+                "new_text" => %{
+                  "type" => "string",
+                  "description" => "Whole replacement/inserted lines; omitted for delete"
+                }
+              },
+              "required" => ["start_line"]
+            }
+          },
           "diagnostics" => %{
             "type" => "boolean",
             "default" => Keyword.get(opts, :diagnostics, false),
@@ -78,7 +121,11 @@ defmodule CodingAgent.Tools.Edit do
               "Whether to run language diagnostics after editing and report newly introduced issues"
           }
         },
-        "required" => ["path", "old_text", "new_text"]
+        "required" => ["path"],
+        "anyOf" => [
+          %{"required" => ["snapshot", "edits"]},
+          %{"required" => ["old_text", "new_text"]}
+        ]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -102,17 +149,13 @@ defmodule CodingAgent.Tools.Edit do
       {:error, "Operation aborted"}
     else
       path = params["path"]
-      old_text = params["old_text"]
-      new_text = params["new_text"]
 
       # Parameter validation
       result =
         with :ok <- validate_required_param(path, "path"),
-             :ok <- validate_required_param(old_text, "old_text"),
-             :ok <- validate_required_param(new_text, "new_text"),
-             :ok <- validate_old_text(old_text),
+             {:ok, edit_spec} <- build_edit_spec(params),
              {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
-          do_execute(path, old_text, new_text, diagnostics?, signal, cwd, opts)
+          do_execute(path, edit_spec, diagnostics?, signal, cwd, opts)
         end
 
       case result do
@@ -122,57 +165,57 @@ defmodule CodingAgent.Tools.Edit do
     end
   end
 
-  defp do_execute(path, old_text, new_text, diagnostics?, signal, cwd, opts) do
+  defp do_execute(path, edit_spec, diagnostics?, signal, cwd, opts) do
     resolved_path = resolve_path(path, cwd, opts)
 
     if ACPFileBridge.read_enabled?(opts) and ACPFileBridge.write_enabled?(opts) do
-      do_execute_acp(path, resolved_path, old_text, new_text, signal, opts)
+      do_execute_acp(path, resolved_path, edit_spec, signal, opts)
     else
-      do_execute_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts)
+      do_execute_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts)
     end
   end
 
-  defp do_execute_acp(path, resolved_path, old_text, new_text, signal, opts) do
+  defp do_execute_acp(path, resolved_path, edit_spec, signal, opts) do
     with :ok <- check_aborted(signal),
          {:ok, raw_content} <- ACPFileBridge.read_text_file(resolved_path, nil, nil, opts),
          :ok <- FileValidation.check_text_content(raw_content, path),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         normalized_old_text <- FileFormatHelpers.normalize_to_lf(old_text),
-         {:ok, match_index, match_length} <- find_match(normalized_content, normalized_old_text),
-         {:ok, new_content} <-
-           perform_replacement(normalized_content, match_index, match_length, new_text),
+         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
          :ok <- ACPFileBridge.write_text_file(resolved_path, final_content, opts) do
-      diff = generate_diff(content, new_content)
-      first_changed_line = find_first_changed_line(content, new_content)
+      diff = generate_diff(normalized_content, new_content)
+      first_changed_line = find_first_changed_line(normalized_content, new_content)
+      snapshot = AnchoredEdit.snapshot(final_content)
 
       %AgentToolResult{
         content: [
           %TextContent{
             type: :text,
-            text: "Successfully replaced text in #{path}.\n\n#{diff}"
+            text:
+              "Successfully replaced text in #{path}.\n\n[#{resolved_path}##{snapshot}]\n#{diff}"
           }
         ],
         details:
           %{diff: diff, first_changed_line: first_changed_line, acp_client: true}
           |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
+          |> Map.put(:snapshot, snapshot)
       }
     else
       error -> format_error(error, path)
     end
   end
 
-  defp do_execute_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts) do
+  defp do_execute_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts) do
     MutationLock.with_lock(MutationLock.path_key(resolved_path), fn ->
-      edit_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts)
+      edit_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts)
     end)
   end
 
-  defp edit_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts) do
+  defp edit_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts) do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
     with :ok <- check_aborted(signal),
@@ -187,10 +230,7 @@ defmodule CodingAgent.Tools.Edit do
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         normalized_old_text <- FileFormatHelpers.normalize_to_lf(old_text),
-         {:ok, match_index, match_length} <- find_match(normalized_content, normalized_old_text),
-         {:ok, new_content} <-
-           perform_replacement(normalized_content, match_index, match_length, new_text),
+         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
@@ -201,9 +241,11 @@ defmodule CodingAgent.Tools.Edit do
              path: resolved_path
            }),
          :ok <- File.write(resolved_path, final_content) do
-      FileReadTracker.record(opts, resolved_path, final_content)
-      diff = generate_diff(content, new_content)
-      first_changed_line = find_first_changed_line(content, new_content)
+      digest = :erlang.md5(final_content)
+      FileReadTracker.record_digest(opts, resolved_path, digest)
+      snapshot = AnchoredEdit.snapshot_for_digest(digest)
+      diff = generate_diff(normalized_content, new_content)
+      first_changed_line = find_first_changed_line(normalized_content, new_content)
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(resolved_path, cwd, baseline, diagnostics?, opts)
@@ -212,17 +254,50 @@ defmodule CodingAgent.Tools.Edit do
         content: [
           %TextContent{
             type: :text,
-            text: "Successfully replaced text in #{path}.\n\n#{diff}#{diagnostics_text}"
+            text:
+              "Successfully replaced text in #{path}.\n\n[#{resolved_path}##{snapshot}]\n#{diff}#{diagnostics_text}"
           }
         ],
         details:
           %{diff: diff, first_changed_line: first_changed_line}
           |> CheckpointGuard.put_details(checkpoint)
           |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
+          |> Map.put(:snapshot, snapshot)
           |> maybe_put_diagnostics(diagnostics)
       }
     else
       error -> format_error(error, path)
+    end
+  end
+
+  defp build_edit_spec(params) do
+    if not is_nil(params["snapshot"]) or not is_nil(params["edits"]) do
+      if not is_nil(params["old_text"]) or not is_nil(params["new_text"]) do
+        {:error,
+         "Choose snapshot + edits OR old_text + new_text; anchored replacements put new_text inside each edit."}
+      else
+        with :ok <- AnchoredEdit.validate(params["snapshot"], params["edits"]) do
+          {:ok, {:anchored, params["snapshot"], params["edits"]}}
+        end
+      end
+    else
+      with :ok <- validate_required_param(params["old_text"], "old_text"),
+           :ok <- validate_required_param(params["new_text"], "new_text"),
+           :ok <- validate_old_text(params["old_text"]) do
+        {:ok, {:text, params["old_text"], params["new_text"]}}
+      end
+    end
+  end
+
+  defp perform_edit(raw_content, content, {:anchored, snapshot, edits}) do
+    AnchoredEdit.apply(raw_content, content, snapshot, edits)
+  end
+
+  defp perform_edit(_raw_content, content, {:text, old_text, new_text}) do
+    normalized_old_text = FileFormatHelpers.normalize_to_lf(old_text)
+
+    with {:ok, index, length} <- find_match(content, normalized_old_text) do
+      perform_replacement(content, index, length, new_text)
     end
   end
 
@@ -620,8 +695,8 @@ defmodule CodingAgent.Tools.Edit do
 
   @spec generate_diff(String.t(), String.t(), non_neg_integer()) :: String.t()
   defp generate_diff(old_content, new_content, context_lines \\ @default_context_lines) do
-    old_lines = String.split(old_content, "\n")
-    new_lines = String.split(new_content, "\n")
+    old_lines = AnchoredEdit.lines(old_content)
+    new_lines = AnchoredEdit.lines(new_content)
 
     # Find changed regions
     changes = compute_line_changes(old_lines, new_lines)
@@ -726,8 +801,8 @@ defmodule CodingAgent.Tools.Edit do
 
   @spec find_first_changed_line(String.t(), String.t()) :: non_neg_integer()
   defp find_first_changed_line(old_content, new_content) do
-    old_lines = String.split(old_content, "\n")
-    new_lines = String.split(new_content, "\n")
+    old_lines = AnchoredEdit.lines(old_content)
+    new_lines = AnchoredEdit.lines(new_content)
 
     # Find first differing line (1-indexed)
     old_lines

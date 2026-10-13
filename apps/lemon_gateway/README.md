@@ -89,6 +89,12 @@ Native executor death publishes an immediate structured `:executor_down`
 completion and releases the slot/lock. The native session runner monitors its
 event sink and aborts/saves/stops its owned session when that sink disappears.
 Terminal receipts are durable before their bus notification is emitted.
+Cancellation of a running native session retains its slot until ordered terminal
+tool results and the agent's cancellation/error event have drained. The original
+cancellation reason wins even if the executor races with successful completion;
+the owned native journal is saved before publishing the terminal receipt. A
+15-second drain deadline bounds an unresponsive executor, without claiming that
+an interrupted tool had no effects.
 
 ## Singleton Executor Contract
 

@@ -186,6 +186,14 @@ defmodule LemonWeb.WorkManagementLive do
                       <p class="break-words text-sm font-medium text-slate-800">{card.label}</p><p class="mt-2 break-all text-xs text-slate-500">{card.id}</p>
                       <p :if={card.result} class="mt-2 text-xs text-slate-600">Last run: <.badge status={card.result} /></p>
                       <.session_link session={card.session} />
+                      <div :if={card.workflow} class="mt-3 space-y-2 border-t border-slate-100 pt-2 text-xs text-slate-600">
+                        <p>Workflow: {String.replace(card.workflow.phase, "_", " ")}</p>
+                        <p :if={card.workflow.approved}>Independent review approved</p>
+                        <p :if={card.workflow.branch} class="break-all">Branch: <code>{card.workflow.branch}</code></p>
+                        <p :if={card.workflow.commit} class="break-all">Commit: <code>{String.slice(card.workflow.commit, 0, 12)}</code></p>
+                        <div :if={card.workflow.review_session}><p>Independent review</p><.session_link session={card.workflow.review_session} /></div>
+                        <a :if={card.workflow.pr_url} href={card.workflow.pr_url} rel="noopener noreferrer" class="inline-block font-medium text-blue-700 underline">Open pull request</a>
+                      </div>
                     </article>
                     <p :if={not Enum.any?(board.cards, &(&1.status == column))} class="py-3 text-xs text-slate-400">No cards</p>
                   </div>

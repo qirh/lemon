@@ -83,6 +83,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     @impl true
     def emit_completed(state, fields) do
+      fields = attach_context_budget(state, fields)
       event = Event.completed(fields)
       # A queued auto-resume may start as soon as the gateway sees completion.
       # Save and stop this session first so it loads the complete prior turn.
@@ -90,6 +91,20 @@ defmodule CodingAgent.Executor.SessionRunner do
 
       emit_event(state, event)
       state
+    end
+
+    defp attach_context_budget(state, fields) do
+      case CodingAgent.Session.context_budget(state.session) do
+        {:ok, budget} ->
+          Map.update(fields, :usage, %{context_budget: budget}, fn usage ->
+            Map.put(usage || %{}, :context_budget, budget)
+          end)
+
+        _ ->
+          fields
+      end
+    catch
+      :exit, _ -> fields
     end
 
     defp emit_event(state, event) do
@@ -102,7 +117,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def cancel(pid, reason \\ :user_requested) do
-    GenServer.cast(pid, {:cancel, reason})
+    GenServer.call(pid, {:cancel, reason})
   end
 
   def steer(pid, text) do
@@ -267,13 +282,14 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   end
 
-  @impl true
-  def handle_cast({:cancel, reason}, state) do
+  def handle_call({:cancel, reason}, _from, state) do
+    translator = RunTranslator.mark_cancelled(state.translator, reason)
+
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
 
-    {:noreply, %{state | translator: RunTranslator.handle_cancel(state.translator, reason)}}
+    {:reply, :ok, %{state | translator: translator}}
   end
 
   @impl true

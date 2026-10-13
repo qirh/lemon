@@ -3,9 +3,10 @@ defmodule CodingAgent.Tools.Read do
   Read file tool for the coding agent.
 
   Reads the contents of a file with support for:
-  - Text files with line number formatting
-  - Image files up to 20 MiB (returned as base64-encoded image content)
-  - Offset and limit parameters for partial reads
+  - Numbered physical text lines and full-byte snapshots for anchored edits
+  - Directories, in-memory archive members, PDF pages and notebook cells/outputs
+  - Native image content with bounded proportional previews when a backend exists
+  - Offset and limit parameters for partial reads, with format-specific continuation
   - Bounded chunked text scanning, including oversized single-line files
   - Binary/invalid UTF-8 refusal with actionable inspection guidance
   - `agent://` live family rosters and `agent://<task-id-or-name>` identities
@@ -42,9 +43,11 @@ defmodule CodingAgent.Tools.Read do
     %AgentTool{
       name: "read",
       description:
-        "Read the contents of a file with 1-based line numbers. Use offset and limit for line ranges. " <>
-          "Text output is capped at 2000 lines / 50KB; follow the returned offset to continue. " <>
-          "Binary files require bash inspection; supported images are returned as image content.",
+        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, and images. " <>
+          "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
+          "to change line ranges without copying old text. Use offset/limit to page text. " <>
+          "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
+          "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
       parallel_safe: true,
       parameters: %{
@@ -64,6 +67,26 @@ defmodule CodingAgent.Tools.Read do
             "type" => "integer",
             "description" => "Maximum number of lines to read (positive integer)",
             "minimum" => 1
+          },
+          "page" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "First PDF page (1-based)"
+          },
+          "page_limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Maximum PDF pages to extract"
+          },
+          "cell" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "First notebook cell (1-based)"
+          },
+          "cell_limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Maximum notebook cells to show"
           }
         },
         "required" => ["path"]
@@ -124,29 +147,52 @@ defmodule CodingAgent.Tools.Read do
     with :ok <- validate_params(path, offset, limit),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_abort(signal) do
-      cond do
-        not InternalUrls.internal_url?(path) and ACPFileBridge.read_enabled?(opts) and
-            is_nil(detect_mime_type(resolved_path)) ->
-          read_text_file_from_acp(resolved_path, offset, limit, opts)
+      # Client filesystem reads are authoritative for unsaved text buffers.
+      # Internal references deliberately stay local, as do native rich reads.
+      rich_result =
+        if not ACPFileBridge.read_enabled?(opts) or InternalUrls.internal_url?(path),
+          do: CodingAgent.Tools.ReadFormats.read(resolved_path, params, signal, cwd, opts),
+          else: :not_supported
 
-        true ->
-          case resolve_existing_read_path(path, resolved_path, cwd, opts) do
-            {:ok, readable_path, stat} ->
-              case detect_mime_type(readable_path) do
-                nil ->
-                  read_text_file(readable_path, stat, offset, limit, signal, opts)
-
-                mime_type ->
-                  read_image_file(readable_path, mime_type, stat)
-              end
-
-            {:ok_optional_missing, readable_path} ->
-              optional_missing_daily_memory_result(readable_path)
-
-            {:error, _} = error ->
-              error
-          end
+      case rich_result do
+        {:ok, result} -> result
+        :not_supported -> read_plain(path, resolved_path, offset, limit, signal, cwd, opts)
+        {:error, _} = error -> error
       end
+    end
+  end
+
+  defp read_plain(path, resolved_path, offset, limit, signal, cwd, opts) do
+    cond do
+      not InternalUrls.internal_url?(path) and ACPFileBridge.read_enabled?(opts) and
+          is_nil(detect_mime_type(resolved_path)) ->
+        read_text_file_from_acp(resolved_path, offset, limit, opts)
+
+      true ->
+        case resolve_existing_read_path(path, resolved_path, cwd, opts) do
+          {:ok, readable_path, stat} ->
+            case detect_mime_type(readable_path) do
+              nil ->
+                read_text_file(
+                  readable_path,
+                  stat,
+                  offset,
+                  limit,
+                  signal,
+                  opts,
+                  not InternalUrls.internal_url?(path)
+                )
+
+              mime_type ->
+                read_image_file(readable_path, mime_type, stat)
+            end
+
+          {:ok_optional_missing, readable_path} ->
+            optional_missing_daily_memory_result(readable_path)
+
+          {:error, _} = error ->
+            error
+        end
     end
   end
 
@@ -346,7 +392,7 @@ defmodule CodingAgent.Tools.Read do
   # Text File Reading
   # ============================================================================
 
-  defp read_text_file(path, _stat, offset, limit, signal, opts) do
+  defp read_text_file(path, _stat, offset, limit, signal, opts, editable?) do
     max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
@@ -360,7 +406,10 @@ defmodule CodingAgent.Tools.Read do
          ) do
       {:ok, window} ->
         FileReadTracker.record_digest(opts, path, window.digest)
-        render_window(path, window, normalize_offset(offset), max_bytes, %{})
+
+        render_window(path, window, normalize_offset(offset), max_bytes, %{
+          immutable: not editable?
+        })
 
       {:error, _} = error ->
         error
@@ -375,6 +424,11 @@ defmodule CodingAgent.Tools.Read do
 
         with {:ok, window} <-
                CodingAgent.Tools.ReadText.from_content(content, max_lines, max_bytes) do
+          window =
+            if normalize_offset(offset) == 0 and is_nil(limit),
+              do: Map.put(window, :digest, :erlang.md5(content)),
+              else: window
+
           # The ACP client has already applied line/limit; do not slice twice.
           render_window(path, window, normalize_offset(offset), max_bytes, %{acp_client: true})
         end
@@ -424,6 +478,17 @@ defmodule CodingAgent.Tools.Read do
       formatted = format_line_numbers(window.lines, start_line + 1)
       text = if truncation, do: formatted <> "\n" <> truncation.message, else: formatted
 
+      snapshot =
+        case {Map.get(extra_details, :immutable, false), Map.get(window, :digest)} do
+          {false, digest} when is_binary(digest) ->
+            CodingAgent.Tools.AnchoredEdit.snapshot_for_digest(digest)
+
+          _ ->
+            nil
+        end
+
+      text = if snapshot, do: "[#{path}##{snapshot}]\n" <> text, else: text
+
       %AgentToolResult{
         content: [%TextContent{text: text}],
         details:
@@ -433,7 +498,8 @@ defmodule CodingAgent.Tools.Read do
               total_lines: total,
               start_line: start_line + 1,
               lines_shown: shown,
-              truncation: truncation
+              truncation: truncation,
+              snapshot: snapshot
             },
             extra_details
           )

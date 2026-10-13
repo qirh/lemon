@@ -547,7 +547,6 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert update(finish)["toolCallId"] == "call_native"
     assert text("$ pwd") in update(finish)["content"]
   end
-
   defp updates_for(session_id, event, opts \\ []) do
     {updates, _state} = SessionUpdates.map_event(SessionUpdates.new(session_id, opts), event)
     updates

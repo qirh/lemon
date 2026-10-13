@@ -124,6 +124,9 @@ export interface CommandHost {
 	themeStatus?(): { preference: ThemePreference; appearance: "dark" | "light"; source?: string };
 	/** The two-stage model picker (Ctrl+O), when the UI has one mounted. */
 	openModelPicker?(): void | Promise<void>;
+	openCommandPalette?(query?: string): void | Promise<void>;
+	toggleTaskTree?(): void;
+	openToolOutput?(mode: "output" | "diff"): void;
 }
 
 export interface CommandContext {

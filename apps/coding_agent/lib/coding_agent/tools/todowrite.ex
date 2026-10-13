@@ -1,8 +1,17 @@
 defmodule CodingAgent.Tools.TodoWrite do
   @moduledoc """
-  Task-list write tool for the coding agent.
+  Replaces the current session's complete todo list through `TodoStore`.
 
-  Stores a todo list for the current session.
+  Entries require only `content`. Omitted `status` and `priority` default to
+  `"pending"` and `"medium"`; explicitly supplied values must be valid.
+  IDs are optional. An omitted ID reuses an unclaimed ID from the previous
+  same-content entry, or gets a deterministic content-based ID. Repeated content
+  receives distinct IDs in list order. Supply the returned ID when renaming a task
+  to preserve its identity. Duplicate explicit IDs reject the entire write.
+
+  Successful results contain the normalized full state in `details.todos` and
+  the complete ACP/TUI plan in `details.plan.entries`, including completed tasks.
+  Writes replace the list (including clearing it with `todos: []`), not patch it.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -24,33 +33,45 @@ defmodule CodingAgent.Tools.TodoWrite do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "todos" => %{
-            "type" => "array",
-            "description" => "Updated todo list",
-            "items" => %{
-              "type" => "object",
-              "properties" => %{
-                "content" => %{
-                  "type" => "string",
-                  "description" => "Brief description of the task"
-                },
-                "status" => %{
-                  "type" => "string",
-                  "description" => "Task status: pending, in_progress, completed"
-                },
-                "priority" => %{
-                  "type" => "string",
-                  "description" => "Priority level: high, medium, low"
-                },
-                "id" => %{"type" => "string", "description" => "Unique todo id"}
-              },
-              "required" => ["content", "status", "priority", "id"]
-            }
-          }
+          "todos" => todos_schema()
         },
         "required" => ["todos"]
       },
       execute: &execute(&1, &2, &3, &4, session_id)
+    }
+  end
+
+  @doc "The entry schema shared by the unified and standalone todo write tools."
+  @spec todos_schema() :: map()
+  def todos_schema do
+    %{
+      "type" => "array",
+      "description" =>
+        "Complete replacement plan, including completed tasks. Use [] to clear it. IDs are optional.",
+      "items" => %{
+        "type" => "object",
+        "properties" => %{
+          "content" => %{"type" => "string", "description" => "Brief description of the task"},
+          "status" => %{
+            "type" => "string",
+            "enum" => ["pending", "in_progress", "completed"],
+            "default" => "pending",
+            "description" => "Task status; defaults to pending when omitted"
+          },
+          "priority" => %{
+            "type" => "string",
+            "enum" => ["high", "medium", "low"],
+            "default" => "medium",
+            "description" => "Priority; defaults to medium when omitted"
+          },
+          "id" => %{
+            "type" => ["string", "null"],
+            "description" =>
+              "Stable ID returned by a previous write; omit or pass null for new tasks"
+          }
+        },
+        "required" => ["content"]
+      }
     }
   end
 
@@ -78,15 +99,26 @@ defmodule CodingAgent.Tools.TodoWrite do
           {:error, "Session id not available"}
 
         true ->
+          todos =
+            Enum.map(todos, fn
+              todo when is_map(todo) ->
+                todo = if is_nil(Map.get(todo, "id")), do: Map.delete(todo, "id"), else: todo
+                todo |> Map.put_new("status", "pending") |> Map.put_new("priority", "medium")
+
+              todo ->
+                todo
+            end)
+
           with :ok <- validate_todos(todos) do
-            TodoStore.put(session_id, todos)
+            todos = assign_ids(todos, TodoStore.get(session_id))
+            :ok = TodoStore.put(session_id, todos)
 
             output = Jason.encode!(todos, pretty: true)
             open_count = Enum.count(todos, fn todo -> Map.get(todo, "status") != "completed" end)
 
             %AgentToolResult{
               content: [%TextContent{text: output}],
-              details: %{title: "#{open_count} todos", todos: todos}
+              details: Map.put(TodoStore.result_details(todos), :title, "#{open_count} todos")
             }
           end
       end
@@ -114,12 +146,16 @@ defmodule CodingAgent.Tools.TodoWrite do
   end
 
   defp validate_todo(todo, idx) do
-    with :ok <- validate_non_empty_string(todo, "id", idx),
+    with :ok <- validate_optional_id(todo, idx),
          :ok <- validate_non_empty_string(todo, "content", idx),
          :ok <- validate_status(todo, idx),
          :ok <- validate_priority(todo, idx) do
       :ok
     end
+  end
+
+  defp validate_optional_id(todo, idx) do
+    if Map.has_key?(todo, "id"), do: validate_non_empty_string(todo, "id", idx), else: :ok
   end
 
   defp validate_non_empty_string(todo, key, idx) do
@@ -169,12 +205,50 @@ defmodule CodingAgent.Tools.TodoWrite do
   end
 
   defp validate_unique_ids(todos) do
-    ids = Enum.map(todos, &Map.get(&1, "id"))
+    ids = for todo <- todos, Map.has_key?(todo, "id"), do: todo["id"]
 
     if Enum.uniq(ids) == ids do
       :ok
     else
       {:error, "todo ids must be unique"}
     end
+  end
+
+  defp assign_ids(todos, previous) do
+    previous_ids =
+      previous
+      |> Enum.group_by(&(Map.get(&1, "content") || Map.get(&1, :content)))
+      |> Map.new(fn {content, entries} ->
+        {content, Enum.map(entries, &(Map.get(&1, "id") || Map.get(&1, :id)))}
+      end)
+
+    reserved = MapSet.new(for todo <- todos, Map.has_key?(todo, "id"), do: todo["id"])
+
+    {todos, _used} =
+      Enum.map_reduce(todos, reserved, fn todo, used ->
+        if Map.has_key?(todo, "id") do
+          {todo, used}
+        else
+          id =
+            Enum.find(Map.get(previous_ids, todo["content"], []), fn id ->
+              is_binary(id) and String.trim(id) != "" and not MapSet.member?(used, id)
+            end) || generated_id(todo["content"], used)
+
+          {Map.put(todo, "id", id), MapSet.put(used, id)}
+        end
+      end)
+
+    todos
+  end
+
+  defp generated_id(content, used) do
+    base = "todo_" <> Base.encode16(:crypto.hash(:sha256, content), case: :lower)
+
+    Stream.iterate(1, &(&1 + 1))
+    |> Stream.map(fn
+      1 -> base
+      index -> "#{base}_#{index}"
+    end)
+    |> Enum.find(&(not MapSet.member?(used, &1)))
   end
 end
