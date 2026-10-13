@@ -82,6 +82,39 @@ error JSON is supported by the profile, session, blueprint, provider, learning,
 and secret-source command families; other commands report errors as text on
 stderr. Invalid arguments remain human-readable usage errors.
 
+## ChatGPT authentication and Codex CLI login import
+
+`lemon model --provider openai-codex` offers browser OAuth (the default),
+an existing token, or an explicit **Import existing Codex CLI ChatGPT login**
+choice. Lemon never discovers or imports CLI credentials automatically.
+
+```bash
+lemon model --provider openai-codex --auth codex-cli --non-interactive \
+  --set-default --model gpt-5.5
+# Optionally select a copied login file instead:
+lemon model --provider openai-codex --auth codex-cli \
+  --codex-auth-path /path/to/auth.json --non-interactive
+# First-time setup can import too; defer its separate live verification if offline:
+lemon setup --provider openai-codex --auth codex-cli --non-interactive --skip-verify
+```
+
+Import reads only the explicitly selected file, otherwise `$CODEX_HOME/auth.json`
+when set, otherwise `$HOME/.codex/auth.json`. It requires a ChatGPT OAuth login
+with an access-token JWT expiry, account ID, and non-empty refresh token;
+API-key-only and incomplete logins are rejected. `codex_cli` is also accepted
+as an auth label. `--codex-auth-path` is valid only with this import choice.
+`--token` cannot be combined with browser OAuth or CLI import. Other
+non-interactive provider setup still requires `--token`.
+
+The copied credentials are encrypted in Lemon's secret store under
+`llm_openai_codex_api_key` by default (`model --secret-name` overrides the name).
+Config references that name with `auth_source = "oauth"` and `oauth_secret`;
+tokens are never written to TOML. Import itself makes no HTTP requests and
+never changes the CLI login file. Later credential resolution refreshes the
+Lemon copy as needed and persists only Lemon's encrypted secret. A failed
+refresh may reuse an unexpired token, but never returns an expired token as
+successful authentication. This is a one-time copy, not ongoing synchronization.
+
 ## Non-interactive coding
 
 ```bash
