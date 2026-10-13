@@ -29,7 +29,7 @@ defmodule CodingAgent.Search.DispatcherTest do
     def available?(:search, _context), do: :ok
 
     def search(_request, _context) do
-      Process.sleep(500)
+      Process.sleep(10_000)
       {:ok, %{}}
     end
   end

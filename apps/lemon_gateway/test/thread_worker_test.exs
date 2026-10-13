@@ -212,7 +212,7 @@ defmodule LemonGateway.ThreadWorkerTest do
     assert completed.answer == "Slow: #{request.prompt}"
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 120)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

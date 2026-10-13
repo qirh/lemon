@@ -1,6 +1,8 @@
 defmodule LemonBrowser.CloudSessionTest do
   use ExUnit.Case, async: false
 
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+
   alias LemonBrowser.{CloudSession, SessionProviderRegistry}
 
   defmodule HostedBrowserFakeProvider do
@@ -146,7 +148,7 @@ defmodule LemonBrowser.CloudSessionTest do
     assert_received {:created, "one"}
     assert_received {:created, "two"}
 
-    assert eventually(fn -> CloudSession.status(:test_hosted) == [] end)
+    assert_eventually(fn -> CloudSession.status(:test_hosted) == [] end)
     assert_received {:closed, "provider-one"}
     assert_received {:closed, "provider-two"}
   end
@@ -158,17 +160,5 @@ defmodule LemonBrowser.CloudSessionTest do
       {{:test_hosted, _scope}, pid} when is_pid(pid) -> GenServer.stop(pid, :normal, 1_000)
       _ -> :ok
     end)
-  end
-
-  defp eventually(fun, attempts \\ 30)
-  defp eventually(fun, 0), do: fun.()
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
   end
 end

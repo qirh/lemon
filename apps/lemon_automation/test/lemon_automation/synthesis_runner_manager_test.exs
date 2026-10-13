@@ -70,7 +70,7 @@ defmodule LemonAutomation.SynthesisRunnerManagerTest do
     ]
   end
 
-  defp await(fun, attempts \\ 150)
+  defp await(fun, attempts \\ 250)
   defp await(_fun, 0), do: flunk("condition never became true")
 
   defp await(fun, attempts) do

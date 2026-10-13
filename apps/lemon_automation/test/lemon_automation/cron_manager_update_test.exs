@@ -253,7 +253,7 @@ defmodule LemonAutomation.CronManagerUpdateTest do
              )
   end
 
-  defp await(fun, attempts \\ 50)
+  defp await(fun, attempts \\ 500)
   defp await(_fun, 0), do: false
 
   defp await(fun, attempts) do

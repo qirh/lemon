@@ -211,7 +211,8 @@ defmodule LemonAutomation.CronManagerRetryTest do
     assert retry_meta.retry_root_id == root_id
 
     send(manager, {:run_complete, root_id, {:ok, "late"}})
-    Process.sleep(50)
+    # A synchronous call returns only after the manager handled the late completion message.
+    _ = :sys.get_state(manager)
 
     assert CronStore.get_run(root_id).status == :failed
     assert length(CronStore.list_audit_events(run_id: root_id, action: :run_reconciled)) == 1
@@ -237,7 +238,7 @@ defmodule LemonAutomation.CronManagerRetryTest do
     Map.get(run.meta || %{}, key) || Map.get(run.meta || %{}, Atom.to_string(key))
   end
 
-  defp await(fun, attempts \\ 100)
+  defp await(fun, attempts \\ 500)
   defp await(_fun, 0), do: false
 
   defp await(fun, attempts) do

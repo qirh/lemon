@@ -174,8 +174,41 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
   end
 
+  # The bundle reports resolved configuration, so ambient LEMON_* variables from
+  # the host (or from tests that ran earlier in the same VM) must not leak in.
+  defp isolate_lemon_env do
+    names = [
+      "LEMON_EXTENSIONS_ENABLED",
+      "LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS",
+      "LEMON_EXTENSION_PATHS",
+      "LEMON_DEFAULT_PROVIDER",
+      "LEMON_DEFAULT_MODEL",
+      "LEMON_PROVIDER_ROUTING_ENABLED",
+      "LEMON_PROVIDER_FALLBACK_PROVIDERS",
+      "LEMON_PROVIDER_ROUTING_DEFAULT_POOL",
+      "LEMON_PROVIDER_ROUTING_DEFAULT_PROFILE",
+      "LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS",
+      "LEMON_TERMINAL_BACKENDS_ALLOW",
+      "LEMON_TERMINAL_BACKENDS_DENY",
+      "LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL",
+      "LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES",
+      "LEMON_SSH_TERMINAL_ALLOWED_TARGETS"
+    ]
+
+    previous = Map.new(names, &{&1, System.get_env(&1)})
+    Enum.each(names, &System.delete_env/1)
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+    end)
+  end
+
   test "writes a zip containing diagnostics and metadata" do
     register_runtime_stubs()
+    isolate_lemon_env()
     tmp_dir = tmp_dir()
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))

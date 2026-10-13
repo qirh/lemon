@@ -18,8 +18,15 @@ defmodule LemonRouter.RunCountTrackerTest do
 
   setup do
     # Reset counters to a known state
-    send(Process.whereis(RunCountTracker), :midnight_reset)
-    Process.sleep(10)
+    reset_counters()
+    :ok
+  end
+
+  # `:sys.get_state/1` returns only after the reset message has been handled.
+  defp reset_counters do
+    pid = Process.whereis(RunCountTracker)
+    send(pid, :midnight_reset)
+    :sys.get_state(pid)
     :ok
   end
 
@@ -53,8 +60,7 @@ defmodule LemonRouter.RunCountTrackerTest do
         run_id: "r"
       })
 
-      send(Process.whereis(RunCountTracker), :midnight_reset)
-      Process.sleep(20)
+      reset_counters()
 
       assert is_integer(RunCountTracker.queued())
       assert RunCountTracker.completed_today() == 0

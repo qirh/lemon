@@ -6,6 +6,8 @@ defmodule CodingAgent.SessionTest do
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
 
+  import CodingAgent.AsyncHelpers
+
   alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
@@ -399,7 +401,7 @@ defmodule CodingAgent.SessionTest do
 
         {:ok, pid} ->
           # Should receive EXIT if process crashed during init
-          assert_receive {:EXIT, ^pid, _reason}, 100
+          assert_receive {:EXIT, ^pid, _reason}, 2_000
       end
 
       Process.flag(:trap_exit, false)
@@ -417,7 +419,7 @@ defmodule CodingAgent.SessionTest do
 
         {:ok, pid} ->
           # Should receive EXIT if process crashed during init
-          assert_receive {:EXIT, ^pid, _reason}, 100
+          assert_receive {:EXIT, ^pid, _reason}, 2_000
       end
 
       Process.flag(:trap_exit, false)
@@ -760,9 +762,18 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "returns error when already streaming" do
-      # Use a slow response to ensure we're still streaming
+      parent = self()
+
+      # Hold the first run open until the test releases it
       slow_stream_fn = fn model, context, options ->
-        Process.sleep(100)
+        send(parent, {:stream_called, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :ok
+        end
+
         mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
       end
 
@@ -772,6 +783,10 @@ defmodule CodingAgent.SessionTest do
       result = Session.prompt(session, "Second prompt")
 
       assert result == {:error, :already_streaming}
+
+      assert_receive {:stream_called, stream_pid}, 2_000
+      send(stream_pid, :release)
+      wait_for_streaming_complete(session)
     end
 
     test "can send prompt with images" do
@@ -949,7 +964,7 @@ defmodule CodingAgent.SessionTest do
           end
         end)
 
-      assert_receive :subscribed, 500
+      assert_receive :subscribed, 2_000
 
       # Get initial listener count
       state_before = Session.get_state(session)
@@ -957,13 +972,11 @@ defmodule CodingAgent.SessionTest do
 
       # Kill the subscriber
       send(pid, :die)
-      Process.sleep(50)
 
-      # Trigger cleanup by sending a message that causes handle_info(:DOWN, ...)
-      # The cleanup happens automatically when process dies
-      state_after = Session.get_state(session)
-
-      assert length(state_after.event_listeners) < initial_count
+      # The session removes the listener when it handles the subscriber's :DOWN
+      assert_eventually(fn ->
+        length(Session.get_state(session).event_listeners) < initial_count
+      end)
     end
   end
 
@@ -1195,10 +1208,11 @@ defmodule CodingAgent.SessionTest do
     test "reset during active run aborts work and stream subscribers get canceled terminal" do
       parent = self()
 
-      slow_stream_fn = fn model, context, options ->
+      # A stream that never produces events keeps the run in flight until reset aborts it
+      slow_stream_fn = fn _model, _context, _options ->
         send(parent, :stream_called)
-        Process.sleep(300)
-        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
+        {:ok, hung_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+        {:ok, hung_stream}
       end
 
       session = start_session(stream_fn: slow_stream_fn)
@@ -1207,7 +1221,7 @@ defmodule CodingAgent.SessionTest do
       stream_events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
 
       :ok = Session.prompt(session, "Hello")
-      assert_receive :stream_called, 500
+      assert_receive :stream_called, 2_000
 
       :ok = Session.reset(session)
 
@@ -1381,21 +1395,28 @@ defmodule CodingAgent.SessionTest do
 
     test "abort stops streaming" do
       # Use a slow stream to ensure we can abort it
+      parent = self()
+
       slow_stream_fn = fn model, context, options ->
-        Process.sleep(500)
+        send(parent, {:stream_called, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :ok
+        end
+
         mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
       end
 
       session = start_session(stream_fn: slow_stream_fn)
 
       :ok = Session.prompt(session, "Hello!")
-      # Give it time to start
-      Process.sleep(50)
+      # Wait for the stream to actually start
+      assert_receive {:stream_called, stream_pid}, 2_000
 
       :ok = Session.abort(session)
-
-      # Wait a bit and check streaming stopped
-      Process.sleep(100)
+      send(stream_pid, :release)
 
       # After abort, is_streaming should eventually be false
       # (may need to wait for cleanup)
@@ -1422,7 +1443,7 @@ defmodule CodingAgent.SessionTest do
       assert Session.get_state(session).is_streaming == false
 
       :ok = Session.prompt(session, "Second prompt")
-      assert_receive :stream_called, 200
+      assert_receive :stream_called, 2_000
       wait_for_streaming_complete(session)
     end
   end
@@ -1485,11 +1506,10 @@ defmodule CodingAgent.SessionTest do
       # Wait for the agent process to actually exit
       assert_receive {:DOWN, ^ref, :process, ^agent_pid, _reason}, 1000
 
-      # Give the registry a moment to clean up
-      Process.sleep(10)
-
-      # Verify unregistered
-      assert :error = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
+      # Verify unregistered (the registry cleans up asynchronously)
+      assert_eventually(fn ->
+        LemonAgent.AgentRegistry.lookup({session_id, :main, 0}) == :error
+      end)
     end
 
     test "list_by_session includes main agent" do
@@ -1570,8 +1590,17 @@ defmodule CodingAgent.SessionTest do
 
     test "is_streaming reflects current state" do
       # Use a slow response to ensure we can check streaming state
+      parent = self()
+
       slow_stream_fn = fn model, context, options ->
-        Process.sleep(200)
+        send(parent, {:stream_called, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :ok
+        end
+
         mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
       end
 
@@ -1581,11 +1610,12 @@ defmodule CodingAgent.SessionTest do
       assert health_before.is_streaming == false
 
       :ok = Session.prompt(session, "Hello!")
-      Process.sleep(10)
+      assert_receive {:stream_called, stream_pid}, 2_000
 
       health_during = Session.health_check(session)
       assert health_during.is_streaming == true
 
+      send(stream_pid, :release)
       wait_for_streaming_complete(session)
 
       health_after = Session.health_check(session)
@@ -1728,8 +1758,9 @@ defmodule CodingAgent.SessionTest do
       state = Session.get_state(session)
 
       # Kill the agent
+      ref = Process.monitor(state.agent)
       Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
 
       health = Session.health_check(session)
       assert health.status == :unhealthy

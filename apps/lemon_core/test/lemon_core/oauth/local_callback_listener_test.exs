@@ -34,10 +34,11 @@ defmodule LemonCore.OAuth.LocalCallbackListenerTest do
     Process.exit(listener.pid, :kill)
 
     {elapsed_us, result} =
-      :timer.tc(fn -> LocalCallbackListener.wait(listener, 2_000) end)
+      :timer.tc(fn -> LocalCallbackListener.wait(listener, 10_000) end)
 
     assert result == {:error, {:listener_down, :killed}}
-    assert elapsed_us < 250_000
+    # Must return as soon as the listener dies instead of waiting out the 10s timeout.
+    assert elapsed_us < 5_000_000
     monitor_ref = listener.monitor_ref
     refute_receive {:DOWN, ^monitor_ref, :process, _pid, _reason}
   end

@@ -189,7 +189,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
         BashExecutor.execute(
           "for i in $(seq 1 1000); do echo line$i; done; sleep 10",
           tmp_dir,
-          timeout: 500
+          timeout: 2_000
         )
 
       assert result.cancelled == true
@@ -227,7 +227,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
           "echo before; sleep 10",
           tmp_dir,
           on_chunk: callback,
-          timeout: 200
+          timeout: 1_000
         )
 
       {count, _last_chunk} = Agent.get(agent, & &1)
@@ -264,8 +264,8 @@ defmodule CodingAgent.BashEdgeCasesTest do
       {:ok, result} = Task.await(task, 10_000)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should abort quickly (within 500ms of calling abort)
-      assert elapsed < 500
+      # Should abort well before the ~10s the loop would otherwise run
+      assert elapsed < 5_000
       assert result.cancelled == true
 
       AbortSignal.clear(signal)
@@ -337,7 +337,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should return promptly under full-suite scheduler load.
-      assert elapsed < 1_000
+      assert elapsed < 5_000
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
 

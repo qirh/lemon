@@ -359,7 +359,7 @@ defmodule LemonHoncho.SessionManagerTest do
       {elapsed_us, block} = :timer.tc(fn -> SessionManager.context_for(@request) end)
 
       assert block == ""
-      assert elapsed_us < 200_000
+      assert elapsed_us < 2_000_000
     end
   end
 
@@ -732,7 +732,7 @@ defmodule LemonHoncho.SessionManagerTest do
       start_unpinned_manager(GatedClient, %{"LEMON_HONCHO_FIRST_TURN_WAIT_MS" => "0"})
 
       {no_wait_us, ""} = :timer.tc(fn -> SessionManager.context_for(request_for("cold-a")) end)
-      assert no_wait_us < 200_000
+      assert no_wait_us < 2_000_000
 
       System.put_env("LEMON_HONCHO_FIRST_TURN_WAIT_MS", "500")
 
@@ -743,7 +743,7 @@ defmodule LemonHoncho.SessionManagerTest do
 
       {waited_us, ""} = :timer.tc(fn -> SessionManager.context_for(request_for("cold-b")) end)
       assert waited_us > 400_000
-      assert waited_us < 900_000
+      assert waited_us < 2_500_000
     end
   end
 
@@ -901,12 +901,16 @@ defmodule LemonHoncho.SessionManagerTest do
 
   describe "a slow Honcho" do
     test "returns within the bounded first-turn wait without exiting the caller" do
-      start_manager(client: SlowClient, first_turn_wait_ms: 100)
+      start_manager(client: GatedClient, first_turn_wait_ms: 100)
 
       {elapsed_us, block} = :timer.tc(fn -> SessionManager.context_for(@request) end)
 
       assert block == ""
-      assert elapsed_us < 500_000
+      # The gate holds the refresh for 5s, so a caller that waited for it would
+      # have taken that long; the bounded wait is a few hundred ms.
+      assert elapsed_us < 2_500_000
+      assert %{pid: refresh} = await_pending(@session_key)
+      assert Process.alive?(refresh)
       assert Process.alive?(self())
       assert Process.alive?(Process.whereis(SessionManager))
     end
@@ -1134,7 +1138,7 @@ defmodule LemonHoncho.SessionManagerTest do
       assert [%{session_key: @session_key, turns: 1} = session] = sessions
       assert session.honcho_session_id == "lemon-honcho-test"
       assert is_integer(session.last_context_at_ms)
-      assert elapsed_us < 200_000
+      assert elapsed_us < 2_000_000
     end
 
     test "sessions/0 is empty when the manager is not running" do

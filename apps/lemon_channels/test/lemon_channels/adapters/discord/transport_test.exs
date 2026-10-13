@@ -1496,7 +1496,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 200)
 
   defp eventually(fun, attempts) when attempts > 0 do
     case fun.() do

@@ -241,8 +241,8 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
           send(parent, {:completed, results})
         end)
 
-      # Give time to start
-      Process.sleep(30)
+      # Wait for the subagent to start
+      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end, 5_000)
 
       # Kill the coordinator
       Process.exit(coordinator, :kill)
@@ -269,7 +269,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 10_000)
       end)
 
-      Process.sleep(30)
+      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end, 5_000)
 
       # Abort then stop
       :ok = Coordinator.abort_all(coordinator)
@@ -711,8 +711,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       _results = Coordinator.run_subagents(coordinator, specs, timeout: 10)
 
       # After timeout, should be cleaned up
-      Process.sleep(50)
-      assert Coordinator.list_active(coordinator) == []
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
     end
 
     @tag :tmp_dir
@@ -723,9 +722,9 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 10_000)
       end)
 
-      Process.sleep(50)
+      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end, 5_000)
       :ok = Coordinator.abort_all(coordinator)
-      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 1_000)
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
     end
   end
 

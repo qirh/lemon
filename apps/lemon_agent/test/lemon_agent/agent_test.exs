@@ -26,7 +26,33 @@ defmodule LemonAgent.AgentTest do
     Agent.start_link(merged_opts)
   end
 
-  defp wait_until(fun, timeout_ms \\ 500) do
+  # Starts an agent whose run is blocked inside the stream function, so the
+  # run's abort_ref stays registered until the test ends. Returns {agent, abort_ref}.
+  defp start_blocked_run_agent do
+    test_pid = self()
+
+    stream_fn = fn _model, _context, _options ->
+      send(test_pid, :stream_blocked)
+
+      receive do
+        :release_stream -> {:error, :released}
+      end
+    end
+
+    {:ok, agent} = start_agent(stream_fn: stream_fn)
+    :ok = Agent.prompt(agent, "test")
+    assert_receive :stream_blocked, 5_000
+
+    abort_ref =
+      case :sys.get_state(agent).abort_ref do
+        {:aborted, ref} -> ref
+        ref -> ref
+      end
+
+    {agent, abort_ref}
+  end
+
+  defp wait_until(fun, timeout_ms \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_wait_until(fun, deadline)
   end
@@ -474,11 +500,9 @@ defmodule LemonAgent.AgentTest do
 
       Process.exit(listener, :kill)
 
-      # Give GenServer time to process the DOWN message
-      Process.sleep(20)
-
-      state = :sys.get_state(agent)
-      refute Enum.any?(state.listeners, fn {pid, _ref} -> pid == listener end)
+      wait_until(fn ->
+        not Enum.any?(:sys.get_state(agent).listeners, fn {pid, _ref} -> pid == listener end)
+      end)
     end
   end
 
@@ -794,26 +818,36 @@ defmodule LemonAgent.AgentTest do
     test "returns {:error, :timeout} when the wait exceeds timeout" do
       response = Mocks.assistant_message("Delayed")
 
+      test_pid = self()
+
       stream_fn = fn _model, _context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
 
-        Task.start(fn ->
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(200)
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
+        {:ok, worker} =
+          Task.start(fn ->
+            LemonAi.EventStream.push(stream, {:start, response})
 
+            receive do
+              :release_stream -> :ok
+            end
+
+            LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+            LemonAi.EventStream.complete(stream, response)
+          end)
+
+        send(test_pid, {:worker, worker})
         {:ok, stream}
       end
 
       {:ok, agent} = start_agent(stream_fn: stream_fn)
 
       :ok = Agent.prompt(agent, "Hi")
+      assert_receive {:worker, worker}, 5_000
 
       assert {:error, :timeout} = Agent.wait_for_idle(agent, timeout: 10)
 
-      assert :ok = Agent.wait_for_idle(agent, timeout: 1000)
+      send(worker, :release_stream)
+      assert :ok = Agent.wait_for_idle(agent, timeout: 5_000)
     end
   end
 
@@ -938,19 +972,8 @@ defmodule LemonAgent.AgentTest do
 
   describe "follow-up long-poll mechanism" do
     test "returns follow-up arriving during 50ms poll window" do
-      {:ok, agent} = start_agent()
-
-      # Start a prompt so abort_ref is set
-      :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
-
-      state = :sys.get_state(agent)
-
-      abort_ref =
-        case state.abort_ref do
-          {:aborted, ref} -> ref
-          ref -> ref
-        end
+      # Block a run so its abort_ref stays registered
+      {agent, abort_ref} = start_blocked_run_agent()
 
       message = Mocks.user_message("Late follow-up")
 
@@ -971,17 +994,7 @@ defmodule LemonAgent.AgentTest do
     end
 
     test "returns empty list when no follow-up arrives within 50ms" do
-      {:ok, agent} = start_agent()
-      :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
-
-      state = :sys.get_state(agent)
-
-      abort_ref =
-        case state.abort_ref do
-          {:aborted, ref} -> ref
-          ref -> ref
-        end
+      {agent, abort_ref} = start_blocked_run_agent()
 
       # Call with nothing queued - should timeout after 50ms
       result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
@@ -989,42 +1002,26 @@ defmodule LemonAgent.AgentTest do
     end
 
     test "returns already-queued follow-ups immediately without polling" do
-      {:ok, agent} = start_agent()
-      :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
-
-      state = :sys.get_state(agent)
-
-      abort_ref =
-        case state.abort_ref do
-          {:aborted, ref} -> ref
-          ref -> ref
-        end
+      {agent, abort_ref} = start_blocked_run_agent()
 
       # Queue follow-ups BEFORE calling get_follow_up_messages
       Agent.follow_up(agent, Mocks.user_message("Already queued"))
-      Process.sleep(5)
 
-      # Should return immediately (not wait 50ms)
-      start_time = System.monotonic_time(:millisecond)
+      # Should be served from the queue without registering a long-poll
       result = GenServer.call(agent, {:get_follow_up_messages, abort_ref})
-      elapsed = System.monotonic_time(:millisecond) - start_time
 
       assert length(result) == 1
       assert hd(result).content == "Already queued"
-      # Should be near-instant, not 50ms
-      assert elapsed < 30
+      assert :sys.get_state(agent).follow_up_poll == nil
     end
 
     test "returns empty list for mismatched abort_ref" do
       {:ok, agent} = start_agent()
       :ok = Agent.prompt(agent, "test")
-      Process.sleep(20)
 
       # Use a wrong abort_ref
       wrong_ref = make_ref()
       Agent.follow_up(agent, Mocks.user_message("Should not be returned"))
-      Process.sleep(5)
 
       result = GenServer.call(agent, {:get_follow_up_messages, wrong_ref})
       assert result == []

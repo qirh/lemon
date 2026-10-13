@@ -115,8 +115,12 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
   end
 
+  # Sends `:stream_called` to the creating (test) process when the stream starts.
   defp delayed_stream_fn(response, delay_ms) do
+    test_pid = self()
+
     fn _model, _context, _options ->
+      send(test_pid, :stream_called)
       {:ok, stream} = LemonAi.EventStream.start_link()
 
       Task.start(fn ->
@@ -541,6 +545,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
 
       spawn(fn ->
         _unsub2 = Session.subscribe(session)
+        send(parent, :other_subscribed)
 
         receive do
           {:session_event, _, event} -> send(parent, {:other_sub, event})
@@ -550,7 +555,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       end)
 
       # Let subscriber connect
-      Process.sleep(50)
+      assert_receive :other_subscribed, 2_000
       :ok = Session.prompt(session, "Hello")
 
       # Main process collects events
@@ -866,8 +871,8 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       _unsub = Session.subscribe(session)
       :ok = Session.prompt(session, "Hello")
 
-      # Wait a bit then abort
-      Process.sleep(100)
+      # Wait for the stream to start, then abort
+      assert_receive :stream_called, 2_000
       :ok = Session.abort(session)
 
       # Collect events - should complete relatively quickly
@@ -897,12 +902,16 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
     end
 
     test "abort during tool execution" do
+      test_pid = self()
+
       slow_tool = %AgentTool{
         name: "very_slow",
         description: "Very slow tool",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Very Slow",
         execute: fn _id, _args, signal, _on_update ->
+          send(test_pid, :tool_started)
+
           # Check abort periodically
           for _ <- 1..50 do
             if LemonAgent.AbortSignal.aborted?(signal) do
@@ -932,7 +941,7 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       :ok = Session.prompt(session, "Run very slow tool")
 
       # Abort during tool execution
-      Process.sleep(100)
+      assert_receive :tool_started, 2_000
       :ok = Session.abort(session)
 
       events = collect_events([], 3000)

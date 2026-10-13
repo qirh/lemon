@@ -1022,23 +1022,35 @@ defmodule LemonGateway.WebhookTransportTest do
   test "wait helper returns completion payload published on run topic" do
     run_id = "run_webhook_wait_#{System.unique_integer([:positive])}"
 
-    Task.start(fn ->
-      Process.sleep(40)
-
-      LemonCore.Bus.broadcast(
-        LemonCore.Bus.run_topic(run_id),
-        LemonCore.Event.new(
-          :run_completed,
-          %{
-            completed: %{ok: true, answer: "done"},
-            duration_ms: 10
-          },
-          %{run_id: run_id}
-        )
+    event =
+      LemonCore.Event.new(
+        :run_completed,
+        %{
+          completed: %{ok: true, answer: "done"},
+          duration_ms: 10
+        },
+        %{run_id: run_id}
       )
-    end)
 
-    assert {:ok, payload} = Webhook.wait_for_run_completion_for_test(run_id, 1_000)
+    # The waiter subscribes when it starts; keep publishing until it has the
+    # completion so a late subscription cannot miss a single broadcast.
+    publisher =
+      spawn_link(fn ->
+        publish = fn publish ->
+          LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
+
+          receive do
+            :stop -> :ok
+          after
+            10 -> publish.(publish)
+          end
+        end
+
+        publish.(publish)
+      end)
+
+    assert {:ok, payload} = Webhook.wait_for_run_completion_for_test(run_id, 5_000)
+    send(publisher, :stop)
     assert payload.completed.ok == true
     assert payload.completed.answer == "done"
     assert payload.duration_ms == 10

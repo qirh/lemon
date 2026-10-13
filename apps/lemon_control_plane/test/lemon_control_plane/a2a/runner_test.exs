@@ -498,7 +498,7 @@ defmodule LemonControlPlane.A2A.RunnerTest do
   defp unique_id(prefix),
     do: "#{prefix}-#{System.unique_integer([:positive, :monotonic])}"
 
-  defp eventually(fun, attempts \\ 50)
+  defp eventually(fun, attempts \\ 300)
   defp eventually(fun, 0), do: fun.()
 
   defp eventually(fun, attempts) do

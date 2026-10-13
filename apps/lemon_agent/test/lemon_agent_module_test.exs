@@ -219,27 +219,18 @@ defmodule LemonAgent.ModuleTest do
     end
 
     test "returns error when already streaming" do
-      delayed_stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      # The producer stalls until released, so the run is in flight when we need it
+      blocking_stream_fn = Mocks.blocking_stream_fn(Mocks.assistant_message("Delayed"), self())
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Delayed")
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(200)
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn)
+      {:ok, agent} = start_agent(stream_fn: blocking_stream_fn)
 
       :ok = LemonAgent.prompt(agent, "First")
+      assert_receive {:stream_blocked, producer}, 5_000
       result = LemonAgent.prompt(agent, "Second")
 
       assert result == {:error, :already_streaming}
-      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 1000)
+      send(producer, :release_stream)
+      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 5_000)
     end
 
     test "adds user message to conversation" do
@@ -312,27 +303,18 @@ defmodule LemonAgent.ModuleTest do
     end
 
     test "returns error when already streaming" do
-      delayed_stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      # The producer stalls until released, so the run is in flight when we need it
+      blocking_stream_fn = Mocks.blocking_stream_fn(Mocks.assistant_message("Delayed"), self())
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Delayed")
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(200)
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn)
+      {:ok, agent} = start_agent(stream_fn: blocking_stream_fn)
 
       :ok = LemonAgent.prompt(agent, "Start")
+      assert_receive {:stream_blocked, producer}, 5_000
       result = LemonAgent.continue(agent)
 
       assert result == {:error, :already_streaming}
-      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 1000)
+      send(producer, :release_stream)
+      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 5_000)
     end
   end
 
@@ -350,27 +332,18 @@ defmodule LemonAgent.ModuleTest do
     end
 
     test "returns :ok and signals abort when streaming" do
-      delayed_stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      # The producer stalls until released, so the run is in flight when we need it
+      blocking_stream_fn =
+        Mocks.blocking_stream_fn(Mocks.assistant_message("Will be aborted"), self())
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Will be aborted")
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(500)
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn)
+      {:ok, agent} = start_agent(stream_fn: blocking_stream_fn)
 
       :ok = LemonAgent.prompt(agent, "Start")
+      assert_receive {:stream_blocked, _producer}, 5_000
       result = LemonAgent.abort(agent)
 
       assert result == :ok
-      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 1000)
+      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 5_000)
     end
   end
 
@@ -502,29 +475,20 @@ defmodule LemonAgent.ModuleTest do
     end
 
     test "returns error on timeout" do
-      delayed_stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      # The producer stalls until released, so the run is in flight when we need it
+      blocking_stream_fn = Mocks.blocking_stream_fn(Mocks.assistant_message("Slow"), self())
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Slow")
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(500)
-          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn)
+      {:ok, agent} = start_agent(stream_fn: blocking_stream_fn)
 
       :ok = LemonAgent.prompt(agent, "Start")
+      assert_receive {:stream_blocked, producer}, 5_000
       result = LemonAgent.wait_for_idle(agent, timeout: 10)
 
       assert result == {:error, :timeout}
 
       # Clean up
-      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 2000)
+      send(producer, :release_stream)
+      assert :ok = LemonAgent.wait_for_idle(agent, timeout: 5_000)
     end
   end
 

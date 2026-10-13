@@ -3,6 +3,8 @@ defmodule LemonAgent.ModelRuntime.CredentialHealthTest do
 
   alias LemonAgent.ModelRuntime.CredentialHealth
 
+  import LemonCore.Testing.AsyncHelpers
+
   setup do
     CredentialHealth.reset()
     on_exit(fn -> CredentialHealth.reset() end)
@@ -58,11 +60,13 @@ defmodule LemonAgent.ModelRuntime.CredentialHealthTest do
   end
 
   test "rate limit failures honor retry_after_ms" do
-    CredentialHealth.record_failure(:openai, "default", :rate_limit, retry_after_ms: 40)
+    CredentialHealth.record_failure(:openai, "default", :rate_limit, retry_after_ms: 300)
 
     assert CredentialHealth.in_cooldown?(:openai, "default")
-    Process.sleep(60)
-    refute CredentialHealth.in_cooldown?(:openai, "default")
+
+    assert_eventually(fn -> not CredentialHealth.in_cooldown?(:openai, "default") end,
+      timeout: 5_000
+    )
   end
 
   test "rate limit failures without retry_after use backoff" do

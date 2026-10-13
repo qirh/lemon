@@ -352,7 +352,7 @@ defmodule CodingAgent.Tools.TaskSwarmTest do
     record.result
   end
 
-  defp await_terminal(task_id, remaining \\ 250)
+  defp await_terminal(task_id, remaining \\ 500)
   defp await_terminal(task_id, 0), do: flunk("Task #{task_id} did not terminalize")
 
   defp await_terminal(task_id, remaining) do

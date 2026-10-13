@@ -132,7 +132,7 @@ defmodule LemonLsp.ServerManagerTest do
                session_id,
                "initialize",
                %{"capabilities" => %{}},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert response["jsonrpc"] == "2.0"
@@ -181,7 +181,7 @@ defmodule LemonLsp.ServerManagerTest do
                session_id,
                "initialize",
                %{"capabilities" => %{}},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert response["result"]["capabilities"]["textDocumentSync"] == 1
@@ -228,7 +228,7 @@ defmodule LemonLsp.ServerManagerTest do
                session_id,
                "initialize",
                %{"capabilities" => %{}},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert response["result"]["capabilities"]["textDocumentSync"] == 1
@@ -335,7 +335,7 @@ defmodule LemonLsp.ServerManagerTest do
              LspServerManager.initialize_session(
                session_id,
                %{"capabilities" => %{}, "rootUri" => raw_uri},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert response["result"]["capabilities"]["textDocumentSync"] == 1
@@ -405,7 +405,7 @@ defmodule LemonLsp.ServerManagerTest do
              LspServerManager.initialize_session(
                session_id,
                %{"capabilities" => %{}, "rootUri" => raw_uri},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert {:ok, response} =
@@ -413,7 +413,7 @@ defmodule LemonLsp.ServerManagerTest do
                session_id,
                "textDocument/diagnostic",
                %{"textDocument" => %{"uri" => raw_uri}},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert response["result"]["kind"] == "full"
@@ -464,7 +464,7 @@ defmodule LemonLsp.ServerManagerTest do
              LspServerManager.initialize_session(
                session_id,
                %{"capabilities" => %{}, "rootUri" => raw_uri},
-               timeout_ms: 1_000
+               timeout_ms: 5_000
              )
 
     assert {:ok, opened} =
@@ -664,7 +664,7 @@ defmodule LemonLsp.ServerManagerTest do
     """
   end
 
-  defp wait_until(fun, attempts \\ 20)
+  defp wait_until(fun, attempts \\ 120)
 
   defp wait_until(fun, attempts) when attempts > 0 do
     case fun.() do

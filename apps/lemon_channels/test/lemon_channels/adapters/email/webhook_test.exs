@@ -350,7 +350,7 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       message_id = "stale-owner@example.com"
 
       first_task = Task.async(fn -> Webhook.handle_inbound(authorized_payload(message_id)) end)
-      assert_receive {:email_submit_blocked, %RunRequest{run_id: run_id}, first_runner}, 500
+      assert_receive {:email_submit_blocked, %RunRequest{run_id: run_id}, first_runner}
 
       digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
       first_entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
@@ -363,7 +363,7 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
                )
 
       second_task = Task.async(fn -> Webhook.handle_inbound(authorized_payload(message_id)) end)
-      assert_receive {:email_submit_blocked, %RunRequest{run_id: ^run_id}, second_runner}, 500
+      assert_receive {:email_submit_blocked, %RunRequest{run_id: ^run_id}, second_runner}
 
       send(second_runner, {:release_email_submit, {:ok, run_id}})
       assert Task.await(second_task, 1_000).status == 202

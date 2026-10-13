@@ -34,8 +34,13 @@ defmodule LemonControlPlane.EventBridgeTickTest do
     end
   end
 
+  # Flushes the bridge mailbox: bus delivery is a plain message send, so a synchronous `:sys`
+  # call returns only once the broadcast events have been handled (and exits if the bridge
+  # crashed while handling them).
+  defp sync_bridge(bridge_pid), do: :sys.get_state(bridge_pid)
+
   describe "tick event mapping" do
-    test "maps :cron_tick to tick event" do
+    test "maps :cron_tick to tick event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         # Create a cron_tick event (what LemonAutomation.Events.emit_tick sends)
         event =
@@ -48,15 +53,14 @@ defmodule LemonControlPlane.EventBridgeTickTest do
         # Broadcast on cron topic
         LemonCore.Bus.broadcast("cron", event)
 
-        # Give time for processing
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         # EventBridge should still be alive (didn't crash)
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
 
-    test "maps :tick to tick event" do
+    test "maps :tick to tick event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         # Create a direct tick event
         event =
@@ -69,7 +73,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
         # Broadcast on system topic
         LemonCore.Bus.broadcast("system", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -77,7 +81,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   end
 
   describe "presence event mapping" do
-    test "maps :presence_changed to presence event" do
+    test "maps :presence_changed to presence event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -88,7 +92,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("presence", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -96,7 +100,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   end
 
   describe "heartbeat event mapping" do
-    test "maps :heartbeat to heartbeat event" do
+    test "maps :heartbeat to heartbeat event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -107,13 +111,13 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("system", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
 
-    test "maps :heartbeat_alert to heartbeat event with alert status" do
+    test "maps :heartbeat_alert to heartbeat event with alert status", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -124,7 +128,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("cron", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -132,7 +136,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   end
 
   describe "node event mapping" do
-    test "maps :node_pair_requested to node.pair.requested event" do
+    test "maps :node_pair_requested to node.pair.requested event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -149,13 +153,13 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("nodes", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
 
-    test "maps :node_pair_resolved to node.pair.resolved event" do
+    test "maps :node_pair_resolved to node.pair.resolved event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -170,13 +174,13 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("nodes", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
 
-    test "maps :node_invoke_request to node.invoke.request event" do
+    test "maps :node_invoke_request to node.invoke.request event", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -193,7 +197,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("nodes", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -201,7 +205,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
   end
 
   describe "state version tracking" do
-    test "bumps presence version on presence_changed" do
+    test "bumps presence version on presence_changed", %{bridge_pid: bridge_pid} do
       # We can't easily test the internal state, but we can verify
       # the event is processed without error
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
@@ -217,13 +221,13 @@ defmodule LemonControlPlane.EventBridgeTickTest do
         LemonCore.Bus.broadcast("presence", event)
         LemonCore.Bus.broadcast("presence", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
 
-    test "bumps health version on health_changed" do
+    test "bumps health version on health_changed", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         event =
           LemonCore.Event.new(
@@ -234,13 +238,13 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("system", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
 
-    test "bumps cron version on cron events" do
+    test "bumps cron version on cron events", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) and Code.ensure_loaded?(LemonCore.Event) do
         tick_event =
           LemonCore.Event.new(
@@ -265,7 +269,7 @@ defmodule LemonControlPlane.EventBridgeTickTest do
 
         LemonCore.Bus.broadcast("cron", run_started)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end

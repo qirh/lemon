@@ -238,7 +238,7 @@ defmodule LemonControlPlane.Methods.SessionLifecycleMethodsTest do
   defp agent_id(session_key), do: session_key |> String.split(":") |> Enum.at(1)
   defp unique_suffix, do: System.unique_integer([:positive, :monotonic])
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 300)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

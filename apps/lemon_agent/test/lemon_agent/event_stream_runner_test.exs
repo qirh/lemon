@@ -535,13 +535,11 @@ defmodule LemonAgent.EventStreamRunnerTest do
           end
         end)
 
+      runner_ref = Process.monitor(runner)
       send(runner, :exit)
-      Process.sleep(50)
-      refute Process.alive?(runner)
+      assert_receive {:DOWN, ^runner_ref, :process, ^runner, _reason}, 5_000
 
       {:ok, stream} = EventStream.start_link(runner: runner)
-
-      Process.sleep(50)
 
       # Consumer should still receive error (monitor fires immediately for dead process)
       # Note: reason will be :noproc since process was already dead

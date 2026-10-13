@@ -19,11 +19,18 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
     end
   end
 
+  # Flushes the bridge mailbox. `subscribe_run/1` is a cast and bus delivery is a plain message
+  # send, so a synchronous `:sys` call returns only after both have been handled (and exits if
+  # the bridge crashed while handling them).
+  defp sync_bridge(bridge_pid), do: :sys.get_state(bridge_pid)
+
   describe "task_started event mapping" do
-    test "maps task_started to task.started WS event and does not crash" do
+    test "maps task_started to task.started WS event and does not crash", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -41,7 +48,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -49,10 +56,10 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "task_started payload contains all expected fields" do
+    test "task_started payload contains all expected fields", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         payload = %{
@@ -67,7 +74,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
         meta = %{run_id: run_id, session_key: "sess-1"}
         event = LemonCore.Event.new(:task_started, payload, meta)
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -75,15 +82,15 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "task_started handles missing optional fields gracefully" do
+    test "task_started handles missing optional fields gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event = LemonCore.Event.new(:task_started, %{}, %{run_id: run_id})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -93,10 +100,12 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
   end
 
   describe "task_completed event mapping" do
-    test "maps task_completed to task.completed WS event and does not crash" do
+    test "maps task_completed to task.completed WS event and does not crash", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -115,7 +124,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -123,15 +132,15 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "task_completed handles missing fields gracefully" do
+    test "task_completed handles missing fields gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event = LemonCore.Event.new(:task_completed, %{}, %{run_id: run_id})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -141,10 +150,10 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
   end
 
   describe "task_error event mapping" do
-    test "maps task_error to task.error WS event and does not crash" do
+    test "maps task_error to task.error WS event and does not crash", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -162,7 +171,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -170,15 +179,15 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "task_error handles missing fields gracefully" do
+    test "task_error handles missing fields gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event = LemonCore.Event.new(:task_error, %{}, %{run_id: run_id})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -188,10 +197,12 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
   end
 
   describe "task_timeout event mapping" do
-    test "maps task_timeout to task.timeout WS event and does not crash" do
+    test "maps task_timeout to task.timeout WS event and does not crash", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -208,7 +219,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -216,15 +227,15 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "task_timeout handles missing fields gracefully" do
+    test "task_timeout handles missing fields gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event = LemonCore.Event.new(:task_timeout, %{}, %{run_id: run_id})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -234,10 +245,12 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
   end
 
   describe "task_aborted event mapping" do
-    test "maps task_aborted to task.aborted WS event and does not crash" do
+    test "maps task_aborted to task.aborted WS event and does not crash", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -254,7 +267,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -262,15 +275,15 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "task_aborted handles missing fields gracefully" do
+    test "task_aborted handles missing fields gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event = LemonCore.Event.new(:task_aborted, %{}, %{run_id: run_id})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -280,10 +293,12 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
   end
 
   describe "run_graph_changed event mapping" do
-    test "maps run_graph_changed to run.graph.changed WS event and does not crash" do
+    test "maps run_graph_changed to run.graph.changed WS event and does not crash", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -300,7 +315,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -308,15 +323,15 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "run_graph_changed handles missing fields gracefully" do
+    test "run_graph_changed handles missing fields gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event = LemonCore.Event.new(:run_graph_changed, %{}, %{run_id: run_id})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -329,10 +344,12 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
     # `parent_run_id` is not a `LemonCore.Events.RunStarted` field, so a payload carrying one
     # loses it on coercion and the bridge reads `meta.parent_run_id` instead. This asserts the
     # bridge tolerates the extra key rather than that it forwards it.
-    test "run_started drops a parent_run_id the RunStarted contract does not declare" do
+    test "run_started drops a parent_run_id the RunStarted contract does not declare", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -348,7 +365,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -356,10 +373,12 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "run_started event includes parentRunId from meta when not in payload" do
+    test "run_started event includes parentRunId from meta when not in payload", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -370,7 +389,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end
@@ -378,10 +397,10 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "run_started handles nil parentRunId gracefully" do
+    test "run_started handles nil parentRunId gracefully", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -392,7 +411,7 @@ defmodule LemonControlPlane.EventBridgeMonitoringTest do
           )
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         assert Process.alive?(Process.whereis(EventBridge))
       end

@@ -46,6 +46,8 @@ defmodule CodingAgent.SessionRecalledContextTest do
 
   use ExUnit.Case, async: false
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
@@ -165,6 +167,13 @@ defmodule CodingAgent.SessionRecalledContextTest do
   # can be read before a run consumes it.
   defp agent_queues(session) do
     :sys.get_state(Session.get_state(session).agent)
+  end
+
+  # `steer/2` and `follow_up/2` are casts; wait until the agent has the message.
+  defp await_queue(session, queue) do
+    assert_eventually(fn -> Map.fetch!(agent_queues(session), queue) != [] end,
+      message: "agent never received #{queue} message"
+    )
   end
 
   defp transcript_contents(session) do
@@ -408,7 +417,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       session = start_session()
 
       :ok = Session.steer(session, "actually, stop")
-      Process.sleep(50)
+      await_queue(session, :steering_queue)
 
       assert [%{message: %UserMessage{content: sent}}] = agent_queues(session).steering_queue
       assert sent =~ @volatile.body
@@ -422,7 +431,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       session = start_session()
 
       :ok = Session.follow_up(session, "and then deploy")
-      Process.sleep(50)
+      await_queue(session, :follow_up_queue)
 
       assert [%{message: %UserMessage{content: sent}}] = agent_queues(session).follow_up_queue
       assert sent =~ @volatile.body
@@ -436,7 +445,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
       session = start_session()
 
       :ok = Session.steer(session, "actually, stop")
-      Process.sleep(50)
+      await_queue(session, :steering_queue)
 
       assert [%{message: %UserMessage{content: "actually, stop"}}] =
                agent_queues(session).steering_queue
@@ -686,7 +695,7 @@ defmodule CodingAgent.SessionRecalledContextTest do
     end
   end
 
-  defp eventually_idle(session, attempts \\ 100)
+  defp eventually_idle(session, attempts \\ 1000)
 
   defp eventually_idle(_session, 0), do: flunk("session did not become idle")
 

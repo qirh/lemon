@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.WebSearchTest do
   use ExUnit.Case, async: false
 
+  import CodingAgent.AsyncHelpers
+
   alias LemonAgent.AbortSignal
   alias CodingAgent.Tools.WebSearch
 
@@ -76,10 +78,18 @@ defmodule CodingAgent.Tools.WebSearchTest do
 
   test "coalesces concurrent identical provider requests" do
     counter = :counters.new(1, [:atomics])
+    test_pid = self()
 
+    # Hold the provider request open until every caller has joined the flight.
     http_get = fn _url, _opts ->
       :counters.add(counter, 1, 1)
-      Process.sleep(80)
+      send(test_pid, {:http_started, self()})
+
+      receive do
+        :finish -> :ok
+      after
+        10_000 -> :ok
+      end
 
       {:ok,
        %Req.Response{
@@ -109,16 +119,28 @@ defmodule CodingAgent.Tools.WebSearchTest do
         }
       )
 
-    results =
-      1..5
-      |> Task.async_stream(
-        fn index ->
+    tasks =
+      for index <- 1..5 do
+        Task.async(fn ->
           tool.execute.("id-#{index}", %{"query" => "same concurrent query"}, nil, nil)
-        end,
-        max_concurrency: 5,
-        timeout: 2_000
-      )
-      |> Enum.map(fn {:ok, result} -> decode_payload(result) end)
+        end)
+      end
+
+    assert_receive {:http_started, http_pid}, 5_000
+
+    assert_eventually(
+      fn ->
+        flights = :sys.get_state(CodingAgent.Search.SingleFlight).by_key
+
+        Enum.sum(for {_key, %{callers: callers}} <- flights, do: length(callers)) == 5
+      end,
+      timeout: 5_000,
+      message: "not every caller joined the flight"
+    )
+
+    send(http_pid, :finish)
+
+    results = tasks |> Task.await_many(5_000) |> Enum.map(&decode_payload/1)
 
     assert Enum.all?(results, &(&1["provider_used"] == "brave"))
     assert :counters.get(counter, 1) == 1

@@ -484,7 +484,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     }
   end
 
-  defp await(fun, attempts \\ 100)
+  defp await(fun, attempts \\ 500)
 
   defp await(_fun, 0), do: false
 
@@ -497,7 +497,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     end
   end
 
-  defp await_value(fun, attempts \\ 100)
+  defp await_value(fun, attempts \\ 500)
 
   defp await_value(_fun, 0), do: flunk("timed out waiting for expected value")
 

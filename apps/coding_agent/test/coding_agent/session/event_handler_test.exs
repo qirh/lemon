@@ -387,7 +387,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
     end
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 1000)
 
   defp eventually(fun, attempts) when attempts > 0 do
     case fun.() do

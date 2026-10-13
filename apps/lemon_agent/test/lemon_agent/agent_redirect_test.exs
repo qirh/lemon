@@ -66,7 +66,18 @@ defmodule LemonAgent.AgentRedirectTest do
 
               for i <- 1..20 do
                 send(parent, {:streaming_chunk, i})
-                Process.sleep(30)
+
+                # Stall after the second chunk so the redirect always lands mid-stream
+                if i == 2 do
+                  receive do
+                    :release_stream -> :ok
+                  after
+                    10_000 -> :ok
+                  end
+                else
+                  Process.sleep(30)
+                end
+
                 LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
               end
 

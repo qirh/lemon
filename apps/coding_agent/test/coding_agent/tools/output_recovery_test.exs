@@ -85,7 +85,7 @@ defmodule CodingAgent.Tools.OutputRecoveryTest do
       ProcessStore.delete(id)
     end)
 
-    await_exit(id, 100)
+    await_exit(id, 500)
     result = BashOutput.execute("output", %{"process_id" => id}, nil, nil, cwd, session_id: owner)
     assert %AgentToolResult{content: content, details: details} = result
     assert details.dropped_lines > 0

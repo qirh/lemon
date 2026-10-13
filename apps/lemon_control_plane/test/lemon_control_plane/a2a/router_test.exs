@@ -13,15 +13,27 @@ defmodule LemonControlPlane.A2A.RouterTest do
       send(owner, {:a2a_submitted, request})
 
       Task.start(fn ->
-        Process.sleep(10)
+        topic = LemonCore.Bus.run_topic(request.run_id)
+        await_subscriber(topic, System.monotonic_time(:millisecond) + 5_000)
 
-        LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(request.run_id), %{
+        LemonCore.Bus.broadcast(topic, %{
           type: :run_completed,
           payload: %{completed: %{run_id: request.run_id, ok: true, answer: answer}}
         })
       end)
 
       {:ok, request.run_id}
+    end
+
+    # The A2A runner subscribes to the run topic only after `submit/1` returns, so the
+    # completion must wait for that subscription instead of guessing a delay.
+    defp await_subscriber(topic, deadline) do
+      registry = if LemonCore.Bus.pubsub?(), do: LemonCore.PubSub, else: LemonCore.Bus.Registry
+
+      if Registry.lookup(registry, topic) == [] and System.monotonic_time(:millisecond) < deadline do
+        Process.sleep(5)
+        await_subscriber(topic, deadline)
+      end
     end
   end
 

@@ -537,7 +537,7 @@ defmodule LemonSimUi.SimManagerAiLoopTest do
     end
   end
 
-  defp wait_until(fun, attempts \\ 50)
+  defp wait_until(fun, attempts \\ 150)
 
   defp wait_until(_fun, 0), do: flunk("condition not met in time")
 

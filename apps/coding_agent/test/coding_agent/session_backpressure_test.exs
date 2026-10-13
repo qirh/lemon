@@ -1,6 +1,8 @@
 defmodule CodingAgent.SessionBackpressureTest do
   use ExUnit.Case, async: true
 
+  import CodingAgent.AsyncHelpers
+
   alias CodingAgent.Session
   alias LemonAgent.EventStream
 
@@ -335,10 +337,9 @@ defmodule CodingAgent.SessionBackpressureTest do
 
       # Kill the subscriber
       send(pid, :die)
-      Process.sleep(50)
 
       # Stream should be canceled (not alive)
-      refute Process.alive?(stream)
+      assert_process_dead(stream)
     end
 
     @tag :tmp_dir
@@ -365,11 +366,9 @@ defmodule CodingAgent.SessionBackpressureTest do
 
       # Kill the subscriber
       send(pid, :die)
-      Process.sleep(50)
 
       # Session should have removed the stream subscriber
-      state_after = Session.get_state(session)
-      assert map_size(state_after.event_streams) == 0
+      assert_eventually(fn -> map_size(Session.get_state(session).event_streams) == 0 end)
     end
   end
 

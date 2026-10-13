@@ -121,7 +121,7 @@ defmodule LemonRouter.FailureBoundaryTest do
     assert %{finalized: false} = :sys.get_state(context.coalescer)
   end
 
-  defp await_replacement(supervisor, old_pid, attempts \\ 100)
+  defp await_replacement(supervisor, old_pid, attempts \\ 500)
 
   defp await_replacement(_supervisor, _old_pid, 0), do: flunk("coalescer was not restarted")
 

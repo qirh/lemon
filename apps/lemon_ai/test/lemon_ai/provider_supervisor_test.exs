@@ -80,6 +80,44 @@ defmodule LemonAi.ProviderSupervisorTest do
     :"test_worker_#{System.unique_integer([:positive])}"
   end
 
+  # Kills `pid` and waits until it is really gone.
+  defp kill_and_await_down(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+    :ok
+  end
+
+  # Waits for the supervisor to register a replacement for `old_pid` under `name`.
+  defp await_restart(name, old_pid) do
+    wait_until("#{inspect(name)} was not restarted", fn ->
+      case Process.whereis(name) do
+        pid when is_pid(pid) and pid != old_pid -> pid
+        _ -> false
+      end
+    end)
+  end
+
+  defp wait_until(message, fun, timeout_ms \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(message, fun, deadline)
+  end
+
+  defp do_wait_until(message, fun, deadline) do
+    case fun.() do
+      falsy when falsy in [false, nil] ->
+        if System.monotonic_time(:millisecond) >= deadline do
+          flunk(message)
+        else
+          Process.sleep(5)
+          do_wait_until(message, fun, deadline)
+        end
+
+      result ->
+        result
+    end
+  end
+
   # Helper to clean up test processes
   defp cleanup_child(pid) when is_pid(pid) do
     if Process.alive?(pid) do
@@ -92,20 +130,12 @@ defmodule LemonAi.ProviderSupervisorTest do
   # Ensure supervisor is running before each test
   setup do
     # Wait for any prior restart to complete
-    Process.sleep(10)
-
-    # Ensure the supervisor is available
-    case Process.whereis(LemonAi.ProviderSupervisor) do
-      nil ->
-        # Wait a bit longer if not found
-        Process.sleep(100)
-
-        assert Process.whereis(LemonAi.ProviderSupervisor) != nil,
-               "ProviderSupervisor should be running"
-
-      pid ->
-        assert Process.alive?(pid)
-    end
+    wait_until("ProviderSupervisor should be running", fn ->
+      case Process.whereis(LemonAi.ProviderSupervisor) do
+        pid when is_pid(pid) -> Process.alive?(pid)
+        _ -> false
+      end
+    end)
 
     :ok
   end
@@ -157,8 +187,7 @@ defmodule LemonAi.ProviderSupervisorTest do
       {:ok, pid2} = start_test_worker(name2)
 
       # Crash pid1
-      Process.exit(pid1, :kill)
-      Process.sleep(50)
+      kill_and_await_down(pid1)
 
       # pid2 should still be alive
       assert Process.alive?(pid2)
@@ -358,8 +387,7 @@ defmodule LemonAi.ProviderSupervisorTest do
       {:ok, pid3} = start_test_worker(name3)
 
       # Crash pid2
-      Process.exit(pid2, :kill)
-      Process.sleep(50)
+      kill_and_await_down(pid2)
 
       # Others should still be alive
       assert Process.alive?(pid1)
@@ -374,8 +402,7 @@ defmodule LemonAi.ProviderSupervisorTest do
       name = unique_name()
 
       {:ok, pid} = start_test_worker(name)
-      Process.exit(pid, :kill)
-      Process.sleep(50)
+      kill_and_await_down(pid)
 
       # Supervisor should still be the same pid
       assert Process.whereis(LemonAi.ProviderSupervisor) == sup_pid
@@ -402,8 +429,6 @@ defmodule LemonAi.ProviderSupervisorTest do
         :exit, _ -> :expected
       end
 
-      Process.sleep(50)
-
       # Supervisor should still be alive
       assert Process.alive?(Process.whereis(LemonAi.ProviderSupervisor))
     end
@@ -417,9 +442,7 @@ defmodule LemonAi.ProviderSupervisorTest do
 
       pids
       |> Enum.take(4)
-      |> Enum.each(&Process.exit(&1, :kill))
-
-      Process.sleep(100)
+      |> Enum.each(&kill_and_await_down/1)
 
       # The survivor should still be alive
       assert Process.alive?(surviving_pid)
@@ -466,11 +489,10 @@ defmodule LemonAi.ProviderSupervisorTest do
       }
 
       {:ok, pid1} = DynamicSupervisor.start_child(LemonAi.ProviderSupervisor, child_spec)
-      Process.exit(pid1, :kill)
-      Process.sleep(100)
+      kill_and_await_down(pid1)
 
       # Should be restarted with a new pid
-      pid2 = Process.whereis(name)
+      pid2 = await_restart(name, pid1)
       assert pid2 != nil
       assert pid2 != pid1
       assert Process.alive?(pid2)
@@ -490,8 +512,7 @@ defmodule LemonAi.ProviderSupervisorTest do
       }
 
       {:ok, pid} = DynamicSupervisor.start_child(LemonAi.ProviderSupervisor, child_spec)
-      Process.exit(pid, :kill)
-      Process.sleep(100)
+      kill_and_await_down(pid)
 
       # Should not be restarted
       assert Process.whereis(name) == nil
@@ -511,17 +532,17 @@ defmodule LemonAi.ProviderSupervisorTest do
       {:ok, pid1} = DynamicSupervisor.start_child(LemonAi.ProviderSupervisor, child_spec)
 
       # Kill with :kill (abnormal exit)
-      Process.exit(pid1, :kill)
-      Process.sleep(100)
+      kill_and_await_down(pid1)
 
       # Should be restarted
-      pid2 = Process.whereis(name)
+      pid2 = await_restart(name, pid1)
       assert pid2 != nil
       assert pid2 != pid1
 
       # Normal exit - stop gracefully
       GenServer.stop(pid2, :normal)
-      Process.sleep(100)
+      # Round trip to the supervisor so it has handled the exit before we check
+      _ = DynamicSupervisor.count_children(LemonAi.ProviderSupervisor)
 
       # Should not be restarted after normal exit
       assert Process.whereis(name) == nil
@@ -679,7 +700,8 @@ defmodule LemonAi.ProviderSupervisorTest do
   describe "edge cases and error handling" do
     test "terminating non-existent child returns error" do
       fake_pid = spawn(fn -> :ok end)
-      Process.sleep(10)
+      ref = Process.monitor(fake_pid)
+      assert_receive {:DOWN, ^ref, :process, ^fake_pid, _reason}, 5_000
 
       result = DynamicSupervisor.terminate_child(LemonAi.ProviderSupervisor, fake_pid)
       assert result == {:error, :not_found}

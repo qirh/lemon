@@ -136,7 +136,7 @@ defmodule LemonChannels.OutboxRetryBehaviorTest do
 
     {:ok, _ref} = Outbox.enqueue(payload)
 
-    assert_receive {:retry_after_attempt, 1, first_attempt_ms}, 500
+    assert_receive {:retry_after_attempt, 1, first_attempt_ms}
 
     outbox_pid = Process.whereis(Outbox)
 

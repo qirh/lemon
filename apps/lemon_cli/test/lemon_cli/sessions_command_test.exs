@@ -325,7 +325,7 @@ defmodule LemonCli.SessionsCommandTest do
     assert output =~ expected
   end
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 500)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

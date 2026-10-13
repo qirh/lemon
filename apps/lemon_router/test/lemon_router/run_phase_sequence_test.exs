@@ -125,7 +125,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
 
     assert_phase_event(run_id, :accepted, nil)
     assert_phase_event(run_id, :waiting_for_slot, :accepted)
-    assert_receive {:started, ^run_id, _opts}, 500
+    assert_receive {:started, ^run_id, _opts}
   end
 
   test "queued submit emits accepted then queued_in_session then waiting_for_slot when started",
@@ -143,15 +143,15 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     :ok = submit(key, run_id_1, "one", :collect, run_supervisor)
     assert_phase_event(run_id_1, :accepted, nil)
     assert_phase_event(run_id_1, :waiting_for_slot, :accepted)
-    assert_receive {:started, ^run_id_1, _opts}, 500
+    assert_receive {:started, ^run_id_1, _opts}
 
     :ok = submit(key, run_id_2, "two", :collect, run_supervisor)
     assert_phase_event(run_id_2, :accepted, nil)
     assert_phase_event(run_id_2, :queued_in_session, :accepted)
 
     SessionCoordinator.cancel(session_key, :user_requested)
-    assert_receive {:aborted, ^run_id_1, :user_requested}, 500
-    assert_receive {:started, ^run_id_2, _opts}, 500
+    assert_receive {:aborted, ^run_id_1, :user_requested}
+    assert_receive {:started, ^run_id_2, _opts}
     assert_phase_event(run_id_2, :waiting_for_slot, :queued_in_session)
   end
 
@@ -164,21 +164,21 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     :ok = Bus.subscribe(Bus.run_topic(run_id_2))
 
     :ok = submit(key, run_id_1, "one", :collect, run_supervisor)
-    assert_receive {:started, ^run_id_1, _opts}, 500
+    assert_receive {:started, ^run_id_1, _opts}
 
     {:ok, gateway_run} =
       start_supervised({RunPhaseSequenceRuntimeRunStub, test_pid: self(), run_id: run_id_1})
 
     :ok = submit(key, run_id_2, "two", :steer, run_supervisor)
 
-    assert_receive {:steer_dispatched, :steer, ^run_id_2, worker_pid}, 500
+    assert_receive {:steer_dispatched, :steer, ^run_id_2, worker_pid}
 
     send(worker_pid, {:steer_rejected, run_id_2})
     refute_phase_event(run_id_2)
 
     SessionCoordinator.cancel(session_key, :user_requested)
-    assert_receive {:aborted, ^run_id_1, :user_requested}, 500
-    assert_receive {:started, ^run_id_2, _opts}, 500
+    assert_receive {:aborted, ^run_id_1, :user_requested}
+    assert_receive {:started, ^run_id_2, _opts}
     refute_phase_event(run_id_2)
 
     GenServer.stop(gateway_run)
@@ -195,7 +195,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     :ok = Bus.subscribe(Bus.run_topic(run_id_3))
 
     :ok = submit(key, run_id_1, "one", :collect, run_supervisor)
-    assert_receive {:started, ^run_id_1, _opts}, 500
+    assert_receive {:started, ^run_id_1, _opts}
 
     :ok = submit(key, run_id_2, "part1", :followup, run_supervisor)
     assert_phase_event(run_id_2, :accepted, nil)
@@ -220,7 +220,7 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     :ok = Bus.subscribe(Bus.run_topic(user_run_id))
 
     :ok = submit(key, active_run_id, "active", :collect, run_supervisor)
-    assert_receive {:started, ^active_run_id, _opts}, 500
+    assert_receive {:started, ^active_run_id, _opts}
 
     :ok =
       submit(key, goal_run_id, "goal continuation", :followup, run_supervisor, %{
@@ -238,8 +238,8 @@ defmodule LemonRouter.RunPhaseSequenceTest do
     assert_phase_event(user_run_id, :queued_in_session, :accepted)
 
     SessionCoordinator.cancel(session_key, :user_requested)
-    assert_receive {:aborted, ^active_run_id, :user_requested}, 500
-    assert_receive {:started, ^user_run_id, _opts}, 500
+    assert_receive {:aborted, ^active_run_id, :user_requested}
+    assert_receive {:started, ^user_run_id, _opts}
     assert_phase_event(user_run_id, :waiting_for_slot, :queued_in_session)
     refute_receive {:started, ^goal_run_id, _opts}, 100
   end

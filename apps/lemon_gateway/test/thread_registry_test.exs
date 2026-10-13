@@ -9,6 +9,7 @@ defmodule LemonGateway.ThreadRegistryTest do
   - Automatic cleanup when processes die
   """
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1]
 
   alias LemonGateway.ThreadRegistry
 
@@ -276,13 +277,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       send(pid, :stop)
-      Process.sleep(50)
-
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "registration is removed when process crashes" do
@@ -297,13 +295,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       send(pid, :crash)
-      Process.sleep(50)
-
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "registration is removed when process is killed" do
@@ -318,13 +313,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       Process.exit(pid, :kill)
-      Process.sleep(50)
-
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "key can be re-registered after process dies" do
@@ -340,12 +332,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid1
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid1 end)
 
       send(pid1, :stop)
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
 
       # Second process can now register the same key
       pid2 = spawn_registering_process(key)
@@ -369,13 +359,14 @@ defmodule LemonGateway.ThreadRegistryTest do
             end
           end)
 
-        Process.sleep(10)
+        assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
+        ref = Process.monitor(pid)
         Process.exit(pid, :kill)
-        Process.sleep(10)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}
       end
 
       # Key should be unregistered
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
   end
 
@@ -748,12 +739,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           loop.(loop)
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       send(pid, :stop)
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
   end
 
@@ -795,13 +784,14 @@ defmodule LemonGateway.ThreadRegistryTest do
             end
           end)
 
-        Process.sleep(5)
+        assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
+        ref = Process.monitor(pid)
         send(pid, :stop)
-        Process.sleep(5)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}
       end
 
       # Should be clean after all cycles
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "handles many different keys" do
@@ -838,12 +828,10 @@ defmodule LemonGateway.ThreadRegistryTest do
 
       # Cleanup
       Enum.each(pids, &send(&1, :stop))
-      Process.sleep(100)
-
       # All should be unregistered
       for i <- 1..200 do
         key = {:stress_test, i, :unique}
-        assert ThreadRegistry.whereis(key) == nil
+        assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
       end
     end
 
@@ -872,7 +860,7 @@ defmodule LemonGateway.ThreadRegistryTest do
             key = {:interleaved, base, i}
             # Try multiple times as registration may not be complete
             result =
-              Enum.reduce_while(1..10, nil, fn _, _ ->
+              Enum.reduce_while(1..500, nil, fn _, _ ->
                 case ThreadRegistry.whereis(key) do
                   nil ->
                     Process.sleep(10)

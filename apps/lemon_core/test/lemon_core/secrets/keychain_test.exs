@@ -20,7 +20,8 @@ defmodule LemonCore.Secrets.KeychainTest do
   defp mock_runner_not_found(cmd, args, _opts) do
     case {cmd, args} do
       {"security", ["find-generic-password", "-s", _, "-a", _, "-w"]} ->
-        {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n", 44}
+        {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
+         44}
 
       _ ->
         {"", 1}
@@ -48,7 +49,8 @@ defmodule LemonCore.Secrets.KeychainTest do
         {"", 0}
 
       {"security", ["find-generic-password", "-s", _, "-a", _, "-w"]} ->
-        {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n", 44}
+        {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
+         44}
 
       _ ->
         {"", 1}
@@ -59,7 +61,8 @@ defmodule LemonCore.Secrets.KeychainTest do
   defp mock_runner_delete_not_found(cmd, args, _opts) do
     case {cmd, args} do
       {"security", ["delete-generic-password" | _]} ->
-        {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n", 44}
+        {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
+         44}
 
       _ ->
         {"", 1}
@@ -72,7 +75,8 @@ defmodule LemonCore.Secrets.KeychainTest do
       {"security", ["find-generic-password", "-s", "CustomService", "-a", "CustomAccount", "-w"]} ->
         {"custom-service-key\n", 0}
 
-      {"security", ["add-generic-password", "-U", "-s", "CustomService", "-a", "CustomAccount" | _]} ->
+      {"security",
+       ["add-generic-password", "-U", "-s", "CustomService", "-a", "CustomAccount" | _]} ->
         {"", 0}
 
       {"security", ["delete-generic-password", "-s", "CustomService", "-a", "CustomAccount"]} ->
@@ -180,7 +184,8 @@ defmodule LemonCore.Secrets.KeychainTest do
           account: "TestAccount"
         )
 
-      assert {:error, {:command_failed, 36, "security: error: User interaction is not allowed."}} = result
+      assert {:error, {:command_failed, 36, "security: error: User interaction is not allowed."}} =
+               result
     end
 
     test "returns {:error, :timeout} when command times out" do
@@ -262,7 +267,8 @@ defmodule LemonCore.Secrets.KeychainTest do
           account: "TestAccount"
         )
 
-      assert {:error, {:command_failed, 36, "security: error: User interaction is not allowed."}} = result
+      assert {:error, {:command_failed, 36, "security: error: User interaction is not allowed."}} =
+               result
     end
 
     test "uses custom service and account when specified" do
@@ -274,7 +280,8 @@ defmodule LemonCore.Secrets.KeychainTest do
             assert "CustomService" in args
             assert "CustomAccount" in args
             assert "custom-value" in args
-            assert "-U" in args  # Update flag should be present
+            # Update flag should be present
+            assert "-U" in args
             {"", 0}
           end,
           service: "CustomService",
@@ -334,7 +341,8 @@ defmodule LemonCore.Secrets.KeychainTest do
           account: "TestAccount"
         )
 
-      assert {:error, {:command_failed, 36, "security: error: User interaction is not allowed."}} = result
+      assert {:error, {:command_failed, 36, "security: error: User interaction is not allowed."}} =
+               result
     end
 
     test "uses custom service and account when specified" do
@@ -342,7 +350,10 @@ defmodule LemonCore.Secrets.KeychainTest do
         Keychain.delete_master_key(
           runner: fn cmd, args, _opts ->
             assert cmd == "security"
-            assert ["delete-generic-password", "-s", "CustomService", "-a", "CustomAccount"] = args
+
+            assert ["delete-generic-password", "-s", "CustomService", "-a", "CustomAccount"] =
+                     args
+
             {"", 0}
           end,
           service: "CustomService",
@@ -383,8 +394,12 @@ defmodule LemonCore.Secrets.KeychainTest do
 
           {"security", ["find-generic-password", "-s", _, "-a", _, "-w"]} ->
             case state.stored do
-              nil -> {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n", 44}
-              value -> {"#{value}\n", 0}
+              nil ->
+                {"security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.\n",
+                 44}
+
+              value ->
+                {"#{value}\n", 0}
             end
 
           {"security", ["delete-generic-password" | _]} ->
@@ -436,27 +451,31 @@ defmodule LemonCore.Secrets.KeychainTest do
     @moduletag :macos_only
 
     test "respects custom timeout_ms option" do
-      # Use a runner that simulates slow response
-      slow_runner = fn _cmd, _args, _opts ->
-        Process.sleep(200)
-        {"slow-result", 0}
+      # A runner that never returns on its own
+      stuck_runner = fn _cmd, _args, _opts ->
+        Process.sleep(:infinity)
       end
 
       # With short timeout, should timeout
       result =
         Keychain.get_master_key(
-          runner: slow_runner,
+          runner: stuck_runner,
           timeout_ms: 50,
           service: "TimeoutTest"
         )
 
       assert {:error, :timeout} = result
 
-      # With longer timeout, should succeed
+      # A slow-but-finite runner succeeds when the timeout leaves enough room
+      slow_runner = fn _cmd, _args, _opts ->
+        Process.sleep(100)
+        {"slow-result", 0}
+      end
+
       result =
         Keychain.get_master_key(
           runner: slow_runner,
-          timeout_ms: 500,
+          timeout_ms: 5_000,
           service: "TimeoutTest"
         )
 
@@ -494,11 +513,9 @@ defmodule LemonCore.Secrets.KeychainTest do
 
       Keychain.get_master_key(runner: test_runner)
 
-      # Give the async task time to complete
-      Process.sleep(50)
-
       assert Agent.get(agent, fn state -> state end) ==
-               {"security", ["find-generic-password", "-s", "Lemon Secrets", "-a", "default", "-w"],
+               {"security",
+                ["find-generic-password", "-s", "Lemon Secrets", "-a", "default", "-w"],
                 [stderr_to_stdout: true]}
 
       Agent.stop(agent)
@@ -513,9 +530,6 @@ defmodule LemonCore.Secrets.KeychainTest do
           {"", 0}
         end
       )
-
-      # Give the async task time to complete
-      Process.sleep(50)
 
       assert Agent.get(agent, fn state -> state end) == [stderr_to_stdout: true]
 

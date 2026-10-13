@@ -31,7 +31,7 @@ defmodule LemonRouter.AgentProfilesTest do
       end
 
       AgentProfiles.reload()
-      Process.sleep(25)
+      :sys.get_state(AgentProfiles)
       File.rm_rf!(tmp_root)
     end)
 
@@ -66,7 +66,7 @@ defmodule LemonRouter.AgentProfilesTest do
     Application.put_env(:lemon_router, :agent_profiles_cwd, project)
 
     AgentProfiles.reload()
-    Process.sleep(25)
+    :sys.get_state(AgentProfiles)
 
     assert AgentProfiles.exists?("global_only")
     assert AgentProfiles.exists?("project_only")

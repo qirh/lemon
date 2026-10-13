@@ -637,7 +637,7 @@ defmodule LemonAgent.ContextRegistryTest do
     end
 
     test "resolving budgets costs one budget slice however many contributors ask" do
-      contributors = 10
+      contributors = 40
 
       for i <- 1..contributors do
         ContextRegistry.register(:"blocking_#{i}", BlockingBudget)
@@ -648,14 +648,14 @@ defmodule LemonAgent.ContextRegistryTest do
 
       assert length(sections) == contributors
 
-      # Ten `timeout_ms/1` callbacks that never answer, each held to the
+      # Forty `timeout_ms/1` callbacks that never answer, each held to the
       # registry's 50ms slice, and a `contribute/1` that returns immediately —
       # so essentially all of this is budget resolution. Resolved one after
-      # another it could not finish under 500ms; resolved together it is 50ms
-      # once. The bound sits between the two with room on both sides: 150ms
-      # under the serial floor, and 300ms of slack over the concurrent cost for
+      # another it could not finish under 2s; resolved together it is 50ms
+      # once. The bound sits between the two with room on both sides: 500ms
+      # under the serial floor, and 1.45s of slack over the concurrent cost for
       # a loaded machine.
-      assert micros < 350_000
+      assert micros < 1_500_000
     end
 
     test "a timeout_ms/1 that misbehaves falls back to the default budget" do
