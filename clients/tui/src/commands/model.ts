@@ -144,8 +144,8 @@ export const modelCommand: SlashCommand = {
 			ctx.ui.openPicker({
 				title: "models",
 				items: entries.map((entry) => ({
-					value: entry.id,
-					label: entry.id,
+					value: `${entry.provider}:${entry.id}`,
+					label: `${entry.provider}:${entry.id}`,
 					description: describeModel(entry),
 				})),
 				footer: "enter applies to this session · esc cancels",
@@ -154,8 +154,11 @@ export const modelCommand: SlashCommand = {
 			return;
 		}
 		const entries = await ensureModels(ctx);
-		const exact = entries.find((entry) => entry.id === requested);
-		const loose = exact ?? entries.find((entry) => entry.id.includes(requested));
+		const exact = entries.find(
+			(entry) => entry.id === requested || `${entry.provider}:${entry.id}` === requested,
+		);
+		const loose =
+			exact ?? entries.find((entry) => `${entry.provider}:${entry.id}`.includes(requested));
 		if (entries.length > 0 && !loose) {
 			ctx.ui.notice(
 				`no model matches "${requested}" — /model with no argument lists them`,
@@ -163,7 +166,7 @@ export const modelCommand: SlashCommand = {
 			);
 			return;
 		}
-		await applyModel(ctx, loose?.id ?? requested);
+		await applyModel(ctx, loose ? `${loose.provider}:${loose.id}` : requested);
 	},
 };
 
@@ -179,16 +182,29 @@ export const thinkCommand: SlashCommand = {
 	name: "think",
 	aliases: ["reasoning"],
 	summary: "set the reasoning effort for this session",
-	usage: `<${THINKING_LEVELS.join("|")}>`,
+	usage: `[${THINKING_LEVELS.join("|")}]`,
 	group: "routing",
 	methods: [METHOD.sessionsPatch],
 	async run(ctx, argv) {
 		const requested = argv[0]?.toLowerCase();
 		if (!requested) {
-			ctx.ui.noticeBlock([
-				`thinking: ${ctx.session.thinkingLevel ?? "(daemon default)"}`,
-				`levels: ${THINKING_LEVELS.join(", ")}`,
-			]);
+			ctx.ui.openPicker({
+				title: `thinking — ${ctx.session.thinkingLevel ?? "daemon default"}`,
+				items: THINKING_LEVELS.map((level) => ({
+					value: level,
+					label: level === ctx.session.thinkingLevel ? `${level} (current)` : level,
+				})),
+				footer: "enter applies to this session · esc keeps the draft",
+				onSelect: async (choice) => {
+					await ctx.methods.sessionsPatch({
+						sessionKey: ctx.session.key,
+						thinkingLevel: choice.value,
+					});
+					ctx.session.thinkingLevel = choice.value;
+					ctx.ui.refreshStatus();
+					ctx.ui.notice(`thinking: ${choice.value}`);
+				},
+			});
 			return;
 		}
 		const level = THINKING_LEVELS.find((candidate) => candidate === requested);

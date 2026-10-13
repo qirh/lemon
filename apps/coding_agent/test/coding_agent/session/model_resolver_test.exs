@@ -28,6 +28,20 @@ defmodule CodingAgent.Session.ModelResolverTest do
     :ok
   end
 
+  test "in-memory persisted atom providers retain their API when restoring a branch" do
+    session =
+      CodingAgent.SessionManager.new("/workspace")
+      |> CodingAgent.SessionManager.append_entry(
+        CodingAgent.SessionManager.SessionEntry.model_change(:"openai-codex", "gpt-5.5")
+      )
+
+    context = CodingAgent.SessionManager.build_session_context(session)
+    model = ModelResolver.resolve_session_model(context.model, %SettingsManager{})
+    assert model.provider == :"openai-codex"
+    assert model.api == :openai_codex_responses
+    assert model.id == "gpt-5.5"
+  end
+
   test "default model routing falls back to a ready provider with the same model id" do
     settings = %SettingsManager{
       default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},

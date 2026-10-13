@@ -66,20 +66,30 @@ defmodule CodingAgent.Tools.Task.Async do
 
   def wrap_on_update(task_id, lifecycle_context, on_update) do
     fn %AgentToolResult{} = result ->
-      result = %{
-        result
-        | details:
-            Map.merge(result.details || %{}, %{
-              task_id: task_id,
-              run_id: lifecycle_context[:run_id],
-              description: lifecycle_context[:description]
-            })
-      }
+      case result.details do
+        %{task_id: descendant_id} when is_binary(descendant_id) and descendant_id != task_id ->
+          # A native child relays its descendants through this callback. Their
+          # own worker already persists these events; do not relabel or duplicate them.
+          notify_progress(lifecycle_context, on_update, result)
 
-      TaskStore.append_event(task_id, result)
-      maybe_emit_child_engine_action(result, lifecycle_context)
+        _ ->
+          result = %{
+            result
+            | details:
+                (result.details || %{})
+                |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(lifecycle_context))
+                |> Map.merge(%{
+                  task_id: task_id,
+                  run_id: lifecycle_context[:run_id],
+                  description: lifecycle_context[:description]
+                })
+          }
 
-      notify_progress(lifecycle_context, on_update, result)
+          TaskStore.append_event(task_id, result)
+          maybe_emit_child_engine_action(result, lifecycle_context)
+
+          notify_progress(lifecycle_context, on_update, result)
+      end
     end
   end
 
@@ -306,7 +316,7 @@ defmodule CodingAgent.Tools.Task.Async do
     result_details =
       case result do
         {:ok, %AgentToolResult{details: details}} when is_map(details) ->
-          Map.take(details, [:session_id, :cwd, :worktree_path, :branch])
+          Map.take(details, [:session_id, :cwd, :worktree_path, :branch, :structured_output])
 
         _ ->
           %{}
@@ -317,7 +327,9 @@ defmodule CodingAgent.Tools.Task.Async do
     notify_progress(context, callback, %AgentToolResult{
       content: [%LemonAi.Types.TextContent{text: text}],
       details:
-        Map.merge(result_details, %{
+        result_details
+        |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(context))
+        |> Map.merge(%{
           task_id: task_id,
           run_id: run_id,
           description: context[:description],

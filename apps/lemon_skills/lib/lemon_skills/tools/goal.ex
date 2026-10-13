@@ -22,7 +22,12 @@ defmodule LemonSkills.Tools.Goal do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "action" => %{"type" => "string", "enum" => @actions},
+          "action" => %{
+            "type" => "string",
+            "enum" => @actions,
+            "description" =>
+              "set defines the goal; status inspects it; start or run_once dispatch bounded work; stop, pause, and resume control its lifecycle."
+          },
           "objective" => %{
             "type" => "string",
             "description" => "Concrete coding objective for set."

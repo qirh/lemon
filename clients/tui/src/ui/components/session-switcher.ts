@@ -52,6 +52,9 @@ export class SessionSwitcher {
 	#rows: SessionRow[] = [];
 	#promptMode = false;
 	#promptText = "";
+	#searchTimer: NodeJS.Timeout | undefined;
+	#searchVersion = 0;
+	#searching = false;
 
 	constructor(host: SessionSwitcherHost) {
 		this.#host = host;
@@ -103,6 +106,8 @@ export class SessionSwitcher {
 			items: this.#items(),
 			footer: this.#footer(),
 			detail: () => this.#detail(),
+			remoteFilter: true,
+			onFilterChange: (filter) => this.#search(filter),
 			onSelect: (item) => void this.#onSelect(item),
 			onCancel: () => this.#onCancel(),
 			onKey: (data) => this.#onKey(data),
@@ -112,6 +117,10 @@ export class SessionSwitcher {
 	}
 
 	close(): void {
+		if (this.#searchTimer) clearTimeout(this.#searchTimer);
+		this.#searchTimer = undefined;
+		this.#searchVersion++;
+		this.#searching = false;
 		this.#close?.();
 		this.#close = undefined;
 		this.#overlay = undefined;
@@ -129,7 +138,9 @@ export class SessionSwitcher {
 
 	#footer(): string {
 		if (this.#promptMode) return "enter creates the session with this prompt · esc goes back";
-		return "enter switches · ctrl+n new · ctrl+w close · esc cancels";
+		return this.#searching
+			? "searching stored sessions… · esc cancels"
+			: "type to search stored sessions · enter switches · ctrl+n new · ctrl+w close";
 	}
 
 	/** The inline prompt row, or nothing while the list is in charge. */
@@ -211,6 +222,9 @@ export class SessionSwitcher {
 
 	async #onSelect(item: PickerItem): Promise<void> {
 		this.close();
+		this.#host.store.session(item.value).title = this.#rows.find(
+			(row) => row.key === item.value,
+		)?.title;
 		await this.#host.switchSession(item.value);
 	}
 
@@ -230,6 +244,41 @@ export class SessionSwitcher {
 		this.#overlay.setFooter(this.#footer());
 		this.#overlay.invalidate();
 		this.#host.repaint();
+	}
+
+	#search(filter: string): void {
+		if (this.#searchTimer) clearTimeout(this.#searchTimer);
+		const version = ++this.#searchVersion;
+		const overlay = this.#overlay;
+		if (!overlay) return;
+		const query = filter.trim();
+		if (Buffer.byteLength(query, "utf8") > 512) {
+			this.#searching = false;
+			overlay.setItems([], filter);
+			overlay.setFooter("search is limited to 512 bytes · shorten the query");
+			this.#host.repaint();
+			return;
+		}
+		this.#searching = true;
+		// An old row must not be selectable under a new, not-yet-resolved query.
+		overlay.setItems([], filter);
+		this.#refresh();
+		this.#searchTimer = setTimeout(async () => {
+			this.#searchTimer = undefined;
+			try {
+				const rows = await collectSessions(this.#host, query);
+				if (version !== this.#searchVersion || this.#overlay !== overlay) return;
+				this.#rows = rows;
+				this.#searching = false;
+				overlay.setItems(this.#items(), filter);
+				this.#refresh();
+			} catch {
+				if (version !== this.#searchVersion || this.#overlay !== overlay) return;
+				this.#searching = false;
+				overlay.setFooter("session search failed · edit the query to retry · esc cancels");
+				this.#host.repaint();
+			}
+		}, 150);
 	}
 }
 

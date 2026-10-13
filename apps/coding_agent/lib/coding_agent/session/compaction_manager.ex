@@ -253,14 +253,44 @@ defmodule CodingAgent.Session.CompactionManager do
   def summary_options(opts, state) do
     resolver = CodingAgent.Session.ModelResolver
 
-    stream_options =
-      resolver.build_stream_options(state.model, state.settings_manager, nil, state.cwd)
+    model =
+      resolver.resolve_compaction_model(
+        Keyword.get(opts, :model),
+        state.settings_manager,
+        state.model
+      )
 
-    api_key = resolver.build_get_api_key(state.settings_manager).(state.model.provider)
+    existing_stream_options =
+      if Keyword.has_key?(opts, :api_key) do
+        Map.put(
+          Keyword.get(opts, :stream_options) || %{},
+          :api_key,
+          Keyword.fetch!(opts, :api_key)
+        )
+      else
+        Keyword.get(opts, :stream_options)
+      end
+
+    stream_options =
+      resolver.build_stream_options(
+        model,
+        state.settings_manager,
+        existing_stream_options,
+        state.cwd
+      )
+
+    api_key =
+      if Keyword.has_key?(opts, :api_key) do
+        Keyword.fetch!(opts, :api_key)
+      else
+        stream_options.api_key ||
+          resolver.build_get_api_key(state.settings_manager).(model.provider)
+      end
 
     opts
-    |> Keyword.put_new(:stream_options, stream_options)
-    |> Keyword.put_new(:api_key, api_key)
+    |> Keyword.put(:model, model)
+    |> Keyword.put(:stream_options, stream_options)
+    |> Keyword.put(:api_key, api_key)
   end
 
   # ============================================================================

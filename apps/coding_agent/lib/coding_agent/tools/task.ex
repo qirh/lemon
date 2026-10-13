@@ -16,7 +16,7 @@ defmodule CodingAgent.Tools.Task do
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     description = Params.build_description(cwd)
-    role_enum = Params.build_role_enum(cwd)
+    agent_enum = Params.build_agent_enum(cwd)
 
     %AgentTool{
       name: "task",
@@ -71,10 +71,15 @@ defmodule CodingAgent.Tools.Task do
             "type" => "string",
             "description" => "Optional thinking level override for the native task session"
           },
-          "role" => %{
+          "agent" => %{
             "type" => "string",
             "description" =>
-              "Optional role to specialize the task (e.g., research, implement, review, test)"
+              "Named agent persona: scout (read-only discovery), reviewer (read-only review), task-executor, or a local .lemon/agents/*.md definition"
+          },
+          "output_schema" => %{
+            "type" => ["object", "boolean"],
+            "description" =>
+              "JSON Schema for the child's final JSON response. Invalid output fails the task; validated data is returned as structured_output."
           },
           "async" => %{
             "type" => "boolean",
@@ -120,7 +125,7 @@ defmodule CodingAgent.Tools.Task do
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
-    |> Params.maybe_add_enum(role_enum)
+    |> Params.maybe_add_enum(agent_enum)
     |> add_batch_schema()
   end
 
@@ -173,7 +178,8 @@ defmodule CodingAgent.Tools.Task do
       Map.take(tool.parameters["properties"], [
         "description",
         "prompt",
-        "role",
+        "agent",
+        "output_schema",
         "model",
         "thinking_level",
         "cwd",

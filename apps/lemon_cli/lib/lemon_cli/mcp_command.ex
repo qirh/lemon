@@ -120,21 +120,23 @@ defmodule LemonCli.McpCommand do
   defp test_connection(entry, opts) do
     id = "mcp-test-" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
-    with {:ok, _} <- Application.ensure_all_started(:lemon_skills) do
-      try do
-        case McpSession.open(id, Keyword.get(opts, :cwd, File.cwd!()), [entry], self()) do
-          :ok ->
-            tools = McpSession.tools(id)
-            {:ok, %{"status" => "connected", "tool_count" => length(tools)}}
+    case Application.ensure_all_started(:lemon_skills) do
+      {:ok, _} ->
+        try do
+          case McpSession.open(id, Keyword.get(opts, :cwd, File.cwd!()), [entry], self()) do
+            :ok ->
+              tools = McpSession.tools(id)
+              {:ok, %{"status" => "connected", "tool_count" => length(tools)}}
 
-          _ ->
-            {:error, :connection_failed}
+            _ ->
+              {:error, :connection_failed}
+          end
+        after
+          McpSession.close(id)
         end
-      after
-        McpSession.close(id)
-      end
-    else
-      _ -> {:error, :unavailable}
+
+      _ ->
+        {:error, :unavailable}
     end
   end
 

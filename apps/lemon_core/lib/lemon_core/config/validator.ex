@@ -57,6 +57,7 @@ defmodule LemonCore.Config.Validator do
   @spec validate(Modular.t() | LemonCore.Config.t()) :: :ok | {:error, [String.t()]}
   def validate(%Modular{} = config) do
     errors = []
+    errors = model_role_errors(config.model_roles) ++ errors
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
@@ -76,6 +77,7 @@ defmodule LemonCore.Config.Validator do
 
   def validate(%LemonCore.Config{} = config) do
     errors = []
+    errors = model_role_errors(config.model_roles) ++ errors
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
@@ -87,6 +89,28 @@ defmodule LemonCore.Config.Validator do
       _ -> {:error, Enum.reverse(errors)}
     end
   end
+
+  @doc "Validates the canonical string-valued model role table without provider dependencies."
+  @spec validate_model_roles(term()) :: :ok | {:error, [String.t()]}
+  def validate_model_roles(roles), do: errors_to_result(model_role_errors(roles))
+
+  defp model_role_errors(roles) when is_map(roles) do
+    Enum.flat_map(roles, fn {role, selector} ->
+      cond do
+        not is_binary(role) or role == "" or String.contains?(role, "@") or
+            String.match?(role, ~r/\s/u) ->
+          ["model_roles: keys must be non-empty role names without @ or whitespace"]
+
+        not is_binary(selector) or String.trim(selector) == "" ->
+          ["model_roles.#{role}: must be a non-empty model selector string"]
+
+        true ->
+          []
+      end
+    end)
+  end
+
+  defp model_role_errors(_), do: ["model_roles: must be a table of model selector strings"]
 
   @doc """
   Validates settings for removed configuration sections and engine-routing keys,

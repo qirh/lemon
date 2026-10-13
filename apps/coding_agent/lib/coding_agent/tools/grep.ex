@@ -4,6 +4,8 @@ defmodule CodingAgent.Tools.Grep do
 
   Searches for patterns in files using ripgrep (rg) if available,
   falling back to Elixir's built-in file/regex operations.
+  Binary and invalid UTF-8 files are skipped by the Elixir fallback, including
+  explicitly targeted files. Truncated lines can be recovered with `read`.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -30,6 +32,7 @@ defmodule CodingAgent.Tools.Grep do
       description:
         "Search for patterns in files using regex or literal text. Uses ripgrep for performance when available.",
       label: "Search Files",
+      parallel_safe: true,
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -422,18 +425,22 @@ defmodule CodingAgent.Tools.Grep do
 
   defp search_file_refs(file_path, matcher) do
     case File.read(file_path) do
-      {:ok, content} ->
-        content
-        |> String.split(~r/\r?\n/)
-        |> Enum.with_index(1)
-        |> Enum.reduce([], fn {line, idx}, acc ->
-          if line_matches?(line, matcher) do
-            [%{file_path: file_path, line_number: idx} | acc]
-          else
-            acc
-          end
-        end)
-        |> Enum.reverse()
+      {:ok, content} when is_binary(content) ->
+        if String.valid?(content) and not String.contains?(content, <<0>>) do
+          content
+          |> String.split(~r/\r?\n/)
+          |> Enum.with_index(1)
+          |> Enum.reduce([], fn {line, idx}, acc ->
+            if line_matches?(line, matcher) do
+              [%{file_path: file_path, line_number: idx} | acc]
+            else
+              acc
+            end
+          end)
+          |> Enum.reverse()
+        else
+          []
+        end
 
       {:error, _} ->
         []
@@ -469,7 +476,7 @@ defmodule CodingAgent.Tools.Grep do
       )
       |> maybe_add_notice(
         truncation.truncated,
-        "#{format_size(opts.max_bytes)} limit reached"
+        "#{format_size(opts.max_bytes)} limit reached. Narrow path/pattern or use read on the reported file and line"
       )
       |> maybe_add_notice(
         lines_truncated?,

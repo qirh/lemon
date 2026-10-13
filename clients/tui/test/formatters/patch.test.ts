@@ -8,6 +8,7 @@
 import { describe, expect, it, mock } from "bun:test";
 
 // Mock os module to control home directory for path formatting
+// Load the formatter after mock.module so its os dependency sees the test home.
 mock.module("node:os", () => ({
 	homedir: mock(() => "/Users/testuser"),
 }));
@@ -251,28 +252,15 @@ describe("patchFormatter", () => {
 			expect(result.isError).toBe(true);
 		});
 
-		it('detects error from content text containing "error"', async () => {
+		it("uses the native error flag rather than words in successful file names", async () => {
 			const { patchFormatter } = await import("../../src/formatters/patch.js");
-
-			const result = patchFormatter.formatResult(
-				{ content: [{ type: "text", text: "Patch error: file not found" }] },
-				{ patch_text: "" },
-			);
-
-			expect(result.summary).toBe("\u2717 Failed");
-			expect(result.isError).toBe(true);
-		});
-
-		it('detects error from content text containing "failed"', async () => {
-			const { patchFormatter } = await import("../../src/formatters/patch.js");
-
-			const result = patchFormatter.formatResult(
-				{ content: [{ type: "text", text: "Patch application failed" }] },
-				{ patch_text: "" },
-			);
-
-			expect(result.summary).toBe("\u2717 Failed");
-			expect(result.isError).toBe(true);
+			const success = patchFormatter.formatResult({
+				content: [{ type: "text", text: "Patched error-handler.ts and failed.test.ts" }],
+				details: { changed: ["error-handler.ts", "failed.test.ts"] },
+			});
+			expect(success.isError).toBe(false);
+			expect(success.summary).toContain("2 files patched");
+			expect(patchFormatter.formatResult({ is_error: true }).isError).toBe(true);
 		});
 
 		it("shows failure details", async () => {
@@ -465,4 +453,18 @@ describe("patchFormatter", () => {
 			expect(patchFormatter.tools).toContain("patch");
 		});
 	});
+});
+
+it("renders native patch envelope operations and authoritative changed paths", async () => {
+	const { patchFormatter } = await import("../../src/formatters/patch.js");
+	const args = {
+		patch_text: "*** Begin Patch\n*** Update File: src/ledger.ts\n@@\n-old\n+new\n*** End Patch",
+	};
+	expect(patchFormatter.formatArgs(args).summary).toContain("1 file");
+	const result = patchFormatter.formatResult(
+		{ details: { changed: ["src/ledger.ts"], additions: 1, removals: 1 } },
+		args,
+	);
+	expect(result.summary).toContain("1 file patched");
+	expect(result.details.join("\n")).toContain("ledger.ts (+1 -1)");
 });

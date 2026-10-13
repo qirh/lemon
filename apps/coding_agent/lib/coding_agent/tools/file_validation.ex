@@ -30,8 +30,9 @@ defmodule CodingAgent.Tools.FileValidation do
   def put_text_snapshots(details, path, old_text, new_text) do
     details = Map.put(details, :path, path)
 
-    if (is_nil(old_text) or (is_binary(old_text) and byte_size(old_text) <= 16_384)) and
-         is_binary(new_text) and byte_size(new_text) <= 16_384 do
+    if (is_binary(old_text) or is_binary(new_text)) and
+         (is_nil(old_text) or (is_binary(old_text) and byte_size(old_text) <= 16_384)) and
+         (is_nil(new_text) or (is_binary(new_text) and byte_size(new_text) <= 16_384)) do
       details |> Map.put(:oldText, old_text) |> Map.put(:newText, new_text)
     else
       details

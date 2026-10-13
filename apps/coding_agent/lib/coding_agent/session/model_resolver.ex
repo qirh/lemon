@@ -6,6 +6,8 @@ defmodule CodingAgent.Session.ModelResolver do
   provider configuration lookups, API key resolution via environment variables and
   secrets, and provider-specific stream option building.
   """
+  alias CodingAgent.SettingsManager
+  alias LemonAgent.ModelRuntime.ModelRoles
 
   # ============================================================================
   # Model Resolution
@@ -21,6 +23,12 @@ defmodule CodingAgent.Session.ModelResolver do
         %CodingAgent.SettingsManager{} = settings
       ) do
     apply_provider_base_url(model, settings)
+  end
+
+  def resolve_session_model("@" <> _role = selector, %SettingsManager{} = settings) do
+    selector
+    |> expand_role!(settings, default_selector(settings))
+    |> resolve_role_model(settings)
   end
 
   def resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
@@ -40,6 +48,9 @@ defmodule CodingAgent.Session.ModelResolver do
 
   def resolve_explicit_model(spec) when is_map(spec) do
     provider = spec[:provider] || spec["provider"]
+
+    provider =
+      if is_atom(provider) and not is_nil(provider), do: Atom.to_string(provider), else: provider
 
     model_id =
       spec[:model_id] || spec["model_id"] || spec[:id] || spec["id"] || spec[:model] ||
@@ -97,11 +108,85 @@ defmodule CodingAgent.Session.ModelResolver do
     LemonAi.Models.find_by_id(model_id)
   end
 
+  @doc """
+  Resolves an explicit task selector, or uses `model_roles.task` when configured.
+  Without either, the parent model is returned unchanged (including nil).
+  Built-in role fallbacks use the parent model before the configured default.
+  """
+  @spec resolve_task_model(term(), SettingsManager.t(), term()) :: term()
+  def resolve_task_model(selector, %SettingsManager{} = settings, parent_model) do
+    selector =
+      selector || if(Map.has_key?(settings.model_roles, "task"), do: "@task")
+
+    cond do
+      is_nil(selector) ->
+        parent_model
+
+      is_binary(selector) and String.starts_with?(String.trim(selector), "@") ->
+        selector
+        |> expand_role!(settings, parent_model || default_selector(settings))
+        |> resolve_role_model(settings)
+
+      true ->
+        selector
+    end
+  end
+
+  @doc "Chooses compaction, configured smol, then the active model without session mutation."
+  @spec resolve_compaction_model(term(), SettingsManager.t(), LemonAi.Types.Model.t()) ::
+          LemonAi.Types.Model.t()
+  def resolve_compaction_model(selector, %SettingsManager{} = settings, active_model) do
+    selector =
+      selector ||
+        cond do
+          Map.has_key?(settings.model_roles, "compaction") -> "@compaction"
+          Map.has_key?(settings.model_roles, "smol") -> "@smol"
+          true -> active_model
+        end
+
+    selector
+    |> expand_role!(settings, active_model)
+    |> resolve_role_model(settings)
+  end
+
+  defp expand_role!(selector, settings, fallback) do
+    case ModelRoles.resolve(selector, settings.model_roles, fallback) do
+      {:ok, concrete} -> concrete
+      {:error, reason} -> raise ArgumentError, reason
+    end
+  end
+
+  defp default_selector(%SettingsManager{default_model: %{model_id: "@" <> _role = selector}}),
+    do: selector
+
+  defp default_selector(%SettingsManager{default_model: selector}), do: selector
+
+  defp resolve_role_model(spec, %SettingsManager{default_model: spec} = settings)
+       when is_map(spec) and not is_struct(spec) do
+    resolve_default_model(settings)
+  end
+
+  defp resolve_role_model(spec, settings), do: resolve_session_model(spec, settings)
+
   @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: LemonAi.Types.Model.t()
   def resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
     # No default model configured, raise an error
     raise ArgumentError,
           "model is required: either pass :model option or configure default_model in settings"
+  end
+
+  def resolve_default_model(%SettingsManager{default_model: "@" <> _role = selector} = settings) do
+    selector
+    |> expand_role!(settings, nil)
+    |> resolve_role_model(settings)
+  end
+
+  def resolve_default_model(
+        %SettingsManager{default_model: %{model_id: "@" <> _role = selector}} = settings
+      ) do
+    selector
+    |> expand_role!(settings, nil)
+    |> resolve_role_model(settings)
   end
 
   def resolve_default_model(%CodingAgent.SettingsManager{default_model: config} = settings)

@@ -76,7 +76,11 @@ function formatTaskResult(result: unknown): FormattedOutput {
 			? (details.current_action as Record<string, unknown>)
 			: undefined;
 	const taskIds = stringList(details.task_ids);
-	const joinedTasks = Array.isArray(details.tasks) ? details.tasks : [];
+	const joinedTasks = Array.isArray(details.tasks)
+		? details.tasks
+		: Array.isArray(details.results)
+			? details.results
+			: [];
 	const outputLines = extractText(result)
 		.split(/\r?\n/)
 		.filter((line) => line.trim().length > 0);

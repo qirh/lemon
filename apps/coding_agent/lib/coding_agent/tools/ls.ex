@@ -7,11 +7,14 @@ defmodule CodingAgent.Tools.Ls do
   - Long format with metadata (size, modified time, permissions)
   - Recursive listing with depth control
   - Entry limits to prevent overwhelming output
+  Recursive listings do not follow directory symlinks. Limited results are
+  selected deterministically; increase `max_entries` or list a subtree for more.
   """
 
   import Bitwise
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
@@ -33,6 +36,7 @@ defmodule CodingAgent.Tools.Ls do
       name: "ls",
       description: "List directory contents. Shows files and directories with optional metadata.",
       label: "List Directory",
+      parallel_safe: true,
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -101,7 +105,9 @@ defmodule CodingAgent.Tools.Ls do
     if aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      do_execute(params, signal, cwd, opts)
+      params
+      |> do_execute(signal, cwd, opts)
+      |> ToolResultTrust.untrusted(:local_search)
     end
   end
 
@@ -149,8 +155,13 @@ defmodule CodingAgent.Tools.Ls do
         sorted_entries = sort_entries(entries)
 
         # Format output
+        count_label =
+          if recursive and truncated,
+            do: "at least #{total_count}",
+            else: Integer.to_string(total_count)
+
         output =
-          format_entries(sorted_entries, long_format, path, truncated, total_count, max_entries)
+          format_entries(sorted_entries, long_format, path, truncated, count_label, max_entries)
 
         %AgentToolResult{
           content: [%TextContent{text: output}],
@@ -194,7 +205,7 @@ defmodule CodingAgent.Tools.Ls do
             full_path = Path.join(path, name)
             relative_path = Path.relative_to(full_path, base_path)
 
-            case File.stat(full_path) do
+            case File.lstat(full_path) do
               {:ok, stat} ->
                 %{
                   name: name,
@@ -221,6 +232,7 @@ defmodule CodingAgent.Tools.Ls do
                 }
             end
           end)
+          |> sort_entries()
 
         # Check if we need to recurse
         if recursive && should_continue_recursion?(current_depth, max_depth) do
@@ -334,7 +346,7 @@ defmodule CodingAgent.Tools.Ls do
     footer =
       cond do
         truncated ->
-          "\n[Showing #{length(entries)} of #{total_count} entries. Limit: #{max_entries}]"
+          "\n[Showing #{length(entries)} of #{total_count} entries. Limit: #{max_entries}. Increase max_entries or list a subdirectory for more.]"
 
         entries == [] ->
           "\n(empty directory)"

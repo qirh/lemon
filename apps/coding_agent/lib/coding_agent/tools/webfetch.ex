@@ -4,6 +4,8 @@ defmodule CodingAgent.Tools.WebFetch do
 
   Fetches content from a URL with SSRF protections, readability extraction,
   optional Firecrawl fallback, and structured JSON output.
+  Binary responses are rejected instead of being treated as readable text.
+  Raise `maxChars` to recover truncated text; omission uses the configured default.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -41,6 +43,7 @@ defmodule CodingAgent.Tools.WebFetch do
       description:
         "Fetch and extract readable content from a URL (HTML -> markdown/text). Returns structured JSON.",
       label: "Web Fetch",
+      parallel_safe: true,
       parameters: %{
         "type" => "object",
         "properties" => %{
@@ -65,7 +68,8 @@ defmodule CodingAgent.Tools.WebFetch do
           },
           "maxChars" => %{
             "type" => "integer",
-            "description" => "Maximum characters to return."
+            "description" =>
+              "Maximum characters to return (minimum 100; defaults to configured fetch limit). Increase to recover truncated content."
           },
           "format" => %{
             "type" => "string",
@@ -120,7 +124,7 @@ defmodule CodingAgent.Tools.WebFetch do
   defp run_cached_fetch(url, extract_mode, max_chars, runtime, providers) do
     cache_key =
       WebCache.normalize_cache_key(
-        "fetch:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
+        "fetch:text-v1:#{Enum.join(providers, ",")}:#{url}:#{Atom.to_string(extract_mode)}:#{max_chars}"
       )
 
     case WebCache.read_cache(@fetch_cache_table, cache_key, runtime.cache_opts) do
@@ -399,12 +403,22 @@ defmodule CodingAgent.Tools.WebFetch do
     end
   end
 
-  defp extract_content(body, _content_type, :html, _url, _runtime) do
-    {:ok, %{text: body, title: nil, extractor: "raw_html"}}
+  defp extract_content(body, content_type, _mode, _url, _runtime)
+       when not is_binary(body) do
+    {:error, "Unsupported non-text response: #{content_type || "unknown content type"}"}
+  end
+
+  defp extract_content(body, content_type, :html, _url, _runtime) do
+    if readable_body?(body, content_type),
+      do: {:ok, %{text: body, title: nil, extractor: "raw_html"}},
+      else: {:error, "Unsupported binary response: #{content_type || "unknown content type"}"}
   end
 
   defp extract_content(body, content_type, extract_mode, url, runtime) do
     cond do
+      not readable_body?(body, content_type) ->
+        {:error, "Unsupported binary response: #{content_type || "unknown content type"}"}
+
       is_binary(content_type) and String.contains?(content_type, "text/html") ->
         extract_html_content(body, extract_mode, url, runtime)
 
@@ -420,6 +434,13 @@ defmodule CodingAgent.Tools.WebFetch do
       true ->
         {:ok, %{text: body, title: nil, extractor: "raw"}}
     end
+  end
+
+  defp readable_body?(body, content_type) do
+    String.valid?(body) and not String.contains?(body, <<0>>) and
+      not (is_binary(content_type) and
+             (String.starts_with?(content_type, ["image/", "audio/", "video/"]) or
+                content_type in ["application/pdf", "application/zip", "application/gzip"]))
   end
 
   defp extract_html_content(html, extract_mode, url, runtime) do
