@@ -110,19 +110,10 @@ defmodule CodingAgent.Session.CompactionLifecycle do
           nil -> []
         end
 
-    latest_compaction =
-      state.session_manager
-      |> CodingAgent.SessionManager.get_branch()
-      |> Enum.reverse()
-      |> Enum.find(&(&1.type == :compaction))
+    context_budget =
+      CodingAgent.Session.ContextBudget.measure(state, agent_state, context_messages)
 
-    context_tokens =
-      CodingAgent.Compaction.estimate_request_context_tokens(
-        context_messages,
-        Map.get(agent_state, :system_prompt),
-        Map.get(agent_state, :tools, []),
-        latest_compaction && latest_compaction.timestamp
-      )
+    context_tokens = context_budget.tokens
 
     context_message_count = length(context_messages)
     context_window = state.model.context_window
