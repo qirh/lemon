@@ -83,6 +83,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     @impl true
     def emit_completed(state, fields) do
+      fields = attach_context_budget(state, fields)
       event = Event.completed(fields)
       # A queued auto-resume may start as soon as the gateway sees completion.
       # Save and stop this session first so it loads the complete prior turn.
@@ -90,6 +91,20 @@ defmodule CodingAgent.Executor.SessionRunner do
 
       emit_event(state, event)
       state
+    end
+
+    defp attach_context_budget(state, fields) do
+      case CodingAgent.Session.context_budget(state.session) do
+        {:ok, budget} ->
+          Map.update(fields, :usage, %{context_budget: budget}, fn usage ->
+            Map.put(usage || %{}, :context_budget, budget)
+          end)
+
+        _ ->
+          fields
+      end
+    catch
+      :exit, _ -> fields
     end
 
     defp emit_event(state, event) do

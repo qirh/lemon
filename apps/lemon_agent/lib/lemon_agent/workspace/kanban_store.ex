@@ -98,7 +98,8 @@ defmodule LemonAgent.Workspace.KanbanStore do
 
     with {:ok, board} <- fetch_board(board_id),
          :ok <- validate_title(title),
-         {:ok, status} <- normalize_task_status(opts[:status], board.columns) do
+         {:ok, status} <- normalize_task_status(opts[:status], board.columns),
+         :ok <- workflow_completion_allowed(%{meta: %{}}, board, status) do
       now = now_ms()
 
       task = %{
@@ -367,13 +368,19 @@ defmodule LemonAgent.Workspace.KanbanStore do
   def track_leased_run(task_id, lease_id, run_id, attrs \\ %{}) do
     with_task_board_lock(task_id, fn ->
       with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
-        run = attrs |> Map.new() |> Map.put_new("status", "running") |> Map.put("runId", run_id)
+        {workflow, attrs} = attrs |> Map.new() |> Map.pop("codingWorkflow")
+        run = attrs |> Map.put_new("status", "running") |> Map.put("runId", run_id)
+
+        meta =
+          task.meta
+          |> Map.put("kanbanRun", run)
+          |> put_workflow(workflow)
 
         updated =
           task
           |> Map.put(:run_id, run_id)
           |> Map.put(:session_key, run["sessionKey"] || task.session_key)
-          |> Map.put(:meta, Map.put(task.meta, "kanbanRun", run))
+          |> Map.put(:meta, meta)
           |> Map.put(:updated_at_ms, now_ms())
 
         with :ok <- Store.put(@tasks_table, task.id, updated) do
@@ -384,13 +391,42 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end)
   end
 
+  @doc "Persist a coding workflow checkpoint under the exact still-owned card lease."
+  def checkpoint_leased_workflow(task_id, lease_id, checkpoint) when is_map(checkpoint) do
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        checkpoint =
+          if get_in(task.meta, ["codingWorkflow", "cancelRequested"]) == true,
+            do: Map.put(checkpoint, "cancelRequested", true),
+            else: checkpoint
+
+        updated = %{
+          task
+          | meta: Map.put(task.meta, "codingWorkflow", checkpoint),
+            updated_at_ms: now_ms()
+        }
+
+        with :ok <- Store.put(@tasks_table, task.id, updated) do
+          emit(:kanban_task_updated, board, updated, [])
+          {:ok, updated}
+        end
+      end
+    end)
+  end
+
+  defp put_workflow(meta, workflow) when is_map(workflow),
+    do: Map.put(meta, "codingWorkflow", workflow)
+
+  defp put_workflow(meta, _), do: meta
+
   @doc """
   Complete a task only if the supplied lease is still authoritative.
   """
   @spec complete_leased_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def complete_leased_task(task_id, lease_id, opts \\ []) do
     with_task_board_lock(task_id, fn ->
-      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id),
+           :ok <- workflow_completion_allowed(task, board, "done") do
         complete_task_unlocked(task, board, opts)
       end
     end)
@@ -572,6 +608,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
     attrs = Map.new(attrs)
 
     with {:ok, status} <- maybe_status(attrs, task.status, board.columns),
+         :ok <- workflow_completion_allowed(task, board, status),
          {:ok, title} <- maybe_title(attrs, task.title) do
       {:ok,
        task
@@ -593,11 +630,38 @@ defmodule LemonAgent.Workspace.KanbanStore do
 
   defp maybe_retry(task, status, first_column) do
     if status == first_column and not tracked_run?(task) do
-      update_in(task.meta, &Map.delete(&1, "lastFailure"))
+      update_in(task.meta, fn meta ->
+        meta = Map.delete(meta, "lastFailure")
+
+        case meta["codingWorkflow"] do
+          %{"phase" => "completed"} ->
+            Map.delete(meta, "codingWorkflow")
+
+          %{} = workflow ->
+            Map.put(meta, "codingWorkflow", Map.delete(workflow, "cancelRequested"))
+
+          _ ->
+            meta
+        end
+      end)
     else
       task
     end
   end
+
+  defp workflow_completion_allowed(task, board, "done") do
+    workflow = task.meta["codingWorkflow"]
+    required? = is_map(workflow) or is_map(board.meta["codingWorkflow"])
+
+    approved? =
+      is_map(workflow) and workflow["phase"] == "completed" and
+        get_in(workflow, ["review", "approved"]) == true and
+        is_binary(workflow["commitSha"]) and workflow["cancelRequested"] != true
+
+    if not required? or approved?, do: :ok, else: {:error, :review_required}
+  end
+
+  defp workflow_completion_allowed(_task, _board, _status), do: :ok
 
   defp tracked_run?(task) do
     get_in(task, [:meta, "kanbanRun", "status"]) in ["running", "outcome_unknown"]

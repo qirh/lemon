@@ -51,6 +51,19 @@ defmodule LemonControlPlane.UsageTokensTest do
              } = UsageTokens.normalize(usage)
     end
 
+    test "keeps latest context separate from cumulative cache-inclusive totals" do
+      usage = %{
+        input: 1_200,
+        output: 340,
+        cache_read: 8_000,
+        cache_write: 500,
+        context_tokens: 3_200
+      }
+
+      assert %{"contextTokens" => 3_200, "totalTokens" => 10_040} =
+               UsageTokens.normalize(usage)
+    end
+
     test "reads the session.detail spelling (:input/:output/:total_tokens/:cost)" do
       usage = %{input: 90, output: 10, total_tokens: 100, cost: %{total: 0.0042}}
 
