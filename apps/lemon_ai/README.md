@@ -184,9 +184,23 @@ LemonAi.Models.supports_xhigh(model)
 
 Codex accepts a ChatGPT access token through `api_key`, including Lemon's configured
 API-key authentication mode. The account header is derived from the URL-safe JWT
-claims; an OpenAI API key is not a ChatGPT token. `session_id` supplies the stable
-prompt-cache key and session header. Sampling temperature and output-token caps are
-deliberately omitted because the Codex endpoint rejects them.
+claims; an OpenAI API key is not a ChatGPT token. Reuse `session_id` across turns
+and resumes: it supplies the prompt-cache key and matching `session_id`,
+`conversation_id` and `x-client-request-id` affinity headers. IDs longer than
+64 wire bytes become deterministic SHA-256-derived keys; IDs are never truncated
+or replaced with a per-request random identity. Native coding sessions supply their
+persisted session ID automatically. Provider cache hits appear in `usage.cache_read`;
+hits depend on the provider's prefix length, retention and routing, not merely on
+sending a key. Sampling temperature and output-token caps are deliberately omitted
+because the Codex endpoint rejects them.
+
+Lemon onboarding can explicitly import an existing Codex CLI ChatGPT login with
+`lemon setup --provider openai-codex --auth codex-cli --non-interactive`.
+This copies refreshable OAuth credentials into Lemon's encrypted secret store;
+it neither refreshes during import nor writes the Codex login file. Import is a
+snapshot, not continuous synchronization or a separate browser login. Subsequent
+refreshes persist only Lemon's secret, and persistence failure is surfaced rather
+than reporting success with lost rotating credentials.
 
 For Responses and Codex, `thinking_budgets: %{summary: "auto", service_tier: "priority"}`
 selects reasoning summaries and a service tier (`"auto"`, `"default"`, `"flex"` or

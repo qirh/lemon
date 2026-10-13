@@ -59,6 +59,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   @codex_url "https://chatgpt.com/backend-api/codex/responses"
   @jwt_claim_path "https://api.openai.com/auth"
+  @affinity_headers ["session_id", "conversation_id", "x-client-request-id"]
 
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
@@ -94,6 +95,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   end
 
   defp do_stream(stream, model, context, opts) do
+    opts = %{opts | session_id: OpenAIResponsesShared.normalize_prompt_cache_key(opts.session_id)}
     output = init_assistant_message(model, api_override: :openai_codex_responses)
 
     try do
@@ -247,19 +249,20 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       "Content-Type" => "application/json"
     }
 
-    # Add model headers
-    headers = Map.merge(base_headers, model.headers || %{})
-
-    # Add session ID if present
     headers =
-      if opts.session_id do
-        Map.put(headers, "session_id", opts.session_id)
-      else
-        headers
-      end
+      base_headers
+      |> Map.merge(model.headers || %{})
+      |> Map.merge(opts.headers || %{})
+      |> Map.reject(fn {key, _} -> String.downcase(to_string(key)) in @affinity_headers end)
 
-    # Add user-provided headers
-    Map.merge(headers, opts.headers || %{})
+    # The wire cache key and routing identity must agree across every turn.
+    Enum.reduce(@affinity_headers, headers, fn key, headers ->
+      if opts.session_id do
+        Map.put(headers, key, opts.session_id)
+      else
+        Map.delete(headers, key)
+      end
+    end)
   end
 
   defp get_os_info do
