@@ -136,11 +136,66 @@ CodingAgent.Supervisor (one_for_one)
 | Category | Tools |
 |----------|-------|
 | File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
-| Search | `grep`, `find` |
+| Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process` |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
+
+**Snapshot-anchored edits.** A local text `read` returns numbered physical lines
+and `[absolute/path#SNAPSHOT]`. Prefer `edit` with that snapshot and an `edits`
+array instead of copying a large unique `old_text` block:
+
+```json
+{"path":"src/app.ts","snapshot":"0123456789ABCDEF","edits":[{"operation":"replace","start_line":73,"end_line":73,"new_text":"  const retryDelayMs = 250;"}]}
+```
+
+The snapshot covers the complete original file, even for a partial read.
+Ranges are inclusive, one-based, and all operations use the original coordinates.
+Operations are `replace`, `delete`, `insert_before`, and `insert_after`; overlapping
+or stale batches fail without writing. Successful edits return a fresh snapshot.
+Original BOM, CRLF/LF, and final-newline conventions are preserved. Exact-text
+editing remains available for a uniquely matched region; ambiguous matches report
+their line locations and never choose an occurrence silently. Read-only internal
+references and transformed formats do not advertise editing snapshots.
+
+**Rich reads.** `read` also accepts directories, ZIP/TAR/TAR.GZ/TGZ archives,
+`bundle.zip:member/path`, PDFs, notebooks, and native images. Archive members are
+read in memory, not extracted into the workspace. `offset`/`limit` select displayed
+lines; follow `next_offset` for bounded directory/member/document output.
+PDFs support `page`/`page_limit`; notebooks support `cell`/`cell_limit` and include
+source, execution counts, text outputs, and errors. PDF extraction requires
+`pdftotext`, `mutool`, or Python with `pypdf`/PyMuPDF; a project-local
+`.lemon/read-formats-venv` is discovered automatically. No backend means an
+actionable error, not fabricated text. On macOS, `sips` supplies proportional
+image previews (maximum dimension 1568 by default) with original/preview
+dimensions and an animation first-frame notice; original bytes remain untouched.
+Input, extraction, preview, and displayed-output limits bound memory use.
+
+**Structural search and replacement.** Install the genuine ast-grep CLI (for
+example `brew install ast-grep`) to enable `ast_grep`. It matches syntax trees,
+supports `$NAME` and `$$$ARGS` captures, and never substitutes text search.
+For `action:"search"`, omitted/null `paths` search the current directory;
+omitted/null `language` infers from extensions, and `rewrite` must be omitted/null.
+Replacement always requires explicit paths; a null scope never enables a write.
+Use `action:"replace"`, explicit `paths`, `pattern`, `rewrite`, and
+`dry_run:true` to preview; apply with `dry_run:false` and `expected_matches`
+equal to the full preview count. Count mismatches, overlapping ranges, stale
+files, binary content, and symlink writes are rejected before writing.
+`max_results` bounds display, not replacement scope; oversized output exposes a
+retrievable full JSONL path. Backend planning is capped at 16 MiB: narrow the
+scope rather than applying a truncated replacement plan. Because the same tool
+can mutate files, read-only tool policies do not enable it.
+
+**Native plans.** `todo` uses `action:"write"` with the complete updated list,
+including completed tasks. New entries need only `content`; omitted/null IDs
+are generated and remain stable across same-content updates. Status defaults to
+`pending` and priority to `medium`. `read`, `progress`, and `actionable` are
+read-only; omit `todos` or pass null, never a replacement list. Every successful
+action returns the complete `details.todos` and normalized `details.plan.entries`
+for TUI/ACP plan rendering, including completed tasks. Plan state survives the
+existing session checkpoint/resume path.
+
 
 **Read-only internal references.** The `read` tool accepts these in its `path`:
 
