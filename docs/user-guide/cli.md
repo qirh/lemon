@@ -199,6 +199,11 @@ invalid CLI arguments use exit `2`. See the
 chat state, policy, and session metadata stores. It does not create another
 conversation database. All list and history reads are bounded; history and
 exports are always redacted.
+Session commands connect to the authenticated running daemon, starting it through
+the normal launcher when absent. They read and mutate that daemon's canonical
+state, not a separate store in the short-lived CLI process. This also applies
+when the runtime uses an isolated home or agent directory. Export destination
+files are still written locally by the client.
 
 ### List, search, show, and history
 
