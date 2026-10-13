@@ -28,7 +28,7 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
       }
       |> maybe_put(:model, Map.get(context, :model))
 
-    with {:ok, _submitted_run_id, output} <-
+    with {:ok, submitted_run_id, output} <-
            RunCompletionWaiter.submit_and_wait(params,
              router_mod: router_mod,
              waiter_mod: waiter_mod,
@@ -40,7 +40,7 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
              on_terminal: Map.get(context, :on_terminal)
            ),
          {:ok, verdict} <- parse_verdict(output) do
-      {:ok, verdict}
+      {:ok, Map.put(verdict, :run_id, submitted_run_id)}
     else
       {:error, {:run_failed, _run_id, reason}} ->
         {:error, reason}

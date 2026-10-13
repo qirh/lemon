@@ -201,7 +201,13 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
-  @doc "Return structured run history suitable for chat resume or inspection."
+  @doc """
+  Return structured run history suitable for chat resume or inspection.
+
+  Tool entries retain their stable `action_id` and newest-first event order.
+  Consumers reconstructing one card per invocation should group by run/action
+  identity and retain the latest phase; distinct calls may share the same title.
+  """
   @spec history(String.t(), keyword()) :: [map()]
   def history(session_key, opts \\ []) when is_binary(session_key) do
     limit =
@@ -538,6 +544,7 @@ defmodule LemonCore.SessionLifecycle do
       action = read(event, :action) || %{}
 
       %{
+        action_id: maybe_redact(read(action, :id), redact?),
         title: maybe_redact(read(action, :title), redact?),
         kind: stringify(read(action, :kind)),
         phase: stringify(read(event, :phase)),
