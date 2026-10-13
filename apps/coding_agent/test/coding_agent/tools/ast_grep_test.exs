@@ -286,6 +286,66 @@ defmodule CodingAgent.Tools.AstGrepTest do
       assert File.read!(path) == "oldApi(2);\n"
     end
 
+    test "partial replacement failure retains its restorable checkpoint", %{
+      tmp_dir: cwd,
+      opts: opts
+    } do
+      session_id = "ast-partial-#{System.unique_integer([:positive])}"
+
+      opts =
+        Keyword.merge(opts, session_id: session_id, spill_dir: cwd, filesystem_checkpoints: true)
+
+      on_exit(fn -> FileReadTracker.forget_session(session_id) end)
+
+      names =
+        ["a.ts"] ++
+          Enum.map(1..512, &"m#{String.pad_leading(Integer.to_string(&1), 4, "0")}.ts") ++
+          ["z.ts"]
+
+      paths = Enum.map(names, &Path.join(cwd, &1))
+      Enum.each(paths, &File.write!(&1, "oldApi(1);\n"))
+      first = hd(paths)
+      last = List.last(paths)
+
+      # Change the final target only after a real first write, while the
+      # intervening files let the watcher run before the final write check.
+      watcher =
+        Task.async(fn ->
+          await_file_content(first, "newApi(1);\n", System.monotonic_time(:millisecond) + 5000)
+          File.write!(last, "changedOutsideTool();\n")
+        end)
+
+      params =
+        Map.merge(replacement(["*.ts"]), %{
+          "dry_run" => false,
+          "expected_matches" => length(paths),
+          "max_results" => 1
+        })
+
+      result = execute(cwd, params, opts)
+      assert :ok = Task.await(watcher, 5000)
+
+      assert %AgentToolResult{
+               is_error: true,
+               details: %{
+                 checkpoint_id: checkpoint_id,
+                 applied: false,
+                 partial: true,
+                 written_paths: written_paths
+               }
+             } = result
+
+      assert first in written_paths
+      refute last in written_paths
+      assert File.read!(first) == "newApi(1);\n"
+      assert File.read!(last) == "changedOutsideTool();\n"
+      assert hd(result.content).text =~ "Already-written paths"
+
+      on_exit(fn -> CodingAgent.Checkpoint.delete(checkpoint_id) end)
+      assert {:ok, _} = CodingAgent.Checkpoint.restore_filesystem(checkpoint_id)
+      assert Enum.all?(paths, &(File.read!(&1) == "oldApi(1);\n"))
+    end
+
     test "unsupported language returns backend error", %{tmp_dir: cwd, opts: opts} do
       File.write!(Path.join(cwd, "code.ts"), "oldApi(1);\n")
 
@@ -312,6 +372,20 @@ defmodule CodingAgent.Tools.AstGrepTest do
                  %{"action" => "search", "pattern" => "a(); b();", "language" => "typescript"},
                  opts
                )
+    end
+  end
+
+  defp await_file_content(path, content, deadline) do
+    if File.read!(path) != content do
+      if System.monotonic_time(:millisecond) >= deadline,
+        do: raise("Expected structural write did not occur")
+
+      receive do
+      after
+        1 -> await_file_content(path, content, deadline)
+      end
+    else
+      :ok
     end
   end
 

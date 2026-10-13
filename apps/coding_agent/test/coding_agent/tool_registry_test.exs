@@ -1050,7 +1050,12 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert report.conflicts == []
       assert report.shadowed_count == 0
-      assert report.builtin_count == length(ToolRegistry.builtin_tool_names())
+
+      assert report.builtin_count ==
+               length(
+                 ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+               )
+
       assert report.extension_count == 0
       assert report.total_tools == report.builtin_count
     end
@@ -1209,7 +1214,12 @@ defmodule CodingAgent.ToolRegistryTest do
       report = ToolRegistry.tool_conflict_report(tmp_dir)
 
       assert report.conflicts == []
-      assert report.builtin_count == length(ToolRegistry.builtin_tool_names())
+
+      assert report.builtin_count ==
+               length(
+                 ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+               )
+
       assert report.extension_count == 1
       assert report.total_tools == report.builtin_count + report.extension_count
       assert report.shadowed_count == 0

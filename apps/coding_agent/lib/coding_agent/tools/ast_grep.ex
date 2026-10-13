@@ -23,8 +23,9 @@ defmodule CodingAgent.Tools.AstGrep do
   the CLI never receives `--update-all`. Writes use the normal mutation locks,
   read tracker and filesystem checkpoint guard. A session-scoped preview records
   the source digest, so an intervening edit requires re-reading before applying.
-  Multi-file writes are not an atomic filesystem transaction: an I/O failure
-  reports already-written paths.
+  Multi-file writes are not an atomic filesystem transaction: failures after
+  checkpoint creation preserve `checkpoint_id`, mark the result as an error,
+  and report `partial` plus `written_paths` so session rewind can restore them.
 
   ## Backend installation and availability
 
@@ -76,7 +77,11 @@ defmodule CodingAgent.Tools.AstGrep do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "action" => %{"type" => "string", "enum" => ["search", "replace"]},
+          "action" => %{
+            "type" => "string",
+            "enum" => ["search", "replace"],
+            "description" => "Search syntax or preview/apply replacement"
+          },
           "pattern" => %{
             "type" => "string",
             "description" => "AST pattern, e.g. console.log($$$ARGS) or $X && $X.foo"
@@ -486,11 +491,42 @@ defmodule CodingAgent.Tools.AstGrep do
            CheckpointGuard.before_mutation(paths, cwd, opts, %{
              tool: "ast_grep",
              action: "replace"
-           }),
-         :ok <- recheck_plans(plans, signal, cwd, opts),
-         :ok <- write_plans(plans, signal, cwd, opts) do
-      %{prepared | details: CheckpointGuard.put_details(prepared.details, checkpoint)}
+           }) do
+      outcome =
+        with :ok <- recheck_plans(plans, signal, cwd, opts) do
+          write_plans(plans, signal, cwd, opts)
+        end
+
+      case outcome do
+        :ok ->
+          %{prepared | details: CheckpointGuard.put_details(prepared.details, checkpoint)}
+
+        {:error, %{message: message, written_paths: written_paths}} ->
+          apply_failure(message, written_paths, paths, checkpoint)
+
+        {:error, reason} ->
+          message =
+            if is_binary(reason), do: reason, else: "Replacement stopped: #{inspect(reason)}."
+
+          apply_failure(message, [], paths, checkpoint)
+      end
     end
+  end
+
+  defp apply_failure(message, written_paths, paths, checkpoint) do
+    %AgentToolResult{
+      content: [%TextContent{text: message}],
+      is_error: true,
+      details:
+        %{
+          action: "replace",
+          applied: false,
+          partial: written_paths != [],
+          written_paths: written_paths,
+          paths: paths
+        }
+        |> CheckpointGuard.put_details(checkpoint)
+    }
   end
 
   defp recheck_plans(plans, signal, cwd, opts) do
@@ -525,7 +561,11 @@ defmodule CodingAgent.Tools.AstGrep do
         error ->
           {:halt,
            {:error,
-            "Replacement stopped: #{inspect(error)}. Already-written paths: #{inspect(Enum.reverse(written))}. Do not retry blindly; inspect these files first."}}
+            %{
+              message:
+                "Replacement stopped: #{inspect(error)}. Already-written paths: #{inspect(Enum.reverse(written))}. Do not retry blindly; inspect these files first.",
+              written_paths: Enum.reverse(written)
+            }}}
       end
     end)
     |> case do
