@@ -241,6 +241,33 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
     end
 
+    test "does not infer external runtime memory failure from an absent CLI-local process" do
+      [check] =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore,
+          external_runtime?: true
+        )
+
+      assert check.status == :skip
+      assert check.remediation == nil
+    end
+
+    test "an external runtime does not conceal missing local memory dependencies" do
+      for opts <- [
+            [exqlite_loaded: false],
+            [exqlite_loaded: true, store_module: LemonCore.Doctor.ChecksTest.NoSuchStore]
+          ] do
+        [check] =
+          Memory.run(
+            [features: %Features{session_search: :"default-on"}, external_runtime?: true] ++ opts
+          )
+
+        assert check.status == :warn
+      end
+    end
+
     test "passes with document count, db size, and ingest recency when the store is up" do
       {:ok, agent} = Agent.start_link(fn -> :ok end, name: StubMemoryStore)
       on_exit(fn -> if Process.alive?(agent), do: Agent.stop(agent) end)
