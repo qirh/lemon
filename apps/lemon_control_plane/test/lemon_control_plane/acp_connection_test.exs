@@ -30,16 +30,25 @@ defmodule LemonControlPlane.ACP.ConnectionTest do
     ref = make_ref()
     request = %{"method" => "session/request_permission", "params" => %{}}
 
-    {:push, _, state} =
+    {:push, {:text, wire}, state} =
       Connection.handle_info(
         {:acp_client_request, self(), ref, request, "session", self()},
         state
       )
 
+    request_id = Jason.decode!(wire)["id"]
+
     request = ~s({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session"}})
     assert {:ok, state} = Connection.handle_in({request, [opcode: :text]}, state)
     assert state.clients == %{}
     assert_receive {:acp_client_response, ^ref, {:error, :cancelled}}
+
+    assert_receive {:acp_output,
+                    %{
+                      "method" => "$/cancel_request",
+                      "params" => %{"requestId" => ^request_id}
+                    }}
+
     Connection.terminate(:normal, state)
   end
 

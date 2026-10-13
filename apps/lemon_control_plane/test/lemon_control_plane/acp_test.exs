@@ -651,6 +651,54 @@ defmodule LemonControlPlane.ACPTest do
     refute inspect(summaries) =~ "/tmp/editor-buffer.txt"
   end
 
+  test "prompt deadline withdraws a permission callback and fails closed" do
+    parent = self()
+
+    Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
+      send(parent, {:permission_deadline_run, request})
+      {:ok, request.run_id}
+    end)
+
+    session_id = new_session()
+
+    prompt =
+      Task.async(fn ->
+        ACP.prompt(
+          %{
+            "sessionId" => session_id,
+            "prompt" => [%{"type" => "text", "text" => "wait for permission"}],
+            "_meta" => %{"lemon" => %{"timeoutMs" => 300}}
+          },
+          client_request_callback: fn _request ->
+            send(parent, {:permission_blocked, self()})
+
+            receive do
+              :never -> %{}
+            end
+          end
+        )
+      end)
+
+    assert_receive {:permission_deadline_run, request}
+
+    approval =
+      Task.async(fn ->
+        LemonCore.ExecApprovals.request(%{
+          run_id: request.run_id,
+          session_key: request.session_key,
+          tool: "bash",
+          tool_call_id: "native_wait",
+          action: %{"command" => "true"}
+        })
+      end)
+
+    assert_receive {:permission_blocked, callback}
+    monitor = Process.monitor(callback)
+    assert {:error, -32_001, _} = Task.await(prompt, 1_000)
+    assert_receive {:DOWN, ^monitor, :process, ^callback, :killed}
+    assert {:ok, :denied} = Task.await(approval, 1_000)
+  end
+
   test "bridges matching exec approval requests to ACP session request permission" do
     parent = self()
 

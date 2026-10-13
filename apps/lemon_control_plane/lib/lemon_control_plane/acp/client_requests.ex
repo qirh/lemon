@@ -32,7 +32,16 @@ defmodule LemonControlPlane.ACP.ClientRequests do
     {pid, monitor} =
       spawn_monitor(fn -> send(bridge, {:client_result, id, exchange.(payload)}) end)
 
-    pending = Map.put(state.pending, id, %{pid: pid, monitor: monitor, payload: payload})
+    requester = Process.monitor(payload.reply_to)
+
+    pending =
+      Map.put(state.pending, id, %{
+        pid: pid,
+        monitor: monitor,
+        requester: requester,
+        payload: payload
+      })
+
     {:noreply, %{state | pending: pending}}
   end
 
@@ -43,6 +52,7 @@ defmodule LemonControlPlane.ACP.ClientRequests do
 
       {request, pending} ->
         Process.demonitor(request.monitor, [:flush])
+        Process.demonitor(request.requester, [:flush])
         send(state.owner, {:acp_client_summary, summary})
         reply(request.payload, response)
         {:noreply, %{state | pending: pending}}
@@ -53,11 +63,16 @@ defmodule LemonControlPlane.ACP.ClientRequests do
     do: {:stop, :normal, state}
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
-    case Enum.find(state.pending, fn {_id, request} -> request.monitor == ref end) do
+    case Enum.find(state.pending, fn {_id, request} ->
+           request.monitor == ref or request.requester == ref
+         end) do
       nil ->
         {:noreply, state}
 
       {id, request} ->
+        Process.demonitor(request.monitor, [:flush])
+        Process.demonitor(request.requester, [:flush])
+        Process.exit(request.pid, :kill)
         reply(request.payload, failure())
         {:noreply, %{state | pending: Map.delete(state.pending, id)}}
     end

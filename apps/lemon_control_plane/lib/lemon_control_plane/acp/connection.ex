@@ -141,7 +141,9 @@ defmodule LemonControlPlane.ACP.Connection do
             send(owner, {:acp_client_request, self(), correlation, message, session, worker})
 
             timeout =
-              if message["method"] == "terminal/wait_for_exit", do: :infinity, else: 60_000
+              if message["method"] in ["terminal/wait_for_exit", "session/request_permission"],
+                do: :infinity,
+                else: 60_000
 
             try do
               receive do
@@ -221,8 +223,19 @@ defmodule LemonControlPlane.ACP.Connection do
         if matches?.(client) do
           Process.demonitor(client.monitor, [:flush])
 
-          unless client.cancelled,
-            do: send(client.pid, {:acp_client_response, client.ref, {:error, :cancelled}})
+          unless client.cancelled do
+            send(client.pid, {:acp_client_response, client.ref, {:error, :cancelled}})
+
+            send(
+              self(),
+              {:acp_output,
+               %{
+                 "jsonrpc" => "2.0",
+                 "method" => "$/cancel_request",
+                 "params" => %{"requestId" => id}
+               }}
+            )
+          end
 
           # Allocation cannot be undone until the client supplies its terminal ID.
           # Retain cancelled creates so their eventual response is killed/released.
