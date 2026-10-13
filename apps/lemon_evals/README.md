@@ -89,7 +89,8 @@ Only upload the `--output` file when sharing summary results.
 `--iterations` controls existing statistical checks. It does **not** repeat
 every live-model check as an independent trial. The report records contract
 results, not benchmark task-success rates, dollar costs, or a Hermes comparison.
-A production-path outcome suite and repeated paired trials remain separate work.
+The separate live coding lane above records single-trial production-path outcomes;
+statistically useful repeated paired trials remain separate work.
 
 The manually dispatched Live Eval workflow retains this allowlisted report for
 14 days with `if: always()`, including when checks fail. It warns when startup

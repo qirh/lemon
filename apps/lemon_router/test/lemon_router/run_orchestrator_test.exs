@@ -1930,21 +1930,6 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert counts.active >= 0
     end
 
-    test "queued is driven by telemetry, not hardcoded to 0" do
-      before = RunOrchestrator.counts().queued
-
-      for idx <- 1..25 do
-        :telemetry.execute([:lemon, :run, :submit], %{count: 1}, %{
-          session_key: "test:counts:#{idx}",
-          origin: :test,
-          engine: "lemon"
-        })
-      end
-
-      after_submit = RunOrchestrator.counts().queued
-      assert after_submit > before
-    end
-
     test "completed_today is driven by telemetry, not hardcoded to 0" do
       before = RunOrchestrator.counts().completed_today
 

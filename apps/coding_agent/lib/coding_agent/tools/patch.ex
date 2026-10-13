@@ -11,6 +11,11 @@ defmodule CodingAgent.Tools.Patch do
   - Special file type detection (symlinks, devices, etc.)
   - Path length validation
   - File size limits for safe operation
+  - Text updates reject invalid UTF-8 and NUL bytes before normalization
+  - Hunk context must identify one location; repeated context is rejected
+  - ACP diff consumers receive bounded complete `perFileResults` snapshots:
+    at most 16 KiB per before/after file and 32 KiB across the patch. Oversized
+    snapshots are omitted, never misrepresented as complete.
 
   ## Supported Operations
 
@@ -157,6 +162,7 @@ defmodule CodingAgent.Tools.Patch do
         content: [%TextContent{text: summary.output <> diagnostics_text}],
         details:
           summary.details
+          |> Map.put(:perFileResults, prepared_file_results(prepared_operations))
           |> CheckpointGuard.put_details(checkpoint)
           |> maybe_put_diagnostics(diagnostics)
       }
@@ -230,10 +236,12 @@ defmodule CodingAgent.Tools.Patch do
   # ============================================================================
 
   defp get_patch_text(%{"patch_text" => patch_text}) when is_binary(patch_text) do
-    if String.trim(patch_text) == "" do
-      {:error, "patch_text is required"}
-    else
-      {:ok, patch_text}
+    with :ok <- FileValidation.check_text_content(patch_text, "patch_text") do
+      if String.trim(patch_text) == "" do
+        {:error, "patch_text is required"}
+      else
+        {:ok, patch_text}
+      end
     end
   end
 
@@ -589,14 +597,41 @@ defmodule CodingAgent.Tools.Patch do
 
   defp parse_patch(text) do
     lines = String.split(text, ~r/\r?\n/, trim: false)
-    {ops, _idx} = parse_lines(lines, 0, [])
 
-    if ops == [] do
-      {:error, "No patch operations found"}
-    else
-      {:ok, Enum.reverse(ops)}
+    try do
+      {ops, _idx} = parse_lines(lines, 0, [])
+      operations = Enum.reverse(ops)
+
+      cond do
+        operations == [] ->
+          {:error,
+           "No patch operations found. Use *** Update File: path followed by @@ and +/- changes."}
+
+        Enum.any?(operations, &empty_update?/1) ->
+          {:error,
+           "Update File requires an @@ hunk containing +added or -removed lines (or *** Move to: for a rename). No files changed."}
+
+        true ->
+          {:ok, operations}
+      end
+    catch
+      {:invalid_patch_line, index, line} ->
+        {:error,
+         "Invalid patch syntax at line #{index + 1}: #{inspect(String.slice(line, 0, 120))}. Prefix hunk lines with a space (context), + (add), or - (remove); start each hunk with @@. No files changed."}
+
+      {:invalid_add_line, index, line} ->
+        {:error,
+         "Invalid Add File content at line #{index + 1}: #{inspect(String.slice(line, 0, 120))}. Prefix every file-content line with +, including blank lines. No files changed."}
     end
   end
+
+  defp empty_update?(%{type: :update, move_to: nil, hunks: hunks}) do
+    not Enum.any?(hunks, fn hunk ->
+      Enum.any?(hunk.changes, &(&1.type in [:add, :remove]))
+    end)
+  end
+
+  defp empty_update?(_operation), do: false
 
   defp parse_lines(lines, idx, ops) do
     if idx >= length(lines) do
@@ -623,8 +658,11 @@ defmodule CodingAgent.Tools.Patch do
           {op, next_idx} = parse_delete(lines, idx)
           parse_lines(lines, next_idx, [op | ops])
 
-        true ->
+        line == "" ->
           parse_lines(lines, idx + 1, ops)
+
+        true ->
+          throw({:invalid_patch_line, idx, line})
       end
     end
   end
@@ -670,8 +708,11 @@ defmodule CodingAgent.Tools.Patch do
           {hunk, next_idx} = parse_hunk(lines, idx + 1, [])
           parse_hunks(lines, next_idx, [hunk | hunks])
 
-        true ->
+        line == "" ->
           parse_hunks(lines, idx + 1, hunks)
+
+        true ->
+          throw({:invalid_patch_line, idx, line})
       end
     end
   end
@@ -698,8 +739,11 @@ defmodule CodingAgent.Tools.Patch do
           content = String.slice(line, 1..-1//1)
           parse_hunk(lines, idx + 1, [%{type: :add, content: content} | changes])
 
-        true ->
+        line == "" ->
           parse_hunk(lines, idx + 1, changes)
+
+        true ->
+          throw({:invalid_patch_line, idx, line})
       end
     end
   end
@@ -727,7 +771,9 @@ defmodule CodingAgent.Tools.Patch do
           content = String.slice(line, 1..-1//1)
           parse_add_lines(lines, idx + 1, [content | acc])
         else
-          parse_add_lines(lines, idx + 1, acc)
+          if line == "",
+            do: parse_add_lines(lines, idx + 1, acc),
+            else: throw({:invalid_add_line, idx, line})
         end
       end
     end
@@ -999,40 +1045,86 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp apply_operations_acp(operations, cwd, signal, opts) do
-    result =
-      Enum.reduce_while(operations, %{changed: [], additions: 0, removals: 0}, fn op, acc ->
-        if aborted?(signal) do
-          {:halt, {:error, "Operation aborted"}}
+  defp prepared_file_results(prepared) do
+    prepared
+    |> Enum.flat_map(fn
+      %{type: :move} = entry ->
+        [
+          FileValidation.put_text_snapshots(%{}, entry.source, entry.original_content, nil),
+          FileValidation.put_text_snapshots(%{}, entry.target, nil, entry.new_content)
+        ]
+
+      entry ->
+        [
+          FileValidation.put_text_snapshots(
+            %{},
+            entry.target,
+            entry.original_content,
+            entry.new_content
+          )
+        ]
+    end)
+    |> bound_file_results()
+  end
+
+  defp bound_file_results(results) do
+    {results, _remaining} =
+      Enum.map_reduce(results, 32 * 1024, fn result, remaining ->
+        bytes =
+          snapshot_bytes(Map.get(result, :oldText)) + snapshot_bytes(Map.get(result, :newText))
+
+        if bytes <= remaining do
+          {result, remaining - bytes}
         else
-          case apply_operation_acp(op, cwd, signal, opts) do
-            {:ok, info} ->
-              updated = %{
-                changed: acc.changed ++ info.changed,
-                additions: acc.additions + info.additions,
-                removals: acc.removals + info.removals
-              }
-
-              {:cont, updated}
-
-            {:error, reason} ->
-              {:halt, {:error, reason}}
-          end
+          {Map.drop(result, [:oldText, :newText]), remaining}
         end
       end)
+
+    results
+  end
+
+  defp snapshot_bytes(text) when is_binary(text), do: byte_size(text)
+  defp snapshot_bytes(_text), do: 0
+
+  defp apply_operations_acp(operations, cwd, signal, opts) do
+    result =
+      Enum.reduce_while(
+        operations,
+        %{changed: [], additions: 0, removals: 0, perFileResults: []},
+        fn op, acc ->
+          if aborted?(signal) do
+            {:halt, {:error, "Operation aborted"}}
+          else
+            case apply_operation_acp(op, cwd, signal, opts) do
+              {:ok, info} ->
+                updated = %{
+                  changed: acc.changed ++ info.changed,
+                  additions: acc.additions + info.additions,
+                  removals: acc.removals + info.removals,
+                  perFileResults: bound_file_results(acc.perFileResults ++ info.file_results)
+                }
+
+                {:cont, updated}
+
+              {:error, reason} ->
+                {:halt, {:error, reason}}
+            end
+          end
+        end
+      )
 
     case result do
       {:error, reason} ->
         {:error, reason}
 
-      %{changed: changed, additions: adds, removals: removes} ->
+      %{changed: changed, additions: adds, removals: removes, perFileResults: files} ->
         output =
           "Patch applied successfully. #{length(changed)} files changed, #{adds} additions, #{removes} removals"
 
         {:ok,
          %{
            output: output,
-           details: %{changed: changed, additions: adds, removals: removes}
+           details: %{changed: changed, additions: adds, removals: removes, perFileResults: files}
          }}
     end
   end
@@ -1043,7 +1135,14 @@ defmodule CodingAgent.Tools.Patch do
     with :ok <- check_abort(signal),
          :ok <- ACPFileBridge.write_text_file(resolved, content, opts) do
       additions = count_lines(content)
-      {:ok, %{changed: [resolved], additions: additions, removals: 0}}
+
+      {:ok,
+       %{
+         changed: [resolved],
+         additions: additions,
+         removals: 0,
+         file_results: [FileValidation.put_text_snapshots(%{}, resolved, nil, content)]
+       }}
     end
   end
 
@@ -1055,7 +1154,14 @@ defmodule CodingAgent.Tools.Patch do
          :ok <- check_abort(signal),
          :ok <- ACPFileBridge.delete_file(resolved, opts) do
       removals = count_lines(content)
-      {:ok, %{changed: [resolved], additions: 0, removals: removals}}
+
+      {:ok,
+       %{
+         changed: [resolved],
+         additions: 0,
+         removals: removals,
+         file_results: [FileValidation.put_text_snapshots(%{}, resolved, content, nil)]
+       }}
     end
   end
 
@@ -1071,7 +1177,13 @@ defmodule CodingAgent.Tools.Patch do
 
     with :ok <- check_abort(signal),
          :ok <- ACPFileBridge.rename_file(resolved, target, opts) do
-      {:ok, %{changed: [target], additions: 0, removals: 0}}
+      {:ok,
+       %{
+         changed: [target],
+         additions: 0,
+         removals: 0,
+         file_results: [%{path: resolved}, %{path: target}]
+       }}
     end
   end
 
@@ -1091,7 +1203,17 @@ defmodule CodingAgent.Tools.Patch do
          :ok <- check_abort(signal),
          :ok <- ACPFileBridge.write_text_file(target, new_content, opts),
          :ok <- maybe_delete_moved_acp_source(resolved, target, opts) do
-      {:ok, %{changed: [target], additions: adds, removals: removes}}
+      files =
+        if target == resolved do
+          [FileValidation.put_text_snapshots(%{}, target, content, new_content)]
+        else
+          [
+            FileValidation.put_text_snapshots(%{}, resolved, content, nil),
+            FileValidation.put_text_snapshots(%{}, target, nil, new_content)
+          ]
+        end
+
+      {:ok, %{changed: [target], additions: adds, removals: removes, file_results: files}}
     else
       {:error, reason} -> {:error, reason}
     end
@@ -1180,6 +1302,12 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp apply_hunks(content, hunks, signal) do
+    with :ok <- FileValidation.check_text_content(content, "Patch source") do
+      apply_text_hunks(content, hunks, signal)
+    end
+  end
+
+  defp apply_text_hunks(content, hunks, signal) do
     lines = String.split(content, ~r/\r?\n/, trim: false)
     newline = if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
 
@@ -1213,20 +1341,26 @@ defmodule CodingAgent.Tools.Patch do
       |> Enum.filter(fn change -> change.type in [:keep, :remove] end)
       |> Enum.map(& &1.content)
 
-    start_idx = find_pattern(lines, pattern)
+    case find_pattern(lines, pattern) do
+      {:ok, start_idx} ->
+        do_apply_changes(lines, changes, start_idx)
 
-    if start_idx == nil do
-      # Provide more helpful error message
-      context_preview =
-        pattern
-        |> Enum.take(3)
-        |> Enum.map(&"  #{inspect(&1)}")
-        |> Enum.join("\n")
+      {:error, matches} ->
+        locations = Enum.map_join(Enum.take(matches, 10), ", ", &Integer.to_string(&1 + 1))
 
-      {:error,
-       "Context not found for patch hunk. Expected context starting with:\n#{context_preview}"}
-    else
-      do_apply_changes(lines, changes, start_idx)
+        {:error,
+         "Ambiguous patch hunk: context matches #{length(matches)} locations at lines #{locations}. " <>
+           "Include more surrounding context to identify one location."}
+
+      :not_found ->
+        context_preview =
+          pattern
+          |> Enum.take(3)
+          |> Enum.map(&"  #{inspect(&1)}")
+          |> Enum.join("\n")
+
+        {:error,
+         "Context not found for patch hunk. Expected context starting with:\n#{context_preview}"}
     end
   end
 
@@ -1262,14 +1396,22 @@ defmodule CodingAgent.Tools.Patch do
     cond do
       plen == 0 ->
         # Empty pattern matches at end of file
-        length(lines)
+        {:ok, length(lines)}
 
       length(lines) < plen ->
-        nil
+        :not_found
 
       true ->
-        0..(length(lines) - plen)
-        |> Enum.find(fn idx -> Enum.slice(lines, idx, plen) == pattern end)
+        matches =
+          Enum.filter(0..(length(lines) - plen), fn idx ->
+            Enum.slice(lines, idx, plen) == pattern
+          end)
+
+        case matches do
+          [] -> :not_found
+          [idx] -> {:ok, idx}
+          matches -> {:error, matches}
+        end
     end
   end
 

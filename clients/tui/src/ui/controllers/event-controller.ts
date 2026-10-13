@@ -47,6 +47,7 @@ import { ReasoningComponent } from "../components/reasoning-block.ts";
 import { ToolShelfComponent } from "../components/tool-shelf.ts";
 import type { TranscriptContainer } from "../components/transcript-container.ts";
 import { UserMessageComponent } from "../components/user-message.ts";
+import { taskProgressEvent } from "../task-progress.ts";
 import { StreamingRevealController } from "./streaming-reveal.ts";
 
 export interface EventControllerOptions {
@@ -279,13 +280,12 @@ export class EventController {
 					},
 					"run",
 				);
-				session.ensureAssistant(started.runId);
 				this.#sync(session);
 				this.#onStatusChanged?.();
 				return;
 			}
 			case "tool_use": {
-				const tool = event as AgentToolUseEvent;
+				const tool = taskProgressEvent(event as AgentToolUseEvent) ?? (event as AgentToolUseEvent);
 				const session = this.#sessionFor(tool.sessionKey);
 				if (tool.action?.kind === "reasoning") {
 					const block = session.upsertReasoning(tool.action, toToolPhase(tool.phase), {
@@ -438,6 +438,19 @@ export class EventController {
 		}
 		let appended = false;
 		for (const block of session.blocks) {
+			const existing = this.#components.get(block.id);
+			if (
+				block.kind === "assistant" &&
+				block.status !== "streaming" &&
+				existing instanceof AssistantMessageComponent &&
+				!existing.isTranscriptBlockFinalized()
+			) {
+				if (this.#reveal.component === existing) {
+					this.#reveal.finish();
+					this.#reveal.stop();
+				}
+				this.#sealAssistant(block, existing);
+			}
 			if (this.#components.has(block.id) || this.#shelves.has(block.id)) continue;
 			if (block.kind === "tool") {
 				this.#placeToolBlock(block);

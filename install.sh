@@ -504,16 +504,33 @@ print(sock.getsockname()[1])
 sock.close()'
 }
 
-verify_boot() {
+verify_boot() (
   control_port="$(free_port)"
   web_port="$(free_port)"
   sim_port="$(free_port)"
+  gateway_health_port="$(free_port)"
+  router_health_port="$(free_port)"
+  verify_node="lemon_install_verify_$$_$control_port"
+  verify_home="$(mktemp -d "$TMP_DIR/verify.XXXXXX")"
+  # A smoke boot must not share the operator's Store, agents, daemon identity,
+  # process records, or release pipe/log directory.
+  export HOME="$verify_home" LEMON_STORE_PATH="$verify_home/.lemon/store"
+  export LEMON_AGENT_DIR="$verify_home/.lemon/agent" LEMON_DOTENV_DIR="$verify_home"
+  export RELEASE_TMP="$verify_home/runtime" RELEASE_NODE="$verify_node"
+  export LEMON_CONTROL_PLANE_PORT="$control_port"
+  trap '"$BIN_DIR/lemon" stop >/dev/null 2>&1 || true; rm -rf "$verify_home"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  cd "$verify_home"
 
   info "Verifying: booting the runtime on port $control_port ..."
 
   if ! LEMON_CONTROL_PLANE_PORT="$control_port" \
     LEMON_WEB_PORT="$web_port" \
     LEMON_SIM_UI_PORT="$sim_port" \
+    LEMON_GATEWAY_HEALTH_PORT="$gateway_health_port" \
+    LEMON_ROUTER_HEALTH_PORT="$router_health_port" \
+    RELEASE_NODE="$verify_node" \
     "$BIN_DIR/lemon" daemon; then
     die "the installed runtime failed to start. Files are in $VERSIONS_DIR."
   fi
@@ -529,7 +546,6 @@ verify_boot() {
     sleep 2
   done
 
-  LEMON_CONTROL_PLANE_PORT="$control_port" "$BIN_DIR/lemon" stop >/dev/null 2>&1 || true
 
   if [ "$healthy" != "1" ]; then
 
@@ -537,7 +553,7 @@ verify_boot() {
   fi
 
   info "ok runtime booted and answered /healthz"
-}
+)
 setup_handoff() {
   if [ "$PROFILE" = "sim_broadcast_platform" ]; then
     info "Setup is not available for the sim profile."

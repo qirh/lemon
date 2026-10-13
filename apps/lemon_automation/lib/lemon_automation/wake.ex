@@ -27,9 +27,7 @@ defmodule LemonAutomation.Wake do
   to distinguish them from scheduled runs.
   """
 
-  alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, Events, RunSubmitter}
-
-  require Logger
+  alias LemonAutomation.{CronManager, CronRun, CronStore}
 
   @doc """
   Trigger a cron job to run immediately.
@@ -43,16 +41,7 @@ defmodule LemonAutomation.Wake do
   """
   @spec trigger(binary(), keyword()) :: {:ok, CronRun.t()} | {:error, term()}
   def trigger(job_id, opts \\ []) do
-    skip_if_running = Keyword.get(opts, :skip_if_running, false)
-    context = Keyword.get(opts, :context, %{})
-
-    with {:ok, job} <- get_job(job_id),
-         :ok <- check_enabled(job),
-         :ok <- check_not_running(job_id, skip_if_running) do
-      run = execute_wake(job, context)
-      Logger.info("[Wake] Triggered job #{job_id} (#{job.name})")
-      {:ok, run}
-    end
+    CronManager.wake(job_id, opts)
   end
 
   @doc """
@@ -105,62 +94,5 @@ defmodule LemonAutomation.Wake do
     |> Enum.filter(fn job -> job.agent_id == agent_id end)
     |> Enum.map(& &1.id)
     |> trigger_many(opts)
-  end
-
-  # ============================================================================
-  # Private Functions
-  # ============================================================================
-
-  defp get_job(job_id) do
-    case CronStore.get_job(job_id) do
-      nil -> {:error, :not_found}
-      job -> {:ok, job}
-    end
-  end
-
-  defp check_enabled(%CronJob{enabled: false}), do: {:error, :job_disabled}
-  defp check_enabled(_job), do: :ok
-
-  defp check_not_running(_job_id, false), do: :ok
-
-  defp check_not_running(job_id, true) do
-    case CronStore.active_runs(job_id) do
-      [] -> :ok
-      _runs -> {:error, :already_running}
-    end
-  end
-
-  defp execute_wake(job, context) do
-    run = CronRun.new(job.id, :wake)
-
-    # Add wake context to metadata
-    run =
-      if map_size(context) > 0 do
-        %{run | meta: %{wake_context: context}}
-      else
-        run
-      end
-
-    CronStore.put_run(run)
-
-    # Start the run
-    run = CronRun.start(run)
-    CronStore.put_run(run)
-    Events.emit_run_started(run, job)
-
-    # Use the same submitter configured for CronManager. This is fire-and-forget;
-    # the run completion is handled by CronManager.
-    submitter = run_submitter()
-
-    Task.start(fn ->
-      result = submitter.submit(job, run, [])
-      send(CronManager, {:run_complete, run.id, result})
-    end)
-
-    run
-  end
-
-  defp run_submitter do
-    Application.get_env(:lemon_automation, :cron_run_submitter, RunSubmitter)
   end
 end

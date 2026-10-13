@@ -6,6 +6,13 @@ defmodule CodingAgent.Tools.LsTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+  test "recursive listing marks names untrusted and does not follow cycles", %{tmp_dir: tmp_dir} do
+    File.write!(Path.join(tmp_dir, "a.txt"), "")
+    File.ln_s!(tmp_dir, Path.join(tmp_dir, "loop"))
+
+    assert %AgentToolResult{trust: :untrusted, details: %{shown_entries: 2, truncated: false}} =
+             Ls.execute("cycle", %{"recursive" => true}, nil, nil, tmp_dir, [])
+  end
 
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do

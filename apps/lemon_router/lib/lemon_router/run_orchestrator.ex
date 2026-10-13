@@ -137,8 +137,8 @@ defmodule LemonRouter.RunOrchestrator do
   Lightweight run counts for status UIs.
 
   `active` reflects current supervised run processes.
-  `queued` and `completed_today` are derived from telemetry counters
-  maintained by `LemonRouter.RunCountTracker`.
+  `queued` is read from authoritative coordinator backlogs; `completed_today`
+  is maintained by `LemonRouter.RunCountTracker` from terminal-run telemetry.
   """
   @spec counts() :: %{
           active: non_neg_integer(),

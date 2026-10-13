@@ -128,6 +128,30 @@ defmodule LemonCore.Paths do
     project_path(cwd, config_file_name(opts), opts)
   end
 
+  @doc """
+  Directory shared by the primary store and its companion SQLite databases.
+
+  Store paths may identify a directory or an explicit `.db`, `.sqlite`, or
+  `.sqlite3` file. Companion databases live beside an explicit file, not inside
+  it. Existing directories and paths ending in `/` remain directories even
+  when their names have a database extension.
+  """
+  @spec store_dir(Path.t()) :: Path.t()
+  def store_dir(path) do
+    expanded = Path.expand(path)
+
+    cond do
+      File.dir?(expanded) or String.ends_with?(path, "/") ->
+        expanded
+
+      String.downcase(Path.extname(expanded)) in [".db", ".sqlite", ".sqlite3"] ->
+        Path.dirname(expanded)
+
+      true ->
+        expanded
+    end
+  end
+
   defp setting(opts, key, default) do
     case Keyword.fetch(opts, key) do
       {:ok, value} ->

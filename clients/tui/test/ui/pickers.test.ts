@@ -179,3 +179,23 @@ describe("PickerOverlay", () => {
 		expect(overlay.items).toHaveLength(1);
 	});
 });
+
+test("bracketed paste filters a picker instead of silently selecting the first unfiltered row", () => {
+	const selected: string[] = [];
+	const picker = new PickerOverlay({
+		title: "models",
+		items: ITEMS,
+		onSelect: (item) => {
+			selected.push(item.value);
+		},
+		detail: () => ["Two messages leave the branch", "Files stay unchanged"],
+	});
+	picker.handleInput("\x1b[200~gpt-4o\x1b[201~");
+	expect(picker.filter).toBe("gpt-4o");
+	expect(picker.selected?.value).toBe("gpt-4o");
+	picker.handleInput("\r");
+	expect(selected).toEqual(["gpt-4o"]);
+	const screen = renderPlain(picker.render(80));
+	expect(screen).toContain("Two messages leave the branch");
+	expect(screen).toContain("Files stay unchanged");
+});

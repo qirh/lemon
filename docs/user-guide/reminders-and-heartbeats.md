@@ -1,7 +1,7 @@
 # Reminders, heartbeats, and the daily brief
 
-Lemon can reach out to you instead of waiting to be asked. Every proactive
-feature is an ordinary scheduled (cron) job run by the agent:
+Lemon can reach out to you instead of waiting to be asked. Scheduled proactive
+features are ordinary cron jobs run by the agent:
 
 - **Reminders** — one-off or recurring messages you set from Telegram with
   `/remind`, or by asking the agent.
@@ -9,8 +9,8 @@ feature is an ordinary scheduled (cron) job run by the agent:
   checklist and only messages you when something needs attention.
 - **Daily brief** — an opt-in morning heartbeat, configured by `lemon setup`.
 
-All of them need Lemon to be running when the job is due, and a paired chat to
-deliver to.
+Scheduled work needs Lemon to be running when the job is due. A paired chat is
+needed only for chat delivery; results remain available in run history.
 
 ---
 
@@ -103,6 +103,64 @@ uses its `cron` tool, which supports:
 
 Jobs created from the TUI or browser are delivered to your paired owner chat.
 Ask the agent to list, pause, or remove its scheduled jobs the same way.
+
+## Coding goals and scheduled coding jobs
+
+Goals and prompt cron jobs execute real native coding sessions, with the same
+file and shell tools as interactive work. From the CLI or TUI, ask the agent to
+create and control them using its `goal` and `cron` tools. Use a concrete task
+and verification command, for example:
+
+> Set a goal in this repository: fix the addition bug in arithmetic.py, run
+> `python3 -m unittest`, and summarize the change. Start a bounded two-tick loop.
+
+### A bounded goal
+
+The `goal` tool manages the current session's durable objective:
+
+- `set` stores `objective` and `cwd`; cwd defaults to the current coding
+  session's directory.
+- `start` launches a bounded loop; `max_ticks` limits judge/continuation cycles.
+  `run_once` starts one cycle. An optional `model` pins the coding model.
+- `status` shows the objective, target directory, loop state, active/last run,
+  and last result. `meta.lastResult` records completion status and output.
+- `pause` or `stop` disables automatic continuation and cancels the owned run.
+  `resume` makes the objective active again; use `start` to execute more work.
+
+The judge checks progress in the goal's directory with read-only tools.
+Continuation runs use that same directory. A failed or ambiguous run does not
+silently start another editor: unknown completion remains under reconciliation
+until the original run is terminal. Loops do not enable automatic restart by
+default.
+
+### A scheduled coding task
+
+Ask for a `cron` job with `prompt`, `schedule`, and an optional `cwd` and `model`.
+For example:
+
+> Create a disabled cron job in this repository to fix arithmetic.py and run
+> its Python tests. Use gpt-5.5 and no chat delivery, then run it once now.
+
+The tool's `add` action inherits the current coding directory unless `cwd` is
+specified. The directory is persisted, so daemon cwd and future interactive
+sessions do not redirect the job to another repository. You can update it
+explicitly. Prompt jobs run in separate conversation sub-sessions; their
+completed summaries and router run IDs remain in `cron` → `runs` history.
+
+- `run` executes a job immediately, including a disabled job.
+- `pause` disables future scheduled launches; `resume` enables them again.
+- `abort` takes the **cron run ID**, not the job ID, and stops an active run.
+  Pausing a schedule alone does not cancel work already in progress.
+- `runs` reports progress, output, and the underlying router run ID.
+
+`maxRetries` applies to definite scheduled-run failures with bounded backoff.
+Manual runs are single-shot. A timeout or lost acknowledgement is not proof of
+failure: Lemon retains the fixed run ID and reconciles completion rather than
+launching a duplicate coding session.
+
+These jobs edit the target directory directly; they do not create or merge Git
+worktrees automatically. Point `cwd` at a dedicated worktree when other agents
+or people are editing the same repository.
 
 ---
 

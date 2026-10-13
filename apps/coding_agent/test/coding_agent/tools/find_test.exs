@@ -6,6 +6,16 @@ defmodule CodingAgent.Tools.FindTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+  test "fallback exact names and exact result limits", %{tmp_dir: tmp_dir} do
+    File.write!(Path.join(tmp_dir, "a.txt"), "")
+    File.write!(Path.join(tmp_dir, "A.txt"), "")
+    File.write!(Path.join(tmp_dir, "aXtxt"), "")
+
+    assert %AgentToolResult{details: %{files: ["a.txt"], truncated: false}} =
+             Find.execute("exact", %{"pattern" => "a.txt", "max_results" => 1}, nil, nil, tmp_dir,
+               fd_available?: false
+             )
+  end
 
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do

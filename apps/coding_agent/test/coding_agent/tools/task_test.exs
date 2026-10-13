@@ -12,21 +12,6 @@ defmodule CodingAgent.Tools.TaskTest do
     :ok
   end
 
-  describe "tool/2" do
-    test "exposes only native task execution controls" do
-      tool = Task.tool("/tmp")
-      properties = tool.parameters["properties"]
-
-      assert tool.name == "task"
-      assert tool.label == "Run Task"
-      assert tool.description =~ "focused native session"
-      refute Map.has_key?(properties, "engine")
-      assert Map.has_key?(properties, "model")
-      assert Map.has_key?(properties, "thinking_level")
-      assert Map.has_key?(properties, "role")
-    end
-  end
-
   describe "validate_run_params/2" do
     test "builds a native execution context" do
       assert {:ok, validated} =

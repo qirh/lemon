@@ -222,6 +222,11 @@ defmodule CodingAgent.ProcessStore do
   """
   @spec delete(process_id()) :: :ok
   def delete(process_id) when is_binary(process_id) do
+    case :ets.lookup(@table, process_id) do
+      [{^process_id, record, _logs}] -> remove_output(record)
+      _ -> :ok
+    end
+
     :ets.delete(@table, process_id)
 
     if dets_open?() do
@@ -271,6 +276,24 @@ defmodule CodingAgent.ProcessStore do
     :dets.info(@dets_table) != :undefined
   rescue
     _ -> false
+  end
+
+  @doc false
+  def remove_output(record) do
+    case Map.get(record, :full_output_path) do
+      path when is_binary(path) ->
+        # Only delete artifacts allocated by ProcessSession, never arbitrary
+        # persisted path metadata.
+        if Path.dirname(path) == Path.expand(System.tmp_dir!()) and
+             Regex.match?(~r/^lemon-process-[0-9a-f]{32}\.log$/, Path.basename(path)) do
+          File.rm(path)
+        end
+
+      _ ->
+        :ok
+    end
+
+    :ok
   end
 
   # Private Functions

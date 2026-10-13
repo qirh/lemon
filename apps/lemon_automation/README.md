@@ -61,25 +61,23 @@ Before a scheduled launch, CronManager checks the persisted run table for
 pending/running runs for the same job, then claims a deterministic scheduled-run
 slot through `LemonCore.Store.put_new/3`. It skips duplicate scheduled starts
 while an active run exists, and competing dispatchers claiming the same scheduled
-slot preserve the first persisted run instead of overwriting it. Active runs
-older than the job's `timeout_ms` are recovered through the normal terminalizer
-as `:timeout`, including monitor suppression, forwarding, audit, and retry
-policy, so a crashed runtime cannot leave the job locked forever. On
-`CronManager` restart, persisted jobs are reloaded and the same active-run
-recovery path runs during initialization, so a manager crash cannot immediately
-double-submit a scheduled job that already has a pending/running persisted run.
-Scheduled failures and timeouts can retry when `max_retries` is greater than
-zero. The terminal source run persists retry due time, attempt, and root/source
+slot preserve the first persisted run instead of overwriting it. Prompt runs
+claim their fixed router ID before submission. A timeout, worker death after
+submission, or lost acknowledgement retains that invocation as active and
+reconciling: it is not a retry-safe failure. Recovery checks durable router
+completion before releasing ownership, including after manager restart.
+Unsubmitted work and local command jobs use their normal terminalization path.
+Definite scheduled failures can retry when `max_retries` is greater than zero.
+The terminal source run persists retry due time, attempt, and root/source
 lineage. Restart rebuilds the wake timer from that state, while a deterministic
 retry ID and atomic claim enforce one run per `{root, attempt}`. Retries are
 separate `CronRun` records with `triggered_by: :retry`; manual and wake runs do
-not retry by default. Cron workers are monitored supervised tasks, so
-supervisor start failures and worker `:DOWN` messages terminalize immediately.
-An unsupervised fallback is available only in explicit standalone mode.
-Operators can abort an active cron run by cron run id. The abort path calls the
-underlying LemonRouter run cancellation when the router run is still active,
-persists the cron run as `:aborted`, emits the normal completion event, and
-ignores late submitter completions.
+not retry by default. Workers are monitored supervised tasks; standalone
+fallback is explicit.
+Operators can abort an active cron run by cron run ID. Cancellation uses the
+claimed router ID and records abort intent before dispatch. Unknown outcomes
+remain under reconciliation and are not automatically retried. Confirmed
+abort terminalizes once and ignores late submitter completions.
 Cron lifecycle actions also record durable audit events in `:cron_audit_events`
 through `CronStore.record_audit/2`. The audit stream covers job lifecycle
 changes, manual run requests, run start/abort/retry/stale recovery, and
@@ -92,13 +90,14 @@ IDs, and reasons.
 `:cron_run_submitter` used by CronManager (normally RunSubmitter ->
 LemonRouter), and routes completion back through CronManager.
 
-**GoalContinuationManager** is the preview persistent-goal runner. It accepts one
-active session goal at a time, starts the work through `TaskSupervisor`, submits
-a `LemonRouter` request with `origin: :goal` and `queue_mode: :followup`, then
-records the router run id back into `LemonAgent.Workspace.GoalStore`.
+**GoalContinuationManager** runs persistent-goal continuations. It accepts one
+active session goal at a time and starts work through `TaskSupervisor` with
+`origin: :goal` and `queue_mode: :followup`. Goal targets persist their `cwd`;
+continuations and the read-only judge use that directory rather than daemon cwd.
+The goal records the accepted router run ID and bounded completion result.
 
 **GoalLoopManager** runs conservative goal loops. `run_once/2` performs one
-preview judge tick. `start_loop/2` starts one bounded supervised loop per
+judge tick. `start_loop/2` starts one bounded supervised loop per
 session, waits for each submitted continuation to emit `:run_completed`, and
 stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 `auto: true` persists opt-in auto-loop intent in `LemonAgent.Workspace.GoalStore`; the
@@ -133,6 +132,13 @@ the real router, a router `RunProcess`, and `RunCompletionWaiter` with a
 deterministic runtime. Set `LEMON_GOAL_JUDGE_MODEL` to pin the judge run model.
 Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
+
+The session-scoped `goal` agent tool exposes set/status/start/stop/pause/resume
+and a bounded asynchronous run-once action. Prompt `cron` jobs created by the
+agent tool inherit the current repository cwd and accept an explicit model pin.
+Neither automatically creates a worktree: use a dedicated target directory
+when other editors are active. See the
+[coding automation workflow](../../docs/user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
 
 Every automation path that both submits and waits uses
 `RunCompletionWaiter.submit_and_wait/2`. Cron, goal judge, autonomous goal

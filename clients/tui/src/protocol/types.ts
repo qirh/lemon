@@ -302,6 +302,8 @@ export interface ChatSendParams {
 	sessionKey: string;
 	prompt: string;
 	agentId?: string;
+	/** Launch workspace for ordinary TUI sessions; profiles keep server-owned cwd. */
+	cwd?: string;
 	queueMode?: QueueMode;
 }
 
@@ -473,6 +475,8 @@ export interface ChatAbortResult {
 
 export interface ChatHistoryParams {
 	sessionKey: string;
+	/** Resolve the native active branch instead of archived run summaries. */
+	cwd?: string;
 	/** Server clamps to 200. */
 	limit?: number;
 	beforeId?: string;

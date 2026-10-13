@@ -154,6 +154,22 @@ describe("breakpoints", () => {
 		const plain = stripAnsi(renderStatusLine(data({ busy: true }), 120));
 		expect(plain).toContain("codex working");
 	});
+
+	test("run usage and cost are separate from the context measurement", () => {
+		const plain = stripAnsi(renderStatusLine(data({ runTokens: 86_000, runCostUsd: 0.125 }), 200));
+		expect(plain).toContain("24% 48k/200k");
+		expect(plain).toContain("last 86k tok $0.13");
+		expect(stripAnsi(renderStatusLine(data({ runCostUsd: Number.NaN }), 200))).not.toContain("$");
+	});
+
+	test("busy composer exposes submission mode and interrupt before optional branch metadata", () => {
+		const plain = stripAnsi(
+			renderStatusLine(data({ busy: true, mode: "steer", pendingPrompts: 2 }), 120),
+		);
+		expect(plain).toContain("enter:steer");
+		expect(plain).toContain("esc:stop");
+		expect(plain).toContain("2 queued");
+	});
 });
 
 describe("sessions off screen", () => {
