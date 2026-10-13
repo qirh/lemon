@@ -184,6 +184,13 @@ Calls without `cwd`, or runtimes reporting missing/unsupported native history,
 retain legacy run-history support; storage failures are not treated as empty
 native history.
 
+`sessions.compact` requires `operator.admin` and accepts `sessionKey`, optional
+native `cwd`, and optional `focus` instructions. Manual compaction defaults to
+`force: true`. Model-backed summarization runs outside the WebSocket connection
+process so heartbeats and other control frames continue while it is working.
+A disconnected client must inspect session status before retrying: the durable
+summary may have committed even when its acknowledgement was lost.
+
 ## Named execution nodes
 
 On the destination host, supply the controller's operator credential for pairing:
