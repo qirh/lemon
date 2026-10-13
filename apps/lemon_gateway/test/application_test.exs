@@ -903,7 +903,7 @@ defmodule LemonGateway.ApplicationTest do
       session_key = "test:1"
 
       request = %ExecutionRequest{
-        run_id: nil,
+        run_id: LemonCore.Id.run_id(),
         session_key: session_key,
         prompt: "test message",
         resume: nil,

@@ -10,7 +10,6 @@ defmodule LemonGateway.ThreadRegistryTest do
   """
   use ExUnit.Case, async: false
 
-  alias LemonGateway.ExecutionRequest
   alias LemonGateway.ThreadRegistry
 
   defmodule ThreadRegistryFixtureExecutor do
@@ -75,20 +74,6 @@ defmodule LemonGateway.ThreadRegistryTest do
 
   defp unique_key do
     {:thread, System.unique_integer([:positive])}
-  end
-
-  defp execution_request(session_key, prompt, meta) do
-    %ExecutionRequest{
-      run_id: "thread-registry-#{System.unique_integer([:positive, :monotonic])}",
-      session_key: session_key,
-      prompt: prompt,
-      conversation_key: {:session, session_key},
-      meta: meta
-    }
-  end
-
-  defp submit_request(%ExecutionRequest{} = request) do
-    LemonGateway.Scheduler.submit_execution(request)
   end
 
   defp spawn_registering_process(key) do
@@ -919,32 +904,6 @@ defmodule LemonGateway.ThreadRegistryTest do
       assert length(successful) >= 15, "Expected at least 15 successful lookups"
 
       Enum.each(register_pids, &send(&1, :stop))
-    end
-  end
-
-  # ============================================================================
-  # Helpers
-  # ============================================================================
-
-  defp wait_for_unregistration(key, timeout) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-
-    do_wait_for_unregistration(key, deadline)
-  end
-
-  defp do_wait_for_unregistration(key, deadline) do
-    case ThreadRegistry.whereis(key) do
-      nil ->
-        :ok
-
-      _pid ->
-        if System.monotonic_time(:millisecond) > deadline do
-          # Worker may still be alive - this is acceptable in some cases
-          :timeout
-        else
-          Process.sleep(20)
-          do_wait_for_unregistration(key, deadline)
-        end
     end
   end
 end
