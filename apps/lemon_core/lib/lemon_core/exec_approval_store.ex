@@ -80,6 +80,33 @@ defmodule LemonCore.ExecApprovalStore do
   def get_pending(approval_id) when is_binary(approval_id),
     do: Store.get(@pending_table, approval_id)
 
+  @spec fetch_pending(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_pending(approval_id) when is_binary(approval_id),
+    do: Store.fetch(@pending_table, approval_id)
+
+  @spec put_pending_new(binary(), map()) :: :ok | {:error, term()}
+  def put_pending_new(approval_id, pending) when is_binary(approval_id) and is_map(pending),
+    do: Store.put_new(@pending_table, approval_id, pending)
+
+  @doc "Remove only the exact pending record the operator was shown."
+  @spec take_pending(binary(), map()) :: {:ok, map()} | {:error, term()}
+  def take_pending(approval_id, expected) when is_binary(approval_id) and is_map(expected) do
+    case Store.compare_and_delete(@pending_table, approval_id, expected) do
+      :ok ->
+        {:ok, expected}
+
+      {:error, :mismatch} ->
+        case fetch_pending(approval_id) do
+          {:ok, nil} -> {:error, :not_pending}
+          {:ok, _} -> {:error, :mismatch}
+          {:error, _} -> {:error, :store_unavailable}
+        end
+
+      {:error, _} ->
+        {:error, :store_unavailable}
+    end
+  end
+
   @spec delete_pending(binary()) :: :ok
   def delete_pending(approval_id) when is_binary(approval_id),
     do: Store.delete(@pending_table, approval_id)
