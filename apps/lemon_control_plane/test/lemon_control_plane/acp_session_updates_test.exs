@@ -497,6 +497,56 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert update(notice)["description"] == "Provider denied the request"
   end
 
+  test "permission previews describe bounded proposals without inventing file snapshots" do
+    for {name, args, label} <- [
+          {"edit", %{path: "file", old_string: "before", new_string: "after"},
+           "Requested replacement fragments"},
+          {"write", %{path: "file", content: String.duplicate("x", 10_000)},
+           "Proposed file content"},
+          {"patch", %{patch_text: "*** Begin Patch\n*** End Patch"}, "Requested patch"}
+        ] do
+      notification = SessionUpdates.tool_call("session", "call", name, args, cwd: "/workspace")
+
+      assert [%{"type" => "content", "content" => %{"type" => "text", "text" => preview}}] =
+               update(notification)["content"]
+
+      assert String.starts_with?(preview, label)
+      assert byte_size(preview) <= 4_000
+    end
+  end
+
+  test "live tool cards retain explicit native identity for permission and history correlation" do
+    start = %{
+      type: :engine_action,
+      payload: %{
+        phase: :started,
+        action: %{
+          id: "tool_call_native",
+          kind: "command",
+          detail: %{tool_call_id: "call_native", name: "bash", args: %{command: "pwd"}}
+        }
+      }
+    }
+
+    finish = %{
+      type: :engine_action,
+      payload: %{
+        phase: :completed,
+        ok: true,
+        action: %{
+          id: "tool_call_native",
+          kind: "command",
+          detail: %{tool_call_id: "call_native", name: "bash", result: "/workspace"}
+        }
+      }
+    }
+
+    {[start], mapper} = SessionUpdates.map_event(SessionUpdates.new("session"), start)
+    {[finish], _mapper} = SessionUpdates.map_event(mapper, finish)
+    assert update(start)["toolCallId"] == "call_native"
+    assert update(finish)["toolCallId"] == "call_native"
+    assert text("$ pwd") in update(finish)["content"]
+  end
   defp updates_for(session_id, event, opts \\ []) do
     {updates, _state} = SessionUpdates.map_event(SessionUpdates.new(session_id, opts), event)
     updates

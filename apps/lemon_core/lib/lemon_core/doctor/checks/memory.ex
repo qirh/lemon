@@ -9,6 +9,11 @@ defmodule LemonCore.Doctor.Checks.Memory do
   and how recently a run was ingested. It warns — never fails — when the
   feature is active but the store is unavailable, since agents still run fine
   with memory disabled.
+
+  A standalone CLI may pass `external_runtime?: true` after probing a separate
+  healthy runtime. If its local memory process is absent, this check reports
+  remote memory health as unverified (`:skip`), not as stopped recording.
+  Missing modules and NIF failures remain warnings.
   """
 
   alias LemonCore.Config.Features
@@ -48,13 +53,21 @@ defmodule LemonCore.Doctor.Checks.Memory do
     )
   end
 
-  defp session_search_check(state, true, {:unavailable, reason}, _opts) do
-    Check.warn(
-      "memory.session_search",
-      "session_search is #{state} but the memory store is unavailable (#{reason_text(reason)}). " <>
-        "Runs are not being recorded and memory search returns no results.",
-      remediation(reason)
-    )
+  defp session_search_check(state, true, {:unavailable, reason}, opts) do
+    if reason == :store_not_running and Keyword.get(opts, :external_runtime?, false) do
+      Check.skip(
+        "memory.session_search",
+        "session_search is #{state}; a separate Lemon runtime is healthy, " <>
+          "but its memory health cannot be checked from this CLI process."
+      )
+    else
+      Check.warn(
+        "memory.session_search",
+        "session_search is #{state} but the memory store is unavailable (#{reason_text(reason)}). " <>
+          "Runs are not being recorded and memory search returns no results.",
+        remediation(reason)
+      )
+    end
   end
 
   # ── Store status ───────────────────────────────────────────────────────────
@@ -116,7 +129,7 @@ defmodule LemonCore.Doctor.Checks.Memory do
   # otherwise memory.sqlite3 lands next to the main store's data.
   defp default_store_path do
     raw = configured_store_dir() || fallback_store_dir()
-    Path.join(Path.expand(raw), "memory.sqlite3")
+    Path.join(LemonCore.Paths.store_dir(raw), "memory.sqlite3")
   end
 
   defp configured_store_dir do

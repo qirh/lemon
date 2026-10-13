@@ -41,11 +41,13 @@ import {
 } from "./run.ts";
 import {
 	historyCommand,
+	nameCommand,
 	resetCommand,
 	resumeCommand,
 	sessionCommand,
 	sessionsCommand,
 } from "./session.ts";
+import { rewindCommand, treeCommand } from "./session-tree.ts";
 import { skillsCommand } from "./skills.ts";
 
 export interface RegistryOptions {
@@ -68,6 +70,9 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 
 		sessionsCommand,
 		sessionCommand,
+		nameCommand,
+		treeCommand,
+		rewindCommand,
 		resetCommand,
 		resumeCommand,
 		historyCommand,

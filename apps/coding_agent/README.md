@@ -142,6 +142,26 @@ CodingAgent.Supervisor (one_for_one)
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
 
+**Read-only internal references.** The `read` tool accepts these in its `path`:
+
+- `skill://<skill-key>` opens the selected bundle's `SKILL.md`, using the same
+  cwd-aware registry and project-over-user precedence as `read_skill`.
+- `skill://<skill-key>/references/example.md` opens a supporting file within that
+  bundle. Traversal and symlinks beneath the bundle are rejected.
+- `artifact://<id>` retrieves full output advertised by a truncated tool result.
+  Use the exact returned handle, with `offset` (one-based line number) and `limit`
+  to retrieve just the relevant portion rather than putting the entire output
+  back into context.
+
+Foreground `bash`, `bash_output`, and context guardrails expose artifact handles
+for their spilled output. Handles are indexed on disk in the session's spill
+directory, so they remain usable when that session is resumed while the
+underlying output file remains available. They do not grant another session
+access to the file, duplicate large output, or change its untrusted status.
+They are for `read`, not mutation tools or remote ACP filesystem operations.
+When registration is unavailable, results retain the existing absolute output
+path instead of advertising a nonexistent handle.
+
 The `agent` tool accepts an optional `node` string for delegated runs. Omit it
 or pass `"local"` to use the controller host. A named value must resolve to a
 currently connected execution node. If `cwd` is omitted, the destination uses
@@ -481,6 +501,9 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Usage checkpoints preserve response costs and cache-write durations as well as
+token counts, so reopening a session does not reset its recorded cost. Rewinding
+a live branch preserves the selected provider API, including ChatGPT/Codex models.
 
 `SessionManager.list_sessions/1` lists most recently modified sessions first.
 `Session.navigate_tree/3` persists branch selection even before another message

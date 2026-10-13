@@ -525,6 +525,15 @@ defmodule CodingAgent.Session do
     GenServer.call(session, {:navigate_tree, entry_id, opts})
   end
 
+  @doc "Preview or confirm rewind to immediately before an earlier user message."
+  @spec rewind(GenServer.server(), String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def rewind(session, entry_id, opts \\ []) do
+    GenServer.call(session, {:rewind, entry_id, opts}, :infinity)
+  end
+
+  @doc "List paginated session tree entries and branch leaves."
+  def tree(session, opts \\ []), do: GenServer.call(session, {:tree, opts})
+
   @doc """
   Get the current messages in the session.
   """
@@ -874,6 +883,31 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call({:tree, opts}, _from, state) do
+    {:reply, {:ok, CodingAgent.Session.Rewind.tree(state.session_manager, opts)}, state}
+  end
+
+  def handle_call({:rewind, _entry_id, _opts}, _from, %{is_streaming: true} = state),
+    do: {:reply, {:error, :busy}, state}
+
+  def handle_call({:rewind, entry_id, opts}, _from, state) do
+    state = CompactionManager.cancel_compaction_tasks(state, :rewind)
+
+    case CodingAgent.Session.Rewind.run(state.session_manager, entry_id, opts) do
+      {:ok, result, session_manager} ->
+        if Keyword.get(opts, :dry_run, true) do
+          {:reply, {:ok, result}, state}
+        else
+          state = restore_branch_state(state, session_manager)
+          Notifier.broadcast_event(state, {:session_rewound, result})
+          {:reply, {:ok, result}, state}
+        end
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
   def handle_call({:navigate_tree, _entry_id, _opts}, _from, %{is_streaming: true} = state),
     do: {:reply, {:error, :busy}, state}
 
@@ -902,27 +936,7 @@ defmodule CodingAgent.Session do
 
         session_manager = SessionManager.set_leaf_id(state.session_manager, entry_id)
 
-        # Rebuild messages from the new position
-        context = SessionManager.build_session_context(session_manager)
-
-        model =
-          ModelResolver.resolve_session_model(
-            context.model || state.model,
-            state.settings_manager
-          )
-
-        :ok = LemonAgent.Agent.set_model(state.agent, model)
-        :ok = LemonAgent.Agent.set_thinking_level(state.agent, context.thinking_level)
-        messages = restore_messages_from_session(session_manager)
-        :ok = LemonAgent.Agent.replace_messages(state.agent, messages)
-
-        {:reply, :ok,
-         %{
-           state
-           | session_manager: session_manager,
-             model: model,
-             thinking_level: context.thinking_level
-         }}
+        {:reply, :ok, restore_branch_state(state, session_manager)}
     end
   end
 
@@ -1890,4 +1904,27 @@ defmodule CodingAgent.Session do
   @spec maybe_trigger_compaction(t()) :: t()
   defp maybe_trigger_compaction(state),
     do: CompactionLifecycle.maybe_trigger(state, self())
+
+  defp restore_branch_state(state, session_manager) do
+    context = SessionManager.build_session_context(session_manager)
+
+    model =
+      ModelResolver.resolve_session_model(context.model || state.model, state.settings_manager)
+
+    :ok = LemonAgent.Agent.set_model(state.agent, model)
+    :ok = LemonAgent.Agent.set_thinking_level(state.agent, context.thinking_level)
+
+    :ok =
+      LemonAgent.Agent.replace_messages(
+        state.agent,
+        restore_messages_from_session(session_manager)
+      )
+
+    %{
+      state
+      | session_manager: session_manager,
+        model: model,
+        thinking_level: context.thinking_level
+    }
+  end
 end

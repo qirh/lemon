@@ -39,6 +39,38 @@ describe("SessionStore deltas", () => {
 		session.appendDelta("run-1", Number.NaN, "x");
 		expect(session.bufferFor("run-1")).toBe("x");
 	});
+
+	test("text after a tool starts a new segment below the tool without duplicating prior text", () => {
+		const session = new SessionStore("s");
+		const first = session.appendDelta("run", 1, "I will inspect.").block;
+		session.upsertTool(
+			{ id: "read-1", kind: "tool", title: "read", detail: { name: "read" } },
+			"completed",
+			{ runId: "run" },
+		);
+		const replay = session.appendDelta("run", 1, "I will inspect.");
+		expect(replay.accepted).toBe(false);
+		expect(session.blocks).toHaveLength(2);
+		const last = session.appendDelta("run", 2, "The answer.").block;
+		session.finalizeRun("run", { ok: true, answer: "I will inspect.The answer." });
+		expect(session.blocks.map((block) => block.kind)).toEqual(["assistant", "tool", "assistant"]);
+		expect(first.text).toBe("I will inspect.");
+		expect(first.status).toBe("done");
+		expect(last.text).toBe("The answer.");
+		expect(last.status).toBe("done");
+		expect(session.bufferFor("run")).toBe("I will inspect.The answer.");
+	});
+
+	test("completion before a late post-tool delta preserves chronological segments", () => {
+		const session = new SessionStore("s");
+		session.appendDelta("run", 1, "Before");
+		session.addNotice("tool boundary");
+		session.finalizeRun("run", { ok: true });
+		const late = session.appendDelta("run", 2, "After");
+		expect(late.amended).toBe(true);
+		expect(late.block.text).toBe("After");
+		expect(late.block.status).toBe("done");
+	});
 });
 
 describe("SessionStore finalize", () => {
@@ -408,4 +440,28 @@ describe("SessionStore context tokens", () => {
 	test("is undefined before any run has completed", () => {
 		expect(new SessionStore("s").contextTokens).toBeUndefined();
 	});
+});
+
+test("a notice seals text layout without hiding the later interrupt outcome", () => {
+	const session = new SessionStore("s");
+	session.activeRunId = "run";
+	session.busy = true;
+	session.appendDelta("run", 1, "partial answer");
+	session.addNotice("aborting");
+	const block = session.markInterrupted("run");
+	expect(block?.status).toBe("aborted");
+	expect(block?.text).toBe("partial answer");
+	session.finalizeRun("run", { ok: true });
+	expect(block?.status).toBe("aborted");
+});
+
+test("replacing history clears synthetic run indexes as well as visible blocks", () => {
+	const session = new SessionStore("s");
+	session.appendDelta("history:entry", Number.NaN, "abandoned text");
+	session.finalizeRun("history:entry", { ok: true });
+	session.resetTranscript();
+	session.appendDelta("history:entry", Number.NaN, "active text");
+	session.finalizeRun("history:entry", { ok: true });
+	expect(session.blocks).toHaveLength(1);
+	expect(session.assistantFor("history:entry")?.text).toBe("active text");
 });

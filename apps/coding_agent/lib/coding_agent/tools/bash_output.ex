@@ -42,12 +42,13 @@ defmodule CodingAgent.Tools.BashOutput do
 
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
-  def execute(_tool_call_id, params, _signal, _on_update, _cwd, opts) do
+  def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
     with {:ok, process_id} <- fetch_process_id(params),
          :ok <- authorize(process_id, opts),
          {:ok, output} <- read(process_id) do
       output
       |> format_output()
+      |> CodingAgent.Artifacts.attach(cwd, opts)
       |> ToolResultTrust.untrusted(:shell)
     end
   end

@@ -14,6 +14,7 @@ defmodule CodingAgent.Tools.Read do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.{TextContent, ImageContent}
   alias CodingAgent.FileReadTracker
+  alias CodingAgent.InternalUrls
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
@@ -50,7 +51,8 @@ defmodule CodingAgent.Tools.Read do
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "The path to the file to read (relative to cwd or absolute)"
+            "description" =>
+              "A local path, skill://<key>[/relative-path], or a returned artifact://<id> handle"
           },
           "offset" => %{
             "type" => "integer",
@@ -116,7 +118,8 @@ defmodule CodingAgent.Tools.Read do
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_abort(signal) do
       cond do
-        ACPFileBridge.read_enabled?(opts) and is_nil(detect_mime_type(resolved_path)) ->
+        not InternalUrls.internal_url?(path) and ACPFileBridge.read_enabled?(opts) and
+            is_nil(detect_mime_type(resolved_path)) ->
           read_text_file_from_acp(resolved_path, offset, limit, opts)
 
         true ->
@@ -269,7 +272,11 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp resolve_path(path, cwd, opts) do
-    {:ok, PathHelpers.resolve_path(path, cwd, opts)}
+    if InternalUrls.internal_url?(path) do
+      InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd))
+    else
+      {:ok, PathHelpers.resolve_path(path, cwd, opts)}
+    end
   end
 
   # ============================================================================
