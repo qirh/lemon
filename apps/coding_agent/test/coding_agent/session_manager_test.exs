@@ -82,7 +82,13 @@ defmodule CodingAgent.SessionManagerTest do
       assert {:ok, fork} = SessionManager.fork_file(path, fork_path, id: "child")
       assert fork.header.parent_session == full.header.id
       assert fork.header.id == "child"
-      assert SessionManager.entry_count(fork) == 1
+
+      assert SessionManager.build_session_context(fork) ==
+               SessionManager.build_session_context(selected)
+
+      assert CodingAgent.Session.BudgetLedger.restore(fork) ==
+               CodingAgent.Session.BudgetLedger.restore(full)
+
       selected |> SessionManager.append_message(%{"role" => "user", "content" => "new branch"})
       assert {:ok, source} = SessionManager.load_from_file(path)
       assert source.leaf_id != first.leaf_id

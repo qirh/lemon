@@ -163,7 +163,17 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       assert {:ok, entries} =
                ControlPlaneProvider.session_history(context.destination, context.cwd)
 
-      assert entries == CodingAgent.SessionManager.get_branch(context.session)
+      child_path =
+        CodingAgent.Session.Presentation.session_file_path(child.last_resume_token, context.cwd)
+
+      assert {:ok, child_session} = CodingAgent.SessionManager.load_from_file(child_path)
+      assert entries == CodingAgent.SessionManager.get_branch(child_session)
+
+      assert CodingAgent.SessionManager.build_session_context(child_session) ==
+               CodingAgent.SessionManager.build_session_context(context.session)
+
+      assert CodingAgent.Session.BudgetLedger.restore(child_session) ==
+               CodingAgent.Session.BudgetLedger.restore(context.session)
 
       assert {:error, :destination_exists} =
                ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
