@@ -137,6 +137,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Requests to the `opencode_go` provider (OpenAI-completions and Anthropic
+  transports) now send the `x-opencode-session` header OpenCode Go requires
+  since 2026-09, avoiding `400 MissingSessionID`. The id is
+  `StreamOptions.session_id` (LemonSim sets one per game and player), with a
+  stable per-system-prompt fallback. Other providers are unaffected.
+
 - Finished LemonSim spectator games now display `COMPLETED`, rather than
   `STOPPED`, after their runner exits. Live Werewolf playback keeps its
   playback indicator until the final scene has been shown.

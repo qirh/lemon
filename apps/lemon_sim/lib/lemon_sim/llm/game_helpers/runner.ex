@@ -147,7 +147,10 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
     {:ok, active_actor_agent} = Agent.start_link(fn -> nil end)
 
+    # One stable provider session id per game and acting player (providers such
+    # as OpenCode Go route/cache per conversation and require it).
     complete_fn = fn _model, context, stream_options ->
+      session_id = "#{state.sim_id}:#{Agent.get(active_actor_agent, & &1) || "none"}"
       {actual_model, api_key} = Agent.get(model_agent, & &1)
 
       model_stream_options =
@@ -161,6 +164,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
         |> Map.new()
         |> Map.merge(Map.new(model_stream_options))
         |> Map.put(:api_key, api_key)
+        |> Map.put_new(:session_id, session_id)
 
       LemonAi.complete(actual_model, context, actual_stream_options)
     end

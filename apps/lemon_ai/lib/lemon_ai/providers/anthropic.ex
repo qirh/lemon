@@ -32,7 +32,7 @@ defmodule LemonAi.Providers.Anthropic do
   @behaviour LemonAi.Provider
 
   alias LemonAi.EventStream
-  alias LemonAi.Providers.{HttpTrace, RetryHelper}
+  alias LemonAi.Providers.{HttpTrace, OpenCodeGoSession, RetryHelper}
   import LemonAi.Providers.AssistantMessageHelper
 
   alias LemonAi.Types.{
@@ -100,7 +100,7 @@ defmodule LemonAi.Providers.Anthropic do
 
       url = "#{base_url}/v1/messages"
 
-      headers = build_headers(api_key, model, opts)
+      headers = build_headers(api_key, model, context, opts)
       {body, history_info} = build_request_body(model, context, opts, api_key)
       trace_id = HttpTrace.new_trace_id("anthropic")
       messages = Map.get(body, "messages", [])
@@ -953,7 +953,7 @@ defmodule LemonAi.Providers.Anthropic do
   }
   @manual_thinking_min_output_tokens 4096
 
-  defp build_headers(api_key, model, opts) do
+  defp build_headers(api_key, model, context, opts) do
     provider = model.provider
     is_copilot = provider in @copilot_providers
 
@@ -1017,11 +1017,19 @@ defmodule LemonAi.Providers.Anthropic do
 
     # Merge beta tokens rather than letting an extra header remove required betas.
     extra_headers =
-      Enum.reduce([model.headers || %{}, opts.headers || %{}], %{}, fn headers, acc ->
-        Enum.reduce(headers, acc, fn {k, v}, acc ->
-          Map.put(acc, String.downcase(to_string(k)), to_string(v))
-        end)
-      end)
+      Enum.reduce(
+        [
+          OpenCodeGoSession.headers(model, context, opts),
+          model.headers || %{},
+          opts.headers || %{}
+        ],
+        %{},
+        fn headers, acc ->
+          Enum.reduce(headers, acc, fn {k, v}, acc ->
+            Map.put(acc, String.downcase(to_string(k)), to_string(v))
+          end)
+        end
+      )
 
     headers = Map.new(base_headers ++ copilot_headers ++ anthropic_oauth_headers)
 
