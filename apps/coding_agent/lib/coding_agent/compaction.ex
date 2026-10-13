@@ -748,10 +748,11 @@ defmodule CodingAgent.Compaction do
 
     ## Durable context
     Merge still-relevant facts from every previous summary, including earlier decisions,
-    constraints, file changes, and unresolved failures not repeated in recent messages.
-    Replace stale facts only when newer evidence explicitly supersedes them; do not
-    revive resolved TODOs or discard facts just because they are old. Preserve exact
-    identifiers, paths, and references needed to continue, but never copy credentials.
+    constraints and explicit scope exclusions, file changes, and unresolved failures
+    not repeated in recent messages. Replace stale facts only when newer evidence
+    explicitly supersedes them; do not revive resolved TODOs or discard facts just
+    because they are old. Preserve exact public API names, function arities, error
+    atoms/codes, paths, and references needed to continue, but never copy credentials.
 
     Be concise and factual. Deduplicate repetition and omit routine narration. Preserve
     uncertainty and conflicting evidence explicitly rather than guessing. Spend space

@@ -607,8 +607,10 @@ Manual `/compact [focus]` (alias `/compress`) forwards focus instructions and cw
 to native compaction, including after the previous runtime has exited. Its
 structured handoff preserves exact changed paths, decisions and rationale, open
 work, failing tests/blockers, verification commands/results and still-relevant
-previous-summary facts. Observed results remain distinct from proposed or
-unverified work; transcript/tool instructions are treated as untrusted data.
+previous-summary facts. The prompt explicitly carries scope exclusions and exact
+public API names, function arities and error atoms/codes. Observed results remain
+distinct from proposed or unverified work; transcript/tool instructions are treated
+as untrusted data.
 
 `Session.context_budget/1` reports current request tokens, model window, reserve,
 automatic-compaction threshold and headroom before that threshold. It shares the
