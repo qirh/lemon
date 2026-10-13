@@ -41,7 +41,9 @@ defmodule LemonControlPlane.UsageTokens do
       "cacheWriteTokens" => cache_write,
       "totalTokens" => total || sum_or_nil([input, output]),
       "contextTokens" => context,
-      "costUsd" => cost
+      "costUsd" => cost,
+      "turns" => first_integer(usage, [:turns]),
+      "tool_errors" => first_integer(usage, [:tool_errors])
     }
 
     if Enum.all?(Map.values(normalized), &is_nil/1), do: nil, else: normalized
