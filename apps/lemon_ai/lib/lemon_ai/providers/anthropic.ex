@@ -11,8 +11,13 @@ defmodule LemonAi.Providers.Anthropic do
   - Content blocks: text, thinking, tool_use; tool results with text and image blocks
   - Thinking shape from the model's capability flags: adaptive thinking + effort for
     `adaptive_thinking` models, manual `budget_tokens` otherwise
+    (summarized output when `compat.anthropic_thinking_display` permits it)
   - Token usage tracking and cost from catalog pricing
-  - Prompt caching support
+  - Prompt caching for string and block messages; provider option `cache_retention`
+    accepts `:none`, `:short` (default), or `:long` (one hour on Anthropic)
+  - Full conversation history is preserved; provider message limits are compaction
+    hints, never permission to silently discard messages
+  - Incomplete SSE responses fail with partial content instead of reporting success
   - Retries for 429/529/5xx and transport errors per
     `LemonAi.Providers.RetryHelper.policy/0`, honoring `retry-after` and
     `anthropic-ratelimit-*-reset`; the final error carries `retry_after_ms`
@@ -37,8 +42,7 @@ defmodule LemonAi.Providers.Anthropic do
     StreamOptions,
     TextContent,
     ThinkingContent,
-    ToolCall,
-    ToolResultMessage
+    ToolCall
   }
 
   @api_base_url "https://api.anthropic.com"
@@ -96,7 +100,7 @@ defmodule LemonAi.Providers.Anthropic do
 
       url = "#{base_url}/v1/messages"
 
-      headers = build_headers(api_key, model.headers, opts.headers, model.provider)
+      headers = build_headers(api_key, model, opts)
       {body, history_info} = build_request_body(model, context, opts, api_key)
       trace_id = HttpTrace.new_trace_id("anthropic")
       messages = Map.get(body, "messages", [])
@@ -135,6 +139,8 @@ defmodule LemonAi.Providers.Anthropic do
           stream: stream,
           blocks: [],
           sse_buffer: "",
+          terminal?: false,
+          cache_creation: %{},
           model: model,
           oauth_request?: anthropic_oauth_request?(model.provider, api_key)
         }
@@ -317,7 +323,18 @@ defmodule LemonAi.Providers.Anthropic do
     end)
   end
 
-  defp finalize_stream(%{output: output, stream: stream}) do
+  defp finalize_stream(%{output: output, stream: stream, terminal?: terminal?}) do
+    output =
+      if not terminal? and output.stop_reason not in [:error, :aborted] do
+        %{
+          output
+          | stop_reason: :error,
+            error_message: "Anthropic stream ended before message_stop or a stop reason"
+        }
+      else
+        output
+      end
+
     case output.stop_reason do
       reason when reason in [:error, :aborted] ->
         EventStream.error(stream, output)
@@ -346,23 +363,22 @@ defmodule LemonAi.Providers.Anthropic do
         headers: headers,
         json: body,
         into: fn {:data, data}, {req, resp} ->
-          Process.put(chunk_key, true)
-          debug_log("sse_chunk", data)
+          if resp.status == 200 do
+            Process.put(chunk_key, true)
+            debug_log("sse_chunk", data)
+            acc_state = resp.private[:sse_state] || initial_state
+            new_state = process_sse_chunk(data, acc_state)
 
-          # Get current accumulated state from response private data, or use initial
-          acc_state = resp.private[:sse_state] || initial_state
+            if meaningful_output_transition?(acc_state, new_state) do
+              Process.put(output_seen_key, true)
+            end
 
-          # Process the SSE chunk
-          new_state = process_sse_chunk(data, acc_state)
-
-          if meaningful_output_transition?(acc_state, new_state) do
-            Process.put(output_seen_key, true)
+            resp = put_in(resp.private[:sse_state], new_state)
+            {:cont, {req, resp}}
+          else
+            # Keep HTTP error bodies available to classification and retry policy.
+            {:cont, {req, %{resp | body: (resp.body || "") <> data}}}
           end
-
-          # Store updated state in response private data
-          resp = put_in(resp.private[:sse_state], new_state)
-
-          {:cont, {req, resp}}
         end,
         receive_timeout: 300_000
       )
@@ -459,7 +475,8 @@ defmodule LemonAi.Providers.Anthropic do
   defp content_size(_), do: 0
 
   defp retryable_http_response?(%Req.Response{status: status} = response, model) do
-    RetryHelper.retryable_http_status?(status) or retryable_kimi_empty_400?(response, model)
+    RetryHelper.retryable_http_error?(status, response.body) or
+      retryable_kimi_empty_400?(response, model)
   end
 
   defp retryable_kimi_empty_400?(%Req.Response{status: 400} = response, %Model{provider: provider})
@@ -525,31 +542,29 @@ defmodule LemonAi.Providers.Anthropic do
   end
 
   defp parse_sse_event(event_text) do
-    lines = String.split(event_text, ~r/\r?\n/)
+    {event_type, data_lines} =
+      event_text
+      |> String.split(~r/\r?\n/)
+      |> Enum.reduce({nil, []}, fn
+        "event:" <> value, {_event, data} ->
+          {String.replace_prefix(value, " ", ""), data}
 
-    event =
-      Enum.reduce(lines, %{event: nil, data: nil}, fn line, acc ->
-        cond do
-          String.starts_with?(line, "event:") ->
-            event = String.trim_leading(line, "event:")
-            %{acc | event: String.trim_leading(event, " ")}
+        "data:" <> value, {event, data} ->
+          {event, [String.replace_prefix(value, " ", "") | data]}
 
-          String.starts_with?(line, "data:") ->
-            data = String.trim_leading(line, "data:")
-            %{acc | data: String.trim_leading(data, " ")}
-
-          true ->
-            acc
-        end
+        _, acc ->
+          acc
       end)
 
-    if event.event && event.data do
-      case Jason.decode(event.data) do
-        {:ok, json} -> {event.event, json}
-        {:error, _} -> nil
-      end
-    else
-      nil
+    case data_lines |> Enum.reverse() |> Enum.join("\n") |> Jason.decode() do
+      {:ok, %{} = json} ->
+        case event_type || json["type"] do
+          type when is_binary(type) -> {type, json}
+          _ -> nil
+        end
+
+      _ ->
+        nil
     end
   end
 
@@ -557,23 +572,14 @@ defmodule LemonAi.Providers.Anthropic do
   # Event Processing
   # ============================================================================
 
+  defp process_sse_event(_event, %{terminal?: true} = state), do: state
+
   defp process_sse_event({"message_start", %{"message" => message}}, state) do
     # Capture initial token usage
     usage = message["usage"] || %{}
-
-    output =
-      update_usage(
-        state.output,
-        %{
-          "input_tokens" => usage["input_tokens"],
-          "output_tokens" => usage["output_tokens"],
-          "cache_read_input_tokens" => usage["cache_read_input_tokens"],
-          "cache_creation_input_tokens" => usage["cache_creation_input_tokens"]
-        },
-        state.model
-      )
-
-    %{state | output: output}
+    cache_creation = usage["cache_creation"] || state.cache_creation
+    output = update_usage(state.output, usage, state.model, cache_creation)
+    %{state | output: output, cache_creation: cache_creation}
   end
 
   defp process_sse_event(
@@ -582,7 +588,7 @@ defmodule LemonAi.Providers.Anthropic do
        ) do
     case block["type"] do
       "text" ->
-        text_block = %TextContent{type: :text, text: ""}
+        text_block = %TextContent{type: :text, text: block["text"] || ""}
         content_index = length(state.output.content)
         blocks = state.blocks ++ [{index, text_block}]
         output = %{state.output | content: state.output.content ++ [text_block]}
@@ -590,7 +596,12 @@ defmodule LemonAi.Providers.Anthropic do
         %{state | blocks: blocks, output: output}
 
       "thinking" ->
-        thinking_block = %ThinkingContent{type: :thinking, thinking: "", thinking_signature: nil}
+        thinking_block = %ThinkingContent{
+          type: :thinking,
+          thinking: block["thinking"] || "",
+          thinking_signature: block["signature"]
+        }
+
         content_index = length(state.output.content)
         blocks = state.blocks ++ [{index, thinking_block}]
         output = %{state.output | content: state.output.content ++ [thinking_block]}
@@ -602,7 +613,7 @@ defmodule LemonAi.Providers.Anthropic do
           type: :tool_call,
           id: block["id"] || "",
           name: maybe_strip_oauth_tool_name(block["name"] || "", state.oauth_request?),
-          arguments: %{}
+          arguments: block["input"] || %{}
         }
 
         content_index = length(state.output.content)
@@ -662,7 +673,7 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp process_sse_event({"message_delta", %{"delta" => delta, "usage" => usage}}, state) do
+  defp process_sse_event({"message_delta", %{"delta" => delta} = event}, state) do
     # Update stop reason
     output =
       case delta["stop_reason"] do
@@ -670,14 +681,20 @@ defmodule LemonAi.Providers.Anthropic do
         reason -> %{state.output | stop_reason: map_stop_reason(reason)}
       end
 
-    # Update usage
-    output = update_usage(output, usage, state.model)
+    usage = event["usage"] || %{}
+    cache_creation = usage["cache_creation"] || state.cache_creation
+    output = update_usage(output, usage, state.model, cache_creation)
 
-    %{state | output: output}
+    %{
+      state
+      | output: output,
+        cache_creation: cache_creation,
+        terminal?: not is_nil(delta["stop_reason"])
+    }
   end
 
   defp process_sse_event({"message_stop", _data}, state) do
-    state
+    %{state | terminal?: true}
   end
 
   defp process_sse_event({"ping", _data}, state) do
@@ -687,7 +704,7 @@ defmodule LemonAi.Providers.Anthropic do
   defp process_sse_event({"error", %{"error" => error}}, state) do
     error_msg = error["message"] || "Unknown error"
     output = %{state.output | stop_reason: :error, error_message: error_msg}
-    %{state | output: output}
+    %{state | output: output, terminal?: true}
   end
 
   defp process_sse_event({_event_type, _data}, state) do
@@ -705,7 +722,7 @@ defmodule LemonAi.Providers.Anthropic do
 
   defp redact_headers(headers) when is_list(headers) do
     Enum.map(headers, fn
-      {"x-api-key", _} -> {"x-api-key", "***"}
+      {k, _} when k in ["x-api-key", "authorization"] -> {k, "***"}
       {k, v} -> {k, v}
     end)
   end
@@ -936,7 +953,8 @@ defmodule LemonAi.Providers.Anthropic do
   }
   @manual_thinking_min_output_tokens 4096
 
-  defp build_headers(api_key, model_headers, opts_headers, provider) do
+  defp build_headers(api_key, model, opts) do
+    provider = model.provider
     is_copilot = provider in @copilot_providers
 
     is_anthropic_oauth =
@@ -954,6 +972,20 @@ defmodule LemonAi.Providers.Anthropic do
         @common_beta_features ++ LemonAi.Auth.AnthropicOAuth.oauth_beta_features()
       else
         @common_beta_features
+      end
+
+    beta_features =
+      if cache_control(model, opts)["ttl"] == "1h" do
+        beta_features ++ ["extended-cache-ttl-2025-04-11"]
+      else
+        beta_features
+      end
+
+    beta_features =
+      if model.reasoning and model.adaptive_thinking and not is_nil(opts.reasoning) do
+        beta_features ++ ["effort-2025-11-24"]
+      else
+        beta_features
       end
 
     base_headers = [
@@ -983,12 +1015,28 @@ defmodule LemonAi.Providers.Anthropic do
         []
       end
 
-    # Merge model and options headers
+    # Merge beta tokens rather than letting an extra header remove required betas.
     extra_headers =
-      Map.merge(model_headers || %{}, opts_headers || %{})
-      |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+      Enum.reduce([model.headers || %{}, opts.headers || %{}], %{}, fn headers, acc ->
+        Enum.reduce(headers, acc, fn {k, v}, acc ->
+          Map.put(acc, String.downcase(to_string(k)), to_string(v))
+        end)
+      end)
 
-    base_headers ++ copilot_headers ++ anthropic_oauth_headers ++ extra_headers
+    headers = Map.new(base_headers ++ copilot_headers ++ anthropic_oauth_headers)
+
+    Map.merge(headers, extra_headers, fn
+      "anthropic-beta", required, extra ->
+        (String.split(required, ",") ++ String.split(extra, ","))
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.uniq()
+        |> Enum.join(",")
+
+      _, _, value ->
+        value
+    end)
+    |> Map.to_list()
   end
 
   defp anthropic_oauth_provider?(:anthropic), do: true
@@ -996,19 +1044,25 @@ defmodule LemonAi.Providers.Anthropic do
   defp anthropic_oauth_provider?(_), do: false
 
   defp build_request_body(model, context, opts, api_key) do
-    {history_messages, history_info} = limit_history_for_provider(context.messages || [], model)
+    history_messages = context.messages || []
+    history_info = %{prepared_message_count: length(history_messages)}
+    cache_control = cache_control(model, opts)
     oauth_request? = anthropic_oauth_request?(model.provider, api_key)
 
     body = %{
       "model" => model.id,
-      "messages" => convert_messages(history_messages, model, oauth_request?: oauth_request?),
-      "max_tokens" => opts.max_tokens || div(model.max_tokens, 3),
+      "messages" =>
+        convert_messages(history_messages, model,
+          oauth_request?: oauth_request?,
+          cache_control: cache_control
+        ),
+      "max_tokens" => min(opts.max_tokens || div(model.max_tokens, 3), model.max_tokens),
       "stream" => true
     }
 
     # Add system prompt (skip if empty to avoid API errors on some providers)
     body =
-      case build_system_prompt(context.system_prompt, oauth_request?) do
+      case build_system_prompt(context.system_prompt, oauth_request?, cache_control) do
         nil ->
           body
 
@@ -1041,18 +1095,49 @@ defmodule LemonAi.Providers.Anthropic do
         !model.reasoning or !opts.reasoning ->
           body
 
+        get_in(body, ["tool_choice", "type"]) in ["any", "tool"] ->
+          if model.adaptive_thinking do
+            body
+            |> Map.delete("temperature")
+            |> Map.put("output_config", %{"effort" => "low"})
+          else
+            body
+          end
+
         model.adaptive_thinking ->
           effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
+          compat = model.compat || %{}
 
-          Map.merge(body, %{
-            "thinking" => %{"type" => "adaptive"},
-            "output_config" => %{
-              "effort" => Map.get(@adaptive_thinking_effort_map, effort, "medium")
-            }
+          thinking =
+            if Map.get(compat, :anthropic_thinking_display) ||
+                 Map.get(compat, "anthropic_thinking_display") do
+              %{"type" => "adaptive", "display" => "summarized"}
+            else
+              %{"type" => "adaptive"}
+            end
+
+          body
+          |> Map.delete("temperature")
+          |> Map.put("thinking", thinking)
+          |> Map.put("output_config", %{
+            "effort" => Map.get(@adaptive_thinking_effort_map, effort, "medium")
           })
 
         true ->
           thinking_budget = get_thinking_budget(opts.reasoning, opts.thinking_budgets)
+
+          max_tokens =
+            min(
+              max(body["max_tokens"], thinking_budget + @manual_thinking_min_output_tokens),
+              model.max_tokens
+            )
+
+          thinking_budget = min(thinking_budget, max_tokens - @manual_thinking_min_output_tokens)
+
+          if thinking_budget < 1024 do
+            raise ArgumentError,
+                  "Anthropic thinking requires room for at least 1024 thinking tokens and #{@manual_thinking_min_output_tokens} output tokens"
+          end
 
           body
           |> Map.put("thinking", %{
@@ -1060,58 +1145,19 @@ defmodule LemonAi.Providers.Anthropic do
             "budget_tokens" => thinking_budget
           })
           |> Map.put("temperature", 1)
-          |> Map.update!(
-            "max_tokens",
-            &max(&1, thinking_budget + @manual_thinking_min_output_tokens)
-          )
+          |> Map.put("max_tokens", max_tokens)
       end
 
     {body, history_info}
   end
 
-  @doc false
+  @doc """
+  Message-count hint for caller-owned compaction. Requests preserve all messages.
+  """
   @spec request_history_limit(Model.t() | map()) :: pos_integer() | nil
   def request_history_limit(%Model{provider: :kimi}), do: kimi_history_limit()
   def request_history_limit(%Model{provider: "kimi"}), do: kimi_history_limit()
   def request_history_limit(_), do: nil
-
-  defp limit_history_for_provider(messages, %Model{provider: :kimi} = model)
-       when is_list(messages) do
-    max_messages = request_history_limit(model)
-    trimmed = Enum.take(messages, -max_messages)
-    dropped_by_limit = max(length(messages) - length(trimmed), 0)
-    {trimmed, dropped_orphans} = drop_leading_tool_result_messages(trimmed)
-
-    {trimmed,
-     %{
-       max_messages: max_messages,
-       prepared_message_count: length(trimmed),
-       dropped_count: dropped_by_limit + dropped_orphans,
-       dropped_orphan_tool_results: dropped_orphans
-     }}
-  end
-
-  defp limit_history_for_provider(messages, _model) when is_list(messages) do
-    {messages,
-     %{
-       max_messages: nil,
-       prepared_message_count: length(messages),
-       dropped_count: 0,
-       dropped_orphan_tool_results: 0
-     }}
-  end
-
-  defp limit_history_for_provider(_messages, model), do: limit_history_for_provider([], model)
-
-  defp drop_leading_tool_result_messages(messages) do
-    {dropped, rest} =
-      Enum.split_while(messages, fn
-        %ToolResultMessage{} -> true
-        _ -> false
-      end)
-
-    {rest, length(dropped)}
-  end
 
   defp kimi_history_limit do
     case System.get_env(@kimi_history_limit_env) do
@@ -1130,7 +1176,7 @@ defmodule LemonAi.Providers.Anthropic do
     messages
     |> Enum.map(fn msg -> convert_message(msg, model, opts) end)
     |> Enum.reject(&is_nil/1)
-    |> add_cache_control_to_last_user_message()
+    |> add_cache_control_to_last_user_message(Keyword.get(opts, :cache_control))
   end
 
   defp convert_message(%LemonAi.Types.UserMessage{content: content}, _model, _opts)
@@ -1303,19 +1349,16 @@ defmodule LemonAi.Providers.Anthropic do
          },
          _oauth_request?
        ) do
-    if String.trim(thinking) != "" do
-      # If signature is missing, convert to plain text
-      if sig && String.trim(sig) != "" do
-        %{
-          "type" => "thinking",
-          "thinking" => thinking,
-          "signature" => sig
-        }
-      else
+    cond do
+      is_binary(sig) and sig != "" ->
+        # Signatures bind the original bytes, including empty/whitespace thinking.
+        %{"type" => "thinking", "thinking" => thinking, "signature" => sig}
+
+      String.trim(thinking) != "" ->
         %{"type" => "text", "text" => thinking}
-      end
-    else
-      nil
+
+      true ->
+        nil
     end
   end
 
@@ -1415,31 +1458,59 @@ defmodule LemonAi.Providers.Anthropic do
   defp tool_result_image?(%{type: :image}), do: true
   defp tool_result_image?(_), do: false
 
-  defp add_cache_control_to_last_user_message([]), do: []
+  defp cache_control(model, opts) do
+    options = resolve_provider_options(model, opts)
 
-  defp add_cache_control_to_last_user_message(messages) do
-    {last, rest} = List.pop_at(messages, -1)
+    case Map.get(options, :cache_retention) || Map.get(options, "cache_retention") do
+      retention when retention in [:none, "none"] ->
+        nil
 
-    if last["role"] == "user" do
-      updated_last = add_cache_control_to_message(last)
-      rest ++ [updated_last]
-    else
-      messages
+      retention
+      when retention in [:long, "long"] and model.provider in [:anthropic, "anthropic"] ->
+        %{"type" => "ephemeral", "ttl" => "1h"}
+
+      _ ->
+        %{"type" => "ephemeral"}
     end
   end
 
-  defp add_cache_control_to_message(%{"content" => content} = msg) when is_list(content) do
+  defp add_cache_control_to_last_user_message(messages, nil), do: messages
+
+  defp add_cache_control_to_last_user_message(messages, cache_control) do
+    case messages
+         |> Enum.with_index()
+         |> Enum.reverse()
+         |> Enum.find(fn {msg, _} ->
+           msg["role"] == "user"
+         end) do
+      nil ->
+        messages
+
+      {message, index} ->
+        List.replace_at(messages, index, add_cache_control_to_message(message, cache_control))
+    end
+  end
+
+  defp add_cache_control_to_message(%{"content" => content} = msg, cache_control)
+       when is_binary(content) do
+    block = %{"type" => "text", "text" => content, "cache_control" => cache_control}
+    %{msg | "content" => [block]}
+  end
+
+  defp add_cache_control_to_message(%{"content" => content} = msg, cache_control)
+       when is_list(content) do
     case List.pop_at(content, -1) do
       {nil, _} ->
         msg
 
       {last_block, rest_blocks} ->
-        updated_block = Map.put(last_block, "cache_control", %{"type" => "ephemeral"})
+        updated_block = Map.put(last_block, "cache_control", cache_control)
         %{msg | "content" => rest_blocks ++ [updated_block]}
     end
   end
 
-  defp add_cache_control_to_message(msg), do: msg
+  defp maybe_cache_block(block, nil), do: block
+  defp maybe_cache_block(block, cache_control), do: Map.put(block, "cache_control", cache_control)
 
   defp convert_tools(tools, opts) do
     oauth_request? = Keyword.get(opts, :oauth_request?, false)
@@ -1461,13 +1532,21 @@ defmodule LemonAi.Providers.Anthropic do
   # Usage & Cost Helpers
   # ============================================================================
 
-  defp update_usage(output, usage_data, model) do
+  defp update_usage(output, usage_data, model, cache_creation) do
     usage = output.usage
 
     input = usage_data["input_tokens"] || usage.input
     output_tokens = usage_data["output_tokens"] || usage.output
     cache_read = usage_data["cache_read_input_tokens"] || usage.cache_read
-    cache_write = usage_data["cache_creation_input_tokens"] || usage.cache_write
+
+    cache_write =
+      usage_data["cache_creation_input_tokens"] ||
+        if(is_map(usage_data["cache_creation"]),
+          do:
+            (cache_creation["ephemeral_5m_input_tokens"] || 0) +
+              (cache_creation["ephemeral_1h_input_tokens"] || 0),
+          else: usage.cache_write
+        )
 
     total_tokens = input + output_tokens + cache_read + cache_write
 
@@ -1477,6 +1556,7 @@ defmodule LemonAi.Providers.Anthropic do
         output: output_tokens,
         cache_read: cache_read,
         cache_write: cache_write,
+        cache_write_long: cache_creation["ephemeral_1h_input_tokens"] || 0,
         total_tokens: total_tokens
     }
 
@@ -1503,7 +1583,7 @@ defmodule LemonAi.Providers.Anthropic do
     anthropic_oauth_provider?(provider) and LemonAi.Auth.AnthropicOAuth.oauth_token?(api_key)
   end
 
-  defp build_system_prompt(system_prompt, true) do
+  defp build_system_prompt(system_prompt, true, cache_control) do
     cc_block = %{"type" => "text", "text" => @claude_code_system_prefix}
 
     case system_prompt do
@@ -1511,11 +1591,10 @@ defmodule LemonAi.Providers.Anthropic do
         if String.trim(prompt) != "" do
           [
             cc_block,
-            %{
-              "type" => "text",
-              "text" => sanitize_oauth_system_prompt(prompt),
-              "cache_control" => %{"type" => "ephemeral"}
-            }
+            maybe_cache_block(
+              %{"type" => "text", "text" => sanitize_oauth_system_prompt(prompt)},
+              cache_control
+            )
           ]
         else
           [cc_block]
@@ -1526,21 +1605,17 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp build_system_prompt(system_prompt, false) when is_binary(system_prompt) do
+  defp build_system_prompt(system_prompt, false, cache_control) when is_binary(system_prompt) do
     if String.trim(system_prompt) != "" do
       [
-        %{
-          "type" => "text",
-          "text" => system_prompt,
-          "cache_control" => %{"type" => "ephemeral"}
-        }
+        maybe_cache_block(%{"type" => "text", "text" => system_prompt}, cache_control)
       ]
     else
       nil
     end
   end
 
-  defp build_system_prompt(_, false), do: nil
+  defp build_system_prompt(_, false, _cache_control), do: nil
 
   defp maybe_prefix_oauth_tool_name(name, true) when is_binary(name) do
     @oauth_tool_prefix <> strip_all_oauth_tool_prefixes(name)

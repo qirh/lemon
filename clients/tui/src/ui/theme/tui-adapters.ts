@@ -17,6 +17,7 @@ import type {
 	SettingsListTheme,
 	SymbolTheme,
 } from "@oh-my-pi/pi-tui";
+import { codeLink } from "../../terminal/links.ts";
 import { ASCII_BOX, peekTheme, type Theme } from "./theme.ts";
 
 const identity = (text: string) => text;
@@ -129,7 +130,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 			heading: theme.fgFn("mdHeading"),
 			link: theme.fgFn("mdLink"),
 			linkUrl: theme.fgFn("mdLinkUrl"),
-			code: theme.fgFn("mdCode"),
+			code: (text) => codeLink(text, theme.fg("mdCode", text)),
 			codeBlock: theme.fgFn("mdCodeBlock"),
 			codeBlockBorder: theme.fgFn("mdCodeBlockBorder"),
 			quote: theme.fgFn("mdQuote"),

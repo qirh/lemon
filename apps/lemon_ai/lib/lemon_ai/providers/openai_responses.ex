@@ -370,10 +370,11 @@ defmodule LemonAi.Providers.OpenAIResponses do
            json: body,
            headers: headers_list,
            into: :self,
+           retry: false,
            receive_timeout: 300_000
          ) do
-      {:ok, %Req.Response{status: status}} when status in 200..299 ->
-        {:ok, receive_sse_events()}
+      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        {:ok, SSEParser.events(response)}
 
       {:ok, %Req.Response{status: status, headers: response_headers} = response} ->
         response_body = materialize_response_body(response.body)
@@ -395,7 +396,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
         })
 
         retry_delay =
-          if retry_allowed? and RetryHelper.retryable_http_status?(status) do
+          if retry_allowed? and RetryHelper.retryable_http_error?(status, response_body) do
             RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
           else
             :give_up
@@ -536,63 +537,6 @@ defmodule LemonAi.Providers.OpenAIResponses do
   end
 
   defp trace_header(_headers, _key), do: nil
-
-  defp receive_sse_events do
-    Stream.resource(
-      fn -> %{buffer: ""} end,
-      fn state ->
-        receive do
-          message ->
-            case normalize_sse_message(message) do
-              {:data, chunk} ->
-                {events, new_buffer} = SSEParser.parse_sse_chunk(state.buffer <> chunk)
-                {events, %{state | buffer: new_buffer}}
-
-              :done ->
-                {:halt, state}
-
-              {:error, reason} ->
-                throw({:stream_error, reason})
-
-              :ignore ->
-                {[], state}
-            end
-        after
-          300_000 ->
-            {:halt, state}
-        end
-      end,
-      fn _state -> :ok end
-    )
-  end
-
-  defp normalize_sse_message(message) do
-    case message do
-      {:data, data} when is_binary(data) ->
-        {:data, data}
-
-      {_, {:data, data}} when is_binary(data) ->
-        {:data, data}
-
-      {:done, _} ->
-        :done
-
-      {_, :done} ->
-        :done
-
-      {_, {:done, _}} ->
-        :done
-
-      {:error, reason} ->
-        {:error, reason}
-
-      {_, {:error, reason}} ->
-        {:error, reason}
-
-      _ ->
-        :ignore
-    end
-  end
 
   # ============================================================================
   # Helpers

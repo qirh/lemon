@@ -41,6 +41,29 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert Enum.all?(checks, &match?(%Check{}, &1))
     end
 
+    test "a named missing secret is not a usable default credential" do
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "doctor_missing_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+
+      File.write!(Path.join(tmp_dir, ".lemon/config.toml"), """
+      [defaults]
+      provider = "doctor_test_provider"
+      model = "doctor_test_provider:model"
+      [providers.doctor_test_provider]
+      api_key_secret = "doctor_missing_secret_#{System.unique_integer([:positive])}"
+      """)
+
+      on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+      check =
+        Providers.run(project_dir: tmp_dir) |> Enum.find(&(&1.name == "providers.credentials"))
+
+      assert check.status == :fail
+      refute check.message =~ "doctor_missing_secret_"
+    end
+
     test "provider routing check reports a ready fallback without leaking credentials" do
       tmp_dir =
         Path.join(

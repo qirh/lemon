@@ -213,14 +213,14 @@ defmodule LemonAi.ErrorProviderTest do
       assert info.reset_at == DateTime.from_unix!(1_704_067_200)
     end
 
-    test "retry-after with decimal is parsed as integer" do
+    test "retry-after preserves fractional seconds as milliseconds" do
       headers = [
         {"retry-after", "30.5"}
       ]
 
       info = Error.extract_rate_limit_info(headers)
 
-      assert info.retry_after == 30_000
+      assert info.retry_after == 30_500
     end
 
     test "handles empty reset value" do
@@ -253,14 +253,14 @@ defmodule LemonAi.ErrorProviderTest do
 
       assert result.category == :server
       assert result.status == 599
-      assert result.retryable == false
+      assert result.retryable == true
     end
 
-    test "categorizes 408 Request Timeout as client error" do
+    test "categorizes 408 Request Timeout as transient error" do
       result = Error.parse_http_error(408, "Request Timeout", [])
 
-      assert result.category == :client
-      assert result.retryable == false
+      assert result.category == :transient
+      assert result.retryable == true
     end
 
     test "categorizes 413 Payload Too Large as client error" do
@@ -274,7 +274,7 @@ defmodule LemonAi.ErrorProviderTest do
       result = Error.parse_http_error(501, "Not Implemented", [])
 
       assert result.category == :server
-      assert result.retryable == false
+      assert result.retryable == true
     end
 
     test "Cloudflare 520 is retryable" do
@@ -316,8 +316,7 @@ defmodule LemonAi.ErrorProviderTest do
       result = Error.parse_http_error(525, "SSL Handshake Failed", [])
 
       assert result.category == :server
-      # Not in retryable list
-      assert result.retryable == false
+      assert result.retryable == true
     end
   end
 
@@ -584,7 +583,7 @@ defmodule LemonAi.ErrorProviderTest do
       result = Error.parse_http_error(429, body, headers)
 
       assert result.category == :rate_limit
-      assert result.retryable == true
+      assert result.retryable == false
       assert result.rate_limit_info.limit == 1_000_000
       assert result.rate_limit_info.remaining == 0
       assert result.rate_limit_info.reset_at != nil
@@ -657,7 +656,7 @@ defmodule LemonAi.ErrorProviderTest do
       result = Error.parse_http_error(400, body, [])
 
       assert result.category == :rate_limit
-      assert result.retryable == true
+      assert result.retryable == false
       assert result.rate_limit_info.retry_after == 2_000
     end
   end

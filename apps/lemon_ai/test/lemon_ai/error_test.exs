@@ -30,7 +30,7 @@ defmodule LemonAi.ErrorTest do
       assert result.category == :server
       assert result.status == 500
       assert result.message =~ "Server error"
-      assert result.retryable == false
+      assert result.retryable == true
     end
 
     test "parses auth error" do
@@ -103,14 +103,14 @@ defmodule LemonAi.ErrorTest do
       assert Error.suggested_retry_delay_from_error(result) == 7_000
     end
 
-    test "does not retry quota errors without a rate-limit status" do
+    test "quota exhaustion rotates credentials without retrying the same request" do
       body = %{"error" => %{"code" => "insufficient_quota", "message" => "Quota exceeded"}}
 
       result = Error.parse_http_error(400, body, [])
 
-      assert result.category == :client
+      assert result.category == :rate_limit
       assert result.retryable == false
-      assert result.rate_limit_info == nil
+      assert Error.failover_action(result) == :next_credential
     end
 
     test "handles JSON string error body" do
@@ -294,8 +294,8 @@ defmodule LemonAi.ErrorTest do
       refute Error.retryable?({:http_error, 404, "not found"})
     end
 
-    test "server errors (500) are not retryable" do
-      refute Error.retryable?({:http_error, 500, "internal error"})
+    test "server errors (500) are retryable" do
+      assert Error.retryable?({:http_error, 500, "internal error"})
     end
 
     test "string errors with retryable keywords are retryable" do
@@ -478,7 +478,7 @@ defmodule LemonAi.ErrorTest do
       assert result.category == :server
       assert result.status == 500
       assert result.provider_message == ""
-      assert result.retryable == false
+      assert result.retryable == true
     end
 
     test "handles nil body" do
@@ -487,7 +487,7 @@ defmodule LemonAi.ErrorTest do
       assert result.category == :server
       assert result.status == 500
       assert result.provider_message == nil
-      assert result.retryable == false
+      assert result.retryable == true
     end
 
     test "handles body with only whitespace" do
@@ -1097,16 +1097,15 @@ defmodule LemonAi.ErrorTest do
     end
 
     test "parsed error with rate_limit category is retryable" do
-      # Simulating a parsed error struct behavior
-      refute Error.retryable?(%{category: :rate_limit})
+      assert Error.retryable?(%{category: :rate_limit})
     end
 
     test ":closed is retryable" do
       assert Error.retryable?(:closed)
     end
 
-    test ":nxdomain is not retryable" do
-      refute Error.retryable?(:nxdomain)
+    test ":nxdomain is retryable" do
+      assert Error.retryable?(:nxdomain)
     end
   end
 

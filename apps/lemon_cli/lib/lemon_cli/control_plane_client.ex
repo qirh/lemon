@@ -12,6 +12,59 @@ defmodule LemonCli.ControlPlaneClient do
 
   @default_timeout_ms 5_000
 
+  @doc "Opens an authenticated connection for a streaming one-shot client."
+  def open(opts \\ []) do
+    ref = make_ref()
+
+    with {:ok, _} <- Application.ensure_all_started(:websockex),
+         {:ok, pid} <-
+           WebSockex.start(Keyword.get(opts, :url) || default_url(), __MODULE__, %{
+             owner: self(),
+             ref: ref
+           }),
+         :ok <- send_connect(pid, token(opts)) do
+      case receive_hello(ref, @default_timeout_ms) do
+        :ok ->
+          {:ok, {pid, ref}}
+
+        error ->
+          WebSockex.cast(pid, :close)
+          error
+      end
+    end
+  end
+
+  def close({pid, _ref}), do: WebSockex.cast(pid, :close)
+
+  def call({pid, ref}, method, params, timeout_ms \\ @default_timeout_ms) do
+    id = request_id()
+
+    with :ok <- send_request(pid, id, method, params) do
+      receive do
+        {:lemon_cli_control_plane, ^ref,
+         %{"type" => "res", "id" => ^id, "ok" => true, "payload" => payload}} ->
+          {:ok, payload}
+
+        {:lemon_cli_control_plane, ^ref, %{"type" => "res", "id" => ^id, "error" => error}} ->
+          {:error, error}
+
+        {:lemon_cli_control_plane, ^ref, {:disconnected, _}} ->
+          {:error, :disconnected}
+      after
+        timeout_ms -> {:error, :control_plane_timeout}
+      end
+    end
+  end
+
+  def next_event({_pid, ref}, timeout_ms) do
+    receive do
+      {:lemon_cli_control_plane, ^ref, %{"type" => "event"} = frame} -> {:ok, frame}
+      {:lemon_cli_control_plane, ^ref, {:disconnected, _}} -> {:error, :disconnected}
+    after
+      timeout_ms -> {:error, :control_plane_timeout}
+    end
+  end
+
   @spec request(String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def request(method, params, opts \\ []) when is_binary(method) and is_map(params) do
     timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)

@@ -28,13 +28,32 @@ defmodule LemonAutomation.KanbanRunWorker do
                waiter_mod: waiter_mod,
                bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
                timeout_ms: timeout_ms,
-               wait_opts: wait_opts
+               wait_opts: wait_opts,
+               on_submitting: submission_claim(opts, params, workspace)
              ) do
-          {:ok, completed_run_id, _output} -> {:ok, %{run_id: completed_run_id}}
-          {:error, {:timeout, _run_id}} -> {:error, :timeout}
-          {:error, {:run_failed, _run_id, reason}} -> {:error, reason}
-          {:error, {:submit_failed, reason}} -> {:error, reason}
-          {:error, reason} -> {:error, reason}
+          {:ok, completed_run_id, output} ->
+            {:ok, %{run_id: completed_run_id, output: output}}
+
+          {:error, {:timeout, id}} ->
+            {:outcome_unknown, id}
+
+          {:error, {:completion_outcome_unknown, id}} ->
+            {:outcome_unknown, id}
+
+          {:error, {:submission_outcome_unknown, id}} ->
+            {:outcome_unknown, id}
+
+          {:error, {:unexpected_run_id, id, _other}} ->
+            {:outcome_unknown, id}
+
+          {:error, {:run_failed, _run_id, reason}} ->
+            {:error, reason}
+
+          {:error, {:submit_failed, reason}} ->
+            {:error, reason}
+
+          {:error, reason} ->
+            {:error, reason}
         end
       rescue
         error ->
@@ -43,6 +62,22 @@ defmodule LemonAutomation.KanbanRunWorker do
         :exit, reason ->
           {:error, {:exit, reason}}
       end
+    end
+  end
+
+  defp submission_claim(opts, params, workspace) do
+    case Keyword.get(opts, :on_submitting) do
+      callback when is_function(callback, 2) ->
+        fn run_id ->
+          callback.(run_id, %{
+            "sessionKey" => params.session_key,
+            "cwd" => workspace.cwd,
+            "branch" => workspace.worktree && workspace.worktree.branch
+          })
+        end
+
+      _ ->
+        nil
     end
   end
 
