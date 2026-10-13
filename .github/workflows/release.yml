@@ -366,9 +366,9 @@ jobs:
           PLATFORM="${{ matrix.platform }}"
           ARTIFACT_NAME="lemon-${VERSION}-${CHANNEL}-${PLATFORM}-${PROFILE}.tar.gz"
 
-          # Create tarball of the release directory
-          tar -czf "$ARTIFACT_NAME" \
-            -C "./_build/prod/rel/$PROFILE" .
+          # Reuse Mix's clean :tar output instead of compressing the runtime a
+          # second time. With no custom release :path, Mix writes it here.
+          cp "./_build/prod/$PROFILE-$VERSION.tar.gz" "$ARTIFACT_NAME"
 
           if command -v sha256sum >/dev/null 2>&1; then
             SHA256=$(sha256sum "$ARTIFACT_NAME" | awk '{print $1}')
