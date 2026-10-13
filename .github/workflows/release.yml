@@ -168,6 +168,9 @@ jobs:
   preflight-beam:
     name: Preflight BEAM
     needs: validate
+    # Tag-ref dispatches and tag pushes skip `prepare`; the implicit success()
+    # check covers skipped ancestors, so every downstream job gates explicitly.
+    if: ${{ !cancelled() && needs.validate.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -221,6 +224,7 @@ jobs:
   preflight-clients:
     name: Preflight clients
     needs: validate
+    if: ${{ !cancelled() && needs.validate.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -258,6 +262,7 @@ jobs:
     name: Build ${{ matrix.profile }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success' }}
 
     strategy:
       fail-fast: false
@@ -417,6 +422,7 @@ jobs:
     name: Build lemon_tui
     runs-on: ubuntu-24.04
     needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success' }}
 
     env:
       LEMON_VERSION: ${{ needs.validate.outputs.version }}
@@ -514,6 +520,7 @@ jobs:
     name: Verify lemon_tui (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: [validate, build-tui]
+    if: ${{ !cancelled() && needs.build-tui.result == 'success' }}
     timeout-minutes: 15
 
     strategy:
@@ -564,6 +571,7 @@ jobs:
     name: Docker ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success' }}
 
     permissions:
       contents: read
@@ -707,6 +715,7 @@ jobs:
     name: Docker manifest
     runs-on: ubuntu-24.04
     needs: [validate, docker-build]
+    if: ${{ !cancelled() && needs.docker-build.result == 'success' }}
     timeout-minutes: 15
 
     permissions:
@@ -766,6 +775,7 @@ jobs:
     name: Publish release
     runs-on: ubuntu-latest
     needs: [validate, build, build-tui, verify-tui, docker-merge]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build-tui.result == 'success' && needs.verify-tui.result == 'success' && needs.docker-merge.result == 'success' }}
     permissions:
       contents: write
 
@@ -919,7 +929,7 @@ jobs:
   promote-container:
     name: Promote container channel
     needs: [validate, publish]
-    if: needs.publish.result == 'success' && (github.event_name == 'push' || github.event.inputs.draft != 'true')
+    if: ${{ !cancelled() && needs.publish.result == 'success' && (github.event_name == 'push' || github.event.inputs.draft != 'true') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
