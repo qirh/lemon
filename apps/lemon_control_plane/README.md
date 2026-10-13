@@ -82,6 +82,8 @@ Use the same `sessionKey` and native workspace `cwd` for these operations.
 Both are required, non-empty strings, bounded to 1,024 and 4,096 UTF-8 bytes
 respectively. NUL bytes are rejected. Native runtime failures expose only safe
 reason classifications, never exception terms or raw filesystem errors.
+Successful tree and rewind receipts include the validated request `sessionKey`
+so clients can reject stale or mismatched targets before applying their results.
 
 `sessions.tree` requires `operator.read`. Optional `limit` is 1–500 (default
 100); `offset` is 0–1,000,000 (default 0). The result contains `sessionId`,
