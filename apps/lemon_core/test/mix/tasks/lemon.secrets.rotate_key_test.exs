@@ -26,7 +26,12 @@ defmodule Mix.Tasks.Lemon.Secrets.RotateKeyTest do
     System.put_env("HOME", home)
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
     System.put_env("LEMON_CONTROL_PLANE_PORT", Integer.to_string(closed_port()))
-    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:file])
+    # The directory flush is stubbed: macOS has no synchronous one, and the
+    # refusal that causes is covered in KeyRotationTest.
+    Application.put_env(:lemon_core, LemonCore.Secrets,
+      key_providers: [:file],
+      directory_sync: fn _dir -> :ok end
+    )
 
     on_exit(fn ->
       clear_secrets_table()

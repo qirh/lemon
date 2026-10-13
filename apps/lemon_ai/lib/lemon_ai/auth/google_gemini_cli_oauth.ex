@@ -261,11 +261,8 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]),
          project_id when is_binary(project_id) and project_id != "" <-
-           project_id_from_secret(refreshed_secret) do
-      if changed? do
-        persist_secret(secret_name, refreshed_secret, opts)
-      end
-
+           project_id_from_secret(refreshed_secret),
+         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
       {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
     else
       :not_oauth -> :ignore
@@ -596,24 +593,22 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
 
   defp fetch_user_email(_), do: {:ok, nil}
 
+  # A refreshed secret that was not stored is a failure, not a success.
   defp persist_secret(secret_name, secret, opts) do
     encoded = encode_secret(secret)
 
     case Keyword.get(opts, :persist_secret) do
       callback when is_function(callback, 2) ->
-        callback.(secret_name, encoded)
-        :ok
+        case callback.(secret_name, encoded) do
+          {:error, _} -> {:error, :oauth_secret_persistence_failed}
+          _ -> :ok
+        end
 
       _ ->
         :ok
     end
   rescue
-    reason ->
-      Logger.debug(
-        "Failed to persist refreshed Google Gemini CLI OAuth secret #{secret_name}: #{inspect(reason)}"
-      )
-
-      :ok
+    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   defp post_form(url, body) when is_map(body) do

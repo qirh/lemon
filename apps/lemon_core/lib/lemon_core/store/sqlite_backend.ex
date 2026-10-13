@@ -196,25 +196,32 @@ defmodule LemonCore.Store.SqliteBackend do
       encoded_key = encode(key)
 
       with :ok <- bind_statement(state.statements.get, [table_name, {:blob, encoded_key}]) do
-        case Sqlite3.step(state.conn, state.statements.get) do
-          {:row, [value_blob]} ->
-            case decode(value_blob, table: table, field: :value, key: key) do
-              {:ok, value} -> {:ok, value, state}
-              {:error, reason} -> {:error, reason}
-            end
+        result =
+          case Sqlite3.step(state.conn, state.statements.get) do
+            {:row, [value_blob]} ->
+              case decode(value_blob, table: table, field: :value, key: key) do
+                {:ok, value} -> {:ok, value, state}
+                {:error, reason} -> {:error, reason}
+              end
 
-          :done ->
-            {:ok, nil, state}
+            :done ->
+              {:ok, nil, state}
 
-          :busy ->
-            {:error, :sqlite_busy}
+            :busy ->
+              {:error, :sqlite_busy}
 
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
 
-          other ->
-            {:error, {:sqlite_get_failed, other}}
-        end
+            other ->
+              {:error, {:sqlite_get_failed, other}}
+          end
+
+        # A single-row SELECT left on SQLITE_ROW keeps its read snapshot open;
+        # a later write or checkpoint on this connection would then see a stale
+        # WAL snapshot and fail with SQLITE_BUSY. Finish it on every path.
+        _ = Sqlite3.reset(state.statements.get)
+        result
       end
     end
   end
@@ -269,7 +276,8 @@ defmodule LemonCore.Store.SqliteBackend do
 
   The store runs with `synchronous=NORMAL`, so a committed transaction may
   still sit unsynced in the WAL. A complete checkpoint syncs the WAL, copies
-  it into the database, and syncs the database file; a checkpoint blocked by
+  it into the database, and syncs the database file (with `F_FULLFSYNC` on
+  macOS, via `checkpoint_fullfsync`); a checkpoint blocked by
   another connection is reported as `{:error, :sqlite_checkpoint_busy}`
   rather than claiming durability. Cached statements are reset first: a read
   statement left on its last row holds a read transaction on this connection
@@ -277,7 +285,7 @@ defmodule LemonCore.Store.SqliteBackend do
   """
   @impl true
   def sync(state) do
-    Enum.each(Map.values(state.statements), &Sqlite3.reset/1)
+    reset_statements(state)
 
     with {:ok, statement} <- Sqlite3.prepare(state.conn, "PRAGMA wal_checkpoint(TRUNCATE)") do
       result =
@@ -441,6 +449,10 @@ defmodule LemonCore.Store.SqliteBackend do
   defp init_db(conn) do
     with :ok <- Sqlite3.execute(conn, "PRAGMA journal_mode=WAL"),
          :ok <- Sqlite3.execute(conn, "PRAGMA synchronous=NORMAL"),
+         # Checkpoints are the `sync/1` durability barrier; on macOS a plain
+         # fsync does not reach stable storage, so they use F_FULLFSYNC there
+         # (a no-op elsewhere). Ordinary commits are unaffected.
+         :ok <- Sqlite3.execute(conn, "PRAGMA checkpoint_fullfsync=ON"),
          :ok <- Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY"),
          :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout=5000"),
          :ok <- Sqlite3.execute(conn, @schema_sql) do
@@ -564,7 +576,13 @@ defmodule LemonCore.Store.SqliteBackend do
     end
   end
 
+  # Every cached statement is finished first: one left mid-result would pin an
+  # old read snapshot and turn BEGIN IMMEDIATE into SQLITE_BUSY.
+  defp reset_statements(state), do: Enum.each(Map.values(state.statements), &Sqlite3.reset/1)
+
   defp compare_and_swap_persistent(state, table, key, expected, replacement) do
+    reset_statements(state)
+
     case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
       :ok ->
         result =
@@ -601,6 +619,8 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   defp compare_and_delete_persistent(state, entries) do
+    reset_statements(state)
+
     case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
       :ok ->
         result =

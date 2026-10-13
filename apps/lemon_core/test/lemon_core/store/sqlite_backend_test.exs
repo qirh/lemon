@@ -891,6 +891,34 @@ defmodule LemonCore.Store.SqliteBackendTest do
   end
 
   describe "compare_and_swap/5 and sync/1" do
+    test "a read on one connection does not block its writes after another connection commits",
+         %{tmp_dir: tmp_dir} do
+      {:ok, a} = SqliteBackend.init(path: tmp_dir)
+      {:ok, b} = SqliteBackend.init(path: tmp_dir)
+      {:ok, a} = SqliteBackend.put(a, :secrets_lock, :secrets, %{owner: "a"})
+
+      # B sees A's lease, A releases it, then B tries to take it.
+      assert {:ok, %{owner: "a"}, b} = SqliteBackend.get(b, :secrets_lock, :secrets)
+      {:ok, a} = SqliteBackend.delete(a, :secrets_lock, :secrets)
+      assert {:ok, b} = SqliteBackend.put_new(b, :secrets_lock, :secrets, %{owner: "b"})
+
+      # Same for compare-and-swap after a fresh read on B and a write on A.
+      assert {:ok, %{owner: "b"}, b} = SqliteBackend.get(b, :secrets_lock, :secrets)
+      {:ok, a} = SqliteBackend.put(a, :secrets_lock, :secrets, %{owner: "a2"})
+
+      assert {:ok, b} =
+               SqliteBackend.compare_and_swap(b, :secrets_lock, :secrets, %{owner: "a2"}, %{
+                 owner: "b2"
+               })
+
+      # And a checkpoint on B is not blocked by an outstanding read on A.
+      assert {:ok, %{owner: "b2"}, a} = SqliteBackend.get(a, :secrets_lock, :secrets)
+      assert {:ok, b} = SqliteBackend.sync(b)
+
+      :ok = SqliteBackend.close(a)
+      :ok = SqliteBackend.close(b)
+    end
+
     test "compare-and-swap compares against the shared file, not one connection",
          %{tmp_dir: tmp_dir} do
       {:ok, first} = SqliteBackend.init(path: tmp_dir)

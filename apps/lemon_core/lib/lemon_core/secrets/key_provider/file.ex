@@ -67,7 +67,7 @@ defmodule LemonCore.Secrets.KeyProvider.File do
         if occupied?(path, opts) do
           {:error, {:key_file_exists, path}}
         else
-          write(path, value)
+          write(path, value, opts)
         end
     end
   end
@@ -78,7 +78,25 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   @spec path(keyword()) :: Path.t() | nil
   def path(opts \\ []), do: KeyProvider.key_file(opts)
 
+  @doc """
+  Whether a replaced key file can be made durable on this host: runs the
+  directory flush on the key file's directory and returns its result.
+  `LemonCore.Secrets.KeyRotation` refuses to rotate a file key without it.
+  The flush is `LemonCore.Durable.sync_directory/1` unless the
+  `:directory_sync` option supplies another function.
+  """
+  @spec durable_replace(keyword()) :: :ok | {:error, term()}
+  def durable_replace(opts) do
+    case KeyProvider.key_file(opts) do
+      nil -> {:error, :unavailable}
+      path -> directory_sync(opts).(Path.dirname(path))
+    end
+  end
+
   defp reader(opts), do: Keyword.get(opts, :file_reader, &Elixir.File.read/1)
+
+  defp directory_sync(opts),
+    do: KeyProvider.option(opts, :directory_sync, &LemonCore.Durable.sync_directory/1)
 
   # Refuse to overwrite key material: everything encrypted with the old key
   # would become unreadable.
@@ -97,12 +115,13 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   # key material on disk at whatever the umask allows, and rewriting the key
   # file in place would leave a truncated key if interrupted. The temporary
   # file is exclusive, `0600` before it holds key material, and synced before
-  # the rename makes it the key; the directory is synced after the rename so
-  # the replacement itself survives a host crash. `:ok` therefore means the new
-  # key is durable — key rotation relies on that before dropping old
-  # ciphertext. A failed directory sync is reported even though the rename
-  # already happened.
-  defp write(path, value) do
+  # the rename makes it the key; the directory is then synced so the
+  # replacement itself survives a host crash. Where no synchronous directory
+  # flush exists (macOS) the rename is still atomic but its durability is not
+  # proven; key rotation checks `durable_replace/1` and refuses there. A
+  # failed flush on a host that supports it is reported even though the
+  # rename already happened.
+  defp write(path, value, opts) do
     dir = Path.dirname(path)
     suffix = "#{System.pid()}.#{System.unique_integer([:positive])}"
     temporary = Path.join(dir, ".#{Path.basename(path)}.#{suffix}")
@@ -111,12 +130,19 @@ defmodule LemonCore.Secrets.KeyProvider.File do
          _ <- Elixir.File.chmod(dir, @dir_mode),
          :ok <- write_private(temporary, String.trim(value) <> "\n"),
          :ok <- Elixir.File.rename(temporary, path),
-         :ok <- LemonCore.Durable.sync_directory(dir) do
+         :ok <- sync_written_directory(dir, opts) do
       :ok
     else
       {:error, reason} ->
         _ = Elixir.File.rm(temporary)
         {:error, {:key_file_write_failed, reason}}
+    end
+  end
+
+  defp sync_written_directory(dir, opts) do
+    case directory_sync(opts).(dir) do
+      {:error, :directory_sync_unsupported} -> :ok
+      result -> result
     end
   end
 

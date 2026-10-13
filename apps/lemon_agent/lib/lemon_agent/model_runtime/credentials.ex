@@ -112,8 +112,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
             non_empty_binary(value)
 
           {:error, reason} ->
-            Logger.debug("Failed to resolve OAuth secret #{secret_name}: #{inspect(reason)}")
-            non_empty_binary(value)
+            # The value is a recognised OAuth payload that could not be used
+            # (refresh or persistence failed); it is not an API key.
+            Logger.warning(
+              "Failed to resolve OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
+            )
+
+            nil
         end
 
       _ ->
@@ -752,8 +757,6 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     if String.trim(value) == "", do: nil, else: value
   end
 
-  defp non_empty_binary(_), do: nil
-
   defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_value?(_), do: false
 
@@ -776,17 +779,25 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       )
   end
 
+  # Persistence results are returned, not swallowed: a refreshed OAuth secret
+  # that was not stored (for example `{:error, :secrets_locked}` during a key
+  # rotation) must fail the resolution rather than strand a rotated refresh
+  # token.
   defp persist_oauth_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "ai_oauth")
   end
 
   defp persist_openai_codex_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "openai_codex_oauth")
-    :ok
   end
 
   defp persist_anthropic_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "anthropic_oauth")
-    :ok
   end
+
+  # Error terms from OAuth helpers can carry provider response bodies; log only
+  # their leading tag.
+  defp safe_reason(reason) when is_atom(reason), do: reason
+  defp safe_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
+  defp safe_reason(_reason), do: :unknown
 end

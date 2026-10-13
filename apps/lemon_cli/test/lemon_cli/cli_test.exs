@@ -287,6 +287,13 @@ defmodule LemonCli.CLITest do
     # The key comes from the private key file under the isolated HOME, never
     # the developer's Keychain or a running runtime.
     System.delete_env("LEMON_SECRETS_MASTER_KEY")
+    # Stub the directory flush so the key-file path also runs on macOS, which
+    # has no synchronous one (that refusal is covered in KeyRotationTest).
+    Application.put_env(:lemon_core, LemonCore.Secrets,
+      key_providers: [:env, :file],
+      directory_sync: fn _dir -> :ok end
+    )
+
     key_file = Path.join([tmp_dir, "home", ".lemon", "secrets_master_key"])
     assert {:ok, %{source: :file}} = LemonCore.Secrets.MasterKey.init(target: :file)
     original_key = File.read!(key_file)

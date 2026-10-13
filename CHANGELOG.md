@@ -63,7 +63,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   replaces the key in the Keychain entry or key file. It refuses stale tokens,
   changes nothing if any secret does not decrypt, never touches external
   sources or environment fallback, refuses while a runtime is running, and
-  keeps every secret readable if interrupted at any step.
+  keeps every secret readable if interrupted at any step. A key file is
+  rotated only where the host can flush the rename synchronously (GNU
+  coreutils); on macOS keep the master key in the Keychain. Secret writes and
+  OAuth token refreshes report a held secrets lock instead of claiming success.
 
 ### Fixed
 

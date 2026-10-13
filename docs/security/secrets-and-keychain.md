@@ -70,7 +70,17 @@ Additional nuance:
 master key, re-encrypts every secret in the encrypted store under it, and
 writes it to the provider that supplied the current key: the Keychain entry is
 updated in place, the key file is replaced by an atomic rename (`0600`)
-followed by a directory sync. Implementation: `LemonCore.Secrets.KeyRotation`.
+followed by a synchronous directory flush. Implementation:
+`LemonCore.Secrets.KeyRotation`.
+
+A key file is only rotated where that flush is real: GNU coreutils
+`sync DIR`, verified at run time. macOS has none (its `sync` ignores
+arguments and only schedules a flush), so rotation of a file key there
+refuses with `key_file_not_durable` before changing anything. Keep the
+master key in the Keychain on macOS (the default provider); to move a file
+key there, store it with `security add-generic-password -s "Lemon Secrets"
+-a default -w "$(cat ~/.lemon/secrets_master_key)"`, move the file aside,
+and confirm `lemon secrets status` reports `source: keychain`.
 
 ```bash
 lemon secrets rotate-key                    # preview; changes nothing
@@ -105,7 +115,12 @@ lemon secrets rotate-key --confirm <token>  # apply exactly that preview
   `Secrets.set/3` takes the same lock from resolving the key to storing the
   record (waiting up to 30 seconds, then `{:error, :secrets_locked}`), so a
   concurrent `lemon secrets set` never encrypts under the retiring key and two
-  rotations never interleave. A lease whose holder exited is reclaimed.
+  rotations never interleave. A lease has no expiry; it is reclaimed only when
+  its holder is provably gone (a dead process in this VM, or an OS pid on this
+  host that no longer exists). A lease from another host is never reclaimed:
+  callers get `{:error, {:secrets_lock_held, host}}` and an operator deletes
+  the `:secrets_lock` row after confirming that holder is gone. OAuth refresh
+  paths and MCP token caches report a failed save instead of claiming success.
 - **Scope.** Only the encrypted store is rotated. External sources and
   same-name environment fallback are read-only and untouched. A master key
   supplied by `LEMON_SECRETS_MASTER_KEY` cannot be rewritten: rotation refuses

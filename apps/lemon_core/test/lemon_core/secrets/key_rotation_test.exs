@@ -108,7 +108,15 @@ defmodule LemonCore.Secrets.KeyRotationTest do
 
     # Never the real Keychain, LEMON_SECRETS_MASTER_KEY, or a runtime on the
     # default control port: only the temp file and a port nobody listens on.
-    opts = [key_providers: [:file], key_file: key_file, control_port: closed_port()]
+    # The directory flush is stubbed so the key-file path runs on any host;
+    # the refusal without one is tested separately.
+    opts = [
+      key_providers: [:file],
+      key_file: key_file,
+      control_port: closed_port(),
+      directory_sync: fn _dir -> :ok end
+    ]
+
     {:ok, key_file: key_file, opts: opts}
   end
 
@@ -402,6 +410,25 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert KeyRotation.describe_error(:runtime_running) =~ "lemon stop"
     assert File.read!(ctx.key_file) == key_before
     refute Enum.any?(Store.list(Secrets.table()), fn {_ref, entry} -> Map.has_key?(entry, :staged) end)
+  end
+
+  test "a key file is not rotated where its replacement cannot be made durable", ctx do
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", ctx.opts)
+    key_before = File.read!(ctx.key_file)
+    rows_before = Enum.sort(Store.list(Secrets.table()))
+    {:ok, %{confirmation_token: token}} = KeyRotation.preview(ctx.opts)
+
+    unsupported =
+      Keyword.put(ctx.opts, :directory_sync, fn _dir -> {:error, :directory_sync_unsupported} end)
+
+    assert {:error, {:key_file_not_durable, :directory_sync_unsupported} = reason} =
+             KeyRotation.preview(unsupported)
+
+    assert {:error, ^reason} = KeyRotation.rotate(token, unsupported)
+    assert KeyRotation.describe_error(reason) =~ "Keychain"
+    assert File.read!(ctx.key_file) == key_before
+    assert Enum.sort(Store.list(Secrets.table())) == rows_before
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", ctx.opts)
   end
 
   defp read_key(path), do: path |> File.read!() |> String.trim() |> Base.decode64!()

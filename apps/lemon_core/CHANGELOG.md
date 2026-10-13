@@ -71,15 +71,19 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   staged copy). New task: `mix lemon.secrets.rotate_key [--confirm TOKEN]`.
 - `LemonCore.Secrets.Lock`: a Store-backed lease, exclusive across OS
   processes on a SQLite store, held by key rotation and by `Secrets.set/3`
-  around key resolution and persistence. `set/3` can now return
-  `{:error, :secrets_locked}` when a rotation holds it for longer than 30 s.
+  around key resolution and persistence. A lease never expires; it is
+  reclaimed only from a holder that is provably gone on this host. `set/3`
+  can now return `{:error, :secrets_locked}` (a live holder outlasted the
+  30 s wait, configurable as `write_lock_wait_ms`) or
+  `{:error, {:secrets_lock_held, host}}` (a lease from another host).
 - `LemonCore.Store.sync/1` durability barrier and optional
   `LemonCore.Store.Backend` callbacks `compare_and_swap/5` and `sync/1`. The
   SQLite backend implements compare-and-swap in one `BEGIN IMMEDIATE`
   transaction (atomic across OS processes) and `sync/1` as a `TRUNCATE` WAL
   checkpoint; JSONL fsyncs its table files and directory; ETS answers `sync/1`
-  trivially. `LemonCore.Secrets.MasterKey.fetch_from/2` reads one provider's key, and
-  `LemonCore.Durable` provides file and directory flushes.
+  trivially. `LemonCore.Secrets.MasterKey.fetch_from/2` reads one provider's
+  key, and `LemonCore.Durable` provides file and verified synchronous
+  directory flushes (GNU coreutils `sync DIR`; never claimed on macOS).
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
   exposes the check used by router startup; optional callbacks remain optional,
@@ -128,9 +132,15 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 ### Changed
 
 - `LemonCore.Secrets.KeyProvider.File` replaces the key file through a synced,
-  `0600` temporary file, an atomic rename and a directory sync, so an
-  interrupted write never leaves a truncated key and `:ok` means the new key is
-  durable.
+  `0600` temporary file, an atomic rename and, where the host has one, a
+  synchronous directory flush. Key rotation of a file key refuses on hosts
+  without that flush (macOS): keep the key in the Keychain there.
+- The SQLite backend finishes its single-row read statement after every
+  `get/3`, and resets cached statements before `BEGIN IMMEDIATE` and WAL
+  checkpoints, so a read no longer pins a stale snapshot that turned the next
+  write on that connection into `:sqlite_busy`. Its connections set
+  `checkpoint_fullfsync`, so the `sync/1` checkpoint reaches stable storage on
+  macOS too.
 - **Breaking for custom key providers:** `use LemonCore.Secrets.KeyProvider` no
   longer defines a default `put/2` returning `{:error, :unavailable}`; read-only
   providers simply omit it, and `KeyProvider.supports_put?/1` now reports real

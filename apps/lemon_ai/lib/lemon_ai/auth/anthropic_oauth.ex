@@ -79,11 +79,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]) do
-      if changed? do
-        persist_secret(secret_name, refreshed_secret, opts)
-      end
-
+           non_empty_binary(refreshed_secret["access_token"]),
+         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
       {:ok, access_token}
     else
       :not_oauth -> :ignore
@@ -223,22 +220,23 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   defp parse_refresh_response(_), do: {:error, :invalid_refresh_response}
 
+  # A refreshed secret that was not stored is a failure: refresh tokens may be
+  # single-use, so reporting success would strand the stored credential.
   defp persist_secret(secret_name, secret, opts) do
     encoded = encode_secret(secret)
 
     case Keyword.get(opts, :persist_secret) do
       callback when is_function(callback, 2) ->
-        callback.(secret_name, encoded)
-        :ok
+        case callback.(secret_name, encoded) do
+          {:error, _} -> {:error, :oauth_secret_persistence_failed}
+          _ -> :ok
+        end
 
       _ ->
         :ok
     end
   rescue
-    reason ->
-      Logger.warning(
-        "Failed to persist refreshed Anthropic OAuth secret #{secret_name}: #{inspect(reason)}"
-      )
+    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   defp resolve_env_token(claude_code_secret \\ nil) do

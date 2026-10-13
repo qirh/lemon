@@ -68,8 +68,9 @@ defmodule LemonCore.Secrets do
 
   Holds `LemonCore.Secrets.Lock` from resolving the key until the record is
   stored, so a write never lands under a key a concurrent rotation is
-  retiring; returns `{:error, :secrets_locked}` if a rotation keeps the lock
-  for longer than the wait.
+  retiring. Returns `{:error, :secrets_locked}` if a live holder keeps the
+  lock for longer than the wait, or `{:error, {:secrets_lock_held, host}}`
+  for a lease from another host; callers must report either, not succeed.
   """
   @spec set(name(), String.t(), keyword()) ::
           {:ok, secret_metadata()} | {:error, error_reason()}

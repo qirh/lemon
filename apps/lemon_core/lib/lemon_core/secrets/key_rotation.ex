@@ -45,7 +45,11 @@ defmodule LemonCore.Secrets.KeyRotation do
      a backend that cannot confirm it stops the rotation before the key moves.
   4. **Switch.** The new key is written to the provider that supplied the
      current one; the key file is replaced by an atomic rename followed by a
-     directory sync, the Keychain entry is updated in place. The switch counts
+     synchronous directory flush, the Keychain entry is updated in place. A
+     key file is rotated only where that flush exists
+     (`LemonCore.Secrets.KeyProvider.File.durable_replace/1`); elsewhere,
+     including macOS, preview and rotation fail with `:key_file_not_durable`
+     before anything is written. The switch counts
      only when the write returned `:ok`, that provider now returns the new key,
      and `LemonCore.Secrets.MasterKey.resolve/1` does too. Otherwise staged
      copies are kept: the write may still land, and records then stay readable
@@ -141,6 +145,10 @@ defmodule LemonCore.Secrets.KeyRotation do
     * `:runtime_running` — a Lemon runtime is up; nothing changed.
     * `:secrets_locked` — another rotation or secret write holds the lock;
       nothing changed.
+    * `{:secrets_lock_held, host}` — a lease from another host holds the
+      lock and is never reclaimed automatically; nothing changed.
+    * `{:key_file_not_durable, reason}` — the key file cannot be replaced
+      durably on this host; nothing changed.
     * `{:undecryptable_secrets, refs}` — nothing changed.
     * `{:read_only_key_source, source}` — the current key cannot be rewritten.
     * `:target_changed` — the store changed during rotation; staged copies were
@@ -240,6 +248,12 @@ defmodule LemonCore.Secrets.KeyRotation do
       "another key rotation or secret write holds the secrets lock; nothing was " <>
         "changed. Retry when it finishes."
 
+  def describe_error({:secrets_lock_held, host}),
+    do:
+      "the secrets lock is held by a process on #{host} that Lemon cannot check from " <>
+        "here; nothing was changed. Once you have confirmed that process is gone, " <>
+        "delete the :secrets_lock row from the store and retry."
+
   def describe_error({:store_not_durable, reason}),
     do:
       "the secrets store could not confirm the re-encrypted secrets are on disk " <>
@@ -260,6 +274,15 @@ defmodule LemonCore.Secrets.KeyRotation do
       "the secrets store failed (#{reason}); every secret stays readable with the key " <>
         "loaded next. Preview again and retry."
 
+  def describe_error({:key_file_not_durable, reason}),
+    do:
+      "the master key is in a key file, and this host cannot make a replaced key file " <>
+        "durable (#{reason}); nothing was changed. On macOS keep the master key in the " <>
+        "Keychain (the default provider): store the current key with `security " <>
+        "add-generic-password -s \"Lemon Secrets\" -a default -w \"$(cat <key file>)\"`, " <>
+        "move the key file aside, check `lemon secrets status` reports source keychain, " <>
+        "then rotate."
+
   def describe_error(reason), do: inspect(reason)
 
   # -- planning ---------------------------------------------------------------
@@ -267,6 +290,7 @@ defmodule LemonCore.Secrets.KeyRotation do
   defp plan(opts) do
     with {:ok, key, source} <- MasterKey.resolve(opts),
          {:ok, provider} <- writable_provider(source, opts),
+         :ok <- durable_key_switch(provider, opts),
          {:ok, rows} <- fetch_rows() do
       rows = Enum.map(rows, fn {ref, entry} -> {ref, entry, expired?(entry)} end)
       expired = for {ref, entry, true} <- rows, do: {ref, entry}
@@ -298,6 +322,20 @@ defmodule LemonCore.Secrets.KeyRotation do
       {:ok, provider}
     else
       {:error, {:read_only_key_source, source}}
+    end
+  end
+
+  # A key file is replaced by rename; unless the directory flush is
+  # synchronous on this host, a crash after promotion could resurrect the old
+  # key with no ciphertext it opens. Refuse before anything is written.
+  defp durable_key_switch(provider, opts) do
+    if KeyProvider.name(provider) == :file do
+      case KeyProvider.File.durable_replace(opts) do
+        :ok -> :ok
+        {:error, reason} -> {:error, {:key_file_not_durable, safe_reason(reason)}}
+      end
+    else
+      :ok
     end
   end
 

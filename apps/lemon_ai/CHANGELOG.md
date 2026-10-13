@@ -13,6 +13,12 @@ what in-repo code has been using.
 
 ### Fixed
 
+- The Anthropic, GitHub Copilot, Google Antigravity and Google Gemini CLI
+  OAuth helpers no longer report success when a refreshed secret could not be
+  stored: a `:persist_secret` callback returning `{:error, _}` (or raising)
+  now makes `resolve_api_key_from_secret/3` return
+  `{:error, :oauth_secret_persistence_failed}`, as the Codex helper already
+  did, instead of handing out a token whose rotated refresh token was lost.
 - Installable from Hex. The `0.1.0` release's `mix.exs` began with
   `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
   the package, so it failed to load in every consumer project; `0.1.0` is

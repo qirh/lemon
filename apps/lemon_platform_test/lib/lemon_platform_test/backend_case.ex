@@ -490,7 +490,14 @@ defmodule LemonPlatformTest.BackendCase do
           if function_exported?(@backend, :sync, 1) do
             {:ok, state} = @backend.put(state, @alpha, "k", "v")
 
-            assert {:ok, state} = apply(@backend, :sync, [state])
+            # `{:error, _}` is a legitimate answer where durability cannot be
+            # confirmed on this host; either way the data must be untouched.
+            state =
+              case apply(@backend, :sync, [state]) do
+                {:ok, state} -> state
+                {:error, _reason} -> state
+              end
+
             assert {:ok, "v", _state} = @backend.get(state, @alpha, "k")
           end
         end
