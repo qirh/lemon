@@ -3,16 +3,18 @@ defmodule LemonCore.Update.Remote do
   Stage-2 self-update: check a published manifest, stage a new release under
   `~/.lemon/versions/`, and atomically flip the `current` symlink.
 
-  Never restarts the running node — `apply/1` stages a version and reports
-  `restart_required: true`; the shim/operator restarts the process.
+  Restarts only a verified managed daemon that was already running before the
+  transaction. A stopped installation remains stopped. The packaged launcher
+  owns process verification and restart; the update lock spans the lifecycle.
 
   ## Manifest v2
 
   Fetched from `<base_url>/releases/latest/download/manifest.json` (stable) or
   `<base_url>/releases/download/v<pin>/manifest.json` (pinned), the same
   no-rate-limit URL scheme the installer uses. `base_url` defaults to
-  `https://github.com/z80dev/lemon`, overridable via the `:base_url` option or
-  `config :lemon_core, :update_base_url` (test seam).
+  `https://github.com/z80dev/lemon`, overridable via the `:base_url` option,
+  `LEMON_UPDATE_BASE_URL`, `LEMON_INSTALL_BASE_URL`, or
+  `config :lemon_core, :update_base_url` (in that order).
 
   ## Install layout
 
@@ -52,7 +54,7 @@ defmodule LemonCore.Update.Remote do
   """
 
   alias LemonCore.Paths
-  alias LemonCore.Update.{Archive, ManagedInstall, Plan, ReceiptStore, Version}
+  alias LemonCore.Update.{Archive, Daemon, ManagedInstall, Plan, ReceiptStore, Version}
 
   @default_base_url "https://github.com/z80dev/lemon"
   @default_channel "stable"
@@ -146,8 +148,9 @@ defmodule LemonCore.Update.Remote do
   directory `current` points at is never cleared to make room. Prunes old
   versions, keeping the newly staged one plus the #{@keep_versions} most recent others.
 
-  Never restarts the node. On success, `restart_required: true` tells the
-  caller a restart is needed to run the staged version.
+  After committing the pointer and receipt, restarts an already-running own
+  daemon through the selected version's launcher. Restart failures return an
+  error containing the committed result/receipt, not a false transaction undo.
   """
   @spec apply(opts()) :: {:ok, map()} | {:error, term()}
   def apply(opts \\ []) do
@@ -318,6 +321,9 @@ defmodule LemonCore.Update.Remote do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp apply_locked(opts, expected_digest) do
+    # Resolve inherited per-release paths while `current` still names the old release.
+    opts = Keyword.put(opts, :release_command_env, ManagedInstall.command_env())
+
     with {:ok, plan} <- plan(opts),
          :ok <- require_confirmation(expected_digest, plan.digest),
          true <- now_ms(opts) < plan.expires_at_ms || {:error, :plan_expired} do
@@ -330,8 +336,9 @@ defmodule LemonCore.Update.Remote do
            latest: plan.latest
          }}
       else
-        with {:ok, checkpoint} <- create_checkpoint(plan, opts) do
-          apply_plan(plan, checkpoint, opts)
+        with {:ok, daemon} <- Daemon.snapshot(plan.current, opts),
+             {:ok, checkpoint} <- create_checkpoint(plan, opts) do
+          apply_plan(plan, checkpoint, daemon, opts)
         end
       end
     end
@@ -368,7 +375,7 @@ defmodule LemonCore.Update.Remote do
     end
   end
 
-  defp apply_plan(plan, checkpoint, opts) do
+  defp apply_plan(plan, checkpoint, daemon, opts) do
     artifact = plan.artifact
     tui_artifact = plan.tui_artifact
 
@@ -377,7 +384,7 @@ defmodule LemonCore.Update.Remote do
         case flip_and_record(plan, checkpoint, final_dir, opts) do
           {:ok, result} ->
             ManagedInstall.prune([plan.target, plan.current], opts)
-            {:ok, result}
+            Daemon.restart(result, daemon, plan.current, plan.target, opts)
 
           {:error, reason} ->
             {:error, reason}
@@ -448,6 +455,7 @@ defmodule LemonCore.Update.Remote do
   end
 
   defp rollback_locked(opts) do
+    opts = Keyword.put(opts, :release_command_env, ManagedInstall.command_env())
     receipt_id = Keyword.get(opts, :receipt)
     confirm = Keyword.get(opts, :confirm)
 
@@ -455,8 +463,10 @@ defmodule LemonCore.Update.Remote do
          {:ok, receipt} <- ReceiptStore.fetch_receipt(receipt_id, opts),
          :ok <- validate_rollback_receipt(receipt, confirm, opts),
          {:ok, checkpoint} <- ReceiptStore.fetch_checkpoint(receipt["checkpoint_id"], opts),
-         :ok <- verify_checkpoint(receipt, checkpoint, opts) do
-      perform_rollback(receipt, opts)
+         :ok <- verify_checkpoint(receipt, checkpoint, opts),
+         {:ok, daemon} <- Daemon.snapshot(receipt["to_version"], opts),
+         {:ok, result} <- perform_rollback(receipt, opts) do
+      Daemon.restart(result, daemon, receipt["to_version"], receipt["from_version"], opts)
     end
   end
 
@@ -777,6 +787,8 @@ defmodule LemonCore.Update.Remote do
 
   defp base_url(opts) do
     Keyword.get(opts, :base_url) ||
+      System.get_env("LEMON_UPDATE_BASE_URL") ||
+      System.get_env("LEMON_INSTALL_BASE_URL") ||
       Application.get_env(:lemon_core, :update_base_url) ||
       @default_base_url
   end

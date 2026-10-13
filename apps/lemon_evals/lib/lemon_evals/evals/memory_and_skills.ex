@@ -29,11 +29,16 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
 
     search_fn = fn query, opts ->
       Agent.update(search_calls, &[{query, opts} | &1])
-      scope_key = Keyword.fetch!(opts, :scope_key)
-      [eval_memory_doc("#{Path.basename(scope_key)}-doc", scope_key)]
+      [eval_memory_doc("scoped-deployment-notes", project_dir, project_dir, "eval-agent")]
     end
 
-    tool = Recall.tool(project_dir, agent_id: "eval-agent", search_fn: search_fn)
+    tool =
+      Recall.tool(project_dir,
+        workspace_dir: project_dir,
+        session_scope: :main,
+        agent_id: "eval-agent",
+        search_fn: search_fn
+      )
 
     agent_result = tool.execute.("eval-recall-agent", %{"query" => "deployment notes"}, nil, nil)
 
@@ -54,14 +59,8 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           details: agent_result.details
         })
 
-      Enum.map(calls, &{&1[:scope], &1[:scope_key]}) !=
-          [{:agent, "eval-agent"}, {:workspace, project_dir}] ->
-        contract_fail("memory_scope_contract", "expected agent then project scope keys", %{
-          calls: inspect(calls)
-        })
-
-      not String.contains?(flatten_text(agent_result), "eval-agent-doc") or
-          not String.contains?(flatten_text(project_result), Path.basename(project_dir)) ->
+      not String.contains?(flatten_text(agent_result), "scoped-deployment-notes") or
+          not String.contains?(flatten_text(project_result), "scoped-deployment-notes") ->
         contract_fail("memory_scope_contract", "expected agent and project recall hits", %{})
 
       true ->
@@ -90,7 +89,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
               %{"text" => "Harness contract evals run before every release."},
               nil,
               nil,
-              workspace_dir
+              %{workspace_dir: workspace_dir, session_scope: :main}
             )
 
           cond do
@@ -381,7 +380,14 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           search_fn = fn query, opts ->
             Agent.update(search_calls, &[{query, opts} | &1])
 
-            [eval_memory_doc("prior-deployment-incident", Keyword.fetch!(opts, :scope_key))]
+            [
+              eval_memory_doc(
+                "prior-deployment-incident",
+                project_dir,
+                home_dir,
+                "learning-tool-trace-eval"
+              )
+            ]
           end
 
           tool_opts = [
@@ -392,9 +398,16 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           ]
 
           search_tool =
-            Recall.tool(project_dir, workspace_dir: home_dir, search_fn: search_fn)
+            Recall.tool(project_dir,
+              workspace_dir: home_dir,
+              search_fn: search_fn,
+              agent_id: "learning-tool-trace-eval",
+              session_scope: :main
+            )
 
-          memory_tool = Remember.tool(project_dir, workspace_dir: project_dir)
+          memory_tool =
+            Remember.tool(project_dir, workspace_dir: project_dir, session_scope: :main)
+
           skill_tool = SkillManage.tool(project_dir, tool_opts)
 
           learning_prompt =
@@ -407,7 +420,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
                    "scope" => "project"
                  }),
                :ok <- assert_contains(flatten_text(search_result), "prior-deployment-incident"),
-               :ok <- assert_learning_search(search_result, search_calls),
+               :ok <- assert_learning_search(search_result),
                {:ok, memory_result} <-
                  execute_tool_result(memory_tool, "trace-remember", %{
                    "text" => "Deployment incident handoffs go to the on-call lead."

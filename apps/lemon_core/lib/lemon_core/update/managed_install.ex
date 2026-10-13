@@ -16,8 +16,8 @@ defmodule LemonCore.Update.ManagedInstall do
 
   @spec current(keyword()) :: {:ok, String.t()} | {:error, term()}
   def current(opts \\ []) do
-    root = Path.expand(release_root(opts))
-    versions = Path.expand(versions_dir(opts))
+    root = release_root(opts) |> Path.expand() |> resolve_root()
+    versions = versions_dir(opts) |> Path.expand() |> resolve_root()
 
     with true <- String.starts_with?(root, versions <> "/") || {:error, :unsupported_layout},
          {:ok, target} <- File.read_link(Path.join(versions, "current")),
@@ -152,8 +152,56 @@ defmodule LemonCore.Update.ManagedInstall do
   @spec versions_dir(keyword()) :: String.t()
   def versions_dir(opts), do: Path.join(Paths.home_state_dir(paths_opts(opts)), "versions")
 
+  @doc """
+  Environment overrides for invoking another release from an eval VM.
+
+  Generated release selection must not pin a child to the eval VM's old root.
+  External operator sysconfig/vmargs/tmp overrides remain in effect; only paths
+  inside the inherited release are removed. Control-plane port, node identity,
+  cookie and ordinary Lemon configuration are inherited unchanged.
+  """
+  @spec command_env() :: [{String.t(), nil}]
+  def command_env do
+    generated =
+      ~w(RELEASE_ROOT RELEASE_VSN RELEASE_NAME RELEASE_PROG RELEASE_COMMAND RELEASE_MODE RELEASE_BOOT_SCRIPT RELEASE_BOOT_SCRIPT_CLEAN)
+
+    root = System.get_env("RELEASE_ROOT")
+
+    release_paths =
+      Enum.filter(
+        ~w(RELEASE_SYS_CONFIG RELEASE_VM_ARGS RELEASE_REMOTE_VM_ARGS RELEASE_TMP),
+        fn name ->
+          case {root, System.get_env(name)} do
+            {root, value} when is_binary(root) and is_binary(value) ->
+              expanded = Path.expand(value)
+              resolved = resolve_root(expanded)
+              inherited = Path.expand(root)
+              physical = resolve_root(inherited)
+
+              expanded == inherited or String.starts_with?(expanded, inherited <> "/") or
+                resolved == physical or String.starts_with?(resolved, physical <> "/")
+
+            _ ->
+              false
+          end
+        end
+      )
+
+    Enum.map(generated ++ release_paths, &{&1, nil})
+  end
+
   defp run_version_command(path, version, opts) do
-    task = Task.async(fn -> System.cmd(path, ["version"], stderr_to_stdout: true) end)
+    task =
+      Task.async(fn ->
+        try do
+          System.cmd(path, ["version"],
+            env: Keyword.get_lazy(opts, :release_command_env, &command_env/0),
+            stderr_to_stdout: true
+          )
+        rescue
+          _ -> {"", 1}
+        end
+      end)
 
     case Task.yield(task, Keyword.get(opts, :version_timeout_ms, 10_000)) ||
            Task.shutdown(task, :brutal_kill) do
@@ -230,6 +278,24 @@ defmodule LemonCore.Update.ManagedInstall do
   defp release_root(opts) do
     Keyword.get(opts, :release_root) || System.get_env("RELEASE_ROOT") ||
       List.to_string(:code.root_dir())
+  end
+
+  defp resolve_root(path, remaining \\ 40)
+  defp resolve_root(path, 0), do: path
+
+  defp resolve_root(path, remaining) do
+    parent = Path.dirname(path)
+
+    if parent == path do
+      path
+    else
+      resolved = Path.join(resolve_root(parent, remaining), Path.basename(path))
+
+      case File.read_link(resolved) do
+        {:ok, target} -> resolve_root(Path.expand(target, Path.dirname(resolved)), remaining - 1)
+        {:error, _reason} -> resolved
+      end
+    end
   end
 
   defp paths_opts(opts), do: Keyword.get(opts, :paths_opts, [])

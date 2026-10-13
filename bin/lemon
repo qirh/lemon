@@ -178,6 +178,22 @@ control_plane_healthy() {
 }
 web_healthy() { [ "$(healthz "$WEB_PORT" | tr -d '[:space:]')" = "ok" ]; }
 
+prepare_runtime_credential() {
+  local status=0
+  if ! control_plane_healthy; then
+    ensure_managed_token
+    return
+  fi
+  [ -n "${LEMON_WS_TOKEN:-}" ] || load_managed_token || status=$?
+  [ "$status" -le 1 ] || return 1
+  [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}${LEMON_WS_TOKEN:-}" ] || return 0
+  case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
+    1|true|TRUE|yes|YES) return 0 ;;
+  esac
+  error "healthy external runtime on port $PORT has no matching credential; set LEMON_CONTROL_PLANE_OPERATOR_TOKEN or use its managed HOME"
+  return 1
+}
+
 wait_until() {
   local attempt
   for ((attempt = 0; attempt < $2; attempt++)); do
@@ -192,8 +208,8 @@ wait_until() {
 run_cli() {
   cd "$LEMON_ROOT"
   # Dependencies are installed explicitly; launching must never mutate them.
-  compile_source >/dev/null
-  exec mix run --no-start --no-compile --no-deps-check -e 'LemonCli.CLI.main(System.argv())' -- "$@"
+  MIX_QUIET=1 compile_source >&2
+  exec env MIX_QUIET=1 mix run --no-start --no-compile --no-deps-check -e 'LemonCli.CLI.main(System.argv())' -- "$@"
 }
 
 parse_runtime_options() {
@@ -242,8 +258,10 @@ start_runtime() {
   local cmd=(mix run --no-start --no-halt --no-compile --no-deps-check -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
   local port
   for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
-    [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port > 0 && 10#$port <= 65535)) ||
-      { error "invalid port value: $port (expected 1-65535)"; exit 2; }
+    if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
+      error "invalid port value: $port (expected 1-65535)"
+      exit 2
+    fi
   done
   # Reuse guard before compiling or registering the Erlang node name: a
   # duplicate lemon@host registration would fail before the in-VM Boot guard.
@@ -350,6 +368,10 @@ open_browser() {
 }
 
 COMMAND="${1:-}"
+if [ -z "$COMMAND" ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+  error "No interactive terminal. Use 'lemon -p \"PROMPT\"' for CI, 'lemon daemon' to start a service, or 'lemon --help'."
+  exit 2
+fi
 if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
   # Tern's --typed wrapper recognizes built-ins, not custom ACP agents.
   # Use the registered Lemon id directly; explicit `lemon tui` stays terminal.
@@ -363,6 +385,7 @@ if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
 fi
 
 case "$COMMAND" in
+  --version|version) run_cli "$@" ;;
   tui|web|start|daemon|stop|restart|status)
     case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
     ;;
@@ -372,7 +395,7 @@ case "$COMMAND" in
   acp)
     shift
     case "${1:-}" in -h|--help) run_cli acp --help ;; esac
-    ensure_managed_token || exit 1
+    prepare_runtime_credential || exit 1
     if ! control_plane_healthy; then start_runtime daemon >&2; fi
     run_cli acp "$@"
     ;;
@@ -466,7 +489,10 @@ case "$COMMAND" in
     ;;
 
   *)
-    ensure_managed_token || exit 1
+    case "$COMMAND" in
+      run|-p|--print) prepare_runtime_credential || exit 1 ;;
+      *) ensure_managed_token || exit 1 ;;
+    esac
     run_cli "$@"
     ;;
 esac
