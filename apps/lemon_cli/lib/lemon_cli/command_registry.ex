@@ -274,6 +274,7 @@ defmodule LemonCli.CommandRegistry do
         %{name: "delete", summary: "Delete one secret"},
         %{name: "check", summary: "Check configured credential sources"},
         %{name: "import-env", summary: "Import selected environment credentials"},
+        %{name: "rotate-key", summary: "Preview or apply a master-key rotation"},
         %{name: "sources", summary: "Inspect or test external secret sources"}
       ],
       options: [
@@ -282,9 +283,13 @@ defmodule LemonCli.CommandRegistry do
         option("--expires-at N", ["--expires-at"], "Expiry timestamp for set"),
         option("--dry-run", ["--dry-run"], "Preview environment imports"),
         option("--force", ["--force"], "Confirm the selected replacement operation"),
+        option("--confirm TOKEN", ["--confirm"], "Exact rotate-key preview token"),
         option("--project-dir PATH", ["--project-dir"], "Project directory for source config"),
         option("--source-id ID", ["--source-id"], "Test one external source"),
         option("--json", ["--json"], "Emit redacted source readiness JSON")
+      ],
+      details: [
+        "rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one."
       ]
     },
     %{

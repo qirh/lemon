@@ -53,6 +53,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Validate/show config | `lemon config validate` | `./bin/lemon config validate` |
 | Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` |
 | Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` |
+| Rotate the secrets master key | `lemon secrets rotate-key` | `./bin/lemon secrets rotate-key` |
 | Inspect channel configuration | `lemon channels` | `./bin/lemon channels` |
 | Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` |
 | Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` |

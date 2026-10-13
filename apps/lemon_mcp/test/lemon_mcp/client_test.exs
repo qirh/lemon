@@ -1027,6 +1027,41 @@ defmodule LemonMCP.ClientTest do
              end)
     end
 
+    test "reports an OAuth token its cache could not save, without logging the token" do
+      {port, _store} = start_oauth_token_transport()
+      test_pid = self()
+
+      # e.g. a Lemon secrets-store save refused with `{:error, :secrets_locked}`.
+      token_cache = [load: fn -> nil end, save: fn _token -> {:error, :secrets_locked} end]
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {:ok, client} =
+            LemonMCP.Client.HTTP.start_link(
+              url: "http://127.0.0.1:#{port}/mcp",
+              oauth: [
+                client_id: "lemon-public",
+                redirect_uri: "http://127.0.0.1/callback",
+                scopes: ["tools"],
+                authorization_code_provider: fn request ->
+                  send(test_pid, :authorized)
+                  {:ok, %{code: "operator-code", state: request.state}}
+                end
+              ],
+              oauth_token_cache: token_cache,
+              timeout_ms: 2_000
+            )
+
+          assert_receive :authorized
+          assert LemonMCP.Client.HTTP.state(client) == :ready
+          :ok = LemonMCP.Client.HTTP.close(client)
+        end)
+
+      assert log =~ "could not be saved to its token cache (:secrets_locked)"
+      refute log =~ "auth-code-token"
+      refute log =~ "auth-refresh"
+    end
+
     test "rejects OAuth authorization-code callback responses with mismatched state" do
       {port, _store} = start_oauth_token_transport()
       previous_trap_exit = Process.flag(:trap_exit, true)

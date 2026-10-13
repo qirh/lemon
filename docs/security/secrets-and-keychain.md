@@ -48,14 +48,13 @@ Additional nuance:
 
 - The keychain provider is macOS-only and skips itself on other platforms, so a Linux host with no key configured reports `:missing_master_key` rather than a keychain failure.
 - If keychain returns malformed key material, env fallback is attempted first; only then returns `:invalid_master_key`.
-- Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value.
-- Key rotation (re-encryption under a new master key) is not implemented — see the "Key rotation" section of the `LemonCore.Secrets` moduledoc and "Known gaps" in `docs/platform-split.md`.
+- Key material must be base64-encoded 32-byte data. Raw passphrase-like strings are rejected with `:weak_master_key` (there is no password stretching); `allow_legacy_raw_keys: true` restores the old behaviour for setups that already encrypted secrets under such a value. `lemon secrets rotate-key` moves such a setup onto a generated key.
 - `status/1` suppresses expected keychain absence (`:missing`, `:keychain_unavailable`) from `keychain_error` while still surfacing hard failures.
 - The local source launcher `bin/lemon` also normalizes `LEMON_SECRETS_MASTER_KEY` from `~/.lemon/secrets_master_key` on non-macOS systems so stale desktop/session env does not override the working local key by accident.
 
 ## Operator Notes
 
-- `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
+- `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed; forcing a new key makes existing secrets unreadable, so change a key in use with `lemon secrets rotate-key` instead.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
 - `lemon secrets sources status|test` returns only source readiness,
   provenance, counts, byte counts, duration, and stable error kinds. Combined
@@ -64,6 +63,76 @@ Additional nuance:
   minimal child environments, `100..30000` ms timeouts, `1..1048576` byte
   output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
+
+## Master Key Rotation
+
+`lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`) generates a new
+master key, re-encrypts every secret in the encrypted store under it, and
+writes it to the provider that supplied the current key: the Keychain entry is
+updated in place, the key file is replaced by an atomic rename (`0600`)
+followed by a synchronous directory flush. Implementation:
+`LemonCore.Secrets.KeyRotation`.
+
+A key file is only rotated where that flush is real: GNU coreutils
+`sync DIR`, verified at run time. macOS has none (its `sync` ignores
+arguments and only schedules a flush), so rotation of a file key there
+refuses with `key_file_not_durable` before changing anything. Keep the
+master key in the Keychain on macOS (the default provider); to move a file
+key there, store it with `security add-generic-password -s "Lemon Secrets"
+-a default -w "$(cat ~/.lemon/secrets_master_key)"`, move the file aside,
+and confirm `lemon secrets status` reports `source: keychain`.
+
+```bash
+lemon secrets rotate-key                    # preview; changes nothing
+lemon secrets rotate-key --confirm <token>  # apply exactly that preview
+```
+
+- **Preview first.** The preview decrypts every live secret with the current
+  key and prints how many will be re-encrypted, how many expired records will
+  be deleted, and a confirmation token: a SHA-256 digest over the key source, a
+  fingerprint of the current key, and every stored owner/name with its
+  ciphertext revision and expiry. Apply refuses the token when anything changed
+  since the preview (a secret set, deleted or re-encrypted, or the key itself
+  replaced).
+- **Fail closed.** If any stored secret does not decrypt with the current key,
+  preview and apply report how many (and their owner/name) and change nothing.
+  Values and key material never appear in output, errors or logs.
+- **Crash safe.** Each record first gains a staged copy encrypted under the new
+  key while keeping its current ciphertext; the store is re-read and verified;
+  `LemonCore.Store.sync/1` makes the staged copies durable (SQLite WAL
+  checkpoint, JSONL fsync) and a backend that cannot confirm it stops the
+  rotation before the key moves. The key switch counts only when the provider
+  that was written now returns the new key and resolution loads it too;
+  otherwise the staged copies are kept, because the write may still land.
+  Finally every record is converged to new-key ciphertext: staged copies are
+  promoted, and any record only the previous key opens is staged, synced and
+  then promoted. `Secrets.get/2` falls back to the staged copy, so after an
+  interruption at any point every secret is readable with whichever key loads
+  next. A later preview reports such records as `resumed`, and the next
+  rotation finishes them.
+- **Exclusive.** Rotation holds `LemonCore.Secrets.Lock`, a lease in the
+  Store that SQLite makes exclusive across OS processes sharing the store.
+  `Secrets.set/3` takes the same lock from resolving the key to storing the
+  record (waiting up to 30 seconds, then `{:error, :secrets_locked}`), so a
+  concurrent `lemon secrets set` never encrypts under the retiring key and two
+  rotations never interleave. A lease has no expiry; it is reclaimed only when
+  its holder is provably gone (a dead process in this VM, or an OS pid on this
+  host that no longer exists). A lease from another host is never reclaimed:
+  callers get `{:error, {:secrets_lock_held, host}}` and an operator deletes
+  the `:secrets_lock` row after confirming that holder is gone. OAuth refresh
+  paths and MCP token caches report a failed save instead of claiming success.
+- **Scope.** Only the encrypted store is rotated. External sources and
+  same-name environment fallback are read-only and untouched. A master key
+  supplied by `LEMON_SECRETS_MASTER_KEY` cannot be rewritten: rotation refuses
+  with `read_only_key_source` until that variable is unset.
+- **Runtime.** `KeyRotation.rotate/2` itself refuses (`runtime_running`) while
+  a Lemon runtime answers on the control-plane port, so both the CLI and the
+  Mix task enforce it: a runtime started by `bin/lemon` exports the master key
+  into its environment at boot and would keep using the previous key. Stop it,
+  rotate, then start it again.
+- **Backups.** Store data in existing backups stays encrypted under the
+  previous key; keep that key (or a `--include-credentials` backup) if you may
+  restore them. See [backups](../user-guide/backups.md).
 
 ## Validation References
 
@@ -74,3 +143,7 @@ Additional nuance:
 - `apps/lemon_core/test/lemon_core/secrets/source_contract_test.exs`
 - `apps/lemon_core/test/lemon_core/config/secrets_test.exs`
 - `apps/lemon_cli/test/lemon_cli/secret_sources_command_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/key_rotation_test.exs`
+- `apps/lemon_cli/test/lemon_cli/cli_test.exs` (`secrets rotate-key`)
+- `apps/lemon_core/test/lemon_core/secrets/lock_test.exs`
+- `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs` (`compare_and_swap/5 and sync/1`)

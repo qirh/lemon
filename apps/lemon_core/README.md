@@ -239,6 +239,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `mix lemon.secrets.delete` | Delete a secret |
 | `mix lemon.secrets.check` | Check secrets health |
 | `mix lemon.secrets.import_env` | Import env vars as secrets |
+| `mix lemon.secrets.rotate_key` | Preview, then (`--confirm TOKEN`) rotate the master key and re-encrypt secrets |
 | `mix lemon.onboard` | Top-level provider onboarding picker with interactive TUI selection |
 
 Provider onboarding `preferred_models` should favor stable models that actually
@@ -361,6 +362,8 @@ Secrets are encrypted at rest with AES-256-GCM. Per-secret encryption keys are d
 The order and the locations are configurable via `config :lemon_core, LemonCore.Secrets, key_providers: [:keychain, :env, :file], key_file: ..., env_var: ...`; see `LemonCore.Secrets.KeyProvider`. The key must be base64-encoded 32 bytes.
 
 For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical master key file. `./bin/lemon` normalizes `LEMON_SECRETS_MASTER_KEY` from that file before boot so stale inherited shell env does not override the working local key.
+
+To change the master key without re-entering secrets, run `lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`): it previews, then with the preview's `--confirm` token re-encrypts every stored secret under a new key and writes that key to the Keychain entry or key file that supplied the old one. See `LemonCore.Secrets.KeyRotation` and [the secrets contract](../../docs/security/secrets-and-keychain.md#master-key-rotation).
 
 ### API
 

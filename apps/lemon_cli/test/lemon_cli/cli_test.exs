@@ -282,6 +282,61 @@ defmodule LemonCli.CLITest do
     end)
   end
 
+  test "secrets rotate-key previews, refuses a wrong token, then rotates the key file",
+       %{tmp_dir: tmp_dir} do
+    # The key comes from the private key file under the isolated HOME, never
+    # the developer's Keychain or a running runtime.
+    System.delete_env("LEMON_SECRETS_MASTER_KEY")
+    # Stub the directory flush so the key-file path also runs on macOS, which
+    # has no synchronous one (that refusal is covered in KeyRotationTest).
+    Application.put_env(:lemon_core, LemonCore.Secrets,
+      key_providers: [:env, :file],
+      directory_sync: fn _dir -> :ok end
+    )
+
+    key_file = Path.join([tmp_dir, "home", ".lemon", "secrets_master_key"])
+    assert {:ok, %{source: :file}} = LemonCore.Secrets.MasterKey.init(target: :file)
+    original_key = File.read!(key_file)
+    original_port = System.get_env("LEMON_CONTROL_PLANE_PORT")
+    System.put_env("LEMON_CONTROL_PLANE_PORT", Integer.to_string(closed_port()))
+
+    try do
+      assert {:ok, _} = Secrets.set("ROTATE_ME", "rotate-value")
+
+      preview = capture_io(fn -> assert CLI.run(["secrets", "rotate-key"]) == 0 end)
+      assert preview =~ "secrets to re-encrypt: 1"
+      assert preview =~ "key source: file (#{key_file})"
+      [_, token] = Regex.run(~r/confirmation token: ([0-9a-f]{64})/, preview)
+
+      mismatch =
+        capture_io(:stderr, fn ->
+          assert CLI.run(["secrets", "rotate-key", "--confirm", String.duplicate("0", 64)]) == 1
+        end)
+
+      assert mismatch =~ "does not match"
+      assert File.read!(key_file) == original_key
+
+      applied =
+        capture_io(fn -> assert CLI.run(["secrets", "rotate-key", "--confirm", token]) == 0 end)
+
+      assert applied =~ "1 secrets re-encrypted"
+      refute File.read!(key_file) == original_key
+      assert {:ok, "rotate-value"} = Secrets.get("ROTATE_ME")
+      refute preview <> applied <> mismatch =~ "rotate-value"
+    after
+      restore_env("LEMON_CONTROL_PLANE_PORT", original_port)
+    end
+  end
+
+  test "secrets rotate-key rejects unexpected arguments" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["secrets", "rotate-key", "extra"]) == 2
+      end)
+
+    assert error =~ "Usage: lemon secrets rotate-key [--confirm <token>]"
+  end
+
   describe "setup_required?/0" do
     test "requires setup when no configuration exists" do
       assert CLI.setup_required?()
@@ -394,6 +449,14 @@ defmodule LemonCli.CLITest do
     after
       Enum.each(snapshot, fn {name, value} -> restore_env(name, value) end)
     end
+  end
+
+  # A port with no listener, so the runtime health probe reports "not running".
+  defp closed_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 
   defp clear_secrets_table do

@@ -25,7 +25,9 @@ defmodule LemonCli.CLI do
   alias LemonCore.Doctor.{Check, Report, SupportBundle}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.EnvCatalog
+  alias LemonCore.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
+  alias LemonCli.LocalRuntime
   alias LemonCli.CommandRegistry
 
   defmodule Error do
@@ -223,7 +225,7 @@ defmodule LemonCli.CLI do
   # Commands that talk to the long-running runtime start it through the
   # invoking launcher first, so neither launcher needs per-command shell logic.
   defp with_runtime(fun) do
-    case LemonCli.LocalRuntime.ensure_running() do
+    case LocalRuntime.ensure_running() do
       :ok ->
         fun.()
 
@@ -633,6 +635,7 @@ defmodule LemonCli.CLI do
   defp run_secrets(["delete" | rest]), do: secrets_delete(rest)
   defp run_secrets(["check" | _rest]), do: secrets_check()
   defp run_secrets(["import-env" | rest]), do: secrets_import_env(rest)
+  defp run_secrets(["rotate-key" | rest]), do: secrets_rotate_key(rest)
 
   defp run_secrets(["sources" | rest]) do
     ensure_apps_started!([:lemon_core])
@@ -693,7 +696,8 @@ defmodule LemonCli.CLI do
         IO.puts(
           :stderr,
           "A secrets master key already exists at #{path}. Re-run with --force to " <>
-            "replace it — every secret encrypted under the old key becomes unreadable."
+            "replace it — every secret encrypted under the old key becomes unreadable. " <>
+            "To change the key and keep secrets, run `lemon secrets rotate-key`."
         )
 
         @exit_error
@@ -947,6 +951,77 @@ defmodule LemonCli.CLI do
         {:error, reason}
     end
   end
+
+  defp secrets_rotate_key(args) do
+    case OptionParser.parse(args, strict: [confirm: :string]) do
+      {parsed, [], []} ->
+        ensure_apps_started!([:lemon_core])
+
+        case parsed[:confirm] do
+          nil -> rotate_key_preview()
+          token -> rotate_key_apply(token)
+        end
+
+      _other ->
+        IO.puts(:stderr, "Usage: lemon secrets rotate-key [--confirm <token>]")
+        @exit_usage
+    end
+  end
+
+  defp rotate_key_preview do
+    case KeyRotation.preview() do
+      {:ok, preview} ->
+        IO.puts("Secrets master key rotation preview (nothing changed)")
+        IO.puts("key source: #{format_key_source(preview)}")
+        IO.puts("secrets to re-encrypt: #{preview.count}")
+        IO.puts("expired secrets to delete: #{preview.expired}")
+        IO.puts("resumed from an interrupted rotation: #{preview.resumed}")
+        IO.puts("confirmation token: #{preview.confirmation_token}")
+        IO.puts("")
+
+        if preview.runtime_running do
+          IO.puts("A Lemon runtime is running; stop it (`lemon stop`) before rotating.")
+        end
+
+        IO.puts(
+          "Stored secrets in existing backups stay encrypted under the current key; " <>
+            "keep it if you may restore them."
+        )
+
+        IO.puts("Rotate with: lemon secrets rotate-key --confirm #{preview.confirmation_token}")
+        @exit_ok
+
+      {:error, reason} ->
+        rotate_key_error(reason)
+    end
+  end
+
+  # The runtime guard and the secrets lock live in KeyRotation.rotate/2, so the
+  # Mix task gets the same refusals.
+  defp rotate_key_apply(token) do
+    case KeyRotation.rotate(token) do
+      {:ok, result} ->
+        IO.puts(
+          "Rotated secrets master key in #{format_key_source(result)}: " <>
+            "#{result.rotated} secrets re-encrypted, #{result.pruned} expired deleted"
+        )
+
+        @exit_ok
+
+      {:error, reason} ->
+        rotate_key_error(reason)
+    end
+  end
+
+  defp rotate_key_error(reason) do
+    IO.puts(:stderr, "Secrets key rotation failed: " <> KeyRotation.describe_error(reason))
+    @exit_error
+  end
+
+  defp format_key_source(%{source: :file, key_file: path}) when is_binary(path),
+    do: "file (#{path})"
+
+  defp format_key_source(%{source: source}), do: to_string(source)
 
   defp format_optional(nil), do: "never"
   defp format_optional(value), do: to_string(value)

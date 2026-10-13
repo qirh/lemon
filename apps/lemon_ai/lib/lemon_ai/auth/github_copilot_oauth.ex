@@ -105,11 +105,8 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]) do
-      if changed? do
-        persist_secret(secret_name, refreshed_secret, opts)
-      end
-
+           non_empty_binary(refreshed_secret["access_token"]),
+         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
       {:ok, access_token}
     else
       :not_oauth -> :ignore
@@ -270,24 +267,22 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
     end
   end
 
+  # A refreshed secret that was not stored is a failure, not a success.
   defp persist_secret(secret_name, secret, opts) do
     encoded = encode_secret(secret)
 
     case Keyword.get(opts, :persist_secret) do
       callback when is_function(callback, 2) ->
-        callback.(secret_name, encoded)
-        :ok
+        case callback.(secret_name, encoded) do
+          {:error, _} -> {:error, :oauth_secret_persistence_failed}
+          _ -> :ok
+        end
 
       _ ->
         :ok
     end
   rescue
-    reason ->
-      Logger.debug(
-        "Failed to persist refreshed GitHub Copilot secret #{secret_name}: #{inspect(reason)}"
-      )
-
-      :ok
+    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   # ----------------------------------------------------------------------------

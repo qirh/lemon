@@ -17,6 +17,12 @@ application from the Lemon umbrella; the OTP application name and every
 
 ### Fixed
 
+- `LemonAgent.ModelRuntime.Credentials` returns the result of storing a
+  refreshed OAuth secret instead of `:ok`, so a refused write (for example
+  `{:error, :secrets_locked}` during a master-key rotation) fails the
+  resolution. A recognised OAuth payload that cannot be resolved now yields no
+  credential, rather than the raw payload being used as an API key; the
+  warning logs only the error's tag.
 - Installable from Hex. The `0.1.0` release's `mix.exs` began with
   `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
   the package, so it failed to load in every consumer project; `0.1.0` is

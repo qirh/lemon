@@ -181,5 +181,32 @@ defmodule LemonCore.Store.Backend do
   """
   @callback ping(state()) :: {:ok, state()} | {:error, error_reason()}
 
-  @optional_callbacks list_recent: 3, ping: 1, compare_and_delete_many: 2
+  @doc """
+  Replaces a value only when the stored value equals `expected` (`===`), as
+  one backend operation.
+
+  Optional. A backend whose storage is shared between OS processes (such as
+  one SQLite file) implements it so the comparison and the write cannot
+  interleave with another process. Without it, the store compares and writes
+  in two calls, which is atomic only within the store process. A missing key
+  matches `expected == nil`.
+  """
+  @callback compare_and_swap(state(), table(), key(), value(), value()) ::
+              {:ok, state()} | {:error, :mismatch | error_reason(), state()}
+
+  @doc """
+  Makes every completed write durable across a host crash.
+
+  Optional. Returns `{:ok, state}` once all writes acknowledged so far are on
+  stable storage, or `{:error, reason}` when that cannot be confirmed. Callers
+  use it as a barrier before an irreversible step that depends on those
+  writes; the store reports `:sync_unsupported` for backends that omit it.
+  """
+  @callback sync(state()) :: {:ok, state()} | {:error, error_reason()}
+
+  @optional_callbacks list_recent: 3,
+                      ping: 1,
+                      compare_and_delete_many: 2,
+                      compare_and_swap: 5,
+                      sync: 1
 end

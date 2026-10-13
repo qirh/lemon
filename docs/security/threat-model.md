@@ -76,11 +76,11 @@ resolution and error semantics are in
 **What is protected:** secret values at rest, against an attacker who reads the
 store but does not hold the master key. **What is not:**
 
-- **No key rotation.** Re-encrypting existing secrets under a new master key is
-  not implemented. This is a *known, documented gap* ("Known gaps" in
-  `docs/platform-split.md`, and the `LemonCore.Secrets` moduledoc), not an
-  oversight — if the master key is exposed, rotation today means re-entering
-  secrets, not an in-place re-wrap.
+- **Rotation is operator-driven.** `lemon secrets rotate-key` re-encrypts every
+  stored secret under a new master key and replaces the key in the Keychain
+  entry or key file (see [`secrets-and-keychain.md`](secrets-and-keychain.md)).
+  It does not re-encrypt store data inside existing backups, and a key exposed
+  before rotation still decrypts those copies.
 - **Not protected against a compromised host.** A process that can read the
   master key source (keychain access, the env var, the key file) can decrypt.
   The threat model is "encrypted at rest," not "secure against local root."
@@ -244,7 +244,6 @@ compile-time edge.
 
 ## Known gaps (tracked)
 
-- **Secret key rotation** is not implemented (`docs/platform-split.md`, "Known gaps").
 - **Prompt injection** via untrusted content is mitigated, not solved (§5).
 - **Local host compromise** is out of the threat model — anything that can read
   the master key source can decrypt secrets (§1).

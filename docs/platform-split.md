@@ -131,9 +131,7 @@ tarballs so this class of break fails CI.
   is kept out of the tarball.
 - **Elixir floor.** The packages declare `~> 1.15`; CI proves 1.19 and runs the
   1.15 leg as advisory.
-- **Secrets key rotation** is not implemented: there is no re-encryption path, so
-  replacing the master key means re-entering secrets. See the "Key rotation"
-  section of the `LemonCore.Secrets` moduledoc.
+
 - **`LemonChannels.Plugin.meta/0`** keeps its flag-map capability vocabulary;
   widening it to typed `Capability.spec()` lists waits for a consumer that needs
   sizes, features or rate limits.

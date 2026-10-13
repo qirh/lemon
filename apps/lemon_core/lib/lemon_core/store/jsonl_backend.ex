@@ -120,6 +120,32 @@ defmodule LemonCore.Store.JsonlBackend do
     {:ok, %{state | data: data}}
   end
 
+  # Appends are unsynced; fsync every table file, then the directory so newly
+  # created table files are durable too. Hosts without a synchronous directory
+  # flush (macOS) get an error rather than an unproven success.
+  @impl true
+  def sync(state) do
+    state.path
+    |> Path.join("*.jsonl")
+    |> Path.wildcard()
+    |> Enum.reduce_while(:ok, fn file, :ok ->
+      case LemonCore.Durable.sync_file(file) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, {:jsonl_sync_failed, file, reason}}}
+      end
+    end)
+    |> case do
+      :ok ->
+        case LemonCore.Durable.sync_directory(state.path) do
+          :ok -> {:ok, state}
+          {:error, reason} -> {:error, {:jsonl_sync_failed, state.path, reason}}
+        end
+
+      error ->
+        error
+    end
+  end
+
   @impl true
   def compare_and_delete_many(state, entries) do
     state =
