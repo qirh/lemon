@@ -64,9 +64,11 @@ defmodule CodingAgent.ProcessStoreServerTest do
       record = %{status: :completed, completed_at: old_time, updated_at: old_time}
       :ets.insert(:coding_agent_processes, {"test_proc_1", record, []})
 
-      # Cleanup with TTL of 60 seconds should remove the old record
+      # The ETS table is global; other suites may leave expired rows, so assert
+      # on this record rather than on the total deleted count.
       assert {:ok, deleted} = ProcessStoreServer.cleanup(pid, 60)
-      assert deleted == 1
+      assert deleted >= 1
+      assert :ets.lookup(:coding_agent_processes, "test_proc_1") == []
 
       GenServer.stop(pid)
     end

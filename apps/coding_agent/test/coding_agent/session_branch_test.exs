@@ -578,6 +578,13 @@ defmodule CodingAgent.SessionBranchTest do
 
       :ok = Session.prompt(session, "Hello!")
       assert_receive {:stream_waiting, provider, ref}, 5000
+      # The provider can be reached before the session persists the prompt;
+      # snapshot only after that entry is durable, so later changes are ours.
+      session_id = Session.get_state(session).session_manager.header.id
+
+      assert_receive {:session_event, ^session_id, {:message_end, %LemonAi.Types.UserMessage{}}},
+                     5000
+
       before_navigation = Session.get_state(session).session_manager
       messages_before = Session.get_messages(session)
 
