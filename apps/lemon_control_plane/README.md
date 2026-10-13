@@ -89,6 +89,20 @@ prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
 errors are bounded and redacted, not raw run/store dumps.
 
+## Durable session inspection
+
+`sessions.get` (`operator.read`) accepts `{sessionKey}` and returns `{session}`
+from the daemon's canonical lifecycle index, including title, pin/archive state
+and run counts. `sessions.history` accepts `{sessionKey, limit}` (1–200, default
+50) and returns `{session, history}` with redacted structured **run history**.
+Unknown keys return `not_found`; these methods do not invent an empty session or
+read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
+
+This management history is distinct from native branch messages returned by
+`chat.history` with `cwd`. `session.detail` remains the richer routing/run
+inspection surface and includes durable title/pin/archive metadata when present,
+so reopening a named session restores its display name.
+
 ## Native session navigation
 
 Use the same `sessionKey` and native workspace `cwd` for these operations.

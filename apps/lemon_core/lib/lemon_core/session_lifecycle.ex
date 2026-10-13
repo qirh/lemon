@@ -237,10 +237,6 @@ defmodule LemonCore.SessionLifecycle do
     RunStore.history(session_key, limit: limit)
     |> Enum.map(fn {run_id, data} -> format_run(run_id, data, redact?) end)
     |> Enum.sort_by(&(&1.started_at_ms || 0), :asc)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
   end
 
   @doc "Build an always-redacted JSON or Markdown export with integrity metadata."
