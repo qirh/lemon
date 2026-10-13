@@ -461,11 +461,17 @@ export class SessionController {
  * Every assistant message becomes a finalized block under a synthetic run id
  * (`history:<message id>`), which is what keeps a rebuilt transcript out of the
  * streaming state: a block that reports itself live pins the native-scrollback
- * commit seam open for the rest of the session. Tool records — daemons vary in
- * how much they store — become completed tool blocks; anything else becomes a
- * notice, so nothing in the stored record is silently dropped.
+ * commit seam open for the rest of the session. Tool calls and results share
+ * their native call id. A saved call without a result remains outcome-unknown,
+ * not a fabricated success or a live execution.
  */
 export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMessage[]): void {
+	const calls = new Map<string, ChatHistoryMessage>();
+	for (const message of messages) {
+		if (message.role === "tool_use" && message.toolCallId) {
+			calls.set(message.toolCallId, message);
+		}
+	}
 	for (const message of messages) {
 		const at = message.timestampMs ?? Date.now();
 		const content = message.content ?? "";
@@ -485,15 +491,36 @@ export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMe
 			continue;
 		}
 		if (role === "tool" || role === "tool_use" || role === "tool_result") {
+			const actionId = message.toolCallId || `history:${message.id}`;
+			const call = calls.get(actionId);
+			const previous = session.byActionId.get(actionId);
+			const completed = role === "tool_result" || role === "tool" || message.phase === "completed";
+			const details = message.details ?? call?.details ?? previous?.detail?.details;
+			const durationMs = message.durationMs;
 			session.upsertTool(
 				{
-					id: `history:${message.id}`,
+					id: actionId,
 					kind: "tool",
-					title: historyToolTitle(message),
-					detail: { result: content },
+					title: message.title ?? call?.title ?? previous?.title ?? historyToolTitle(message),
+					detail: {
+						...previous?.detail,
+						name: message.toolName ?? call?.toolName ?? previous?.detail?.name ??
+							historyToolTitle(message),
+						args: message.arguments ?? call?.arguments ?? previous?.detail?.args,
+						details,
+						...(completed ? { result: content } : {}),
+					},
 				},
-				"completed",
-				{ ok: true },
+				completed ? "completed" : "started",
+				{
+					at: message.timestampMs ?? 0,
+					historical: true,
+					ok: message.ok,
+					cancelled: completed && (message.cancelled === true ||
+						message.details?.cancelled === true || message.details?.error_type === "aborted"),
+					durationMs: completed && typeof durationMs === "number" &&
+						Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : undefined,
+				},
 			);
 			continue;
 		}

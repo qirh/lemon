@@ -406,9 +406,12 @@ describe("synthesizeHistory", () => {
 		expect(result.accepted).toBe(true);
 	});
 
-	test("maps tool records to completed tool blocks, named from whatever field exists", () => {
+	test("maps explicit tool results to completed tool blocks with their recorded outcome", () => {
 		const session = build([
-			{ id: "m3", role: "tool", content: "exit 0", timestampMs: 6, name: "bash" },
+			{
+				id: "m3", role: "tool_result", content: "exit 0", timestampMs: 6,
+				toolCallId: "call-3", toolName: "bash", phase: "completed", ok: true, cancelled: false,
+			},
 		]);
 		expect(session.blocks[0]).toMatchObject({
 			kind: "tool",

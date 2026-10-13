@@ -53,6 +53,11 @@ remains a legacy client-side alias; it does not configure the daemon.
   Native patch receipts use their actual changed-file list (including Lemon's
   `*** Update File` format). Child task progress has one independently updated
   card per task, separate from the completed parent launch receipt.
+  Saved tool calls and results pair by native call ID, retaining arguments,
+  output and details. Cancelled receipts stay terminal (distinct from failed)
+  with captured partial output available on expansion. Saved calls without a
+  terminal result say “outcome unknown”; history never starts a spinner or
+  invents elapsed time, and only a recorded duration is shown.
 - The model's thinking is its own dimmed transcript block, collapsed to its
   first line (up to 16 KB of reasoning is available when expanded).
 - Ctrl+R expands/collapses the latest tool card or thinking block (a merged

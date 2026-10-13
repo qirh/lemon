@@ -818,7 +818,7 @@ defmodule LemonRouter.SessionCoordinator do
         {ok?, error, meta} =
           cond do
             Keyword.has_key?(opts, :dropped_reason) ->
-              {false, opts[:dropped_reason], %{disposition: :cancelled}}
+              {false, opts[:dropped_reason], %{disposition: :cancelled, cancelled: true}}
 
             is_binary(opts[:steered_into]) ->
               {true, nil, %{disposition: :steered, active_run_id: opts[:steered_into]}}

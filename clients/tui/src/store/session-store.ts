@@ -319,7 +319,15 @@ export class SessionStore {
 	upsertTool(
 		action: AgentAction | undefined,
 		phase: ToolPhase,
-		options: { runId?: string | null; ok?: boolean | null; message?: string | null } = {},
+		options: {
+			runId?: string | null;
+			ok?: boolean | null;
+			message?: string | null;
+			at?: number;
+			historical?: boolean;
+			cancelled?: boolean;
+			durationMs?: number | null;
+		} = {},
 	): ToolBlock {
 		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:${toolTitle(action)}`;
 		const existing = this.byActionId.get(actionId);
@@ -334,6 +342,11 @@ export class SessionStore {
 			// not just the phase — a `started` frame carries the pre-result detail,
 			// so merging it would erase the result from an already-sealed card.
 			if (existing.phase === "completed" && phase !== "completed") return existing;
+			if (options.historical !== undefined) existing.historical = options.historical;
+			if (options.cancelled === true) existing.cancelled = true;
+			if (options.durationMs !== undefined && options.durationMs !== null) {
+				existing.durationMs = options.durationMs;
+			}
 			existing.phase = phase;
 			existing.title = toolTitle(action) || existing.title;
 			if (detail !== undefined) existing.detail = detail;
@@ -347,7 +360,7 @@ export class SessionStore {
 		const block: ToolBlock = {
 			id: nextBlockId("tool"),
 			kind: "tool",
-			at: Date.now(),
+			at: options.at ?? Date.now(),
 			runId: options.runId ?? undefined,
 			actionId,
 			toolKind: action?.kind ?? "tool",
@@ -356,6 +369,9 @@ export class SessionStore {
 			phase,
 			ok: options.ok ?? undefined,
 			message: options.message ?? undefined,
+			historical: options.historical,
+			cancelled: options.cancelled,
+			durationMs: options.durationMs ?? undefined,
 		};
 		this.byActionId.set(actionId, block);
 		this.#push(block);

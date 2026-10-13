@@ -140,7 +140,7 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   def handle_info({:method_result, id, result}, state) when is_binary(id) do
-    {:push, {:text, Frames.encode_response(id, result)}, state}
+    {:push, {:text, encode_response(id, result)}, state}
   end
 
   def handle_info({:node_session_revoked, node_id, generation}, state) do
@@ -187,15 +187,7 @@ defmodule LemonControlPlane.WS.Connection do
     {:push, {:text, frame}, state}
   rescue
     error ->
-      classification =
-        case error do
-          %Protocol.UndefinedError{} -> "unsupported_json_type"
-          %Jason.EncodeError{} -> "invalid_json_value"
-          %ArgumentError{} -> "invalid_encoding_argument"
-          _ -> "encoding_exception"
-        end
-
-      drop_event(classification, state)
+      drop_event(encoding_failure_class(error), state)
   catch
     :throw, _ -> drop_event("encoding_throw", state)
     :exit, _ -> drop_event("encoding_exit", state)
@@ -205,6 +197,33 @@ defmodule LemonControlPlane.WS.Connection do
     Logger.warning("Dropping WS event frame: " <> classification)
     {:ok, state}
   end
+
+  defp encode_response(id, result) do
+    Frames.encode_response(id, result)
+  rescue
+    error -> response_encoding_failed(id, encoding_failure_class(error))
+  catch
+    :throw, _ -> response_encoding_failed(id, "encoding_throw")
+    :exit, _ -> response_encoding_failed(id, "encoding_exit")
+  end
+
+  defp response_encoding_failed(id, classification) do
+    Logger.warning("Replacing invalid WS response frame: " <> classification)
+
+    Frames.encode_response(
+      id,
+      {:error,
+       Errors.internal_error("Response could not be encoded; reconcile the operation outcome", %{
+         "code" => "RESPONSE_ENCODING_FAILED",
+         "retrySafe" => false
+       })}
+    )
+  end
+
+  defp encoding_failure_class(%Protocol.UndefinedError{}), do: "unsupported_json_type"
+  defp encoding_failure_class(%Jason.EncodeError{}), do: "invalid_json_value"
+  defp encoding_failure_class(%ArgumentError{}), do: "invalid_encoding_argument"
+  defp encoding_failure_class(_), do: "encoding_exception"
 
   ## Frame Handling
 
@@ -292,7 +311,7 @@ defmodule LemonControlPlane.WS.Connection do
 
       :inline ->
         result = Registry.dispatch(method, params, ctx)
-        response = Frames.encode_response(id, result)
+        response = encode_response(id, result)
 
         {:push, {:text, response}, state}
     end
