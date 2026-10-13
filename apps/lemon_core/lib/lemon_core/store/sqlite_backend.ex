@@ -425,7 +425,7 @@ defmodule LemonCore.Store.SqliteBackend do
       File.dir?(expanded) ->
         Path.join(expanded, @default_filename)
 
-      String.ends_with?(expanded, "/") ->
+      String.ends_with?(path, "/") ->
         Path.join(expanded, @default_filename)
 
       ext in [".db", ".sqlite", ".sqlite3"] ->
