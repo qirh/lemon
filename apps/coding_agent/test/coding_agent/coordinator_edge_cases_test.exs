@@ -519,8 +519,8 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         send(parent, {:results, results})
       end)
 
-      # Give time to start
-      Process.sleep(50)
+      # Abort only once the run is registered; a fixed sleep raced slow runners.
+      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end)
 
       # Abort
       :ok = Coordinator.abort_all(coordinator)
