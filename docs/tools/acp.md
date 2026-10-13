@@ -96,9 +96,16 @@ text previews are bounded to 4 KiB and raw previews share a 32 KiB bound.
 
 Usage with a known context window is exposed as `usage_update`; accounting
 without a known window uses vendor metadata instead of inventing a context
-percentage. Compaction events use ACP compaction updates. The runtime preserves
-message and tool ids so a client can append streams and update cards rather
-than duplicating them.
+percentage. The context gauge measures the latest request's input, cached
+tokens and output—not the sum of every request in a tool-heavy turn. Turn usage
+and cost totals aggregate the assistant responses separately. Context limits
+are model- and provider-surface-specific; the Codex and direct OpenAI versions
+of a model need not have the same window.
+
+Plans preserve task priorities and completion state. Retry, compaction and
+subagent lifecycle events use native notices, compaction and subagent updates.
+The runtime preserves message and tool ids so a client can append streams and
+update cards rather than duplicating them.
 
 Negotiated client filesystem support lets model-facing coding tools read and
 write editor-managed text buffers through the existing ACP client bridge. Raw
