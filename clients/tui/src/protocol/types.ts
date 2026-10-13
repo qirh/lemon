@@ -489,6 +489,17 @@ export interface ChatHistoryMessage {
 	content: string;
 	timestampMs: Nullable<number>;
 	truncated?: boolean;
+	/** Native tool identity, shared by its call and result rows. */
+	toolCallId?: string;
+	toolName?: string;
+	title?: string;
+	arguments?: Record<string, unknown>;
+	details?: Record<string, unknown>;
+	phase?: "started" | "completed";
+	ok?: Nullable<boolean>;
+	cancelled?: boolean;
+	/** Persisted duration only; absence is not a zero-length execution. */
+	durationMs?: Nullable<number>;
 	[key: string]: unknown;
 }
 

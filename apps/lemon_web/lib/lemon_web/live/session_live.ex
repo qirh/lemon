@@ -1204,10 +1204,13 @@ defmodule LemonWeb.SessionLive do
   end
 
   defp tool_message_id(run_id, payload) do
+    action = MapHelpers.get_key(payload, :action)
+
     action_id =
-      payload
-      |> MapHelpers.get_key(:action)
-      |> MapHelpers.get_key(:id)
+      action
+      |> MapHelpers.get_key(:detail)
+      |> MapHelpers.get_key(:tool_call_id)
+      |> then(&(&1 || MapHelpers.get_key(action, :id)))
 
     if is_binary(action_id) and action_id != "" do
       digest =
@@ -1283,7 +1286,21 @@ defmodule LemonWeb.SessionLive do
 
     case reason do
       reason
-      when reason in [:aborted, :cancelled, :canceled, "aborted", "cancelled", "canceled"] ->
+      when reason in [
+             :aborted,
+             :cancelled,
+             :canceled,
+             :acp_cancel,
+             :user_requested,
+             "aborted",
+             "cancelled",
+             "canceled",
+             "acp_cancel",
+             "user_requested",
+             "Cancelled by user",
+             "Cancelled: acp_cancel",
+             "Cancelled: user_requested"
+           ] ->
         "Run stopped."
 
       reason
@@ -1358,22 +1375,26 @@ defmodule LemonWeb.SessionLive do
       run.tools
       |> Enum.with_index()
       |> Enum.map(fn {tool, index} ->
-        %{
-          id: history_message_id(run_id, "tool-#{index}"),
-          kind: :tool_call,
-          event: %{
-            action: %{
-              title: tool.title,
-              kind: tool.kind,
-              detail: tool.detail
-            },
-            phase: tool.phase,
-            ok: tool.ok,
-            message: tool.message
+        event = %{
+          action: %{
+            id: read(tool, :id),
+            title: tool.title,
+            kind: tool.kind,
+            detail: tool.detail
           },
-          ts_ms: ts_ms
+          phase: tool.phase,
+          ok: tool.ok,
+          message: tool.message
         }
+
+        id =
+          if is_binary(read(tool, :id)) and read(tool, :id) != "",
+            do: tool_message_id(run_id, event),
+            else: history_message_id(run_id, "tool-#{index}")
+
+        %{id: id, kind: :tool_call, event: event, ts_ms: ts_ms}
       end)
+      |> coalesce_tool_messages()
 
     answer =
       if is_binary(run.answer) and run.answer != "" do
@@ -1391,7 +1412,39 @@ defmodule LemonWeb.SessionLive do
         []
       end
 
-    prompt ++ tools ++ answer
+    notice =
+      if run.ok == false do
+        [
+          %{
+            id: history_message_id(run_id, "completion"),
+            kind: :system,
+            content: run_failure_notice(run.error),
+            ts_ms: ts_ms
+          }
+        ]
+      else
+        []
+      end
+
+    prompt ++ tools ++ answer ++ notice
+  end
+
+  # Only explicit action identities link receipts. A run stopping is not
+  # evidence that an otherwise unfinished tool completed.
+  defp coalesce_tool_messages(messages) do
+    latest =
+      Enum.reduce(messages, %{}, fn message, acc ->
+        Map.update(acc, message.id, message, fn previous ->
+          if read(previous.event, :phase) in [:completed, "completed"] and
+               read(message.event, :phase) not in [:completed, "completed"],
+            do: previous,
+            else: message
+        end)
+      end)
+
+    messages
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.map(&Map.fetch!(latest, &1.id))
   end
 
   defp history_message_id(run_id, suffix) do

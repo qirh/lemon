@@ -91,7 +91,7 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - Transcript rendered as a LiveView stream (`stream/3`): a streaming delta re-inserts only the active reply, so per-token diffs do not grow with the transcript
 - Finished assistant replies rendered as sanitized markdown (`LemonWeb.Markdown`: headings, lists, tables, links, code blocks with a `language-*` class); raw HTML, script-capable links, inline attributes, and images never become markup. A reply renders as plain text while it is still streaming
 - Multi-file upload (up to 5 files, 20 MB each) with progress tracking and cancellation
-- Tool call cards, collapsed by default, showing tool name, a one-line argument summary, and running/done/failed status; each card updates in place by action id, and expanding it shows the (credential-masked) arguments and result
+- Tool call cards, collapsed by default, showing tool name, a one-line argument summary, and running/done/failed/cancelled status; each card updates in place by action id, including after reload. Expanding shows the (credential-masked) arguments and real visible output, preferring the full result when supplied. Cancelled receipts retain partial output and explain unknown outcomes or tools that never started when reported; cancellation of a run alone does not invent a result for an unfinished call.
 - Approval panel for this session's pending tool approvals with the TUI's choices (approve once, approve for this session, always approve, deny), resolved through `LemonCore.ExecApprovals.resolve/2`
 - System notifications for run lifecycle events (started, completed, failed)
 - Active-run stop control through `LemonRouter.abort_run/2`
@@ -110,7 +110,7 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - `:run_started` -- Displays "Run started" system message
 - `:delta` -- Streams text into the current assistant reply; a tool starting ends that reply so later text appears below the tool card
 - `:engine_action` -- Inserts or updates the tool call card for that action
-- `:run_completed` -- Finalizes the assistant reply (rendered as markdown); shows error if the run failed
+- `:run_completed` -- Finalizes the assistant reply (rendered as markdown); distinguishes a stopped run from a genuine failure
 - `:config_reloaded` / `:secret_changed` on the `"system"` topic -- Re-derives browser setup readiness
 - `:approval_requested` / `:approval_resolved` on the `"exec_approvals"` topic -- Adds approvals whose `session_key` matches this tab and removes resolved, timed-out, or cancelled ones
 
@@ -210,7 +210,7 @@ survives stale/refused operations, while the stale plan digest is cleared.
 |-----------|--------|---------|
 | `MessageComponent` | `LemonWeb.Live.Components.MessageComponent` | Renders one transcript stream item (user, assistant, system, tool call). Finished assistant replies go through `LemonWeb.Markdown`; tool calls delegate to `ToolCallComponent`. |
 | `FileUploadComponent` | `LemonWeb.Live.Components.FileUploadComponent` | Drag-and-drop file upload area with per-file progress bars, error messages, and cancel buttons. |
-| `ToolCallComponent` | `LemonWeb.Live.Components.ToolCallComponent` | Collapsed `<details>` card: tool name, argument summary, running/done/failed status; expands to credential-masked arguments, result, and message. `JS.ignore_attributes("open")` keeps the user's open/closed choice across in-place updates. |
+| `ToolCallComponent` | `LemonWeb.Live.Components.ToolCallComponent` | Collapsed `<details>` card: tool name, argument summary, running/done/failed/cancelled status (or completed when success is unknown); expands to credential-masked arguments, visible result, and message. Cancelled cards have no running animation and never render hidden thinking as output. `JS.ignore_attributes("open")` keeps the user's open/closed choice across in-place updates. |
 | `ApprovalComponent` | `LemonWeb.Live.Components.ApprovalComponent` | Pending-approval panel with approve once / approve for this session / always approve / deny buttons. |
 | `Payload` | `LemonWeb.Live.Components.Payload` | Shared helpers: `false`-preserving key reads, credential-key masking, and JSON formatting for display. |
 
