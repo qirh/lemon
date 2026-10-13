@@ -25,7 +25,7 @@ defmodule LemonMemory.Lifecycle do
   @workspace_digest_regex ~r/^[a-f0-9]{12}(?:[a-f0-9]{52})?$/
   @safe_agent_regex ~r/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
   @allowed_scopes ~w(all session workspace agent global)
-  @allowed_kinds ~w(all run learned_source)
+  @allowed_kinds ~w(all run learned_source project_learning)
   @allowed_source_types ~w(file folder url git_diff session document notebook pdf office unknown)
 
   @type result :: {:ok, map()} | {:error, atom()}
@@ -159,7 +159,9 @@ defmodule LemonMemory.Lifecycle do
     case validate_doc_id(doc.doc_id) do
       :ok ->
         kind = kind(doc)
-        {prompt, prompt_redactions} = Safety.redact_for_operator(doc.prompt_summary, max_bytes: 480)
+
+        {prompt, prompt_redactions} =
+          Safety.redact_for_operator(doc.prompt_summary, max_bytes: 480)
 
         {answer, answer_redactions} =
           if doc.outcome == :failure do
@@ -188,12 +190,16 @@ defmodule LemonMemory.Lifecycle do
           {:ok, base}
         end
 
-      _ -> {:error, :unsafe_record}
+      _ ->
+        {:error, :unsafe_record}
     end
   end
 
   defp kind(%Document{meta: meta}) when is_map(meta) do
-    if map_value(meta, "kind") == "learned_source", do: "learned_source", else: "run"
+    case map_value(meta, "kind") do
+      kind when kind in ["learned_source", "project_learning"] -> kind
+      _ -> "run"
+    end
   end
 
   defp kind(_), do: "run"

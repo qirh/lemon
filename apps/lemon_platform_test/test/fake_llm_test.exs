@@ -25,6 +25,8 @@ defmodule LemonPlatformTest.FakeLLMTest do
       convert_to_llm: convert_to_llm(),
       stream_options: %StreamOptions{},
       max_tool_turns: 25,
+      # This suite validates scripted provider steps, not recovery retries.
+      max_retries: 0,
       stream_fn: stream_fn
     }
   end
@@ -183,6 +185,36 @@ defmodule LemonPlatformTest.FakeLLMTest do
 
     messages = run(FakeLLM.script([msg]))
     assert assistant_text(messages) == "verbatim"
+  end
+
+  test "typed transient provider errors recover even when their display message is opaque" do
+    failed = %LemonAi.Types.AssistantMessage{
+      role: :assistant,
+      content: [%TextContent{type: :text, text: "unfinished"}],
+      stop_reason: :error,
+      error_message: "Request failed",
+      error_details: %{
+        category: :transient,
+        retryable: true,
+        rate_limit_info: %{retry_after: 1}
+      },
+      model: "custom",
+      timestamp: 0
+    }
+
+    stream_fn = FakeLLM.script([failed, {:text, "recovered"}], on_exhaust: :raise)
+    retry_config = %{config(stream_fn) | max_retries: 1, retry_base_delay_ms: 0}
+    context = AgentContext.new(system_prompt: "You are helpful.")
+    stream = Loop.agent_loop([user("go")], context, retry_config, nil, nil)
+    events = Enum.to_list(EventStream.events(stream))
+
+    assert [{:provider_retry, %{category: :transient, reason: "Request failed", delay_ms: 1}}] =
+             Enum.filter(events, &match?({:provider_retry, _}, &1))
+
+    assert {:provider_retry_end, %{attempt: 1, success: true, canceled: false}} in events
+    assert {:ok, messages} = EventStream.result(stream)
+    assert assistant_text(messages) == "recovered"
+    refute Enum.any?(events, &match?({:message_end, %{stop_reason: :error}}, &1))
   end
 
   test "on_exhaust: :stop (default) lets an over-run loop end cleanly" do

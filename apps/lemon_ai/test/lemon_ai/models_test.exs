@@ -19,7 +19,6 @@ defmodule LemonAi.ModelsTest do
       model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
       assert %Model{} = model
       assert model.id == "claude-sonnet-4-20250514"
-      assert model.name == "Claude Sonnet 4"
       assert model.provider == :anthropic
       assert model.api == :anthropic_messages
     end

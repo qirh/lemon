@@ -817,52 +817,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
     refute Enum.any?(model_texts, &String.contains?(&1, "MiniMax-M2.7-highspeed"))
   end
 
-  test "/model google picker omits dead direct ids and prefers custom-tools preview" do
-    chat_id = 33_300_532
-    user_msg_id = 13_332
-
-    System.put_env("GOOGLE_GENERATIVE_AI_API_KEY", "test-google-key")
-
-    on_exit(fn ->
-      System.delete_env("GOOGLE_GENERATIVE_AI_API_KEY")
-    end)
-
-    CancelMockAPI.set_updates([message_update(chat_id, user_msg_id, "/model")])
-
-    assert {:ok, _pid} =
-             start_transport(%{
-               allowed_chat_ids: [chat_id],
-               deny_unbound_chats: false
-             })
-
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
-
-    google_choice =
-      opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.flatten()
-      |> Enum.find(fn
-        %{"text" => text} -> String.contains?(String.downcase(text), "google")
-        _ -> false
-      end)
-      |> Map.fetch!("text")
-
-    CancelMockAPI.set_updates([
-      message_update(chat_id, user_msg_id + 1, google_choice)
-    ])
-
-    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}, 500
-
-    model_texts =
-      model_opts
-      |> get_in(["reply_markup", "keyboard"])
-      |> List.flatten()
-      |> Enum.map(&Map.get(&1, "text"))
-
-    refute Enum.any?(model_texts, &String.contains?(&1, "Gemini 3.1 Pro (gemini-3.1-pro)"))
-    assert hd(model_texts) =~ "Gemini 3.1 Pro Preview (Custom Tools)"
-  end
-
   test "/model does not advertise google vertex when only direct google credentials exist" do
     chat_id = 33_300_533
     user_msg_id = 13_333

@@ -15,6 +15,7 @@
  */
 
 import { Text } from "@oh-my-pi/pi-tui/components/text";
+import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 
@@ -76,6 +77,10 @@ export class ClampedText implements Component {
 
 	setText(value: string): boolean {
 		return this.#text.setText(value);
+	}
+
+	describe(context: DescribeContext): NativeNode {
+		return this.#text.describe(context);
 	}
 
 	render(width: number): readonly string[] {

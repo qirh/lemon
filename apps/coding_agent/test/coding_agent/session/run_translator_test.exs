@@ -12,27 +12,28 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     def emit_started(pid, _fields), do: pid
 
     @impl true
-    def emit_action_event(pid, fields) do
+    def emit_action_event(%{sink: pid} = state, fields) do
       send(pid, {:action_event, fields})
-      pid
+      state
     end
 
     @impl true
     def emit_delta(pid, _text, _meta), do: pid
 
     @impl true
-    def emit_completed(pid, fields) do
+    def emit_completed(%{sink: pid} = state, fields) do
       send(pid, {:completed, fields})
-      pid
+      state
     end
   end
 
   defp translator do
     RunTranslator.new(
       emitter: TestEmitter,
-      emitter_state: self(),
+      emitter_state: %{sink: self()},
       engine: "lemon",
       label: "test",
+      session_id: "translator-cancel-regression",
       cwd: "/tmp"
     )
   end
@@ -58,6 +59,38 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     |> RunTranslator.handle_event({:agent_end, []})
 
     assert_receive {:completed, %{usage: %{turns: 2, tool_errors: 1}}}
+  end
+
+  test "cancel intent drains terminal tool actions before one failed completion" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "observed partial output"}],
+      details: %{cancelled: true, outcome: "unknown"}
+    }
+
+    t =
+      translator()
+      |> RunTranslator.handle_event({:agent_start})
+      |> RunTranslator.handle_event({:tool_execution_start, "cancel-tool", "bash", %{}})
+      |> RunTranslator.mark_cancelled(:interrupted)
+      |> RunTranslator.mark_cancelled(:user_requested)
+
+    assert_receive {:action_event, %{phase: :started}}
+    refute_receive {:completed, _}, 10
+    assert t.cancel_reason == :interrupted
+
+    t =
+      t
+      |> RunTranslator.handle_event({:tool_execution_end, "cancel-tool", "bash", result, true})
+      |> RunTranslator.handle_event({:message_end, nil})
+      |> RunTranslator.handle_event({:turn_end, nil, []})
+      |> RunTranslator.handle_event({:canceled, :assistant_aborted})
+
+    assert_receive {:action_event, %{phase: :completed, ok: false}}
+    assert_receive {:completed, %{ok: false, usage: %{turns: 1, tool_errors: 1}}}
+    assert t.pending_actions == %{}
+    assert t.completed_emitted
+    RunTranslator.handle_event(t, {:agent_end, []})
+    refute_receive {:completed, _}, 10
   end
 
   describe "completed tool actions" do
@@ -108,6 +141,84 @@ defmodule CodingAgent.Session.RunTranslatorTest do
       refute Map.has_key?(detail, :result_full)
       refute Map.has_key?(detail, :details)
     end
+  end
+
+  test "async children keep distinct actions and terminal phases after their launcher completes" do
+    receipt = %AgentToolResult{
+      content: [],
+      details: %{status: "queued", task_ids: ["one", "two"]}
+    }
+
+    t =
+      translator()
+      |> RunTranslator.handle_event({:tool_execution_start, "launch", "task", %{}})
+      |> RunTranslator.handle_event({:tool_execution_end, "launch", "task", receipt, false})
+
+    assert_receive {:action_event, %{id: "tool_launch", phase: :started}}
+    assert_receive {:action_event, %{id: "tool_launch", phase: :completed}}
+
+    one = task_update("one", "running")
+    two = task_update("two", "running")
+    t = RunTranslator.handle_event(t, {:tool_execution_update, "launch", "task", %{}, one})
+    t = RunTranslator.handle_event(t, {:tool_execution_update, "launch", "task", %{}, two})
+    assert_receive {:action_event, %{id: "task_one", phase: :started, detail: detail}}
+    assert detail.tool_call_id == "task_one"
+    assert detail.parent_tool_call_id == "launch"
+    assert detail.parent_action_id == "tool_launch"
+    assert detail.partial_result == one
+    assert_receive {:action_event, %{id: "task_two", phase: :started}}
+
+    done = task_update("one", "completed")
+    t = RunTranslator.handle_event(t, {:tool_execution_update, "launch", "task", %{}, done})
+
+    assert_receive {:action_event,
+                    %{
+                      id: "task_one",
+                      phase: :completed,
+                      ok: true,
+                      detail: %{partial_result: ^done}
+                    }}
+
+    t = RunTranslator.handle_event(t, {:tool_execution_update, "launch", "task", %{}, two})
+    assert_receive {:action_event, %{id: "task_two", phase: :updated}}
+    t = RunTranslator.handle_event(t, {:tool_execution_update, "launch", "task", %{}, one})
+    refute_receive {:action_event, _}
+
+    RunTranslator.handle_event(
+      t,
+      {:tool_execution_update, "launch", "task", %{}, task_update("two", "error")}
+    )
+
+    assert_receive {:action_event, %{id: "task_two", phase: :completed, ok: false}}
+    refute_receive {:action_event, %{id: "tool_launch"}}
+  end
+
+  test "cancelled async children emit failed terminal completion, not another progress update" do
+    for status <- ["aborted", "cancelled"] do
+      RunTranslator.handle_event(
+        translator(),
+        {:tool_execution_update, "launch", "task", %{}, task_update(status, status)}
+      )
+
+      assert_receive {:action_event, %{phase: :completed, ok: false}}
+    end
+  end
+
+  defp task_update(id, status) do
+    %AgentToolResult{
+      content: [%TextContent{text: status}],
+      details: %{
+        task_id: id,
+        run_id: "run-#{id}",
+        session_id: "session-#{id}",
+        parent_run_id: "parent-run",
+        parent_session_id: "parent-session",
+        agent: "scout",
+        description: "Inspect #{id}",
+        status: status,
+        current_action: %{title: "Read source", kind: "tool", phase: "updated"}
+      }
+    }
   end
 
   describe "reasoning actions" do

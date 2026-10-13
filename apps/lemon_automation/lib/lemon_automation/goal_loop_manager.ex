@@ -9,6 +9,8 @@ defmodule LemonAutomation.GoalLoopManager do
     later tick. Its result includes a sanitized `router_abort` status; an
     `:outcome_unknown` status means the abort may have taken effect, is not
     retried automatically, and retains ownership until durable reconciliation.
+    Accepted aborts durably replace the pending abort marker and clear its
+    in-progress error, so subsequent status agrees with the stop response.
   * `:graceful` disables auto restart but lets the already bounded loop finish;
     status remains `stopping` until its task returns.
 
@@ -19,6 +21,11 @@ defmodule LemonAutomation.GoalLoopManager do
   The manager API timeout is computed above the judge/continuation wait timeout,
   avoiding a caller exit while its supervised judge is still within its
   configured deadline.
+
+  Operator start/stop accepts `expected_revision:` from `status/1`. The manager
+  checks it before mutation against the goal and exact active invocation.
+  `transition_goal/3` uses the same guard to pause/resume only an idle goal.
+  Drift returns `{:error, :stale}`; an old confirmation cannot stop a new loop.
   """
 
   use GenServer
@@ -42,18 +49,27 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   def start_loop(session_key, opts \\ []) do
-    GenServer.call(Keyword.get(opts, :name, __MODULE__), {:start_loop, session_key, opts})
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:start_loop, session_key, opts, Keyword.get(opts, :expected_revision)}
+    )
   end
 
   def stop_loop(session_key, opts \\ []) do
     GenServer.call(
       Keyword.get(opts, :name, __MODULE__),
-      {:stop_loop, session_key, Keyword.get(opts, :mode, :hard)}
+      {:stop_loop, session_key, Keyword.get(opts, :mode, :hard),
+       Keyword.get(opts, :expected_revision)}
     )
   end
 
   def status(session_key) do
     GenServer.call(__MODULE__, {:status, session_key})
+  end
+
+  @doc "Pause or resume an idle goal after checking an operator control revision."
+  def transition_goal(session_key, status, expected_revision) when status in [:pause, :resume] do
+    GenServer.call(__MODULE__, {:transition_goal, session_key, status, expected_revision})
   end
 
   def set_goal(session_key, objective, opts \\ []) do
@@ -141,6 +157,16 @@ defmodule LemonAutomation.GoalLoopManager do
     end
   end
 
+  def handle_call({:start_loop, session_key, opts, expected}, from, state) do
+    state = restore_persisted_reconciliation(state, session_key)
+
+    if is_nil(expected) or expected == control_revision(session_key, state) do
+      handle_call({:start_loop, session_key, opts}, from, state)
+    else
+      {:reply, {:error, :stale}, state}
+    end
+  end
+
   def handle_call({:start_loop, session_key, opts}, _from, state) do
     auto? = Keyword.get(opts, :auto, false) == true
 
@@ -153,6 +179,32 @@ defmodule LemonAutomation.GoalLoopManager do
     end
   rescue
     error -> {:reply, {:error, error}, state}
+  end
+
+  def handle_call({:stop_loop, session_key, mode, expected}, from, state) do
+    state = restore_persisted_reconciliation(state, session_key)
+
+    if is_nil(expected) or expected == control_revision(session_key, state) do
+      handle_call({:stop_loop, session_key, mode}, from, state)
+    else
+      {:reply, {:error, :stale}, state}
+    end
+  end
+
+  def handle_call({:transition_goal, session_key, action, expected}, _from, state)
+      when action in [:pause, :resume] do
+    state = restore_persisted_reconciliation(state, session_key)
+
+    cond do
+      expected != control_revision(session_key, state) ->
+        {:reply, {:error, :stale}, state}
+
+      Map.has_key?(state.loops, session_key) ->
+        {:reply, {:error, :already_running}, state}
+
+      true ->
+        {:reply, apply(GoalStore, action, [session_key]), state}
+    end
   end
 
   def handle_call({:stop_loop, session_key}, from, state) do
@@ -234,6 +286,7 @@ defmodule LemonAutomation.GoalLoopManager do
      {:ok,
       %{
         running: not is_nil(loop),
+        control_revision: control_revision(session_key, state),
         loop: loop && public_loop(loop),
         goal: GoalStore.get(session_key),
         auto: goal_auto(GoalStore.get(session_key))
@@ -436,7 +489,12 @@ defmodule LemonAutomation.GoalLoopManager do
   defp finish_hard_stop(session_key, loop, router_abort, state)
        when router_abort in [:accepted, :not_needed] do
     {:ok, goal} =
-      GoalStore.record_loop_status(session_key, :stopped, run_id: active_run_id(loop))
+      GoalStore.record_loop_status(session_key, :stopped,
+        run_id: active_run_id(loop),
+        error: nil,
+        abort_attempted: router_abort == :accepted,
+        abort_result: router_abort
+      )
 
     state =
       state
@@ -803,6 +861,16 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   defp budget_exhausted?(_), do: false
+
+  defp control_revision(session_key, state) do
+    loop = Map.get(state.loops, session_key)
+    invocation = loop && {loop.started_at_ms, loop.pid, public_loop(loop)}
+
+    {GoalStore.get(session_key), invocation}
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
 
   defp public_loop(loop) do
     %{

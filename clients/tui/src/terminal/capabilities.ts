@@ -19,8 +19,8 @@ export function detectTerminalCapabilities(
 	return {
 		enabled,
 		tern,
-		// Reuse upstream's explicit opt-outs and multiplexer policy. Tern's
-		// identity is not yet in pi-tui's catalog, but it consumes OSC 8.
+		// Reuse upstream's explicit opt-outs and multiplexer policy, including
+		// panes that export TERN_PANE without a TERM_PROGRAM identity.
 		hyperlinks:
 			enabled &&
 			(tern ? shouldEnableHyperlinksByDefault(env, "kitty") : shouldEnableHyperlinksByDefault(env)),

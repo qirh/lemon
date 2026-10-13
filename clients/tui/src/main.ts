@@ -7,10 +7,10 @@
  * pipeline smoke-tests the compiled binary that way.
  */
 
-import { AppShell } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
-import { initAppearanceTheme } from "./ui/theme/appearance.ts";
+import { consumeForkHandoff } from "./terminal/fork.ts";
+
 
 /** Injected by `scripts/build-binary.ts` via Bun's `define`. */
 declare const LEMON_TUI_VERSION: string | undefined;
@@ -21,6 +21,8 @@ const MIN_BUN_VERSION = "1.3.14";
 export interface CliOptions {
 	url: string;
 	sessionKey?: string;
+	/** Private one-shot handoff used only by Tern session forks. */
+	forkLaunchFile?: string;
 	help: boolean;
 	version: boolean;
 	/** Set when parsing failed; main prints it and exits 2. */
@@ -96,6 +98,11 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
 				if (value !== undefined) options.sessionKey = value;
 				break;
 			}
+			case "--internal-fork-launch": {
+				const value = takeValue(arg);
+				if (value !== undefined) options.forkLaunchFile = value;
+				break;
+			}
 			default:
 				if (arg.startsWith("--ws-url=") || arg.startsWith("--url=")) {
 					options.url = arg.slice(arg.indexOf("=") + 1);
@@ -167,6 +174,25 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 		process.stderr.write(`lemon-tui: ${options.error}\n\n${USAGE}`);
 		return 2;
 	}
+	if (options.forkLaunchFile) {
+		try {
+			const launch = consumeForkHandoff(options.forkLaunchFile);
+			options.url = launch.url;
+			options.sessionKey = launch.sessionKey;
+			process.chdir(launch.cwd);
+			// The daemon launching this pane may have a different environment.
+			// Install only the parent's resolved credential, never one from argv.
+			delete process.env.LEMON_WS_TOKEN;
+			if (launch.operatorToken === undefined) {
+				delete process.env.LEMON_CONTROL_PLANE_OPERATOR_TOKEN;
+			} else {
+				process.env.LEMON_CONTROL_PLANE_OPERATOR_TOKEN = launch.operatorToken;
+			}
+		} catch {
+			process.stderr.write("lemon-tui: could not consume fork launch handoff\n");
+			return 2;
+		}
+	}
 	if (!satisfiesVersion(Bun.version, MIN_BUN_VERSION)) {
 		process.stderr.write(
 			`lemon-tui: requires Bun >= ${MIN_BUN_VERSION} (running ${Bun.version})\n`,
@@ -184,12 +210,15 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	// by constructor argument and pi-tui ships no defaults. `auto` installs the
 	// dark palette now and swaps it if the terminal answers the OSC 11 query
 	// with a light background — the answer arrives after the first frame.
-	const configuredTheme = await loadConfig()
-		.then((config) => config.agent?.theme)
-		.catch(() => undefined);
-	const theme = initAppearanceTheme({ configured: configuredTheme });
-
-	const version = await resolveVersion();
+	// Keep CLI-only calls out of the native renderer's import graph, and overlap
+	// config/version I/O with the interactive module load.
+	const [{ AppShell }, { initAppearanceTheme }, config, version] = await Promise.all([
+		import("./app.ts"),
+		import("./ui/theme/appearance.ts"),
+		loadConfig().catch(() => undefined),
+		resolveVersion(),
+	]);
+	const theme = initAppearanceTheme({ configured: config?.agent?.theme });
 	return await new Promise<number>((resolve) => {
 		const app = new AppShell({
 			url: options.url,
@@ -216,5 +245,5 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 }
 
 if (import.meta.main) {
-	process.exit(await main());
+	void main().then((code) => process.exit(code));
 }

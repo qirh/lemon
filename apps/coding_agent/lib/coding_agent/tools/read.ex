@@ -9,6 +9,7 @@ defmodule CodingAgent.Tools.Read do
   - Offset and limit parameters for partial reads, with format-specific continuation
   - Bounded chunked text scanning, including oversized single-line files
   - Binary/invalid UTF-8 refusal with actionable inspection guidance
+  - `agent://` live family rosters and `agent://<task-id-or-name>` identities
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -55,7 +56,7 @@ defmodule CodingAgent.Tools.Read do
           "path" => %{
             "type" => "string",
             "description" =>
-              "A local path, skill://<key>[/relative-path], or a returned artifact://<id> handle"
+              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, or agent://[task-id-or-name] live roster"
           },
           "offset" => %{
             "type" => "integer",
@@ -119,6 +120,12 @@ defmodule CodingAgent.Tools.Read do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_tool_call_id, %{"path" => "agent://" <> _ = path}, signal, _on_update, _cwd, opts) do
+    if aborted?(signal),
+      do: {:error, "Operation aborted"},
+      else: CodingAgent.Tools.Task.Messaging.read(path, opts)
+  end
+
   def execute(tool_call_id, params, signal, _on_update, cwd, opts) do
     _ = tool_call_id
 

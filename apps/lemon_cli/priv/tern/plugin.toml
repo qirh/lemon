@@ -1,0 +1,6 @@
+schema = 1
+id = "lemon"
+name = "Lemon"
+version = "1.0.0"
+description = "Open a native Lemon TUI beside your work and focus existing Lemon panes."
+window = "window.luau"

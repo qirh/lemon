@@ -30,6 +30,13 @@ export const LEMON_KEYBINDINGS = {
 		defaultKeys: "ctrl+t",
 		description: "Cycle detail for every card: collapsed → expanded → default",
 	},
+	"lemon.palette.open": {
+		defaultKeys: "ctrl+p",
+		description: "Search commands, skills and prompts",
+	},
+	"lemon.tasks.toggle": { defaultKeys: "alt+a", description: "Show/hide live subagent tree" },
+	"lemon.tools.toggle": { defaultKeys: "alt+o", description: "Collapse/expand all tool output" },
+	"lemon.tools.diff": { defaultKeys: "alt+d", description: "Inspect the latest edit diff" },
 } as const;
 
 export type LemonKeybinding = keyof typeof LEMON_KEYBINDINGS;
@@ -49,6 +56,11 @@ export interface InputControllerOptions {
 	toggleLatest?: () => boolean;
 	/** Cycle the global accordion override and apply it to the transcript. */
 	cycleDetail?: () => void;
+	openCommandPalette?: () => void | Promise<void>;
+	isComposerEmpty?: () => boolean;
+	toggleTaskTree?: () => void;
+	toggleToolOutputs?: () => void;
+	openDiff?: () => void;
 	notice?: (text: string) => void;
 }
 
@@ -77,6 +89,27 @@ export class InputController {
 		if (this.#dispose) return;
 		this.#dispose = this.#options.tui.addInputListener((data) => {
 			if (this.#options.hasOverlay()) return undefined;
+			if (
+				this.#matches(data, "lemon.palette.open") ||
+				(data === "/" && this.#editorFocused() && this.#options.isComposerEmpty?.())
+			) {
+				if (this.#options.openCommandPalette) {
+					void this.#options.openCommandPalette();
+					return { consume: true };
+				}
+			}
+			if (this.#matches(data, "lemon.tasks.toggle")) {
+				this.#options.toggleTaskTree?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.tools.toggle")) {
+				this.#options.toggleToolOutputs?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.tools.diff")) {
+				this.#options.openDiff?.();
+				return { consume: true };
+			}
 			if (this.#matches(data, "lemon.picker.model")) {
 				void this.#options.openModelPicker();
 				return { consume: true };

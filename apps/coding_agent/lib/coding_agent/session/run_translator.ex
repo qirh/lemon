@@ -27,8 +27,10 @@ defmodule CodingAgent.Session.RunTranslator do
     :delta_callback,
     :retry_action_id,
     :compaction_action_id,
+    :cancel_reason,
     accumulated_text: "",
     pending_actions: %{},
+    task_actions: %{},
     reasoning_accumulator: nil,
     started_emitted: false,
     completed_emitted: false,
@@ -75,7 +77,7 @@ defmodule CodingAgent.Session.RunTranslator do
     action_id = "tool_#{id}"
     kind = Presentation.tool_kind(name)
     title = Presentation.tool_title(name, args)
-    detail = %{name: name, args: args}
+    detail = %{name: name, args: args, tool_call_id: id}
 
     action = %{id: action_id, kind: kind, title: title, detail: detail}
 
@@ -94,20 +96,83 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_event(
         %__MODULE__{} = t,
-        {:tool_execution_update, id, name, args, partial_result}
+        {:tool_execution_update, launch_id, "task", args,
+         %{details: %{task_id: task_id} = details} = partial_result}
+      )
+      when is_binary(task_id) do
+    action_id = "task_#{task_id}"
+
+    if Map.get(t.task_actions, action_id) == :terminal do
+      t
+    else
+      status = details[:status]
+
+      terminal? =
+        status in [
+          :completed,
+          "completed",
+          :error,
+          "error",
+          :aborted,
+          "aborted",
+          :cancelled,
+          "cancelled",
+          :killed,
+          "killed"
+        ]
+
+      phase =
+        cond do
+          terminal? -> :completed
+          Map.has_key?(t.task_actions, action_id) -> :updated
+          true -> :started
+        end
+
+      detail = %{
+        name: "task",
+        args: args,
+        task_id: task_id,
+        tool_call_id: action_id,
+        parent_action_id: "tool_#{launch_id}",
+        parent_tool_call_id: launch_id,
+        partial_result: partial_result
+      }
+
+      detail =
+        if terminal? do
+          detail
+          |> Map.put(:result, Presentation.truncate_result(partial_result))
+          |> Presentation.put_operator_result(partial_result)
+          |> Presentation.maybe_put_result_meta(partial_result, "task")
+        else
+          detail
+        end
+
+      t =
+        emit_action_event(t, %{
+          id: action_id,
+          kind: Presentation.tool_kind("task"),
+          title: details[:name] || details[:description] || "Task #{task_id}",
+          phase: phase,
+          ok: if(terminal?, do: status in [:completed, "completed"], else: nil),
+          detail: detail
+        })
+
+      %{
+        t
+        | task_actions:
+            Map.put(t.task_actions, action_id, if(terminal?, do: :terminal, else: :running))
+      }
+    end
+  end
+
+  def handle_event(
+        %__MODULE__{} = t,
+        {:tool_execution_update, id, _name, _args, partial_result}
       ) do
     action_id = "tool_#{id}"
 
     case Map.get(t.pending_actions, action_id) do
-      nil when name == "task" ->
-        emit_action_event(t, %{
-          id: action_id,
-          kind: Presentation.tool_kind(name),
-          title: Presentation.tool_title(name, args),
-          phase: :updated,
-          detail: %{name: name, args: args, partial_result: partial_result}
-        })
-
       nil ->
         t
 
@@ -143,7 +208,7 @@ defmodule CodingAgent.Session.RunTranslator do
         title = Presentation.tool_title(name, %{})
 
         detail =
-          %{name: name, result: Presentation.truncate_result(result)}
+          %{name: name, tool_call_id: id, result: Presentation.truncate_result(result)}
           |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
@@ -289,14 +354,27 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
-    answer = Presentation.extract_answer(messages, t.accumulated_text)
-    usage = with_metrics(Presentation.build_usage(messages), t)
+    if t.cancel_reason do
+      emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason), %{
+        messages: messages
+      })
+    else
+      answer = Presentation.extract_answer(messages, t.accumulated_text)
+      usage = with_metrics(Presentation.build_usage(messages), t)
+      emit_completed_ok(t, answer, usage)
+    end
+  end
 
-    emit_completed_ok(t, answer, usage)
+  def handle_event(%__MODULE__{} = t, {:canceled, reason}) do
+    t = mark_cancelled(t, reason)
+    emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason))
   end
 
   def handle_event(%__MODULE__{} = t, {:error, reason, partial_state}) do
-    error_msg = Presentation.format_error(reason, t)
+    error_msg =
+      if t.cancel_reason,
+        do: Presentation.cancel_error_message(t.cancel_reason),
+        else: Presentation.format_error(reason, t)
 
     Logger.error(
       "#{t.label} stream error " <>
@@ -319,17 +397,21 @@ defmodule CodingAgent.Session.RunTranslator do
   def handle_event(%__MODULE__{} = t, {:branch_summarized, _info}), do: t
   def handle_event(%__MODULE__{} = t, _event), do: t
 
-  def handle_cancel(%__MODULE__{} = t, reason) do
-    if t.started_emitted and not t.completed_emitted do
-      emit_completed_error(t, Presentation.cancel_error_message(reason))
-    else
-      t
-    end
+  @doc "Marks cancellation intent without discarding queued terminal tool events."
+  def mark_cancelled(%__MODULE__{} = t, reason) do
+    if t.completed_emitted or t.cancel_reason,
+      do: t,
+      else: %{t | cancel_reason: reason || :user_requested}
   end
 
   def handle_session_down(%__MODULE__{} = t, reason) do
     if t.started_emitted and not t.completed_emitted do
-      emit_completed_error(t, "Session terminated: #{inspect(reason)}")
+      error =
+        if t.cancel_reason,
+          do: Presentation.cancel_error_message(t.cancel_reason),
+          else: "Session terminated: #{inspect(reason)}"
+
+      emit_completed_error(t, error)
     else
       t
     end

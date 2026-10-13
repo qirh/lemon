@@ -53,22 +53,21 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end
   end
 
-  @spec list_boards(keyword()) :: [map()]
+  @doc "List boards. `strict: true` returns `{:ok, boards}` or a store error, never false emptiness."
+  @spec list_boards(keyword()) :: [map()] | {:ok, [map()]} | {:error, term()}
   def list_boards(opts \\ []) do
-    status = opts[:status] && to_string(opts[:status])
-    owner = opts[:owner] && to_string(opts[:owner])
-    workspace = opts[:workspace] && to_string(opts[:workspace])
-    limit = positive_limit(opts[:limit], 50)
+    project = fn records ->
+      records
+      |> Enum.map(fn {_key, board} -> normalize_board(board) end)
+      |> Enum.reject(&(&1 == %{}))
+      |> maybe_filter(:status, opts[:status] && to_string(opts[:status]))
+      |> maybe_filter(:owner, opts[:owner] && to_string(opts[:owner]))
+      |> maybe_filter(:workspace, opts[:workspace] && to_string(opts[:workspace]))
+      |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
+      |> Enum.take(positive_limit(opts[:limit], 50))
+    end
 
-    @boards_table
-    |> Store.list()
-    |> Enum.map(fn {_key, board} -> normalize_board(board) end)
-    |> Enum.reject(&(&1 == %{}))
-    |> maybe_filter(:status, status)
-    |> maybe_filter(:owner, owner)
-    |> maybe_filter(:workspace, workspace)
-    |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
-    |> Enum.take(limit)
+    list_records(@boards_table, opts, project)
   end
 
   @spec archive_board(binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -137,21 +136,29 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end
   end
 
-  @spec list_tasks(binary(), keyword()) :: [map()]
+  @doc "List cards. `strict: true` preserves backend failure instead of returning an empty board."
+  @spec list_tasks(binary(), keyword()) :: [map()] | {:ok, [map()]} | {:error, term()}
   def list_tasks(board_id, opts \\ []) when is_binary(board_id) do
-    status = opts[:status] && to_string(opts[:status])
-    assignee = opts[:assignee] && to_string(opts[:assignee])
-    limit = positive_limit(opts[:limit], 100)
+    project = fn records ->
+      records
+      |> Enum.map(fn {_key, task} -> normalize_task(task) end)
+      |> Enum.reject(&(&1 == %{}))
+      |> Enum.filter(&(&1.board_id == board_id))
+      |> maybe_filter(:status, opts[:status] && to_string(opts[:status]))
+      |> maybe_filter(:assignee, opts[:assignee] && to_string(opts[:assignee]))
+      |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
+      |> Enum.take(positive_limit(opts[:limit], 100))
+    end
 
-    @tasks_table
-    |> Store.list()
-    |> Enum.map(fn {_key, task} -> normalize_task(task) end)
-    |> Enum.reject(&(&1 == %{}))
-    |> Enum.filter(&(&1.board_id == board_id))
-    |> maybe_filter(:status, status)
-    |> maybe_filter(:assignee, assignee)
-    |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
-    |> Enum.take(limit)
+    list_records(@tasks_table, opts, project)
+  end
+
+  defp list_records(table, opts, project) do
+    if opts[:strict] do
+      with {:ok, records} <- Store.fetch_all(table), do: {:ok, project.(records)}
+    else
+      project.(Store.list(table))
+    end
   end
 
   @spec update_task(binary(), keyword() | map(), keyword()) :: {:ok, map()} | {:error, term()}

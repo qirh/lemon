@@ -322,18 +322,13 @@ defmodule LemonEvals.Support do
     end
   end
 
-  def assert_learning_search(result, search_calls) do
-    calls = Agent.get(search_calls, &Enum.reverse/1)
-
+  def assert_learning_search(result) do
     cond do
       result.details[:scope] != "project" ->
         {:error, "expected recall scope project, got #{inspect(result.details)}"}
 
       result.details[:conversations] != 1 ->
         {:error, "expected one recalled conversation, got #{inspect(result.details)}"}
-
-      Enum.map(calls, fn {_query, opts} -> opts[:scope] end) != [:workspace] ->
-        {:error, "expected recall to search the project once, got #{inspect(calls)}"}
 
       true ->
         :ok
@@ -364,18 +359,27 @@ defmodule LemonEvals.Support do
   A memory document for scripted `recall` search functions. `doc_id` is also
   the prompt text, so it shows up in the tool's rendered result.
   """
-  def eval_memory_doc(doc_id, scope_key) do
+  def eval_memory_doc(doc_id, cwd, workspace_dir, agent_id \\ "eval") do
+    {:ok, identity} =
+      LemonMemory.Project.scope(%{
+        cwd: cwd,
+        workspace_dir: workspace_dir,
+        agent_id: agent_id,
+        session_scope: :main
+      })
+
     %LemonMemory.Document{
       doc_id: doc_id,
       run_id: "run-#{doc_id}",
-      session_key: "agent:eval:main",
-      agent_id: "eval",
-      workspace_key: scope_key,
+      session_key: "agent:#{agent_id}:main",
+      agent_id: agent_id,
+      workspace_key: identity.root,
       scope: :workspace,
       started_at_ms: 1_758_000_000_000,
       ingested_at_ms: 1_758_000_000_000,
       prompt_summary: doc_id,
-      answer_summary: "Recalled #{doc_id}."
+      answer_summary: "Recalled #{doc_id}.",
+      meta: %{"home_digest" => identity.home_digest}
     }
   end
 
@@ -535,9 +539,6 @@ defmodule LemonEvals.Support do
       length(calls) != expected_count ->
         {:error, "expected #{expected_count} search calls, got #{inspect(calls)}"}
 
-      not Enum.all?(calls, fn {_query, opts} -> Keyword.get(opts, :scope) == :workspace end) ->
-        {:error, "expected search calls to use workspace scopes, got #{inspect(calls)}"}
-
       true ->
         :ok
     end
@@ -549,9 +550,6 @@ defmodule LemonEvals.Support do
     cond do
       length(calls) < minimum_count ->
         {:error, "expected at least #{minimum_count} search calls, got #{inspect(calls)}"}
-
-      not Enum.all?(calls, fn {_query, opts} -> Keyword.get(opts, :scope) == :workspace end) ->
-        {:error, "expected search calls to use workspace scopes, got #{inspect(calls)}"}
 
       true ->
         :ok

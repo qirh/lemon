@@ -906,6 +906,20 @@ defmodule CodingAgent.SessionManager do
   @spec get_session_dir(String.t()) :: String.t()
   defdelegate get_session_dir(cwd), to: CodingAgent.Config, as: :sessions_dir
 
+  @doc "Derive a portable journal filename without changing the native session identity."
+  @spec session_file_path(String.t(), String.t()) :: String.t()
+  def session_file_path(cwd, session_id) when is_binary(session_id) do
+    basename =
+      if byte_size(session_id) <= 120 and
+           String.match?(session_id, ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]*\z/) do
+        session_id
+      else
+        "session-" <> Base.encode16(:crypto.hash(:sha256, session_id), case: :lower)
+      end
+
+    Path.join(get_session_dir(cwd), basename <> ".jsonl")
+  end
+
   @doc """
   List all sessions for a cwd with metadata.
 

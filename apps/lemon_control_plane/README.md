@@ -69,6 +69,11 @@ presence, health and cron data. They are not durable event replay cursors.
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
+Bun and other conforming clients automatically pong, keeping long-running
+outbound streams alive without application-level requests. The listener retains
+its 60-second inbound dead-peer timeout for clients that do not respond.
+
 Tool action details use a bounded, credential-redacted wire projection of
 visible text/images and selected public result metadata. Hidden thinking,
 signatures, callbacks and runtime state are excluded; complete diff snapshots
@@ -82,6 +87,20 @@ missing and non-directory paths are rejected before submission. Canonical
 profile sessions reject caller workspace overrides; use `profile.chat`, whose
 workspace remains server-owned.
 
+`chat.send` and `profile.chat` accept optional `images` arrays containing
+`{"type":"image","mime_type":"image/png","data":"<standard Base64>"}`.
+PNG, JPEG, GIF and WebP are supported, with at most five images and 10 MiB
+aggregate decoded bytes. Invalid Base64, unsupported/mismatched MIME headers
+and over-limit attachments are rejected before submission; errors and summaries
+never echo encoded image data. `prompt: ""` is valid for image-only messages.
+The default WebSocket JSON frame limit is 16 MiB; an explicitly configured lower
+`:max_payload` remains authoritative.
+
+Image-bearing followups stay separate so their prompt/attachment association
+is retained. Images cannot use text-only in-flight steering: `steer`/`redirect`
+queue the intact request as a followup, and `steer_backlog` queues it as collect.
+Queued attachment data has an independent 16 MiB encoded-memory budget.
+
 A lost mutation acknowledgement does not prove failure. In particular,
 `profile.chat` may return `UNAVAILABLE` with its fixed run ID and
 `retrySafe: false`; reconcile instead of blindly submitting again. Session delete,
@@ -89,12 +108,28 @@ prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
 errors are bounded and redacted, not raw run/store dumps.
 
+## Durable session inspection
+
+`sessions.get` (`operator.read`) accepts `{sessionKey}` and returns `{session}`
+from the daemon's canonical lifecycle index, including title, pin/archive state
+and run counts. `sessions.history` accepts `{sessionKey, limit}` (1–200, default
+50) and returns `{session, history}` with redacted structured **run history**.
+Unknown keys return `not_found`; these methods do not invent an empty session or
+read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
+
+This management history is distinct from native branch messages returned by
+`chat.history` with `cwd`. `session.detail` remains the richer routing/run
+inspection surface and includes durable title/pin/archive metadata when present,
+so reopening a named session restores its display name.
+
 ## Native session navigation
 
 Use the same `sessionKey` and native workspace `cwd` for these operations.
 Both are required, non-empty strings, bounded to 1,024 and 4,096 UTF-8 bytes
 respectively. NUL bytes are rejected. Native runtime failures expose only safe
 reason classifications, never exception terms or raw filesystem errors.
+Successful tree and rewind receipts include the validated request `sessionKey`
+so clients can reject stale or mismatched targets before applying their results.
 
 `sessions.tree` requires `operator.read`. Optional `limit` is 1–500 (default
 100); `offset` is 0–1,000,000 (default 0). The result contains `sessionId`,
@@ -129,6 +164,9 @@ durable session index with independent lifecycle metadata. The result is
 `sessions.list` immediately, with zero runs of its own; no synthetic run is
 created. If acknowledgement or registration is uncertain, error details retain
 the generated keys and `retrySafe: false`; reconcile instead of retrying.
+Existing plain keys such as `tui-*` are valid fork sources when their durable
+session index identifies the source agent. Children still use canonical keys
+for that same agent; an unknown source never falls back to a guessed default.
 
 Name a child with the existing `sessions.metadata.patch` method using
 `{sessionKey, title}` (`operator.admin`); `title: null` clears its name.

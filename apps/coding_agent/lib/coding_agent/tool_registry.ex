@@ -89,6 +89,8 @@ defmodule CodingAgent.ToolRegistry do
     {:goal, LemonSkills.Tools.Goal},
     {:peer, LemonSkills.Tools.Peer},
     {:task, Tools.Task},
+    {:agent_message, Tools.Task.Messaging},
+    {:wait, Tools.Task.Wait},
     {:agent, Tools.Agent},
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
@@ -862,7 +864,7 @@ defmodule CodingAgent.ToolRegistry do
         tool_name,
         params,
         fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        approval_context
+        Map.put(approval_context, :tool_call_id, tool_call_id)
       )
     end
 
