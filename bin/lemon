@@ -209,7 +209,7 @@ run_cli() {
   cd "$LEMON_ROOT"
   # Dependencies are installed explicitly; launching must never mutate them.
   MIX_QUIET=1 compile_source >&2
-  exec env MIX_QUIET=1 mix run --no-start --no-compile --no-deps-check -e 'LemonCli.CLI.main(System.argv())' -- "$@"
+  exec env MIX_QUIET=1 mix run --no-start --no-compile --no-deps-check -e 'File.cd!(System.fetch_env!("LEMON_NODE_LAUNCH_CWD")); LemonCli.CLI.main(System.argv())' -- "$@"
 }
 
 parse_runtime_options() {
@@ -427,6 +427,7 @@ case "$COMMAND" in
           ;;
       esac
     fi
+    cd "$LAUNCH_CWD"
     exec bun "$TUI_DIR/src/main.ts" --ws-url "ws://127.0.0.1:$PORT/ws" "$@"
     ;;
 
