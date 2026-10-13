@@ -1,20 +1,23 @@
 defmodule LemonControlPlane.ACP do
   @moduledoc """
-  Preview Agent Client Protocol JSON-RPC bridge.
+  Agent Client Protocol JSON-RPC bridge.
 
-  The bridge maps ACP sessions and prompt turns onto Lemon's existing supervised
-  router run graph. It intentionally advertises only text and resource-link
-  prompt support until Lemon has a safe raw media artifact contract.
+  ACP sessions retain model, thinking and approval settings across reconnects.
+  Loading replays redacted durable run history; closing releases the active run
+  without deleting that history. Session configuration is applied to the next
+  prompt through the router boundary. Raw media and client-supplied MCP servers
+  are rejected until a session-scoped safe transport contract is available.
   """
+
+  alias LemonControlPlane.AgentRuntime
 
   alias LemonControlPlane.Methods.AgentWait
   alias LemonCore.Store
   alias LemonCore.RunRequest
 
-  @protocol_version "1"
+  @protocol_version 1
   @default_agent_id "default"
-  @default_wait_timeout_ms 60_000
-  @session_table :lemon_control_plane_acp_sessions
+  @default_wait_timeout_ms 600_000
   @session_store_table :acp_sessions
 
   def capabilities do
@@ -27,6 +30,7 @@ defmodule LemonControlPlane.ACP do
         "image" => false
       },
       "sessionCapabilities" => %{
+        "fork" => %{},
         "close" => %{},
         "list" => %{},
         "resume" => %{}
@@ -88,7 +92,7 @@ defmodule LemonControlPlane.ACP do
     do: {:ok, error_response(nil, -32_600, "invalid JSON-RPC request")}
 
   def initialize(params) when is_map(params) do
-    version = string_param(params, "protocolVersion", @protocol_version)
+    version = @protocol_version
 
     client_capabilities =
       params |> Map.get("clientCapabilities") |> normalize_client_capabilities()
@@ -101,10 +105,16 @@ defmodule LemonControlPlane.ACP do
          "version" => lemon_version()
        },
        "agentCapabilities" => capabilities(),
-       "authMethods" => [],
+       "authMethods" => [
+         %{
+           "id" => "agent",
+           "name" => "Use local Lemon credentials",
+           "description" => "Uses provider keys and OAuth already configured with lemon setup."
+         }
+       ],
        "_meta" => %{
          "lemon" => %{
-           "status" => "preview",
+           "status" => "ready",
            "beamSupervisedRuns" => true,
            "rawMediaPromptSupport" => false,
            "clientCapabilities" => client_capabilities_json(client_capabilities)
@@ -118,37 +128,32 @@ defmodule LemonControlPlane.ACP do
   def new_session(params, opts \\ [])
 
   def new_session(params, opts) when is_map(params) do
-    with {:ok, cwd} <- required_string(params, "cwd"),
-         {:ok, _servers} <- required_list(params, "mcpServers") do
+    with {:ok, cwd} <- required_cwd(params),
+         :ok <- validate_mcp_servers(params) do
       agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
       client_capabilities = client_capabilities(params, opts)
       session_id = "acp_" <> LemonCore.Id.uuid()
       session_key = "agent:#{agent_id}:acp-#{short_hash(session_id)}"
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
-      put_session(session_id, %{
+      session = %{
         cwd: cwd,
         session_key: session_key,
         agent_id: agent_id,
         title: nil,
         updated_at: now,
         last_run_id: nil,
+        model: nil,
+        thinking: "off",
+        mode: "default",
+        approval_mode: "ask",
+        closed: false,
         client_capabilities: client_capabilities
-      })
+      }
 
-      {:ok,
-       %{
-         "sessionId" => session_id,
-         "modes" => nil,
-         "configOptions" => [],
-         "_meta" => %{
-           "lemon" => %{
-             "sessionKey" => session_key,
-             "cwdHash" => short_hash(cwd),
-             "clientCapabilities" => client_capabilities_json(client_capabilities)
-           }
-         }
-       }}
+      put_session(session_id, session)
+      bootstrap(session_id, session, opts)
+      {:ok, Map.put(session_response(session), "sessionId", session_id)}
     end
   end
 
@@ -158,61 +163,50 @@ defmodule LemonControlPlane.ACP do
 
   def resume_session(params, opts) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
-         {:ok, cwd} <- required_string(params, "cwd") do
-      agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
-      session_key = session_key_for(session_id, agent_id)
-      now = DateTime.utc_now() |> DateTime.to_iso8601()
-      existing = get_session(session_id) || %{}
-      client_capabilities = client_capabilities(params, opts, existing)
-
+         {:ok, existing} <- existing_session(session_id),
+         {:ok, cwd} <- required_cwd(params),
+         :ok <- validate_mcp_servers(params),
+         true <- cwd == existing.cwd do
       session =
-        Map.merge(existing, %{
-          cwd: cwd,
-          session_key: session_key,
-          agent_id: agent_id,
-          title: nil,
-          updated_at: now,
-          last_run_id: nil,
-          client_capabilities: client_capabilities
-        })
+        existing
+        |> Map.put(:closed, false)
+        |> Map.put(:client_capabilities, client_capabilities(params, opts, existing))
 
       put_session(session_id, session)
-
-      {:ok,
-       %{
-         "modes" => nil,
-         "configOptions" => [],
-         "_meta" => %{
-           "lemon" => %{
-             "sessionKey" => session_key,
-             "cwdHash" => short_hash(cwd),
-             "clientCapabilities" => client_capabilities_json(client_capabilities)
-           }
-         }
-       }}
+      if Keyword.get(opts, :replay, false), do: replay_history(session_id, session, opts)
+      bootstrap(session_id, session, opts)
+      {:ok, session_response(session)}
+    else
+      false -> {:error, -32_602, "cwd must match the stored session"}
+      error -> error
     end
   end
 
   def resume_session(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
   def list_sessions(params) when is_map(params) do
-    cwd = Map.get(params, "cwd")
+    with {:ok, offset} <- parse_cursor(Map.get(params, "cursor")) do
+      cwd = Map.get(params, "cwd")
 
-    sessions =
-      all_sessions()
-      |> Enum.map(fn {session_id, session} -> session_info(session_id, session) end)
-      |> Enum.filter(fn session -> is_nil(cwd) or session["cwd"] == cwd end)
+      sessions =
+        all_sessions()
+        |> Enum.map(fn {session_id, session} -> session_info(session_id, session) end)
+        |> Enum.filter(fn session -> is_nil(cwd) or session["cwd"] == cwd end)
+        |> Enum.sort_by(&{&1["updatedAt"], &1["sessionId"]}, :desc)
 
-    {:ok, %{"sessions" => sessions}}
+      page = Enum.slice(sessions, offset, 50)
+      next = if offset + length(page) < length(sessions), do: to_string(offset + length(page))
+      {:ok, reject_nil_values(%{"sessions" => page, "nextCursor" => next})}
+    end
   end
 
   def list_sessions(_params), do: {:error, -32_602, "params must be an object"}
 
   def close_session(params) when is_map(params) do
-    with {:ok, session_id} <- required_string(params, "sessionId") do
-      session = get_session(session_id)
-      cancel_last_run(session)
-      delete_session(session_id)
+    with {:ok, session_id} <- required_string(params, "sessionId"),
+         {:ok, session} <- existing_session(session_id),
+         :ok <- cancel_last_run(session) do
+      put_session(session_id, Map.put(session, :closed, true))
       {:ok, %{}}
     end
   end
@@ -221,8 +215,9 @@ defmodule LemonControlPlane.ACP do
 
   def cancel_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
-         {:ok, session} <- existing_session(session_id) do
-      cancel_last_run(session)
+         {:ok, session} <- existing_session(session_id),
+         :ok <- cancel_last_run(session) do
+      put_session(session_id, Map.put(session, :cancelled_run_id, session.last_run_id))
       {:ok, %{}}
     end
   end
@@ -232,52 +227,439 @@ defmodule LemonControlPlane.ACP do
   def prompt(params, opts \\ [])
 
   def prompt(params, opts) when is_map(params) do
-    with {:ok, session_id} <- required_string(params, "sessionId"),
-         {:ok, session} <- existing_session(session_id),
-         {:ok, blocks} <- required_list(params, "prompt"),
-         {:ok, prompt} <- prompt_text(blocks),
-         {:ok, result} <- submit_prompt(session_id, session, params, prompt),
-         {:ok, result} <- maybe_wait(result, params, opts) do
-      {:ok, prompt_response(result)}
+    with {:ok, session_id} <- required_string(params, "sessionId") do
+      lock = {{__MODULE__, session_id}, self()}
+
+      if :global.set_lock(lock, [node()], 0) do
+        try do
+          with_prepared_run(opts, fn run_id, opts ->
+            with {:ok, session} <- open_session(session_id),
+                 {:ok, blocks} <- required_list(params, "prompt"),
+                 {:ok, prompt} <- prompt_text(blocks),
+                 {:ok, prompt} <- expand_skill_command(prompt, session),
+                 {:ok, result} <- submit_prompt(session_id, session, params, prompt, run_id),
+                 {:ok, result} <- maybe_wait(result, params, opts) do
+              {:ok, prompt_response(result)}
+            end
+          end)
+        after
+          :global.del_lock(lock, [node()])
+        end
+      else
+        {:error, -32_000, "session already has an active prompt"}
+      end
     end
   end
 
   def prompt(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
-  def session_update(session_id, %LemonCore.Event{} = event) when is_binary(session_id) do
-    case event.type do
-      :delta -> delta_update(session_id, event.payload)
-      :engine_action -> tool_update(session_id, event.payload)
-      :run_completed -> nil
-      _ -> nil
+  defp with_prepared_run(opts, callback) do
+    run_id = LemonCore.Id.run_id()
+
+    streaming? =
+      Keyword.has_key?(opts, :session_update_callback) or
+        Keyword.has_key?(opts, :client_request_callback)
+
+    topic = LemonCore.Bus.run_topic(run_id)
+
+    if streaming? do
+      :ok = LemonCore.Bus.subscribe(topic)
+      :ok = LemonCore.Bus.subscribe("exec_approvals")
+      :ok = LemonCore.ACPClientBridge.register(run_id)
+    end
+
+    try do
+      callback.(run_id, Keyword.put(opts, :prepared_run_id, run_id))
+    after
+      if streaming? do
+        LemonCore.ACPClientBridge.unregister(run_id)
+        LemonCore.Bus.unsubscribe(topic)
+        LemonCore.Bus.unsubscribe("exec_approvals")
+      end
     end
   end
 
-  def session_update(session_id, %{type: type, payload: payload}) when is_binary(session_id) do
-    session_update(session_id, LemonCore.Event.new(type, payload))
-  end
-
-  def session_update(_session_id, _event), do: nil
+  defp dispatch(_method, params, _opts) when not is_map(params),
+    do: {:error, -32_602, "params must be an object"}
 
   defp dispatch("initialize", params, _opts), do: initialize(params)
   defp dispatch("session/new", params, opts), do: new_session(params, opts)
-  defp dispatch("session/load", params, opts), do: resume_session(params, opts)
+
+  defp dispatch("session/load", params, opts),
+    do: resume_session(params, Keyword.put(opts, :replay, true))
+
   defp dispatch("session/resume", params, opts), do: resume_session(params, opts)
   defp dispatch("session/list", params, _opts), do: list_sessions(params)
   defp dispatch("session/close", params, _opts), do: close_session(params)
   defp dispatch("session/cancel", params, _opts), do: cancel_session(params)
   defp dispatch("session/prompt", params, opts), do: prompt(params, opts)
+  defp dispatch("session/fork", params, opts), do: fork_session(params, opts)
+
+  defp dispatch("session/set_mode", params, opts),
+    do: set_config(params, "mode", params["modeId"], opts)
+
+  defp dispatch("session/set_model", params, opts),
+    do: set_config(params, "model", params["modelId"], opts)
+
+  defp dispatch("session/set_config_option", params, opts),
+    do: set_config(params, params["configId"], params["value"], opts)
+
+  defp dispatch("authenticate", %{"methodId" => "agent"}, _opts), do: {:ok, %{}}
+
+  defp dispatch("authenticate", _params, _opts),
+    do: {:error, -32_602, "unknown authentication method"}
+
   defp dispatch(_method, _params, _opts), do: {:error, -32_601, "method not found"}
 
-  defp submit_prompt(session_id, session, params, prompt) do
+  defp required_cwd(params) do
+    with {:ok, cwd} <- required_string(params, "cwd") do
+      if Path.type(cwd) == :absolute,
+        do: {:ok, Path.expand(cwd)},
+        else: {:error, -32_602, "cwd must be an absolute path"}
+    end
+  end
+
+  defp validate_mcp_servers(params) do
+    case Map.get(params, "mcpServers", []) do
+      [] ->
+        :ok
+
+      servers when is_list(servers) ->
+        {:error, -32_602, "client MCP servers are not supported; configure MCP in Lemon"}
+
+      _ ->
+        {:error, -32_602, "mcpServers must be an array"}
+    end
+  end
+
+  defp parse_cursor(nil), do: {:ok, 0}
+
+  defp parse_cursor(cursor) when is_binary(cursor) do
+    case Integer.parse(cursor) do
+      {offset, ""} when offset >= 0 -> {:ok, offset}
+      _ -> {:error, -32_602, "invalid session cursor"}
+    end
+  end
+
+  defp parse_cursor(_), do: {:error, -32_602, "invalid session cursor"}
+
+  defp open_session(session_id) do
+    with {:ok, session} <- existing_session(session_id) do
+      if Map.get(session, :closed, false),
+        do: {:error, -32_602, "session is closed; load or resume it first"},
+        else: {:ok, session}
+    end
+  end
+
+  defp session_response(session) do
+    %{
+      "modes" => %{
+        "currentModeId" => Map.get(session, :mode, "default"),
+        "availableModes" => [
+          %{
+            "id" => "default",
+            "name" => "Code",
+            "description" => "Implement changes with approval controls."
+          },
+          %{
+            "id" => "plan",
+            "name" => "Plan",
+            "description" => "Read-only tools; no edits or execution."
+          }
+        ]
+      },
+      "configOptions" => config_options(session),
+      "_meta" => %{
+        "lemon" => %{
+          "sessionKey" => session.session_key,
+          "cwdHash" => short_hash(session.cwd),
+          "clientCapabilities" => client_capabilities_json(session_client_capabilities(session))
+        }
+      }
+    }
+  end
+
+  defp model_options do
+    LemonAi.Models.list_models(discover_openai: false)
+    |> Enum.map(fn model ->
+      %{
+        "value" => "#{model.provider}:#{model.id}",
+        "name" => "#{model.name || model.id} (#{model.provider})"
+      }
+    end)
+    |> Enum.uniq_by(& &1["value"])
+    |> Enum.sort_by(& &1["value"])
+  end
+
+  defp config_options(session) do
+    [
+      select_option("mode", "Mode", "mode", Map.get(session, :mode, "default"), [
+        %{"value" => "default", "name" => "Code"},
+        %{"value" => "plan", "name" => "Plan (read only)"}
+      ]),
+      select_option("model", "Model", "model", Map.get(session, :model) || "default", [
+        %{"value" => "default", "name" => "Lemon configured default"} | model_options()
+      ]),
+      select_option(
+        "thinking",
+        "Thinking",
+        "thought_level",
+        Map.get(session, :thinking, "off"),
+        Enum.map(
+          ~w(off minimal low medium high xhigh),
+          &%{"value" => &1, "name" => String.capitalize(&1)}
+        )
+      ),
+      select_option(
+        "approval",
+        "Tool approvals",
+        "other",
+        Map.get(session, :approval_mode, "ask"),
+        [
+          %{"value" => "ask", "name" => "Ask before changes"},
+          %{"value" => "never", "name" => "Reject changes"},
+          %{"value" => "auto", "name" => "Allow changes"}
+        ]
+      )
+    ]
+  end
+
+  defp select_option(id, name, category, current, options) do
+    %{
+      "id" => id,
+      "name" => name,
+      "category" => category,
+      "type" => "select",
+      "currentValue" => current,
+      "options" => options
+    }
+  end
+
+  defp set_config(params, id, value, opts) when is_map(params) do
+    with {:ok, session_id} <- required_string(params, "sessionId"),
+         {:ok, session} <- open_session(session_id),
+         {:ok, key, stored} <- config_value(id, value) do
+      session = Map.put(session, key, stored)
+      put_session(session_id, session)
+
+      if id == "mode",
+        do:
+          emit(
+            session_id,
+            %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
+            opts
+          )
+
+      options = config_options(session)
+
+      emit(
+        session_id,
+        %{"sessionUpdate" => "config_option_update", "configOptions" => options},
+        opts
+      )
+
+      {:ok, %{"configOptions" => options}}
+    end
+  end
+
+  defp config_value("mode", value) when value in ["default", "plan"], do: {:ok, :mode, value}
+
+  defp config_value("thinking", value) when value in ~w(off minimal low medium high xhigh),
+    do: {:ok, :thinking, value}
+
+  defp config_value("approval", value) when value in ["ask", "never", "auto"],
+    do: {:ok, :approval_mode, value}
+
+  defp config_value("model", "default"), do: {:ok, :model, nil}
+
+  defp config_value("model", value) when is_binary(value) do
+    if Enum.any?(model_options(), &(&1["value"] == value)),
+      do: {:ok, :model, value},
+      else: {:error, -32_602, "model is not in the Lemon model registry"}
+  end
+
+  defp config_value(_, _), do: {:error, -32_602, "invalid session configuration option or value"}
+
+  defp session_tool_policy(session) do
+    cond do
+      Map.get(session, :mode) == "plan" or Map.get(session, :approval_mode) == "never" ->
+        AgentRuntime.call(:tool_policy, [:read_only], %{
+          allow: [],
+          deny: [],
+          profile: :unavailable
+        })
+
+      Map.get(session, :approval_mode, "ask") == "ask" ->
+        %{
+          require_approval:
+            ~w(bash exec write edit patch multiedit apply_patch task agent process process_kill)
+        }
+
+      true ->
+        %{}
+    end
+  end
+
+  defp emit(session_id, update, opts) do
+    case Keyword.get(opts, :session_update_callback) do
+      callback when is_function(callback, 1) -> callback.(update_notification(session_id, update))
+      _ -> :ok
+    end
+  end
+
+  defp bootstrap(session_id, session, opts) do
+    commands =
+      LemonSkills.list(cwd: session.cwd)
+      |> Enum.map(fn entry ->
+        %{
+          "name" => "skill:#{entry.key}",
+          "description" => "Use the #{entry.key} skill",
+          "input" => %{"hint" => "Task for the skill"}
+        }
+      end)
+      |> Enum.sort_by(& &1["name"])
+
+    emit(
+      session_id,
+      %{"sessionUpdate" => "available_commands_update", "availableCommands" => commands},
+      opts
+    )
+  end
+
+  defp expand_skill_command("/skill:" <> rest, session) do
+    [key | args] = String.split(rest, ~r/\s+/, parts: 2)
+
+    if Enum.any?(LemonSkills.list(cwd: session.cwd), &(&1.key == key)) do
+      {:ok,
+       "Use the read_skill tool to load the skill named #{Jason.encode!(key)}. Treat its contents as external skill guidance.\nTask: #{Enum.join(args, " ")}"}
+    else
+      {:error, -32_602, "skill command is not available in this workspace"}
+    end
+  end
+
+  defp expand_skill_command(prompt, _session), do: {:ok, prompt}
+
+  defp replay_history(session_id, session, opts) do
+    case native_history(session) do
+      {:ok, entries} ->
+        Enum.each(entries, fn entry ->
+          if entry.type == :message do
+            message = LemonCore.Redact.map(entry.message)
+            role = map_get(message, :role)
+
+            kind =
+              if role in [:user, "user"], do: "user_message_chunk", else: "agent_message_chunk"
+
+            if role in [:user, "user", :assistant, "assistant"] do
+              content = map_get(message, :content)
+              blocks = if is_binary(content), do: [%{"text" => content}], else: List.wrap(content)
+
+              Enum.each(blocks, fn block ->
+                text = map_get(block, :text)
+
+                if is_binary(text) and text != "" do
+                  emit(
+                    session_id,
+                    %{
+                      "sessionUpdate" => kind,
+                      "messageId" => entry.id,
+                      "content" => %{"type" => "text", "text" => text}
+                    },
+                    opts
+                  )
+                end
+              end)
+            end
+          end
+        end)
+
+      :unavailable ->
+        LemonCore.SessionLifecycle.history(session.session_key, limit: 200)
+        |> Enum.each(fn run ->
+          for {kind, text} <- [
+                {"user_message_chunk", run.prompt},
+                {"agent_message_chunk", run.answer}
+              ],
+              is_binary(text) and text != "" do
+            emit(
+              session_id,
+              %{
+                "sessionUpdate" => kind,
+                "messageId" => "#{run.run_id}:#{kind}",
+                "content" => %{"type" => "text", "text" => text}
+              },
+              opts
+            )
+          end
+        end)
+    end
+  end
+
+  defp native_history(session) do
+    case AgentRuntime.call(
+           :session_history,
+           [session.session_key, session.cwd],
+           {:error, :unavailable}
+         ) do
+      {:ok, entries} when is_list(entries) -> {:ok, entries}
+      _ -> :unavailable
+    end
+  end
+
+  defp fork_session(params, opts) when is_map(params) do
+    with {:ok, source_id} <- required_string(params, "sessionId"),
+         {:ok, source} <- existing_session(source_id),
+         {:ok, cwd} <- required_cwd(params),
+         :ok <- validate_mcp_servers(params),
+         true <- cwd == source.cwd do
+      id = "acp_" <> LemonCore.Id.uuid()
+      key = "agent:#{source.agent_id}:acp-#{short_hash(id)}"
+
+      with :ok <- fork_native_session(source, key) do
+        session =
+          source
+          |> Map.merge(%{
+            session_key: key,
+            last_run_id: nil,
+            closed: false,
+            updated_at: DateTime.utc_now() |> DateTime.to_iso8601()
+          })
+
+        put_session(id, session)
+        bootstrap(id, session, opts)
+        {:ok, Map.put(session_response(session), "sessionId", id)}
+      end
+    else
+      false -> {:error, -32_602, "cwd must match the stored session"}
+      error -> error
+    end
+  end
+
+  defp fork_native_session(source, destination_key) do
+    if is_nil(source.last_run_id) and is_nil(LemonCore.ChatStateStore.get(source.session_key)) do
+      :ok
+    else
+      case AgentRuntime.call(
+             :session_fork,
+             [source.session_key, source.cwd, destination_key],
+             {:error, :unavailable}
+           ) do
+        :ok -> :ok
+        _ -> {:error, -32_000, "could not fork the persisted native session"}
+      end
+    end
+  end
+
+  defp submit_prompt(session_id, session, params, prompt, run_id) do
     queue_only? = lemon_meta(params, "wait") == false
-    model = lemon_meta(params, "model")
-    tool_policy = lemon_meta(params, "toolPolicy")
+    model = lemon_meta(params, "model") || Map.get(session, :model)
+    tool_policy = session_tool_policy(session)
     client_capabilities = session_client_capabilities(session)
     client_fs_capabilities = client_capabilities.fs
 
     request =
       RunRequest.new(%{
+        run_id: run_id,
         origin: :control_plane,
         session_key: session.session_key,
         agent_id: session.agent_id,
@@ -288,6 +670,7 @@ defmodule LemonControlPlane.ACP do
         tool_policy: tool_policy,
         meta: %{
           origin: :acp,
+          thinking_level: Map.get(session, :thinking, "off"),
           acp_session_id: session_id,
           acp_wait_requested: not queue_only?,
           acp_resource_link_count: resource_link_count(params["prompt"]),
@@ -300,7 +683,7 @@ defmodule LemonControlPlane.ACP do
       })
 
     case submitter().(request) do
-      {:ok, run_id} ->
+      {:ok, run_id} when is_binary(run_id) and byte_size(run_id) > 0 ->
         put_session(session_id, %{
           session
           | updated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -318,8 +701,11 @@ defmodule LemonControlPlane.ACP do
            wait?: not queue_only?
          }}
 
-      {:error, reason} ->
-        {:error, -32_000, "failed to submit Lemon run: #{inspect(reason)}"}
+      {:error, _reason} ->
+        {:error, -32_000, "failed to submit Lemon run"}
+
+      _ ->
+        {:error, -32_000, "run submission did not return a non-empty run ID"}
     end
   end
 
@@ -348,8 +734,8 @@ defmodule LemonControlPlane.ACP do
       {:error, :timeout} ->
         {:error, -32_001, "Run did not complete within timeout"}
 
-      {:error, reason} ->
-        {:error, -32_000, "failed to wait for Lemon run: #{inspect(reason)}"}
+      {:error, _reason} ->
+        {:error, -32_000, "failed to wait for Lemon run"}
     end
   end
 
@@ -357,11 +743,36 @@ defmodule LemonControlPlane.ACP do
 
   defp wait_with_updates(%{run_id: run_id} = result, params, opts) do
     topic = LemonCore.Bus.run_topic(run_id)
-    :ok = LemonCore.Bus.subscribe(topic)
-    :ok = LemonCore.Bus.subscribe("exec_approvals")
-    _ = LemonCore.ACPClientBridge.register(run_id)
+    prepared? = Keyword.get(opts, :prepared_run_id) == run_id
+
+    unless prepared? do
+      :ok = LemonCore.Bus.subscribe(topic)
+      :ok = LemonCore.ACPClientBridge.register(run_id)
+    end
+
     session_update_callback = Keyword.get(opts, :session_update_callback)
     client_request_callback = Keyword.get(opts, :client_request_callback)
+    session = get_session(result.session_id)
+
+    result =
+      Map.put(
+        result,
+        :mapper_state,
+        LemonControlPlane.ACP.SessionUpdates.new(result.session_id, cwd: session.cwd)
+      )
+
+    result =
+      Enum.reduce(LemonCore.ExecApprovalStore.list_pending(), result, fn {_id, pending}, acc ->
+        maybe_perform_approval_request(acc, %{pending: pending}, client_request_callback)
+      end)
+
+    case LemonCore.RunStore.get(run_id) do
+      %{summary: %{completed: completed}} when not is_nil(completed) ->
+        send(self(), LemonCore.Event.new(:run_completed, %{completed: completed}))
+
+      _ ->
+        :ok
+    end
 
     try do
       update_wait_loop(
@@ -371,9 +782,10 @@ defmodule LemonControlPlane.ACP do
         deadline_ms(wait_timeout_ms(params))
       )
     after
-      LemonCore.ACPClientBridge.unregister(run_id)
-      LemonCore.Bus.unsubscribe(topic)
-      LemonCore.Bus.unsubscribe("exec_approvals")
+      unless prepared? do
+        LemonCore.ACPClientBridge.unregister(run_id)
+        LemonCore.Bus.unsubscribe(topic)
+      end
     end
   end
 
@@ -384,7 +796,8 @@ defmodule LemonControlPlane.ACP do
 
       timeout_ms ->
         receive do
-          %LemonCore.Event{type: :run_completed, payload: payload} ->
+          %LemonCore.Event{type: :run_completed, payload: payload} = event ->
+            result = emit_run_updates(result, event, session_update_callback)
             {:ok, complete_streamed_result(result, payload)}
 
           {:acp_client_request, payload} ->
@@ -408,7 +821,7 @@ defmodule LemonControlPlane.ACP do
             )
 
           %LemonCore.Event{} = event ->
-            maybe_emit_update(result.session_id, event, session_update_callback)
+            result = emit_run_updates(result, event, session_update_callback)
 
             update_wait_loop(
               result,
@@ -417,7 +830,8 @@ defmodule LemonControlPlane.ACP do
               deadline_ms
             )
 
-          %{type: :run_completed, payload: payload} ->
+          %{type: :run_completed, payload: payload} = event ->
+            result = emit_run_updates(result, event, session_update_callback)
             {:ok, complete_streamed_result(result, payload)}
 
           %{type: :approval_requested, payload: payload} ->
@@ -431,7 +845,7 @@ defmodule LemonControlPlane.ACP do
             )
 
           %{type: _type} = event ->
-            maybe_emit_update(result.session_id, event, session_update_callback)
+            result = emit_run_updates(result, event, session_update_callback)
 
             update_wait_loop(
               result,
@@ -459,7 +873,11 @@ defmodule LemonControlPlane.ACP do
   defp maybe_perform_approval_request(result, payload, callback) do
     pending = payload |> map_get(:pending) |> ensure_map()
 
-    if map_get(pending, :session_key) == result.session_key do
+    approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
+
+    if map_get(pending, :session_key) == result.session_key and
+         map_get(pending, :run_id) == result.run_id and is_binary(approval_id) and
+         not is_nil(LemonCore.ExecApprovalStore.get_pending(approval_id)) do
       perform_approval_request(result, pending, callback)
     else
       result
@@ -484,18 +902,18 @@ defmodule LemonControlPlane.ACP do
       })
 
     summary =
-      case callback.(request) do
+      case safe_client_request(callback, request) do
         {:ok, response} ->
           resolve_approval_from_response(approval_id, response)
           summarize_client_response("session/request_permission", response)
 
-        {:error, reason} ->
+        {:error, _reason} ->
           deny_if_pending(approval_id)
 
           %{
             "method" => "session/request_permission",
             "status" => "failed",
-            "reason" => inspect(reason)
+            "reason" => "client permission request failed"
           }
 
         response ->
@@ -553,8 +971,6 @@ defmodule LemonControlPlane.ACP do
       case {Map.get(outcome, "outcome"), Map.get(outcome, "optionId")} do
         {"selected", "allow-once"} -> :approve_once
         {"selected", "allow-session"} -> :approve_session
-        {"selected", "allow-agent"} -> :approve_agent
-        {"selected", "allow-global"} -> :approve_global
         _ -> :deny
       end
 
@@ -567,6 +983,14 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp resolve_approval_from_response(_approval_id, _response), do: :ok
+
+  defp safe_client_request(callback, request) do
+    callback.(request)
+  rescue
+    _ -> {:error, :client_request_failed}
+  catch
+    _, _ -> {:error, :client_request_failed}
+  end
 
   defp perform_client_request(result, _payload, callback) when not is_function(callback, 1) do
     add_client_request_result(result, %{
@@ -582,18 +1006,18 @@ defmodule LemonControlPlane.ACP do
     request = client_request(method, Map.put_new(params, "sessionId", result.session_id))
 
     {summary, response} =
-      case callback.(request) do
+      case safe_client_request(callback, request) do
         {:ok, response} ->
           {summarize_client_response(method, response), response}
 
-        {:error, reason} ->
+        {:error, _reason} ->
           summary = %{
             "method" => method || "unknown",
             "status" => "failed",
-            "reason" => inspect(reason)
+            "reason" => "client request failed"
           }
 
-          {summary, %{"error" => %{"message" => inspect(reason)}}}
+          {summary, %{"error" => %{"message" => "client request failed"}}}
 
         response ->
           {summarize_client_response(method, response), response}
@@ -687,12 +1111,10 @@ defmodule LemonControlPlane.ACP do
     |> Map.new()
   end
 
-  defp maybe_emit_update(session_id, event, callback) do
-    case session_update(session_id, event) do
-      nil -> :ok
-      update when is_function(callback, 1) -> callback.(update)
-      _update -> :ok
-    end
+  defp emit_run_updates(result, event, callback) do
+    {updates, state} = LemonControlPlane.ACP.SessionUpdates.map_event(result.mapper_state, event)
+    if is_function(callback, 1), do: Enum.each(updates, callback)
+    Map.put(result, :mapper_state, state)
   end
 
   defp complete_streamed_result(result, payload) do
@@ -735,37 +1157,6 @@ defmodule LemonControlPlane.ACP do
     }
   end
 
-  defp delta_update(session_id, payload) do
-    text = map_get(payload, :text)
-
-    if is_binary(text) and text != "" do
-      update_notification(session_id, %{
-        "sessionUpdate" => "agent_message_chunk",
-        "content" => %{"type" => "text", "text" => text}
-      })
-    end
-  end
-
-  defp tool_update(session_id, payload) do
-    action = map_get(payload, :action) || %{}
-    tool_call_id = map_get(action, :id) || "tool_#{short_hash(inspect(action))}"
-
-    update_notification(session_id, %{
-      "sessionUpdate" => "tool_call_update",
-      "toolCallId" => tool_call_id,
-      "title" => map_get(action, :title) || "Tool progress",
-      "kind" => acp_tool_kind(map_get(action, :kind)),
-      "status" => acp_tool_status(map_get(payload, :phase), map_get(payload, :ok)),
-      "content" => tool_update_content(payload),
-      "_meta" => %{
-        "lemon" => %{
-          "phase" => atom_to_string(map_get(payload, :phase)),
-          "ok" => map_get(payload, :ok)
-        }
-      }
-    })
-  end
-
   defp update_notification(session_id, update) do
     %{
       "jsonrpc" => "2.0",
@@ -775,16 +1166,6 @@ defmodule LemonControlPlane.ACP do
         "update" => update
       }
     }
-  end
-
-  defp tool_update_content(payload) do
-    case map_get(payload, :message) do
-      message when is_binary(message) and message != "" ->
-        [%{"type" => "content", "content" => %{"type" => "text", "text" => truncate(message)}}]
-
-      _ ->
-        nil
-    end
   end
 
   defp acp_tool_kind(kind) when kind in [:read, "read"], do: "read"
@@ -798,14 +1179,6 @@ defmodule LemonControlPlane.ACP do
   defp acp_tool_kind(kind) when kind in [:exec, "exec", :process, "process"], do: "execute"
   defp acp_tool_kind(kind) when kind in [:fetch, "fetch", :web, "web"], do: "fetch"
   defp acp_tool_kind(_kind), do: "other"
-
-  defp acp_tool_status(phase, false) when phase in [:completed, "completed"], do: "failed"
-  defp acp_tool_status(phase, _ok) when phase in [:completed, "completed"], do: "completed"
-
-  defp acp_tool_status(phase, _ok) when phase in [:started, "started", :running, "running"],
-    do: "in_progress"
-
-  defp acp_tool_status(_phase, _ok), do: "pending"
 
   defp prompt_text(blocks) do
     blocks
@@ -874,61 +1247,21 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp get_session(session_id) do
-    ensure_table(@session_table)
-
-    case :ets.lookup(@session_table, session_id) do
-      [{^session_id, session}] ->
-        session
-
-      [] ->
-        case Store.get(@session_store_table, session_id) do
-          session when is_map(session) ->
-            :ets.insert(@session_table, {session_id, session})
-            session
-
-          _ ->
-            nil
-        end
+    case Store.get(@session_store_table, session_id) do
+      session when is_map(session) -> session
+      _ -> nil
     end
   end
 
   defp put_session(session_id, session) do
-    ensure_table(@session_table)
-    :ets.insert(@session_table, {session_id, session})
-    Store.put(@session_store_table, session_id, session)
-    :ok
-  end
-
-  defp delete_session(session_id) do
-    ensure_table(@session_table)
-    :ets.delete(@session_table, session_id)
-    Store.delete(@session_store_table, session_id)
-    :ok
+    :ok = Store.put(@session_store_table, session_id, session)
   end
 
   defp all_sessions do
-    ensure_table(@session_table)
-
-    stored_sessions =
-      @session_store_table
-      |> Store.list()
-      |> Enum.filter(fn {session_id, session} -> is_binary(session_id) and is_map(session) end)
-
-    @session_table
-    |> :ets.tab2list()
-    |> Enum.concat(stored_sessions)
+    @session_store_table
+    |> Store.list()
+    |> Enum.filter(fn {session_id, session} -> is_binary(session_id) and is_map(session) end)
     |> Map.new()
-  end
-
-  defp ensure_table(table) do
-    case :ets.whereis(table) do
-      :undefined -> :ets.new(table, [:named_table, :public, read_concurrency: true])
-      tid -> tid
-    end
-
-    table
-  rescue
-    ArgumentError -> table
   end
 
   defp session_info(session_id, session) do
@@ -937,7 +1270,8 @@ defmodule LemonControlPlane.ACP do
     %{
       "sessionId" => session_id,
       "cwd" => session.cwd,
-      "title" => session.title,
+      "title" =>
+        if(is_binary(session.title), do: LemonCore.Redact.text(session.title), else: nil),
       "updatedAt" => session.updated_at,
       "_meta" => %{
         "lemon" => %{
@@ -950,13 +1284,15 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp cancel_last_run(%{last_run_id: run_id}) when is_binary(run_id) and run_id != "" do
-    canceller().(run_id, :acp_cancel)
+    case canceller().(run_id, :acp_cancel) do
+      :ok -> :ok
+      {:ok, _} -> :ok
+      {:error, :not_found} -> :ok
+      _ -> {:error, -32_000, "run cancellation was not acknowledged"}
+    end
   end
 
   defp cancel_last_run(_session), do: :ok
-
-  defp session_key_for(session_id, agent_id),
-    do: "agent:#{agent_id}:acp-#{short_hash(session_id)}"
 
   defp resource_link_count(blocks) when is_list(blocks),
     do: Enum.count(blocks, &(is_map(&1) and &1["type"] == "resource_link"))
@@ -1013,13 +1349,6 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp string_param(params, key, default) do
-    case Map.get(params, key) do
-      value when is_binary(value) and value != "" -> value
-      _ -> default
-    end
-  end
-
   defp wait_timeout_ms(params) do
     case lemon_meta(params, "timeoutMs") do
       value when is_integer(value) and value > 0 -> value
@@ -1031,8 +1360,15 @@ defmodule LemonControlPlane.ACP do
   defp wait_status(%{ok: false}), do: "failed"
   defp wait_status(_wait_result), do: "completed"
 
-  defp stop_reason(%{status: "failed"}), do: "refusal"
-  defp stop_reason(_result), do: "end_turn"
+  defp stop_reason(result) do
+    session = get_session(result.session_id) || %{}
+
+    cond do
+      Map.get(session, :cancelled_run_id) == result.run_id -> "cancelled"
+      result.status == "failed" -> "refusal"
+      true -> "end_turn"
+    end
+  end
 
   defp wait_ok(nil), do: nil
   defp wait_ok(%{"ok" => ok}), do: ok
@@ -1065,9 +1401,6 @@ defmodule LemonControlPlane.ACP do
 
   defp truthy?(true), do: true
   defp truthy?(_value), do: false
-
-  defp atom_to_string(value) when is_atom(value), do: Atom.to_string(value)
-  defp atom_to_string(value), do: value
 
   defp truncate(text, max \\ 240)
   defp truncate(text, max) when is_binary(text) and byte_size(text) <= max, do: text

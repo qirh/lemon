@@ -42,6 +42,15 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
 
+  @doc "Read the persisted native branch for replay, preserving fork ancestry."
+  @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
+
+  @doc "Fork persisted native context into an independent destination session key."
+  @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
+
+  @doc "Resolve the runtime's named tool policy; absence must fail closed."
+  @callback tool_policy(atom()) :: map()
+
   @doc "Starts an isolated durable background agent session."
   @callback background_start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
 
@@ -103,6 +112,9 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,
+                      session_history: 2,
+                      session_fork: 3,
+                      tool_policy: 1,
                       background_start: 2,
                       background_list: 1,
                       background_status: 1,
