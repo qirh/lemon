@@ -258,8 +258,10 @@ start_runtime() {
   local cmd=(mix run --no-start --no-halt --no-compile --no-deps-check -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
   local port
   for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
-    [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port > 0 && 10#$port <= 65535)) ||
-      { error "invalid port value: $port (expected 1-65535)"; exit 2; }
+    if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
+      error "invalid port value: $port (expected 1-65535)"
+      exit 2
+    fi
   done
   # Reuse guard before compiling or registering the Erlang node name: a
   # duplicate lemon@host registration would fail before the in-VM Boot guard.

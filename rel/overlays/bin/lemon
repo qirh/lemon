@@ -23,12 +23,12 @@ error() { printf '\033[0;31m[lemon]\033[0m %s\n' "$1" >&2; }
 
 SCRIPT_PATH="${BASH_SOURCE[0]}"
 while [ -L "$SCRIPT_PATH" ]; do
-  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
   SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
   [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
-SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 PROFILE=""
 for candidate in lemon_runtime_full lemon_runtime_min sim_broadcast_platform; do
@@ -119,6 +119,22 @@ control_plane_healthy() {
 }
 web_healthy() { [ "$(healthz "$WEB_PORT" | tr -d '[:space:]')" = "ok" ]; }
 
+prepare_runtime_credential() {
+  local status=0
+  if ! control_plane_healthy; then
+    ensure_managed_token
+    return
+  fi
+  [ -n "${LEMON_WS_TOKEN:-}" ] || load_managed_token || status=$?
+  [ "$status" -le 1 ] || return 1
+  [ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}${LEMON_WS_TOKEN:-}" ] || return 0
+  case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
+    1|true|TRUE|yes|YES) return 0 ;;
+  esac
+  error "healthy external runtime on port $PORT has no matching credential; set LEMON_CONTROL_PLANE_OPERATOR_TOKEN or use its managed HOME"
+  return 1
+}
+
 wait_until() {
   local attempt
   for ((attempt = 0; attempt < $2; attempt++)); do
@@ -160,6 +176,7 @@ setup_environment() {
 # The sim-only release bundles no lemon_cli; keep its few commands CLI-free.
 sim_command() {
   case "${1:-}" in
+    --version) exec "$RELEASE_BIN" eval 'IO.puts(LemonCore.Update.Version.describe())' ;;
     version) exec "$RELEASE_BIN" eval 'IO.puts(LemonCore.Update.Version.current())' ;;
     update) shift && exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@" ;;
     doctor)
@@ -193,9 +210,9 @@ start_daemon() {
     return 0
   fi
   ensure_managed_token || exit 1
-  "$RELEASE_BIN" daemon
+  release_command "$LEMON_ROOT" daemon
   for ((attempt = 0; attempt < 15; attempt++)); do
-    pid="$("$RELEASE_BIN" pid 2>/dev/null || true)"
+    pid="$(release_command "$LEMON_ROOT" pid 2>/dev/null || true)"
     [ -z "$pid" ] || break
     sleep 1
   done
@@ -212,14 +229,115 @@ start_daemon() {
   fi
 }
 
-# stop/restart prefer the root recorded at daemon time over this shim's root.
-running_release_bin() {
-  local recorded
-  recorded="$(cat "$ROOTFILE" 2>/dev/null || true)"
-  if [ -n "$recorded" ] && [ -x "$recorded/bin/$PROFILE" ]; then
-    RELEASE_BIN="$recorded/bin/$PROFILE"
+# An eval VM exports its own release selection into child processes. Never let
+# those generated paths make an update boot the old release through a new shim.
+release_command() (
+  local root="$1" variable value
+  shift
+  for variable in RELEASE_SYS_CONFIG RELEASE_VM_ARGS RELEASE_REMOTE_VM_ARGS RELEASE_TMP; do
+    value="${!variable:-}"
+    case "$value" in
+      "${RELEASE_ROOT:-$LEMON_ROOT}"/*|"$root"/*) unset "$variable" ;;
+    esac
+  done
+  unset RELEASE_ROOT RELEASE_VSN RELEASE_NAME RELEASE_PROG RELEASE_COMMAND RELEASE_MODE
+  unset RELEASE_BOOT_SCRIPT RELEASE_BOOT_SCRIPT_CLEAN
+  exec "$root/bin/$PROFILE" "$@"
+)
+
+daemon_identity() {
+  local digest
+  digest="$(printf '%s\n' "$1" "$2" "$3" "$PORT" | openssl dgst -sha256)"
+  printf '%s\n' "${digest##* }"
+}
+
+# Private update protocol: bind the live process to its recorded release and
+# control port. Single-line pid records require authenticated RPC confirmation.
+update_daemon_snapshot() {
+  local pid recorded born actual file
+  if [ ! -e "$PIDFILE" ]; then
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+      error "port $PORT is occupied without an owned daemon record; refusing to update its runtime"
+      return 1
+    fi
+    printf 'stopped\n'
+    return 0
   fi
-  [ -x "$RELEASE_BIN" ] || { error "no release binary found (looked for $RELEASE_BIN)"; exit 1; }
+  for file in "$PIDFILE" "$ROOTFILE"; do
+    if [ ! -f "$file" ] || [ -L "$file" ] || [ ! -O "$file" ]; then
+      error "unsafe or missing managed daemon record: $file"
+      return 1
+    fi
+  done
+  IFS= read -r pid < "$PIDFILE" || true
+  IFS= read -r recorded < "$ROOTFILE" || true
+  if [[ ! "$pid" =~ ^[0-9]+$ ]] || [ ! -x "$recorded/bin/$PROFILE" ]; then
+    error "invalid managed daemon identity; no process was signalled"
+    return 1
+  fi
+  recorded="$(cd "$recorded" && pwd -P)" || return
+  born="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  if [ -z "$born" ]; then
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+      error "stale daemon record with occupied port $PORT; no process was signalled"
+      return 1
+    fi
+    printf 'stopped\n'
+    return 0
+  fi
+  actual="$(release_command "$recorded" rpc 'IO.puts("#{System.pid()}:#{Application.get_env(:lemon_control_plane, :port)}")' 2>/dev/null)" || {
+    error "cannot authenticate the recorded daemon; no process was signalled"
+    return 1
+  }
+  if { [ "$PROFILE" != sim_broadcast_platform ] && [ "$actual" != "$pid:$PORT" ]; } ||
+     { [ "$PROFILE" = sim_broadcast_platform ] && [ "$actual" != "$pid:" ]; }; then
+    error "recorded PID/control port does not match the authenticated daemon; no process was signalled"
+    return 1
+  fi
+  daemon_identity "$pid" "$born" "$recorded"
+}
+
+stop_recorded_runtime() {
+  local root="$1" token="$2" pid born attempt
+  root="$(cd "$root" && pwd -P)" || return
+  IFS= read -r pid < "$PIDFILE"
+  born="$(ps -p "$pid" -o lstart= 2>/dev/null || true)"
+  if [ "$(daemon_identity "$pid" "$born" "$root")" != "$token" ]; then
+    error "daemon changed before stop; no process was signalled"
+    return 1
+  fi
+  release_command "$root" rpc \
+    "if System.pid() == \"$pid\", do: System.stop(), else: raise(\"daemon changed before stop\")" || return
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$born" ] || break
+    sleep 0.1
+  done
+  if [ "$(ps -p "$pid" -o lstart= 2>/dev/null || true)" = "$born" ]; then
+    error "daemon has not exited after stop; refusing to start another runtime"
+    return 1
+  fi
+  rm -f "$PIDFILE" "$ROOTFILE"
+}
+
+restart_updated_daemon() {
+  local token="$1" previous="$2" current recorded
+  previous="$(cd "$previous" && pwd -P)" || return
+  current="$(update_daemon_snapshot)" || return
+  IFS= read -r recorded < "$ROOTFILE" || true
+  recorded="$(cd "$recorded" && pwd -P)" || return
+  if [ "$current" = stopped ] || [ "$current" != "$token" ] || [ "$recorded" != "$previous" ]; then
+    error "daemon changed during update; no process was signalled"
+    return 1
+  fi
+  stop_recorded_runtime "$previous" "$token" || return
+  RELEASE_BIN="$LEMON_ROOT/bin/$PROFILE"
+  start_daemon || return
+  IFS= read -r recorded < "$ROOTFILE" || true
+  if [ "$recorded" != "$LEMON_ROOT" ]; then
+    error "another runtime won the restart; selected release was not started"
+    return 1
+  fi
+  info "restarted selected release at $LEMON_ROOT"
 }
 
 open_browser() {
@@ -241,6 +359,10 @@ open_browser() {
 }
 
 COMMAND="${1:-}"
+if [ -z "$COMMAND" ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+  error "No interactive terminal. Use 'lemon -p \"PROMPT\"' for CI, 'lemon daemon' to start a service, or 'lemon --help'."
+  exit 2
+fi
 if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
   # Custom ACP agents are not recognized by Tern's built-in --typed wrapper.
   if [ -n "${TERN_PANE:-}" ]; then
@@ -253,6 +375,19 @@ if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
 fi
 
 case "$COMMAND" in
+  --version|version) run_cli "$@" ;;
+  __update-daemon)
+    if [ -z "${RELEASE_COOKIE:-}" ] && [ -f "$LEMON_HOME_DIR/cookie" ]; then
+      IFS= read -r RELEASE_COOKIE < "$LEMON_HOME_DIR/cookie"
+      export RELEASE_COOKIE
+    fi
+    case "${2:-}:$#" in
+      snapshot:2) update_daemon_snapshot ;;
+      restart:4) restart_updated_daemon "$3" "$4" ;;
+      *) error "invalid internal update lifecycle request"; exit 2 ;;
+    esac
+    exit $?
+    ;;
   ""|-h|--help|help) run_cli "$@" ;;
   tui|web|start|daemon|stop|restart|status|remote|eval|rpc)
     case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
@@ -265,7 +400,7 @@ case "$COMMAND" in
   acp)
     shift
     case "${1:-}" in -h|--help) run_cli acp --help ;; esac
-    ensure_managed_token || exit 1
+    prepare_runtime_credential || exit 1
     if ! control_plane_healthy; then start_daemon >&2; fi
     run_cli acp "$@"
     ;;
@@ -330,15 +465,22 @@ case "$COMMAND" in
   daemon) start_daemon ;;
 
   stop)
-    running_release_bin
-    stop_status=0
-    "$RELEASE_BIN" stop || stop_status=$?
-    rm -f "$PIDFILE" "$ROOTFILE"
-    [ "$stop_status" -eq 0 ] || { error "stop exited with status $stop_status"; exit "$stop_status"; }
+    snapshot="$(update_daemon_snapshot)" || exit 1
+    [ "$snapshot" != stopped ] || { error "not running; no process was signalled"; exit 1; }
+    IFS= read -r recorded < "$ROOTFILE"
+    stop_recorded_runtime "$recorded" "$snapshot"
     info "stopped"
     ;;
 
-  restart) running_release_bin && exec "$RELEASE_BIN" restart ;;
+  restart)
+    snapshot="$(update_daemon_snapshot)" || exit 1
+    if [ "$snapshot" = stopped ]; then
+      start_daemon
+    else
+      IFS= read -r recorded < "$ROOTFILE"
+      restart_updated_daemon "$snapshot" "$recorded"
+    fi
+    ;;
 
   status)
     pid="$(cat "$PIDFILE" 2>/dev/null || true)"
@@ -357,7 +499,10 @@ case "$COMMAND" in
   remote|eval|rpc) exec "$RELEASE_BIN" "$@" ;;
 
   *)
-    ensure_managed_token || exit 1
+    case "$COMMAND" in
+      run|-p|--print) prepare_runtime_credential || exit 1 ;;
+      *) ensure_managed_token || exit 1 ;;
+    esac
     run_cli "$@"
     ;;
 esac
