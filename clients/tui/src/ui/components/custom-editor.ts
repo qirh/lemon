@@ -10,8 +10,8 @@
  *            with nothing running, twice in a row quits.
  *   Ctrl+D   quits on an empty draft, deletes forward otherwise.
  *   Ctrl+G   hands the draft to $EDITOR.
- *   Esc Esc  discards the draft — recoverable with ↑, because a discard the
- *            user did not mean is otherwise unrecoverable.
+ *   Esc      aborts the live run without discarding the draft; while idle,
+ *            Esc Esc discards the draft (recoverable with ↑).
  *   ↑ / ↓    recall sent prompts while the draft is empty.
  *   Alt+↵    cycle the submission mode for the next submission only.
  *
@@ -160,7 +160,7 @@ export class CustomEditor extends Editor {
 	}
 
 	#onCtrlC(): void {
-		const draft = this.getText();
+		const draft = this.getExpandedText();
 		if (draft.length > 0) {
 			// Not lost: a cleared draft is still recallable with ↑.
 			this.rememberDraft(draft);
@@ -185,9 +185,15 @@ export class CustomEditor extends Editor {
 	#onEscape(): boolean {
 		// An open autocomplete popup owns Escape.
 		if (this.isShowingAutocomplete()) return false;
+		// Interrupt is independent of the draft: an in-flight correction is
+		// valuable input, not something the user should clear just to stop a run.
+		if (this.#options.onAbort?.()) {
+			this.disarm();
+			return true;
+		}
 		const now = this.#now();
 		if (now - this.#escapeAt < ESC_DISCARD_MS && this.getText().length > 0) {
-			this.rememberDraft(this.getText());
+			this.rememberDraft(this.getExpandedText());
 			this.setText("");
 			this.#historyIndex = undefined;
 			this.#escapeAt = 0;
