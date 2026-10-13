@@ -22,6 +22,7 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | `LemonMemory.Lifecycle` | Bounded/redacted browse, provenance inspection, and exact revision-bound delete for operator clients |
 | `LemonMemory.SessionSearch` | Session-scoped conversation search API used by `recall` |
 | `LemonMemory.TaskFingerprint` | Stable fingerprints for recognising repeated work |
+| `LemonMemory.Doctor.Checks.Memory` | `lemon doctor` check of `session_search` against store health; registered via `config :lemon_core, :doctor_checks` |
 
 Explicit review/confirm workflows can use `LemonMemory.Store.put_sync/1` when
 they must not report success before SQLite accepts a document, or

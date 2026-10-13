@@ -28,6 +28,12 @@ where durable memory had been eight modules with no boundary of their own.
   `delete_document/1,2` prevent stale reviewers from overwriting rows and make
   their provenance-bearing records inspectable/removable. Also added
   `LemonMemory.Safety.redact/1` for a shared durable-boundary replacement pass.
+- `LemonMemory.Doctor.Checks.Memory`, the `memory.session_search` doctor
+  check, moved here from `lemon_core` (`LemonCore.Doctor.Checks.Memory`).
+  Register it with `config :lemon_core, :doctor_checks, [LemonMemory.Doctor.Checks.Memory]`;
+  it reads `LemonMemory.Store` directly instead of the `:doctor_runtime`
+  `:memory_store` key. `LemonMemory.Store.database_path/0` returns the SQLite
+  file the configured default store opens.
 
 - `LemonMemory.Store` — SQLite-backed document store with full-text search over
   an agent's past work. Queries are sanitised before they reach FTS5, so agent-

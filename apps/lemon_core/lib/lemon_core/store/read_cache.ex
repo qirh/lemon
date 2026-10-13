@@ -13,8 +13,8 @@ defmodule LemonCore.Store.ReadCache do
 
   This module maintains a set of public ETS tables that mirror the backing
   store for domains that receive heavy read traffic (runs, the session index,
-  chat state, progress mappings, and whatever tables collaborators register
-  through `register_cached_table/1`). Reads are served directly from ETS
+  chat state, and whatever tables collaborators register through
+  `LemonCore.Store.register_cached_table/2`). Reads are served directly from ETS
   without going through the Store GenServer, eliminating mailbox contention on
   the read path.
 
@@ -27,8 +27,8 @@ defmodule LemonCore.Store.ReadCache do
 
   - `:runs` — run records by run_id
 
-  Generic tables are added per store instance — `:sessions_index`, `:chat`,
-  and `:progress` by default, plus whatever owners register with
+  Generic tables are added per store instance — `:sessions_index` and `:chat`
+  by default, plus whatever owners register with
   `LemonCore.Store.register_cached_table/2`. The store does not know what
   those tables hold.
 

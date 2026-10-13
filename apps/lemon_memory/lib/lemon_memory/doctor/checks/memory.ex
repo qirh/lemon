@@ -1,4 +1,4 @@
-defmodule LemonCore.Doctor.Checks.Memory do
+defmodule LemonMemory.Doctor.Checks.Memory do
   @moduledoc """
   Checks the session_search feature state against durable memory store health.
 
@@ -13,18 +13,15 @@ defmodule LemonCore.Doctor.Checks.Memory do
   A standalone CLI may pass `external_runtime?: true` after probing a separate
   healthy runtime. If its local memory process is absent, this check reports
   remote memory health as unverified (`:skip`), not as stopped recording.
-  Missing modules and NIF failures remain warnings.
+  NIF failures remain warnings.
+
+  Registered with the `LemonCore.Doctor` framework via
+  `config :lemon_core, :doctor_checks, [__MODULE__]`.
   """
 
   alias LemonCore.Config.Features
   alias LemonCore.Config.Modular
   alias LemonCore.Doctor.Check
-  alias LemonCore.Doctor.RuntimeModules
-
-  # lemon_memory depends on lemon_core, so the store module is looked up via
-  # the :doctor_runtime registry (see RuntimeModules) and only called through
-  # apply/3. The optional exqlite NIF is probed by name.
-  @sqlite_module Exqlite.Sqlite3
 
   @kill_switch_hint "To turn durable memory off entirely, set LEMON_FEATURE_SESSION_SEARCH=off (or `[features] session_search = \"off\"` in config.toml)."
 
@@ -73,26 +70,17 @@ defmodule LemonCore.Doctor.Checks.Memory do
   # ── Store status ───────────────────────────────────────────────────────────
 
   defp store_status(opts) do
-    store = Keyword.get_lazy(opts, :store_module, fn -> RuntimeModules.fetch(:memory_store) end)
+    store = Keyword.get(opts, :store_module, LemonMemory.Store)
 
     cond do
-      not exqlite_loaded?(opts) ->
-        {:unavailable, :exqlite_not_loaded}
-
-      is_nil(store) or
-          not (Code.ensure_loaded?(store) and function_exported?(store, :stats, 0)) ->
-        {:unavailable, :store_module_missing}
-
-      not store_process_alive?(store) ->
-        {:unavailable, :store_not_running}
-
-      true ->
-        {:ok, apply(store, :stats, [])}
+      not exqlite_loaded?(opts) -> {:unavailable, :exqlite_not_loaded}
+      not store_process_alive?(store) -> {:unavailable, :store_not_running}
+      true -> {:ok, store.stats()}
     end
   end
 
   defp exqlite_loaded?(opts) do
-    Keyword.get_lazy(opts, :exqlite_loaded, fn -> Code.ensure_loaded?(@sqlite_module) end)
+    Keyword.get_lazy(opts, :exqlite_loaded, fn -> Code.ensure_loaded?(Exqlite.Sqlite3) end)
   end
 
   defp store_process_alive?(store) do
@@ -117,37 +105,12 @@ defmodule LemonCore.Doctor.Checks.Memory do
   end
 
   defp db_size_part(opts) do
-    path = Keyword.get_lazy(opts, :store_path, &default_store_path/0)
+    path = Keyword.get_lazy(opts, :store_path, &LemonMemory.Store.database_path/0)
 
     case File.stat(path) do
       {:ok, %File.Stat{size: size}} -> "db #{format_bytes(size)}"
       {:error, _} -> nil
     end
-  end
-
-  # Mirrors the memory store's path resolution: an explicit store path wins,
-  # otherwise memory.sqlite3 lands next to the main store's data.
-  defp default_store_path do
-    raw = configured_store_dir() || fallback_store_dir()
-    Path.join(LemonCore.Paths.store_dir(raw), "memory.sqlite3")
-  end
-
-  defp configured_store_dir do
-    case RuntimeModules.fetch(:memory_store) do
-      nil ->
-        nil
-
-      store ->
-        :lemon_memory
-        |> Application.get_env(store, [])
-        |> Keyword.get(:path)
-    end
-  end
-
-  defp fallback_store_dir do
-    Application.get_env(:lemon_core, LemonCore.Store, [])
-    |> Keyword.get(:backend_opts, [])
-    |> Keyword.get(:path, "~/.lemon/store")
   end
 
   defp last_ingest_part(newest_ms) when is_integer(newest_ms) do
@@ -158,16 +121,11 @@ defmodule LemonCore.Doctor.Checks.Memory do
   defp last_ingest_part(_), do: "no runs ingested yet"
 
   defp reason_text(:exqlite_not_loaded), do: "the exqlite SQLite NIF is not loaded"
-  defp reason_text(:store_module_missing), do: "the lemon_memory store module is not loaded"
   defp reason_text(:store_not_running), do: "the memory store process is not running"
 
   defp remediation(:exqlite_not_loaded) do
     "Ensure the :exqlite dependency compiles and its NIF loads in this build. " <>
       @kill_switch_hint
-  end
-
-  defp remediation(:store_module_missing) do
-    "Include the :lemon_memory application in this release. " <> @kill_switch_hint
   end
 
   defp remediation(:store_not_running) do

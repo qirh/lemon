@@ -120,6 +120,10 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 aggregate usage diagnostics and warns when configured run, token, or cost
 limits are exceeded.
 
+Checks for domains owned by other apps live in those apps and register through
+`config :lemon_core, :doctor_checks` (memory: `LemonMemory.Doctor.Checks.Memory`;
+skills: `LemonSkills.Doctor.Checks.Skills`; channels and automation likewise).
+
 ### Secrets
 
 | Module | Purpose |
@@ -155,7 +159,6 @@ truncating so partial credentials cannot escape.
 | `LemonCore.Store` | Generic table GenServer with pluggable backends plus the serialized run lifecycle (append/finalize) |
 | `LemonCore.RunStore` | Typed run lifecycle/history wrapper over `:runs` and `:sessions_index`; finalization is synchronous and retry-safe |
 | `LemonCore.ChatStateStore` | Per-scope chat state in `:chat` with a 24h expiry |
-| `LemonCore.ProgressStore` | Progress-message → run id mapping in `:progress` |
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
@@ -468,7 +471,6 @@ Shared-domain callers should prefer typed wrappers:
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
-- **Progress mapping**: `LemonCore.ProgressStore.put/3`, `get_run/2`, `delete/2`
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
@@ -735,7 +737,7 @@ config :lemon_core, :paths,
 
 Renaming `:state_dir` moves everything derived from it: both config files, the
 config reloader's watched paths, the default run-history store directory, and the
-doctor's skills and extension directories. Two locations
+doctor's extension directory. Two locations
 are configured separately because they are not part of that layout: the secrets
 master key (`config :lemon_core, LemonCore.Secrets, key_file: ...`) and the
 store backend path (`config :lemon_core, LemonCore.Store, backend_opts: [path: ...]`).

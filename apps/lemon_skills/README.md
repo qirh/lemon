@@ -112,6 +112,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Audit.Engine` | `lib/lemon_skills/audit/engine.ex` | Static security audit and verdict aggregation |
 | `LemonSkills.Audit.LlmReviewer` | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed review for suspicious or malicious skill content |
 | `LemonSkills.Config` | `lib/lemon_skills/config.ex` | Directory paths, config load/save, ancestor `.agents/skills` discovery, git root detection |
+| `LemonSkills.Doctor.Checks.Skills` | `lib/lemon_skills/doctor/checks/skills.ex` | `lemon doctor` check for the global skills directory, registered via `config :lemon_core, :doctor_checks` |
 | `LemonSkills.BuiltinSeeder` | `lib/lemon_skills/builtin_seeder.ex` | Copies bundled skills from priv/ to user config dir on startup |
 | `LemonSkills.Discovery` | `lib/lemon_skills/discovery.ex` | Online skill discovery from GitHub (topic search) and registry URL probing |
 | `LemonSkills.HttpClient` | `lib/lemon_skills/http_client.ex` | HTTP client behaviour for dependency injection |

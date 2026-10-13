@@ -1,21 +1,24 @@
-defmodule LemonCore.Doctor.Checks.Skills do
-  @moduledoc "Checks skill store integrity and directory layout."
+defmodule LemonSkills.Doctor.Checks.Skills do
+  @moduledoc """
+  Checks the global skills directory (`LemonSkills.Config.global_skills_dir/0`).
+
+  Registered with the `LemonCore.Doctor` framework via
+  `config :lemon_core, :doctor_checks, [__MODULE__]`.
+  """
 
   alias LemonCore.Doctor.Check
 
   @doc """
-  Returns a list of Check results covering the local skills store.
+  Returns a list of Check results covering the global skills directory.
   """
   @spec run(keyword()) :: [Check.t()]
   def run(_opts \\ []) do
     [
-      check_skills_dir()
+      check_skills_dir(LemonSkills.Config.global_skills_dir())
     ]
   end
 
-  defp check_skills_dir do
-    path = LemonCore.Paths.home_path("skills")
-
+  defp check_skills_dir(path) do
     cond do
       not File.exists?(path) ->
         Check.skip(

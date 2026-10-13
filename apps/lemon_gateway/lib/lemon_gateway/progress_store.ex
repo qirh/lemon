@@ -1,13 +1,20 @@
-defmodule LemonCore.ProgressStore do
+defmodule LemonGateway.ProgressStore do
   @moduledoc """
   Progress-message to run mapping, keyed by `{scope, progress_msg_id}` in the
-  `:progress` table. `:progress` is in the store's default read-cache set, so
-  lookups are served from ETS without a store round trip.
+  generic `:progress` store table.
+
+  Gateway registers the table with `LemonCore.Store.register_cached_table/2`
+  at boot, so lookups are served from the store's read cache without a store
+  round trip.
   """
 
   alias LemonCore.Store
 
   @table :progress
+
+  @doc "The generic store table backing progress mappings."
+  @spec table() :: atom()
+  def table, do: @table
 
   @spec put(Store.server(), term(), integer() | binary(), binary()) :: :ok | {:error, term()}
   def put(server \\ Store, scope, progress_msg_id, run_id),

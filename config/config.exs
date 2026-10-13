@@ -60,7 +60,6 @@ config :lemon_core, :workspace_diagnostics,
 # See LemonCore.Doctor.RuntimeModules.
 config :lemon_core, :doctor_runtime,
   memory_providers: LemonMemory.Providers,
-  memory_store: LemonMemory.Store,
   media_jobs: LemonMedia.MediaJobs,
   media_supervisor: LemonMedia.MediaJobSupervisor,
   browser_artifacts: LemonBrowser.Artifacts,
@@ -71,6 +70,8 @@ config :lemon_core, :doctor_runtime,
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
 config :lemon_core, :doctor_checks, [
+  LemonMemory.Doctor.Checks.Memory,
+  LemonSkills.Doctor.Checks.Skills,
   LemonAutomation.Doctor.Checks.Synthesis,
   LemonChannels.Doctor.Checks.Channels
 ]

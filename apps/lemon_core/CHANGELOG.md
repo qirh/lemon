@@ -33,10 +33,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 - `LemonCore.Store`'s domain functions: `put/get/delete_chat_state`, the
   agent/channel/session/runtime `*_policy` functions, and
   `put/delete_progress_mapping` / `get_run_by_progress`. Use
-  `LemonCore.ChatStateStore`, `LemonCore.PolicyStore`, and
-  `LemonCore.ProgressStore`, which now sit on the generic table API. The
-  `:chat_state_ttl_ms` store option is gone; chat state always expires after
-  24 hours.
+  `LemonCore.ChatStateStore` and `LemonCore.PolicyStore`, which now sit on the
+  generic table API; the progress mapping moved to its only consumer (see
+  below). The `:chat_state_ttl_ms` store option is gone; chat state always
+  expires after 24 hours.
 - `LemonCore.Quality.RatchetCheck`, `ArchitectureRulesCheck`,
   `StoreTableOwnershipCheck`, `DocsCatalog`, and `Cleanup`, plus the
   `mix lemon.ratchet` and `mix lemon.cleanup` tasks. `mix lemon.quality` now
@@ -201,6 +201,19 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   `lemon_agent` as `LemonAgent.Workspace.*`.
 - `LemonCore.ProviderPoolRotator` and `ProviderConfigResolver` — moved to their
   single consumers (`coding_agent` and `lemon_agent` respectively).
+- `LemonCore.ProgressStore` — moved to its only consumer, the (unpublished)
+  `lemon_gateway` app, as `LemonGateway.ProgressStore`. `:progress` is no
+  longer in `LemonCore.Store`'s default cached tables; gateway registers it
+  with `register_cached_table/2` at boot, like any other owner's hot index.
+- `LemonCore.Doctor.Checks.Memory` and `LemonCore.Doctor.Checks.Skills` are no
+  longer built-in checks. They moved to `lemon_memory`
+  (`LemonMemory.Doctor.Checks.Memory`) and `lemon_skills`
+  (`LemonSkills.Doctor.Checks.Skills`) and register through
+  `config :lemon_core, :doctor_checks`; the `:memory_store` key of
+  `:doctor_runtime` is no longer read. The remaining core-resident stores,
+  `ConfigReloader` and doctor diagnostics stay because a consumer outside their
+  target app (or core itself) still uses them; `docs/platform-split.md`
+  ("Known gaps") lists the blocking consumer for each.
 - Weak raw master keys are rejected with `:weak_master_key` rather than being
   silently stretched; `allow_legacy_raw_keys: true` is the deprecation escape
   hatch. Stretching would have quietly broken existing ciphertexts.

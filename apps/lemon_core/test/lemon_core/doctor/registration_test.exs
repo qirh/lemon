@@ -37,11 +37,11 @@ defmodule LemonCore.Doctor.RegistrationTest do
 
   describe "check registration" do
     test "built-ins stand on their own, independent of registrations" do
-      # The umbrella registers LemonAutomation.Doctor.Checks.Synthesis and
-      # LemonChannels.Doctor.Checks.Channels in config/config.exs; running
-      # lemon_core on its own leaves those modules unloadable, so the
-      # registered list is empty there. Either way the registry only ever
-      # yields loadable modules and never duplicates a built-in.
+      # The umbrella registers the memory, skills, automation and channels
+      # checks in config/config.exs; running lemon_core on its own leaves
+      # those modules unloadable, so the registered list is empty there.
+      # Either way the registry only ever yields loadable modules and never
+      # duplicates a built-in.
       registered = Doctor.registered_checks()
       assert Enum.all?(registered, &Code.ensure_loaded?/1)
       assert registered -- Doctor.builtin_checks() == registered

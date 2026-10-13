@@ -9,7 +9,7 @@ defmodule LemonCore.StoreInstanceTest do
   import ExUnit.CaptureLog
 
   alias Exqlite.Sqlite3
-  alias LemonCore.{ChatStateStore, ProgressStore, Store}
+  alias LemonCore.{ChatStateStore, Store}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
   alias LemonCore.Store.SqliteBackend
@@ -101,13 +101,7 @@ defmodule LemonCore.StoreInstanceTest do
       assert ChatStateStore.get(alpha, scope) == nil
     end
 
-    test "progress mappings and runs are isolated", %{alpha: alpha, beta: beta} do
-      scope = {:store_instance_test, :progress}
-
-      assert :ok = ProgressStore.put(alpha, scope, 42, "run_alpha")
-      assert ProgressStore.get_run(alpha, scope, 42) == "run_alpha"
-      assert ProgressStore.get_run(beta, scope, 42) == nil
-
+    test "runs are isolated", %{alpha: alpha, beta: beta} do
       assert :ok = Store.append_run_event(alpha, "run_alpha", %{type: :started})
       # Casts are async; wait for the write to land in the backend.
       assert :ok = Store.ping(alpha)

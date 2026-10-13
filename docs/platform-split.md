@@ -92,12 +92,37 @@ tarballs so this class of break fails CI.
   not on Hex and has no `--hex` mode.
 - **`--channel` is checkout-only.** It depends on `lemon_channels`, which is not
   published; so does `PluginCase`.
-- **`lemon_core` is broader than a core.** Stores the plan meant to move out are
-  still there (`run_store`, `run_history_store`, `cwd`, `binding`,
-  `binding_resolver`, `gateway_config`, `project_binding_store`,
-  `config_reloader`, `usage_store`, `policy_store`, `progress_store`,
-  `exec_approval_store`), as is `doctor/`. Only the repo tooling (`quality/`,
-  `update/`, repo-only `mix lemon.*` tasks) is kept out of the tarball.
+- **`lemon_core` is still broader than a core.** The plan's store moves were
+  re-measured against real consumers; a module moves only when every non-test
+  consumer is the target app or already depends on it, with no new mix edge or
+  bridge. Moved: `ProgressStore` → `LemonGateway.ProgressStore` (gateway also
+  registers the `:progress` read cache), the memory doctor check →
+  `LemonMemory.Doctor.Checks.Memory`, and the skills doctor check →
+  `LemonSkills.Doctor.Checks.Skills` (both via `:doctor_checks`). Staying, with
+  the consumer that blocks each move:
+  - Router targets: `RunStore` (core `SessionLifecycle`/`SessionMetadataStore`,
+    gateway `Run`/`Scheduler`/`ThreadWorker`, channels Telegram transport,
+    `coding_agent` `SideQuery`/`ControlPlaneProvider`); `RunHistoryStore` (core
+    `RunStore.history/2` and its supervision child); `ChatState`/`ChatStateStore`
+    (core `SessionLifecycle`, channels Discord/Telegram transports,
+    `coding_agent` `ControlPlaneProvider`).
+  - Channels targets: `Binding`, `BindingResolver` and `GatewayConfig`
+    (`lemon_gateway`, which does not depend on channels); `Cwd` (`coding_agent`
+    `BackgroundRun`/`SideQuery`); `ProjectBindingStore` (core `BindingResolver`).
+  - Former "runtime platform repo" targets (gone under D18): `ConfigReloader`
+    (core-only, reloads core config; no other owner); `UsageStore` (read by
+    core `UsageDiagnostics`, which channels `PortableCommand` uses);
+    `PolicyStore` (`coding_agent` `SideQuery`, core `SessionLifecycle`; it is
+    also the canonical policy plane); `ExecApprovalStore` (core `ExecApprovals`
+    and `Events.ApprovalPending`).
+  - Doctor: the framework, the core-domain checks (config, secrets, runtime,
+    providers, usage, node tools) and the diagnostics core's `SupportBundle`
+    reads: `LspDiagnostics` (also `coding_agent` `Tools.LspDiagnostics`),
+    `CheckpointDiagnostics` (also channels), `CronDiagnostics`,
+    `ExtensionDiagnostics` and `ProviderDiagnostics`.
+
+  Only the repo tooling (`quality/`, `update/`, repo-only `mix lemon.*` tasks)
+  is kept out of the tarball.
 - **Elixir floor.** The packages declare `~> 1.15`; CI proves 1.19 and runs the
   1.15 leg as advisory.
 - **Gateway reaches into automation.** `LemonGateway.Tools.Cron` resolves
