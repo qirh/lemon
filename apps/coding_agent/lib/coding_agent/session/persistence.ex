@@ -103,10 +103,7 @@ defmodule CodingAgent.Session.Persistence do
   def save(state) do
     path =
       state.session_file ||
-        Path.join(
-          SessionManager.get_session_dir(state.cwd),
-          "#{state.session_manager.header.id}.jsonl"
-        )
+        SessionManager.session_file_path(state.cwd, state.session_manager.header.id)
 
     case SessionManager.save_to_file(path, state.session_manager) do
       :ok ->

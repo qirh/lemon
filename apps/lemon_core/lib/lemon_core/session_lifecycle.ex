@@ -159,6 +159,32 @@ defmodule LemonCore.SessionLifecycle do
     end)
   end
 
+  @doc "Resolve a fork source's agent from its canonical key or durable session index."
+  @spec fork_agent_id(String.t()) :: {:ok, String.t()} | {:error, atom()}
+  def fork_agent_id(session_key) when is_binary(session_key) do
+    case LemonCore.SessionKey.agent_id(session_key) do
+      agent_id when is_binary(agent_id) and agent_id != "" ->
+        {:ok, agent_id}
+
+      _ ->
+        case get(session_key) do
+          %{agent_id: agent_id} when is_binary(agent_id) and agent_id != "" ->
+            if LemonCore.SessionKey.valid?(LemonCore.SessionKey.main(agent_id)),
+              do: {:ok, agent_id},
+              else: {:error, :invalid_session_key}
+
+          _ ->
+            {:error, :session_not_found}
+        end
+    end
+  rescue
+    _ -> {:error, :session_store_unavailable}
+  catch
+    :exit, _ -> {:error, :session_store_unavailable}
+  end
+
+  def fork_agent_id(_), do: {:error, :invalid_session_key}
+
   @doc """
   Register a newly forked native session in canonical discovery and metadata.
 
@@ -167,8 +193,7 @@ defmodule LemonCore.SessionLifecycle do
   """
   @spec register_fork(String.t(), String.t()) :: :ok | {:error, term()}
   def register_fork(source_session_key, destination_session_key) do
-    with agent_id when is_binary(agent_id) and agent_id != "" <-
-           LemonCore.SessionKey.agent_id(source_session_key),
+    with {:ok, agent_id} <- fork_agent_id(source_session_key),
          true <- destination_session_key != source_session_key,
          true <- LemonCore.SessionKey.agent_id(destination_session_key) == agent_id,
          :ok <- RunStore.create_session_index(destination_session_key, agent_id, :control_plane),
@@ -218,10 +243,6 @@ defmodule LemonCore.SessionLifecycle do
     RunStore.history(session_key, limit: limit)
     |> Enum.map(fn {run_id, data} -> format_run(run_id, data, redact?) end)
     |> Enum.sort_by(&(&1.started_at_ms || 0), :asc)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
   end
 
   @doc "Build an always-redacted JSON or Markdown export with integrity metadata."

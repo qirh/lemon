@@ -193,7 +193,21 @@ defmodule LemonControlPlane.Methods.SessionDetail do
             |> Map.merge(routing_meta(session_key, nil))
           end
 
-        {:ok, meta}
+        lifecycle_meta =
+          case LemonCore.SessionLifecycle.get(session_key) do
+            nil ->
+              %{}
+
+            session ->
+              %{
+                "title" => session.title,
+                "pinned" => session.pinned,
+                "archived" => session.archived,
+                "metadataUpdatedAtMs" => session.metadata_updated_at_ms
+              }
+          end
+
+        {:ok, Map.merge(meta, lifecycle_meta)}
 
       {:error, _reason} ->
         {:error, :unavailable}
