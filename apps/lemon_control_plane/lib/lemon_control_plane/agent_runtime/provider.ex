@@ -63,6 +63,14 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @doc "Returns the tool policy for a named runtime mode."
   @callback tool_policy(atom()) :: map()
 
+  @doc """
+  Resolves a named persona for an internal runtime consumer.
+
+  Returns its system instructions, optional model/role, and enforced tool policy.
+  Instructions are private runtime data, not an operator status projection.
+  """
+  @callback resolve_subagent(Path.t(), String.t()) :: {:ok, map()} | {:error, atom()}
+
   @doc "Starts an isolated durable background agent session."
   @callback background_start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
 
@@ -129,6 +137,7 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       session_tree: 3,
                       session_rewind: 4,
                       tool_policy: 1,
+                      resolve_subagent: 2,
                       background_start: 2,
                       background_list: 1,
                       background_status: 1,
