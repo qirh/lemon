@@ -94,6 +94,17 @@ defmodule LemonCli.ControlPlaneClient do
   end
 
   @impl true
+  def handle_connect(_connection, state) do
+    {:ok, Map.put(state, :keepalive_timer, Process.send_after(self(), :keepalive, 30_000))}
+  end
+
+  @impl true
+  def handle_info(:keepalive, state) do
+    state = Map.put(state, :keepalive_timer, Process.send_after(self(), :keepalive, 30_000))
+    {:reply, :ping, state}
+  end
+
+  @impl true
   def handle_frame({:text, encoded}, state) do
     frame =
       case Jason.decode(encoded) do
@@ -107,6 +118,7 @@ defmodule LemonCli.ControlPlaneClient do
 
   @impl true
   def handle_disconnect(disconnect, state) do
+    if timer = Map.get(state, :keepalive_timer), do: Process.cancel_timer(timer)
     send(state.owner, {:lemon_cli_control_plane, state.ref, {:disconnected, disconnect}})
     {:ok, state}
   end

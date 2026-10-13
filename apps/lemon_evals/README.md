@@ -18,6 +18,45 @@ mix test apps/lemon_evals/test
 cd apps/lemon_evals && mix test --cover
 ```
 
+## Live agentic coding benchmark
+
+This separate, paid-model lane measures actual coding outcomes through the
+production `lemon -p --output json` client. It is never part of the fast lane:
+
+```bash
+LEMON_CONTROL_PLANE_PORT=4210 mix lemon.eval.coding \
+  --model openai-codex:gpt-5.5 \
+  --output /tmp/lemon-coding-benchmark.json
+```
+
+Configure credentials normally and reuse a healthy daemon, or let the standard
+launcher start it. The Mix task itself does not boot another router. `--lemon`
+selects an installed launcher; `--timeout` bounds each CLI invocation (default
+660 seconds, slightly longer than the client's ten-minute run deadline).
+
+Eight disposable git repositories exercise bug repair, multi-file refactoring,
+feature implementation with tests, reading and answering, bash debugging,
+targeted editing of a 12,000-entry file, repository-wide search/migration, and
+recovery after a failing tool. A verifier outside each repository checks real
+behavior, and applicable tasks must also pass their repository's unittest suite.
+The recovery task also requires at least one observed failed tool call, so simply
+skipping the requested failure cannot earn a pass.
+Runs explicitly allow requested tool approvals; use an isolated runtime and do
+not point this benchmark at a sensitive workspace.
+
+The command writes a JSON report and adjacent Markdown table containing task
+pass/fail, completed assistant turns, tokens, wall time, and failed tool calls.
+Missing runtime counters are `null`/`n/a`, never estimated from tool-call count.
+All tasks run even when one fails; any failure makes the command exit nonzero.
+The report contains no raw prompts, model output, credentials, or workspace paths.
+It measures one trial per task, not statistically significant model rankings.
+
+For local failure diagnosis only, `--failure-dir /tmp/lemon-bench-failures`
+retains private failure bundles with the task repo, verifier, and CLI/test
+stdout/stderr. These may contain sensitive model output; do not commit or upload
+them. Without that explicit flag, every temporary repository is removed.
+
+
 ## Retained evaluation reports
 
 Write a machine-readable artifact separately from diagnostic console output:
@@ -50,7 +89,8 @@ Only upload the `--output` file when sharing summary results.
 `--iterations` controls existing statistical checks. It does **not** repeat
 every live-model check as an independent trial. The report records contract
 results, not benchmark task-success rates, dollar costs, or a Hermes comparison.
-A production-path outcome suite and repeated paired trials remain separate work.
+The separate live coding lane above records single-trial production-path outcomes;
+statistically useful repeated paired trials remain separate work.
 
 The manually dispatched Live Eval workflow retains this allowlisted report for
 14 days with `if: always()`, including when checks fail. It warns when startup
