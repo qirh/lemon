@@ -4,16 +4,8 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
   import LemonAgent.Tools.AbortHelpers, only: [check_abort: 1]
 
   def run(executable, args, signal, opts \\ []) do
-    with :ok <- check_abort(signal) do
-      port =
-        Port.open({:spawn_executable, executable}, [
-          :binary,
-          :exit_status,
-          :stderr_to_stdout,
-          args: args,
-          env: [{~c"PYTHONIOENCODING", ~c"utf-8"}]
-        ])
-
+    with :ok <- check_abort(signal),
+         {:ok, port} <- open(executable, args) do
       try do
         collect(
           port,
@@ -24,11 +16,30 @@ defmodule CodingAgent.Tools.ReadFormatCommand do
           Keyword.get(opts, :max_bytes, 32 * 1024 * 1024)
         )
       after
-        if Port.info(port), do: Port.close(port)
+        close(port)
       end
     end
+  end
+
+  defp open(executable, args) do
+    {:ok,
+     Port.open({:spawn_executable, executable}, [
+       :binary,
+       :exit_status,
+       :stderr_to_stdout,
+       args: args,
+       env: [{~c"PYTHONIOENCODING", ~c"utf-8"}]
+     ])}
   rescue
     error -> {:error, "Cannot start document backend: #{Exception.message(error)}"}
+  end
+
+  # The command can exit between any liveness check and the close, and closing
+  # an already-closed port raises; either way the port is gone.
+  defp close(port) do
+    Port.close(port)
+  rescue
+    ArgumentError -> :ok
   end
 
   defp collect(port, chunks, size, signal, deadline, max_bytes) do

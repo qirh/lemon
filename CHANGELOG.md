@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Document reads (PDF and other converted formats) no longer report
+  "Cannot start document backend" when the converter exits while its port is
+  being closed; the real result or size/time-limit error is returned.
 
 ---
 
