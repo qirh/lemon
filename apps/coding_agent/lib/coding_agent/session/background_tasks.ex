@@ -32,10 +32,11 @@ defmodule CodingAgent.Session.BackgroundTasks do
 
     if length(message_entries) >= 2 do
       model = state.model
+      opts = CompactionManager.summary_options([], state)
 
       _ =
         CompactionManager.start_background_task(fn ->
-          case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, []) do
+          case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, opts) do
             {:ok, summary} ->
               send(session_pid, {:store_branch_summary, from_id, summary})
 
@@ -86,6 +87,7 @@ defmodule CodingAgent.Session.BackgroundTasks do
           {:ok, map()} | {:error, term(), map()}
   def summarize_branch(state, opts, callbacks) do
     branch_entries = SessionManager.get_branch(state.session_manager)
+    opts = CompactionManager.summary_options(opts, state)
 
     message_entries =
       Enum.filter(branch_entries, fn entry ->
