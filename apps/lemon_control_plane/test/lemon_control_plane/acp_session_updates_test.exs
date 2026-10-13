@@ -403,6 +403,100 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert byte_size(Jason.encode!(notification)) < 40_000
   end
 
+  test "multi-response costs add every component instead of replacing the previous response" do
+    merged =
+      CodingAgent.Session.Presentation.merge_usage(
+        %{
+          "cost" => %{"input" => 0.1, "output" => 0.2, "total" => 0.3, "cache_write_long" => 0.04}
+        },
+        %{
+          cost: %LemonAi.Types.Cost{
+            input: 0.3,
+            output: 0.4,
+            total: 0.7,
+            cache_read: 0.2,
+            cache_write: 0.1
+          }
+        }
+      )
+
+    assert_in_delta merged.cost.input, 0.4, 0.000001
+    assert_in_delta merged.cost.output, 0.6, 0.000001
+    assert_in_delta merged.cost.total, 1.0, 0.000001
+    assert merged.cost.cache_read == 0.2
+    assert merged.cost.cache_write == 0.1
+    assert merged.cost.cache_write_long == 0.04
+    refute Map.has_key?(merged, "cost")
+  end
+
+  test "plans preserve native priorities and canonical structured state" do
+    entries = [
+      %{content: "Urgent", status: "in_progress", priority: "high"},
+      %{content: "Later", status: "pending", priority: "low"}
+    ]
+
+    result = %{
+      details: %{todos: [%{content: "Filtered", status: "pending"}], plan: %{entries: entries}}
+    }
+
+    [_tool, notification] =
+      updates_for("session", {:tool_execution_end, "todo", "todo", result, false})
+
+    assert update(notification)["entries"] == [
+             %{"content" => "Urgent", "status" => "in_progress", "priority" => "high"},
+             %{"content" => "Later", "status" => "pending", "priority" => "low"}
+           ]
+
+    [_tool, notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "todo", "todo", %{details: %{todos: entries}}, false}
+      )
+
+    assert hd(update(notification)["entries"])["priority"] == "high"
+  end
+
+  test "oversized plan entries obey the rendered collection budget" do
+    entries =
+      Enum.map(1..100, fn _ -> %{content: String.duplicate("x", 4_000), status: "pending"} end)
+
+    [_tool, notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "todo", "todo", %{details: %{plan: %{entries: entries}}}, false}
+      )
+
+    assert length(update(notification)["entries"]) < 100
+    assert byte_size(Jason.encode!(update(notification)["entries"])) < 66_000
+  end
+
+  test "semantic cancellation emits no fabricated assistant error but real failures remain visible" do
+    state = SessionUpdates.new("session")
+    {[], cancelled} = SessionUpdates.map_event(state, {:cancel_requested})
+
+    {[], _state} =
+      SessionUpdates.map_event(cancelled, %{
+        type: :run_completed,
+        payload: %{ok: false, error: "acp_cancel"}
+      })
+
+    assert [] ==
+             updates_for("session", %{
+               type: :run_completed,
+               payload: %{ok: false, error: :acp_cancel}
+             })
+
+    [notice] =
+      updates_for("session", %{
+        type: :run_completed,
+        payload: %{ok: false, error: "Provider denied the request"}
+      })
+
+    assert update(notice)["sessionUpdate"] == "notice"
+    assert update(notice)["severity"] == "error"
+    assert update(notice)["description"] == "Provider denied the request"
+  end
+
   defp updates_for(session_id, event, opts \\ []) do
     {updates, _state} = SessionUpdates.map_event(SessionUpdates.new(session_id, opts), event)
     updates
