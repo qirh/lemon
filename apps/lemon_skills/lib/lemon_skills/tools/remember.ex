@@ -95,15 +95,18 @@ defmodule LemonSkills.Tools.Remember do
           "\"memory\" writes MEMORY.md (other personal long-term facts), " <>
           "\"project\" saves repository build commands, conventions, and decisions " <>
           "only for this project, profile, and agent. " <>
-          "Pass text to save it, text plus replaces to correct an existing note, " <>
-          "or replaces alone to delete one.",
+          "To add a new fact, pass text and omit replaces (or set it to null, never an empty string). " <>
+          "To correct or delete a project fact, first recall it with scope \"project\", then copy " <>
+          "its exact saved text into replaces. Pass text as well to correct it; omit or null text to delete.",
       label: "Remember",
       parameters: %{
         "type" => "object",
         "properties" => %{
           "text" => %{
-            "type" => "string",
-            "description" => "The fact to save, as one short self-contained sentence."
+            "type" => ["string", "null"],
+            "minLength" => 1,
+            "description" =>
+              "The fact to save, as one short self-contained sentence. Omit or null only when deleting."
           },
           "target" => %{
             "type" => "string",
@@ -113,9 +116,11 @@ defmodule LemonSkills.Tools.Remember do
                 "project: facts specific to this repository. Default memory."
           },
           "replaces" => %{
-            "type" => "string",
+            "type" => ["string", "null"],
+            "minLength" => 1,
             "description" =>
-              "Exact existing note or project fact: replaced by text, or deleted if text is omitted."
+              "Omit or null when adding. For correction/deletion, copy the exact existing saved " <>
+                "note or project fact, not a guessed summary. An empty string is invalid."
           }
         },
         "required" => []
@@ -191,6 +196,12 @@ defmodule LemonSkills.Tools.Remember do
         }
       }
     else
+      {:error, :not_found} ->
+        {:error,
+         "No existing project fact matched replaces; nothing was changed. " <>
+           "Use recall with scope \"project\" and relevant query keywords, then copy the exact " <>
+           "saved fact into replaces. To add a genuinely new fact instead, omit replaces or set it to null."}
+
       {:error, reason} when is_atom(reason) ->
         {:error, "Project memory refused: #{reason}"}
 
@@ -268,6 +279,11 @@ defmodule LemonSkills.Tools.Remember do
     cond do
       not is_binary(value) ->
         {:error, "#{key} must be a string"}
+
+      key == "replaces" and String.trim(value) == "" ->
+        {:error,
+         "replaces must be a non-empty string; to add a new fact, omit replaces or set it to null. " <>
+           "To correct or delete a fact, use its exact existing saved text."}
 
       String.trim(value) == "" ->
         {:error, "#{key} must be a non-empty string"}
