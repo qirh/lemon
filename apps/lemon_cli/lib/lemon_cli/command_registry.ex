@@ -64,6 +64,22 @@ defmodule LemonCli.CommandRegistry do
 
   @commands [
     %{
+      name: "acp",
+      summary: "Serve ACP over stdio using the local runtime",
+      usage: "lemon acp",
+      subcommands: [],
+      options: []
+    },
+    %{
+      name: "tern",
+      summary: "Register Lemon as a native Tern ACP agent",
+      usage: "lemon tern install [--config-dir PATH]",
+      subcommands: [%{name: "install", summary: "Merge Lemon into Tern's custom agents"}],
+      options: [
+        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
+      ]
+    },
+    %{
       name: "run",
       summary: "Run a prompt non-interactively (-p, --print)",
       usage: "lemon run [PROMPT] [--output text|json|stream-json] [options]",

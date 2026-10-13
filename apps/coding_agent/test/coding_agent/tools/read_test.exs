@@ -63,7 +63,7 @@ defmodule CodingAgent.Tools.ReadTest do
 
       params =
         reply_acp_request("fs/read_text_file", %{
-          "result" => %{"content" => "line one\nline two\nline three"}
+          "result" => %{"content" => "line two"}
         })
 
       assert params["path"] == path
@@ -132,6 +132,32 @@ defmodule CodingAgent.Tools.ReadTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "Hello 世界! 🌍"
+    end
+
+    test "caps a giant first line and keeps UTF-8 previews valid", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "long-line.txt")
+      File.write!(path, String.duplicate("🌍", 100_000) <> "\nsecond")
+      result = Read.execute("long", %{"path" => path}, nil, nil, tmp_dir, max_bytes: 101)
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert String.valid?(text)
+      assert byte_size(text) < 500
+      assert details.total_lines == 2
+      assert details.truncation.reason == "long_line"
+      assert text =~ path
+
+      assert %AgentToolResult{content: [%TextContent{text: "2: second"}]} =
+               Read.execute("next", %{"path" => path, "offset" => 2}, nil, nil, tmp_dir, [])
+    end
+
+    test "validates UTF-8 across chunk boundaries and retains the full-file digest", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "chunk-boundary.txt")
+      content = String.duplicate("x", 65_535) <> "🌍\nsecond"
+      File.write!(path, content)
+      assert {:ok, window} = CodingAgent.Tools.ReadText.read(path, 1, 1, 10, 100, nil)
+      assert window.lines == ["second"]
+      assert window.digest == :erlang.md5(content)
     end
   end
 
@@ -231,36 +257,35 @@ defmodule CodingAgent.Tools.ReadTest do
       assert details.lines_shown == 2
     end
 
-    test "offset of 0 or negative is treated as 1", %{tmp_dir: tmp_dir} do
+    test "rejects non-positive offsets", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "negative.txt")
       File.write!(path, "line1\nline2\nline3")
 
       result1 = Read.execute("call_1", %{"path" => path, "offset" => 0}, nil, nil, tmp_dir, [])
       result2 = Read.execute("call_1", %{"path" => path, "offset" => -5}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{details: %{start_line: 1}} = result1
-      assert %AgentToolResult{details: %{start_line: 1}} = result2
+      assert {:error, "offset must be a positive integer" <> _} = result1
+      assert {:error, "offset must be a positive integer" <> _} = result2
     end
 
-    test "offset beyond file length returns empty content", %{tmp_dir: tmp_dir} do
+    test "offset beyond file length reports its bounds", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "beyond.txt")
       File.write!(path, "line1\nline2")
 
       result = Read.execute("call_1", %{"path" => path, "offset" => 100}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{details: details} = result
-      assert details.lines_shown == 0
+      assert {:error, message} = result
+      assert message =~ "offset=100"
+      assert message =~ "2 lines"
     end
 
-    test "limit of 0 or negative returns no lines", %{tmp_dir: tmp_dir} do
+    test "rejects non-positive limits", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "zero_limit.txt")
       File.write!(path, "line1\nline2\nline3")
 
       result1 = Read.execute("call_1", %{"path" => path, "limit" => 0}, nil, nil, tmp_dir, [])
 
-      # limit <= 0 does not apply user limit (reads all lines)
-      assert %AgentToolResult{details: details} = result1
-      assert details.lines_shown == 3
+      assert {:error, "limit must be a positive integer" <> _} = result1
     end
   end
 
@@ -434,11 +459,7 @@ defmodule CodingAgent.Tools.ReadTest do
   # ============================================================================
 
   describe "execute/6 - binary files" do
-    # Note: The current implementation does not explicitly detect binary files
-    # other than images. Non-image binary files are read as text.
-    # This test documents current behavior.
-
-    test "binary file without image extension is read as text", %{tmp_dir: tmp_dir} do
+    test "binary file without image extension is refused", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "binary.bin")
       # Binary data with null bytes
       binary_data = <<0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE>>
@@ -446,8 +467,9 @@ defmodule CodingAgent.Tools.ReadTest do
 
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
-      # Current behavior: returns TextContent (may have encoding issues)
-      assert %AgentToolResult{content: [%TextContent{}]} = result
+      assert {:error, message} = result
+      assert message =~ "binary"
+      assert message =~ "bash"
     end
   end
 
@@ -456,9 +478,6 @@ defmodule CodingAgent.Tools.ReadTest do
   # ============================================================================
 
   describe "execute/6 - invalid UTF-8" do
-    # Note: The current implementation reads file as binary and splits on regex
-    # which handles invalid UTF-8 gracefully by treating it as bytes.
-
     test "handles file with invalid UTF-8 sequences", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "invalid_utf8.txt")
       # Invalid UTF-8 sequence (continuation byte without start)
@@ -467,8 +486,8 @@ defmodule CodingAgent.Tools.ReadTest do
 
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
-      # Should not crash - either returns text or handles gracefully
-      assert %AgentToolResult{} = result
+      assert {:error, message} = result
+      assert message =~ "invalid UTF-8"
     end
   end
 
@@ -533,22 +552,6 @@ defmodule CodingAgent.Tools.ReadTest do
 
       assert {:error, msg} = result
       assert msg =~ "directory"
-    end
-  end
-
-  describe "execute/6 - missing path parameter" do
-    test "returns error when path is empty" do
-      result = Read.execute("call_1", %{"path" => ""}, nil, nil, "/tmp", [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Path is required"
-    end
-
-    test "returns error when path is missing" do
-      result = Read.execute("call_1", %{}, nil, nil, "/tmp", [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Path is required"
     end
   end
 

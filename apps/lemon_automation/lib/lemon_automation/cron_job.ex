@@ -12,7 +12,7 @@ defmodule LemonAutomation.CronJob do
   - `:session_key` - Session key for prompt-job routing
   - `:prompt` - The prompt to send to the agent
   - `:command` - Optional operator-owned shell command for no-agent jobs
-  - `:cwd` - Optional command working directory
+  - `:cwd` - Optional target working directory for prompt or command jobs
   - `:env` - Optional command environment overrides
   - `:memory_file` - Optional markdown file used as persistent cross-run memory
   - `:deliver_to` - Where the completed run's result is sent (see

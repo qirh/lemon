@@ -2,7 +2,8 @@ defmodule LemonControlPlane.Methods.ChatSend do
   @moduledoc """
   Handler for the chat.send method.
 
-  Sends a message to a session.
+  Sends a message to a session. An optional `cwd` must be an absolute existing
+  directory. Canonical profile sessions do not accept caller workspace overrides.
   """
 
   @behaviour LemonControlPlane.Method
@@ -14,11 +15,12 @@ defmodule LemonControlPlane.Methods.ChatSend do
   def scopes, do: [:write]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     session_key = params["sessionKey"]
     prompt = params["prompt"] || params["message"]
     agent_id = params["agentId"]
     queue_mode = parse_queue_mode(params["queueMode"])
+    router_mod = Map.get(ctx, :router_mod, LemonRouter)
 
     cond do
       is_nil(session_key) ->
@@ -26,6 +28,12 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
       is_nil(prompt) ->
         {:error, {:invalid_request, "prompt is required", nil}}
+
+      Map.has_key?(params, "cwd") and not valid_cwd?(params["cwd"]) ->
+        {:error, {:invalid_request, "cwd must be a nonempty absolute existing directory", nil}}
+
+      Map.has_key?(params, "cwd") and profile_session?(session_key) ->
+        {:error, {:invalid_request, "cwd cannot override a canonical profile session", nil}}
 
       true ->
         submit_params = %{
@@ -39,7 +47,14 @@ defmodule LemonControlPlane.Methods.ChatSend do
           }
         }
 
-        case LemonRouter.submit(submit_params) do
+        submit_params =
+          if Map.has_key?(params, "cwd") do
+            Map.put(submit_params, :cwd, params["cwd"])
+          else
+            submit_params
+          end
+
+        case router_mod.submit(submit_params) do
           {:ok, run_id} ->
             {:ok,
              %{
@@ -53,6 +68,28 @@ defmodule LemonControlPlane.Methods.ChatSend do
         end
     end
   end
+
+  defp valid_cwd?(cwd) when is_binary(cwd) and cwd != "" do
+    Path.type(cwd) == :absolute and File.dir?(cwd)
+  end
+
+  defp valid_cwd?(_cwd), do: false
+
+  defp profile_session?(session_key) when is_binary(session_key) do
+    case LemonCore.SessionKey.parse(session_key) do
+      %{kind: :main, agent_id: id} ->
+        case LemonCore.ProfileStore.get(id) do
+          {:ok, profile} -> profile["canonicalSessionKey"] == session_key
+          {:error, :not_found} -> false
+          {:error, _} -> true
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp profile_session?(_session_key), do: false
 
   defp parse_queue_mode(nil), do: :collect
   defp parse_queue_mode("collect"), do: :collect

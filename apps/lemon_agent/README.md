@@ -69,7 +69,7 @@ The supervisor uses a `:one_for_one` strategy. Each child is independent:
 |--------|------|---------|
 | `LemonAgent.Loop` | `lib/agent_core/loop.ex` | Stateless agent loop: `agent_loop/5`, `agent_loop_continue/4`, `stream/4`, `stream_continue/3`. Orchestrates prompt injection, LLM streaming, tool call execution, steering, and follow-up in a recursive inner/outer loop. |
 | LemonAgent.Loop.Streaming (internal) | `lib/agent_core/loop/streaming.ex` | LLM response streaming. Calls `LemonAi.stream/3` (or a custom `stream_fn`), processes SSE events, builds partial `AssistantMessage`, emits `message_start`/`message_update`/`message_end` events. |
-| LemonAgent.Loop.ToolCalls (internal) | `lib/agent_core/loop/tool_calls.ex` | Concurrent tool execution. Starts tool tasks under `LemonAgent.ToolTaskSupervisor`, collects results, handles abort, emits `tool_execution_start`/`tool_execution_end` events. Supports configurable `max_tool_concurrency`. |
+| LemonAgent.Loop.ToolCalls (internal) | `lib/agent_core/loop/tool_calls.ex` | Supervised tool execution. Only tools opting into `parallel_safe: true` overlap; sequential tools are ordering barriers. Supports `max_tool_concurrency`, steering, abort, crash and timeout recovery. |
 
 ### Events and Context
 
@@ -124,16 +124,29 @@ The `{:agent_end, new_messages}` event contains only messages created during the
 
 ### Cooperative Abort
 
-Abort is cooperative, not forced. `LemonAgent.AbortSignal` uses an ETS table with `read_concurrency: true`. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call and tool batch. This allows tools to clean up gracefully.
+`LemonAgent.AbortSignal` uses an ETS table with `read_concurrency: true`. Tools check `AbortSignal.aborted?(signal)` in their execute functions. The loop checks before each LLM call, during retry backoff, while waiting for idle provider streams, and during tool execution. On cancellation, supervised tool workers get up to 250ms to observe the signal and finish resource cleanup before remaining workers are terminated. The abort signal stays set until this drain finishes. Cancellation also stops provider streams, cancels tool timers, and leaves queued steering and follow-up messages available for the next run. Tools owning external processes must additionally clean them up on worker death. Incomplete assistant tool calls are removed from canceled model responses so continuing never sends an unpaired tool transcript.
 
 ### Steering and Follow-up Queues
 
 The Agent GenServer provides two message queues:
 
-- **Steering** (`steer/2`): Messages injected mid-run. After the current tool batch completes, remaining tools are skipped and the steering message is processed in the next turn.
+- **Steering** (`steer/2`): Messages injected mid-run. Already-started tools finish, but queued calls are skipped with error results before another model turn. All calls receive paired results before the steering message enters context.
 - **Follow-up** (`follow_up/2`): Messages queued for after the agent would naturally stop (no more tool calls). A 50ms long-poll closes the race where a follow-up is enqueued just as the run ends.
 
 Both queues support two consumption modes: `:one_at_a_time` (default) or `:all`.
+
+### Provider Recovery
+
+The loop retries transient provider failures with capped exponential backoff, including failures after partial text or tool-call output. A retry reuses the pre-attempt context, re-resolves credentials, and never executes tools from a failed response. Failed attempts are not committed as assistant messages. The loop emits `{:provider_retry, details}` before each wait and `{:provider_retry_end, details}` on success, exhaustion, or cancellation; clients can show the attempt count and delay without treating a retry as a terminal failure.
+
+Direct agents default to three retries, starting at 2 seconds and capped at 30 seconds (`max_retries`, `retry_base_delay_ms`, `retry_max_delay_ms`). `max_retries: 0` disables retries. Explicit provider retry-after hints are honored up to 120 seconds rather than shortened to the backoff cap. Coding sessions use their existing `[runtime.retry]` settings, with one session-level retry budget rather than stacked retry wrappers.
+
+Authentication, invalid-request and context-overflow errors are not transient retries. Coding sessions handle overflow through their compaction-and-continue recovery boundary; the core loop reports the original failure to that boundary.
+
+### Tool Ordering
+
+Tools default to sequential execution. Set `parallel_safe: true` only when overlapping invocations cannot conflict with mutations or depend on earlier calls. Contiguous safe calls run concurrently up to `max_tool_concurrency`; a sequential call waits for the preceding group and finishes before later calls start. Results enter model context in the assistant's original call order, regardless of completion order. Unknown tools and invalid arguments are returned as model-readable error results, so the model can correct them.
+
 
 ### Registry Pattern
 

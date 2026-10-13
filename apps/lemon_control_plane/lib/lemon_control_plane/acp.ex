@@ -7,6 +7,11 @@ defmodule LemonControlPlane.ACP do
   without deleting that history. Session configuration is applied to the next
   prompt through the router boundary. Raw media and client-supplied MCP servers
   are rejected until a session-scoped safe transport contract is available.
+
+  `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
+  load the selected workspace skill. Native resume identities survive the chat
+  cache TTL. Streaming subscriptions precede run submission; uncertain receipts
+  retain their fixed run ID and explicitly forbid automatic retries.
   """
 
   alias LemonControlPlane.AgentRuntime
@@ -77,10 +82,23 @@ defmodule LemonControlPlane.ACP do
     params = Map.get(request, "params", %{})
 
     case dispatch(method, params, opts) do
-      {:ok, _result} when is_nil(id) -> :noreply
-      {:ok, result} -> {:ok, response(id, result)}
-      {:error, _code, _message} when is_nil(id) -> :noreply
-      {:error, code, message} -> {:ok, error_response(id, code, message)}
+      {:ok, _result} when is_nil(id) ->
+        :noreply
+
+      {:ok, result} ->
+        {:ok, response(id, result)}
+
+      {:error, _code, _message} when is_nil(id) ->
+        :noreply
+
+      {:error, code, message} ->
+        {:ok, error_response(id, code, message)}
+
+      {:error, _code, _message, _data} when is_nil(id) ->
+        :noreply
+
+      {:error, code, message, data} ->
+        {:ok, put_in(error_response(id, code, message), ["error", "data"], data)}
     end
   end
 
@@ -236,10 +254,8 @@ defmodule LemonControlPlane.ACP do
             with {:ok, session} <- open_session(session_id),
                  {:ok, blocks} <- required_list(params, "prompt"),
                  {:ok, prompt} <- prompt_text(blocks),
-                 {:ok, prompt} <- expand_skill_command(prompt, session),
-                 {:ok, result} <- submit_prompt(session_id, session, params, prompt, run_id),
-                 {:ok, result} <- maybe_wait(result, params, opts) do
-              {:ok, prompt_response(result)}
+                 {:ok, prompt} <- expand_skill_command(prompt, session) do
+              execute_prompt(session_id, session, params, prompt, run_id, opts)
             end
           end)
         after
@@ -252,6 +268,42 @@ defmodule LemonControlPlane.ACP do
   end
 
   def prompt(_params, _opts), do: {:error, -32_602, "params must be an object"}
+
+  defp execute_prompt(session_id, session, _params, "/compact" <> rest, _run_id, opts) do
+    if rest == "" or String.starts_with?(rest, " ") do
+      compact_opts = [cwd: session.cwd, custom_instructions: String.trim(rest)]
+
+      case AgentRuntime.call(
+             :compact_session,
+             [session.session_key, compact_opts],
+             {:error, :unavailable}
+           ) do
+        :ok ->
+          emit(
+            session_id,
+            %{
+              "sessionUpdate" => "agent_message_chunk",
+              "content" => %{"type" => "text", "text" => "Session context compacted."}
+            },
+            opts
+          )
+
+          {:ok, %{"stopReason" => "end_turn"}}
+
+        _ ->
+          {:error, -32_000, "session context could not be compacted"}
+      end
+    else
+      {:error, -32_602, "unknown slash command"}
+    end
+  end
+
+  defp execute_prompt(session_id, session, params, prompt, run_id, opts) do
+    with {:ok, result} <- submit_prompt(session_id, session, params, prompt, run_id),
+         {:ok, result} <- maybe_wait(result, params, opts) do
+      {:ok, prompt_response(result)}
+    end
+  end
 
   defp with_prepared_run(opts, callback) do
     run_id = LemonCore.Id.run_id()
@@ -519,6 +571,15 @@ defmodule LemonControlPlane.ACP do
       end)
       |> Enum.sort_by(& &1["name"])
 
+    commands = [
+      %{
+        "name" => "compact",
+        "description" => "Compact this session's context",
+        "input" => %{"hint" => "Optional summary instructions"}
+      }
+      | commands
+    ]
+
     emit(
       session_id,
       %{"sessionUpdate" => "available_commands_update", "availableCommands" => commands},
@@ -542,36 +603,8 @@ defmodule LemonControlPlane.ACP do
   defp replay_history(session_id, session, opts) do
     case native_history(session) do
       {:ok, entries} ->
-        Enum.each(entries, fn entry ->
-          if entry.type == :message do
-            message = LemonCore.Redact.map(entry.message)
-            role = map_get(message, :role)
-
-            kind =
-              if role in [:user, "user"], do: "user_message_chunk", else: "agent_message_chunk"
-
-            if role in [:user, "user", :assistant, "assistant"] do
-              content = map_get(message, :content)
-              blocks = if is_binary(content), do: [%{"text" => content}], else: List.wrap(content)
-
-              Enum.each(blocks, fn block ->
-                text = map_get(block, :text)
-
-                if is_binary(text) and text != "" do
-                  emit(
-                    session_id,
-                    %{
-                      "sessionUpdate" => kind,
-                      "messageId" => entry.id,
-                      "content" => %{"type" => "text", "text" => text}
-                    },
-                    opts
-                  )
-                end
-              end)
-            end
-          end
-        end)
+        state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
+        Enum.reduce(entries, state, &replay_native_entry(session_id, &1, opts, &2))
 
       :unavailable ->
         LemonCore.SessionLifecycle.history(session.session_key, limit: 200)
@@ -593,6 +626,79 @@ defmodule LemonControlPlane.ACP do
           end
         end)
     end
+  end
+
+  defp replay_native_entry(session_id, %{type: :message} = entry, opts, state) do
+    message = LemonCore.Redact.map(entry.message)
+    role = map_get(message, :role)
+    content = map_get(message, :content)
+
+    blocks =
+      if is_binary(content),
+        do: [%{"type" => "text", "text" => content}],
+        else: List.wrap(content)
+
+    cond do
+      role in [:tool_result, "tool_result"] ->
+        replay_event(
+          state,
+          {:tool_execution_end, map_get(message, :tool_call_id), map_get(message, :tool_name),
+           message, map_get(message, :is_error) == true},
+          opts
+        )
+
+      role in [:user, "user", :assistant, "assistant"] ->
+        Enum.reduce(blocks, state, fn block, acc ->
+          if map_get(block, :type) in [:tool_call, "tool_call"] do
+            replay_event(
+              acc,
+              {:tool_execution_start, map_get(block, :id), map_get(block, :name),
+               map_get(block, :arguments) || %{}},
+              opts
+            )
+          else
+            thought? = map_get(block, :type) in [:thinking, "thinking"]
+            text = if thought?, do: map_get(block, :thinking), else: map_get(block, :text)
+
+            kind =
+              cond do
+                role in [:user, "user"] -> "user_message_chunk"
+                thought? -> "agent_thought_chunk"
+                true -> "agent_message_chunk"
+              end
+
+            if is_binary(text) and text != "" do
+              emit(
+                session_id,
+                %{
+                  "sessionUpdate" => kind,
+                  "messageId" => entry.id,
+                  "content" => %{"type" => "text", "text" => text}
+                },
+                opts
+              )
+            end
+
+            acc
+          end
+        end)
+
+      true ->
+        state
+    end
+  end
+
+  defp replay_native_entry(_session_id, _entry, _opts, state), do: state
+
+  defp replay_event(state, event, opts) do
+    {updates, state} = LemonControlPlane.ACP.SessionUpdates.map_event(state, event)
+
+    case Keyword.get(opts, :session_update_callback) do
+      callback when is_function(callback, 1) -> Enum.each(updates, callback)
+      _ -> :ok
+    end
+
+    state
   end
 
   defp native_history(session) do
@@ -626,6 +732,7 @@ defmodule LemonControlPlane.ACP do
           })
 
         put_session(id, session)
+        remember_native_resume(id)
         bootstrap(id, session, opts)
         {:ok, Map.put(session_response(session), "sessionId", id)}
       end
@@ -701,6 +808,12 @@ defmodule LemonControlPlane.ACP do
            wait?: not queue_only?
          }}
 
+      {:error, :outcome_unknown} ->
+        put_session(session_id, %{session | last_run_id: run_id})
+
+        {:error, -32_000, "run submission outcome is unknown; do not retry automatically",
+         %{"runId" => run_id, "retrySafe" => false}}
+
       {:error, _reason} ->
         {:error, -32_000, "failed to submit Lemon run"}
 
@@ -758,7 +871,10 @@ defmodule LemonControlPlane.ACP do
       Map.put(
         result,
         :mapper_state,
-        LemonControlPlane.ACP.SessionUpdates.new(result.session_id, cwd: session.cwd)
+        LemonControlPlane.ACP.SessionUpdates.new(result.session_id,
+          cwd: session.cwd,
+          context_window: session_context_window(session)
+        )
       )
 
     result =
@@ -894,7 +1010,7 @@ defmodule LemonControlPlane.ACP do
         "toolCall" => %{
           "toolCallId" => approval_id || "approval_#{short_hash(inspect(pending))}",
           "title" => "Approve #{tool}",
-          "kind" => acp_tool_kind(tool),
+          "kind" => LemonControlPlane.ACP.SessionUpdates.tool_kind(tool),
           "status" => "pending",
           "content" => approval_content(pending)
         },
@@ -949,7 +1065,15 @@ defmodule LemonControlPlane.ACP do
   defp approval_content(pending) do
     case map_get(pending, :rationale) do
       rationale when is_binary(rationale) and rationale != "" ->
-        [%{"type" => "content", "content" => %{"type" => "text", "text" => truncate(rationale)}}]
+        [
+          %{
+            "type" => "content",
+            "content" => %{
+              "type" => "text",
+              "text" => rationale |> LemonCore.Redact.text() |> truncate()
+            }
+          }
+        ]
 
       _ ->
         nil
@@ -1126,6 +1250,7 @@ defmodule LemonControlPlane.ACP do
 
     result
     |> Map.put(:status, wait_status(completed))
+    |> Map.put(:usage, map_get(completed, :usage))
     |> Map.put(:wait_result, %{
       "runId" => result.run_id,
       "ok" => completed_ok(completed),
@@ -1135,8 +1260,11 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp prompt_response(result) do
+    remember_native_resume(result.session_id)
+
     %{
       "stopReason" => stop_reason(result),
+      "usage" => prompt_usage(result[:usage]),
       "_meta" => %{
         "lemon" => %{
           "runId" => result.run_id,
@@ -1155,6 +1283,7 @@ defmodule LemonControlPlane.ACP do
         }
       }
     }
+    |> reject_nil_values()
   end
 
   defp update_notification(session_id, update) do
@@ -1167,18 +1296,6 @@ defmodule LemonControlPlane.ACP do
       }
     }
   end
-
-  defp acp_tool_kind(kind) when kind in [:read, "read"], do: "read"
-
-  defp acp_tool_kind(kind) when kind in [:edit, "edit", :write, "write", :patch, "patch"],
-    do: "edit"
-
-  defp acp_tool_kind(kind) when kind in [:delete, "delete"], do: "delete"
-  defp acp_tool_kind(kind) when kind in [:move, "move"], do: "move"
-  defp acp_tool_kind(kind) when kind in [:search, "search"], do: "search"
-  defp acp_tool_kind(kind) when kind in [:exec, "exec", :process, "process"], do: "execute"
-  defp acp_tool_kind(kind) when kind in [:fetch, "fetch", :web, "web"], do: "fetch"
-  defp acp_tool_kind(_kind), do: "other"
 
   defp prompt_text(blocks) do
     blocks
@@ -1241,9 +1358,56 @@ defmodule LemonControlPlane.ACP do
 
   defp existing_session(session_id) do
     case get_session(session_id) do
-      nil -> {:error, -32_602, "session not found"}
-      session -> {:ok, session}
+      nil ->
+        {:error, -32_602, "session not found"}
+
+      session ->
+        restore_native_resume(session)
+        {:ok, session}
     end
+  end
+
+  defp session_context_window(session) do
+    model_id = Map.get(session, :model) || LemonCore.Config.cached().agent.default_model
+
+    Enum.find_value(LemonAi.Models.list_models(discover_openai: false), fn model ->
+      if "#{model.provider}:#{model.id}" == model_id, do: model.context_window
+    end)
+  end
+
+  defp prompt_usage(usage) when is_map(usage) do
+    %{
+      "inputTokens" => map_get(usage, :input) || 0,
+      "outputTokens" => map_get(usage, :output) || 0,
+      "totalTokens" => map_get(usage, :total_tokens) || 0,
+      "cachedReadTokens" => map_get(usage, :cache_read) || 0,
+      "cachedWriteTokens" => map_get(usage, :cache_write) || 0
+    }
+  end
+
+  defp prompt_usage(_), do: nil
+
+  defp remember_native_resume(session_id) do
+    with session when is_map(session) <- get_session(session_id),
+         %{last_engine: "lemon", last_resume_token: token} when is_binary(token) <-
+           LemonCore.ChatStateStore.get(session.session_key) do
+      put_session(session_id, Map.put(session, :native_resume, token))
+    else
+      _ -> :ok
+    end
+  end
+
+  defp restore_native_resume(session) do
+    if is_nil(LemonCore.ChatStateStore.get(session.session_key)) and
+         is_binary(Map.get(session, :native_resume)) do
+      LemonCore.ChatStateStore.put(session.session_key, %LemonCore.ChatState{
+        last_engine: "lemon",
+        last_resume_token: session.native_resume,
+        updated_at: System.system_time(:millisecond)
+      })
+    end
+
+    :ok
   end
 
   defp get_session(session_id) do
@@ -1299,7 +1463,9 @@ defmodule LemonControlPlane.ACP do
 
   defp resource_link_count(_blocks), do: 0
 
-  defp lemon_meta(params, key), do: get_in(params, ["_meta", "lemon", key])
+  defp lemon_meta(params, key) do
+    params |> Map.get("_meta") |> ensure_map() |> Map.get("lemon") |> ensure_map() |> Map.get(key)
+  end
 
   defp client_capabilities(params, opts, existing \\ %{}) do
     from_opts = Keyword.get(opts, :client_capabilities)

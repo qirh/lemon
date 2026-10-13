@@ -10,6 +10,8 @@ defmodule LemonAgent.Loop.ToolCalls do
     ToolResultMessage
   }
 
+  @tool_abort_grace_ms 250
+
   @unicode_whitespace for codepoint <- [
                             0x00A0,
                             0x2000,
@@ -52,13 +54,15 @@ defmodule LemonAgent.Loop.ToolCalls do
     {results, context, new_messages} =
       execute_tool_calls_parallel(context, new_messages, tool_calls, config, signal, stream)
 
-    # Clear the redirect flag BEFORE draining (see LemonAgent.Loop.run_loop/6):
-    # a redirect that arrived during tool execution has its correction picked
-    # up here, so its flag must not survive to spuriously cancel the next
-    # model call; one that arrives after this drain keeps its flag and cancels
-    # the next call, which then retries with the correction.
-    AbortSignal.clear_redirect(signal)
-    steering_messages = get_steering_messages(config)
+    steering_messages =
+      if aborted?(signal) do
+        []
+      else
+        # Clear before draining so a redirect received during this batch does
+        # not cancel the next model call after its correction is consumed.
+        AbortSignal.clear_redirect(signal)
+        get_steering_messages(config)
+      end
 
     {results, steering_messages, context, new_messages}
   end
@@ -71,21 +75,10 @@ defmodule LemonAgent.Loop.ToolCalls do
     base_context_message_count = length(context.messages)
     base_new_message_count = length(new_messages)
 
-    {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
-      start_tool_tasks(
-        context.tools,
-        tool_calls,
-        %{},
-        %{},
-        max_concurrency,
-        tool_timeout_ms,
-        signal,
-        stream,
-        tool_task_supervisor
-      )
-
-    {context, new_messages, results} =
-      emit_start_failures(start_failures, context, new_messages, [], stream)
+    pending_by_ref = %{}
+    pending_by_mon = %{}
+    remaining_tool_calls = tool_calls
+    results = []
 
     collect_parallel_tool_results(
       context,
@@ -102,7 +95,8 @@ defmodule LemonAgent.Loop.ToolCalls do
       signal,
       tool_call_order,
       base_context_message_count,
-      base_new_message_count
+      base_new_message_count,
+      config
     )
   end
 
@@ -121,341 +115,202 @@ defmodule LemonAgent.Loop.ToolCalls do
          signal,
          tool_call_order,
          base_context_message_count,
-         base_new_message_count
+         base_new_message_count,
+         config
        ) do
-    if map_size(pending_by_ref) == 0 and remaining_tool_calls == [] do
-      finish_tool_results(
-        results,
-        context,
-        new_messages,
-        tool_call_order,
-        base_context_message_count,
-        base_new_message_count
-      )
-    else
-      # Check for abort before waiting
-      if aborted?(signal) do
-        # Terminate all pending tool tasks on abort
-        Enum.each(pending_by_ref, fn {_ref, %{mon_ref: mon_ref, pid: pid, tool_call: tool_call}} ->
-          Task.Supervisor.terminate_child(tool_task_supervisor, pid)
-          Process.demonitor(mon_ref, [:flush])
-
-          LemonCore.Telemetry.emit(
-            [:lemon_agent, :tool_task, :error],
-            %{system_time: System.system_time()},
-            %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: :aborted}
-          )
-        end)
+    cond do
+      aborted?(signal) ->
+        stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
 
         pending_tool_calls =
           pending_by_ref
           |> Map.values()
           |> Enum.map(& &1.tool_call)
 
-        all_aborted_tool_calls = pending_tool_calls ++ remaining_tool_calls
-
-        Enum.each(remaining_tool_calls, fn tool_call ->
-          LemonCore.Telemetry.emit(
-            [:lemon_agent, :tool_task, :error],
-            %{system_time: System.system_time()},
-            %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: :aborted}
+        {context, new_messages, results} =
+          emit_tool_errors(
+            pending_tool_calls ++ remaining_tool_calls,
+            tool_aborted_result(),
+            context,
+            new_messages,
+            results,
+            stream
           )
-        end)
-
-        {aborted_results, context, new_messages} =
-          Enum.reduce(all_aborted_tool_calls, {results, context, new_messages}, fn tool_call,
-                                                                                   {acc_results,
-                                                                                    acc_ctx,
-                                                                                    acc_msgs} ->
-            aborted_result = %AgentToolResult{
-              content: [%TextContent{type: :text, text: "Tool execution aborted"}],
-              details: %{error_type: :aborted}
-            }
-
-            {acc_ctx, acc_msgs, acc_results} =
-              emit_tool_result(
-                tool_call,
-                aborted_result,
-                true,
-                acc_ctx,
-                acc_msgs,
-                acc_results,
-                stream
-              )
-
-            {acc_results, acc_ctx, acc_msgs}
-          end)
 
         finish_tool_results(
-          aborted_results,
+          results,
           context,
           new_messages,
           tool_call_order,
           base_context_message_count,
           base_new_message_count
         )
-      else
-        receive do
-          {:tool_task_result, ref, tool_call, result, is_error} ->
-            if Map.has_key?(pending_by_ref, ref) do
-              {pending_by_ref, pending_by_mon} =
-                drop_pending_task(pending_by_ref, pending_by_mon, ref)
 
-              {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
-                start_tool_tasks(
-                  tools,
-                  remaining_tool_calls,
-                  pending_by_ref,
-                  pending_by_mon,
-                  max_concurrency - map_size(pending_by_ref),
-                  tool_timeout_ms,
-                  signal,
-                  stream,
-                  tool_task_supervisor
-                )
+      map_size(pending_by_ref) == 0 and remaining_tool_calls == [] ->
+        finish_tool_results(
+          results,
+          context,
+          new_messages,
+          tool_call_order,
+          base_context_message_count,
+          base_new_message_count
+        )
 
-              LemonCore.Telemetry.emit(
-                [:lemon_agent, :tool_task, :end],
-                %{system_time: System.system_time()},
-                %{tool_name: tool_call.name, tool_call_id: tool_call.id, is_error: is_error}
-              )
-
-              {context, new_messages, results} =
-                emit_tool_result(
-                  tool_call,
-                  result,
-                  is_error,
-                  context,
-                  new_messages,
-                  results,
-                  stream
-                )
-
-              {context, new_messages, results} =
-                emit_start_failures(start_failures, context, new_messages, results, stream)
-
-              collect_parallel_tool_results(
+      true ->
+        {context, new_messages, results, remaining_tool_calls} =
+          if remaining_tool_calls != [] and has_steering_messages?(config) and
+               not aborted?(signal) do
+            {context, new_messages, results} =
+              emit_tool_errors(
+                remaining_tool_calls,
+                tool_skipped_result(),
                 context,
                 new_messages,
-                pending_by_ref,
-                pending_by_mon,
-                remaining_tool_calls,
-                tools,
-                tool_task_supervisor,
-                max_concurrency,
-                tool_timeout_ms,
                 results,
-                stream,
-                signal,
-                tool_call_order,
-                base_context_message_count,
-                base_new_message_count
+                stream
               )
-            else
-              collect_parallel_tool_results(
-                context,
-                new_messages,
-                pending_by_ref,
-                pending_by_mon,
-                remaining_tool_calls,
-                tools,
-                tool_task_supervisor,
-                max_concurrency,
-                tool_timeout_ms,
-                results,
-                stream,
-                signal,
-                tool_call_order,
-                base_context_message_count,
-                base_new_message_count
-              )
+
+            {context, new_messages, results, []}
+          else
+            {context, new_messages, results, remaining_tool_calls}
+          end
+
+        {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
+          start_tool_tasks(
+            tools,
+            remaining_tool_calls,
+            pending_by_ref,
+            pending_by_mon,
+            max_concurrency - map_size(pending_by_ref),
+            tool_timeout_ms,
+            signal,
+            stream,
+            tool_task_supervisor,
+            config
+          )
+
+        {context, new_messages, results} =
+          emit_start_failures(start_failures, context, new_messages, results, stream)
+
+        {context, new_messages, pending_by_ref, pending_by_mon, results} =
+          if map_size(pending_by_ref) == 0 do
+            {context, new_messages, pending_by_ref, pending_by_mon, results}
+          else
+            receive do
+              {:tool_task_result, ref, tool_call, result, is_error} ->
+                if Map.has_key?(pending_by_ref, ref) do
+                  {pending_by_ref, pending_by_mon} =
+                    drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                  LemonCore.Telemetry.emit(
+                    [:lemon_agent, :tool_task, :end],
+                    %{system_time: System.system_time()},
+                    %{tool_name: tool_call.name, tool_call_id: tool_call.id, is_error: is_error}
+                  )
+
+                  {context, new_messages, results} =
+                    emit_tool_result(
+                      tool_call,
+                      result,
+                      is_error,
+                      context,
+                      new_messages,
+                      results,
+                      stream
+                    )
+
+                  {context, new_messages, pending_by_ref, pending_by_mon, results}
+                else
+                  {context, new_messages, pending_by_ref, pending_by_mon, results}
+                end
+
+              {:DOWN, mon_ref, :process, _pid, reason} ->
+                case Map.get(pending_by_mon, mon_ref) do
+                  nil ->
+                    {context, new_messages, pending_by_ref, pending_by_mon, results}
+
+                  ref ->
+                    %{tool_call: tool_call} = Map.fetch!(pending_by_ref, ref)
+
+                    {pending_by_ref, pending_by_mon} =
+                      drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                    LemonCore.Telemetry.emit(
+                      [:lemon_agent, :tool_task, :error],
+                      %{system_time: System.system_time()},
+                      %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: reason}
+                    )
+
+                    {context, new_messages, results} =
+                      emit_tool_result(
+                        tool_call,
+                        tool_crash_result(reason),
+                        true,
+                        context,
+                        new_messages,
+                        results,
+                        stream
+                      )
+
+                    {context, new_messages, pending_by_ref, pending_by_mon, results}
+                end
+
+              {:tool_task_timeout, ref} ->
+                case Map.get(pending_by_ref, ref) do
+                  nil ->
+                    {context, new_messages, pending_by_ref, pending_by_mon, results}
+
+                  %{tool_call: tool_call, pid: pid} ->
+                    {pending_by_ref, pending_by_mon} =
+                      drop_pending_task(pending_by_ref, pending_by_mon, ref)
+
+                    Task.Supervisor.terminate_child(tool_task_supervisor, pid)
+
+                    LemonCore.Telemetry.emit(
+                      [:lemon_agent, :tool_task, :error],
+                      %{system_time: System.system_time()},
+                      %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: :timeout}
+                    )
+
+                    {context, new_messages, results} =
+                      emit_tool_result(
+                        tool_call,
+                        tool_timeout_result(tool_timeout_ms),
+                        true,
+                        context,
+                        new_messages,
+                        results,
+                        stream
+                      )
+
+                    {context, new_messages, pending_by_ref, pending_by_mon, results}
+                end
+            after
+              100 ->
+                # Poll steering without draining it, and abort without waiting
+                # for a running tool to produce another event.
+                {context, new_messages, pending_by_ref, pending_by_mon, results}
             end
+          end
 
-          {:DOWN, mon_ref, :process, _pid, reason} ->
-            case Map.get(pending_by_mon, mon_ref) do
-              nil ->
-                collect_parallel_tool_results(
-                  context,
-                  new_messages,
-                  pending_by_ref,
-                  pending_by_mon,
-                  remaining_tool_calls,
-                  tools,
-                  tool_task_supervisor,
-                  max_concurrency,
-                  tool_timeout_ms,
-                  results,
-                  stream,
-                  signal,
-                  tool_call_order,
-                  base_context_message_count,
-                  base_new_message_count
-                )
-
-              ref ->
-                %{tool_call: tool_call} = Map.fetch!(pending_by_ref, ref)
-
-                {pending_by_ref, pending_by_mon} =
-                  drop_pending_task(pending_by_ref, pending_by_mon, ref)
-
-                {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
-                  start_tool_tasks(
-                    tools,
-                    remaining_tool_calls,
-                    pending_by_ref,
-                    pending_by_mon,
-                    max_concurrency - map_size(pending_by_ref),
-                    tool_timeout_ms,
-                    signal,
-                    stream,
-                    tool_task_supervisor
-                  )
-
-                # Emit telemetry for tool task error (crash)
-                LemonCore.Telemetry.emit(
-                  [:lemon_agent, :tool_task, :error],
-                  %{system_time: System.system_time()},
-                  %{tool_name: tool_call.name, tool_call_id: tool_call.id, reason: reason}
-                )
-
-                {context, new_messages, results} =
-                  emit_tool_result(
-                    tool_call,
-                    tool_crash_result(reason),
-                    true,
-                    context,
-                    new_messages,
-                    results,
-                    stream
-                  )
-
-                {context, new_messages, results} =
-                  emit_start_failures(start_failures, context, new_messages, results, stream)
-
-                collect_parallel_tool_results(
-                  context,
-                  new_messages,
-                  pending_by_ref,
-                  pending_by_mon,
-                  remaining_tool_calls,
-                  tools,
-                  tool_task_supervisor,
-                  max_concurrency,
-                  tool_timeout_ms,
-                  results,
-                  stream,
-                  signal,
-                  tool_call_order,
-                  base_context_message_count,
-                  base_new_message_count
-                )
-            end
-
-          {:tool_task_timeout, ref} ->
-            case Map.get(pending_by_ref, ref) do
-              nil ->
-                collect_parallel_tool_results(
-                  context,
-                  new_messages,
-                  pending_by_ref,
-                  pending_by_mon,
-                  remaining_tool_calls,
-                  tools,
-                  tool_task_supervisor,
-                  max_concurrency,
-                  tool_timeout_ms,
-                  results,
-                  stream,
-                  signal,
-                  tool_call_order,
-                  base_context_message_count,
-                  base_new_message_count
-                )
-
-              %{tool_call: tool_call, mon_ref: mon_ref, pid: pid} ->
-                Task.Supervisor.terminate_child(tool_task_supervisor, pid)
-                Process.demonitor(mon_ref, [:flush])
-
-                {pending_by_ref, pending_by_mon} =
-                  drop_pending_task(pending_by_ref, pending_by_mon, ref)
-
-                {pending_by_ref, pending_by_mon, remaining_tool_calls, start_failures} =
-                  start_tool_tasks(
-                    tools,
-                    remaining_tool_calls,
-                    pending_by_ref,
-                    pending_by_mon,
-                    max_concurrency - map_size(pending_by_ref),
-                    tool_timeout_ms,
-                    signal,
-                    stream,
-                    tool_task_supervisor
-                  )
-
-                LemonCore.Telemetry.emit(
-                  [:lemon_agent, :tool_task, :error],
-                  %{system_time: System.system_time()},
-                  %{
-                    tool_name: tool_call.name,
-                    tool_call_id: tool_call.id,
-                    reason: :timeout
-                  }
-                )
-
-                {context, new_messages, results} =
-                  emit_tool_result(
-                    tool_call,
-                    tool_timeout_result(tool_timeout_ms),
-                    true,
-                    context,
-                    new_messages,
-                    results,
-                    stream
-                  )
-
-                {context, new_messages, results} =
-                  emit_start_failures(start_failures, context, new_messages, results, stream)
-
-                collect_parallel_tool_results(
-                  context,
-                  new_messages,
-                  pending_by_ref,
-                  pending_by_mon,
-                  remaining_tool_calls,
-                  tools,
-                  tool_task_supervisor,
-                  max_concurrency,
-                  tool_timeout_ms,
-                  results,
-                  stream,
-                  signal,
-                  tool_call_order,
-                  base_context_message_count,
-                  base_new_message_count
-                )
-            end
-        after
-          100 ->
-            # Periodically check for abort
-            collect_parallel_tool_results(
-              context,
-              new_messages,
-              pending_by_ref,
-              pending_by_mon,
-              remaining_tool_calls,
-              tools,
-              tool_task_supervisor,
-              max_concurrency,
-              tool_timeout_ms,
-              results,
-              stream,
-              signal,
-              tool_call_order,
-              base_context_message_count,
-              base_new_message_count
-            )
-        end
-      end
+        collect_parallel_tool_results(
+          context,
+          new_messages,
+          pending_by_ref,
+          pending_by_mon,
+          remaining_tool_calls,
+          tools,
+          tool_task_supervisor,
+          max_concurrency,
+          tool_timeout_ms,
+          results,
+          stream,
+          signal,
+          tool_call_order,
+          base_context_message_count,
+          base_new_message_count,
+          config
+        )
     end
   end
 
@@ -513,7 +368,8 @@ defmodule LemonAgent.Loop.ToolCalls do
          _tool_timeout_ms,
          _signal,
          _stream,
-         _tool_task_supervisor
+         _tool_task_supervisor,
+         _config
        )
        when available_slots <= 0 do
     {pending_by_ref, pending_by_mon, remaining_tool_calls, []}
@@ -528,24 +384,40 @@ defmodule LemonAgent.Loop.ToolCalls do
          tool_timeout_ms,
          signal,
          stream,
-         tool_task_supervisor
+         tool_task_supervisor,
+         config
        ) do
-    if aborted?(signal) do
+    unsafe_pending? =
+      Enum.any?(pending_by_ref, fn {_ref, pending} -> not pending.parallel_safe end)
+
+    if aborted?(signal) or has_steering_messages?(config) or unsafe_pending? do
       {pending_by_ref, pending_by_mon, remaining_tool_calls, []}
     else
       parent = self()
+      max_pending = map_size(pending_by_ref) + available_slots
 
       {by_ref, by_mon, remaining, start_failures} =
         Enum.reduce_while(
-          1..available_slots,
+          remaining_tool_calls,
           {pending_by_ref, pending_by_mon, remaining_tool_calls, []},
-          fn _, {by_ref, by_mon, remaining, start_failures} ->
-            case remaining do
-              [] ->
-                {:halt, {by_ref, by_mon, remaining, start_failures}}
+          fn tool_call, {by_ref, by_mon, remaining, start_failures} = state ->
+            tool = find_tool(tools, tool_call.name)
+            parallel_safe? = tool != nil and tool.parallel_safe == true
 
-              [tool_call | rest] ->
-                tool = find_tool(tools, tool_call.name)
+            cond do
+              aborted?(signal) or has_steering_messages?(config) ->
+                {:halt, state}
+
+              map_size(by_ref) >= max_pending ->
+                {:halt, state}
+
+              not parallel_safe? and map_size(by_ref) > 0 ->
+                # Unsafe calls are barriers: neither earlier nor later safe
+                # calls may overlap their execution.
+                {:halt, state}
+
+              true ->
+                [_tool_call | rest] = remaining
 
                 EventStream.push(
                   stream,
@@ -575,18 +447,20 @@ defmodule LemonAgent.Loop.ToolCalls do
                         mon_ref = Process.monitor(pid)
                         timeout_ref = schedule_tool_timeout(ref, tool_timeout_ms)
 
-                        {:cont,
-                         {
-                           Map.put(by_ref, ref, %{
-                             tool_call: prepared_tool_call,
-                             mon_ref: mon_ref,
-                             pid: pid,
-                             timeout_ref: timeout_ref
-                           }),
-                           Map.put(by_mon, mon_ref, ref),
-                           rest,
-                           start_failures
-                         }}
+                        state = {
+                          Map.put(by_ref, ref, %{
+                            tool_call: prepared_tool_call,
+                            mon_ref: mon_ref,
+                            pid: pid,
+                            timeout_ref: timeout_ref,
+                            parallel_safe: parallel_safe?
+                          }),
+                          Map.put(by_mon, mon_ref, ref),
+                          rest,
+                          start_failures
+                        }
+
+                        if parallel_safe?, do: {:cont, state}, else: {:halt, state}
 
                       {:error, reason} ->
                         LemonCore.Telemetry.emit(
@@ -653,6 +527,23 @@ defmodule LemonAgent.Loop.ToolCalls do
         acc_results,
         stream
       )
+    end)
+  end
+
+  defp emit_tool_errors(tool_calls, result, context, new_messages, results, stream) do
+    Enum.reduce(tool_calls, {context, new_messages, results}, fn tool_call,
+                                                                 {context, new_messages, results} ->
+      LemonCore.Telemetry.emit(
+        [:lemon_agent, :tool_task, :error],
+        %{system_time: System.system_time()},
+        %{
+          tool_name: tool_call.name,
+          tool_call_id: tool_call.id,
+          reason: Map.get(result.details, :reason, result.details.error_type)
+        }
+      )
+
+      emit_tool_result(tool_call, result, true, context, new_messages, results, stream)
     end)
   end
 
@@ -749,7 +640,7 @@ defmodule LemonAgent.Loop.ToolCalls do
     Enum.find(tools, fn tool ->
       normalized_tool_name = normalize_tool_name(tool.name)
 
-      if normalized_tool_name == normalized_name do
+      if normalized_name != nil and normalized_tool_name == normalized_name do
         # Emit telemetry if normalization was needed (name != tool.name after normalization)
         if tool.name != name do
           LemonCore.Telemetry.emit(
@@ -774,13 +665,20 @@ defmodule LemonAgent.Loop.ToolCalls do
 
   Provider formatting drift can cause tool names to include accidental padding
   or non-canonical casing. This normalization ensures robust matching.
+
+  Invalid or nonbinary names return `nil` and cannot match a tool.
   """
-  @spec normalize_tool_name(String.t()) :: String.t()
+  @spec normalize_tool_name(term()) :: String.t() | nil
   def normalize_tool_name(name) when is_binary(name) do
-    name
-    |> String.trim()
-    |> normalize_unicode_whitespace()
+    if String.valid?(name) do
+      case name |> String.trim() |> normalize_unicode_whitespace() do
+        "" -> nil
+        normalized_name -> normalized_name
+      end
+    end
   end
+
+  def normalize_tool_name(_name), do: nil
 
   # Replace common Unicode whitespace characters with ASCII space, then trim
   defp normalize_unicode_whitespace(name) do
@@ -1005,8 +903,13 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp null_value?(_value), do: false
 
   defp unknown_tool_result(tool_call) do
+    name =
+      if is_binary(tool_call.name) and String.valid?(tool_call.name),
+        do: tool_call.name,
+        else: inspect(tool_call.name)
+
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: "Tool #{tool_call.name} not found"}],
+      content: [%TextContent{type: :text, text: "Tool #{name} not found"}],
       details: %{error_type: :unknown_tool, tool_name: tool_call.name}
     }
   end
@@ -1044,6 +947,27 @@ defmodule LemonAgent.Loop.ToolCalls do
         %TextContent{type: :text, text: "Tool task timed out after #{timeout_ms}ms"}
       ],
       details: %{error_type: :tool_task_timeout, timeout_ms: timeout_ms}
+    }
+  end
+
+  defp tool_aborted_result do
+    %AgentToolResult{
+      content: [%TextContent{type: :text, text: "Tool execution aborted"}],
+      details: %{error_type: :aborted}
+    }
+  end
+
+  defp tool_skipped_result do
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          type: :text,
+          text:
+            "Tool execution skipped because new user steering is queued. " <>
+              "Review the new instructions before retrying this tool call."
+        }
+      ],
+      details: %{error_type: :skipped, reason: :steering}
     }
   end
 
@@ -1090,7 +1014,56 @@ defmodule LemonAgent.Loop.ToolCalls do
     :ok
   end
 
+  defp stop_aborted_tools(pending_by_ref, pending_by_mon, supervisor) do
+    Enum.each(pending_by_ref, fn {_ref, pending} ->
+      cancel_tool_timeout(pending.timeout_ref)
+    end)
+
+    # Give cooperative tools time to stop external work before killing their
+    # BEAM worker. The run's abort signal stays set throughout this drain.
+    remaining =
+      await_tool_cleanup(
+        pending_by_ref,
+        pending_by_mon,
+        System.monotonic_time(:millisecond) + @tool_abort_grace_ms
+      )
+
+    Enum.each(remaining, fn {_ref, pending} ->
+      Task.Supervisor.terminate_child(supervisor, pending.pid)
+      Process.demonitor(pending.mon_ref, [:flush])
+    end)
+  end
+
+  defp await_tool_cleanup(pending_by_ref, _pending_by_mon, _deadline)
+       when map_size(pending_by_ref) == 0, do: pending_by_ref
+
+  defp await_tool_cleanup(pending_by_ref, pending_by_mon, deadline) do
+    remaining_ms = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:DOWN, mon_ref, :process, _pid, _reason} when is_map_key(pending_by_mon, mon_ref) ->
+        ref = Map.fetch!(pending_by_mon, mon_ref)
+
+        await_tool_cleanup(
+          Map.delete(pending_by_ref, ref),
+          Map.delete(pending_by_mon, mon_ref),
+          deadline
+        )
+
+      {:tool_task_result, ref, _call, _result, _is_error} when is_map_key(pending_by_ref, ref) ->
+        await_tool_cleanup(pending_by_ref, pending_by_mon, deadline)
+    after
+      remaining_ms -> pending_by_ref
+    end
+  end
+
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
+
+  defp has_steering_messages?(%AgentLoopConfig{has_steering_messages: nil}), do: false
+
+  defp has_steering_messages?(%AgentLoopConfig{has_steering_messages: has_fn}) do
+    has_fn.() == true
+  end
 
   defp get_steering_messages(%AgentLoopConfig{get_steering_messages: nil}), do: []
 

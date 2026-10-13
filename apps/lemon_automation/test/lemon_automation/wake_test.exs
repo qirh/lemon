@@ -58,6 +58,7 @@ defmodule LemonAutomation.WakeTest do
 
       assert {:ok, run} = Wake.trigger(job.id, context: context)
       assert run.job_id == job.id
+      assert is_binary(run.run_id) and run.run_id != ""
       assert run.triggered_by == :wake
       assert run.meta.wake_context == context
 

@@ -225,6 +225,7 @@ export class AppShell {
 			events: this.events,
 			tui: this.tui,
 			editor: this.#editor,
+			cwd: this.#cwd,
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
@@ -266,6 +267,7 @@ export class AppShell {
 			// from under a question the daemon is blocked on.
 			hasOverlay: () => this.selectors.isOpen || this.approvals.panel.visible,
 			openModelPicker: () => this.#modelPicker.open(),
+			openThinkingPicker: () => this.submit("/think"),
 			openSessionSwitcher: () => this.#switcher.open(),
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
@@ -435,6 +437,9 @@ export class AppShell {
 			contextTokens: context.tokens,
 			contextWindow: context.window,
 			contextSource: context.source,
+			runTokens: session.usage?.totalTokens ?? undefined,
+			runCostUsd: session.usage?.costUsd ?? undefined,
+			pendingPrompts: this.store.queue.length(session.key),
 			sessionCount: this.store.sessions.size,
 			busy: session.busy,
 			busySessions: this.store.busySessions(),
@@ -762,6 +767,7 @@ export class AppShell {
 		) {
 			return await this.methods.chatSend({
 				sessionKey,
+				cwd: this.#cwd,
 				prompt,
 				...(queueMode ? { queueMode } : {}),
 			});
@@ -783,6 +789,7 @@ export class AppShell {
 				return await this.methods.chatSend({
 					sessionKey,
 					prompt,
+					cwd: this.#cwd,
 					...(queueMode ? { queueMode } : {}),
 				});
 			}
@@ -804,6 +811,7 @@ export class AppShell {
 			return await this.methods.chatSend({
 				sessionKey,
 				prompt,
+				cwd: this.#cwd,
 				...(queueMode ? { queueMode } : {}),
 			});
 		}
@@ -842,6 +850,7 @@ export class AppShell {
 						description: item.description,
 					})),
 					footer: spec.footer,
+					detail: () => spec.detail,
 					onSelect: (item) => {
 						this.selectors.close();
 						void spec.onSelect(item);
@@ -911,6 +920,7 @@ export class AppShell {
 			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
 			forgetDeletedSession: (sessionKey: string) => this.sessions.forgetDeleted(sessionKey),
 			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
+			reloadSession: (sessionKey: string) => this.sessions.reload(sessionKey),
 			focusQueue: () => this.focusQueue(),
 			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),
 			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),

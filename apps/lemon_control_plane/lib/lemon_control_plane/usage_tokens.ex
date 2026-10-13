@@ -15,8 +15,8 @@ defmodule LemonControlPlane.UsageTokens do
 
   @input_keys [:input_tokens, :input, :prompt_tokens]
   @output_keys [:output_tokens, :output, :completion_tokens]
-  @cache_read_keys [:cached_input_tokens, :cache_read_input_tokens]
-  @cache_write_keys [:cache_creation_input_tokens, :cache_write_input_tokens]
+  @cache_read_keys [:cached_input_tokens, :cache_read_input_tokens, :cache_read]
+  @cache_write_keys [:cache_creation_input_tokens, :cache_write_input_tokens, :cache_write]
   @total_keys [:total_tokens, :total, :tokens]
 
   @doc """
@@ -39,7 +39,7 @@ defmodule LemonControlPlane.UsageTokens do
       "outputTokens" => output,
       "cacheReadTokens" => cache_read,
       "cacheWriteTokens" => cache_write,
-      "totalTokens" => total || sum_or_nil([input, output]),
+      "totalTokens" => total || sum_or_nil([context, output]),
       "contextTokens" => context,
       "costUsd" => cost
     }

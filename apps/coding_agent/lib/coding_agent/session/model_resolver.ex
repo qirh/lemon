@@ -41,6 +41,9 @@ defmodule CodingAgent.Session.ModelResolver do
   def resolve_explicit_model(spec) when is_map(spec) do
     provider = spec[:provider] || spec["provider"]
 
+    provider =
+      if is_atom(provider) and not is_nil(provider), do: Atom.to_string(provider), else: provider
+
     model_id =
       spec[:model_id] || spec["model_id"] || spec[:id] || spec["id"] || spec[:model] ||
         spec["model"]

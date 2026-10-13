@@ -159,6 +159,32 @@ defmodule LemonCore.SessionLifecycle do
     end)
   end
 
+  @doc """
+  Register a newly forked native session in canonical discovery and metadata.
+
+  The native runtime owns the copied conversation and resume mapping. A fork
+  starts with zero runs of its own and independent, unnamed lifecycle metadata.
+  """
+  @spec register_fork(String.t(), String.t()) :: :ok | {:error, term()}
+  def register_fork(source_session_key, destination_session_key) do
+    with agent_id when is_binary(agent_id) and agent_id != "" <-
+           LemonCore.SessionKey.agent_id(source_session_key),
+         true <- destination_session_key != source_session_key,
+         true <- LemonCore.SessionKey.agent_id(destination_session_key) == agent_id,
+         :ok <- RunStore.create_session_index(destination_session_key, agent_id, :control_plane),
+         {:ok, _} <-
+           SessionMetadataStore.patch(destination_session_key, %{
+             title: nil,
+             pinned: false,
+             archived: false
+           }) do
+      :ok
+    else
+      value when value in [nil, false, ""] -> {:error, :invalid_session_key}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Patch title, pin, or archive state for an existing durable session."
   @spec patch(String.t(), map()) :: {:ok, session_row()} | {:error, term()}
   def patch(session_key, attrs) when is_binary(session_key) and is_map(attrs) do

@@ -115,6 +115,10 @@ defmodule LemonAgent.Types do
       * `:label` — a short human-readable name for UI display. Never shown to
         the model.
       * `:execute` — the function below.
+      * `:parallel_safe` — opt in to overlapping calls in the same tool batch.
+        Defaults to `false`; mutations and tools with ordering dependencies
+        must remain sequential. Sequential calls are barriers between parallel
+        groups, even when `max_tool_concurrency` is unbounded.
 
     ## The execute function
 
@@ -196,12 +200,14 @@ defmodule LemonAgent.Types do
             description: String.t(),
             parameters: map(),
             label: String.t(),
+            parallel_safe: boolean(),
             execute: execute_fn()
           }
     defstruct name: "",
               description: "",
               parameters: %{},
               label: "",
+              parallel_safe: false,
               execute: nil
   end
 
@@ -348,9 +354,13 @@ defmodule LemonAgent.Types do
     - `get_api_key` - Resolves API key dynamically for each LLM call
       (useful for short-lived OAuth tokens)
     - `get_steering_messages` - Returns messages to inject mid-run for steering
+    - `has_steering_messages` - Non-consuming queue peek used between tool calls
     - `get_follow_up_messages` - Returns follow-up messages after agent would stop
     - `max_tool_concurrency` - Max number of concurrent tool calls (`nil`/`:infinity` = unbounded)
     - `max_tool_turns` - Max assistant turns that may execute tools before terminal fallback
+    - `max_retries` - Maximum transient provider retries per response (default: 3; 0 disables)
+    - `retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
+    - `retry_max_delay_ms` - Maximum retry delay (default: 30,000ms)
     - `tool_timeout_ms` - Optional per-tool task timeout in milliseconds
     - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `LemonAgent.ToolTaskSupervisor`)
     - `tool_schema_snapshot` - Per-run snapshot used for provider schemas and tool execution
@@ -367,6 +377,7 @@ defmodule LemonAgent.Types do
                | {:error, term()})
     @type get_api_key_fn :: (provider :: String.t() -> String.t() | nil)
     @type get_steering_messages_fn :: (-> [LemonAgent.Types.agent_message()])
+    @type has_steering_messages_fn :: (-> boolean())
     @type get_follow_up_messages_fn :: (-> [LemonAgent.Types.agent_message()])
     @type stream_fn ::
             (LemonAi.Types.Model.t(),
@@ -380,9 +391,13 @@ defmodule LemonAgent.Types do
             transform_context: transform_context_fn() | nil,
             get_api_key: get_api_key_fn() | nil,
             get_steering_messages: get_steering_messages_fn() | nil,
+            has_steering_messages: has_steering_messages_fn() | nil,
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
             max_tool_concurrency: pos_integer() | :infinity | nil,
             max_tool_turns: pos_integer() | :infinity | nil,
+            max_retries: non_neg_integer(),
+            retry_base_delay_ms: non_neg_integer(),
+            retry_max_delay_ms: non_neg_integer(),
             tool_timeout_ms: pos_integer() | :infinity | nil,
             tool_task_supervisor: Supervisor.supervisor() | nil,
             tool_schema_snapshot: LemonAgent.Types.ToolSchemaSnapshot.t() | nil,
@@ -394,9 +409,13 @@ defmodule LemonAgent.Types do
               transform_context: nil,
               get_api_key: nil,
               get_steering_messages: nil,
+              has_steering_messages: nil,
               get_follow_up_messages: nil,
               max_tool_concurrency: nil,
               max_tool_turns: 25,
+              max_retries: 3,
+              retry_base_delay_ms: 2_000,
+              retry_max_delay_ms: 30_000,
               tool_timeout_ms: nil,
               tool_task_supervisor: nil,
               tool_schema_snapshot: nil,
@@ -425,6 +444,8 @@ defmodule LemonAgent.Types do
   - `{:turn_start}` - New turn has started
   - `{:turn_end, message, tool_results}` - Turn completed
   - `{:loop_budget_exhausted, details}` - Tool loop budget exhausted with terminal fallback
+  - `{:provider_retry, details}` - Transient provider retry scheduled, including delay and attempt
+  - `{:provider_retry_end, details}` - Retry sequence succeeded, failed, or was canceled
 
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
@@ -449,6 +470,8 @@ defmodule LemonAgent.Types do
           | {:turn_end, message :: agent_message(),
              tool_results :: [LemonAi.Types.ToolResultMessage.t()]}
           | {:loop_budget_exhausted, details :: map()}
+          | {:provider_retry, details :: map()}
+          | {:provider_retry_end, details :: map()}
           | {:message_start, message :: agent_message()}
           | {:message_update, message :: agent_message(), assistant_event :: term()}
           | {:message_end, message :: agent_message()}
