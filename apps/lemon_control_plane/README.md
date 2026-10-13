@@ -69,6 +69,11 @@ presence, health and cron data. They are not durable event replay cursors.
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
+Bun and other conforming clients automatically pong, keeping long-running
+outbound streams alive without application-level requests. The listener retains
+its 60-second inbound dead-peer timeout for clients that do not respond.
+
 Tool action details use a bounded, credential-redacted wire projection of
 visible text/images and selected public result metadata. Hidden thinking,
 signatures, callbacks and runtime state are excluded; complete diff snapshots
