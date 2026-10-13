@@ -560,6 +560,39 @@ seam, binding forked files to independent native resume tokens. Its manual
 compaction adapter accepts `cwd:` and also works for an idle saved session after
 the previous run's process has exited.
 
+### Planning and context budget
+
+`Session.plan/3` and the `sessions.plan` RPC share one branch-aware lifecycle:
+`enter` makes the session read-only; a successful planning turn saves its final
+Markdown response as an immutable review artifact under native session storage.
+The journal records the full proposal, so restart, branch navigation and compaction
+do not lose it. Planning tools are restricted to `read`, `read_skill`, `recall`,
+`grep`, `find` and `ls`, further restricted by the session's existing policy.
+
+Approval is an explicit user operation with the exact reviewed revision. A stale
+revision or edited/missing artifact is rejected. Selecting code mode is not
+approval. Approval restores the original permitted tools and includes the approved
+plan in subsequent model context; it does not itself submit an execution prompt.
+`discard` exits without approval. The TUI exposes `/plan enter`, `/plan`,
+`/plan approve` and `/plan discard`; ACP uses the same native lifecycle.
+Proposals are bounded to 32 KiB. Entering before the first run durably binds the
+native journal to the logical session key, rather than creating parallel client state.
+
+Manual `/compact [focus]` (alias `/compress`) forwards focus instructions and cwd
+to native compaction, including after the previous runtime has exited. Its
+structured handoff preserves exact changed paths, decisions and rationale, open
+work, failing tests/blockers, verification commands/results and still-relevant
+previous-summary facts. Observed results remain distinct from proposed or
+unverified work; transcript/tool instructions are treated as untrusted data.
+
+`Session.context_budget/1` reports current request tokens, model window, reserve,
+automatic-compaction threshold and headroom before that threshold. It shares the
+automatic trigger's estimator, using the latest successful provider usage plus
+newer message estimates—not cumulative run spending. Sources are `usage`,
+`usage+estimate` or `estimate`. Compaction and planning-context changes invalidate
+older usage anchors. A cold read without a valid measured anchor reports
+unavailable rather than omitting unknown system/tool overhead.
+
 ### Tool Execution
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
