@@ -187,6 +187,15 @@ Name a child with the existing `sessions.metadata.patch` method using
 Find named sessions with `sessions.list` using `{query}` (`operator.read`).
 No separate naming or search API is needed.
 
+To name a new conversation **before its first turn**, explicitly call
+`sessions.create` (`operator.write`) with a canonical `sessionKey` and native
+workspace `cwd`, then use the same metadata patch. Creation returns
+`{sessionKey, sessionId, created}` and is idempotent for that key/workspace.
+It persists an empty native journal and zero-run session index; it does not send
+a prompt, enter plan mode, or manufacture history. Existing native sessions
+return `created: false`; a mismatched workspace or non-native identity is not
+silently rebound. Metadata patches still refuse unknown session IDs by default.
+
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch
 after rewind. Only visible user/assistant text is projected; abandoned turns,

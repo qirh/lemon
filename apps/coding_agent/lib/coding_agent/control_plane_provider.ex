@@ -138,11 +138,46 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc "Explicitly allocate a durable empty native session without entering a mode or sending a prompt."
+  def session_create(session_key, cwd) do
+    if LemonCore.SessionKey.agent_id(session_key) in [nil, ""] do
+      {:error, :invalid_session_key}
+    else
+      :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
+        case native_session_path(session_key, cwd) do
+          {:ok, path} ->
+            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                 result when result in [:ok, {:error, :exists}] <-
+                   register_native_index(session_key) do
+              {:ok, %{"sessionId" => session.header.id, "created" => false}}
+            end
+
+          {:error, :session_not_found} ->
+            cond do
+              live_session(session_key) != nil ->
+                {:error, :busy}
+
+              LemonCore.SessionLifecycle.get(session_key) != nil ->
+                {:error, :unsupported_session}
+
+              true ->
+                with {:ok, session} <- create_native_session(session_key, cwd) do
+                  {:ok, %{"sessionId" => session.header.id, "created" => true}}
+                end
+            end
+
+          {:error, _} = error ->
+            error
+        end
+      end)
+    end
+  end
+
   @doc "Inspect or explicitly transition branch-aware native planning state."
   def session_plan(session_key, cwd, action, opts) do
     case live_session(session_key) do
       nil ->
-        :global.trans({{__MODULE__, :plan, session_key}, self()}, fn ->
+        :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
           case native_session_path(session_key, cwd) do
             {:ok, path} ->
               :global.trans({{__MODULE__, path}, self()}, fn ->
@@ -161,7 +196,10 @@ defmodule CodingAgent.ControlPlaneProvider do
               {:ok, CodingAgent.Session.Planning.empty()}
 
             {:error, :session_not_found} when action == :enter ->
-              create_planning_session(session_key, cwd)
+              with {:ok, session} <- create_native_session(session_key, cwd),
+                   {:ok, plan, _} <- CodingAgent.Session.Planning.transition(session, :enter, []) do
+                {:ok, plan}
+              end
 
             {:error, _} = error ->
               error
@@ -173,26 +211,28 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
-  defp create_planning_session(session_key, cwd) do
+  defp create_native_session(session_key, cwd) do
     session = CodingAgent.SessionManager.new(cwd)
     path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
     session = CodingAgent.SessionManager.persist(session, path)
 
-    with {:ok, plan, _session} <- CodingAgent.Session.Planning.transition(session, :enter, []),
-         :ok <-
+    with :ok <-
            LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
              last_engine: "lemon",
              last_resume_token: session.header.id,
              updated_at: System.system_time(:millisecond)
            }),
-         :ok <-
-           LemonCore.RunStore.create_session_index(
-             session_key,
-             LemonCore.SessionKey.agent_id(session_key) || "default",
-             :control_plane
-           ) do
-      {:ok, plan}
+         :ok <- register_native_index(session_key) do
+      {:ok, session}
     end
+  end
+
+  defp register_native_index(session_key) do
+    LemonCore.RunStore.create_session_index(
+      session_key,
+      LemonCore.SessionKey.agent_id(session_key) || "default",
+      :control_plane
+    )
   end
 
   defp native_session_opts(session_key, cwd, path) do

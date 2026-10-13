@@ -234,6 +234,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"sessionKey" => :string},
       optional: %{"limit" => :integer}
     },
+    "sessions.create" => %{
+      required: %{"sessionKey" => :string, "cwd" => :string},
+      optional: %{}
+    },
     "sessions.plan" => %{
       required: %{"sessionKey" => :string, "cwd" => :string, "action" => :string},
       optional: %{"revision" => :string}
