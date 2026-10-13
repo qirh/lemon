@@ -488,3 +488,22 @@ describe("SessionController routing hydration", () => {
 		expect(app.store.focused.model).toBeUndefined();
 	});
 });
+
+test("rewind reload replaces abandoned history with full active-branch messages and retains the draft", async () => {
+	const { app, server } = await bootApp("tui-a");
+	app.store.focused.appendDelta("history:a", Number.NaN, "abandoned answer");
+	app.store.focused.finalizeRun("history:a", { ok: true });
+	app.editor.setText("recalled prompt");
+	server.respondWith("chat.history", {
+		messages: [{ id: "a", role: "assistant", content: "active answer", timestampMs: 10 }],
+	});
+	await app.sessions.reload("tui-a");
+	expect(chatText(app)).toContain("active answer");
+	expect(chatText(app)).not.toContain("abandoned answer");
+	expect(app.editor.getExpandedText()).toBe("recalled prompt");
+	expect(server.requestsFor("chat.history").at(-1)?.params).toMatchObject({
+		sessionKey: "tui-a",
+		cwd: process.cwd(),
+		includeFullText: true,
+	});
+});

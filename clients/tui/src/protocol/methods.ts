@@ -14,6 +14,13 @@
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
 import { MethodUnavailableError } from "./errors.ts";
 import type {
+	SessionRewindPreview,
+	SessionRewindResult,
+	SessionRewindTarget,
+	SessionTreeParams,
+	SessionTreeResult,
+} from "./session-tree.ts";
+import type {
 	ApprovalResolveParams,
 	BlueprintActivationResult,
 	BlueprintInspectResult,
@@ -80,6 +87,8 @@ export const METHOD = {
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
+	sessionsTree: "sessions.tree",
+	sessionsRewind: "sessions.rewind",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -245,6 +254,41 @@ export class ControlPlaneMethods {
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.sessionsPatch, params, options);
+	}
+
+	sessionsTree(params: SessionTreeParams, options?: RequestOptions): Promise<SessionTreeResult> {
+		return this.#call<SessionTreeResult>(METHOD.sessionsTree, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsRewindPreview(
+		params: SessionRewindTarget,
+		options?: RequestOptions,
+	): Promise<SessionRewindPreview> {
+		return this.#call<SessionRewindPreview>(
+			METHOD.sessionsRewind,
+			{ ...params, dryRun: true },
+			{
+				...options,
+				queueIfOffline: false,
+			},
+		);
+	}
+
+	sessionsRewindConfirm(
+		params: SessionRewindTarget & { confirmationToken: string },
+		options?: RequestOptions,
+	): Promise<SessionRewindResult> {
+		return this.#call<SessionRewindResult>(
+			METHOD.sessionsRewind,
+			{ ...params, dryRun: false },
+			{
+				...options,
+				queueIfOffline: false,
+			},
+		);
 	}
 
 	sessionsMetadataPatch(

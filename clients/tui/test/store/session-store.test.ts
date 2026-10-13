@@ -454,3 +454,14 @@ test("a notice seals text layout without hiding the later interrupt outcome", ()
 	session.finalizeRun("run", { ok: true });
 	expect(block?.status).toBe("aborted");
 });
+
+test("replacing history clears synthetic run indexes as well as visible blocks", () => {
+	const session = new SessionStore("s");
+	session.appendDelta("history:entry", Number.NaN, "abandoned text");
+	session.finalizeRun("history:entry", { ok: true });
+	session.resetTranscript();
+	session.appendDelta("history:entry", Number.NaN, "active text");
+	session.finalizeRun("history:entry", { ok: true });
+	expect(session.blocks).toHaveLength(1);
+	expect(session.assistantFor("history:entry")?.text).toBe("active text");
+});

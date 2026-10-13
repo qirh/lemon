@@ -83,6 +83,8 @@ export class SessionStore {
 	lastRunEndedAtMs = 0;
 	/** Last engine reported by `agent started`, for the status line. */
 	engine: string | undefined;
+	/** Server-confirmed user label, separate from the durable routing key. */
+	title: string | undefined;
 	/** Model this session runs on, as last set through `/model` or reported. */
 	model: string | undefined;
 	/** Where {@link model} came from. See {@link setModel} for what that buys. */
@@ -206,6 +208,23 @@ export class SessionStore {
 	}
 
 	// -- writes --------------------------------------------------------------
+
+	/** Forget all transcript indexes when the active branch is replaced. */
+	resetTranscript(): void {
+		this.blocks.length = 0;
+		this.byActionId.clear();
+		this.reasoningByActionId.clear();
+		this.#buffers.clear();
+		this.#deltaSeqs.clear();
+		this.#assistantByRun.clear();
+		this.#assistantNeedsSegment.clear();
+		this.#finishedRuns.clear();
+		this.#answerOnly.clear();
+		this.activeRunId = undefined;
+		this.busy = false;
+		this.usage = undefined;
+		this.unread = 0;
+	}
 
 	addUser(text: string, at = Date.now()): Block {
 		return this.#push({ id: nextBlockId("user"), kind: "user", at, text });
