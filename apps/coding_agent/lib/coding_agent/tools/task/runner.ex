@@ -6,7 +6,6 @@ defmodule CodingAgent.Tools.Task.Runner do
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
   alias CodingAgent.Session
-  alias CodingAgent.Subagents
   alias CodingAgent.Tools.Task.Result
 
   @await_poll_ms 200
@@ -99,18 +98,6 @@ defmodule CodingAgent.Tools.Task.Runner do
     end
   end
 
-  @spec maybe_apply_role_prompt(String.t(), String.t() | nil, String.t()) ::
-          String.t() | {:error, String.t()}
-  def maybe_apply_role_prompt(prompt, nil, _cwd), do: prompt
-  def maybe_apply_role_prompt(prompt, "", _cwd), do: prompt
-
-  def maybe_apply_role_prompt(prompt, role_id, cwd) do
-    case Subagents.get(cwd, role_id) do
-      nil -> {:error, "Unknown role: #{role_id}"}
-      role -> role.prompt <> "\n\n" <> prompt
-    end
-  end
-
   defp await_result(
          session,
          session_ref,
@@ -154,7 +141,9 @@ defmodule CodingAgent.Tools.Task.Runner do
           poll_ms
         )
 
-      {:session_event, ^session_id, {:tool_execution_update, _id, name, args, _partial_result}} ->
+      {:session_event, ^session_id, {:tool_execution_update, _id, name, args, partial_result}} ->
+        maybe_forward_descendant_update(on_update, name, partial_result)
+
         maybe_emit_action_update(
           on_update,
           description,
@@ -376,6 +365,16 @@ defmodule CodingAgent.Tools.Task.Runner do
     "Task session crashed before completion: #{inspect(reason)}"
   end
 
+  defp maybe_forward_descendant_update(
+         callback,
+         "task",
+         %AgentToolResult{details: %{task_id: task_id}} = result
+       )
+       when is_function(callback, 1) and is_binary(task_id),
+       do: callback.(result)
+
+  defp maybe_forward_descendant_update(_callback, _name, _result), do: :ok
+
   defp maybe_emit_action_update(nil, _description, _text, _kind, _phase, _detail), do: :ok
 
   defp maybe_emit_action_update(on_update, description, text, kind, phase, detail) do
@@ -446,7 +445,7 @@ defmodule CodingAgent.Tools.Task.Runner do
 
   defp with_session_id(callback, session_id) do
     fn result ->
-      callback.(%{result | details: Map.put(result.details || %{}, :session_id, session_id)})
+      callback.(%{result | details: Map.put_new(result.details || %{}, :session_id, session_id)})
     end
   end
 

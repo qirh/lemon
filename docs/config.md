@@ -207,6 +207,48 @@ Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
 executions) when the agent invokes its `task` tool. There are no vendor CLI task
 runners and no `[runtime.cli.*]` configuration.
 
+### Model Roles
+
+`[model_roles]` is a string-to-string map in the same canonical config, layered
+global → project like other sections. Roles are explicit selectors, not model IDs
+or subagent personas:
+
+```toml
+[defaults]
+model = "@default"
+
+[model_roles]
+default = "openai:gpt-4o"
+smol = "openai:gpt-4o-mini"
+slow = "@review"
+review = "anthropic:claude-sonnet-4-20250514"
+task = "@smol"          # Optional: omitted task.model otherwise inherits its parent
+compaction = "@smol"    # Optional: takes precedence over configured smol
+```
+
+Native session model overrides and explicit `task.model` accept `@default`,
+`@smol`, `@slow`, and any configured custom role. Aliases expand recursively.
+Concrete model specs retain their existing behavior; bare `smol` is still a model
+ID, not the `@smol` role. Role names remain strings and are never converted into
+atoms. Empty/non-string mappings, unknown custom aliases, and alias cycles
+produce configuration/model-resolution errors rather than silently ignoring an
+override. A configured role still needs to resolve to a valid concrete model.
+
+Without a mapping, the three built-ins use the configured default for a native
+session and the current parent model for a task. They do not select a new provider
+or a hard-coded small/slow model. A default of `@default` requires a role mapping
+that ultimately reaches a concrete model; it cannot fall back to itself.
+Omitting `task.model` preserves parent inheritance unless `model_roles.task` is
+configured; an explicit task model takes precedence.
+
+Compaction and abandoned-branch summaries choose `model_roles.compaction` first,
+then `model_roles.smol` **only if configured**, otherwise the active session model.
+An explicit compaction `:model` option takes precedence. Summary credentials and
+provider stream options are resolved for that selected model together, including
+background compaction, without changing the main session's model. Explicit
+summary credential/stream-option overrides are retained.
+
+
 ### Named Execution Nodes
 
 The `agent` tool can route a delegated run to an authenticated execution node

@@ -411,13 +411,17 @@ defmodule CodingAgent.Tools.Agent do
         description: validated.description,
         kind: :agent,
         run_id: run_id,
+        parent_run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
+        session_key: Keyword.get(opts, :session_key),
+        parent_session_id: Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session),
+        parent_agent_id: Keyword.get(opts, :agent_id),
         agent_id: validated.agent_id,
         delegated_session_key: delegated_session_key,
         role: validated.role_id,
         node: result_node(validated)
       })
 
-    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key)
+    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key, opts)
 
     watcher_result =
       start_completion_watcher(
@@ -497,7 +501,9 @@ defmodule CodingAgent.Tools.Agent do
     }
   end
 
-  defp register_delegated_run(run_id, task_id, validated, delegated_session_key) do
+  defp register_delegated_run(run_id, task_id, validated, delegated_session_key, opts) do
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
+
     case RunGraph.get(run_id) do
       {:ok, _record} ->
         :ok
@@ -510,7 +516,9 @@ defmodule CodingAgent.Tools.Agent do
           status: :queued,
           inserted_at: now,
           updated_at: now,
-          parent: nil,
+          parent: parent_run_id,
+          session_key: Keyword.get(opts, :session_key),
+          parent_session_id: Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session),
           children: [],
           type: :agent,
           task_id: task_id,
@@ -520,6 +528,12 @@ defmodule CodingAgent.Tools.Agent do
           node: result_node(validated)
         })
     end
+
+    if is_binary(parent_run_id) and parent_run_id != "" and parent_run_id != run_id do
+      RunGraph.add_child(parent_run_id, run_id)
+    end
+
+    :ok
   end
 
   defp wait_sync_completion(run_id, validated, delegated_session_key) do
@@ -554,15 +568,19 @@ defmodule CodingAgent.Tools.Agent do
 
   defp build_run_request(validated, delegated_session_key, cwd, opts) do
     parent_session_key = Keyword.get(opts, :session_key)
-    parent_session_id = Keyword.get(opts, :session_id)
+    parent_session_id = Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session)
     parent_agent_id = Keyword.get(opts, :agent_id)
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
 
     role_cwd = validated.cwd || cwd
 
-    with {:ok, prompt} <- maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
+    with {:ok, prompt, persona} <-
+           maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
       base_meta =
         %{
+          parent_run_id: parent_run_id,
           delegated_by: %{
+            run_id: parent_run_id,
             session_key: parent_session_key,
             session_id: parent_session_id,
             agent_id: parent_agent_id
@@ -576,8 +594,16 @@ defmodule CodingAgent.Tools.Agent do
         |> compact_map()
 
       meta =
-        base_meta
-        |> Map.merge(validated.meta)
+        validated.meta
+        |> Map.drop([
+          :delegated_by,
+          "delegated_by",
+          :delegated,
+          "delegated",
+          :parent_run_id,
+          "parent_run_id"
+        ])
+        |> Map.merge(base_meta)
         |> Map.drop([
           :node,
           "node",
@@ -596,9 +622,13 @@ defmodule CodingAgent.Tools.Agent do
           agent_id: validated.agent_id,
           prompt: prompt,
           queue_mode: validated.queue_mode,
-          model: validated.model,
+          model: validated.model || persona_model(persona),
           cwd: validated.cwd || cwd,
-          tool_policy: validated.tool_policy,
+          tool_policy:
+            if(persona,
+              do: Subagents.tool_policy(persona, validated.tool_policy),
+              else: validated.tool_policy
+            ),
           meta: meta
         })
 
@@ -1334,15 +1364,18 @@ defmodule CodingAgent.Tools.Agent do
 
   defp validate_run_params(_, _cwd), do: {:error, "params must be an object"}
 
-  defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt}
-  defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt}
+  defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt, nil}
+  defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt, nil}
 
   defp maybe_apply_role_prompt(prompt, role_id, cwd) do
-    case Subagents.get(cwd, role_id) do
-      nil -> {:error, "Unknown role: #{role_id}"}
-      role -> {:ok, role.prompt <> "\n\n" <> prompt}
+    with {:ok, persona} <- Subagents.fetch(cwd, role_id) do
+      {:ok, persona.prompt <> "\n\n" <> prompt, persona}
     end
   end
+
+  defp persona_model(%{model: model}) when is_binary(model), do: model
+  defp persona_model(%{role: role}) when is_binary(role), do: "@" <> role
+  defp persona_model(_), do: nil
 
   defp normalize_join_mode(nil), do: :wait_all
   defp normalize_join_mode("wait_all"), do: :wait_all
