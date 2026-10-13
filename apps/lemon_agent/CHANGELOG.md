@@ -6,6 +6,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] - 2026-10-13
+
 First release as a standalone package. `lemon_agent` is the `:lemon_agent`
 application from the Lemon umbrella; the OTP application name and every
 `LemonAgent.*` module name are unchanged.
