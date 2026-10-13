@@ -109,7 +109,7 @@ defmodule LemonMemory.Document do
       provider: provider,
       model: model,
       outcome: LemonCore.RunOutcome.infer(summary),
-      meta: Map.get(summary, :meta) || %{}
+      meta: LemonMemory.Project.history_metadata(Map.get(summary, :meta) || %{})
     }
   end
 

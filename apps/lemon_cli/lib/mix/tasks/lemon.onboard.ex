@@ -161,6 +161,7 @@ defmodule Mix.Tasks.Lemon.Onboard do
               "--secret-name",
               "--model",
               "--auth",
+              "--codex-auth-path",
               "--enterprise-domain",
               "--project-id"
             ] do

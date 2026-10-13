@@ -7,6 +7,8 @@
  */
 
 import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
+import { card } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { TranscriptMarks } from "../../terminal/marks.ts";
@@ -26,6 +28,7 @@ export class UserMessageComponent extends Container {
 	#lines: readonly string[] | undefined;
 	readonly #clamp = new WidthClamp();
 	readonly #marks = new TranscriptMarks();
+	#native: NativeNode | undefined;
 
 	constructor(text: string) {
 		super();
@@ -35,6 +38,11 @@ export class UserMessageComponent extends Container {
 				color: (value) => theme.fg("userText", value),
 			}),
 		);
+	}
+
+	override describe(): NativeNode {
+		this.#native ??= card({ role: "omp.user", tone: "user" }, this.children);
+		return this.#native;
 	}
 
 	override render(width: number): readonly string[] {

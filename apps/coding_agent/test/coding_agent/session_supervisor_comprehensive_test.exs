@@ -15,6 +15,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Session
+  alias CodingAgent.SessionManager
   alias CodingAgent.SessionRegistry
   alias CodingAgent.SessionSupervisor
 
@@ -996,6 +997,11 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       assert stats.session_id == long_id
 
       assert {:ok, ^pid} = SessionRegistry.lookup(long_id)
+      state = Session.get_state(pid)
+      assert File.regular?(state.session_file)
+      assert byte_size(Path.basename(state.session_file)) < 255
+      assert {:ok, journal} = SessionManager.load_from_file(state.session_file)
+      assert journal.header.id == long_id
     end
 
     test "sessions with special characters in session_id are handled" do
@@ -1004,6 +1010,15 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       stats = Session.get_stats(pid)
       assert stats.session_id == special_id
+    end
+
+    test "native identities cannot escape the session journal directory" do
+      session_id = "../escaped-session-#{System.unique_integer([:positive])}"
+      {:ok, pid} = start_test_session(session_id: session_id)
+      state = Session.get_state(pid)
+      assert Path.dirname(state.session_file) == SessionManager.get_session_dir(state.cwd)
+      assert {:ok, journal} = SessionManager.load_from_file(state.session_file)
+      assert journal.header.id == session_id
     end
   end
 

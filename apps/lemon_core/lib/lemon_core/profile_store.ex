@@ -160,13 +160,19 @@ defmodule LemonCore.ProfileStore do
     end
   end
 
-  @doc "Build the canonical native run request for a profile's main chat."
+  @doc """
+  Build the canonical native run request for a profile's main chat.
+
+  An image-only prompt may be empty when `:images` contains normalized, nonempty
+  native image blocks. Ingress owns image decoding/limits; workspace and node
+  ownership remain profile-derived.
+  """
   @spec chat_request(profile(), String.t(), keyword()) ::
           {:ok, RunRequest.t()} | {:error, term()}
   def chat_request(profile, prompt, opts \\ []) when is_map(profile) do
     with id when is_binary(id) <- profile["id"],
          :ok <- validate_id(id),
-         {:ok, prompt} <- bounded_string(prompt, :prompt, @max_prompt_bytes),
+         {:ok, prompt} <- chat_prompt(prompt, Keyword.get(opts, :images, [])),
          {:ok, node} <- normalize_node(profile["node"]) do
       meta =
         opts
@@ -190,6 +196,7 @@ defmodule LemonCore.ProfileStore do
          session_key: profile["canonicalSessionKey"] || SessionKey.main(id),
          agent_id: id,
          prompt: prompt,
+         images: Keyword.get(opts, :images, []),
          queue_mode: Keyword.get(opts, :queue_mode, :collect),
          model: Keyword.get(opts, :model) || profile["model"],
          cwd: cwd,
@@ -683,6 +690,23 @@ defmodule LemonCore.ProfileStore do
   defp optional_bounded(nil, _field, _max), do: {:ok, nil}
   defp optional_bounded("", _field, _max), do: {:ok, nil}
   defp optional_bounded(value, field, max), do: bounded_string(value, field, max)
+
+  defp chat_prompt("", [_ | _] = images) do
+    normalized? =
+      Enum.all?(images, fn
+        %{type: :image, data: data, mime_type: mime}
+        when is_binary(data) and data != "" and
+               mime in ["image/png", "image/jpeg", "image/gif", "image/webp"] ->
+          true
+
+        _ ->
+          false
+      end)
+
+    if normalized?, do: {:ok, ""}, else: {:error, {:invalid_field, :prompt}}
+  end
+
+  defp chat_prompt(prompt, _images), do: bounded_string(prompt, :prompt, @max_prompt_bytes)
 
   defp bounded_string(value, field, max) when is_binary(value) do
     value = String.trim(value)

@@ -56,7 +56,6 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:session_key, session_key)
     |> maybe_add_opt(:agent_id, agent_id)
     |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
-    |> maybe_add_opt(:acp_client_terminal, Keyword.get(opts, :acp_client_terminal))
     |> maybe_add_opt(:acp_mcp_session_id, Keyword.get(opts, :acp_mcp_session_id))
     |> maybe_add_opt(
       :acp_client_fs_read_text_file,
@@ -212,8 +211,7 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def session_file_path(session_id, cwd) do
-    dir = CodingAgent.Config.sessions_dir(cwd)
-    Path.join(dir, "#{session_id}.jsonl")
+    CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
   def finalize_session(state) do
@@ -992,8 +990,8 @@ defmodule CodingAgent.Session.Presentation do
 
   def merge_usage(acc, usage) do
     merged =
-      Map.merge(acc, usage, fn _k, v1, v2 ->
-        if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
+      Map.merge(acc, usage, fn _key, first, second ->
+        if is_number(first) and is_number(second), do: first + second, else: second
       end)
 
     previous_cost = Map.get(acc, :cost) || Map.get(acc, "cost")
@@ -1075,8 +1073,7 @@ defmodule CodingAgent.Session.Presentation do
     }
   end
 
-  # Cumulative previews are bounded, while each incremental delta remains available
-  # after that preview fills. This lets ACP append long thought streams faithfully.
+  # Bounded cumulative previews are separate from faithful incremental deltas.
   defp reasoning_payload(text, phase, delta) do
     preview = reasoning_payload_text(text, phase)
 

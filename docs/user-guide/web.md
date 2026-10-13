@@ -79,6 +79,18 @@ session. Named routes reload durable prompt, tool, and answer history before
 subscribing to new streaming events, so an existing conversation can be
 continued rather than merely reused as an empty routing key.
 
+Tool cards update while a command is still running, not only when it finishes.
+Expand a card to inspect its bounded arguments and latest output; the completed
+result replaces the live preview. Reopening a named session retains one card
+per durable action, with its latest phase; live updates reuse that same card.
+
+The **Subagents** panel follows actual parent/child task links for the session.
+It refreshes every two seconds while the page is connected and includes running
+and finished children, their status, and links to available child sessions.
+The tree is bounded to 50 nodes and eight levels. Missing runtime data is shown
+as unavailable, never as proof that no child work exists. It does not expose
+child prompts, results, repository paths, or credentials.
+
 ## Management access
 
 Set `LEMON_WEB_ACCESS_TOKEN`, launch the full runtime, and open `/manage` with
@@ -92,7 +104,12 @@ The server validates the token, stores only a derived signed-session marker,
 and redirects to the same address without `token` before rendering the page.
 The server validates the same token for every page under `/manage`. The
 sessions page shows local runtime health, live named-node names, and
-durable-session counts. From there you can:
+durable-session counts. **Working now** includes active agents before their
+first run has produced durable history. Open **Live transcript** to watch a run
+or **Open** beside a saved session to continue it. The list refreshes every
+three seconds while connected; an unavailable router preserves the last known
+work with an explicit unavailable state. Up to 40 active runs and 200 matching
+durable sessions are shown. From there you can:
 
 - search session keys, titles, prompts, and answers, then filter active,
   archived, or all sessions;
@@ -107,6 +124,48 @@ threshold and exact candidate identities plus their current lifecycle state.
 If any candidate changes, no deletion occurs and the page asks for a fresh
 preview. Export and inspection omit raw run records, raw event payloads,
 credentials, and secret values and report any size-bound run omissions.
+
+Management labels and in-page history additionally omit path-bearing tokens;
+the private chat transcript remains available only through its authenticated
+session page.
+
+### Manage automated coding work
+
+Choose **Automation** from the sessions page, or open `/manage/work`, to follow
+the same kanban boards, goals, and cron jobs used by agent tools and the CLI.
+The dashboard refreshes while connected and links accepted runs to their live
+session transcripts. It shows bounded status, progress, result-state, and
+retry information without exposing stored prompts, objectives, repository
+paths, or raw errors.
+
+- **Kanban:** inspect cards in the board's configured workflow order, including
+  custom columns; start a board or stop its dispatcher and active work.
+- **Goals:** start a bounded execution, inspect active and completed progress,
+  and pause, resume, or stop its loop.
+- **Cron:** run a configured job now, pause or resume its schedule, inspect
+  recent runs, and stop an exact active invocation.
+
+Controls use the existing automation managers, not a separate browser
+scheduler. Changes are previewed against the current target revision before
+confirmation. A changed target requires a new preview; stale confirmations
+cannot stop a replacement run or silently apply to newer settings. Cancellation
+requests and unknown outcomes remain visible until the shared runtime confirms
+the final state.
+
+A failed attempt is shown as **Last run: failed**, not silently treated as
+unfinished work. Resume a paused goal before starting another bounded attempt.
+Failed kanban cards are not automatically redispatched: after reviewing the
+private transcript, use the `kanban` tool to update the card back to its first
+column, then start its board. Cron shows each attempt's retry number and links
+to that invocation's actual session rather than only the job's parent session.
+If a browser control reports an unknown outcome, it does not retry the action;
+inspect shared live state before reopening the page to act again.
+
+Create repository-backed work with the `kanban`, `goal`, or `cron` agent tools
+(or their existing control-plane surfaces), then use the dashboard to operate
+it. Creating a cron job does not require enabling its schedule: a paused job can
+still be run manually. The browser does not accept arbitrary shell commands or
+repository paths in management forms.
 
 ### Manage provider routing
 
@@ -134,8 +193,8 @@ you to re-enter the same reference and Lemon compares only its digest before
 calling the shared provider-configuration service. The service remains the
 single owner of comment-preserving validation and atomic TOML replacement.
 
-Approvals, automation, skills/MCP, memory, logs, and broader configuration still
-use their existing CLI/TUI/control-plane surfaces.
+Skills/MCP, memory, logs, and broader configuration retain their existing
+CLI/TUI/control-plane surfaces where no management page is linked.
 
 ## Access control
 

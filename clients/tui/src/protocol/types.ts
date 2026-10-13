@@ -298,9 +298,18 @@ export interface ConnectParams {
 
 export type QueueMode = "collect" | "followup" | "steer" | "redirect" | "interrupt";
 
+/** Canonical LemonAi image content; data is raw base64, not a data URL or path. */
+export interface ImageContent {
+	type: "image";
+	mime_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+	data: string;
+}
+
 export interface ChatSendParams {
 	sessionKey: string;
 	prompt: string;
+	/** At most five images and 10 MiB aggregate decoded bytes. */
+	images?: readonly ImageContent[];
 	agentId?: string;
 	/** Launch workspace for ordinary TUI sessions; profiles keep server-owned cwd. */
 	cwd?: string;
@@ -390,6 +399,8 @@ export interface ProfileDeleteResult {
 export interface ProfileChatParams {
 	id: string;
 	prompt: string;
+	/** Same canonical multimodal payload as chat.send, through the profile route. */
+	images?: readonly ImageContent[];
 	model?: string;
 	queueMode?: QueueMode;
 }
@@ -552,6 +563,16 @@ export interface SessionsListResult {
 	filters?: Record<string, unknown>;
 	summary?: Record<string, unknown>;
 	[key: string]: unknown;
+}
+
+export interface SessionsForkParams {
+	sessionKey: string;
+	cwd: string;
+}
+
+export interface SessionsForkResult {
+	sessionKey: string;
+	sourceSessionKey: string;
 }
 
 export interface SessionsListParams {

@@ -4,17 +4,15 @@
  * Flat container order (later phases slot components into the same seams):
  *
  *   banner        welcome + connection state
- *   chat          TranscriptContainer: the blocks, with the native-scrollback
- *                 commit seam (`getNativeScrollbackLiveRegionStart`)
+ *   chat          TranscriptContainer: ordered semantic history and live blocks
  *   queue         the editable backlog, when there is one
  *   approval      the decision panel, when a tool is waiting
  *   status        spare slot above the status line
  *   statusLine    one line: session, activity, approvals
  *   editor        the prompt
  *
- * The two panels sit *below* the transcript on purpose: everything under the
- * transcript's live region is repainted every frame, so a panel that appears,
- * grows and vanishes can never strand a row in the terminal's own scrollback.
+ * RowFrameProvider splits main (banner/transcript) from the mutable dock
+ * (queue/approval/status/editor). Dock rows never enter native scrollback.
  *
  * Wiring rules this file keeps to, because later phases depend on them:
  *   - controllers own the stores and the UI; components stay dumb
@@ -32,6 +30,12 @@ import { type CommandHost, type CommandRegistry, createCommandRegistry } from ".
 import { contextWindowFromCache } from "./commands/model.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
+import {
+	ComposerDrafts,
+	type ComposerSubmission,
+	type SubmissionDisposition,
+} from "./composer/drafts.ts";
+import type { ImageContent } from "./protocol/types.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient } from "./protocol/client.ts";
 import { ControlPlaneError } from "./protocol/errors.ts";
@@ -46,6 +50,7 @@ import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import type { NoticeLevel } from "./store/transcript-model.ts";
+import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
@@ -59,12 +64,16 @@ import { ApprovalController } from "./ui/controllers/approval-controller.ts";
 import { CommandController, type DeliverOptions } from "./ui/controllers/command-controller.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
 import { InputController } from "./ui/controllers/input-controller.ts";
+import { CommandPalette } from "./ui/controllers/command-palette.ts";
+import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
+import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
 import {
 	type ConfirmSpec,
 	SessionController,
 	synthesizeHistory,
 } from "./ui/controllers/session-controller.ts";
+import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
 import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
@@ -104,6 +113,7 @@ export class AppShell {
 	readonly client: ControlPlaneClient;
 	readonly methods: ControlPlaneMethods;
 	readonly store: AppStore;
+	readonly composerDrafts = new ComposerDrafts();
 	readonly events: EventController;
 
 	readonly commands: CommandRegistry;
@@ -132,14 +142,21 @@ export class AppShell {
 	readonly #switcher: SessionSwitcher;
 	readonly #queuePanel: QueuePanelComponent;
 	readonly #host: CommandHost;
+	readonly #palette: CommandPalette;
+	readonly #taskTree: TaskTreeController;
+	readonly #toolInspector: ToolInspector;
 
 	readonly #version: string;
 	readonly #onExit: ((code: number) => void) | undefined;
 	readonly #cwd: string;
+	readonly #forkConnection: Pick<ForkLaunch, "url" | "operatorToken">;
 	readonly #terminalIntegration: TerminalIntegration;
 
 	#disposers: Array<() => void> = [];
+	readonly #drainingSessions = new Set<string>();
 	#started = false;
+	#sessionReady = false;
+	#initialSessionLoad: Promise<void> | undefined;
 	#queueMounted = false;
 	/** True while the queue panel, rather than the editor, owns the keyboard. */
 	#queueFocused = false;
@@ -156,16 +173,37 @@ export class AppShell {
 		this.#version = options.version ?? "dev";
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
+		this.#forkConnection = { url: options.url, operatorToken: options.operatorToken };
 		this.client =
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
 		this.store = new AppStore(options.sessionKey ?? defaultSessionKey());
-		this.#terminalIntegration = new TerminalIntegration(this.tui.terminal, this.store, this.client);
+		this.#terminalIntegration = new TerminalIntegration(
+			this.tui.terminal,
+			this.store,
+			this.client,
+			this.#cwd,
+			undefined,
+			() => {
+				if (this.tui.nativeRendering) this.tui.renderNow();
+			},
+		);
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
 			onSubmit: (text) => this.submit(text),
+			canSubmit: () =>
+				this.#sessionReady &&
+				this.client.online &&
+				!this.selectors.isOpen &&
+				!this.approvals.panel.visible,
+			composer: {
+				drafts: this.composerDrafts,
+				sessionKey: () => this.store.focusedKey,
+				cwd: () => this.#cwd,
+				submit: (submission) => this.#submitAttachments(submission),
+			},
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
 			onExternalEdit: () => this.openExternalEditor(),
@@ -210,6 +248,18 @@ export class AppShell {
 			tui: this.tui,
 			defaultFocus: () => this.#editor,
 		});
+		this.#toolInspector = new ToolInspector({
+			store: this.store,
+			rows: () => this.tui.terminal.rows,
+			present: (component) => this.selectors.open(component),
+			repaint: () => this.selectors.repaint(),
+			notice: (text) => this.events.notice(text),
+		});
+		this.#taskTree = new TaskTreeController({
+			requestRender: () => this.tui.requestRender(),
+			onBlur: () => this.#focusEditor(),
+		});
+		this.#taskTree.setSession(this.store.focusedKey);
 		this.#modelPicker = new ModelPicker({
 			store: this.store,
 			methods: this.methods,
@@ -251,6 +301,24 @@ export class AppShell {
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
 		});
+		this.#palette = new CommandPalette({
+			context: () => ({
+				store: this.store,
+				session: this.store.focused,
+				methods: this.methods,
+				client: this.client,
+				ui: this.#host,
+				registry: this.commands,
+				cwd: this.#cwd,
+				name: "palette",
+				rest: "",
+			}),
+			getDraft: () => this.#editor.getExpandedText(),
+			setDraft: (text) => this.#host.setDraft(text),
+			present: (overlay) => this.selectors.open(overlay),
+			repaint: () => this.selectors.repaint(),
+			notice: (text, level) => this.events.notice(text, level),
+		});
 		this.commandController = new CommandController({
 			registry: this.commands,
 			store: this.store,
@@ -274,6 +342,13 @@ export class AppShell {
 			focusQueue: () => this.focusQueue(),
 			toggleLatest: () => this.events.toggleLatestBlock(),
 			cycleDetail: () => this.events.cycleAccordionOverride(),
+			openCommandPalette: () => this.#palette.open(),
+			isComposerEmpty: () => this.#editor.getText().length === 0,
+			toggleTaskTree: () => this.#toggleTaskTree(),
+			toggleToolOutputs: () => {
+				this.events.toggleToolOutputs();
+			},
+			openDiff: () => this.#toolInspector.open("diff"),
 			notice: (text) => this.events.notice(text),
 		});
 	}
@@ -308,7 +383,23 @@ export class AppShell {
 		this.events.attach();
 		this.approvals.attach();
 		this.#disposers.push(
+			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
 			this.client.events.on("state", () => this.#renderConnection()),
+			this.client.events.on("hello-ok", () => {
+				if (this.#sessionReady || this.#initialSessionLoad) return;
+				this.#initialSessionLoad = this.sessions
+					.initialize()
+					.then(() => {
+						this.#sessionReady = true;
+					})
+					.catch((error: unknown) =>
+						this.events.notice(`could not load session: ${describeError(error)}`, "error"),
+					)
+					.finally(() => {
+						this.#initialSessionLoad = undefined;
+						this.tui.requestRender();
+					});
+			}),
 			this.client.events.on("queued", () => {
 				this.#renderConnection();
 				this.syncQueuePanel();
@@ -321,6 +412,8 @@ export class AppShell {
 			// both have moved, and the only one worth spending a request on. It is
 			// also the moment the session's backlog is allowed to move.
 			this.client.events.on("agent", (event: AgentEvent) => {
+				this.#taskTree.ingest(event);
+				this.#toolInspector.refresh();
 				if (event?.type !== "completed") return;
 				void this.#statusBar.refreshBranch();
 				void this.refreshUsage();
@@ -331,7 +424,12 @@ export class AppShell {
 			// approvals are still waiting all have to be re-read.
 			this.client.events.on("resync-needed", () => void this.sessions.resync()),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
-			this.store.events.on("session-changed", () => this.syncQueuePanel()),
+			this.store.events.on("session-changed", () => {
+				this.syncQueuePanel();
+				this.#palette.close();
+				this.#toolInspector.close();
+				this.#taskTree.setSession(this.store.focusedKey);
+			}),
 			this.store.queue.events.on("changed", ({ sessionKey }) => {
 				if (sessionKey === this.store.focusedKey) this.syncQueuePanel();
 				this.#renderStatus();
@@ -340,6 +438,9 @@ export class AppShell {
 			() => this.selectors.dispose(),
 			() => this.approvals.dispose(),
 			() => this.input.dispose(),
+			() => this.#palette.close(),
+			() => this.#taskTree.dispose(),
+			() => this.#toolInspector.close(),
 		);
 		this.tui.start();
 		this.#terminalIntegration.start();
@@ -350,9 +451,9 @@ export class AppShell {
 		this.#renderStatus();
 		try {
 			await this.client.connect();
-			// Only now are the daemon's methods known, so this is the first moment the
-			// status bar can name the model instead of guessing at "no model".
-			void this.sessions.hydrateRouting(this.store.focused);
+			// The explicit session may be a durable fork. Restore it before
+			// advertising a sendable composer to terminal automation.
+			await this.#initialSessionLoad;
 		} catch (error) {
 			// The socket keeps retrying in the background; just say so.
 			this.events.notice(`connection failed: ${describeError(error)}`, "error");
@@ -375,6 +476,7 @@ export class AppShell {
 		this.bannerContainer.addChild(this.#banner);
 		this.bannerContainer.addChild(this.#connectionLine);
 		this.statusLineContainer.addChild(this.#statusBar);
+		this.statusContainer.addChild(this.#taskTree.panel);
 
 		// Slash-command and file-path completion in the prompt.
 		this.#editor.setCommands(
@@ -394,6 +496,22 @@ export class AppShell {
 		this.tui.addChild(this.statusContainer);
 		this.tui.addChild(this.statusLineContainer);
 		this.tui.addChild(this.editorContainer);
+		// A width replay replaces the old presentation instead of duplicating it.
+		this.tui.setResizeScrollback("rebuild");
+		this.tui.setFrameProvider(
+			new RowFrameProvider(
+				this.chatContainer,
+				[this.bannerContainer],
+				[
+					this.queueContainer,
+					this.approvalContainer,
+					this.statusContainer,
+					this.statusLineContainer,
+					this.editorContainer,
+				],
+				this.tui,
+			),
+		);
 		this.tui.setFocus(this.#editor);
 		this.#renderConnection();
 	}
@@ -404,7 +522,7 @@ export class AppShell {
 		this.#banner.setText(
 			`${theme.fg("bannerTitle", "lemon")} ${theme.fg("bannerSubtitle", `tui ${this.#version}`)}  ${theme.fg(
 				"dim",
-				"/help · Ctrl+X sessions · Ctrl+O model · Ctrl+G editor · Ctrl+C abort/quit",
+				"/help · Ctrl+P commands · Ctrl+X sessions · Ctrl+O model · Ctrl+C abort/quit",
 			)}`,
 		);
 	}
@@ -505,10 +623,24 @@ export class AppShell {
 		this.#focusEditor();
 	}
 
+	#toggleTaskTree(): void {
+		this.#taskTree.toggle();
+		this.#taskTree.panel.focused = this.#taskTree.panel.visible;
+		if (this.#taskTree.panel.visible) this.tui.setFocus(this.#taskTree.panel);
+		else this.#focusEditor();
+		this.tui.requestRender();
+	}
+
 	/** Enter in the panel: the item goes back to being a draft. */
 	editQueued(item: QueueItem): void {
-		if (item.state !== "queued-local") {
+		if (item.state === "waiting-connection") {
 			this.events.notice("that one is already on its way to the daemon", "warning");
+			return;
+		}
+		try {
+			this.composerDrafts.add(this.store.focusedKey, item.attachments ?? []);
+		} catch (error) {
+			this.events.notice(`cannot restore queued images: ${describeError(error)}`, "error");
 			return;
 		}
 		this.store.queue.remove(this.store.focusedKey, item.id);
@@ -517,7 +649,7 @@ export class AppShell {
 	}
 
 	deleteQueued(item: QueueItem): void {
-		if (item.state !== "queued-local") {
+		if (item.state === "waiting-connection") {
 			this.events.notice("that one is already on its way to the daemon", "warning");
 			return;
 		}
@@ -560,10 +692,36 @@ export class AppShell {
 	 */
 	async drainQueue(sessionKey: string): Promise<void> {
 		const session = this.store.sessions.get(sessionKey);
-		if (!session || session.busy) return;
+		if (!session || session.busy || this.#drainingSessions.has(sessionKey)) return;
+		if (this.store.queue.items(sessionKey)[0]?.state !== "queued-local") return;
 		const item = this.store.queue.shift(sessionKey);
 		if (!item) return;
-		await this.#send(item.text, session);
+		this.#drainingSessions.add(sessionKey);
+		try {
+			if (item.attachments?.length) {
+				const disposition = await this.#submitAttachments(
+					{
+						sessionKey,
+						text: item.text,
+						attachments: item.attachments,
+						images: item.attachments.map((image) => image.content),
+					},
+					false,
+				);
+				if (disposition === "rejected") {
+					this.store.queue.restoreForReview(sessionKey, item);
+					this.events.notice(
+						"queued image send was not acknowledged; ctrl+q to review before retrying",
+						"warning",
+						session,
+					);
+				}
+			} else {
+				await this.#send(item.text, session);
+			}
+		} finally {
+			this.#drainingSessions.delete(sessionKey);
+		}
 	}
 
 	#mountQueue(): void {
@@ -658,6 +816,82 @@ export class AppShell {
 		await this.commandController.handleSubmit(value);
 	}
 
+	async #submitAttachments(
+		submission: ComposerSubmission,
+		allowQueue = true,
+	): Promise<SubmissionDisposition> {
+		const session = this.store.sessions.get(submission.sessionKey);
+		if (!session) return "rejected";
+		if (!submission.images.length) {
+			if (session !== this.store.focused) return "rejected";
+			await this.submit(submission.text);
+			return "accepted";
+		}
+		if (/^[!/]/.test(submission.text.trim())) {
+			this.events.notice(
+				"image attachments belong to model prompts, not slash commands or shell escapes",
+				"warning",
+				session,
+			);
+			return "rejected";
+		}
+		const mode = allowQueue ? this.#takeModeOverride() : "queue";
+		if (session.busy && mode === "queue") {
+			if (!allowQueue) return "rejected";
+			this.store.queue.push(session.key, submission.text, "queued-local", submission.attachments);
+			this.events.notice(
+				`queued with ${submission.images.length} image(s) — ctrl+q to edit`,
+				"info",
+				session,
+			);
+			return "queued";
+		}
+		// Never transfer images to an unacknowledged offline RPC: the editable
+		// draft remains their owner until a concrete run or local queue accepts it.
+		if (!this.client.online) {
+			this.events.notice(
+				"offline — image draft kept; reconnect before sending",
+				"warning",
+				session,
+			);
+			return "rejected";
+		}
+		const priorRun = session.activeRunId;
+		const queueMode = session.busy && mode !== "queue" ? mode : undefined;
+		try {
+			const result = await this.#dispatchPrompt(
+				session.key,
+				submission.text,
+				queueMode,
+				submission.images,
+			);
+			if (typeof result?.runId !== "string" || !result.runId.trim()) {
+				throw new Error("unverified send receipt; inspect the session before retrying");
+			}
+			if (queueMode === "interrupt" && priorRun) this.events.markInterrupted(priorRun, session);
+			this.events.addUserBlock(
+				[
+					submission.text,
+					...submission.attachments.map(
+						(image) => `[image: ${image.name.replace(/\p{Cc}/gu, "")}]`,
+					),
+				]
+					.filter(Boolean)
+					.join("\n"),
+				session,
+			);
+			this.events.noteRunStarted(result.runId, session);
+			return "accepted";
+		} catch (error) {
+			this.events.notice(
+				`image send not acknowledged: ${describeError(error)} — draft retained; inspect before retrying`,
+				"error",
+				session,
+			);
+			return "rejected";
+		}
+	}
+
 	/**
 	 * The prompt sink, and the whole submission state machine.
 	 *
@@ -749,14 +983,25 @@ export class AppShell {
 	 * back to `chat.send`. Once a profile route is confirmed, `profile.chat`
 	 * failures never bypass the profile boundary (including deletion races).
 	 */
-	async #dispatchPrompt(sessionKey: string, prompt: string, queueMode?: QueueMode) {
+	async #dispatchPrompt(
+		sessionKey: string,
+		prompt: string,
+		queueMode?: QueueMode,
+		images?: readonly ImageContent[],
+	) {
+		const media = images?.length ? { images } : undefined;
+		const requestOptions = media ? { queueIfOffline: false } : undefined;
 		const remembered = this.#profileSessions.get(sessionKey);
 		if (remembered) {
-			return await this.methods.profileChat({
-				id: remembered,
-				prompt,
-				...(queueMode ? { queueMode } : {}),
-			});
+			return await this.methods.profileChat(
+				{
+					id: remembered,
+					prompt,
+					...media,
+					...(queueMode ? { queueMode } : {}),
+				},
+				requestOptions,
+			);
 		}
 
 		const candidate = canonicalProfileId(sessionKey);
@@ -765,12 +1010,16 @@ export class AppShell {
 			!this.methods.supports(METHOD.profilesGet) ||
 			!this.methods.supports(METHOD.profileChat)
 		) {
-			return await this.methods.chatSend({
-				sessionKey,
-				cwd: this.#cwd,
-				prompt,
-				...(queueMode ? { queueMode } : {}),
-			});
+			return await this.methods.chatSend(
+				{
+					sessionKey,
+					cwd: this.#cwd,
+					prompt,
+					...media,
+					...(queueMode ? { queueMode } : {}),
+				},
+				requestOptions,
+			);
 		}
 
 		if (this.client.online) {
@@ -786,35 +1035,33 @@ export class AppShell {
 				) {
 					throw error;
 				}
-				return await this.methods.chatSend({
-					sessionKey,
-					prompt,
-					cwd: this.#cwd,
-					...(queueMode ? { queueMode } : {}),
-				});
+				return await this.methods.chatSend(
+					{
+						sessionKey,
+						prompt,
+						cwd: this.#cwd,
+						...media,
+						...(queueMode ? { queueMode } : {}),
+					},
+					requestOptions,
+				);
 			}
 		}
 
-		try {
-			const result = await this.methods.profileChat({
+		const result = await this.methods.profileChat(
+			{
 				id: candidate,
 				prompt,
+				...media,
 				...(queueMode ? { queueMode } : {}),
-			});
-			if (result.sessionKey !== sessionKey) {
-				throw new Error(`profile ${candidate} routed to an unexpected session`);
-			}
-			this.#profileSessions.set(sessionKey, candidate);
-			return result;
-		} catch (error) {
-			if (!ControlPlaneError.is(error, "METHOD_NOT_FOUND")) throw error;
-			return await this.methods.chatSend({
-				sessionKey,
-				prompt,
-				cwd: this.#cwd,
-				...(queueMode ? { queueMode } : {}),
-			});
+			},
+			requestOptions,
+		);
+		if (result.sessionKey !== sessionKey) {
+			throw new Error(`profile ${candidate} routed to an unexpected session`);
 		}
+		this.#profileSessions.set(sessionKey, candidate);
+		return result;
 	}
 
 	/** Read and clear the one-shot Alt+Enter override. */
@@ -905,6 +1152,10 @@ export class AppShell {
 			closeOverlay: () => this.selectors.close(),
 			openSessionSwitcher: () => void this.#switcher.open(),
 			switchSession: (sessionKey: string) => this.sessions.switch(sessionKey),
+			openFork: (sessionKey: string) =>
+				openForkSession({ ...this.#forkConnection, sessionKey, cwd: this.#cwd }, (key) =>
+					this.sessions.switch(key),
+				),
 			openProfile: async (profileId: string, sessionKey: string) => {
 				this.#profileSessions.set(sessionKey, profileId);
 				await this.sessions.switch(sessionKey);
@@ -918,8 +1169,15 @@ export class AppShell {
 				await this.sessions.create(sessionKey, prompt);
 			},
 			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
-			forgetDeletedSession: (sessionKey: string) => this.sessions.forgetDeleted(sessionKey),
-			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
+			forgetDeletedSession: (sessionKey: string) => {
+				this.composerDrafts.clear(sessionKey);
+				this.#taskTree.store.clear(sessionKey);
+				this.sessions.forgetDeleted(sessionKey);
+			},
+			resetSession: (sessionKey: string) => {
+				this.#taskTree.store.clear(sessionKey);
+				this.sessions.resetLocal(sessionKey);
+			},
 			reloadSession: (sessionKey: string) => this.sessions.reload(sessionKey),
 			focusQueue: () => this.focusQueue(),
 			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),
@@ -934,6 +1192,9 @@ export class AppShell {
 			frameLog: () => this.client.recentFrames(),
 			replayHistory: (messages: ChatHistoryMessage[]) => this.#replayHistory(messages),
 			openModelPicker: () => this.#modelPicker.open(),
+			openCommandPalette: (query) => this.#palette.open(query),
+			toggleTaskTree: () => this.#toggleTaskTree(),
+			openToolOutput: (mode) => this.#toolInspector.open(mode),
 			themeChanged: () => this.#themeChanged(),
 			setThemePreference: (preference: ThemePreference) =>
 				this.appearance.setPreference(preference),
