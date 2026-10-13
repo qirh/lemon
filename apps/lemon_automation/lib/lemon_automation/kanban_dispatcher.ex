@@ -19,6 +19,7 @@ defmodule LemonAutomation.KanbanDispatcher do
   use GenServer
 
   alias LemonAgent.Workspace.KanbanStore
+  alias LemonAutomation.KanbanCodingWorkflow
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -116,14 +117,47 @@ defmodule LemonAutomation.KanbanDispatcher do
         nil ->
           {:error, :lease_not_owned}
 
-        _ ->
-          case KanbanStore.track_leased_run(task_id, lease_id, run_id, attrs) do
-            {:ok, _task} -> :ok
-            {:error, reason} -> {:error, reason}
+        _ when is_map(attrs) ->
+          task = KanbanStore.get_task(task_id)
+
+          if get_in(task, [:meta, "codingWorkflow", "cancelRequested"]) == true do
+            {:error, :cancelled}
+          else
+            case KanbanStore.track_leased_run(task_id, lease_id, run_id, attrs) do
+              {:ok, _task} -> :ok
+              {:error, reason} -> {:error, reason}
+            end
           end
       end
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:checkpoint_workflow, task_id, lease_id, checkpoint}, _from, state) do
+    owned? =
+      Enum.any?(state.refs, fn {_, worker} ->
+        worker.task_id == task_id and worker.lease_id == lease_id
+      end)
+
+    task = KanbanStore.get_task(task_id)
+    cancelled? = get_in(task, [:meta, "codingWorkflow", "cancelRequested"]) == true
+
+    result =
+      cond do
+        not owned? ->
+          {:error, :lease_not_owned}
+
+        cancelled? and checkpoint["cancelRequested"] != true ->
+          {:error, :cancelled}
+
+        true ->
+          case KanbanStore.checkpoint_leased_workflow(task_id, lease_id, checkpoint) do
+            {:ok, _} -> :ok
+            {:error, reason} -> {:error, reason}
+          end
+      end
+
+    {:reply, result, state}
   end
 
   def handle_call({:stop_board, board_id, expected}, from, state) do
@@ -140,40 +174,55 @@ defmodule LemonAutomation.KanbanDispatcher do
         {:reply, {:error, :not_running}, state}
 
       dispatcher ->
-        if dispatcher.timer, do: Process.cancel_timer(dispatcher.timer)
+        with :ok <- mark_workflow_cancellations(board_id) do
+          if dispatcher.timer, do: Process.cancel_timer(dispatcher.timer)
 
-        state =
-          dispatcher.running
-          |> Enum.reduce(state, fn {ref, worker}, acc ->
-            Process.exit(worker.pid, :kill)
-            Process.demonitor(ref, [:flush])
-            task = KanbanStore.get_task(worker.task_id)
+          state =
+            dispatcher.running
+            |> Enum.reduce(state, fn {ref, worker}, acc ->
+              Process.exit(worker.pid, :kill)
+              Process.demonitor(ref, [:flush])
+              task = KanbanStore.get_task(worker.task_id)
 
-            if not tracked_run?(task),
-              do: KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
+              if not tracked_run?(task),
+                do: KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
 
-            update_in(acc.refs, &Map.delete(&1, ref))
-          end)
-          |> update_in([:boards], &Map.delete(&1, board_id))
+              update_in(acc.refs, &Map.delete(&1, ref))
+            end)
+            |> update_in([:boards], &Map.delete(&1, board_id))
 
-        aborts =
-          KanbanStore.list_tasks(board_id, limit: 10_000)
-          |> Enum.filter(&tracked_run?/1)
-          |> Enum.map(fn task ->
-            result = request_abort(task, dispatcher.worker_opts)
+          aborts =
+            KanbanStore.list_tasks(board_id, limit: 10_000)
+            |> Enum.filter(&tracked_run?/1)
+            |> Enum.map(fn task ->
+              workflow? = KanbanCodingWorkflow.workflow?(task)
+              phase = get_in(task, [:meta, "codingWorkflow", "phase"])
 
-            if result == :ok do
-              KanbanStore.fail_leased_task(task.id, lease_id(task), "cancelled")
-            end
+              result =
+                if workflow? and phase not in ["coding", "review"],
+                  do: :outcome_unknown,
+                  else: request_abort(task, dispatcher.worker_opts)
 
-            %{run_id: task.run_id, result: result}
-          end)
+              if workflow? do
+                mark_unknown(task.id, lease_id(task))
+              else
+                if result == :ok,
+                  do: KanbanStore.fail_leased_task(task.id, lease_id(task), "cancelled")
+              end
 
-        if Enum.any?(aborts, &(&1.result == :outcome_unknown)),
-          do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
+              result = if workflow? and result == :ok, do: :outcome_unknown, else: result
 
-        stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
-        {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
+              %{run_id: task.run_id, result: result}
+            end)
+
+          if Enum.any?(aborts, &(&1.result == :outcome_unknown)),
+            do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
+
+          stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
+          {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
+        else
+          {:error, reason} -> {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -229,6 +278,8 @@ defmodule LemonAutomation.KanbanDispatcher do
 
       dispatcher ->
         reconcile_board(board_id, dispatcher.running)
+        state = resume_workflows(state, board_id)
+        dispatcher = Map.fetch!(state.boards, board_id)
         {:ok, _reclaimed} = KanbanStore.reclaim_expired_leases(board_id)
         reconciling = length(unowned_runs(board_id, dispatcher.running))
 
@@ -251,32 +302,7 @@ defmodule LemonAutomation.KanbanDispatcher do
            worker_profile: dispatcher.worker_profile
          ) do
       {:ok, task} ->
-        lease_id = lease_id(task)
-
-        owner = self()
-
-        worker_opts =
-          Keyword.put(dispatcher.worker_opts, :on_submitting, fn run_id, attrs ->
-            GenServer.call(owner, {:claim_run, task.id, lease_id, run_id, attrs})
-          end)
-
-        case start_task(
-               state.task_supervisor,
-               dispatcher.worker_mod,
-               task,
-               worker_opts
-             ) do
-          {:ok, task_ref} ->
-            worker = %{task_id: task.id, lease_id: lease_id, pid: task_ref.pid}
-
-            state
-            |> put_in([:refs, task_ref.ref], Map.put(worker, :board_id, board_id))
-            |> put_in([:boards, board_id, :running, task_ref.ref], worker)
-
-          {:error, _reason} ->
-            _ = KanbanStore.reclaim_task_lease(task.id, lease_id)
-            state
-        end
+        start_leased_worker(state, board_id, task)
 
       {:error, :no_available_task} ->
         state
@@ -284,6 +310,63 @@ defmodule LemonAutomation.KanbanDispatcher do
       {:error, _reason} ->
         state
     end
+  end
+
+  defp mark_workflow_cancellations(board_id) do
+    with {:ok, tasks} <- KanbanStore.list_tasks(board_id, limit: 10_000, strict: true) do
+      tasks
+      |> Enum.filter(&(tracked_run?(&1) and KanbanCodingWorkflow.workflow?(&1)))
+      |> Enum.reduce_while(:ok, fn task, :ok ->
+        checkpoint = Map.put(task.meta["codingWorkflow"], "cancelRequested", true)
+
+        case KanbanStore.checkpoint_leased_workflow(task.id, lease_id(task), checkpoint) do
+          {:ok, _} -> {:cont, :ok}
+          {:error, _} -> {:halt, {:error, :cancel_intent_unavailable}}
+        end
+      end)
+    else
+      _ -> {:error, :cancel_intent_unavailable}
+    end
+  end
+
+  defp start_leased_worker(state, board_id, task) do
+    dispatcher = Map.fetch!(state.boards, board_id)
+    lease_id = lease_id(task)
+    owner = self()
+
+    worker_opts =
+      dispatcher.worker_opts
+      |> Keyword.put(:on_submitting, fn run_id, attrs ->
+        GenServer.call(owner, {:claim_run, task.id, lease_id, run_id, attrs})
+      end)
+      |> Keyword.put(:on_checkpoint, fn checkpoint ->
+        GenServer.call(owner, {:checkpoint_workflow, task.id, lease_id, checkpoint})
+      end)
+
+    case start_task(state.task_supervisor, dispatcher.worker_mod, task, worker_opts) do
+      {:ok, task_ref} ->
+        worker = %{task_id: task.id, lease_id: lease_id, pid: task_ref.pid}
+
+        state
+        |> put_in([:refs, task_ref.ref], Map.put(worker, :board_id, board_id))
+        |> put_in([:boards, board_id, :running, task_ref.ref], worker)
+
+      {:error, _reason} ->
+        if not tracked_run?(task), do: KanbanStore.reclaim_task_lease(task.id, lease_id)
+        state
+    end
+  end
+
+  defp resume_workflows(state, board_id) do
+    dispatcher = Map.fetch!(state.boards, board_id)
+    capacity = max(dispatcher.max_concurrency - map_size(dispatcher.running), 0)
+
+    unowned_runs(board_id, dispatcher.running)
+    |> Enum.filter(
+      &(KanbanCodingWorkflow.workflow?(&1) and KanbanCodingWorkflow.ready_to_resume?(&1))
+    )
+    |> Enum.take(capacity)
+    |> Enum.reduce(state, fn task, acc -> start_leased_worker(acc, board_id, task) end)
   end
 
   defp start_task(task_supervisor, worker_mod, task, worker_opts) do
@@ -341,21 +424,30 @@ defmodule LemonAutomation.KanbanDispatcher do
   defp reconcile_board(board_id, running) do
     unowned_runs(board_id, running)
     |> Enum.each(fn task ->
-      case LemonCore.RunStore.get(task.run_id) do
-        %{summary: summary} when not is_nil(summary) ->
-          case LemonAutomation.RunCompletionWaiter.extract_output_from_completion(summary) do
-            {:ok, output} ->
-              KanbanStore.complete_leased_task(task.id, lease_id(task),
-                run_id: task.run_id,
-                output: output
-              )
+      if KanbanCodingWorkflow.workflow?(task) do
+        checkpoint = task.meta["codingWorkflow"]
 
-            {:error, _reason} ->
-              KanbanStore.fail_leased_task(task.id, lease_id(task), "run_failed")
-          end
+        if checkpoint["cancelRequested"] == true and checkpoint["phase"] != "publish_pending" and
+             KanbanCodingWorkflow.ready_to_resume?(task) do
+          KanbanStore.fail_leased_task(task.id, lease_id(task), "cancelled")
+        end
+      else
+        case LemonCore.RunStore.get(task.run_id) do
+          %{summary: summary} when not is_nil(summary) ->
+            case LemonAutomation.RunCompletionWaiter.extract_output_from_completion(summary) do
+              {:ok, output} ->
+                KanbanStore.complete_leased_task(task.id, lease_id(task),
+                  run_id: task.run_id,
+                  output: output
+                )
 
-        _ ->
-          :ok
+              {:error, _reason} ->
+                KanbanStore.fail_leased_task(task.id, lease_id(task), "run_failed")
+            end
+
+          _ ->
+            :ok
+        end
       end
     end)
   end

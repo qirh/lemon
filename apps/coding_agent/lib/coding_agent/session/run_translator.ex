@@ -390,6 +390,15 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:turn_start}), do: t
+
+  def handle_event(
+        %__MODULE__{} = t,
+        {:turn_end, %LemonAi.Types.AssistantMessage{stop_reason: :aborted}, _results}
+      ) do
+    t = mark_cancelled(%{t | turns: t.turns + 1}, :assistant_aborted)
+    emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason))
+  end
+
   def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: %{t | turns: t.turns + 1}
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:message_end, _msg}), do: t

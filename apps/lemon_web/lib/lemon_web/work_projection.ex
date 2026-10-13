@@ -177,9 +177,59 @@ defmodule LemonWeb.WorkProjection do
       label: label(raw[:title]),
       status: label(raw[:status]),
       session: session(raw[:session_key]),
-      result: outcome(get_in(raw, [:meta, "kanbanRun", "status"]))
+      result: outcome(get_in(raw, [:meta, "kanbanRun", "status"])),
+      workflow: workflow(get_in(raw, [:meta, "codingWorkflow"]))
     }
   end
+
+  defp workflow(raw) when is_map(raw) do
+    commit = raw["commitSha"]
+    branch = raw["branch"]
+
+    %{
+      phase:
+        enum(
+          raw["phase"],
+          ~w(coding coding_complete review review_rejected commit_pending committed publish_pending completed)
+        ),
+      approved: get_in(raw, ["review", "approved"]) == true,
+      commit:
+        if(is_binary(commit) and Regex.match?(~r/\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z/, commit),
+          do: commit
+        ),
+      branch:
+        if(is_binary(branch) and Regex.match?(~r/\Alemon-kanban\/[A-Za-z0-9_-]{1,160}\z/, branch),
+          do: branch
+        ),
+      review_session: session(raw["reviewSessionKey"]),
+      pr_url: pull_request_url(raw["prUrl"])
+    }
+  end
+
+  defp workflow(_), do: nil
+
+  defp pull_request_url(value) when is_binary(value) and byte_size(value) <= 256 do
+    case URI.parse(value) do
+      %URI{
+        scheme: "https",
+        host: host,
+        port: 443,
+        userinfo: nil,
+        query: nil,
+        fragment: nil,
+        path: path
+      }
+      when is_binary(host) and host != "" and is_binary(path) ->
+        if Regex.match?(~r/\A\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/[1-9][0-9]*\z/, path) and
+             Regex.match?(~r/\A[A-Za-z0-9.-]+\z/, host),
+           do: value
+
+      _ ->
+        nil
+    end
+  end
+
+  defp pull_request_url(_), do: nil
 
   defp goal(raw) do
     key = session(raw[:session_key])
