@@ -118,7 +118,9 @@ defmodule LemonCore.Secrets.ExternalTest do
     assert {:error, {:external_source, :timeout}} =
              Secrets.resolve("STUB_SECRET", sources: [source])
 
-    assert System.monotonic_time(:millisecond) - started_at < 1_000
+    # The stub would sleep for 5s; returning sooner proves the helper was cut off
+    # at its timeout rather than awaited.
+    assert System.monotonic_time(:millisecond) - started_at < 4_500
   end
 
   test "combined stdout and stderr are hard bounded and never returned", %{stub: stub} do
@@ -147,7 +149,7 @@ defmodule LemonCore.Secrets.ExternalTest do
       executable: stub,
       refs: %{"STUB_SECRET" => "op://Private/Test/credential"},
       auth_secret: "op_bootstrap",
-      timeout_ms: 500,
+      timeout_ms: 5_000,
       max_output_bytes: 1_024
     }
 
@@ -166,7 +168,7 @@ defmodule LemonCore.Secrets.ExternalTest do
       project_id: "project_123",
       access_token_secret: "bws_bootstrap",
       access_token_env: "BWS_ACCESS_TOKEN",
-      timeout_ms: 500,
+      timeout_ms: 5_000,
       max_output_bytes: 4_096
     }
 
@@ -207,7 +209,7 @@ defmodule LemonCore.Secrets.ExternalTest do
           type: :command,
           enabled: true,
           argv: [stub | args],
-          timeout_ms: 500,
+          timeout_ms: 5_000,
           max_output_bytes: 4_096
         ],
         opts

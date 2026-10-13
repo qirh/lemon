@@ -36,9 +36,6 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
       # Wait for all tasks to complete
       Enum.each(tasks, &Task.await/1)
 
-      # Allow time for all casts to be processed
-      Process.sleep(50)
-
       # Circuit should be open (we exceeded threshold)
       assert CircuitBreaker.open?(provider)
 
@@ -64,7 +61,6 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
         end
 
       Enum.each(tasks, &Task.await/1)
-      Process.sleep(50)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       # Should have recorded all failures (circuit still closed)
@@ -92,7 +88,6 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
         end
 
       Enum.each(tasks, &Task.await/1)
-      Process.sleep(50)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       # With 10 successes resetting failure count, circuit should stay closed
@@ -112,8 +107,6 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
       for _ <- 1..3 do
         CircuitBreaker.record_failure(provider)
       end
-
-      Process.sleep(20)
 
       # Now dispatch 10 concurrent requests - all should fail with circuit_open
       tasks =
@@ -164,9 +157,8 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
 
   describe "half-open state under concurrent access" do
     test "only allows limited requests through in half-open state", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 50}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 50)
 
       start_supervised!(
         {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
@@ -175,12 +167,11 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for half-open
-      Process.sleep(60)
+      # Move time past the recovery timeout to reach half-open
+      advance_clock.(50)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
@@ -199,7 +190,6 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
         end
 
       results = Enum.map(tasks, &Task.await/1)
-      Process.sleep(20)
 
       executed_count = Agent.get(counter, & &1)
       Agent.stop(counter)
@@ -213,9 +203,8 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
     end
 
     test "failure in half-open state immediately reopens circuit", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 50}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 50)
 
       start_supervised!(
         {RateLimiter, provider: provider, tokens_per_second: 1000, max_tokens: 100}
@@ -224,17 +213,15 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
-      # Wait for half-open
-      Process.sleep(60)
+      # Move time past the recovery timeout to reach half-open
+      advance_clock.(50)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
       # Record a failure - should reopen circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :open
@@ -253,26 +240,28 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
       {:ok, executed} = Agent.start_link(fn -> 0 end)
       parent = self()
 
-      # Start a slow request
+      # Start a slow request that stays in flight until released
       slow_task =
         Task.async(fn ->
           CallDispatcher.dispatch(provider, fn ->
-            send(parent, :slow_started)
-            Process.sleep(100)
-            Agent.update(executed, &(&1 + 1))
-            {:ok, "slow_done"}
+            send(parent, {:slow_started, self()})
+
+            receive do
+              :release ->
+                Agent.update(executed, &(&1 + 1))
+                {:ok, "slow_done"}
+            end
           end)
         end)
 
       # Wait for slow request to start
-      assert_receive :slow_started, 1000
+      assert_receive {:slow_started, slow_pid}, 1000
 
       # While slow request is running, open the circuit
       for _ <- 1..3 do
         CircuitBreaker.record_failure(provider)
       end
 
-      Process.sleep(20)
       assert CircuitBreaker.open?(provider)
 
       # Try another request - should be rejected
@@ -280,7 +269,8 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
       assert {:error, :circuit_open} = result
 
       # The slow request should still complete (it started before circuit opened)
-      slow_result = Task.await(slow_task, 500)
+      send(slow_pid, :release)
+      slow_result = Task.await(slow_task, 5000)
       assert {:ok, "slow_done"} = slow_result
 
       Agent.stop(executed)
@@ -322,6 +312,25 @@ defmodule LemonAi.CircuitBreakerConcurrencyTest do
                  is_integer(state.failure_count) and
                  state.failure_count >= 0
              end)
+    end
+  end
+
+  # Starts a circuit breaker on a manually advanced clock; returns a function
+  # that moves the clock forward by the given milliseconds.
+  defp start_breaker_with_clock(provider, opts) do
+    clock = :atomics.new(1, signed: true)
+
+    start_supervised!(
+      {CircuitBreaker,
+       opts
+       |> Keyword.put(:provider, provider)
+       |> Keyword.put(:monotonic_time, fn -> :atomics.get(clock, 1) end)}
+    )
+
+    fn milliseconds ->
+      # A call from the same process observes all earlier casts before time moves.
+      {:ok, _state} = CircuitBreaker.get_state(provider)
+      :atomics.add_get(clock, 1, milliseconds)
     end
   end
 end

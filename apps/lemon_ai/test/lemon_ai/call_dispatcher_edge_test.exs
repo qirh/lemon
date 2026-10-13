@@ -55,7 +55,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       ref = make_ref()
       parent = self()
@@ -236,8 +235,8 @@ defmodule LemonAi.CallDispatcherEdgeTest do
                match?({:error, _}, result)
              end)
 
-      # Give time for circuit breaker to process failures
-      Process.sleep(50)
+      # record_failure/1 is a cast from each task; the call below is ordered
+      # after them because every task finished before its result was awaited.
 
       # Circuit should now be open
       assert CircuitBreaker.open?(provider)
@@ -248,19 +247,17 @@ defmodule LemonAi.CallDispatcherEdgeTest do
         {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
       )
 
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 100}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 100)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for half-open state
-      Process.sleep(120)
+      # Move time past the recovery timeout to reach half-open
+      advance_clock.(100)
       refute CircuitBreaker.open?(provider)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -268,7 +265,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
 
       # Failure during half-open should reopen
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
@@ -288,8 +284,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
         CallDispatcher.dispatch(provider, fn -> raise "simulated error" end)
       end
 
-      Process.sleep(20)
-
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 1
 
@@ -297,8 +291,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       assert_raise RuntimeError, fn ->
         CallDispatcher.dispatch(provider, fn -> raise "simulated error 2" end)
       end
-
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
     end
@@ -312,14 +304,12 @@ defmodule LemonAi.CallDispatcherEdgeTest do
 
       # Interleave successes and failures
       CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 1
 
       # Success resets failure count
       CallDispatcher.dispatch(provider, fn -> {:ok, "success"} end)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 0
@@ -327,14 +317,12 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # Need 3 consecutive failures now
       CallDispatcher.dispatch(provider, fn -> {:error, :econnrefused} end)
       CallDispatcher.dispatch(provider, fn -> {:error, :econnreset} end)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.failure_count == 2
       refute CircuitBreaker.open?(provider)
 
       CallDispatcher.dispatch(provider, fn -> {:error, :nxdomain} end)
-      Process.sleep(10)
 
       assert CircuitBreaker.open?(provider)
     end
@@ -352,7 +340,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       # Even though rate limiter has tokens, circuit being open should reject first
       {:ok, rl_state} = RateLimiter.get_state(provider)
@@ -383,8 +370,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
                  CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
       end
 
-      Process.sleep(20)
-
       # Circuit breaker failure count should not have increased
       {:ok, cb_state_after} = CircuitBreaker.get_state(provider)
       assert cb_state_after.failure_count == initial_failure_count
@@ -405,7 +390,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # Open circuit through failures
       CallDispatcher.dispatch(provider, fn -> {:error, :timeout} end)
       CallDispatcher.dispatch(provider, fn -> {:error, :econnrefused} end)
-      Process.sleep(20)
 
       # Rate limiter should still have capacity, but circuit is open
       {:ok, rl_state} = RateLimiter.get_state(provider)
@@ -421,9 +405,10 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       rl_provider = :"#{provider}_rl"
       cb_provider = :"#{provider}_cb"
 
-      # Test rate limiter recovery
+      # Test rate limiter recovery. A slow refill (one token every 500ms) keeps
+      # the exhaustion assertion safe on a slow scheduler.
       start_supervised!(
-        {RateLimiter, provider: rl_provider, tokens_per_second: 100, max_tokens: 2},
+        {RateLimiter, provider: rl_provider, tokens_per_second: 2, max_tokens: 2},
         id: {RateLimiter, rl_provider}
       )
 
@@ -440,11 +425,14 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       assert {:error, :rate_limited} =
                CallDispatcher.dispatch(rl_provider, fn -> {:ok, "test"} end)
 
-      # Wait for tokens to refill (100/s means ~50ms for 5 tokens)
-      Process.sleep(60)
-
-      {:ok, rl_state} = RateLimiter.get_state(rl_provider)
-      assert rl_state.available_tokens >= 1
+      # Wait for a token to refill
+      wait_until(
+        fn ->
+          {:ok, rl_state} = RateLimiter.get_state(rl_provider)
+          rl_state.available_tokens >= 1
+        end,
+        5_000
+      )
 
       # Test circuit breaker recovery
       start_supervised!(
@@ -452,23 +440,21 @@ defmodule LemonAi.CallDispatcherEdgeTest do
         id: {RateLimiter, cb_provider}
       )
 
-      start_supervised!(
-        # Give slack so the circuit can't flip to half-open before we assert it's open.
-        {CircuitBreaker, provider: cb_provider, failure_threshold: 2, recovery_timeout: 500},
-        id: {CircuitBreaker, cb_provider}
-      )
+      advance_clock =
+        start_breaker_with_clock(cb_provider, failure_threshold: 2, recovery_timeout: 500)
 
       # Open circuit
       CircuitBreaker.record_failure(cb_provider)
       CircuitBreaker.record_failure(cb_provider)
 
-      wait_until(fn -> CircuitBreaker.open?(cb_provider) end, 200)
+      assert CircuitBreaker.open?(cb_provider)
 
       # Wait for recovery
-      wait_until(fn -> not CircuitBreaker.open?(cb_provider) end, 1_200)
+      advance_clock.(500)
 
       # Circuit should be half-open (not open)
       refute CircuitBreaker.open?(cb_provider)
+      assert {:ok, %{circuit_state: :half_open}} = CircuitBreaker.get_state(cb_provider)
     end
   end
 
@@ -488,17 +474,19 @@ defmodule LemonAi.CallDispatcherEdgeTest do
 
       parent = self()
 
-      # Start a slow request
+      # Start a slow request that holds its slot until released
       slow_task =
         Task.async(fn ->
           CallDispatcher.dispatch(provider, fn ->
-            send(parent, :slow_started)
-            Process.sleep(200)
-            {:ok, "slow"}
+            send(parent, {:slow_started, self()})
+
+            receive do
+              :release -> {:ok, "slow"}
+            end
           end)
         end)
 
-      assert_receive :slow_started, 1000
+      assert_receive {:slow_started, slow_pid}, 1000
 
       # Verify active requests increased
       assert CallDispatcher.get_active_requests(provider) == 1
@@ -507,7 +495,8 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       assert {:ok, "fast"} = CallDispatcher.dispatch(provider, fn -> {:ok, "fast"} end)
 
       # Wait for slow task
-      assert {:ok, "slow"} = Task.await(slow_task, 1000)
+      send(slow_pid, :release)
+      assert {:ok, "slow"} = Task.await(slow_task, 5000)
 
       # Slot should be released
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end)
@@ -906,9 +895,6 @@ defmodule LemonAi.CallDispatcherEdgeTest do
       # All should be error results
       assert Enum.all?(results, &match?({:error, _}, &1))
 
-      # Allow time for circuit breaker to process all failures
-      Process.sleep(100)
-
       # Circuit breaker state should reflect failures
       {:ok, cb_state} = CircuitBreaker.get_state(provider)
 
@@ -1113,7 +1099,27 @@ defmodule LemonAi.CallDispatcherEdgeTest do
   # Helpers
   # ============================================================================
 
-  defp wait_until(fun, timeout_ms \\ 1_000, step_ms \\ 10) do
+  # Starts a circuit breaker on a manually advanced clock; returns a function
+  # that moves the clock forward by the given milliseconds.
+  defp start_breaker_with_clock(provider, opts) do
+    clock = :atomics.new(1, signed: true)
+
+    start_supervised!(
+      {CircuitBreaker,
+       opts
+       |> Keyword.put(:provider, provider)
+       |> Keyword.put(:monotonic_time, fn -> :atomics.get(clock, 1) end)},
+      id: {CircuitBreaker, provider}
+    )
+
+    fn milliseconds ->
+      # A call from the same process observes all earlier casts before time moves.
+      {:ok, _state} = CircuitBreaker.get_state(provider)
+      :atomics.add_get(clock, 1, milliseconds)
+    end
+  end
+
+  defp wait_until(fun, timeout_ms \\ 5_000, step_ms \\ 10) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     if fun.() do

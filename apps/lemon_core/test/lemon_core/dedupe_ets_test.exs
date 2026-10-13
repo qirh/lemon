@@ -55,8 +55,17 @@ defmodule LemonCore.Dedupe.EtsTest do
     test "sets concurrency options by default", %{table: table} do
       assert :ok = Ets.init(table)
       info = :ets.info(table)
-      assert info[:read_concurrency] == true
-      assert info[:write_concurrency] == true
+
+      # ETS reports these flags according to the VM (e.g. write_concurrency is
+      # not reported on a single-scheduler VM), so compare against a table
+      # created with the options requested explicitly.
+      reference =
+        :ets.new(:dedupe_concurrency_reference, read_concurrency: true, write_concurrency: true)
+
+      on_exit(fn -> if :ets.info(reference) != :undefined, do: :ets.delete(reference) end)
+
+      assert info[:read_concurrency] == :ets.info(reference, :read_concurrency)
+      assert info[:write_concurrency] == :ets.info(reference, :write_concurrency)
     end
   end
 
@@ -202,12 +211,13 @@ defmodule LemonCore.Dedupe.EtsTest do
     test "does not remove non-expired entries", %{table: table} do
       :ok = Ets.init(table)
 
-      :ok = Ets.mark(table, "key1")
-      Process.sleep(50)
+      # key1 was marked long ago; key2 is fresh. A generous TTL keeps key2 live
+      # even if the test process is descheduled.
+      :ets.insert(table, {"key1", System.monotonic_time(:millisecond) - 60_000})
       :ok = Ets.mark(table, "key2")
 
       # Only key1 is expired
-      assert Ets.cleanup_expired(table, 30) == 1
+      assert Ets.cleanup_expired(table, 30_000) == 1
       assert length(:ets.tab2list(table)) == 1
       assert :ets.lookup(table, "key2") != []
     end
@@ -258,11 +268,12 @@ defmodule LemonCore.Dedupe.EtsTest do
       :ok = Ets.init(table)
 
       # Spawn multiple processes marking keys
-      tasks = for i <- 1..10 do
-        Task.async(fn ->
-          Ets.mark(table, "key_#{i}")
-        end)
-      end
+      tasks =
+        for i <- 1..10 do
+          Task.async(fn ->
+            Ets.mark(table, "key_#{i}")
+          end)
+        end
 
       Task.await_many(tasks)
 
@@ -273,11 +284,12 @@ defmodule LemonCore.Dedupe.EtsTest do
       :ok = Ets.init(table)
 
       # Multiple processes checking same key
-      tasks = for _ <- 1..10 do
-        Task.async(fn ->
-          Ets.check_and_mark(table, "shared_key", 1000)
-        end)
-      end
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn ->
+            Ets.check_and_mark(table, "shared_key", 1000)
+          end)
+        end
 
       results = Task.await_many(tasks)
 

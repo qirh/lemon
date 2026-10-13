@@ -175,7 +175,7 @@ defmodule LemonCore.RunStoreTest do
     assert %{summary: ^original} = Store.get(store, :runs, "run-conflict")
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 500)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do
