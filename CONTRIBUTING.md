@@ -64,6 +64,10 @@ repo or in your own. Here is the whole on-ramp:
    mix lemon.new my_agent
    ```
 
+   (`mix lemon.new my_agent --hex` depends on the published Hex packages
+   instead of this checkout; it cannot be combined with `--channel`, and
+   resolves once 0.2.0 is on hex.pm.)
+
 2. **Follow the guide.** [Add a channel](docs/getting-started/add-a-channel.md)
    walks from the console loop the generator gives you to a registered
    `LemonChannels.Plugin`, callback by callback. Its companions —

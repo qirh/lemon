@@ -10,9 +10,7 @@ paste any block into the project you generate in step 2 and it will work.
 ## 1. Install the generator
 
 The generator is built from a checkout of the
-[lemon](https://github.com/z80dev/lemon) repository, and the project it writes
-depends on the platform packages in that checkout. (The packages are also
-published to Hex from `0.2.0`; see "About those path dependencies" below.)
+[lemon](https://github.com/z80dev/lemon) repository:
 
 ```bash
 git clone https://github.com/z80dev/lemon
@@ -20,6 +18,12 @@ cd lemon/installer
 MIX_ENV=prod mix archive.build
 mix archive.install lemon_new-0.1.0.ez
 ```
+
+By default the project it writes depends on the platform packages in that
+checkout. To depend on the published Hex packages instead, generate with
+`--hex` (step 2). Once `lemon_new` itself is published, `mix archive.install
+hex lemon_new` replaces the clone, and with no checkout the generator uses
+`--hex` on its own.
 
 The packages declare Elixir 1.15 or later; CI tests them on Elixir 1.19 / OTP 28,
 which is the safest choice. Check with `elixir --version`.
@@ -35,11 +39,22 @@ mix test
 
 The tests pass. Nothing has talked to a model yet — more on that in step 4.
 
+To build against the Hex packages instead of a checkout, add `--hex`:
+
+```bash
+mix lemon.new my_agent --hex
+```
+
+`mix deps.get` then resolves `lemon_core`, `lemon_ai` and `lemon_agent` at
+`~> 0.2` from hex.pm, which works once `0.2.0` is published. `--hex` cannot be
+combined with `--channel`: the channel adapter needs `lemon_channels`, which is
+not published.
+
 The generator wrote a plain Mix project, not an umbrella app:
 
 ```
 my_agent/
-  mix.exs                          three path deps on the platform
+  mix.exs                          three deps on the platform
   config/config.exs                which model to run
   lib/my_agent.ex                  the facade
   lib/my_agent/application.ex      supervision tree
@@ -63,8 +78,9 @@ The generator bakes in the checkout it was built from. Override it with
 `mix lemon.new my_agent --lemon-path /elsewhere/lemon` or by exporting
 `LEMON_PATH`. Each path line has the Hex requirement commented beneath it
 (`{:lemon_core, "~> 0.2"}`); swap them to build against a Hex release instead of
-the checkout. `0.2.0` is the first installable release — the `0.1.0` releases
-on Hex are broken and retired.
+the checkout (or generate with `--hex` to get the Hex requirements directly).
+`0.2.0` is the first installable release — the `0.1.0` releases on Hex are
+broken and retired.
 
 ## 3. Read the agent
 

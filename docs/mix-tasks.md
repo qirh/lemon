@@ -56,7 +56,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.new NAME` | Scaffold a new Lemon agent project. Ships in the `installer/` archive, **not** the umbrella — install it with `mix archive.install` before use. Flags: `--channel`, `--memory`, `--install`. |
+| `mix lemon.new NAME` | Scaffold a new Lemon agent project. Ships in the `installer/` archive, **not** the umbrella — install it with `mix archive.install` before use. Flags: `--hex` (Hex requirements, no checkout; not with `--channel`), `--channel`, `--memory`, `--lemon-path`, `--packages-path`, `--install`. |
 | `mix lemon.setup` | Idempotent first-run setup: derives config/secrets/provider state, creates only missing config and secrets state, skips an already usable provider, and verifies a newly configured provider unless `--skip-verify` defers its live check. This is the contributor alternative to `lemon setup` / `./bin/lemon setup`. |
 | `mix lemon.onboard` | Top-level interactive provider onboarding. Contributor alternative to `lemon model` / `./bin/lemon model`. |
 | `mix lemon.onboard.anthropic` | Interactive onboarding for the Anthropic provider. |

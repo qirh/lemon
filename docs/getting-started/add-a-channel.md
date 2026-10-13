@@ -51,6 +51,9 @@ You can generate the whole thing:
 mix lemon.new my_agent --channel
 ```
 
+`--channel` needs a lemon checkout (`--lemon-path`): `lemon_channels` is not
+published to Hex, so the generator refuses it together with `--hex`.
+
 or add it to an existing project by following the rest of this guide.
 
 ### 1. Add the dependencies
