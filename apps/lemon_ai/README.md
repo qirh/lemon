@@ -193,6 +193,17 @@ persisted session ID automatically. Provider cache hits appear in `usage.cache_r
 hits depend on the provider's prefix length, retention and routing, not merely on
 sending a key. Sampling temperature and output-token caps are deliberately omitted
 because the Codex endpoint rejects them.
+Codex sends the same pinned `version: 0.153.0` used for live model discovery;
+caller headers cannot accidentally override that capability version. Function
+tools explicitly use `strict: false` so optional parameters remain optional rather
+than being auto-filled by the endpoint.
+
+For deliberate local diagnostics, `StreamOptions.on_payload` observes the final
+request body and `on_usage` observes raw terminal usage, including vendor
+`attribution.request_fields`. Both receive only provider/model/session metadata,
+have ignored return values, and propagate callback failures as stream errors.
+Bodies can contain private content: retain only counts/hashes, never raw payloads
+or authentication data. These hooks are disabled by default.
 
 Lemon onboarding can explicitly import an existing Codex CLI ChatGPT login with
 `lemon setup --provider openai-codex --auth codex-cli --non-interactive`.
