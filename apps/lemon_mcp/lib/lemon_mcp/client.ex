@@ -228,6 +228,7 @@ defmodule LemonMCP.Client do
     config = %{
       command: Keyword.fetch!(opts, :command),
       args: Keyword.get(opts, :args, []),
+      cwd: Keyword.get(opts, :cwd),
       env: Keyword.get(opts, :env, []),
       client_name: Keyword.get(opts, :client_name, "lemon-mcp"),
       client_version: Keyword.get(opts, :client_version, "0.1.0"),
@@ -406,6 +407,7 @@ defmodule LemonMCP.Client do
     transport_opts = [
       command: state.config.command,
       args: state.config.args,
+      cwd: state.config.cwd,
       env: state.config.env,
       message_handler: handler
     ]

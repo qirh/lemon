@@ -97,7 +97,8 @@ defmodule LemonAi.Env do
       aliases: [],
       type: :integer,
       default: nil,
-      doc: "Max message-history length sent per request to Kimi (history-limited provider).",
+      doc:
+        "Kimi message-count preflight compaction hint; provider requests preserve full history.",
       secret?: false,
       required?: false,
       area: :ai_diagnostics,

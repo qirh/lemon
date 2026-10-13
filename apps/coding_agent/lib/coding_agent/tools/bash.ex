@@ -7,7 +7,7 @@ defmodule CodingAgent.Tools.Bash do
   120 s, max 10 min). A timeout or an execution failure is returned as an
   error tool result. Streaming replacement snapshots retain at most 50,000
   output bytes plus a fixed omission marker; the executor's final result and
-  full-output spill file remain authoritative.
+  full-output spill file remain authoritative, including timeout/cancellation results.
 
   `run_in_background: true` starts the command under
   `CodingAgent.ProcessManager` and returns a `process_id` immediately; read
@@ -57,6 +57,8 @@ defmodule CodingAgent.Tools.Bash do
           "command" => %{"type" => "string", "description" => "The bash command to execute"},
           "timeout" => %{
             "type" => "integer",
+            "minimum" => 1,
+            "maximum" => @max_timeout_ms,
             "description" =>
               "Foreground timeout in milliseconds (default #{@default_timeout_ms}, " <>
                 "max #{@max_timeout_ms}). The command and its children are killed when it expires."
@@ -107,7 +109,7 @@ defmodule CodingAgent.Tools.Bash do
   def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
     # Check abort signal before starting
     if signal && AbortSignal.aborted?(signal) do
-      %AgentToolResult{content: [%TextContent{text: "Command cancelled."}]}
+      %AgentToolResult{content: [%TextContent{text: "Command cancelled."}], is_error: true}
     else
       params
       |> do_execute(signal, on_update, cwd, opts)
@@ -116,10 +118,19 @@ defmodule CodingAgent.Tools.Bash do
   end
 
   defp do_execute(params, signal, on_update, cwd, opts) do
-    command = Map.fetch!(params, "command")
+    command = Map.get(params, "command")
     use_pty = Map.get(params, "pty", false)
 
     cond do
+      not is_binary(command) or String.trim(command) == "" ->
+        {:error, "command must be a non-empty string"}
+
+      not is_boolean(use_pty) ->
+        {:error, "pty must be a boolean"}
+
+      not is_boolean(Map.get(params, "run_in_background", false)) ->
+        {:error, "run_in_background must be a boolean"}
+
       Map.get(params, "run_in_background", false) != true ->
         with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
           run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd)
@@ -226,7 +237,7 @@ defmodule CodingAgent.Tools.Bash do
   defp format_result(%BashExecutor.Result{} = result, timeout_ms) do
     cond do
       result.timed_out ->
-        output = result.output || ""
+        output = output_with_spill(result)
 
         notice =
           "Command timed out after #{timeout_ms} ms and was killed. Pass a larger timeout " <>
@@ -242,28 +253,19 @@ defmodule CodingAgent.Tools.Bash do
 
       result.cancelled ->
         # Cancelled via abort signal
+        output = output_with_spill(result)
+
         output_text =
-          if result.output && result.output != "" do
-            "Command cancelled.\n\n#{result.output}"
-          else
-            "Command cancelled."
-          end
+          if output != "", do: "Command cancelled.\n\n#{output}", else: "Command cancelled."
 
         %AgentToolResult{
           content: [%TextContent{text: output_text}],
-          details: build_details(result)
+          details: build_details(result),
+          is_error: true
         }
 
       result.exit_code == 0 ->
-        # Success
-        output = result.output || ""
-
-        text =
-          if result.truncated && result.full_output_path do
-            "#{output}\n\n[Full output saved to: #{result.full_output_path}]"
-          else
-            output
-          end
+        text = output_with_spill(result)
 
         %AgentToolResult{
           content: [%TextContent{text: text}],
@@ -271,25 +273,28 @@ defmodule CodingAgent.Tools.Bash do
         }
 
       true ->
-        # Non-zero exit code (still success, just report the code)
-        output = result.output || ""
+        output = output_with_spill(result)
 
         text =
-          cond do
-            result.truncated && result.full_output_path ->
-              "#{output}\n\n[Full output saved to: #{result.full_output_path}]\n\nCommand exited with code #{result.exit_code}"
-
-            output != "" ->
-              "#{output}\n\nCommand exited with code #{result.exit_code}"
-
-            true ->
-              "Command exited with code #{result.exit_code}"
-          end
+          if output != "",
+            do: "#{output}\n\nCommand exited with code #{result.exit_code}",
+            else: "Command exited with code #{result.exit_code}"
 
         %AgentToolResult{
           content: [%TextContent{text: text}],
-          details: build_details(result)
+          details: build_details(result),
+          is_error: true
         }
+    end
+  end
+
+  defp output_with_spill(result) do
+    output = result.output || ""
+
+    if result.truncated && result.full_output_path do
+      "#{output}\n\n[Full output saved to: #{result.full_output_path}. Use read with offset/limit to retrieve it.]"
+    else
+      output
     end
   end
 

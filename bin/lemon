@@ -323,10 +323,10 @@ stop_runtime() {
   fi
   kill -TERM "$pid"
   for ((attempt = 0; attempt < 30; attempt++)); do
-    kill -0 "$pid" 2>/dev/null || break
+    [ "$(owned_runtime_pid || true)" = "$pid" ] || break
     sleep 1
   done
-  ! kill -0 "$pid" 2>/dev/null || kill -KILL "$pid"
+  [ "$(owned_runtime_pid || true)" != "$pid" ] || kill -KILL "$pid"
   rm -f "$PIDFILE"
   info "stopped"
 }
@@ -433,7 +433,11 @@ case "$COMMAND" in
     start_runtime daemon
     ;;
 
-  stop) stop_runtime ;;
+  stop)
+    shift
+    parse_runtime_options "$@"
+    stop_runtime
+    ;;
 
   restart)
     shift
@@ -443,6 +447,8 @@ case "$COMMAND" in
     ;;
 
   status)
+    shift
+    parse_runtime_options "$@"
     if ! pid="$(owned_runtime_pid)"; then
       if control_plane_healthy; then
         echo "lemon: healthy on port $PORT (not managed by this HOME)"

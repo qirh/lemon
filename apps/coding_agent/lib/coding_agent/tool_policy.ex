@@ -88,6 +88,8 @@ defmodule CodingAgent.ToolPolicy do
     "media_generate_video",
     "todo",
     "kanban",
+    "goal",
+    "cron",
     "task",
     "agent",
     "extensions_status"
@@ -142,6 +144,9 @@ defmodule CodingAgent.ToolPolicy do
     "kill_process",
     "agent",
     "task",
+    "goal",
+    "kanban",
+    "cron",
     "browser_click",
     "browser_type",
     "browser_select_option",
@@ -195,7 +200,7 @@ defmodule CodingAgent.ToolPolicy do
   def from_profile(:leaf_worker) do
     %{
       allow: :all,
-      deny: ["task", "agent"],
+      deny: ["task", "agent", "goal", "kanban", "cron"],
       blocked_tools: [],
       require_approval: [],
       approvals: %{},

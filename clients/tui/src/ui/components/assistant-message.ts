@@ -21,6 +21,7 @@
 import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
 import { Text } from "@oh-my-pi/pi-tui/components/text";
 import { Container } from "@oh-my-pi/pi-tui/tui";
+import { TranscriptMarks, type TranscriptPhase } from "../../terminal/marks.ts";
 import { getTheme } from "../theme/theme.ts";
 import { getMarkdownTheme } from "../theme/tui-adapters.ts";
 import { WidthClamp } from "./width-safe.ts";
@@ -42,6 +43,8 @@ export class AssistantMessageComponent extends Container {
 	/** Holds the post-run error line, if any. Empty renders zero rows. */
 	readonly #footer = new Container();
 	readonly #clamp = new WidthClamp();
+	readonly #marks = new TranscriptMarks();
+	#phase: TranscriptPhase = "running";
 
 	#text = "";
 	#finalized = false;
@@ -97,6 +100,7 @@ export class AssistantMessageComponent extends Container {
 			: this.#text;
 		this.updateContent(body, { transient: false });
 		this.#finalized = true;
+		this.#phase = options.ok === false || options.interrupted ? "error" : "success";
 		this.#footer.clear();
 		if (options.ok === false && options.error) {
 			this.#footer.addChild(new Text(theme.fg("error", `Error: ${options.error}`), 1, 0));
@@ -107,7 +111,7 @@ export class AssistantMessageComponent extends Container {
 	override render(width: number): readonly string[] {
 		// Markdown keeps its horizontal padding at any width, so very narrow
 		// renders would otherwise emit rows wider than requested.
-		return this.#clamp.apply(super.render(width), width);
+		return this.#marks.apply(this.#clamp.apply(super.render(width), width), this.#phase);
 	}
 
 	override invalidate(): void {
@@ -132,6 +136,6 @@ export class AssistantMessageComponent extends Container {
 		// The markdown is child 0 with paddingY 0, so its settled row count is
 		// already in this component's raw render coordinates. Anything below it
 		// (the error footer) can only appear after finalize.
-		return this.#markdown.getLastRenderSettledRows();
+		return this.#marks.settledRows(this.#markdown.getLastRenderSettledRows());
 	}
 }

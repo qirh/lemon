@@ -117,6 +117,7 @@ defmodule LemonMCP.Transport.Stdio do
       port: nil,
       command: command,
       args: args,
+      cwd: Keyword.get(opts, :cwd),
       env: normalize_env(env),
       message_handler: message_handler,
       buffer: "",
@@ -167,20 +168,21 @@ defmodule LemonMCP.Transport.Stdio do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port, buffer: buffer} = state) do
-    # Accumulate data in buffer and process complete lines
     new_buffer = buffer <> data
-    {messages, remaining} = extract_messages(new_buffer)
 
-    # Handle each complete message
-    Enum.each(messages, &handle_message(&1, state))
-
-    {:noreply, %{state | buffer: remaining}}
+    if byte_size(new_buffer) > 8 * 1024 * 1024 do
+      {:stop, :message_too_large, state}
+    else
+      {messages, remaining} = extract_messages(new_buffer)
+      Enum.each(messages, &handle_message(&1, state))
+      {:noreply, %{state | buffer: remaining}}
+    end
   end
 
   @impl true
   def handle_info({port, {:exit_status, status}}, %{port: port} = state) do
     Logger.warning("MCP server exited with status #{status}")
-    {:noreply, %{state | port: nil}}
+    {:stop, :normal, %{state | port: nil}}
   end
 
   @impl true
@@ -210,6 +212,9 @@ defmodule LemonMCP.Transport.Stdio do
       args: state.args,
       env: state.env
     ]
+
+    port_options =
+      if state.cwd, do: [{:cd, state.cwd} | port_options], else: port_options
 
     with {:ok, executable} <- find_executable(state.command) do
       case Port.open({:spawn_executable, executable}, port_options) do

@@ -77,7 +77,7 @@ defmodule LemonCli.CLI do
   def main(argv) do
     exit_code =
       LemonCli.Onboarding.LogSilencer.with_quiet_logs(
-        "--json" in argv or List.first(argv) == "acp",
+        "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp"],
         fn -> run(argv) end
       )
 
@@ -119,6 +119,8 @@ defmodule LemonCli.CLI do
   end
 
   defp dispatch(["help", command | _rest]), do: dispatch([command, "--help"])
+
+  defp dispatch([flag | rest]) when flag in ["-p", "--print"], do: dispatch(["run" | rest])
 
   defp dispatch([command | rest]) do
     # Intercept help anywhere in the command's arguments — including after
@@ -174,6 +176,7 @@ defmodule LemonCli.CLI do
 
   defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
   defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
+  defp run_command("run", args), do: LemonCli.PrintCommand.run(args)
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
   defp run_command("gateway", args), do: run_gateway(args)
@@ -310,8 +313,9 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp exit_code_for(reason) when reason in [:unknown_subcommand, :unknown_transport],
-    do: @exit_usage
+  defp exit_code_for(reason)
+       when reason in [:unknown_subcommand, :unknown_transport, :invalid_arguments],
+       do: @exit_usage
 
   defp exit_code_for(_reason), do: @exit_error
 

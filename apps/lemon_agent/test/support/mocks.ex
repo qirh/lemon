@@ -153,6 +153,7 @@ defmodule LemonAgent.Test.Mocks do
         "required" => ["text"]
       },
       label: "Echo",
+      parallel_safe: true,
       execute: fn _id, %{"text" => text}, _signal, _on_update ->
         %AgentToolResult{
           content: [%TextContent{type: :text, text: "Echo: #{text}"}],
@@ -178,6 +179,7 @@ defmodule LemonAgent.Test.Mocks do
         "required" => ["a", "b"]
       },
       label: "Add",
+      parallel_safe: true,
       execute: fn _id, %{"a" => a, "b" => b}, _signal, _on_update ->
         %AgentToolResult{
           content: [%TextContent{type: :text, text: "#{a + b}"}],

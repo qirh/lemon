@@ -198,6 +198,7 @@ defmodule LemonAgent.ToolSupervisionTest do
         description: "Reports its pid",
         parameters: %{"id" => %{"type" => "string"}},
         label: "Reporting Tool",
+        parallel_safe: true,
         execute: fn _id, %{"id" => tool_id}, _abort, _on_update ->
           send(test_pid, {:tool_started, tool_id, self()})
           Process.sleep(50)

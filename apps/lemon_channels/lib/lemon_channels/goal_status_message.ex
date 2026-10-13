@@ -60,7 +60,7 @@ defmodule LemonChannels.GoalStatusMessage do
   @spec set_text(binary(), binary(), keyword()) :: String.t()
   def set_text(session_key, objective, opts \\ [])
       when is_binary(session_key) and is_binary(objective) do
-    case LemonAgent.Workspace.GoalStore.set(session_key, objective, opts) do
+    case call_module(loop_module(opts), :set_goal, [session_key, objective, opts]) do
       {:ok, goal} ->
         Enum.join(
           [
@@ -77,6 +77,9 @@ defmodule LemonChannels.GoalStatusMessage do
 
       {:error, :empty_objective} ->
         "Goal objective is required. Use /goal set <objective>."
+
+      {:error, :already_running} ->
+        "Goal has active or unresolved work. Stop it with /goal loop stop before replacing it."
 
       {:error, reason} ->
         "Goal update failed: #{inspect(reason)}"

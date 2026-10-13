@@ -553,10 +553,8 @@ defmodule LemonAi.Providers.GoogleShared do
   Check if an error is retryable (rate limit, server error, network error, etc.)
   """
   @spec retryable_error?(non_neg_integer(), String.t()) :: boolean()
-  def retryable_error?(status, _error_text) when status in [429, 500, 502, 503, 504], do: true
-
-  def retryable_error?(_status, error_text) do
-    LemonAi.Providers.RetryHelper.retryable_error_text?(error_text)
+  def retryable_error?(status, error_text) do
+    LemonAi.Providers.RetryHelper.retryable_http_error?(status, error_text)
   end
 
   @doc """
@@ -621,21 +619,8 @@ defmodule LemonAi.Providers.GoogleShared do
   Calculate cost for usage based on model pricing.
   """
   @spec calculate_cost(Model.t(), map()) :: map()
-  def calculate_cost(%Model{cost: cost}, usage) do
-    input_cost = usage.input * cost.input / 1_000_000
-    output_cost = usage.output * cost.output / 1_000_000
-    cache_read_cost = usage.cache_read * cost.cache_read / 1_000_000
-    cache_write_cost = usage.cache_write * cost.cache_write / 1_000_000
-    total = input_cost + output_cost + cache_read_cost + cache_write_cost
-
-    Map.merge(usage, %{
-      cost: %{
-        input: input_cost,
-        output: output_cost,
-        cache_read: cache_read_cost,
-        cache_write: cache_write_cost,
-        total: total
-      }
-    })
+  def calculate_cost(%Model{} = model, usage) do
+    cost = LemonAi.calculate_cost(model, struct(LemonAi.Types.Usage, usage))
+    Map.put(usage, :cost, Map.from_struct(cost))
   end
 end

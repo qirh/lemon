@@ -30,6 +30,7 @@
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ToolBlock } from "../../store/transcript-model.ts";
+import { toolLink } from "../../terminal/links.ts";
 import { getTheme, type Theme } from "../theme/theme.ts";
 import { buildToolView, type ToolCardState, type ToolView } from "../tool-view.ts";
 import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
@@ -262,7 +263,10 @@ export class ToolCardComponent implements ToolBlockComponent {
 	shelfLine(width: number): string {
 		const theme = getTheme();
 		const icon = statusIcon(this.#view.state, this.#view.kind, theme, this.#spinnerFrame);
-		const title = theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title);
+		const title = toolLink(
+			theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title),
+			this.#block,
+		);
 		const summary = this.#view.summary;
 		const head = `${icon} ${title}`;
 		if (summary.length === 0) return truncateToWidth(head, width);
@@ -280,7 +284,10 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#header(width: number): string {
 		const theme = getTheme();
 		const icon = statusIcon(this.#view.state, this.#view.kind, theme, this.#spinnerFrame);
-		const title = theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title);
+		const title = toolLink(
+			theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title),
+			this.#block,
+		);
 		const badge =
 			this.#view.kind && this.#view.kind !== "tool" ? theme.fg("dim", ` (${this.#view.kind})`) : "";
 		const left = `${icon} ${title}${badge}`;

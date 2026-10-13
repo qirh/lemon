@@ -46,7 +46,8 @@ See [README](README.md) for usage and [BEAM invariants](../../docs/beam_agents.m
 - Kanban terminal writes require the exact lease ID. Complete/fail/reclaim via
   the lease-guarded APIs; stale workers must not mutate newly leased tasks.
   Board-scoped locking serializes task read-modify-write and claim operations.
-- A restarting dispatcher reclaims its prior worker leases before claiming more.
+- A restarting dispatcher reclaims only unsubmitted leases. Tracked kanban router
+  runs retain their exact lease until completion or confirmed cancellation.
 - Context contributors are bounded in time and size. Stable session context
   belongs in the system prefix; volatile turn-local context belongs on the user
   message. Do not let network latency or a cache refresh block every turn.

@@ -13,6 +13,11 @@ defmodule CodingAgent.Parallel do
 
     Limits the number of concurrent operations. Callers block on `acquire/1`
     until a slot becomes available, then must call `release/1` when done.
+
+    Slots belong to the acquiring process and are reclaimed when it exits.
+    Each acquisition consumes a slot, including repeated acquisitions by the
+    same caller; acquiring again when all slots are held blocks until another
+    caller releases a slot. Each successful acquisition needs its own release.
     """
 
     use GenServer
@@ -45,11 +50,12 @@ defmodule CodingAgent.Parallel do
     end
 
     @doc """
-    Release a semaphore slot, allowing a waiting caller to proceed.
+    Release one slot held by the calling process, allowing a waiter to proceed.
+    Releases from processes that hold no slots are ignored.
     """
     @spec release(t()) :: :ok
     def release(semaphore) do
-      GenServer.cast(semaphore, :release)
+      GenServer.cast(semaphore, {:release, self()})
     end
 
     @doc """
@@ -64,16 +70,23 @@ defmodule CodingAgent.Parallel do
 
     @impl true
     def init(max) do
-      {:ok, %{max: max, current: 0, waiters: :queue.new()}}
+      {:ok, %{max: max, current: 0, waiters: :queue.new(), holders: %{}, monitors: %{}}}
     end
 
     @impl true
-    def handle_call(:acquire, from, state) do
+    def handle_call(:acquire, {pid, _tag} = from, state) do
+      ref = Process.monitor(pid)
+
       if state.current < state.max do
-        {:reply, :ok, %{state | current: state.current + 1}}
+        {:reply, :ok, grant(state, pid, ref)}
       else
-        waiters = :queue.in(from, state.waiters)
-        {:noreply, %{state | waiters: waiters}}
+        state = %{
+          state
+          | waiters: :queue.in(ref, state.waiters),
+            monitors: Map.put(state.monitors, ref, {:waiter, from})
+        }
+
+        {:noreply, state}
       end
     end
 
@@ -82,15 +95,80 @@ defmodule CodingAgent.Parallel do
     end
 
     @impl true
-    def handle_cast(:release, state) do
+    def handle_cast({:release, pid}, state) do
+      case Map.get(state.holders, pid, []) do
+        [ref | _rest] ->
+          Process.demonitor(ref, [:flush])
+          {:noreply, state |> remove_holder(pid, ref) |> drain_waiters()}
+
+        [] ->
+          {:noreply, state}
+      end
+    end
+
+    @impl true
+    def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+      case Map.get(state.monitors, ref) do
+        {:holder, ^pid} ->
+          {:noreply, state |> remove_holder(pid, ref) |> drain_waiters()}
+
+        {:waiter, _from} ->
+          {:noreply, %{state | monitors: Map.delete(state.monitors, ref)}}
+
+        nil ->
+          {:noreply, state}
+      end
+    end
+
+    defp grant(state, pid, ref) do
+      %{
+        state
+        | current: state.current + 1,
+          holders: Map.update(state.holders, pid, [ref], &[ref | &1]),
+          monitors: Map.put(state.monitors, ref, {:holder, pid})
+      }
+    end
+
+    defp remove_holder(state, pid, ref) do
+      holders =
+        case List.delete(Map.fetch!(state.holders, pid), ref) do
+          [] -> Map.delete(state.holders, pid)
+          refs -> Map.put(state.holders, pid, refs)
+        end
+
+      %{
+        state
+        | current: state.current - 1,
+          holders: holders,
+          monitors: Map.delete(state.monitors, ref)
+      }
+    end
+
+    defp drain_waiters(%{current: current, max: max} = state) when current >= max,
+      do: state
+
+    defp drain_waiters(state) do
       case :queue.out(state.waiters) do
-        {{:value, waiter}, rest} ->
-          # Hand the slot directly to the next waiter
-          GenServer.reply(waiter, :ok)
-          {:noreply, %{state | waiters: rest}}
+        {{:value, ref}, rest} ->
+          state = %{state | waiters: rest}
+
+          case Map.get(state.monitors, ref) do
+            {:waiter, {pid, _tag} = from} ->
+              if Process.alive?(pid) do
+                state = grant(state, pid, ref)
+                GenServer.reply(from, :ok)
+                drain_waiters(state)
+              else
+                Process.demonitor(ref, [:flush])
+                drain_waiters(%{state | monitors: Map.delete(state.monitors, ref)})
+              end
+
+            nil ->
+              drain_waiters(state)
+          end
 
         {:empty, _} ->
-          {:noreply, %{state | current: max(state.current - 1, 0)}}
+          state
       end
     end
   end
