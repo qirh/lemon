@@ -1,6 +1,6 @@
 defmodule LemonAutomation.CronDelivery do
   @moduledoc """
-  Decides where a finished cron run's result is sent and sends it.
+  Resolves automation supervision targets. Channels owns rendering and delivery.
 
   Target resolution, in order:
 
@@ -21,10 +21,8 @@ defmodule LemonAutomation.CronDelivery do
   name an explicit `deliver_to` target.
   """
 
-  alias LemonAutomation.{CronJob, CronRun}
+  alias LemonAutomation.CronJob
   alias LemonCore.{GatewayConfig, SessionKey}
-
-  require Logger
 
   @type target :: %{
           channel_id: String.t(),
@@ -69,10 +67,7 @@ defmodule LemonAutomation.CronDelivery do
 
   def target(%CronJob{deliver_to: deliver_to}, session_key)
       when is_binary(deliver_to) and deliver_to != "" do
-    case parse_explicit(deliver_to) do
-      {:ok, target} -> {:ok, target}
-      :error -> origin_or_owner(session_key)
-    end
+    target_for(deliver_to, session_key)
   end
 
   def target(%CronJob{} = job, session_key) do
@@ -95,62 +90,17 @@ defmodule LemonAutomation.CronDelivery do
     end
   end
 
-  @doc """
-  The channel message for a finished run: the job name, then the output (or
-  the failure reason).
-  """
-  @spec channel_text(String.t() | nil, CronRun.t(), String.t() | nil) :: String.t()
-  def channel_text(job_name, %CronRun{} = run, body) do
-    title = job_name || run.job_id
+  @doc "Resolve the shared explicit/auto/none automation supervision target grammar."
+  @spec target_for(String.t() | nil, String.t() | nil) :: {:ok, target()} | :none
+  def target_for(value, session_key) when value in [nil, "", "auto"],
+    do: origin_or_owner(session_key)
 
-    case run.status do
-      :completed ->
-        if is_binary(body) and body != "", do: "#{title}\n\n#{body}", else: title
+  def target_for("none", _session_key), do: :none
 
-      status ->
-        reason = run.error || to_string(status)
-        "#{title} (#{status}): #{reason}"
-    end
-  end
-
-  @doc """
-  Enqueues `text` to `target` on the channel outbox. Idempotent per cron run.
-  """
-  @spec deliver(target(), String.t(), CronRun.t()) :: :ok | {:error, term()}
-  def deliver(%{} = target, text, %CronRun{} = run) when is_binary(text) do
-    payload_mod = Module.concat([:"Elixir.LemonChannels", :OutboundPayload])
-    delivery_mod = Module.concat([:"Elixir.LemonRouter", :ChannelsDelivery])
-
-    if Code.ensure_loaded?(payload_mod) and Code.ensure_loaded?(delivery_mod) and
-         function_exported?(delivery_mod, :enqueue, 2) do
-      payload =
-        struct!(payload_mod,
-          channel_id: target.channel_id,
-          account_id: target.account_id,
-          peer: target.peer,
-          kind: :text,
-          content: text,
-          idempotency_key: "cron_notify_#{run.id}",
-          meta: %{
-            origin: :cron,
-            cron_forwarded_summary: true,
-            cron_run_id: run.id,
-            cron_job_id: run.job_id
-          }
-        )
-
-      case delivery_mod.enqueue(payload,
-             context: %{component: :cron_manager, phase: :forwarded_summary}
-           ) do
-        {:ok, _ref} ->
-          :ok
-
-        {:error, reason} = error ->
-          Logger.warning("[CronDelivery] Failed to enqueue cron result: #{inspect(reason)}")
-          error
-      end
-    else
-      {:error, :channels_unavailable}
+  def target_for(value, _session_key) do
+    case parse_explicit(value) do
+      {:ok, target} -> {:ok, target}
+      :error -> :none
     end
   end
 

@@ -63,6 +63,23 @@ defmodule LemonWeb.WorkManagementLiveTest do
     refute_private(inspect(:sys.get_state(view.pid), limit: :infinity))
   end
 
+  test "legacy TUI goal remains visible without unsafe controls or a false transcript", %{
+    state: state
+  } do
+    Agent.update(state, fn data ->
+      data
+      |> put_in([:goal, :session_key], "tui-20261013T062900")
+      |> put_in([:goal, :status], "paused")
+    end)
+
+    {:ok, view, _} = live(auth_conn(), "/manage/work")
+    render_click(view, "tab", %{"tab" => "goals"})
+    assert has_element?(view, "#work-goal-goal_demo")
+    assert render(view) =~ "paused"
+    refute has_element?(view, "#work-goal-goal_demo a[href^='/sessions/']")
+    refute has_element?(view, "#work-goal-goal_demo button:not([disabled])")
+  end
+
   test "board columns keep configured workflow order and safe custom status labels", %{
     state: state
   } do

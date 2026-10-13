@@ -233,8 +233,11 @@ defmodule LemonWeb.WorkProjection do
 
   defp goal(raw) do
     key = session(raw[:session_key])
-    if is_nil(key), do: throw(:invalid_projection)
-    runtime = runtime(fn -> call(GoalLoopManager, :status, [key]) end, :loop)
+
+    runtime =
+      if key,
+        do: runtime(fn -> call(GoalLoopManager, :status, [key]) end, :loop),
+        else: %{status: "unavailable", revision: nil, count: 0}
 
     %{
       kind: :goals,

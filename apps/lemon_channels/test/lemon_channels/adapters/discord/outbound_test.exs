@@ -40,7 +40,7 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       enable_discord: true,
-      discord: %{api_mod: MockMessageApi}
+      discord: %{account_id: "acct", api_mod: MockMessageApi}
     })
 
     on_exit(fn ->
@@ -58,6 +58,19 @@ defmodule LemonChannels.Adapters.Discord.OutboundTest do
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  test "foreign accounts never use the configured Discord client" do
+    payload =
+      OutboundPayload.text(
+        "discord",
+        "foreign",
+        %{kind: :channel, id: "123", thread_id: nil},
+        "private"
+      )
+
+    assert {:error, :unknown_account} = Outbound.deliver(payload)
+    refute_receive {:create, _, _}
+  end
 
   test "text delivery posts to the Discord thread channel when thread_id is present" do
     payload =

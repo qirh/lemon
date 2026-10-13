@@ -449,6 +449,7 @@ defmodule LemonAutomation.GoalLoopManager do
           opts = if status == :error, do: [error: "goal loop failed"], else: []
           if status == :error, do: GoalStore.configure_loop_auto(session_key, false)
           GoalStore.record_loop_status(session_key, status, opts)
+          LemonAutomation.RunNotifications.goal_finished(session_key, status)
 
           state
           |> update_in([:loops], &Map.delete(&1, session_key))
@@ -495,6 +496,8 @@ defmodule LemonAutomation.GoalLoopManager do
         abort_attempted: router_abort == :accepted,
         abort_result: router_abort
       )
+
+    LemonAutomation.RunNotifications.goal_finished(session_key, :stopped)
 
     state =
       state
@@ -633,6 +636,8 @@ defmodule LemonAutomation.GoalLoopManager do
                 run_id: run_id,
                 error: "ambiguous submission reached terminal state; restart required"
               )
+
+            LemonAutomation.RunNotifications.goal_finished(session_key, :error)
 
             update_in(state.loops, &Map.delete(&1, session_key))
 

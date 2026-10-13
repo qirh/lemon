@@ -19,6 +19,7 @@ defmodule LemonAutomation.GoalContinuation do
          :ok <- budget_available?(goal, opts),
          run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id()),
          params = build_params(goal, run_id, opts),
+         :ok <- LemonAutomation.RunNotifications.bind_goal(goal, params),
          {:ok, submitted_run_id, completion} <- submit(params, opts),
          {:ok, updated} <-
            GoalStore.record_continuation(session_key, submitted_run_id, completion: completion) do

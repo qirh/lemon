@@ -412,6 +412,86 @@ defmodule LemonCore.ExecApprovalsTest do
     end
   end
 
+  describe "exact approval previews" do
+    test "changed preview and invalid decisions leave the live request pending" do
+      pending = %{
+        id: "approval_preview",
+        run_id: "run_preview",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "first"},
+        expires_at_ms: nil
+      }
+
+      :ok = ExecApprovalStore.put_pending(pending.id, pending)
+      changed = %{pending | action: %{command: "second"}}
+      :ok = ExecApprovalStore.put_pending(pending.id, changed)
+
+      assert {:error, :mismatch} =
+               ExecApprovals.resolve(pending.id, :approve_once, expected_pending: pending)
+
+      assert {:error, :invalid_decision} = ExecApprovals.resolve(pending.id, :yes)
+      assert {:ok, ^changed} = ExecApprovalStore.fetch_pending(pending.id)
+      assert :ok = ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
+
+      assert {:error, :not_pending} =
+               ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
+    end
+
+    test "an expired preview cannot install policy and wakes the waiter as timed out" do
+      LemonCore.Bus.subscribe("exec_approvals")
+
+      pending = %{
+        id: "approval_expired",
+        run_id: "run_expired",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "expired"},
+        expires_at_ms: LemonCore.Clock.now_ms() - 1
+      }
+
+      :ok = ExecApprovalStore.put_pending(pending.id, pending)
+
+      assert {:error, :expired} =
+               ExecApprovals.resolve(pending.id, :approve_global, expected_pending: pending)
+
+      assert {:ok, nil} = ExecApprovalStore.fetch_pending(pending.id)
+      assert ExecApprovalStore.get_global_policy("bash", hash_action(pending.action)) == nil
+
+      assert_receive %LemonCore.Event{
+        type: :approval_resolved,
+        payload: %{approval_id: "approval_expired", decision: :timeout}
+      }
+    end
+
+    test "a second request cannot replace an existing exact approval ID" do
+      pending = %{
+        id: "approval_duplicate",
+        run_id: "run_original",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "original"}
+      }
+
+      :ok = ExecApprovalStore.put_pending(pending.id, pending)
+
+      assert {:error, :already_pending} =
+               ExecApprovals.request(%{
+                 approval_id: pending.id,
+                 run_id: "run_replacement",
+                 session_key: "agent:test:main",
+                 tool: "bash",
+                 action: %{command: "replacement"},
+                 expires_in_ms: 10
+               })
+
+      assert {:ok, ^pending} = ExecApprovalStore.fetch_pending(pending.id)
+    end
+  end
+
   describe "atomic cancel/resolve transition" do
     test "take_pending hands the record to exactly one taker" do
       pending = %{id: "approval_take", tool: "bash", run_id: "run_123"}
@@ -736,7 +816,7 @@ defmodule LemonCore.ExecApprovalsTest do
 
     Enum.count(messages, fn
       {:"$gen_call", _from, {operation, :exec_approvals_pending, ^approval_id}}
-      when operation in [:generic_get, :generic_take] ->
+      when operation in [:generic_get, :generic_fetch, :generic_take] ->
         true
 
       _other ->

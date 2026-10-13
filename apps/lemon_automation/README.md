@@ -53,7 +53,7 @@ CronManager (tick every 60s)
                                     +-- forwards prompt-job summary to the base session and sends the
                                         result to the chat chosen by CronDelivery (explicit deliver_to,
                                         originating chat, or paired owner chat) through
-                                        LemonRouter.ChannelsDelivery into LemonChannels
+                                        LemonChannels.Supervision and its durable outbox
                                     +-- one-shot (`once`) jobs are deleted after their run finishes
 ```
 
@@ -258,11 +258,36 @@ the originating chat when the job's session key is a channel-peer key of a
 registered chat platform; otherwise the paired owner chat (the first
 `gateway.telegram.allowed_chat_ids` entry when Telegram is enabled, else
 `gateway.discord.default_channel_id` when Discord is enabled); otherwise
-nowhere. The channel message is `"<job name>\n\n<output>"` for completed runs
-and `"<job name> (<status>): <error>"` otherwise, enqueued with idempotency key
-`cron_notify_<run_id>`. Telegram `/remind` (`LemonChannels.Reminders`) and the
-agent `cron` tool (`LemonGateway.Tools.Cron`) create ordinary jobs through the
-`CronManager` API and rely on this resolution.
+nowhere. `RunNotifications` binds router invocations to the exact target before
+submission; `LemonChannels.Supervision` owns bounded completion/failure rendering,
+durable admission and per-kind/job/run/status deduplication. Telegram `/remind`
+(`LemonChannels.Reminders`) and the agent `cron` tool create ordinary jobs through
+`CronManager` and rely on this resolution.
+
+### Remote supervision
+
+Goals and kanban boards use the same target grammar as cron. Set `deliver_to` on
+the `goal` tool's `set` or `kanban` tool's `board_create`: `auto` uses the originating
+Telegram/Discord account/chat/topic, then the configured owner; `none` opts out;
+`telegram:<chat_id>[:<thread_id>]` or `discord:<channel_id>[:<thread_id>]` selects an
+explicit target. Channel-created boards preserve their origin even when workers
+run in isolated sessions. Programmatic callers store these options in goal/board
+`meta["deliverTo"]` and board `meta["notificationSessionKey"]`.
+
+Known terminal results produce notices with task/run identity, bounded redacted
+summary, and reviewed commit/PR when present. An uncertain submission or abort is
+not reported as completed/failed: inspect the existing run and reconcile it.
+Goal loops that pause or exhaust their bound report incomplete work rather than
+claiming success. Existing CLI/TUI goal and kanban tools still control start,
+status, stop and explicit retry; cron retains its scheduled retry policy.
+
+Approval-requiring tools remain blocked until the corresponding channel's
+**Approve once** or **Deny** control resolves the exact pending request.
+Controls bind the full approval ID and pending snapshot to the immutable run,
+session, account, chat and topic; stale, expired, foreign and failed decisions
+never acknowledge success. Remote controls cannot grant persistent policy.
+See [channel supervision](../lemon_channels/README.md#automation-supervision)
+for delivery and recovery guarantees.
 
 **SkillCuratorManager** runs Lemon's learned-skill curator after the runtime has
 been idle long enough and the persisted curator interval gate is due. It asks
@@ -324,7 +349,7 @@ and the harmless disabled example under
 | `LemonAutomation.CronCommandRunner` | `lib/lemon_automation/cron_command_runner.ex` | Supervised no-agent local shell command runner for operator-created command cron jobs |
 | `LemonCore.Doctor.CronDiagnostics` | `apps/lemon_core/lib/lemon_core/doctor/cron_diagnostics.ex` | Core-owned redacted support-bundle diagnostics for cron jobs and runs |
 | `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization, plus daily-brief reconciliation from `[automation] daily_brief` |
-| `LemonAutomation.CronDelivery` | `lib/lemon_automation/cron_delivery.ex` | Resolves the delivery target (`deliver_to`, originating chat, paired owner chat), formats the channel message, and enqueues it on the channel outbox |
+| `LemonAutomation.CronDelivery` | `lib/lemon_automation/cron_delivery.ex` | Resolves the shared automation target grammar; `RunNotifications` binds invocations and hands terminal facts to channels |
 | `LemonAutomation.GoalContinuation` | `lib/lemon_automation/goal_continuation.ex` | Builds and submits one persistent-goal continuation run through LemonRouter |
 | `LemonAutomation.GoalContinuationManager` | `lib/lemon_automation/goal_continuation_manager.ex` | Supervised task entrypoint for one-shot goal continuation |
 | `LemonAutomation.GoalJudge` | `lib/lemon_automation/goal_judge.ex` | Normalizes preview goal-loop verdicts |
@@ -730,7 +755,7 @@ mix test --cover apps/lemon_automation
 | `cron_manager_scheduler_lock_test.exs` | Scheduled ticks and manager restarts skip duplicate launches when a persisted active run exists and recover stale active runs as timeouts |
 | `cron_manager_update_test.exs` | Immutable field rejection, mutable field updates |
 | `cron_manager_forwarding_test.exs` | Summary forwarding to main/channel_peer sessions and channel outbox delivery; default delivery to the paired owner chat (including non-Lemon session ids), explicit `deliver_to` and `"none"`, heartbeat suppression vs. delivery, and one-shot delivery then removal |
-| `cron_delivery_test.exs` | `deliver_to` validation, target resolution (explicit, originating chat, Telegram/Discord owner chat, unpaired), and channel message text |
+| `cron_delivery_test.exs` | `deliver_to` validation and target resolution (explicit, originating chat, Telegram/Discord owner chat, unpaired) |
 | `events_test.exs` | Event emission for all event types |
 | `heartbeat_test.exs` | `apply_policy/2` suppression/alert behavior and daily-brief create/reschedule/remove/invalid-time reconciliation |
 | `run_completion_waiter_test.exs` | Bus-based completion waiting, output truncation |
