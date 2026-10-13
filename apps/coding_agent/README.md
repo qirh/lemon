@@ -478,6 +478,10 @@ successful result.
 `Session.navigate_tree/3` persists branch selection even before another message
 is sent. `SessionManager.fork_file/3` creates an independent branch file with
 parent-session provenance; it refuses to overwrite an existing destination.
+The control-plane provider exposes history replay and fork through its runtime
+seam, binding forked files to independent native resume tokens. Its manual
+compaction adapter accepts `cwd:` and also works for an idle saved session after
+the previous run's process has exited.
 
 ### Tool Execution
 
