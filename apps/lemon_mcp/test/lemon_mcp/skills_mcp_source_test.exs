@@ -155,6 +155,65 @@ defmodule LemonMCP.SkillsMcpSourceTest do
   alias LemonCore.{Secrets, Store}
   alias LemonSkills.McpSource
 
+  defmodule TimeoutClient do
+    def call_tool(observer, name, params, timeout) do
+      send(observer, {:invoked, name, params, timeout})
+      exit({:timeout, {GenServer, :call, []}})
+    end
+  end
+
+  test "bounds invocation waits, keeps the source responsive and never retries a timeout" do
+    ref = make_ref()
+
+    state = %{
+      disabled: false,
+      tool_cache: %{"safe" => %{server_name: "server", original_name: {:tool, "mutate"}}},
+      servers: %{
+        "server" => %{
+          client: self(),
+          client_module: TimeoutClient,
+          connected: true,
+          config: {:stdio, "fixture", [], timeout_ms: 70}
+        }
+      }
+    }
+
+    assert {:noreply, ^state} =
+             McpSource.handle_call({:call_tool, "safe", %{}, []}, {self(), ref}, state)
+
+    assert_receive {:invoked, "mutate", %{}, 70}
+    assert_receive {^ref, {:error, :timeout}}
+    refute_receive {:invoked, _, _, _}
+  end
+
+  test "parses request timeouts and stdio environment overrides from JSON" do
+    previous = System.get_env("LEMON_MCP_SERVERS")
+
+    on_exit(fn ->
+      if previous,
+        do: System.put_env("LEMON_MCP_SERVERS", previous),
+        else: System.delete_env("LEMON_MCP_SERVERS")
+    end)
+
+    System.put_env(
+      "LEMON_MCP_SERVERS",
+      Jason.encode!([
+        %{
+          "type" => "stdio",
+          "command" => "fixture",
+          "timeout_ms" => 123,
+          "env" => %{"MCP_TEST" => "value"}
+        },
+        %{"type" => "http", "url" => "https://example.test/mcp", "timeout_ms" => 456}
+      ])
+    )
+
+    assert [{:stdio, "fixture", [], stdio}, {:http, _, http}] = LemonSkills.Config.mcp_servers()
+    assert stdio[:timeout_ms] == 123
+    assert stdio[:env] == [{"MCP_TEST", "value"}]
+    assert http[:timeout_ms] == 456
+  end
+
   @moduletag :tmp_dir
 
   setup do
@@ -362,6 +421,86 @@ defmodule LemonMCP.SkillsMcpSourceTest do
   end
 
   describe "stdio MCP discovery and calls" do
+    test "bounds names without merging distinct normalized remote names", %{tmp_dir: tmp_dir} do
+      prefix = String.duplicate("long_name", 12)
+
+      script =
+        fixture_server_script()
+        |> String.replace(~s("name" => "echo"), ~s("name" => "#{prefix}.tool"))
+        |> String.replace(~s("name" => "fail"), ~s("name" => "#{prefix}_tool"))
+
+      path = Path.join(tmp_dir, "long_names.exs")
+      File.write!(path, script)
+
+      Application.put_env(:lemon_skills, :mcp_servers, [
+        {:stdio, System.find_executable("elixir"), [path]}
+      ])
+
+      tools = McpSource.discover_tools(force_refresh: true)
+      remote = Enum.filter(tools, &String.starts_with?(&1.label, "MCP #{prefix}"))
+      assert length(remote) == 2
+      assert length(Enum.uniq_by(remote, & &1.name)) == 2
+      assert Enum.all?(remote, &Regex.match?(~r/^[a-zA-Z0-9_-]{1,64}$/, &1.name))
+    end
+
+    test "keeps project inventories isolated and reconnects without replaying calls", %{
+      tmp_dir: tmp_dir
+    } do
+      Application.put_env(:lemon_skills, :mcp_servers, [])
+      elixir = System.find_executable("elixir")
+
+      projects =
+        for project <- ["one", "two"] do
+          cwd = Path.join(tmp_dir, project)
+          File.mkdir_p!(Path.join(cwd, ".lemon"))
+          script = Path.join(cwd, "server.exs")
+          File.write!(script, fixture_server_script())
+
+          File.write!(
+            Path.join(cwd, ".lemon/mcp.json"),
+            Jason.encode!(%{
+              "servers" => [%{"type" => "stdio", "command" => elixir, "args" => [script]}]
+            })
+          )
+
+          cwd
+        end
+
+      on_exit(fn ->
+        Enum.each(projects, fn cwd ->
+          File.rm(Path.join(cwd, ".lemon/mcp.json"))
+          McpSource.discover_tools(cwd: cwd, force_refresh: true)
+        end)
+      end)
+
+      [first, second] = projects
+      first_tools = McpSource.discover_tools(cwd: first, force_refresh: true)
+      second_tools = McpSource.discover_tools(cwd: second, force_refresh: true)
+      first_echo = Enum.find(first_tools, &(&1.label == "MCP echo"))
+      second_echo = Enum.find(second_tools, &(&1.label == "MCP echo"))
+      refute first_echo.name == second_echo.name
+
+      assert Enum.all?(
+               first_tools ++ second_tools,
+               &Regex.match?(~r/^[a-zA-Z0-9_-]{1,64}$/, &1.name)
+             )
+
+      assert {:ok, _} = first_echo.execute.("first", %{"message" => "one"}, nil, nil)
+      assert {:ok, _} = second_echo.execute.("second", %{"message" => "two"}, nil, nil)
+      McpSource.refresh()
+
+      assert {:ok, _} =
+               first_echo.execute.("after-global-refresh", %{"message" => "one"}, nil, nil)
+
+      state = :sys.get_state(McpSource)
+      entry = state.tool_cache[first_echo.name]
+      client = state.servers[entry.server_name].client
+      LemonMCP.Client.close(client)
+      refreshed = McpSource.discover_tools(cwd: first, force_refresh: true)
+      assert Enum.any?(refreshed, &(&1.name == first_echo.name))
+      assert {:ok, _} = first_echo.execute.("after-reconnect", %{"message" => "one"}, nil, nil)
+    end
+
     test "discovers prefixed tools and invokes them through LemonMCP.Client", %{tmp_dir: tmp_dir} do
       server_script = Path.join(tmp_dir, "fixture_mcp_server.exs")
       File.write!(server_script, fixture_server_script())
@@ -375,7 +514,8 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = McpSource.refresh()
 
       tools = McpSource.discover_tools(force_refresh: true)
-      names = Enum.map(tools, & &1.name)
+      names = Enum.map(tools, &String.replace(&1.name, ~r/_[0-9a-f]{16}$/, ""))
+      tool_name = fn name -> Enum.find(tools, &(&1.label == "MCP #{name}")).name end
 
       assert "mcp_elixir_echo" in names
       assert "mcp_elixir_fail" in names
@@ -384,34 +524,39 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert "mcp_elixir_prompts_list" in names
       assert "mcp_elixir_prompt_get" in names
 
-      assert {:ok, result} = McpSource.call_tool("mcp_elixir_echo", %{"message" => "ok"})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("echo"), %{"message" => "ok"})
       assert [%LemonAi.Types.TextContent{text: "echo:ok"}] = result.content
+      assert result.trust == :untrusted
 
-      assert {:ok, result} = McpSource.call_tool("mcp_elixir_resources_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("resources_list"), %{})
       assert [%LemonAi.Types.TextContent{text: resources_json}] = result.content
+      assert result.trust == :untrusted
       assert [%{"uri" => "fixture://status"}] = Jason.decode!(resources_json)
 
       assert {:ok, result} =
-               McpSource.call_tool("mcp_elixir_resource_read", %{"uri" => "fixture://status"})
+               McpSource.call_tool(tool_name.("resource_read"), %{"uri" => "fixture://status"})
 
       assert [%LemonAi.Types.TextContent{text: resource_json}] = result.content
+      assert result.trust == :untrusted
       assert [%{"text" => "status:ok"}] = Jason.decode!(resource_json)
 
-      assert {:ok, result} = McpSource.call_tool("mcp_elixir_prompts_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("prompts_list"), %{})
       assert [%LemonAi.Types.TextContent{text: prompts_json}] = result.content
+      assert result.trust == :untrusted
       assert [%{"name" => "brief"}] = Jason.decode!(prompts_json)
 
       assert {:ok, result} =
-               McpSource.call_tool("mcp_elixir_prompt_get", %{
+               McpSource.call_tool(tool_name.("prompt_get"), %{
                  "name" => "brief",
                  "arguments" => %{"topic" => "beam"}
                })
 
       assert [%LemonAi.Types.TextContent{text: prompt_json}] = result.content
+      assert result.trust == :untrusted
       assert %{"messages" => [%{"role" => "user"}]} = Jason.decode!(prompt_json)
 
       assert {:error, {:tool_error, [%LemonAi.Types.TextContent{text: "planned failure"}]}} =
-               McpSource.call_tool("mcp_elixir_fail", %{})
+               McpSource.call_tool(tool_name.("fail"), %{})
 
       status = McpSource.status()
       assert status.cached_tools >= 6
@@ -436,24 +581,25 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = McpSource.refresh()
 
       tools = McpSource.discover_tools(force_refresh: true)
-      names = Enum.map(tools, & &1.name)
+      names = Enum.map(tools, &String.replace(&1.name, ~r/_[0-9a-f]{16}$/, ""))
+      tool_name = fn name -> Enum.find(tools, &(&1.label == "MCP #{name}")).name end
 
       assert "mcp_elixir_echo" in names
       refute "mcp_elixir_fail" in names
       assert "mcp_elixir_resources_list" in names
       assert "mcp_elixir_prompts_list" in names
 
-      assert {:ok, result} = McpSource.call_tool("mcp_elixir_resources_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("resources_list"), %{})
       assert [%LemonAi.Types.TextContent{text: "[]"}] = result.content
 
       assert {:error, {:blocked_resource, "fixture://status"}} =
-               McpSource.call_tool("mcp_elixir_resource_read", %{"uri" => "fixture://status"})
+               McpSource.call_tool(tool_name.("resource_read"), %{"uri" => "fixture://status"})
 
-      assert {:ok, result} = McpSource.call_tool("mcp_elixir_prompts_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("prompts_list"), %{})
       assert [%LemonAi.Types.TextContent{text: "[]"}] = result.content
 
       assert {:error, {:blocked_prompt, "brief"}} =
-               McpSource.call_tool("mcp_elixir_prompt_get", %{"name" => "brief"})
+               McpSource.call_tool(tool_name.("prompt_get"), %{"name" => "brief"})
     end
 
     test "bridges configured sampling review through exec approvals", %{tmp_dir: tmp_dir} do
@@ -510,7 +656,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
 
       tools = Task.await(task, 5_000)
-      assert "mcp_elixir_echo" in Enum.map(tools, & &1.name)
+      assert Enum.any?(tools, &(&1.label == "MCP echo"))
 
       assert_receive {:sampling_delegate, params, summary}, 1_000
       assert get_in(params, ["messages", Access.at(0), "content", "text"]) == "secret prompt"
@@ -530,7 +676,8 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = McpSource.refresh()
 
       tools = McpSource.discover_tools(force_refresh: true)
-      names = Enum.map(tools, & &1.name)
+      names = Enum.map(tools, &String.replace(&1.name, ~r/_[0-9a-f]{16}$/, ""))
+      tool_name = fn name -> Enum.find(tools, &(&1.label == "MCP #{name}")).name end
 
       assert "mcp_mcp_echo" in names
       assert "mcp_mcp_resources_list" in names
@@ -539,25 +686,25 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert "mcp_mcp_prompt_get" in names
       refute "mcp_mcp_fail" in names
 
-      assert {:ok, result} = McpSource.call_tool("mcp_mcp_echo", %{"message" => "ok"})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("echo"), %{"message" => "ok"})
       assert [%LemonAi.Types.TextContent{text: "echo:ok"}] = result.content
 
-      assert {:ok, result} = McpSource.call_tool("mcp_mcp_resources_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("resources_list"), %{})
       assert [%LemonAi.Types.TextContent{text: resources_json}] = result.content
       assert [%{"uri" => "fixture://status"}] = Jason.decode!(resources_json)
 
       assert {:ok, result} =
-               McpSource.call_tool("mcp_mcp_resource_read", %{"uri" => "fixture://status"})
+               McpSource.call_tool(tool_name.("resource_read"), %{"uri" => "fixture://status"})
 
       assert [%LemonAi.Types.TextContent{text: resource_json}] = result.content
       assert [%{"text" => "status:ok"}] = Jason.decode!(resource_json)
 
-      assert {:ok, result} = McpSource.call_tool("mcp_mcp_prompts_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("prompts_list"), %{})
       assert [%LemonAi.Types.TextContent{text: prompts_json}] = result.content
       assert [%{"name" => "brief"}] = Jason.decode!(prompts_json)
 
       assert {:ok, result} =
-               McpSource.call_tool("mcp_mcp_prompt_get", %{
+               McpSource.call_tool(tool_name.("prompt_get"), %{
                  "name" => "brief",
                  "arguments" => %{"topic" => "beam"}
                })
@@ -607,7 +754,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = McpSource.refresh()
 
       tools = McpSource.discover_tools(force_refresh: true)
-      assert "mcp_mcp_secured_echo" in Enum.map(tools, & &1.name)
+      assert Enum.any?(tools, &(&1.label == "MCP secured_echo"))
 
       assert {:ok, token_json} = Secrets.get(token_secret, env_fallback: false)
       token = Jason.decode!(token_json)
@@ -696,7 +843,7 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
 
       tools = Task.await(task, 5_000)
-      assert "mcp_mcp_secured_echo" in Enum.map(tools, & &1.name)
+      assert Enum.any?(tools, &(&1.label == "MCP secured_echo"))
 
       observed = Agent.get(store, &Enum.reverse/1)
 
@@ -736,7 +883,8 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert :ok = McpSource.refresh()
 
       tools = McpSource.discover_tools(force_refresh: true)
-      names = Enum.map(tools, & &1.name)
+      names = Enum.map(tools, &String.replace(&1.name, ~r/_[0-9a-f]{16}$/, ""))
+      tool_name = fn name -> Enum.find(tools, &(&1.label == "MCP #{name}")).name end
 
       assert "mcp_sse_echo" in names
       assert "mcp_sse_resources_list" in names
@@ -745,25 +893,25 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert "mcp_sse_prompt_get" in names
       refute "mcp_sse_fail" in names
 
-      assert {:ok, result} = McpSource.call_tool("mcp_sse_echo", %{"message" => "ok"})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("echo"), %{"message" => "ok"})
       assert [%LemonAi.Types.TextContent{text: "echo:ok"}] = result.content
 
-      assert {:ok, result} = McpSource.call_tool("mcp_sse_resources_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("resources_list"), %{})
       assert [%LemonAi.Types.TextContent{text: resources_json}] = result.content
       assert [%{"uri" => "fixture://status"}] = Jason.decode!(resources_json)
 
       assert {:ok, result} =
-               McpSource.call_tool("mcp_sse_resource_read", %{"uri" => "fixture://status"})
+               McpSource.call_tool(tool_name.("resource_read"), %{"uri" => "fixture://status"})
 
       assert [%LemonAi.Types.TextContent{text: resource_json}] = result.content
       assert [%{"text" => "status:ok"}] = Jason.decode!(resource_json)
 
-      assert {:ok, result} = McpSource.call_tool("mcp_sse_prompts_list", %{})
+      assert {:ok, result} = McpSource.call_tool(tool_name.("prompts_list"), %{})
       assert [%LemonAi.Types.TextContent{text: prompts_json}] = result.content
       assert [%{"name" => "brief"}] = Jason.decode!(prompts_json)
 
       assert {:ok, result} =
-               McpSource.call_tool("mcp_sse_prompt_get", %{
+               McpSource.call_tool(tool_name.("prompt_get"), %{
                  "name" => "brief",
                  "arguments" => %{"topic" => "beam"}
                })

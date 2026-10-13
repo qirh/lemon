@@ -58,6 +58,12 @@ absence of an application callback.
 )
 ```
 
+Stdio clients accept `cwd: "/path/to/project"` and string-pair `env` overrides.
+The consuming host owns reconnection: subprocess exit terminates the transport
+and fails pending client requests. Protocol buffering is capped at 8 MiB.
+Never replay a timed-out tool invocation automatically; the remote operation may
+already have taken effect.
+
 `sampling/createMessage` is disabled by default. Prefer a `sampling_policy`
 when requests should pass through redacted review and local limits before a
 model-backed delegate is called:
