@@ -66,20 +66,24 @@ defmodule LemonAgent.Workspace.GoalStore do
     end
   end
 
-  @spec list(keyword()) :: [map()]
+  @doc "List goals. `strict: true` returns `{:ok, goals}` or a store error, never false emptiness."
+  @spec list(keyword()) :: [map()] | {:ok, [map()]} | {:error, term()}
   def list(opts \\ []) do
-    status = opts[:status] && to_string(opts[:status])
-    agent_id = opts[:agent_id] && to_string(opts[:agent_id])
-    limit = opts[:limit] || 50
+    project = fn records ->
+      records
+      |> Enum.map(fn {_key, goal} -> normalize_goal(goal) end)
+      |> Enum.reject(&(&1 == %{}))
+      |> maybe_filter(:status, opts[:status] && to_string(opts[:status]))
+      |> maybe_filter(:agent_id, opts[:agent_id] && to_string(opts[:agent_id]))
+      |> Enum.sort_by(&(&1[:updated_at_ms] || 0), :desc)
+      |> Enum.take(opts[:limit] || 50)
+    end
 
-    @table
-    |> Store.list()
-    |> Enum.map(fn {_key, goal} -> normalize_goal(goal) end)
-    |> Enum.reject(&(&1 == %{}))
-    |> maybe_filter(:status, status)
-    |> maybe_filter(:agent_id, agent_id)
-    |> Enum.sort_by(&(&1[:updated_at_ms] || 0), :desc)
-    |> Enum.take(limit)
+    if opts[:strict] do
+      with {:ok, records} <- Store.fetch_all(@table), do: {:ok, project.(records)}
+    else
+      project.(Store.list(@table))
+    end
   end
 
   @spec pause(binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -136,7 +140,7 @@ defmodule LemonAgent.Workspace.GoalStore do
 
           goal ->
             now = now_ms()
-            run_id = string_opt(opts[:run_id]) || goal.last_run_id
+            run_id = string_opt(opts[:run_id])
 
             loop =
               goal.meta
@@ -188,10 +192,10 @@ defmodule LemonAgent.Workspace.GoalStore do
               |> reset_loop_run(opts)
               |> Map.put("status", status)
               |> Map.put("updatedAtMs", now)
-              |> maybe_put("lastError", string_opt(opts[:error]))
+              |> put_loop_error(opts)
               |> maybe_put(
                 "lastRunId",
-                if(opts[:reset_run], do: nil, else: string_opt(opts[:run_id]) || goal.last_run_id)
+                if(opts[:reset_run], do: nil, else: string_opt(opts[:run_id]))
               )
               |> maybe_put("lastRunKind", string_opt(opts[:run_kind]))
               |> maybe_put("abortAttempted", opts[:abort_attempted])
@@ -378,6 +382,17 @@ defmodule LemonAgent.Workspace.GoalStore do
       %{goal | meta: Map.put(goal.meta, "lastResult", result)}
     else
       goal
+    end
+  end
+
+  defp put_loop_error(loop, opts) do
+    if Keyword.has_key?(opts, :error) do
+      case string_opt(opts[:error]) do
+        nil -> Map.delete(loop, "lastError")
+        error -> Map.put(loop, "lastError", error)
+      end
+    else
+      loop
     end
   end
 

@@ -80,7 +80,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
     session_file =
       session_file ||
-        Path.join(SessionManager.get_session_dir(cwd), "#{session_manager.header.id}.jsonl")
+        SessionManager.session_file_path(cwd, session_manager.header.id)
 
     session_manager =
       session_manager
@@ -118,6 +118,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:agent_id, agent_id)
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
+      |> Keyword.put(:session_scope, session_scope)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
@@ -329,6 +330,7 @@ defmodule CodingAgent.Session.Lifecycle do
       agent_id: state.agent_id,
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
+      session_scope: state.session_scope,
       tool_policy: state.tool_policy,
       approval_context: state.approval_context,
       wasm_tools: wasm_reload.wasm_tools,
@@ -406,10 +408,7 @@ defmodule CodingAgent.Session.Lifecycle do
         new_session_manager =
           SessionManager.persist(
             new_session_manager,
-            Path.join(
-              SessionManager.get_session_dir(state.cwd),
-              "#{new_session_manager.header.id}.jsonl"
-            )
+            SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
           )
 
         Persistence.maybe_unregister_session(

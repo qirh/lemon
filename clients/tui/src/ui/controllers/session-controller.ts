@@ -116,6 +116,19 @@ export class SessionController {
 
 	// -- switching -----------------------------------------------------------
 
+	/** Hydrate an explicit launch key before the initial composer is ready. */
+	async initialize(): Promise<void> {
+		const session = this.#store.focused;
+		await Promise.all([
+			this.#hydrateIfCold(session),
+			this.hydrateRouting(session),
+			this.#resyncActive(),
+			this.#resyncApprovals(),
+		]);
+		this.#events.rebuildFocused();
+		this.#refreshStatus?.();
+	}
+
 	/**
 	 * Focus `key`, hydrating and rebuilding as needed.
 	 *
@@ -294,7 +307,7 @@ export class SessionController {
 	/** Pull stored history for a session that has nothing on screen yet. */
 	async #hydrateIfCold(session: SessionStore): Promise<void> {
 		if (this.#hydrated.has(session.key)) return;
-		if (session.blocks.length > 0) {
+		if (session.blocks.some((block) => block.kind !== "notice")) {
 			// Live events already built a transcript; stored history would double it.
 			this.#hydrated.add(session.key);
 			return;

@@ -1,8 +1,8 @@
 defmodule LemonSkills.Tools.Remember do
   @moduledoc """
   The `remember` tool: persist, correct, or delete a durable fact in the
-  assistant-home `USER.md` (who the user is, their preferences) or `MEMORY.md`
-  (curated long-term facts).
+  assistant-home `USER.md` (who the user is, their preferences), `MEMORY.md`
+  (curated long-term facts), or scoped project memory in `LemonMemory.Project`.
 
   Both files are loaded into every main-session system prompt as workspace
   bootstrap files, so a remembered fact is in front of the model on the next
@@ -24,7 +24,7 @@ defmodule LemonSkills.Tools.Remember do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonMemory.Safety
+  alias LemonMemory.{Project, Safety}
 
   @targets %{
     "user" => %{
@@ -72,21 +72,29 @@ defmodule LemonSkills.Tools.Remember do
   @doc """
   Returns the `remember` tool definition wired to `execute/5`.
 
-  `cwd` is unused. `opts` may carry:
-
-  - `:workspace_dir` - assistant-home directory containing `USER.md`/`MEMORY.md`;
-    passed to `execute/5`, where a non-empty binary is required
+  `cwd` identifies the current repository. `opts` carries `:workspace_dir`,
+  `:agent_id`, `:session_key`, and `:session_scope`. Only explicitly main-scoped
+  sessions may write memory. `:store` can select a named memory store.
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
-  def tool(_cwd, opts \\ []) do
-    workspace_dir = Keyword.get(opts, :workspace_dir)
+  def tool(cwd, opts \\ []) do
+    context = %{
+      cwd: cwd,
+      workspace_dir: Keyword.get(opts, :workspace_dir),
+      agent_id: Keyword.get(opts, :agent_id),
+      session_key: Keyword.get(opts, :session_key),
+      session_scope: Keyword.get(opts, :session_scope),
+      store_opts: Keyword.take(opts, [:store])
+    }
 
     %AgentTool{
       name: "remember",
       description:
         "Save a durable fact or preference so it is in your context in every future session: " <>
           "target \"user\" writes USER.md (who the user is, how they like to work), " <>
-          "\"memory\" writes MEMORY.md (other long-term facts and decisions). " <>
+          "\"memory\" writes MEMORY.md (other personal long-term facts), " <>
+          "\"project\" saves repository build commands, conventions, and decisions " <>
+          "only for this project, profile, and agent. " <>
           "Pass text to save it, text plus replaces to correct an existing note, " <>
           "or replaces alone to delete one.",
       label: "Remember",
@@ -99,31 +107,31 @@ defmodule LemonSkills.Tools.Remember do
           },
           "target" => %{
             "type" => "string",
-            "enum" => ["user", "memory"],
+            "enum" => ["user", "memory", "project"],
             "description" =>
-              "user: USER.md (profile, preferences). memory: MEMORY.md (everything else). " <>
-                "Default memory."
+              "user: USER.md (profile, preferences). memory: MEMORY.md (personal facts). " <>
+                "project: facts specific to this repository. Default memory."
           },
           "replaces" => %{
             "type" => "string",
             "description" =>
-              "Exact existing text in the file: replaced by text, or deleted if text is omitted."
+              "Exact existing note or project fact: replaced by text, or deleted if text is omitted."
           }
         },
         "required" => []
       },
-      execute: &execute(&1, &2, &3, &4, workspace_dir)
+      execute: &execute(&1, &2, &3, &4, context)
     }
   end
 
   @doc """
   Tool callback invoked by the agent loop: `execute(tool_call_id, params, signal,
-  on_update, workspace_dir)`.
+  on_update, context)`.
 
   Reads from `params`:
 
   - `"text"` - the note to save (add) or the replacement (with `"replaces"`)
-  - `"target"` (default `"memory"`) - `"user"` or `"memory"`
+  - `"target"` (default `"memory"`) - `"user"`, `"memory"`, or `"project"`
   - `"replaces"` - exact existing text, matched exactly once, to replace or delete
 
   Text values must be non-empty strings of at most 4096 bytes without NUL bytes;
@@ -143,18 +151,56 @@ defmodule LemonSkills.Tools.Remember do
           map(),
           reference() | nil,
           (AgentToolResult.t() -> :ok) | nil,
-          String.t() | nil
+          map()
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, workspace_dir) do
+  def execute(_tool_call_id, params, signal, _on_update, context) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      with :ok <- validate_workspace_dir(workspace_dir),
+      with :ok <- validate_workspace_dir(context.workspace_dir),
+           :ok <- validate_session_scope(context),
            {:ok, target} <- get_target(params),
            {:ok, action} <- get_action(params) do
-        do_execute(workspace_dir, target, action, params)
+        if target == "project",
+          do: remember_project(context, action, params),
+          else: do_execute(context.workspace_dir, target, action, params)
       end
     end
+  end
+
+  defp validate_session_scope(%{session_scope: :main}), do: :ok
+  defp validate_session_scope(_), do: {:error, "remember requires a main session"}
+
+  defp remember_project(context, action, params) do
+    with {:ok, text} <- optional_text(params, "text"),
+         {:ok, replaces} <- optional_text(params, "replaces"),
+         {:ok, result} <- Project.remember(context, text, replaces, context.store_opts) do
+      %AgentToolResult{
+        content: [
+          %TextContent{
+            text:
+              "Project memory #{if result.changed, do: "updated", else: "unchanged"}.\n\n" <>
+                Enum.map_join(result.facts, "\n", &("- " <> &1))
+          }
+        ],
+        details: %{
+          target: "project",
+          action: action,
+          changed: result.changed,
+          facts: result.facts
+        }
+      }
+    else
+      {:error, reason} when is_atom(reason) ->
+        {:error, "Project memory refused: #{reason}"}
+
+      error ->
+        error
+    end
+  end
+
+  defp optional_text(params, key) do
+    if Map.get(params, key) == nil, do: {:ok, nil}, else: get_text(params, key)
   end
 
   defp do_execute(workspace_dir, target, action, params) do
@@ -197,8 +243,9 @@ defmodule LemonSkills.Tools.Remember do
 
   defp get_target(params) do
     case Map.get(params, "target", "memory") do
+      "project" -> {:ok, "project"}
       target when is_map_key(@targets, target) -> {:ok, target}
-      _ -> {:error, "target must be either user or memory"}
+      _ -> {:error, "target must be user, memory, or project"}
     end
   end
 

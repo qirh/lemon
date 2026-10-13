@@ -1908,8 +1908,13 @@ defmodule CodingAgent.Session do
   defp restore_branch_state(state, session_manager) do
     context = SessionManager.build_session_context(session_manager)
 
-    model =
-      ModelResolver.resolve_session_model(context.model || state.model, state.settings_manager)
+    model_spec =
+      if context.model && context.model.model_id == state.model.id &&
+           to_string(context.model.provider) == to_string(state.model.provider),
+         do: state.model,
+         else: context.model || state.model
+
+    model = ModelResolver.resolve_session_model(model_spec, state.settings_manager)
 
     :ok = LemonAgent.Agent.set_model(state.agent, model)
     :ok = LemonAgent.Agent.set_thinking_level(state.agent, context.thinking_level)
