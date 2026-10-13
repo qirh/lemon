@@ -137,6 +137,15 @@ defmodule CodingAgent.SessionBranchTest do
     wait_for_streaming_complete(session)
   end
 
+  # The provider can be reached before the session persists the prompt; tests
+  # that snapshot state mid-run wait for that entry so later changes are theirs.
+  defp await_prompt_persisted(session) do
+    session_id = Session.get_state(session).session_manager.header.id
+
+    assert_receive {:session_event, ^session_id, {:message_end, %LemonAi.Types.UserMessage{}}},
+                   5000
+  end
+
   defp assert_messages_match_branch(session) do
     state = Session.get_state(session)
     context = SessionManager.build_session_context(state.session_manager)
@@ -578,12 +587,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       :ok = Session.prompt(session, "Hello!")
       assert_receive {:stream_waiting, provider, ref}, 5000
-      # The provider can be reached before the session persists the prompt;
-      # snapshot only after that entry is durable, so later changes are ours.
-      session_id = Session.get_state(session).session_manager.header.id
-
-      assert_receive {:session_event, ^session_id, {:message_end, %LemonAi.Types.UserMessage{}}},
-                     5000
+      await_prompt_persisted(session)
 
       before_navigation = Session.get_state(session).session_manager
       messages_before = Session.get_messages(session)
@@ -1094,6 +1098,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       :ok = Session.prompt(session, "Second!")
       assert_receive {:stream_waiting, provider, ref}, 5000
+      await_prompt_persisted(session)
       before_navigation = Session.get_state(session).session_manager
       messages_before = Session.get_messages(session)
 
@@ -1173,6 +1178,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       :ok = Session.prompt(session, "Prompt with steer coming")
       assert_receive {:stream_waiting, provider, ref}, 5000
+      await_prompt_persisted(session)
       :ok = Session.steer(session, "Interrupting steer!")
       before_navigation = Session.get_state(session).session_manager
       messages_before = Session.get_messages(session)
