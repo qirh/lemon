@@ -82,13 +82,15 @@ defmodule CodingAgent.Session.RunTranslatorTest do
       t
       |> RunTranslator.handle_event({:tool_execution_end, "cancel-tool", "bash", result, true})
       |> RunTranslator.handle_event({:message_end, nil})
-      |> RunTranslator.handle_event({:turn_end, nil, []})
-      |> RunTranslator.handle_event({:canceled, :assistant_aborted})
+      |> RunTranslator.handle_event(
+        {:turn_end, %LemonAi.Types.AssistantMessage{stop_reason: :aborted}, []}
+      )
 
     assert_receive {:action_event, %{phase: :completed, ok: false}}
     assert_receive {:completed, %{ok: false, usage: %{turns: 1, tool_errors: 1}}}
     assert t.pending_actions == %{}
     assert t.completed_emitted
+    RunTranslator.handle_event(t, {:canceled, :assistant_aborted})
     RunTranslator.handle_event(t, {:agent_end, []})
     refute_receive {:completed, _}, 10
   end
