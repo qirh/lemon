@@ -41,27 +41,6 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     }
   end
 
-  def session_updates(session_id, event, opts \\ []) do
-    {updates, _state} = map_event(new(session_id, opts), event)
-    updates
-  end
-
-  def tool_call(session_id, id, name, args, opts \\ []) do
-    state = new(session_id, opts)
-
-    notification(
-      state,
-      start_update(
-        state,
-        id,
-        name,
-        args,
-        Keyword.get(opts, :intent),
-        Keyword.get(opts, :status, "pending")
-      )
-    )
-  end
-
   def tool_kind(name, args \\ %{}) do
     case to_string(name || "") do
       "read" -> "read"
@@ -185,13 +164,21 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         "in_progress"
       )
 
-  defp map_named_event(state, "tool_execution_end", event),
-    do:
-      map_event(
-        state,
-        {:tool_execution_end, get(event, :toolCallId), get(event, :toolName), get(event, :result),
-         get(event, :isError) == true}
-      )
+  defp map_named_event(state, "tool_execution_end", event) do
+    id = get(event, :toolCallId)
+    name = get(event, :toolName)
+    {_name, remembered_args} = Map.get(state.tools, id, {name, %{}})
+    args = get(event, :args) || remembered_args
+
+    tool_result(
+      state,
+      id,
+      name,
+      args,
+      get(event, :result),
+      if(get(event, :isError) == true, do: "failed", else: "completed")
+    )
+  end
 
   defp map_named_event(state, "todo_reminder", event),
     do: emit(state, plan(get(event, :todos) || []))
@@ -355,7 +342,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         "sessionUpdate" => "tool_call_update",
         "toolCallId" => id,
         "status" => status,
-        "rawOutput" => bounded(result)
+        "rawOutput" => raw_output(result)
       }
       |> put_nonempty(
         "content",
@@ -478,7 +465,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   end
 
   defp content_block(block) do
-    case to_string(get(block, :type) || "") do
+    case scalar_string(get(block, :type)) do
       "text" ->
         case get(block, :text) do
           text when is_binary(text) and text != "" -> [text_content(text)]
@@ -529,8 +516,14 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     ]
     |> Enum.flat_map(fn raw ->
       case location_path(state, raw, name) do
-        nil -> []
-        path -> [%{"path" => path} |> maybe_put("line", get(args, :offset) || get(args, :line))]
+        nil ->
+          []
+
+        path ->
+          [
+            %{"path" => path}
+            |> maybe_put("line", line_number(get(args, :offset) || get(args, :line)))
+          ]
       end
     end)
     |> Enum.uniq()
@@ -547,7 +540,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         path = local_path(state, get(entry, :path) || get(entry, :resolvedPath))
 
         if path,
-          do: [%{"path" => path} |> maybe_put("line", get(entry, :first_changed_line))],
+          do: [
+            %{"path" => path} |> maybe_put("line", line_number(get(entry, :first_changed_line)))
+          ],
           else: []
       end)
 
@@ -605,7 +600,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
 
         if is_binary(content) and content != "" do
           status =
-            case to_string(get(todo, :status) || "pending") do
+            case scalar_string(get(todo, :status)) do
               n when n in ["completed", "abandoned"] -> "completed"
               "in_progress" -> "in_progress"
               _ -> "pending"
@@ -687,7 +682,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     |> Enum.take(@items_limit)
     |> Enum.flat_map(fn child ->
       id = get(child, :session_id) || get(child, :task_id)
-      status = to_string(get(child, :status) || tool_status)
+      status = scalar_string(get(child, :status) || tool_status)
 
       if is_binary(id) do
         running = status in ["queued", "running", "pending", "in_progress"]
@@ -768,7 +763,29 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     if is_number(amount) and amount > 0, do: %{"amount" => amount, "currency" => "USD"}
   end
 
-  defp aggregate_usage(messages), do: CodingAgent.Session.Presentation.build_usage(messages)
+  defp aggregate_usage(messages) do
+    Enum.reduce(messages, %{}, fn message, acc ->
+      case get(message, :usage) do
+        usage when is_map(usage) ->
+          totals =
+            Enum.reduce([:input, :output, :cache_read, :cache_write, :total_tokens], acc, fn key,
+                                                                                             totals ->
+              Map.put(totals, key, number(get(acc, key)) + number(get(usage, key)))
+            end)
+
+          context_tokens =
+            Enum.reduce([:input, :output, :cache_read, :cache_write], 0, fn key, total ->
+              total + number(get(usage, key))
+            end)
+
+          cost = number(get(get(acc, :cost), :total)) + number(get(get(usage, :cost), :total))
+          totals |> Map.put(:context_tokens, context_tokens) |> Map.put(:cost, %{total: cost})
+
+        _ ->
+          acc
+      end
+    end)
+  end
 
   defp chunks(state, kind, text, extra \\ %{})
 
@@ -825,6 +842,11 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp number(_value), do: 0
   defp list(value) when is_list(value), do: value
   defp list(_value), do: []
+  defp scalar_string(value) when is_binary(value), do: value
+  defp scalar_string(value) when is_atom(value), do: Atom.to_string(value)
+  defp scalar_string(_value), do: ""
+  defp line_number(value) when is_integer(value) and value > 0, do: value
+  defp line_number(_value), do: nil
 
   defp assistant?(message), do: to_string(get(message, :role) || "") == "assistant"
 
@@ -833,7 +855,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       get(message, :content)
       |> list()
       |> Enum.flat_map(fn block ->
-        if to_string(get(block, :type) || "") == "text" and is_binary(get(block, :text)),
+        if scalar_string(get(block, :type)) == "text" and is_binary(get(block, :text)),
           do: [get(block, :text)],
           else: []
       end)
@@ -869,6 +891,17 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     prefix = binary_part(text, 0, min(bytes, byte_size(text)))
     if String.valid?(prefix), do: prefix, else: utf8_prefix(text, bytes - 1)
   end
+
+  defp raw_output(%LemonAgent.Types.AgentToolResult{} = result),
+    do: result |> LemonControlPlane.EventProjection.tool_result() |> bounded()
+
+  defp raw_output(result) when is_map(result) do
+    if is_list(get(result, :content)),
+      do: result |> LemonControlPlane.EventProjection.tool_result() |> bounded(),
+      else: bounded(result)
+  end
+
+  defp raw_output(result), do: bounded(result)
 
   defp bounded(value) do
     {safe, _budget} = bound(value, @raw_limit, 0)
