@@ -635,14 +635,14 @@ defmodule LemonAgent.EventStreamTest do
   # ============================================================================
 
   describe "cancel/2" do
-    test "cancels the stream with a reason" do
+    test "cancel stops the stream once its terminal is consumed" do
       {:ok, stream} = EventStream.start_link()
+      ref = Process.monitor(stream)
 
       :ok = EventStream.cancel(stream, :user_requested)
 
-      # Stream should be stopped
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert [{:canceled, :user_requested}] = EventStream.events(stream) |> Enum.to_list()
+      assert_receive {:DOWN, ^ref, :process, ^stream, :normal}, 1000
     end
 
     test "result returns canceled error after cancel" do
@@ -674,11 +674,12 @@ defmodule LemonAgent.EventStreamTest do
 
     test "cancel with default reason" do
       {:ok, stream} = EventStream.start_link()
+      ref = Process.monitor(stream)
 
       EventStream.cancel(stream)
 
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert [{:canceled, :canceled}] = EventStream.events(stream) |> Enum.to_list()
+      assert_receive {:DOWN, ^ref, :process, ^stream, :normal}, 1000
     end
 
     test "push returns error after cancel" do

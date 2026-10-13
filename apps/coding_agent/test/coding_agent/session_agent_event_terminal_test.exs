@@ -187,6 +187,60 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
     assert_native_cancel(:forced)
   end
 
+  test "aborting an idle provider preserves observed partial prose in chronological journal order" do
+    partial = Mocks.assistant_message("OBSERVED_PARTIAL_PROSE")
+
+    stream_fn = fn _model, _context, _options ->
+      {:ok, response_stream} = LemonAi.EventStream.start_link()
+      :ok = LemonAi.EventStream.push(response_stream, {:start, Mocks.assistant_message("")})
+
+      :ok =
+        LemonAi.EventStream.push(
+          response_stream,
+          {:text_delta, 0, "OBSERVED_PARTIAL_PROSE", partial}
+        )
+
+      {:ok, response_stream}
+    end
+
+    session = start_session(stream_fn: stream_fn)
+    _unsubscribe = Session.subscribe(session)
+    {:ok, stream} = Session.subscribe(session, mode: :stream)
+    session_id = Session.get_state(session).session_manager.header.id
+    :ok = Session.prompt(session, "write an essay")
+
+    assert_receive {:session_event, ^session_id,
+                    {:message_update,
+                     %AssistantMessage{content: [%TextContent{text: "OBSERVED_PARTIAL_PROSE"}]},
+                     _}},
+                   2_000
+
+    :ok = Session.abort(session)
+    events = collect_stream_events(stream)
+    assert List.last(events) == {:canceled, :assistant_aborted}
+
+    assert Enum.any?(events, fn
+             {:session_event, _,
+              {:message_end, %AssistantMessage{stop_reason: :aborted} = message}} ->
+               Enum.any?(message.content, &(&1.text == "OBSERVED_PARTIAL_PROSE"))
+
+             _ ->
+               false
+           end)
+
+    state = Session.get_state(session)
+    {:ok, reloaded} = SessionManager.load_from_file(state.session_file)
+
+    messages =
+      for entry <- SessionManager.entries(reloaded), entry.type == :message, do: entry.message
+
+    assert Enum.map(messages, & &1["role"]) == ["user", "assistant"]
+    assert List.last(messages)["stop_reason"] == "aborted"
+
+    assert Enum.map_join(List.last(messages)["content"], "", & &1["text"]) ==
+             "OBSERVED_PARTIAL_PROSE"
+  end
+
   test "aborted assistant message_end clears streaming and completes stream subscribers" do
     session = start_session()
     {:ok, stream} = Session.subscribe(session, mode: :stream)

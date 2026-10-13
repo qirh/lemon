@@ -586,6 +586,32 @@ export interface SessionsForkResult {
 	sourceSessionKey: string;
 }
 
+export interface SessionsPlanParams {
+	sessionKey: string;
+	cwd: string;
+	action: "status" | "enter" | "approve" | "discard";
+	revision?: string;
+}
+
+export interface SessionsPlanResult {
+	sessionKey: string;
+	plan: {
+		mode: "code" | "plan";
+		status: "none" | "draft" | "pending" | "approved";
+		revision: string | null;
+		path: string | null;
+		content: string | null;
+	};
+}
+
+export interface SessionsCompactParams {
+	sessionKey: string;
+	cwd?: string;
+	focus?: string;
+	summary?: string;
+	force?: boolean;
+}
+
 export interface SessionsListParams {
 	limit?: number;
 	offset?: number;

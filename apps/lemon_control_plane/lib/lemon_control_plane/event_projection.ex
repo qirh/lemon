@@ -185,15 +185,31 @@ defmodule LemonControlPlane.EventProjection do
     do:
       project_selected(
         value,
-        [:input, :output, :cache_read, :cache_write, :cache_write_long, :total_tokens, :cost,
-         :context_tokens, :context_budget, :turns, :tool_errors],
+        [
+          :input,
+          :output,
+          :cache_read,
+          :cache_write,
+          :cache_write_long,
+          :total_tokens,
+          :cost,
+          :context_tokens,
+          :context_budget,
+          :turns,
+          :tool_errors
+        ],
         depth,
         budget
       )
 
   defp project(%Cost{} = value, depth, budget, _string_keys),
     do:
-      project_selected(value, [:input, :output, :cache_read, :cache_write, :cache_write_long, :total], depth, budget)
+      project_selected(
+        value,
+        [:input, :output, :cache_read, :cache_write, :cache_write_long, :total],
+        depth,
+        budget
+      )
 
   defp project(%{__struct__: _}, _depth, _budget, _string_keys), do: :drop
 
@@ -290,8 +306,16 @@ defmodule LemonControlPlane.EventProjection do
       if next_budget.bytes >= 2 do
         projected =
           cond do
-            name in ["total_tokens", "totalTokens", "context_tokens", "contextTokens",
-              "tokens", "reserve_tokens", "threshold_tokens", "headroom_tokens"] and
+            name in [
+              "total_tokens",
+              "totalTokens",
+              "context_tokens",
+              "contextTokens",
+              "tokens",
+              "reserve_tokens",
+              "threshold_tokens",
+              "headroom_tokens"
+            ] and
                 (is_number(value) or is_nil(value)) ->
               project(value, depth + 1, next_budget, string_keys)
 

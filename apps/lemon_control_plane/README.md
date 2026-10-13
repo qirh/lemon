@@ -147,14 +147,28 @@ thoughts or tool-result bodies. Branch summaries contain `leafId` and `active`.
 ```
 
 A preview returns `confirmationToken`, `prompt`, `discardedMessages`,
-`restorePaths`, `unrestorableTools`, `entryId`, and `sessionId`. Show the
-preview before executing: send the same target and restoration choice with
-`dryRun: false` and the returned `confirmationToken` (at most 256 bytes).
-Missing confirmation is rejected before runtime delegation; stale or mismatched
-previews are rejected by the native runtime. Execution returns `prompt`,
-`leafId`, `restoredPaths`, `entryId`, and `sessionId`. The prompt can be placed
-back in the composer. A failed restoration/rollback must not be treated as
-proof that no files changed.
+`restorePaths`, `unrestorableTools`, `entryId`, and `sessionId`, plus the
+`restoreFiles` and `allowPartialRestore` choices. Show the preview before
+executing: send the same target and both choices with `dryRun: false` and the
+returned `confirmationToken` (at most 256 bytes). Missing confirmation is
+rejected before runtime delegation; stale or mismatched previews are rejected
+by the native runtime. Execution echoes that token and both choices, and returns
+`prompt`, `leafId`, `restoredPaths`, `entryId`, and `sessionId`. The prompt can be
+placed back in the composer. A failed restoration/rollback must not be treated
+as proof that no files changed.
+
+File restoration fails closed when the discarded history contains shell
+commands. A user may explicitly consent to restoring only checkpointed files
+by requesting a **new preview** with `restoreFiles: true` and
+`allowPartialRestore: true` (default `false`). Changing this flag at confirmation
+invalidates the previous token. Previews and receipts include redacted
+`unrestorableCommands`, their total `unrestorableCommandCount`, and
+`canAllowPartialRestore`. The client must explain “restore N checkpointed files;
+effects of M shell commands are not reverted” and list those commands before
+confirmation. A successful partial restoration returns `partialRestore: true`.
+Missing non-shell checkpoints, unavailable/truncated command text, or more than
+100 shell invocations cannot be bypassed with partial consent. Other shell
+effects are never undone or represented as restored.
 
 `sessions.fork` requires `operator.write` and accepts only the source
 `sessionKey` and `cwd`. The server generates an independent canonical child key,
@@ -173,6 +187,15 @@ Name a child with the existing `sessions.metadata.patch` method using
 Find named sessions with `sessions.list` using `{query}` (`operator.read`).
 No separate naming or search API is needed.
 
+To name a new conversation **before its first turn**, explicitly call
+`sessions.create` (`operator.write`) with a canonical `sessionKey` and native
+workspace `cwd`, then use the same metadata patch. Creation returns
+`{sessionKey, sessionId, created}` and is idempotent for that key/workspace.
+It persists an empty native journal and zero-run session index; it does not send
+a prompt, enter plan mode, or manufacture history. Existing native sessions
+return `created: false`; a mismatched workspace or non-native identity is not
+silently rebound. Metadata patches still refuse unknown session IDs by default.
+
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch
 after rewind. Only visible user/assistant text is projected; abandoned turns,
@@ -183,6 +206,13 @@ messages following that entry, matching the existing cursor contract.
 Calls without `cwd`, or runtimes reporting missing/unsupported native history,
 retain legacy run-history support; storage failures are not treated as empty
 native history.
+
+`sessions.compact` requires `operator.admin` and accepts `sessionKey`, optional
+native `cwd`, and optional `focus` instructions. Manual compaction defaults to
+`force: true`. Model-backed summarization runs outside the WebSocket connection
+process so heartbeats and other control frames continue while it is working.
+A disconnected client must inspect session status before retrying: the durable
+summary may have committed even when its acknowledgement was lost.
 
 ## Named execution nodes
 

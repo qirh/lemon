@@ -1495,8 +1495,8 @@ defmodule LemonWeb.SessionLive do
         Map.update(acc, message.id, message, fn previous ->
           if read(previous.event, :phase) in [:completed, "completed"] and
                read(message.event, :phase) not in [:completed, "completed"],
-            do: previous,
-            else: message
+             do: previous,
+             else: message
         end)
       end)
 

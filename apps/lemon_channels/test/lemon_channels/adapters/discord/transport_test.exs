@@ -53,6 +53,17 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     def unreact(_channel_id, _message_id, _emoji), do: {:ok}
   end
 
+  defmodule ApprovalOutboxAPI do
+    def edit(channel_id, message_id, params) do
+      send(
+        :persistent_term.get({__MODULE__, :pid}),
+        {:approval_edit, channel_id, message_id, params}
+      )
+
+      {:ok, %{id: message_id}}
+    end
+  end
+
   defmodule FakePortableRuntime do
     def background_start("index the repository", opts) do
       :persistent_term.put({__MODULE__, :owner_session}, opts[:session_key])
@@ -625,6 +636,28 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   test "approval component resolves a pending approval through the runtime path" do
     parent = self()
+    previous_gateway = Application.get_env(:lemon_gateway, @gateway_config_key)
+    previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
+    :persistent_term.put({ApprovalOutboxAPI, :pid}, parent)
+    Application.put_env(:lemon_core, :config_test_mode, true)
+
+    Application.put_env(:lemon_gateway, @gateway_config_key, %{
+      discord: %{api_mod: ApprovalOutboxAPI}
+    })
+
+    previous_plugin = LemonChannels.Registry.get_plugin("discord")
+    :ok = LemonChannels.Registry.register(LemonChannels.Adapters.Discord)
+
+    on_exit(fn ->
+      LemonChannels.Registry.unregister("discord")
+      if previous_plugin, do: LemonChannels.Registry.register(previous_plugin)
+    end)
+
+    on_exit(fn ->
+      restore_env(:lemon_gateway, @gateway_config_key, previous_gateway)
+      restore_env(:lemon_core, :config_test_mode, previous_test_mode)
+      :persistent_term.erase({ApprovalOutboxAPI, :pid})
+    end)
 
     Application.put_env(:lemon_channels, :discord_interaction_responder, fn interaction,
                                                                             payload ->
@@ -638,7 +671,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       Task.async(fn ->
         LemonCore.ExecApprovals.request(%{
           run_id: "run_discord_approval",
-          session_key: "agent:test:main",
+          session_key: "agent:test:discord:default:group:1475727417372049419",
           tool: "bash",
           action: %{command: "touch proof"},
           expires_in_ms: 5_000
@@ -653,8 +686,11 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
         end)
       end)
 
-    interaction = component_interaction("#{pending.id}|once")
-    state = %{}
+    interaction =
+      component_interaction(LemonChannels.RemoteApproval.callback(pending, :approve_once))
+      |> Map.put(:message, %{id: "4444"})
+
+    state = discord_message_state()
 
     assert {:noreply, ^state} =
              Transport.handle_info(
@@ -664,15 +700,11 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     assert {:ok, :approved, :approve_once} = Task.await(task, 1_000)
 
-    assert_receive {:interaction_response, ^interaction,
-                    %{
-                      type: 7,
-                      data: %{
-                        content: "Approval: Approved (once)",
-                        components: [],
-                        allowed_mentions: %{parse: [], replied_user: false}
-                      }
-                    }}
+    assert_receive {:interaction_response, ^interaction, %{type: 6}}
+
+    assert_receive {:approval_edit, 1_475_727_417_372_049_419, 4444,
+                    %{content: "Approval: Approved (once)", components: []}},
+                   2_000
   end
 
   test "cancel component aborts the run through the runtime path" do

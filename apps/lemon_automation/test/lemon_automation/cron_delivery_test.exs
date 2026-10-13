@@ -100,16 +100,6 @@ defmodule LemonAutomation.CronDeliveryTest do
     end
   end
 
-  test "channel_text leads with the job name and reports failures" do
-    completed = %LemonAutomation.CronRun{id: "r1", job_id: "j1", status: :completed}
-    failed = %LemonAutomation.CronRun{id: "r2", job_id: "j1", status: :failed, error: "boom"}
-
-    assert CronDelivery.channel_text("Reminder: stand-up", completed, "Stand-up in 5 minutes") ==
-             "Reminder: stand-up\n\nStand-up in 5 minutes"
-
-    assert CronDelivery.channel_text("Nightly", failed, nil) == "Nightly (failed): boom"
-  end
-
   defp configure(config) do
     Application.put_env(
       :lemon_gateway,

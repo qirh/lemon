@@ -144,6 +144,135 @@ defmodule CodingAgent.SessionRewindTest do
              )
   end
 
+  test "partial restoration requires fresh explicit consent and leaves shell effects intact", %{
+    session: session,
+    dir: dir
+  } do
+    path = Path.join(dir, "tracked.txt")
+    File.write!(path, "original")
+    target = user(session, "edit and verify")
+    {:ok, checkpoint} = Checkpoint.create_filesystem(session.header.id, [path], cwd: dir)
+    File.write!(path, "edited")
+    edited = tool_result(target, "write", checkpoint.id)
+    command = "printf shell-side-effect > shell.txt"
+    {"", 0} = System.cmd("sh", ["-c", command], cd: dir)
+    full = shell_call(edited, command)
+
+    {:ok, preview, _} = Rewind.run(full, target.leaf_id, restore_files: true)
+    assert preview["unrestorableCommands"] == [command]
+    assert preview["unrestorableCommandCount"] == 1
+    assert preview["canAllowPartialRestore"]
+    refute preview["allowPartialRestore"]
+
+    assert {:error, :unrestorable_effects} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    assert File.read!(path) == "edited"
+
+    assert {:error, :stale_confirmation} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               allow_partial_restore: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    {:ok, partial, _} =
+      Rewind.run(full, target.leaf_id, restore_files: true, allow_partial_restore: true)
+
+    assert {:ok, receipt, rewound} =
+             Rewind.run(full, target.leaf_id,
+               restore_files: true,
+               allow_partial_restore: true,
+               dry_run: false,
+               confirmation_token: partial["confirmationToken"]
+             )
+
+    assert receipt["partialRestore"]
+    assert receipt["confirmationToken"] == partial["confirmationToken"]
+    assert receipt["restoreFiles"] and receipt["allowPartialRestore"]
+    assert receipt["unrestorableCommands"] == [command]
+    assert receipt["restoredPaths"] == [path]
+    assert File.read!(path) == "original"
+    assert File.read!(Path.join(dir, "shell.txt")) == "shell-side-effect"
+    assert rewound.leaf_id == target.by_id[target.leaf_id].parent_id
+    assert length(SessionManager.entries(rewound)) == length(SessionManager.entries(full))
+  end
+
+  test "partial consent cannot bypass missing file checkpoints or unreviewable commands", %{
+    session: session
+  } do
+    target = user(session, "unsafe partial restore")
+    missing = tool_result(target, "write", nil)
+
+    {:ok, preview, _} =
+      Rewind.run(missing, target.leaf_id, restore_files: true, allow_partial_restore: true)
+
+    refute preview["canAllowPartialRestore"]
+
+    assert {:error, :checkpoint_missing} =
+             Rewind.run(missing, target.leaf_id,
+               restore_files: true,
+               allow_partial_restore: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    long = shell_call(target, String.duplicate("x", 2049))
+
+    {:ok, preview, _} =
+      Rewind.run(long, target.leaf_id, restore_files: true, allow_partial_restore: true)
+
+    refute preview["canAllowPartialRestore"]
+    assert preview["unrestorableCommandCount"] == 1
+
+    assert {:error, :partial_restore_unreviewable} =
+             Rewind.run(long, target.leaf_id,
+               restore_files: true,
+               allow_partial_restore: true,
+               dry_run: false,
+               confirmation_token: preview["confirmationToken"]
+             )
+
+    assert {:error, :invalid_partial_restore} =
+             Rewind.run(long, target.leaf_id, allow_partial_restore: true)
+
+    secret = "sk-" <> String.duplicate("x", 40)
+    redacted = shell_call(target, "API_KEY=#{secret} printf ok")
+    {:ok, preview, _} = Rewind.run(redacted, target.leaf_id, restore_files: true)
+    refute Enum.join(preview["unrestorableCommands"]) =~ secret
+    assert preview["canAllowPartialRestore"]
+  end
+
+  defp shell_call(session, command) do
+    id = "shell-#{System.unique_integer([:positive])}"
+
+    session
+    |> SessionManager.append_message(%{
+      "role" => "assistant",
+      "content" => [
+        %{
+          "type" => "tool_call",
+          "id" => id,
+          "name" => "bash",
+          "arguments" => %{"command" => command}
+        }
+      ]
+    })
+    |> SessionManager.append_message(%{
+      "role" => "tool_result",
+      "tool_name" => "bash",
+      "tool_call_id" => id,
+      "content" => [%{"type" => "text", "text" => "complete"}],
+      "details" => %{"exit_code" => 0},
+      "is_error" => false
+    })
+  end
+
   test "tree pages remain stable and do not expose hidden thought text", %{session: session} do
     first = user(session, "visible prompt")
 

@@ -65,6 +65,11 @@ defmodule LemonSkills.Tools.Kanban do
           "workspace" => %{"type" => "string", "description" => "Board workspace path."},
           "author" => %{"type" => "string", "description" => "Comment author."},
           "coding_workflow" => coding_workflow_schema(),
+          "deliver_to" => %{
+            "type" => "string",
+            "description" =>
+              "Supervision for board_create: auto (origin channel or owner), none, telegram:chat[:thread], or discord:channel[:thread]."
+          },
           "max_concurrency" => %{
             "type" => "integer",
             "minimum" => 1,
@@ -252,9 +257,27 @@ defmodule LemonSkills.Tools.Kanban do
     result("kanban boards", %{boards: KanbanStore.list_boards(opts)})
   end
 
+  defp validate_delivery(nil), do: {:ok, nil}
+
+  defp validate_delivery(value) do
+    module = :"Elixir.LemonAutomation.CronDelivery"
+
+    if Code.ensure_loaded?(module),
+      do: apply(module, :validate, [value]),
+      else: {:error, "kanban supervision unavailable"}
+  end
+
   defp board_create(params, cwd, opts) do
     with {:ok, name} <- required_string(params, "name"),
-         {:ok, meta} <- coding_workflow_meta(params) do
+         {:ok, meta} <- coding_workflow_meta(params),
+         {:ok, delivery} <- validate_delivery(params["deliver_to"]) do
+      meta =
+        Map.merge(meta || %{}, %{
+          "deliverTo" => delivery,
+          "notificationSessionKey" => Keyword.get(opts, :session_key)
+        })
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
       create_opts =
         []
         |> put_opt(:workspace, params["workspace"] || Keyword.get(opts, :kanban_workspace) || cwd)

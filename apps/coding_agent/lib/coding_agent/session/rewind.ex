@@ -15,6 +15,8 @@ defmodule CodingAgent.Session.Rewind do
   @confirmation_table :session_rewinds
   @confirmation_ttl_ms 5 * 60 * 1000
   @mutation_tools ~w(write edit patch apply_patch bash)
+  @max_review_commands 100
+  @max_command_chars 2048
 
   def tree(session, opts \\ []) do
     entries = SessionManager.entries(session)
@@ -61,18 +63,24 @@ defmodule CodingAgent.Session.Rewind do
   end
 
   def run(session, entry_id, opts \\ []) do
-    with {:ok, target, suffix} <- target_suffix(session, entry_id) do
-      if Keyword.get(opts, :dry_run, true) do
-        preview_rewind(session, target, suffix, opts)
-      else
-        execute_rewind(session, target, suffix, opts)
+    if Keyword.get(opts, :allow_partial_restore, false) and
+         not Keyword.get(opts, :restore_files, false) do
+      {:error, :invalid_partial_restore}
+    else
+      with {:ok, target, suffix} <- target_suffix(session, entry_id) do
+        if Keyword.get(opts, :dry_run, true) do
+          preview_rewind(session, target, suffix, opts)
+        else
+          execute_rewind(session, target, suffix, opts)
+        end
       end
     end
   end
 
   defp preview_rewind(session, target, suffix, opts) do
     restore_files = Keyword.get(opts, :restore_files, false)
-    {plan, unavailable} = restoration_plan(session, suffix)
+    allow_partial = Keyword.get(opts, :allow_partial_restore, false)
+    {plan, unavailable, review} = restoration_review(session, suffix)
 
     with {:ok, fingerprints} <- fingerprints(plan, restore_files) do
       token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
@@ -82,24 +90,28 @@ defmodule CodingAgent.Session.Rewind do
         revision: revision(session),
         entry_id: target.id,
         restore_files: restore_files,
+        allow_partial_restore: allow_partial,
         plan: plan,
         fingerprints: fingerprints,
         unavailable: unavailable,
+        review: review,
         expires_at: System.system_time(:millisecond) + @confirmation_ttl_ms
       }
 
       case Store.put(@confirmation_table, session.header.id, confirmation) do
         :ok ->
           {:ok,
-           %{
+           Map.merge(review, %{
              "sessionId" => session.header.id,
              "entryId" => target.id,
              "confirmationToken" => token,
+             "restoreFiles" => restore_files,
+             "allowPartialRestore" => allow_partial,
              "prompt" => message_text(target.message),
              "discardedMessages" => Enum.count(suffix, &(&1.type in [:message, :custom_message])),
              "restorePaths" => Enum.map(plan, & &1.path),
              "unrestorableTools" => unavailable
-           }, session}
+           }), session}
 
         {:error, _} ->
           {:error, :session_store_unavailable}
@@ -111,7 +123,8 @@ defmodule CodingAgent.Session.Rewind do
     token = Keyword.get(opts, :confirmation_token)
     confirmation = Store.get(@confirmation_table, session.header.id)
     restore_files = Keyword.get(opts, :restore_files, false)
-    {plan, unavailable} = restoration_plan(session, suffix)
+    allow_partial = Keyword.get(opts, :allow_partial_restore, false)
+    {plan, unavailable, review} = restoration_review(session, suffix)
 
     cond do
       not is_binary(token) or token == "" ->
@@ -121,17 +134,39 @@ defmodule CodingAgent.Session.Rewind do
         confirmation.expires_at < System.system_time(:millisecond) or
         confirmation.revision != revision(session) or confirmation.entry_id != target.id or
         confirmation.restore_files != restore_files or confirmation.plan != plan or
-          confirmation.unavailable != unavailable ->
+        Map.get(confirmation, :allow_partial_restore) != allow_partial or
+        Map.get(confirmation, :review) != review or confirmation.unavailable != unavailable ->
         {:error, :stale_confirmation}
 
-      restore_files and unavailable != [] ->
+      restore_files and Enum.any?(unavailable, &(&1 != "bash")) ->
         {:error, :checkpoint_missing}
+
+      restore_files and review["unrestorableCommandCount"] > 0 and not allow_partial ->
+        {:error, :unrestorable_effects}
+
+      restore_files and allow_partial and review["unrestorableCommandCount"] > 0 and
+          not review["canAllowPartialRestore"] ->
+        {:error, :partial_restore_unreviewable}
 
       true ->
         with {:ok, current} <- fingerprints(plan, restore_files),
              true <- current == confirmation.fingerprints,
-             :ok <- Store.compare_and_delete(@confirmation_table, session.header.id, confirmation) do
-          restore_and_rewind(session, target, if(restore_files, do: plan, else: []))
+             :ok <- Store.compare_and_delete(@confirmation_table, session.header.id, confirmation),
+             {:ok, receipt, session} <-
+               restore_and_rewind(session, target, if(restore_files, do: plan, else: [])) do
+          receipt =
+            receipt
+            |> Map.merge(review)
+            |> Map.merge(%{
+              "confirmationToken" => token,
+              "restoreFiles" => restore_files,
+              "allowPartialRestore" => allow_partial,
+              "partialRestore" =>
+                restore_files and allow_partial and review["unrestorableCommandCount"] > 0,
+              "unrestorableTools" => unavailable
+            })
+
+          {:ok, receipt, session}
         else
           false -> {:error, :stale_confirmation}
           {:error, :mismatch} -> {:error, :stale_confirmation}
@@ -215,6 +250,81 @@ defmodule CodingAgent.Session.Rewind do
         {:error, :not_user_message}
     end
   end
+
+  defp restoration_review(session, suffix) do
+    {plan, unavailable} = restoration_plan(session, suffix)
+    commands = shell_commands(suffix)
+    unavailable = if commands == [], do: unavailable, else: Enum.uniq(unavailable ++ ["bash"])
+    count = length(commands)
+
+    review = %{
+      "unrestorableCommands" =>
+        commands |> Enum.take(@max_review_commands) |> Enum.map(& &1.display),
+      "unrestorableCommandCount" => count,
+      "canAllowPartialRestore" =>
+        unavailable == ["bash"] and count > 0 and count <= @max_review_commands and
+          Enum.all?(commands, & &1.complete?)
+    }
+
+    {plan, unavailable, review}
+  end
+
+  defp shell_commands(suffix) do
+    calls =
+      Enum.flat_map(suffix, fn entry ->
+        case field(entry.message, :content) do
+          blocks when is_list(blocks) ->
+            blocks
+            |> Enum.with_index()
+            |> Enum.flat_map(fn {block, index} ->
+              if field(block, :type) in [:tool_call, "tool_call"] and
+                   field(block, :name) == "bash" do
+                id = field(block, :id) || {:entry, entry.id, index}
+                [{id, field(field(block, :arguments), :command)}]
+              else
+                []
+              end
+            end)
+
+          _ ->
+            []
+        end
+      end)
+
+    call_ids = MapSet.new(calls, &elem(&1, 0))
+
+    missing =
+      Enum.flat_map(suffix, fn entry ->
+        message = entry.message
+        id = field(message, :tool_call_id) || {:result, entry.id}
+
+        if field(message, :role) in [:tool_result, "tool_result"] and
+             field(message, :tool_name) == "bash" and not MapSet.member?(call_ids, id),
+           do: [{id, nil}],
+           else: []
+      end)
+
+    (calls ++ missing)
+    |> Enum.uniq_by(&elem(&1, 0))
+    |> Enum.map(fn {_id, command} -> command_review(command) end)
+  end
+
+  defp command_review(command) when is_binary(command) and command != "" do
+    text =
+      command
+      |> LemonCore.Redact.text()
+      |> String.replace(~r/[\x00-\x08\x0B-\x1F\x7F]/u, "")
+
+    if String.length(text) <= @max_command_chars,
+      do: %{display: text, complete?: true},
+      else: %{
+        display: String.slice(text, 0, @max_command_chars) <> " [truncated]",
+        complete?: false
+      }
+  end
+
+  defp command_review(_),
+    do: %{display: "[shell command unavailable in persisted history]", complete?: false}
 
   defp restoration_plan(session, suffix) do
     {paths, unavailable} =

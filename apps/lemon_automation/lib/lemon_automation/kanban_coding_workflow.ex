@@ -202,7 +202,10 @@ defmodule LemonAutomation.KanbanCodingWorkflow do
              bus_mod: Keyword.get(context.opts, :bus_mod, LemonCore.Bus),
              timeout_ms: Keyword.get(context.opts, :timeout_ms, 300_000),
              wait_opts: Keyword.get(context.opts, :wait_opts, []),
-             on_submitting: fn id -> claim(context, id, attrs, checkpoint) end
+             on_submitting: fn id ->
+               with :ok <- LemonAutomation.RunNotifications.bind_kanban(context.task, params),
+                    do: claim(context, id, attrs, checkpoint)
+             end
            ) do
         {:ok, _id, output} ->
           reviewed(context, checkpoint, output)

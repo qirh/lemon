@@ -48,18 +48,20 @@ defmodule LemonAgent.Loop do
 
   require Logger
 
-  alias LemonAgent.{AbortSignal, EventStream}
+  alias LemonAgent.{AbortSignal, Budget, EventStream}
   alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls}
-  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, ToolSchemaSnapshot}
+  alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult, ToolSchemaSnapshot}
 
   alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
-    ToolCall
+    ToolCall,
+    ToolResultMessage
   }
 
   @loop_abort_signal_pd_key :agent_abort_signal
   @loop_state_pd_key :agent_loop_state
+  @usage_budget_pd_key :agent_usage_budget
 
   # ============================================================================
   # Public API
@@ -323,6 +325,7 @@ defmodule LemonAgent.Loop do
 
     # Emit initial events
     EventStream.push(stream, {:agent_start})
+    config = initialize_budget(config, stream, true)
     emit_tool_schema_snapshot(stream, snapshot)
     EventStream.push(stream, {:turn_start})
     reset_loop_state()
@@ -363,6 +366,7 @@ defmodule LemonAgent.Loop do
     {current_context, config, snapshot} = snapshot_tool_schema(context, config)
 
     EventStream.push(stream, {:agent_start})
+    config = initialize_budget(config, stream, false)
     emit_tool_schema_snapshot(stream, snapshot)
     EventStream.push(stream, {:turn_start})
     reset_loop_state()
@@ -524,21 +528,30 @@ defmodule LemonAgent.Loop do
 
     transition_loop_state(stream, :await_model, %{first_turn: first_turn})
 
-    # Stream assistant response
-    case Streaming.stream_assistant_response(context, config, signal, stream_fn, stream) do
+    # Check before each response; Streaming also checks before every retry.
+    response =
+      case budget_check(config) do
+        nil -> Streaming.stream_assistant_response(context, config, signal, stream_fn, stream)
+        details -> {:error, {:budget_exceeded, details}}
+      end
+
+    case response do
       {:ok, message, context} ->
         new_messages = new_messages ++ [message]
         transition_loop_state(stream, :normalizing_response, %{stop_reason: message.stop_reason})
 
-        case message.stop_reason do
-          :aborted ->
+        case {budget_check(config), message.stop_reason} do
+          {%{} = details, _stop_reason} ->
+            stop_usage_budget(context, new_messages, message, details, stream)
+
+          {nil, :aborted} ->
             Logger.info("LemonAgent.Loop turn aborted")
             transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
             EventStream.push(stream, {:turn_end, message, []})
             EventStream.cancel(stream, :assistant_aborted)
             {context, new_messages, [], false}
 
-          :redirected ->
+          {nil, :redirected} ->
             # The in-flight model request was canceled by a redirect. Drop the
             # partial assistant message from the loop context (prior completed
             # messages/tool results are preserved), clear the redirect flag,
@@ -570,7 +583,7 @@ defmodule LemonAgent.Loop do
               )
             end
 
-          :error ->
+          {nil, :error} ->
             transition_loop_state(stream, :recovering_provider_error, %{reason: :assistant_error})
             EventStream.push(stream, {:turn_end, message, []})
 
@@ -666,12 +679,99 @@ defmodule LemonAgent.Loop do
             end
         end
 
+      {:error, {:budget_exceeded, details}} ->
+        stop_usage_budget(context, new_messages, nil, details, stream)
+
       {:error, reason} ->
         transition_loop_state(stream, :recovering_provider_error, %{reason: reason})
         EventStream.error(stream, reason, new_messages)
         transition_loop_state(stream, :finalizing, %{reason: :stream_error})
         {context, new_messages, [], false}
     end
+  end
+
+  # Budget state is loop-task-local, so retries and recursive turns share it
+  # without an extra process or expanding every streaming return tuple.
+  defp initialize_budget(config, stream, reset_run?) do
+    budget =
+      cond do
+        config.budget && reset_run? ->
+          Budget.new(config.budget.limits, config.budget.session_usage)
+
+        config.budget ->
+          config.budget
+
+        Budget.enabled?(config.budget_limits) ->
+          Budget.new(config.budget_limits, config.budget_usage)
+
+        true ->
+          nil
+      end
+
+    if budget do
+      Process.put(@usage_budget_pd_key, budget)
+      emit_budget_usage(stream, budget)
+      %{config | budget: budget}
+    else
+      config
+    end
+  end
+
+  @doc false
+  def budget_check(%AgentLoopConfig{budget: nil}), do: nil
+  def budget_check(config), do: Budget.check(Process.get(@usage_budget_pd_key, config.budget))
+
+  @doc false
+  def record_budget_usage(%AgentLoopConfig{budget: nil}, _message, _stream), do: :ok
+
+  def record_budget_usage(config, message, stream) do
+    budget = Budget.record_message(Process.get(@usage_budget_pd_key, config.budget), message)
+    Process.put(@usage_budget_pd_key, budget)
+    emit_budget_usage(stream, budget)
+  end
+
+  defp emit_budget_usage(stream, budget) do
+    EventStream.push(
+      stream,
+      {:usage_budget_updated, %{run_usage: budget.run_usage, session_usage: budget.session_usage}}
+    )
+  end
+
+  defp stop_usage_budget(context, new_messages, message, details, stream) do
+    tool_results =
+      if message do
+        Enum.map(get_tool_calls(message), fn call ->
+          result = %AgentToolResult{
+            content: [%TextContent{text: details.message}],
+            details: details,
+            is_error: true
+          }
+
+          rejected = %ToolResultMessage{
+            tool_call_id: call.id,
+            tool_name: call.name,
+            content: result.content,
+            details: details,
+            is_error: true,
+            timestamp: System.system_time(:millisecond)
+          }
+
+          EventStream.push(stream, {:tool_execution_end, call.id, call.name, result, true})
+          EventStream.push(stream, {:message_start, rejected})
+          EventStream.push(stream, {:message_end, rejected})
+          rejected
+        end)
+      else
+        []
+      end
+
+    context = %{context | messages: context.messages ++ tool_results}
+    new_messages = new_messages ++ tool_results
+    if message, do: EventStream.push(stream, {:turn_end, message, tool_results})
+    EventStream.push(stream, {:budget_exceeded, details})
+    transition_loop_state(stream, :finalizing, %{reason: :budget_exceeded})
+    EventStream.error(stream, {:budget_exceeded, details}, %{new_messages: new_messages})
+    {context, new_messages, [], false}
   end
 
   defp process_pending_messages(context, new_messages, [], _stream) do
