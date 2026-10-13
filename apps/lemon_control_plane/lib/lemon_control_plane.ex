@@ -70,7 +70,7 @@ defmodule LemonControlPlane do
   def max_payload do
     case Application.get_env(:lemon_control_plane, :max_payload) do
       value when is_integer(value) and value > 0 -> value
-      _ -> LemonCore.JSONPayload.default_max_bytes()
+      _ -> 16_777_216
     end
   end
 
