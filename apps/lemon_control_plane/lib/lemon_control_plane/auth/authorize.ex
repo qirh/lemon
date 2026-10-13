@@ -324,6 +324,8 @@ defmodule LemonControlPlane.Auth.Authorize do
       "agent.wait",
       "chat.send",
       "chat.abort",
+      "sessions.rewind",
+      "sessions.fork",
       "node.invoke"
     ]
   end

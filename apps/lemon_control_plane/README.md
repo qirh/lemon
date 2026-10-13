@@ -76,6 +76,63 @@ prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
 errors are bounded and redacted, not raw run/store dumps.
 
+## Native session navigation
+
+Use the same `sessionKey` and native workspace `cwd` for these operations.
+Both are required, non-empty strings, bounded to 1,024 and 4,096 UTF-8 bytes
+respectively. NUL bytes are rejected. Native runtime failures expose only safe
+reason classifications, never exception terms or raw filesystem errors.
+
+`sessions.tree` requires `operator.read`. Optional `limit` is 1–500 (default
+100); `offset` is 0–1,000,000 (default 0). The result contains `sessionId`,
+`leafId`, `entries`, `branches`, `totalEntries`, `offset`, and `hasMore`.
+Each entry contains `id`, `parentId`, `type`, `role`, `text`, `timestamp`,
+`isActive`, `isLeaf`, and `rewindable`. Text is a redacted native preview, not
+thoughts or tool-result bodies. Branch summaries contain `leafId` and `active`.
+
+`sessions.rewind` requires `operator.write`, including previews. Supply an
+`entryId` of at most 256 bytes identifying a rewindable user message.
+`restoreFiles` defaults to `false`; `dryRun` defaults to `true`.
+
+```json
+{"type":"req","id":"preview-1","method":"sessions.rewind","params":{"sessionKey":"agent:default:main","cwd":"/srv/project","entryId":"user-entry-id","restoreFiles":true}}
+```
+
+A preview returns `confirmationToken`, `prompt`, `discardedMessages`,
+`restorePaths`, `unrestorableTools`, `entryId`, and `sessionId`. Show the
+preview before executing: send the same target and restoration choice with
+`dryRun: false` and the returned `confirmationToken` (at most 256 bytes).
+Missing confirmation is rejected before runtime delegation; stale or mismatched
+previews are rejected by the native runtime. Execution returns `prompt`,
+`leafId`, `restoredPaths`, `entryId`, and `sessionId`. The prompt can be placed
+back in the composer. A failed restoration/rollback must not be treated as
+proof that no files changed.
+
+`sessions.fork` requires `operator.write` and accepts only the source
+`sessionKey` and `cwd`. The server generates an independent canonical child key,
+copies native resume state through the runtime, and registers the child in the
+durable session index with independent lifecycle metadata. The result is
+`{sessionKey: "<child>", sourceSessionKey: "<source>"}`. It is discoverable in
+`sessions.list` immediately, with zero runs of its own; no synthetic run is
+created. If acknowledgement or registration is uncertain, error details retain
+the generated keys and `retrySafe: false`; reconcile instead of retrying.
+
+Name a child with the existing `sessions.metadata.patch` method using
+`{sessionKey, title}` (`operator.admin`); `title: null` clears its name.
+Find named sessions with `sessions.list` using `{query}` (`operator.read`).
+No separate naming or search API is needed.
+
+When reopening native conversations, pass `cwd` to `chat.history`. Its
+successful native response is authoritative, including an empty active branch
+after rewind. Only visible user/assistant text is projected; abandoned turns,
+thought blocks, tool results, and structural tree entries are excluded.
+`limit`, `beforeId`, and `includeFullText` remain available. Native pages are
+chronological, defaulting to the latest messages; a `beforeId` cursor selects
+messages following that entry, matching the existing cursor contract.
+Calls without `cwd`, or runtimes reporting missing/unsupported native history,
+retain legacy run-history support; storage failures are not treated as empty
+native history.
+
 ## Named execution nodes
 
 On the destination host, supply the controller's operator credential for pairing:
