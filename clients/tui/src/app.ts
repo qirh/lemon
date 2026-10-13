@@ -600,14 +600,12 @@ export class AppShell {
 		const session = this.store.focused;
 		const runId = session.activeRunId;
 		if (!runId) return false;
-		this.events.notice("aborting…");
+		this.events.notice("cancellation requested");
 		void this.methods
 			.chatAbort({ runId, sessionKey: session.key })
-			// The reply is the daemon agreeing to stop, which is the moment the
-			// partial answer becomes final: seal it with the interrupted marker
-			// rather than waiting for a `completed` that may never describe it as
-			// anything but a normal end.
-			.then(() => this.events.markInterrupted(runId, session))
+			.then((result) => {
+				if (result.aborted) this.events.markInterrupted(runId, session);
+			})
 			.catch((error) => this.events.notice(`abort failed: ${describeError(error)}`, "error"));
 		return true;
 	}

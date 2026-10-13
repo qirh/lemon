@@ -57,6 +57,7 @@ export interface FinalizeOptions {
 	ok?: boolean | null;
 	/** Server-truncated; loses to the delta buffer whenever the buffer has text. */
 	answer?: string | null;
+	error?: string | null;
 	/** Renders an `*[interrupted]*` marker on the block. */
 	interrupted?: boolean;
 }
@@ -416,7 +417,8 @@ export class SessionStore {
 		const answer = options.answer ?? "";
 		const alreadyFinished = this.#finishedRuns.has(runId);
 		const block =
-			this.#assistantByRun.get(runId) ?? (answer ? this.ensureAssistant(runId) : undefined);
+			this.#assistantByRun.get(runId) ??
+			(answer || options.interrupted || options.error ? this.ensureAssistant(runId) : undefined);
 		if (!alreadyFinished) {
 			this.#finishedRuns.set(
 				runId,
@@ -449,7 +451,12 @@ export class SessionStore {
 		} else if (options.ok === false) {
 			block.status = "error";
 			// Surface the server's message only when it is not already the body.
-			block.error = answer && answer !== text ? answer : undefined;
+			block.error =
+				options.error && options.error !== text
+					? options.error
+					: answer && answer !== text
+						? answer
+						: undefined;
 		} else {
 			block.status = "done";
 		}

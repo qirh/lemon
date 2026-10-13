@@ -82,6 +82,7 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsCreate: "sessions.create",
 	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
@@ -303,6 +304,13 @@ export class ControlPlaneMethods {
 				queueIfOffline: false,
 			},
 		);
+	}
+
+	sessionsCreate(
+		params: { sessionKey: string; cwd: string },
+		options?: RequestOptions,
+	): Promise<{ sessionKey: string; sessionId: string; created: boolean }> {
+		return this.#call(METHOD.sessionsCreate, params, { ...options, queueIfOffline: false });
 	}
 
 	sessionsMetadataPatch(

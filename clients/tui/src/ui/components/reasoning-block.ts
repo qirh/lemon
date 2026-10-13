@@ -13,10 +13,15 @@
  * whatever is inside the window (the container re-renders on a version bump).
  */
 
+import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
+import { Text } from "@oh-my-pi/pi-tui/components/text";
+import { col } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ReasoningBlock } from "../../store/transcript-model.ts";
 import { getTheme } from "../theme/theme.ts";
+import { getMarkdownTheme } from "../theme/tui-adapters.ts";
 import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
 
 export class ReasoningComponent implements Component {
@@ -24,6 +29,10 @@ export class ReasoningComponent implements Component {
 	#block: ReasoningBlock;
 	#text = "";
 	#live = true;
+	readonly #nativeHeading = new Text("", 0, 0);
+	readonly #nativeBody: Markdown;
+	#native: NativeNode | undefined;
+	#nativeVersion = -1;
 
 	#version = 0;
 	#cachedVersion = -1;
@@ -33,6 +42,9 @@ export class ReasoningComponent implements Component {
 
 	constructor(block: ReasoningBlock, options: { accordion?: AccordionState } = {}) {
 		this.#block = block;
+		this.#nativeBody = new Markdown("", 2, 0, getMarkdownTheme(), {
+			color: (text) => getTheme().fg("dim", text),
+		});
 		this.#accordion = new AccordionComponent(
 			options.accordion ?? resolveAccordionState("reasoning"),
 			{ indent: 2, wrap: true, moreHint: (hidden) => `+${hidden} more lines` },
@@ -77,6 +89,20 @@ export class ReasoningComponent implements Component {
 	}
 
 	// -- render --------------------------------------------------------------
+
+	describe(): NativeNode {
+		const version = this.getTranscriptBlockVersion();
+		if (this.#native && this.#nativeVersion === version) return this.#native;
+		const state = this.#accordion.state;
+		const text = state === "hidden" ? "" : this.#text.trim();
+		this.#nativeHeading.setText(getTheme().fg("dim", this.#live ? "thinking…" : "thinking"));
+		this.#nativeBody.setText(state === "collapsed" ? (text.split(/\r?\n/, 1)[0] ?? "") : text);
+		this.#native = col(text ? [this.#nativeHeading, this.#nativeBody] : [this.#nativeHeading], {
+			role: "omp.thinking",
+		});
+		this.#nativeVersion = version;
+		return this.#native;
+	}
 
 	render(width: number): readonly string[] {
 		if (

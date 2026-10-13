@@ -99,7 +99,13 @@ beforeEach(async () => {
 	h = await createHarness({
 		sessionKey: "s",
 		cwd: "/repo",
-		methods: ["chat.history", "sessions.tree", "sessions.rewind", "sessions.metadata.patch"],
+		methods: [
+			"chat.history",
+			"sessions.create",
+			"sessions.tree",
+			"sessions.rewind",
+			"sessions.metadata.patch",
+		],
 	});
 	resets = [];
 	reloads = [];
@@ -543,4 +549,24 @@ test("name persists server metadata and mirrors the confirmed title", async () =
 	h.server.failWith("sessions.metadata.patch", "FORBIDDEN", "denied");
 	await h.run("/name Not accepted");
 	expect(h.store.focused.title).toBe("Review parser");
+});
+
+test("names a fresh local session without sending a model prompt", async () => {
+	const sessionKey = "agent:default:tui:local:dm:fresh";
+	h.store.setFocused(sessionKey);
+	h.server.respondWith("sessions.create", { sessionKey, sessionId: "native-fresh", created: true });
+	h.server.respondWith("sessions.metadata.patch", { success: true, metadata: { titleBytes: 5 } });
+	await h.run("/name Ready");
+	expect(h.server.requestsFor("sessions.create")[0].params).toEqual({ sessionKey, cwd: "/repo" });
+	expect(h.store.focused.title).toBe("Ready");
+	expect(h.server.requestsFor("chat.send")).toHaveLength(0);
+});
+
+test("a refused empty-session creation never claims a title or patches metadata", async () => {
+	h.store.setFocused("agent:default:tui:local:dm:fresh");
+	h.server.failWith("sessions.create", "CONFLICT", "workspace differs");
+	await h.run("/name Not accepted");
+	expect(h.store.focused.title).toBeUndefined();
+	expect(h.server.requestsFor("sessions.metadata.patch")).toHaveLength(0);
+	expect(h.server.requestsFor("chat.send")).toHaveLength(0);
 });

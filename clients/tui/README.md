@@ -58,6 +58,8 @@ remains a legacy client-side alias; it does not configure the daemon.
   omit duration instead of measuring their age as tool runtime.
 - The model's thinking is its own dimmed transcript block, collapsed to its
   first line (up to 16 KB of reasoning is available when expanded).
+  Native Tern rendering uses a semantic thinking block and Markdown body, not
+  a row-fallback badge; collapsed/expanded/hidden state stays intact.
 - Ctrl+R expands/collapses the latest tool card or thinking block (a merged
   shelf line opens into a full card); Ctrl+T cycles detail for the whole
   transcript: collapsed → expanded → per-kind default.
@@ -75,7 +77,8 @@ remains a legacy client-side alias; it does not configure the daemon.
 - Four submission modes while the agent is busy: `queue` (client-side,
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
-  replies keep their partial text.
+  replies keep their partial text. Authoritative cancellation receipts render
+  as interrupted, not as a generic failed run; real failures retain their error.
   The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
   without discarding a correction in the editor (autocomplete gets Escape first).
   Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
@@ -110,6 +113,8 @@ remains a legacy client-side alias; it does not configure the daemon.
   restored. Cancel is the default; changing consent requires another preview.
   Success reloads the active branch and recalls the selected prompt into the
   editor without sending it. `/name` gives the current session a durable title.
+  Before the first turn, a fresh local session is explicitly persisted through
+  `sessions.create` before naming; this sends no prompt and enters no plan.
 - Ctrl+O model picker (two-stage, draft-preserving, provider-qualified routing),
   Shift+Tab thinking picker (`/think` or `/reasoning` also opens it),
   capability-aware slash commands with

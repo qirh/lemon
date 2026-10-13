@@ -65,6 +65,51 @@ function transcript(app: AppShell): string {
 	return renderPlain(app.chatContainer.render(80));
 }
 
+describe("authoritative cancellation", () => {
+	test.each([false, true])(
+		"renders interrupted even before an abort reply (partial=%s)",
+		async (partial) => {
+			const { app, server } = await boot();
+			if (partial) {
+				server.pushEvent("agent", { type: "started", runId: "cancelled", sessionKey: SESSION });
+				delta(server, "cancelled", 1, "Kept partial answer.");
+				await waitFor(() => app.store.focused.bufferFor("cancelled").length > 0);
+			}
+			server.pushEvent("agent", {
+				type: "completed",
+				runId: "cancelled",
+				sessionKey: SESSION,
+				ok: false,
+				cancelled: true,
+				error: "Run cancelled",
+				answer: "",
+			});
+			await waitFor(() => app.store.focused.assistantFor("cancelled")?.status === "aborted");
+			const rendered = transcript(app);
+			expect(rendered).toContain("[interrupted]");
+			if (partial) expect(rendered).toContain("Kept partial answer.");
+			expect(rendered).not.toContain("Error:");
+			expect(app.store.focused.busy).toBe(false);
+		},
+	);
+
+	test("preserves real failures instead of treating every failed run as cancellation", async () => {
+		const { app, server } = await boot();
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "failed",
+			sessionKey: SESSION,
+			ok: false,
+			cancelled: false,
+			error: "Provider unavailable",
+			answer: "",
+		});
+		await waitFor(() => app.store.focused.assistantFor("failed")?.status === "error");
+		expect(transcript(app)).toContain("Provider unavailable");
+		expect(transcript(app)).not.toContain("[interrupted]");
+	});
+});
+
 describe("completed for another run", () => {
 	test("does not flush or stop the reveal driving the live run", async () => {
 		const { app, server } = await boot();
