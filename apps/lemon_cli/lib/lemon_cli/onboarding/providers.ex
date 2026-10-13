@@ -50,13 +50,13 @@ defmodule LemonCli.Onboarding.Providers do
     %Provider{
       id: "openai-codex",
       display_name: "OpenAI Codex",
-      description: "Sign in with your ChatGPT subscription (OAuth) or token",
+      description: "ChatGPT browser OAuth, explicit Codex CLI login import, or token",
       provider_table: "providers.openai-codex",
       default_secret_name: "llm_openai_codex_api_key",
       api_key_secret_provider: "onboarding_openai_codex",
       oauth_secret_provider: "onboarding_openai_codex_oauth",
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenAICodexOAuth]),
-      auth_modes: [:oauth, :api_key],
+      auth_modes: [:oauth, :api_key, :codex_cli],
       default_auth_mode: :oauth,
       preferred_models: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
       aliases: ["chatgpt", "codex", "openai_codex"],
@@ -66,8 +66,12 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_failure_label: "OpenAI Codex OAuth login failed",
       token_resolution_hint:
         "OpenAI Codex OAuth flow did not return credentials. Retry and paste the callback URL/code, or pass --token.",
-      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
-      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "oauth_secret"}
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth", codex_cli: "oauth"},
+      secret_config_key_by_mode: %{
+        api_key: "api_key_secret",
+        oauth: "oauth_secret",
+        codex_cli: "oauth_secret"
+      }
     },
     %Provider{
       id: "github_copilot",
@@ -329,5 +333,6 @@ defmodule LemonCli.Onboarding.Providers do
   end
 
   defp auth_mode_label(:oauth), do: "OAuth"
+  defp auth_mode_label(:codex_cli), do: "Codex CLI login import"
   defp auth_mode_label(:api_key), do: "API key"
 end

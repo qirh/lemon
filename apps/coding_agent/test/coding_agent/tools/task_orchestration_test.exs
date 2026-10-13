@@ -289,7 +289,9 @@ defmodule CodingAgent.Tools.TaskOrchestrationTest do
 
     child = start_supervised!({ChildMailbox, self()})
     :ok = Control.attach_session(id, child)
-    assert_receive {:child_message, "focus on parser"}
+    assert_receive {:child_message, envelope}
+    [_notice, payload] = String.split(envelope, "\n", parts: 2)
+    assert %{"sender" => "agent://parent", "body" => "focus on parser"} = Jason.decode!(payload)
     TaskTool.execute("cancel", %{"action" => "cancel", "task_id" => id}, nil, nil, "/tmp", opts)
     TaskTool.execute("join", %{"action" => "join", "task_id" => id}, nil, nil, "/tmp", opts)
   end
@@ -324,7 +326,12 @@ defmodule CodingAgent.Tools.TaskOrchestrationTest do
       {:tool_execution_update, "launch", "task", %{}, partial}
     )
 
-    assert_receive {:action, %{phase: :updated, detail: %{partial_result: ^partial}}}
+    assert_receive {:action,
+                    %{
+                      id: "task_child",
+                      phase: :started,
+                      detail: %{partial_result: ^partial, parent_action_id: "tool_launch"}
+                    }}
   end
 
   defp tasks(count),

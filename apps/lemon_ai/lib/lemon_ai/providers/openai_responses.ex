@@ -117,7 +117,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
                 session_id: opts.session_id
               })
 
-              output = %{output | stop_reason: :error, error_message: reason}
+              output = error_assistant_message(output, reason)
               EventStream.error(stream, output)
           end
 
@@ -129,12 +129,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
             session_id: opts.session_id
           })
 
-          output = %{
-            output
-            | stop_reason: :error,
-              error_message: reason,
-              retry_after_ms: retry_after_ms
-          }
+          output = error_assistant_message(output, reason, retry_after_ms)
 
           EventStream.error(stream, output)
       end
@@ -148,7 +143,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
           session_id: opts.session_id
         })
 
-        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        output = error_assistant_message(output, e)
         EventStream.error(stream, output)
     end
   end
@@ -405,7 +400,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
         case retry_delay do
           :give_up ->
             error = LemonAi.Error.parse_http_error(status, response_body, response_headers)
-            {:error, error.message, RetryHelper.retry_after_ms(response_headers)}
+            {:error, error, RetryHelper.retry_after_ms(response_headers)}
 
           delay_ms ->
             RetryHelper.sleep(delay_ms)
@@ -425,7 +420,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
           RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
           stream_request(url, headers, body, trace_id, policy, attempt + 1)
         else
-          {:error, "Request failed: #{inspect(reason)}", nil}
+          {:error, reason, nil}
         end
     end
   end

@@ -887,6 +887,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       :agent_id,
       :resume_source,
       :acp_session_id,
+      :acp_client_terminal,
       :acp_client_fs_read_text_file,
       :acp_client_fs_write_text_file,
       :async_followups

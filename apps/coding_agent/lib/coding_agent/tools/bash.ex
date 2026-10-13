@@ -134,7 +134,7 @@ defmodule CodingAgent.Tools.Bash do
 
       Map.get(params, "run_in_background", false) != true ->
         with {:ok, timeout_ms} <- resolve_timeout(params, opts) do
-          run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd)
+          run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd, opts)
         end
 
       use_pty == true ->
@@ -157,7 +157,7 @@ defmodule CodingAgent.Tools.Bash do
     end
   end
 
-  defp run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd) do
+  defp run_foreground(command, use_pty, timeout_ms, signal, on_update, cwd, opts) do
     # Set up streaming callback if on_update is provided
     {accumulator_pid, streaming_callback} = build_streaming_callback(on_update)
 
@@ -169,8 +169,22 @@ defmodule CodingAgent.Tools.Bash do
         pty: use_pty
       ]
 
+    executor =
+      if Keyword.get(opts, :acp_client_terminal) == true and not use_pty,
+        do: CodingAgent.ACPTerminalExecutor,
+        else: BashExecutor
+
+    executor_opts =
+      executor_opts
+      |> Keyword.put(:run_id, Keyword.get(opts, :run_id))
+      |> Keyword.put(:on_terminal, fn id ->
+        if is_function(on_update, 1) do
+          on_update.(%AgentToolResult{content: [], details: %{terminalId: id}})
+        end
+      end)
+
     try do
-      case BashExecutor.execute(command, cwd, executor_opts) do
+      case executor.execute(command, cwd, executor_opts) do
         {:ok, result} ->
           format_result(result, timeout_ms)
 
@@ -292,10 +306,15 @@ defmodule CodingAgent.Tools.Bash do
   defp output_with_spill(result) do
     output = result.output || ""
 
-    if result.truncated && result.full_output_path do
-      "#{output}\n\n[Full output saved to: #{result.full_output_path}. Use read with offset/limit to retrieve it.]"
-    else
-      output
+    cond do
+      result.truncated && result.full_output_path ->
+        "#{output}\n\n[Full output saved to: #{result.full_output_path}. Use read with offset/limit to retrieve it.]"
+
+      result.client_output_truncated ->
+        "#{output}\n\n[The ACP client discarded earlier terminal output; only its retained output tail is available.]"
+
+      true ->
+        output
     end
   end
 
@@ -304,6 +323,11 @@ defmodule CodingAgent.Tools.Bash do
       exit_code: result.exit_code,
       truncated: result.truncated
     }
+
+    details =
+      if result.terminal_id,
+        do: Map.put(details, :terminalId, result.terminal_id),
+        else: details
 
     if result.full_output_path do
       Map.put(details, :full_output_path, result.full_output_path)
