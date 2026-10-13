@@ -154,7 +154,7 @@ defmodule CodingAgent.Tools.TodoPlanTest do
           {"status", "blocked", "Todo 1 status must be pending, in_progress, or completed"},
           {"status", nil, "Todo 1 status must be pending, in_progress, or completed"},
           {"priority", nil, "Todo 1 priority must be high, medium, or low"},
-          {"id", nil, "Todo 1 id must be a non-empty string"}
+          {"id", "", "Todo 1 id must be a non-empty string"}
         ] do
       assert {:error, ^message} =
                write(session_id, [Map.put(%{"content" => "Invalid"}, field, value)])

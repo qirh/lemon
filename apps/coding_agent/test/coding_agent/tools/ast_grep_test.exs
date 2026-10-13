@@ -84,7 +84,13 @@ defmodule CodingAgent.Tools.AstGrepTest do
       assert %AgentToolResult{details: %{match_count: 1}} =
                execute(
                  cwd,
-                 %{"action" => "search", "pattern" => "$X && $X.foo", "language" => "typescript"},
+                 %{
+                   "action" => "search",
+                   "pattern" => "$X && $X.foo",
+                   "language" => nil,
+                   "paths" => nil,
+                   "rewrite" => nil
+                 },
                  opts
                )
     end

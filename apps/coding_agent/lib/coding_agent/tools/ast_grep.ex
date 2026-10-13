@@ -82,19 +82,20 @@ defmodule CodingAgent.Tools.AstGrep do
             "description" => "AST pattern, e.g. console.log($$$ARGS) or $X && $X.foo"
           },
           "language" => %{
-            "type" => "string",
-            "description" => "ast-grep language name; omitted infers from file extensions"
+            "type" => ["string", "null"],
+            "description" =>
+              "ast-grep language name; omit or pass null to infer from file extensions"
           },
           "paths" => %{
-            "type" => "array",
+            "type" => ["array", "null"],
             "items" => %{"type" => "string"},
             "description" =>
               "Local files, directories or globs relative to cwd; search defaults to ['.']; replace requires explicit scope"
           },
           "rewrite" => %{
-            "type" => "string",
+            "type" => ["string", "null"],
             "description" =>
-              "Replacement template using named captures; empty string deletes the matched syntax node"
+              "Replacement template; omit or pass null for search. Empty string deletes matched syntax nodes"
           },
           "dry_run" => %{
             "type" => "boolean",
@@ -182,7 +183,13 @@ defmodule CodingAgent.Tools.AstGrep do
     action = params["action"]
     pattern = params["pattern"]
     language = params["language"]
-    paths = Map.get(params, "paths", ["."])
+
+    paths =
+      case params["paths"] do
+        nil -> ["."]
+        paths -> paths
+      end
+
     rewrite = params["rewrite"]
     dry_run = Map.get(params, "dry_run", true)
     expected = params["expected_matches"]
@@ -220,10 +227,10 @@ defmodule CodingAgent.Tools.AstGrep do
       not is_nil(expected) and (not is_integer(expected) or expected < 0) ->
         {:error, "expected_matches must be a nonnegative integer"}
 
-      action == "search" and Map.has_key?(params, "rewrite") ->
+      action == "search" and not is_nil(rewrite) ->
         {:error, "rewrite is only valid for action=replace"}
 
-      action == "replace" and not Map.has_key?(params, "paths") ->
+      action == "replace" and is_nil(params["paths"]) ->
         {:error, "replace requires explicit paths; preview a bounded scope first"}
 
       action == "replace" and not is_binary(rewrite) ->
