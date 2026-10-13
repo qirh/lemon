@@ -27,6 +27,8 @@ defmodule CodingAgent.Session.RunTranslator do
     :delta_callback,
     :retry_action_id,
     :compaction_action_id,
+    :budget_usage,
+    :budget_stop,
     accumulated_text: "",
     pending_actions: %{},
     task_actions: %{},
@@ -352,9 +354,22 @@ defmodule CodingAgent.Session.RunTranslator do
     %{t | compaction_action_id: nil}
   end
 
+  def handle_event(%__MODULE__{} = t, {:usage_budget_updated, usage}) do
+    %{t | budget_usage: usage}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:budget_exceeded, details}) do
+    %{t | budget_stop: details}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:error, {:budget_exceeded, details}, partial_state}) do
+    t = %{t | budget_stop: details, budget_usage: Map.take(details, [:run_usage, :session_usage])}
+    emit_completed_error(t, details.message, partial_state)
+  end
+
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
     answer = Presentation.extract_answer(messages, t.accumulated_text)
-    usage = with_metrics(Presentation.build_usage(messages), t)
+    usage = messages |> Presentation.build_usage() |> with_budget_usage(t) |> with_metrics(t)
 
     emit_completed_ok(t, answer, usage)
   end
@@ -494,7 +509,12 @@ defmodule CodingAgent.Session.RunTranslator do
     if t.completed_emitted do
       t
     else
-      usage = with_metrics(Presentation.build_failure_usage(t.emitter_state, partial_state), t)
+      usage =
+        case t.budget_usage do
+          nil -> Presentation.build_failure_usage(t.emitter_state, partial_state)
+          _ -> with_budget_usage(%{}, t)
+        end
+        |> with_metrics(t)
 
       emitter_state =
         t.emitter.emit_completed(t.emitter_state, %{
@@ -503,12 +523,27 @@ defmodule CodingAgent.Session.RunTranslator do
           error: error_msg,
           answer: t.accumulated_text,
           resume: t.resume_token,
-          usage: usage
+          usage: usage,
+          meta: if(t.budget_stop, do: %{budget: t.budget_stop}, else: %{})
         })
 
       %{t | emitter_state: emitter_state, completed_emitted: true}
     end
   end
+
+  defp with_budget_usage(usage, %{budget_usage: %{run_usage: run_usage}}) do
+    usage = usage || %{}
+    cost = Map.put(Map.get(usage, :cost) || %{}, :total, run_usage.cost_usd)
+
+    Map.merge(usage, %{
+      total_tokens: run_usage.tokens,
+      tokens: run_usage.tokens,
+      cost_usd: run_usage.cost_usd,
+      cost: cost
+    })
+  end
+
+  defp with_budget_usage(usage, _translator), do: usage
 
   defp with_metrics(usage, t),
     do: Map.merge(usage || %{}, %{turns: t.turns, tool_errors: t.tool_errors})

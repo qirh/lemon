@@ -81,6 +81,8 @@ defmodule CodingAgent.Session do
     :session_key,
     :agent_id,
     :settings_manager,
+    :budget_limits,
+    :budget_usage,
     :cwd,
     :tools,
     :model,
@@ -131,6 +133,8 @@ defmodule CodingAgent.Session do
           session_key: String.t() | nil,
           agent_id: String.t(),
           settings_manager: term() | nil,
+          budget_limits: map(),
+          budget_usage: map(),
           cwd: String.t(),
           tools: [AgentTool.t()],
           model: LemonAi.Types.Model.t(),
@@ -190,6 +194,7 @@ defmodule CodingAgent.Session do
 
   ## Options (optional)
 
+    * `:budget_limits` - Cumulative run/session caps, overriding SettingsManager.budgets.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
@@ -1104,6 +1109,12 @@ defmodule CodingAgent.Session do
     event = strip_recalled_context_from_event(raw_event)
     state = handle_agent_event(event, state)
     # An observed completed message must already be recoverable after SIGKILL.
+    Notifier.broadcast_event(state, event)
+    {:noreply, state}
+  end
+
+  def handle_info({:agent_event, {:usage_budget_updated, _usage} = event}, state) do
+    state = handle_agent_event(event, state)
     Notifier.broadcast_event(state, event)
     {:noreply, state}
   end

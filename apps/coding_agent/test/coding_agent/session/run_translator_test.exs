@@ -60,6 +60,37 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     assert_receive {:completed, %{usage: %{turns: 2, tool_errors: 1}}}
   end
 
+  test "budget failures preserve structured limits and reported run spend in JSON-safe completion" do
+    details = %{
+      reason: :budget_exceeded,
+      scope: :session,
+      metric: :tokens,
+      limit: 100,
+      used: 120,
+      run_usage: %{tokens: 30, cost_usd: 0.25},
+      session_usage: %{tokens: 120, cost_usd: 1.0},
+      message: "Session token budget exhausted. Increase max_session_tokens to continue."
+    }
+
+    translator()
+    |> RunTranslator.handle_event(
+      {:usage_budget_updated, Map.take(details, [:run_usage, :session_usage])}
+    )
+    |> RunTranslator.handle_event({:budget_exceeded, details})
+    |> RunTranslator.handle_event({:error, {:budget_exceeded, details}, %{new_messages: []}})
+
+    assert_receive {:completed,
+                    %{ok: false, error: error, usage: usage, meta: %{budget: ^details}} =
+                      completed}
+
+    assert error == details.message
+    assert usage.total_tokens == 30
+    assert usage.cost.total == 0.25
+    json = completed |> Jason.encode!() |> Jason.decode!()
+    assert json["meta"]["budget"]["reason"] == "budget_exceeded"
+    assert json["meta"]["budget"]["used"] == 120
+  end
+
   describe "completed tool actions" do
     test "keep the 500-char preview for channels and add a bounded full result and structured details for operators" do
       body = Enum.map_join(1..400, "\n", &"line #{&1}")

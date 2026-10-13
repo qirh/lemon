@@ -24,6 +24,10 @@ defmodule CodingAgent.Session.EventHandler do
     state
   end
 
+  def handle({:usage_budget_updated, usage}, state, _callbacks) do
+    CodingAgent.Session.BudgetLedger.update(state, usage)
+  end
+
   def handle({:turn_start}, state, _callbacks) do
     # Execute on_turn_start hooks
     Extensions.execute_hooks(state.hooks, :on_turn_start, [])

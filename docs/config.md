@@ -197,6 +197,44 @@ filesystem paths to the profile table. See
 [User-managed profiles](user-guide/profiles.md) for clone, credential-safe
 export, recoverable deletion, and named-node routing.
 
+## Cumulative usage budgets
+
+Set optional caps in the global `~/.lemon/config.toml` or project
+`.lemon/config.toml` (project values override global values):
+
+```toml
+[budgets]
+max_run_tokens = 100000
+max_run_cost_usd = 2.50
+max_session_tokens = 500000
+max_session_cost_usd = 10.00
+```
+
+Omitted limits are unlimited. Token caps are nonnegative integers; dollar caps
+are finite nonnegative numbers. **Zero blocks requests**, unlike an omitted
+limit. A run is one prompt: its counters reset on the next prompt. Session
+counters accumulate across prompts and durable resumes. They are separate from
+context-window occupancy: compaction, rewind, branch navigation and clear do not
+refund spend. Forks inherit the source session's entire cumulative ledger,
+including spend outside the selected branch; subsequent spend is independent.
+A genuinely new, unrelated session starts a new session budget.
+
+Tokens use the provider's reported total, or input + output + cache-read +
+cache-write when a total is unavailable. Long-lived cache writes are a subset of
+cache writes, not an additional token charge. Dollar amounts are catalog-based
+**estimates**, not billing invoices. Reported usage from interrupted requests and
+retries counts while enforcing a cap; usage the provider never reports cannot be
+invented. Legacy sessions derive their starting ledger from all stored assistant
+messages, including inactive branches.
+
+Limits are checked before a request and after reported usage, before another
+request or tool execution. Providers normally report usage only at the end:
+**one in-flight request can overshoot a positive cap**. These are stopping
+policies, not hard billing caps. Already-exhausted or zero caps prevent requests.
+Tool calls requested by the response that exhausts a cap are recorded as rejected
+error results without executing their side effects. Increase the configured cap
+if you intentionally want to continue an exhausted session.
+
 ## Native Execution and Subagents
 
 Lemon uses its native executor for every top-level TUI and gateway run. Configure
@@ -434,6 +472,7 @@ Use only these top-level sections:
 
 - `defaults`
 - `runtime`
+- `budgets`
 - `features`
 - `secrets.sources.<source_id>`
 - `profiles.<agent_id>`

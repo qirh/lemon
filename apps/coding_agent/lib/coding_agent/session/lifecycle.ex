@@ -56,6 +56,8 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
+    budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
+    {session_manager, budget_usage} = CodingAgent.Session.BudgetLedger.initialize(session_manager)
 
     run_id = Keyword.get(opts, :run_id)
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
@@ -225,6 +227,8 @@ defmodule CodingAgent.Session.Lifecycle do
         transform_context: transform_context,
         get_api_key: get_api_key,
         session_id: session_manager.header.id,
+        budget_limits: budget_limits,
+        budget_usage: budget_usage,
         # Coding and assistant turns run until the model stops calling tools
         # (or the user interrupts); `[runtime] max_tool_turns` or an explicit
         # `:max_tool_turns` option installs a cap.
@@ -259,6 +263,8 @@ defmodule CodingAgent.Session.Lifecycle do
       session_key: session_key,
       agent_id: agent_id,
       settings_manager: settings_manager,
+      budget_limits: budget_limits,
+      budget_usage: budget_usage,
       cwd: cwd,
       tools: lifecycle.tools,
       model: model,
@@ -377,6 +383,11 @@ defmodule CodingAgent.Session.Lifecycle do
 
     case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
       :ok ->
+        # Reset may discard queued events after abort. Capture already reported
+        # spend from the agent first, and persist it in both old and new files.
+        usage = LemonAgent.Agent.get_state(state.agent).budget_usage
+        state = CodingAgent.Session.BudgetLedger.update(state, %{session_usage: usage})
+
         state =
           if was_streaming do
             Notifier.broadcast_event(state, {:canceled, :reset})
@@ -404,6 +415,7 @@ defmodule CodingAgent.Session.Lifecycle do
           |> SessionManager.append_entry(
             SessionManager.SessionEntry.thinking_level_change(state.thinking_level)
           )
+          |> CodingAgent.Session.BudgetLedger.append(state.budget_usage)
 
         new_session_manager =
           SessionManager.persist(
