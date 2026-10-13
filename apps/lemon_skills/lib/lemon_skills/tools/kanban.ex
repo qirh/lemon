@@ -10,7 +10,7 @@ defmodule LemonSkills.Tools.Kanban do
   alias LemonAi.Types.TextContent
   alias LemonAgent.Workspace.KanbanStore
 
-  @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment)
+  @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment dispatch_start dispatch_stop dispatch_status)
 
   @doc """
   Returns the `LemonAgent.Types.AgentTool.t()` definition for the `"kanban"`
@@ -28,7 +28,7 @@ defmodule LemonSkills.Tools.Kanban do
     %AgentTool{
       name: "kanban",
       description:
-        "Manage durable Lemon kanban boards and tasks for multi-agent work. Use this for work that should persist beyond the current session.",
+        "Manage durable Lemon kanban boards and coding tasks. Create a board in a repository, add tasks, then dispatch_start to execute them in isolated worktrees. Inspect task_get for progress/results; dispatch_stop cancels workers. Move a failed task back to the first column to explicitly retry.",
       label: "Kanban",
       parameters: %{
         "type" => "object",
@@ -56,6 +56,16 @@ defmodule LemonSkills.Tools.Kanban do
           "owner" => %{"type" => "string", "description" => "Board owner or owner filter."},
           "workspace" => %{"type" => "string", "description" => "Board workspace path."},
           "author" => %{"type" => "string", "description" => "Comment author."},
+          "max_concurrency" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 8,
+            "description" => "Parallel coding workers for dispatch_start (default 1)."
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "Optional provider:model for workers."
+          },
           "columns" => %{
             "type" => "array",
             "description" => "Board columns for board_create.",
@@ -100,6 +110,11 @@ defmodule LemonSkills.Tools.Kanban do
   optional fields; `task_comment` requires `"task_id"` and `"body"` and reads
   `"author"`.
 
+  `dispatch_start`, `dispatch_stop`, and `dispatch_status` require `"board_id"`
+  and operate on the long-running automation dispatcher. Start accepts
+  `"max_concurrency"` (1–8) and an optional worker `"model"`. No scheduler is
+  started by this tool when the automation runtime is unavailable.
+
   On success returns a `%LemonAgent.Types.AgentToolResult{}` whose `content`
   is the pretty-printed JSON encoding of the details and whose `details` map
   holds the payload (board/task data) plus a `:title` summary string. Failures
@@ -119,9 +134,38 @@ defmodule LemonSkills.Tools.Kanban do
       "task_create" -> task_create(params)
       "task_update" -> task_update(params)
       "task_comment" -> task_comment(params, opts)
+      "dispatch_start" -> dispatch(:start_board, params)
+      "dispatch_stop" -> dispatch(:stop_board, params)
+      "dispatch_status" -> dispatch(:status, params)
       nil -> {:error, "missing required parameter: action"}
       action -> {:error, "unsupported kanban action: #{inspect(action)}"}
     end
+  end
+
+  defp dispatch(operation, params) do
+    module = :"Elixir.LemonAutomation.KanbanDispatcher"
+    concurrency = Map.get(params, "max_concurrency", 1)
+
+    with {:ok, board_id} <- required_string(params, "board_id"),
+         true <- is_integer(concurrency) and concurrency in 1..8,
+         true <- Code.ensure_loaded?(module) and function_exported?(module, operation, 2) do
+      opts =
+        if operation == :start_board do
+          [max_concurrency: concurrency, worker_opts: put_opt([], :model, params["model"])]
+        else
+          []
+        end
+
+      case apply(module, operation, [board_id, opts]) do
+        {:ok, dispatch} -> result("kanban dispatch #{board_id}", %{dispatch: dispatch})
+        {:error, reason} -> {:error, format_error(reason)}
+      end
+    else
+      false -> {:error, "kanban dispatcher unavailable or max_concurrency must be 1..8"}
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    :exit, _ -> {:error, "kanban dispatcher unavailable"}
   end
 
   defp board_list(params) do

@@ -143,25 +143,44 @@ submission; rejection prevents the router call.
 A router run-id mismatch is an explicit error rather than a late subscription
 to a replacement id, because a synchronous completion may already have fired.
 
-**KanbanDispatcher** is the first supervised fleet-work layer for durable boards.
-It scans `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
-dependency-unblocked tasks, runs a worker module under `TaskSupervisor`, and
-records task completion or failure back into durable state. Focused dispatcher
-coverage proves bounded multi-worker leasing, completion, explicit worker
-failure, crashed-worker failure marking, expired-lease reclaim, and a
-production-shaped bounded-concurrency path through the real `KanbanRunWorker`
-with router/waiter stubs. The default `KanbanRunWorker` submits leased work
-through `LemonRouter` with `origin: :kanban`, board/task metadata, a blocked
-`kanban` tool policy, and an isolated git worktree cwd when the board workspace
-is a git repository. The worktree layer creates
-`<repo>/.worktrees/kanban-<task_id>` on a
-`lemon-kanban/<task_id>` branch before submitting the router run, so broad
-multi-agent execution does not share one mutable checkout.
-Stopping a board is a hard cancellation: worker pids are killed and their exact
-lease IDs are reclaimed before return. Completion/failure writes require the
-same lease ID, so late worker results cannot mutate a newer lease. Starting a
-board reconciles unexpired leases left by the same dispatcher worker ID after a
-manager restart.
+**KanbanDispatcher** runs durable coding tasks through the same router and native
+coding sessions as interactive work. From a CLI or TUI coding session, ask the
+agent to use the `kanban` tool:
+
+1. `board_create` with `name` and a repository `workspace` (defaults to the
+   current project), then `task_create` with a concrete coding task.
+2. `dispatch_start` with `board_id`, optional `max_concurrency` (1–8, default 1)
+   and optional `model` (`provider:model`).
+3. `task_get` or `board_get` to inspect progress and results;
+   `dispatch_status` to inspect worker and reconciliation counts.
+4. `dispatch_stop` to stop leasing and cancel the board's router runs.
+
+Workers lease dependency-unblocked cards and execute with `origin: :kanban`.
+The `kanban` tool is blocked inside workers to prevent recursive dispatch. A
+Git-backed board gets a separate `<repo>/.worktrees/kanban-<task_id>` checkout
+on `lemon-kanban/<task_id>` for each task. Changes stay there for review: they
+are **not** automatically committed or merged into your checkout. Inspect
+`task.meta.kanbanRun.cwd` and `.branch` to find them. Tasks without an assignee
+use the default agent, not the dispatcher's lease-owner ID.
+
+Before router submission, the exact lease records the fixed `run_id`, session,
+worktree location and `kanbanRun.status = "running"`. Completion marks the card
+done and persists the bounded result summary at `task.meta.kanbanRun.output`;
+the full conversation remains available under the linked session/run.
+
+Failures record a sanitized `lastFailure` and stop that card from being leased
+again, even on boards without a `blocked` column. Correct the cause, then
+explicitly `task_update` its status back to the board's first column to retry.
+There is no unbounded automatic retry loop.
+
+A timeout, lost waiter or ambiguous submission retains its run ID and lease
+with `kanbanRun.status = "outcome_unknown"`. It occupies a concurrency slot
+until durable completion is reconciled; expiry and manager restart cannot
+launch a second editor in the same worktree. Restart the dispatcher for a board
+after a runtime restart to resume reconciliation. Hard stop aborts claimed
+router runs once, not just waiter processes. Unknown abort outcomes retain
+their leases for reconciliation and are reported in the stop result's `aborts`.
+Late terminal writes require the original lease ID.
 
 **Heartbeat** (`LemonAutomation.Heartbeat`) is Lemon's one heartbeat
 mechanism: a cron job whose `meta` has `heartbeat: true` (atom or string key).

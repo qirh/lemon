@@ -245,7 +245,6 @@ defmodule LemonAgent.Workspace.KanbanStore do
             updated =
               task
               |> Map.put(:status, to_status)
-              |> Map.put(:assignee, task.assignee || worker_id)
               |> Map.put(
                 :worker_profile,
                 string_opt(opts[:worker_profile]) || task.worker_profile
@@ -302,7 +301,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
         reclaimed =
           board_id
           |> list_tasks(limit: 10_000)
-          |> Enum.filter(&expired_lease?(&1, now))
+          |> Enum.filter(&(expired_lease?(&1, now) and not tracked_run?(&1)))
           |> Enum.map(fn task -> reclaim_task_unlocked(task, board, target_status, opts) end)
 
         {:ok, reclaimed}
@@ -343,10 +342,37 @@ defmodule LemonAgent.Workspace.KanbanStore do
         reclaimed =
           board_id
           |> list_tasks(limit: 10_000)
-          |> Enum.filter(&(lease_worker_id(active_lease(&1)) == worker_id))
+          |> Enum.filter(
+            &(lease_worker_id(active_lease(&1)) == worker_id and not tracked_run?(&1))
+          )
           |> Enum.map(&reclaim_task_unlocked(&1, board, target_status, opts))
 
         {:ok, reclaimed}
+      end
+    end)
+  end
+
+  @doc """
+  Persist a router invocation before submission, guarded by the exact task lease.
+  Tracked invocations are not reclaimed on expiry or dispatcher restart: their
+  outcome must be reconciled before another worker can edit the same checkout.
+  """
+  def track_leased_run(task_id, lease_id, run_id, attrs \\ %{}) do
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        run = attrs |> Map.new() |> Map.put_new("status", "running") |> Map.put("runId", run_id)
+
+        updated =
+          task
+          |> Map.put(:run_id, run_id)
+          |> Map.put(:session_key, run["sessionKey"] || task.session_key)
+          |> Map.put(:meta, Map.put(task.meta, "kanbanRun", run))
+          |> Map.put(:updated_at_ms, now_ms())
+
+        with :ok <- Store.put(@tasks_table, task.id, updated) do
+          emit(:kanban_task_updated, board, updated, [])
+          {:ok, updated}
+        end
       end
     end)
   end
@@ -385,7 +411,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
       |> Map.put(:run_id, string_opt(opts[:run_id]) || task.run_id)
       |> Map.put(:updated_at_ms, now)
       |> Map.put(:completed_at_ms, now)
-      |> Map.put(:meta, clear_lease(task.meta))
+      |> Map.put(:meta, terminal_meta(task.meta, "completed", opts))
 
     with :ok <- Store.put(@tasks_table, task.id, updated) do
       emit(:kanban_task_completed, board, updated, opts)
@@ -408,7 +434,10 @@ defmodule LemonAgent.Workspace.KanbanStore do
       |> Map.put(:status, status || "todo")
       |> Map.put(:updated_at_ms, now)
       |> Map.put(:completed_at_ms, nil)
-      |> Map.put(:meta, task.meta |> clear_lease() |> Map.put("lastFailure", failure))
+      |> Map.put(
+        :meta,
+        terminal_meta(task.meta, "failed", opts) |> Map.put("lastFailure", failure)
+      )
 
     with :ok <- Store.put(@tasks_table, task.id, updated) do
       emit(:kanban_task_failed, board, updated, opts)
@@ -520,7 +549,8 @@ defmodule LemonAgent.Workspace.KanbanStore do
     |> list_tasks(status: from_status, limit: 10_000)
     |> Enum.sort_by(&(&1.created_at_ms || 0), :asc)
     |> Enum.find(fn task ->
-      is_nil(active_lease(task)) and Enum.all?(task.depends_on, &MapSet.member?(completed, &1))
+      is_nil(active_lease(task)) and not Map.has_key?(task.meta, "lastFailure") and
+        not tracked_run?(task) and Enum.all?(task.depends_on, &MapSet.member?(completed, &1))
     end)
   end
 
@@ -547,11 +577,38 @@ defmodule LemonAgent.Workspace.KanbanStore do
        |> maybe_put(:session_key, attr(attrs, :session_key) || attr(attrs, :sessionKey))
        |> maybe_put(:run_id, attr(attrs, :run_id) || attr(attrs, :runId))
        |> maybe_put_list(:depends_on, attr(attrs, :depends_on) || attr(attrs, :dependsOn))
-       |> maybe_put_meta(attr(attrs, :meta))}
+       |> maybe_put_meta(attr(attrs, :meta))
+       |> maybe_retry(attr(attrs, :status), List.first(board.columns))}
     end
   end
 
   defp apply_task_attrs(_task, _board, _attrs), do: {:error, :invalid_attrs}
+
+  defp maybe_retry(task, status, first_column) do
+    if status == first_column and not tracked_run?(task) do
+      update_in(task.meta, &Map.delete(&1, "lastFailure"))
+    else
+      task
+    end
+  end
+
+  defp tracked_run?(task) do
+    get_in(task, [:meta, "kanbanRun", "status"]) in ["running", "outcome_unknown"]
+  end
+
+  defp terminal_meta(meta, status, opts) do
+    run = Map.get(meta, "kanbanRun", %{})
+
+    meta
+    |> clear_lease()
+    |> Map.put(
+      "kanbanRun",
+      run
+      |> Map.put("status", status)
+      |> Map.put("finishedAtMs", now_ms())
+      |> Map.put("output", string_opt(opts[:output]))
+    )
+  end
 
   defp maybe_title(attrs, existing) do
     case attr(attrs, :title) do
