@@ -180,7 +180,8 @@ defmodule CodingAgent.Tools.Task.Execution do
         is_function(run_override, 2) ->
           run_override.(on_update_safe, signal)
 
-        coordinator_alive?(execution.coordinator) and execution.role_id ->
+        coordinator_alive?(execution.coordinator) and execution.role_id and
+            is_nil(execution.validated.model) ->
           Runner.execute_via_coordinator(
             execution.coordinator,
             execution.prompt,

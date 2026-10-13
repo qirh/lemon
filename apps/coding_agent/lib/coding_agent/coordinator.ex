@@ -410,19 +410,25 @@ defmodule CodingAgent.Coordinator do
             {:error, reason}
         end
     end
+  rescue
+    error in [ArgumentError, LemonCore.Config.ValidationError] ->
+      {:error, Exception.message(error)}
   end
 
   @spec build_session_opts(t(), String.t()) :: keyword()
   defp build_session_opts(state, _description) do
+    settings = state.settings_manager || CodingAgent.SettingsManager.load(state.cwd)
+    model = CodingAgent.Session.ModelResolver.resolve_task_model(nil, settings, state.model)
+
     base_opts = [
       cwd: state.cwd,
-      model: state.model,
+      model: model,
       thinking_level: state.thinking_level,
       register: true
     ]
 
     base_opts
-    |> maybe_add_opt(:settings_manager, state.settings_manager)
+    |> maybe_add_opt(:settings_manager, settings)
     |> maybe_add_opt(:parent_session, state.parent_session)
   end
 

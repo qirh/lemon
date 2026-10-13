@@ -229,7 +229,7 @@ defmodule CodingAgent.Tools.Task.Params do
         "- task_id: required when action=poll or action=get\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
-        "- model: Optional model override (e.g., \"gpt-5.2-codex\" for complex tasks)\n" <>
+        "- model: Optional concrete model or @role override (e.g., @smol, @slow, @default); omitted inherits the parent unless model_roles.task is configured\n" <>
         "- thinking_level: Optional thinking level override\n" <>
         "- role: Optional specialization for the task\n" <>
         "- cwd: Optional working directory override\n" <>
@@ -270,11 +270,28 @@ defmodule CodingAgent.Tools.Task.Params do
     %{tool | parameters: Map.put(params, "properties", props)}
   end
 
+  @doc false
+  @spec resolve_task_model(String.t(), keyword(), map()) ::
+          {term(), CodingAgent.SettingsManager.t()}
+  def resolve_task_model(cwd, opts, validated) do
+    settings = Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
+    inherited_model = resolve_inherited_model(opts)
+
+    model =
+      CodingAgent.Session.ModelResolver.resolve_task_model(
+        validated[:model],
+        settings,
+        inherited_model
+      )
+
+    {model, settings}
+  end
+
   @spec build_session_opts(String.t(), keyword(), map()) :: keyword()
   def build_session_opts(cwd, opts, validated) do
     inherited_extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     child_extra_tools = inherited_extra_tools ++ maybe_build_ask_parent_tools(cwd, opts)
-    inherited_model = resolve_inherited_model(opts)
+    {task_model, settings} = resolve_task_model(cwd, opts, validated)
 
     base_opts =
       opts
@@ -293,11 +310,11 @@ defmodule CodingAgent.Tools.Task.Params do
         :agent_id
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> maybe_put_kw(:model, inherited_model)
+      |> Keyword.put(:settings_manager, settings)
 
     override_opts =
       []
-      |> maybe_put_kw(:model, validated[:model])
+      |> maybe_put_kw(:model, task_model)
       |> maybe_put_kw(:thinking_level, validated[:thinking_level])
       |> maybe_put_kw(:tool_policy, validated[:tool_policy])
       |> maybe_put_kw(:session_key, validated[:session_key])
@@ -314,7 +331,8 @@ defmodule CodingAgent.Tools.Task.Params do
          session_module <- Keyword.get(opts, :session_module, Session),
          true <- function_exported?(session_module, :get_state, 1),
          state when is_map(state) <- safe_get_session_state(session_module, session_pid),
-         model when is_binary(model) and model != "" <- Map.get(state, :model) do
+         model when (is_binary(model) and model != "") or is_struct(model, LemonAi.Types.Model) <-
+           Map.get(state, :model) do
       model
     else
       model when is_binary(model) and model != "" -> model
