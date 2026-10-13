@@ -2,9 +2,13 @@ import { expect, test } from "bun:test";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { FakeControlPlane } from "../src/dev/fake-server.ts";
+import { ControlPlaneClient } from "../src/protocol/client.ts";
+import { AppStore } from "../src/store/app-store.ts";
 import { detectTerminalCapabilities } from "../src/terminal/capabilities.ts";
+import { TerminalIntegration } from "../src/terminal/integration.ts";
 import { codeLink, fileTarget, hyperlink } from "../src/terminal/links.ts";
 import { TranscriptMarks } from "../src/terminal/marks.ts";
+import { MemoryTerminal } from "./helpers/memory-terminal.ts";
 
 test("Tern detection respects non-TTY, dumb, hyperlink and notification opt-outs", () => {
 	const env = { TERN_PANE: "42", TERM: "xterm-256color" };
@@ -52,6 +56,52 @@ test("file links encode special characters, line anchors and reject control inje
 		expect(hyperlink("safe", "https://example.com\x07bad")).toBe("safe");
 	} finally {
 		TERMINAL.hyperlinks = previous;
+	}
+});
+
+test("publishes the finalized native frame before terminal completion becomes observable", async () => {
+	const terminal = new MemoryTerminal();
+	const store = new AppStore("native-order");
+	store.setConnection("online");
+	const client = new ControlPlaneClient({ url: "ws://127.0.0.1:1/ws" });
+	let frame = "partial";
+	const integration = new TerminalIntegration(
+		terminal,
+		store,
+		client,
+		"/repo",
+		detectTerminalCapabilities({ TERM_PROGRAM: "Tern" }, true),
+		() => terminal.write(frame),
+	);
+	try {
+		integration.start();
+		store.focused.busy = true;
+		client.events.emit("agent", {
+			type: "started",
+			runId: "native-run",
+			sessionKey: store.focusedKey,
+		});
+		await Promise.resolve();
+		terminal.writes.length = 0;
+		store.focused.busy = false;
+		store.events.emit("blocks-changed", { key: store.focusedKey });
+		frame = "complete final answer";
+		client.events.emit("agent", {
+			type: "completed",
+			runId: "native-run",
+			sessionKey: store.focusedKey,
+			ok: true,
+			answer: frame,
+			durationMs: 1,
+		});
+		expect(terminal.writes.join("")).not.toContain("state=done");
+		await Promise.resolve();
+		const output = terminal.writes.join("");
+		expect(output).toContain("complete final answer");
+		expect(output.indexOf("complete final answer")).toBeLessThan(output.indexOf("state=done"));
+	} finally {
+		integration.stop();
+		client.close();
 	}
 });
 

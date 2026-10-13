@@ -141,6 +141,8 @@ export class AppShell {
 
 	#disposers: Array<() => void> = [];
 	#started = false;
+	#sessionReady = false;
+	#initialSessionLoad: Promise<void> | undefined;
 	#queueMounted = false;
 	/** True while the queue panel, rather than the editor, owns the keyboard. */
 	#queueFocused = false;
@@ -168,13 +170,20 @@ export class AppShell {
 			this.store,
 			this.client,
 			this.#cwd,
+			undefined,
+			() => {
+				if (this.tui.nativeRendering) this.tui.renderNow();
+			},
 		);
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
 			onSubmit: (text) => this.submit(text),
 			canSubmit: () =>
-				this.client.online && !this.selectors.isOpen && !this.approvals.panel.visible,
+				this.#sessionReady &&
+				this.client.online &&
+				!this.selectors.isOpen &&
+				!this.approvals.panel.visible,
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
 			onExternalEdit: () => this.openExternalEditor(),
@@ -319,6 +328,21 @@ export class AppShell {
 		this.#disposers.push(
 			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
 			this.client.events.on("state", () => this.#renderConnection()),
+			this.client.events.on("hello-ok", () => {
+				if (this.#sessionReady || this.#initialSessionLoad) return;
+				this.#initialSessionLoad = this.sessions
+					.initialize()
+					.then(() => {
+						this.#sessionReady = true;
+					})
+					.catch((error: unknown) =>
+						this.events.notice(`could not load session: ${describeError(error)}`, "error"),
+					)
+					.finally(() => {
+						this.#initialSessionLoad = undefined;
+						this.tui.requestRender();
+					});
+			}),
 			this.client.events.on("queued", () => {
 				this.#renderConnection();
 				this.syncQueuePanel();
@@ -360,9 +384,9 @@ export class AppShell {
 		this.#renderStatus();
 		try {
 			await this.client.connect();
-			// Only now are the daemon's methods known, so this is the first moment the
-			// status bar can name the model instead of guessing at "no model".
-			void this.sessions.hydrateRouting(this.store.focused);
+			// The explicit session may be a durable fork. Restore it before
+			// advertising a sendable composer to terminal automation.
+			await this.#initialSessionLoad;
 		} catch (error) {
 			// The socket keeps retrying in the background; just say so.
 			this.events.notice(`connection failed: ${describeError(error)}`, "error");
