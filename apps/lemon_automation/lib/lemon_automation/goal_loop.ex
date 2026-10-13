@@ -6,6 +6,10 @@ defmodule LemonAutomation.GoalLoop do
   submit-and-wait lifecycle. The completion topic is subscribed before the
   continuation is submitted, so a router/runtime that completes synchronously
   cannot strand the loop until timeout.
+
+  Verdict provenance uses the actual judge invocation, independently of the
+  goal's last coding continuation. A terminal verdict never attributes work
+  to an unsubmitted continuation ID supplied for a future tick.
   """
 
   alias LemonAutomation.{GoalContinuation, GoalJudge}
@@ -17,8 +21,7 @@ defmodule LemonAutomation.GoalLoop do
     with {:ok, goal} <- active_goal(session_key) do
       case judge(goal, opts) do
         {:ok, verdict} ->
-          with {:ok, _goal_with_verdict} <-
-                 GoalStore.record_loop_verdict(session_key, verdict_map(verdict), opts) do
+          with {:ok, _goal_with_verdict} <- record_verdict(session_key, verdict, opts) do
             apply_verdict(session_key, verdict, opts)
           end
 
@@ -108,7 +111,7 @@ defmodule LemonAutomation.GoalLoop do
 
       {:error, :budget_exhausted} ->
         GoalStore.record_loop_status(session_key, :limit_reached)
-        GoalStore.pause(session_key, opts)
+        GoalStore.pause(session_key, Keyword.delete(opts, :run_id))
         {:error, :budget_exhausted}
 
       error ->
@@ -117,14 +120,14 @@ defmodule LemonAutomation.GoalLoop do
   end
 
   defp apply_verdict(session_key, %{action: :done} = verdict, opts) do
-    with {:ok, goal} <- GoalStore.complete(session_key, opts) do
+    with {:ok, goal} <- GoalStore.complete(session_key, Keyword.delete(opts, :run_id)) do
       {:ok, %{run_id: nil, goal: goal, verdict: verdict}}
     end
   end
 
   defp apply_verdict(session_key, %{action: action} = verdict, opts)
        when action in [:blocked, :needs_input] do
-    with {:ok, goal} <- GoalStore.pause(session_key, opts) do
+    with {:ok, goal} <- GoalStore.pause(session_key, Keyword.delete(opts, :run_id)) do
       {:ok, %{run_id: nil, goal: goal, verdict: verdict}}
     end
   end
@@ -149,8 +152,7 @@ defmodule LemonAutomation.GoalLoop do
           source: "judge_failure_policy"
         }
 
-        with {:ok, _goal_with_verdict} <-
-               GoalStore.record_loop_verdict(session_key, verdict_map(verdict), opts) do
+        with {:ok, _goal_with_verdict} <- record_verdict(session_key, verdict, opts) do
           apply_verdict(session_key, verdict, opts)
         end
 
@@ -161,14 +163,13 @@ defmodule LemonAutomation.GoalLoop do
           source: "judge_failure_policy"
         }
 
-        with {:ok, _goal_with_verdict} <-
-               GoalStore.record_loop_verdict(session_key, verdict_map(verdict), opts) do
+        with {:ok, _goal_with_verdict} <- record_verdict(session_key, verdict, opts) do
           apply_verdict(session_key, verdict, opts)
         end
 
       _pause ->
         GoalStore.record_loop_status(session_key, :error, error: "goal judge failed")
-        GoalStore.pause(session_key, opts)
+        GoalStore.pause(session_key, Keyword.delete(opts, :run_id))
         {:error, {:judge_failed, reason}}
     end
   end
@@ -184,6 +185,14 @@ defmodule LemonAutomation.GoalLoop do
   defp terminal_status(:done), do: :finished
   defp terminal_status(:blocked), do: :blocked
   defp terminal_status(:needs_input), do: :needs_input
+
+  defp record_verdict(session_key, verdict, opts) do
+    GoalStore.record_loop_verdict(
+      session_key,
+      verdict_map(verdict),
+      Keyword.put(opts, :run_id, Map.get(verdict, :run_id))
+    )
+  end
 
   defp verdict_map(verdict) do
     %{
