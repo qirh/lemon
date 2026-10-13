@@ -103,7 +103,16 @@ defmodule LemonCli.CommandRegistry do
           "Provider to sign in to (openai-codex for ChatGPT)"
         ),
         option("--token TOKEN", ["--token"], "Credential for non-interactive provider setup"),
-        option("--auth oauth|api_key", ["--auth"], "Authentication mode"),
+        option(
+          "--auth oauth|api_key|codex-cli",
+          ["--auth"],
+          "Authentication mode (import is opt-in)"
+        ),
+        option(
+          "--codex-auth-path PATH",
+          ["--codex-auth-path"],
+          "Auth file for --auth codex-cli only"
+        ),
         option("--model MODEL", ["--model"], "Model to make the default after onboarding"),
         option(
           "--if-required",
@@ -120,7 +129,17 @@ defmodule LemonCli.CommandRegistry do
       options: [
         option("--provider NAME", ["--provider"], "Provider id"),
         option("--token TOKEN", ["--token"], "Provider credential"),
-        option("--auth oauth|api_key", ["--auth"], "Authentication mode"),
+        option(
+          "--auth oauth|api_key|codex-cli",
+          ["--auth"],
+          "Authentication mode (import is opt-in)"
+        ),
+        option(
+          "--codex-auth-path PATH",
+          ["--codex-auth-path"],
+          "Auth file for --auth codex-cli only"
+        ),
+        option("--non-interactive", ["--non-interactive"], "Require --token or --auth codex-cli"),
         option("--secret-name NAME", ["--secret-name"], "Encrypted secret name"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),

@@ -53,6 +53,7 @@ defmodule LemonCli.Setup.Wizard do
           daily_brief: :string,
           token: :string,
           auth: :string,
+          codex_auth_path: :string,
           model: :string
         ],
         aliases: [n: :non_interactive]
@@ -354,8 +355,9 @@ defmodule LemonCli.Setup.Wizard do
             ["--config-path", config_path, "--set-default"] ++
               if(forced, do: ["--provider", forced], else: []) ++
               if(non_interactive?, do: ["--non-interactive"], else: []) ++
-              Enum.flat_map([:token, :auth, :model], fn key ->
-                if value = opts[key], do: ["--#{key}", value], else: []
+              Enum.flat_map([:token, :auth, :model, :codex_auth_path], fn key ->
+                flag = key |> Atom.to_string() |> String.replace("_", "-")
+                if value = opts[key], do: ["--#{flag}", value], else: []
               end) ++
               if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
 
