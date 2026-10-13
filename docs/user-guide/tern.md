@@ -21,6 +21,11 @@ is enabled; explicitly disabled plugins stay disabled. Installation does not
 change Lemon credentials or start a daemon. Re-run after moving the checkout or
 switching installations. Modified or linked Lemon plugin files are not overwritten.
 
+Before registration, an interactive `lemon` launch in Tern falls back to Lemon's
+own TUI with an installation hint, so first use still opens a working coding
+session. Registered ACP startup or runtime errors are not hidden by that
+fallback. Use `lemon tui` to select the terminal interface explicitly.
+
 Open a **new Tern shell** and type:
 
 ```bash
