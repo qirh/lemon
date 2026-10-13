@@ -35,6 +35,17 @@ path dependency on a checkout.
 2026-08-11 cannot be installed (below); sibling requirements are `~> 0.2` so no
 resolver ever picks them.
 
+## The generator (`lemon_new`)
+
+`installer/` builds `mix lemon.new`. It is not one of the five and `release_package`
+does not handle it, but its `mix.exs` is self-contained the same way (package
+metadata, MIT license, links, files `lib templates mix.exs README.md CHANGELOG.md
+LICENSE`, nothing read from outside `installer/`), so `mix hex.build` works in
+that directory and `mix archive.install hex lemon_new` will work once an owner
+runs `mix hex.publish` there. It has no dependencies. Until the five packages
+are on hex.pm, `mix lemon.new --hex` generates a project whose `mix deps.get`
+cannot resolve.
+
 ## Retiring the 0.1.0 releases (owner action, not yet done)
 
 Every `0.1.0` tarball shipped a `mix.exs` whose first line was

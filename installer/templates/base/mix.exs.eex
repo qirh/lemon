@@ -24,14 +24,21 @@ defmodule <%= @app_module %>.MixProject do
 
   defp deps do
     [
-<%= if @unpacked? do %>
+<%= if @source == :hex do %>
+      # The Lemon platform, from Hex. 0.2.0 is the first installable release.
+      {:lemon_core, "~> 0.2"},
+      {:lemon_ai, "~> 0.2"},
+      {:lemon_agent, "~> 0.2"},
+<% end %>
+<%= if @source == :unpacked do %>
       # The Lemon platform, from unpacked Hex tarballs (`mix hex.build --unpack`).
       # Those packages declare each other as Hex requirements; `override: true`
       # makes these paths win instead.
       {:lemon_core, path: "<%= @package_root %>/lemon_core", override: true},
       {:lemon_ai, path: "<%= @package_root %>/lemon_ai", override: true},
       {:lemon_agent, path: "<%= @package_root %>/lemon_agent", override: true},
-<% else %>
+<% end %>
+<%= if @source == :checkout do %>
       # The Lemon platform, as path dependencies on a lemon checkout. The Hex
       # line beneath each is the same package from a release; swap them to
       # build against Hex instead (0.2.0 is the first installable release).
@@ -48,11 +55,15 @@ defmodule <%= @app_module %>.MixProject do
       # published to Hex, so it always comes from the lemon checkout.
       {:lemon_channels, path: "<%= @package_root %>/lemon_channels"},
 <% end %>
-<%= if @memory? and @unpacked? do %>
+<%= if @memory? and @source == :hex do %>
+      # Durable agent memory, backed by SQLite.
+      {:lemon_memory, "~> 0.2"},
+<% end %>
+<%= if @memory? and @source == :unpacked do %>
       # Durable agent memory, backed by SQLite.
       {:lemon_memory, path: "<%= @package_root %>/lemon_memory", override: true},
 <% end %>
-<%= if @memory? and not @unpacked? do %>
+<%= if @memory? and @source == :checkout do %>
       # Durable agent memory, backed by SQLite.
       {:lemon_memory, path: "<%= @package_root %>/lemon_memory"},
       # {:lemon_memory, "~> 0.2"},

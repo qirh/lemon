@@ -10,6 +10,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **`mix lemon.new --hex`.** The generator can emit `~> 0.2` Hex requirements
+  for `lemon_core`, `lemon_ai`, `lemon_agent` (and `lemon_memory` with
+  `--memory`) instead of path dependencies, so a project needs no checkout of
+  this repository. It resolves once 0.2.0 is on hex.pm. `--hex --channel` is
+  refused with an explanation, since `lemon_channels` is not published. The
+  `installer/` package (`lemon_new`) now carries Hex package metadata, a
+  license and a changelog so it can be published; an installer built outside a
+  checkout generates the `--hex` form by default. Path mode and
+  `--packages-path` are unchanged.
+
 - **Tern integration.** `lemon acp` is a runtime-attached ACP stdio agent and
   `lemon tern install` registers Lemon as a native Tern chat agent plus a
   managed plugin ("New session in split", "Focus existing session"). In a Tern

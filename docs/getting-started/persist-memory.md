@@ -32,6 +32,9 @@ You can generate the whole thing:
 mix lemon.new my_agent --memory
 ```
 
+(`--hex` makes the generated `mix.exs` use the Hex requirements instead of a
+checkout.)
+
 or add it by hand. In `mix.exs`:
 
 ```elixir
