@@ -504,7 +504,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert String.length(preview) <= 503
   end
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 300)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

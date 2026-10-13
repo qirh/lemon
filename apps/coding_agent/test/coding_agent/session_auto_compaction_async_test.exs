@@ -162,7 +162,13 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
 
   test "a new prompt cancels stale auto compaction without accepting its late result" do
     slow_stream = fn _model, _context, _options ->
-      Process.sleep(250)
+      # Keep the run in flight for the whole test; nothing ever releases it.
+      receive do
+        :never -> :ok
+      after
+        10_000 -> :ok
+      end
+
       Mocks.mock_stream_fn_single(Mocks.assistant_message("new answer")).(nil, nil, nil)
     end
 
@@ -226,7 +232,7 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
              compactions_before
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 500)
   defp eventually(fun, 0), do: fun.()
 
   defp eventually(fun, attempts) do

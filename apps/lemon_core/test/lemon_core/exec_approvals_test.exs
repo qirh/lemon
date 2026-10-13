@@ -24,6 +24,16 @@ defmodule LemonCore.ExecApprovalsTest do
     :ok
   end
 
+  # Waits for a request running in another process to create its pending approval.
+  defp await_pending_approvals do
+    LemonCore.Testing.AsyncHelpers.assert_eventually(
+      fn -> Store.list(:exec_approvals_pending) != [] end,
+      timeout: 5_000
+    )
+
+    Store.list(:exec_approvals_pending)
+  end
+
   defp clear_approval_tables do
     [
       :exec_approvals_pending,
@@ -129,11 +139,10 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      # Give the request time to create the pending approval
-      Process.sleep(100)
+      # Wait for the request to create the pending approval
+      pending_list = await_pending_approvals()
 
       # Verify pending approval was created
-      pending_list = Store.list(:exec_approvals_pending)
       assert length(pending_list) == 1
 
       {_key, pending} = hd(pending_list)
@@ -145,7 +154,7 @@ defmodule LemonCore.ExecApprovalsTest do
       ExecApprovals.resolve(pending.id, :approve_once)
 
       # Wait for the result
-      assert {:ok, :approved, :approve_once} = Task.await(task, 1000)
+      assert {:ok, :approved, :approve_once} = Task.await(task, 5_000)
     end
 
     test "returns denied when approval is denied" do
@@ -162,16 +171,14 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      Process.sleep(100)
-
-      # Get the pending approval
-      pending_list = Store.list(:exec_approvals_pending)
+      # Get the pending approval once the request created it
+      pending_list = await_pending_approvals()
       {_key, pending} = hd(pending_list)
 
       # Deny the approval
       ExecApprovals.resolve(pending.id, :deny)
 
-      assert {:ok, :denied} = Task.await(task, 1000)
+      assert {:ok, :denied} = Task.await(task, 5_000)
     end
 
     test "records redacted approval lifecycle introspection events" do
@@ -191,12 +198,10 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      Process.sleep(100)
-
-      {_key, pending} = hd(Store.list(:exec_approvals_pending))
+      {_key, pending} = hd(await_pending_approvals())
       :ok = ExecApprovals.resolve(pending.id, :deny)
 
-      assert {:ok, :denied} = Task.await(task, 1000)
+      assert {:ok, :denied} = Task.await(task, 5_000)
 
       events = LemonCore.Introspection.list(run_id: run_id, limit: 10)
       requested = Enum.find(events, &(&1.event_type == :approval_requested))

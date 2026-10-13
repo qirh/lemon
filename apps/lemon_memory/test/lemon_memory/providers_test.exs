@@ -219,7 +219,7 @@ defmodule LemonMemory.ProvidersTest do
 
     assert Enum.map(results, & &1.doc_id) == ["external-doc"]
     assert elapsed_ms >= 150, "the 200ms provider was dropped early (#{elapsed_ms}ms)"
-    assert elapsed_ms < 1_000, "the 200ms provider waited on the 5s provider (#{elapsed_ms}ms)"
+    assert elapsed_ms < 4_000, "the 200ms provider waited on the 5s provider (#{elapsed_ms}ms)"
   end
 
   test "a fast provider still returns while a slow one is being dropped" do

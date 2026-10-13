@@ -4,6 +4,12 @@ import Config
 # messages via `ExUnit.CaptureLog`. Every app's test_helper starts ExUnit with
 # `capture_log: true`, so log output is only printed for failing tests.
 
+# ExUnit's default `assert_receive` timeout is 100ms, shorter than scheduler
+# latency on loaded CI runners. A bare `assert_receive` returns as soon as the
+# message arrives, so the larger bound only lengthens genuine failures.
+# `refute_receive` keeps its own default.
+config :ex_unit, assert_receive_timeout: 1_000
+
 # Isolate on-disk poller locks per `mix test` OS process. This prevents cross-process
 # test interference if multiple `mix test` commands run concurrently on the same host.
 System.put_env(

@@ -26,7 +26,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
              ExternalDecider.decide(context(), [check_balance_tool(), wait_tool()],
                external_decider: session,
                support_tool_matcher: &(&1.name == "check_balance"),
-               live_step_timeout_ms: 500
+               live_step_timeout_ms: 5_000
              )
 
     assert decision["tool_name"] == "wait_for_next_day"
@@ -51,7 +51,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
     assert {:error, {:malformed_turn, details}} =
              ExternalDecider.decide(context(), [wait_tool()],
                external_decider: session,
-               live_step_timeout_ms: 500
+               live_step_timeout_ms: 5_000
              )
 
     assert details.reason =~ "Invalid JSON"
@@ -71,7 +71,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
     assert {:error, {:tool_call_required, details}} =
              ExternalDecider.decide(context(), [wait_tool()],
                external_decider: session,
-               live_step_timeout_ms: 500
+               live_step_timeout_ms: 5_000
              )
 
     assert details.assistant_text == ""
@@ -99,7 +99,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
     assert {:ok, decision} =
              ExternalDecider.decide(context(), [wait_tool()],
                external_decider: session,
-               live_step_timeout_ms: 1_000
+               live_step_timeout_ms: 5_000
              )
 
     assert decision["tool_name"] == "wait_for_next_day"
@@ -123,7 +123,7 @@ defmodule LemonSim.LLM.Deciders.ExternalDeciderTest do
     assert {:ok, decision} =
              ExternalDecider.decide(context(), [wait_tool()],
                external_decider: session,
-               live_step_timeout_ms: 500
+               live_step_timeout_ms: 5_000
              )
 
     assert decision["tool_name"] == "wait_for_next_day"

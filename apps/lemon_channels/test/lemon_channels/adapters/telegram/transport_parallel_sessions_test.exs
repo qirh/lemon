@@ -172,7 +172,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, msg}, 800
+    assert_receive {:inbound, msg}
     assert msg.meta[:session_key] == base_session_key <> ":sub:" <> Integer.to_string(user_msg_id)
     assert msg.meta[:forked_session] == true
   end
@@ -203,7 +203,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, msg}, 800
+    assert_receive {:inbound, msg}
     assert msg.meta[:forked_session] == true
     assert msg.message.text == "hello"
   end
@@ -232,7 +232,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, msg1}, 800
+    assert_receive {:inbound, msg1}
     fork_session_key = msg1.meta[:session_key]
     assert is_binary(fork_session_key)
 
@@ -246,7 +246,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     # Reply to the original user message should route to the forked session
     ParallelMockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", user_msg_id1)])
 
-    assert_receive {:inbound, msg2}, 800
+    assert_receive {:inbound, msg2}
     assert msg2.meta[:session_key] == fork_session_key
     refute msg2.meta[:session_key] == base_session_key
 
@@ -654,7 +654,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     Application.put_env(:lemon_channels, :gateway, Map.put(cfg, :bindings, bindings))
   end
 
-  defp eventually(fun, timeout_ms \\ 1_500) when is_function(fun, 0) do
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(fun, deadline)
   end

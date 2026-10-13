@@ -730,8 +730,15 @@ defmodule LemonCore.StoreTest do
                  session_key: key
                })
 
-      # Allow async cast to RunHistoryStore to complete
-      Process.sleep(100)
+      # The history write to RunHistoryStore is asynchronous
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
+        fn ->
+          key
+          |> Store.get_run_history(limit: 50)
+          |> Enum.any?(fn {id, _} -> id == rid end)
+        end,
+        timeout: 5_000
+      )
 
       history = Store.get_run_history(key, limit: 50)
       assert {^rid, data} = Enum.find(history, fn {id, _} -> id == rid end)
@@ -748,7 +755,7 @@ defmodule LemonCore.StoreTest do
       assert :ok = Store.append_introspection_event(event)
 
       # Poll until the event is persisted (proves it was async, not a call)
-      Enum.reduce_while(1..20, nil, fn _, _ ->
+      Enum.reduce_while(1..100, nil, fn _, _ ->
         Process.sleep(50)
         events = Store.list_introspection_events(run_id: event.run_id, limit: 10)
 

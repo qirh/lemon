@@ -250,7 +250,9 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
                sha,
                config,
                "Reviewed title",
-               "Reviewed body", runner: runner)
+               "Reviewed body",
+               runner: runner
+             )
 
     assert_receive {:gh, ["pr", "list" | _]}
 
@@ -408,7 +410,7 @@ defmodule LemonAutomation.KanbanGitWorkflowTest do
     script
   end
 
-  defp assert_eventually(fun, attempts \\ 100)
+  defp assert_eventually(fun, attempts \\ 250)
   defp assert_eventually(fun, 0), do: assert(fun.())
 
   defp assert_eventually(fun, attempts) do

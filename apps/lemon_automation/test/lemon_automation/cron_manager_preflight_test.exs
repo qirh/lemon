@@ -270,7 +270,7 @@ defmodule LemonAutomation.CronManagerPreflightTest do
   defp restore_system_env(name, nil), do: System.delete_env(name)
   defp restore_system_env(name, value), do: System.put_env(name, value)
 
-  defp await(fun, attempts \\ 200)
+  defp await(fun, attempts \\ 500)
 
   defp await(_fun, 0), do: false
 

@@ -62,7 +62,11 @@ defmodule LemonAgent.ToolSupervisionTest do
         label: "PID Reporter",
         execute: fn _id, _params, _abort, _on_update ->
           send(test_pid, {:tool_pid, self()})
-          Process.sleep(50)
+
+          receive do
+            :release_tool -> :ok
+          end
+
           %AgentToolResult{content: [%TextContent{type: :text, text: "done"}]}
         end
       }
@@ -84,6 +88,8 @@ defmodule LemonAgent.ToolSupervisionTest do
       # Verify the tool pid is a child of ToolTaskSupervisor
       children = Task.Supervisor.children(LemonAgent.ToolTaskSupervisor)
       assert tool_pid in children
+
+      send(tool_pid, :release_tool)
 
       # Consume the stream to completion
       {:ok, _messages} = EventStream.result(stream)
@@ -201,7 +207,11 @@ defmodule LemonAgent.ToolSupervisionTest do
         parallel_safe: true,
         execute: fn _id, %{"id" => tool_id}, _abort, _on_update ->
           send(test_pid, {:tool_started, tool_id, self()})
-          Process.sleep(50)
+
+          receive do
+            :release_tool -> :ok
+          end
+
           %AgentToolResult{content: [%TextContent{type: :text, text: "done #{tool_id}"}]}
         end
       }
@@ -235,6 +245,8 @@ defmodule LemonAgent.ToolSupervisionTest do
       for pid <- tool_pids do
         assert pid in children
       end
+
+      for pid <- tool_pids, do: send(pid, :release_tool)
 
       # Consume the stream to completion
       {:ok, messages} = EventStream.result(stream)

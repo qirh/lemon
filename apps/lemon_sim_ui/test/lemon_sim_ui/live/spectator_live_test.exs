@@ -472,7 +472,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
     refute html =~ "Nightfall"
   end
 
-  defp assert_eventually(fun, attempts \\ 30)
+  defp assert_eventually(fun, attempts \\ 150)
 
   defp assert_eventually(fun, attempts) when attempts > 0 do
     if fun.() do

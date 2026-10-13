@@ -155,9 +155,9 @@ defmodule LemonCore.ContextTest do
                root: root,
                timeout_ms: 10,
                resolve_fun: fn _ -> {:ok, [{93, 184, 216, 34}]} end,
+               # Never answers; the resolver must cut it off at timeout_ms
                request_fun: fn _, _, _, _ ->
-                 Process.sleep(100)
-                 {:error, :late}
+                 Process.sleep(:infinity)
                end
              )
   end

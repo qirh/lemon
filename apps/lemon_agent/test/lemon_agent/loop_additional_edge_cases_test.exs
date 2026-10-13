@@ -305,8 +305,8 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Slow",
         execute: fn id, _params, _signal, _on_update ->
-          send(test_pid, {:slow_tool_started, id})
-          Process.sleep(500)
+          send(test_pid, {:slow_tool_started, id, self()})
+          Process.sleep(30_000)
           send(test_pid, {:slow_tool_finished, id})
 
           %AgentToolResult{
@@ -334,19 +334,18 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
 
       stream = Loop.agent_loop([user_message("Run slow")], context, config, signal, nil)
 
-      assert_receive {:slow_tool_started, _id}, 5_000
+      assert_receive {:slow_tool_started, _id, worker}, 5_000
+      worker_monitor = Process.monitor(worker)
       AbortSignal.abort(signal)
 
-      start = System.monotonic_time(:millisecond)
-      events = EventStream.events(stream) |> Enum.to_list()
-      elapsed = System.monotonic_time(:millisecond) - start
-
-      # Should complete much faster than 3 * 500ms.
-      # In CI or under heavy local load this can be a bit slower, so keep a generous bound.
-      assert elapsed < 800
+      # The tools sleep for 30s each, so the run can only end because the abort
+      # terminates the pending tool work.
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+      events = Task.await(events_task, 20_000)
 
       assert events != []
-      refute_receive {:slow_tool_finished, _id}, 600
+      assert_receive {:DOWN, ^worker_monitor, :process, ^worker, _}, 5_000
+      refute_received {:slow_tool_finished, _id}
     end
 
     test "abort returns detailed context in aborted tool results" do
@@ -356,7 +355,7 @@ defmodule LemonAgent.LoopAdditionalEdgeCasesTest do
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Test",
         execute: fn _id, _params, _signal, _on_update ->
-          Process.sleep(1000)
+          Process.sleep(30_000)
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Done"}],

@@ -7,6 +7,8 @@ defmodule LemonAgent.Loop.ToolCallsTest do
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
 
+  import LemonCore.Testing.AsyncHelpers
+
   alias LemonAi.Types.{
     StreamOptions,
     TextContent,
@@ -503,7 +505,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     }
 
     context = simple_context(tools: [slow_tool])
-    config = simple_config(tool_timeout_ms: 50)
+    config = simple_config(tool_timeout_ms: 250)
     signal = AbortSignal.new()
     tool_call = Mocks.tool_call("timeout_tool", %{}, id: "call_tool_timeout")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
@@ -511,12 +513,12 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     {results, _steering_messages, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
-    assert_receive {:timeout_tool_started, "call_tool_timeout"}, 1_000
+    assert_receive {:timeout_tool_started, "call_tool_timeout"}, 5_000
     assert [tool_result_message] = results
     assert tool_result_message.is_error == true
     assert tool_result_message.tool_call_id == "call_tool_timeout"
-    assert tool_result_message.details == %{error_type: :tool_task_timeout, timeout_ms: 50}
-    assert [%TextContent{text: "Tool task timed out after 50ms"}] = tool_result_message.content
+    assert tool_result_message.details == %{error_type: :tool_task_timeout, timeout_ms: 250}
+    assert [%TextContent{text: "Tool task timed out after 250ms"}] = tool_result_message.content
     assert List.last(updated_context.messages).tool_call_id == "call_tool_timeout"
     assert List.last(updated_new_messages).tool_call_id == "call_tool_timeout"
 
@@ -1349,7 +1351,16 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     wait_for_abort = fn wait_for_abort ->
       if AbortSignal.aborted?(signal) do
-        Process.sleep(100)
+        send(parent, :abort_observed)
+
+        # Cleanup only finishes once the test says so (after the loop has begun
+        # draining aborted tools), instead of racing the loop's abort poll.
+        receive do
+          :finish_cleanup -> :ok
+        after
+          5_000 -> :ok
+        end
+
         send(parent, {:resource_cleanup_finished, AbortSignal.aborted?(signal)})
         {:error, "aborted after cleanup"}
       else
@@ -1386,12 +1397,30 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert_receive {:external_tool_started, worker}
     monitor = Process.monitor(worker)
     AbortSignal.abort(signal)
-    assert_receive {:resource_cleanup_finished, true}, 1_000
+    assert_receive :abort_observed, 5_000
+
+    # Wait until the loop has noticed the abort and is draining the tool
+    # (inside its bounded cleanup receive), then let the cleanup finish.
+    runner_pid = runner.pid
+
+    assert_eventually(
+      fn ->
+        match?(
+          {:current_function, {LemonAgent.Loop.ToolCalls, :await_tool_cleanup, _}},
+          Process.info(runner_pid, :current_function)
+        )
+      end,
+      timeout: 5_000,
+      interval: 1
+    )
+
+    send(worker, :finish_cleanup)
+    assert_receive {:resource_cleanup_finished, true}, 5_000
 
     assert {[%{is_error: true, details: %{error_type: :tool_error, cancelled: true}}], [], _, _} =
-             Task.await(runner, 1_000)
+             Task.await(runner, 5_000)
 
-    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000
     assert Task.Supervisor.children(supervisor) == []
     EventStream.complete(stream, [])
   end

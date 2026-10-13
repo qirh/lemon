@@ -155,9 +155,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:create_forum_topic, ^chat_id, ^topic_name}, 400
+    assert_receive {:create_forum_topic, ^chat_id, ^topic_name}
 
-    assert_receive {:send_message, ^chat_id, text, _reply_to_or_opts, _parse_mode}, 400
+    assert_receive {:send_message, ^chat_id, text, _reply_to_or_opts, _parse_mode}
     assert String.starts_with?(text, "Created topic \"foo\"")
     refute_receive {:inbound, _msg}, 250
   end
@@ -204,7 +204,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, cwd_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert_receive {:send_message, ^chat_id, cwd_msg, _reply_to_or_opts, _parse_mode}
     assert cwd_msg =~ "Working directory set for this topic"
     assert cwd_msg =~ Path.expand(cwd)
 
@@ -257,7 +257,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}
     assert clear_msg == "Cleared working directory override for this topic."
     assert BindingResolver.resolve_cwd(scope) == nil
   end
@@ -281,7 +281,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, thinking_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert_receive {:send_message, ^chat_id, thinking_msg, _reply_to_or_opts, _parse_mode}
     assert thinking_msg =~ "Thinking level set to high for this topic."
 
     assert_receive {:send_message, ^chat_id, new_session_msg, _reply_to_or_opts, _parse_mode},
@@ -318,7 +318,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 800
+    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}
     assert clear_msg == "Cleared thinking level override for this topic."
     assert StateStore.get_default_thinking({"default", chat_id, topic_id}) == nil
   end
@@ -341,9 +341,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}
 
-    assert_receive {:send_message, ^chat_id, trigger_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert_receive {:send_message, ^chat_id, trigger_msg, _reply_to_or_opts, _parse_mode}
     assert trigger_msg == "Trigger mode set to mentions for this chat."
 
     assert_receive {:inbound, inbound}, 1_200
@@ -370,9 +370,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "member"}, 400
+    assert_receive {:get_chat_member, ^chat_id, 99, "member"}
 
-    assert_receive {:send_message, ^chat_id, trigger_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert_receive {:send_message, ^chat_id, trigger_msg, _reply_to_or_opts, _parse_mode}
     assert trigger_msg == "Trigger mode can only be changed by a group admin."
 
     assert_receive {:inbound, inbound}, 1_200
@@ -402,13 +402,17 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
+    # The chat and topic confirmations are separate outbox delivery lanes, so they may be
+    # sent in either order.
     assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
-    assert_receive {:send_message, ^chat_id, chat_msg, _reply_to_or_opts, _parse_mode}, 400
-    assert chat_msg == "Trigger mode set to mentions for this chat."
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, first_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert_receive {:send_message, ^chat_id, second_msg, _reply_to_or_opts, _parse_mode}, 400
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
-    assert_receive {:send_message, ^chat_id, topic_msg, _reply_to_or_opts, _parse_mode}, 400
-    assert topic_msg == "Trigger mode set to all for this topic."
+    assert Enum.sort([first_msg, second_msg]) == [
+             "Trigger mode set to all for this topic.",
+             "Trigger mode set to mentions for this chat."
+           ]
 
     assert_eventually(fn ->
       TriggerMode.resolve("default", chat_id, topic_id).mode == :all
@@ -522,7 +526,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
     :exit, _ -> :ok
   end
 
-  defp assert_eventually(fun, timeout \\ 1_000) do
+  defp assert_eventually(fun, timeout \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_assert_eventually(fun, deadline)
   end

@@ -167,7 +167,7 @@ defmodule LemonSimUi.ArenaPagesTest do
     end
   end
 
-  defp render_eventually(view, needle, attempts \\ 50)
+  defp render_eventually(view, needle, attempts \\ 150)
 
   defp render_eventually(_view, needle, 0) do
     flunk("leaderboard never rendered #{inspect(needle)}")

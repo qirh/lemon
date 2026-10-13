@@ -1,0 +1,76 @@
+name: BEAM setup
+description: >
+  Install the pinned OTP/Elixir toolchain, restore the shared deps/_build cache
+  for one MIX_ENV family, install inotify-tools, and fetch deps. Saving is the
+  caller's job (see `cache-key` output): only pushes to main save, so pull
+  requests reuse main's newest build instead of filling the cache quota.
+
+inputs:
+  family:
+    description: Cache family; jobs that compile the same MIX_ENV share one.
+    required: true
+  bun:
+    description: Also install Bun and the TUI client's dependencies.
+    required: false
+    default: "false"
+
+outputs:
+  cache-key:
+    description: Exact key for this commit; pass to actions/cache/save.
+    value: ${{ steps.key.outputs.key }}
+  cache-hit:
+    description: Whether the exact key was restored.
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Setup BEAM
+      uses: erlef/setup-beam@v1
+      with:
+        otp-version: "28.5"
+        elixir-version: "1.19.5"
+
+    - name: Compute cache key
+      id: key
+      shell: bash
+      run: |
+        prefix="${RUNNER_OS}-mix-${{ inputs.family }}-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}"
+        echo "prefix=${prefix}-" >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+    # Newest build for this lockfile first, then any build of this family:
+    # incremental compilation from a recent _build is far cheaper than cold.
+    - name: Restore deps and _build
+      id: restore
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          deps
+          _build
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.prefix }}
+          ${{ runner.os }}-mix-${{ inputs.family }}-otp28.5-elixir1.19.5-
+
+    - name: Install inotify-tools
+      uses: awalsh128/cache-apt-pkgs-action@v1
+      with:
+        packages: inotify-tools
+        version: "1"
+
+    - name: Setup Bun
+      if: inputs.bun == 'true'
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version-file: clients/tui/.bun-version
+
+    - name: Install TUI dependencies
+      if: inputs.bun == 'true'
+      shell: bash
+      working-directory: clients/tui
+      run: bun install --frozen-lockfile
+
+    - name: Fetch deps
+      shell: bash
+      run: mix deps.get

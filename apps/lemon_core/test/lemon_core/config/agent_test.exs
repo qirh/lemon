@@ -494,6 +494,11 @@ defmodule LemonCore.Config.AgentTest do
     end
 
     test "default extension directories require explicit trust" do
+      # The defaults must hold regardless of ambient host/earlier-test env
+      # (on_exit in setup restores the original environment).
+      System.delete_env("LEMON_EXTENSIONS_ENABLED")
+      System.delete_env("LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS")
+
       config = Agent.resolve(%{})
 
       assert config.extensions.enabled == true

@@ -99,7 +99,7 @@ defmodule LemonRouter.ChannelIngressPolicyTest do
     }
 
     assert :ok = Router.handle_inbound(msg)
-    assert_receive {:submit, %RunRequest{origin: :channel} = request}, 500
+    assert_receive {:submit, %RunRequest{origin: :channel} = request}
 
     request = %{request | run_id: "run_#{System.unique_integer([:positive])}"}
 

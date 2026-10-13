@@ -117,12 +117,12 @@ defmodule LemonRouter.RouterTest do
 
     Router.abort(session_key, :test_abort)
 
-    assert_receive {:abort_session, ^session_key, :test_abort}, 500
+    assert_receive {:abort_session, ^session_key, :test_abort}
   end
 
   test "abort/2 is a no-op when session has no runs" do
     assert :ok = Router.abort("missing:session", :test_abort)
-    assert_receive {:abort_session, "missing:session", :test_abort}, 500
+    assert_receive {:abort_session, "missing:session", :test_abort}
   end
 
   test "abort/2 propagates a coordinator rejection" do
@@ -135,7 +135,7 @@ defmodule LemonRouter.RouterTest do
     assert {:error, :coordinator_unavailable} =
              Router.abort("agent:test:main", :test_abort)
 
-    assert_receive {:abort_session, "agent:test:main", :test_abort}, 500
+    assert_receive {:abort_session, "agent:test:main", :test_abort}
   end
 
   test "RouterBridge reports an unknown abort outcome when tombstone registration exits" do
@@ -169,7 +169,7 @@ defmodule LemonRouter.RouterTest do
     assert {:error, :outcome_unknown} =
              Router.abort_run("run-coordinator-rejected", :test_abort)
 
-    assert_receive {:abort_run, "run-coordinator-rejected", :test_abort}, 500
+    assert_receive {:abort_run, "run-coordinator-rejected", :test_abort}
   end
 
   test "query callbacks propagate coordinator read failures" do
@@ -187,10 +187,10 @@ defmodule LemonRouter.RouterTest do
     Process.put(:router_busy_session_key, session_key)
 
     assert Router.session_busy?(session_key)
-    assert_receive {:busy_query, ^session_key}, 500
+    assert_receive {:busy_query, ^session_key}
 
     refute Router.session_busy?("agent:test:main:other")
-    assert_receive {:busy_query, "agent:test:main:other"}, 500
+    assert_receive {:busy_query, "agent:test:main:other"}
   end
 
   test "active_run/1 delegates to the session coordinator" do
@@ -198,7 +198,7 @@ defmodule LemonRouter.RouterTest do
     Process.put({:active_run, session_key}, {:ok, "run_active"})
 
     assert Router.active_run(session_key) == {:ok, "run_active"}
-    assert_receive {:active_run_query, ^session_key}, 500
+    assert_receive {:active_run_query, ^session_key}
   end
 
   test "list_active_sessions/0 delegates to the session coordinator" do
@@ -206,7 +206,7 @@ defmodule LemonRouter.RouterTest do
     Process.put(:router_active_sessions, sessions)
 
     assert Router.list_active_sessions() == sessions
-    assert_receive :list_active_sessions, 500
+    assert_receive :list_active_sessions
   end
 
   test "resolve_session_key/1 uses explicit meta.session_key when provided" do
@@ -260,7 +260,7 @@ defmodule LemonRouter.RouterTest do
 
     assert :ok = Router.handle_inbound(msg)
 
-    assert_receive {:orchestrator_submit, request}, 500
+    assert_receive {:orchestrator_submit, request}
     assert request.origin == :channel
     assert request.agent_id == "agent-x"
     assert request.session_key == "agent:agent-x:telegram:default:dm:42:thread:99"
@@ -285,7 +285,7 @@ defmodule LemonRouter.RouterTest do
     }
 
     assert {:error, :submit_failed} = Router.handle_inbound(msg)
-    assert_receive {:orchestrator_submit, _request}, 500
+    assert_receive {:orchestrator_submit, _request}
   end
 
   test "handle_inbound/1 treats malformed orchestrator acknowledgements as outcome unknown" do
@@ -302,7 +302,7 @@ defmodule LemonRouter.RouterTest do
     for malformed <- [false, {:ok, 123}, {:ok, ""}] do
       Process.put(:router_submit_result, malformed)
       assert {:error, :outcome_unknown} = Router.handle_inbound(msg)
-      assert_receive {:orchestrator_submit, _request}, 500
+      assert_receive {:orchestrator_submit, _request}
     end
   end
 
@@ -339,7 +339,7 @@ defmodule LemonRouter.RouterTest do
     assert {:ok, %{run_id: "run_control_1", session_key: "agent:control-agent:main"}} =
              Router.handle_control_agent(params, ctx)
 
-    assert_receive {:orchestrator_submit, request}, 500
+    assert_receive {:orchestrator_submit, request}
     assert request.origin == :control_plane
     assert request.session_key == "agent:control-agent:main"
     assert request.agent_id == "control-agent"

@@ -144,7 +144,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     assert text =~ "March 14th"
   end
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 500)
   defp eventually(_fun, 0), do: false
 
   defp eventually(fun, attempts) do

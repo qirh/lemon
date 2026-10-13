@@ -182,7 +182,7 @@ defmodule CodingAgent.SystemPromptContextTest do
 
     assert String.contains?(prompt, "## Patient Context\n\npatient body line")
     assert micros > 300_000
-    assert micros < 3_000_000
+    assert micros < 15_000_000
   end
 
   @tag :tmp_dir

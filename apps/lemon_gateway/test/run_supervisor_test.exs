@@ -13,6 +13,7 @@ defmodule LemonGateway.RunSupervisorTest do
   - Integration with Run processes
   """
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1, assert_process_dead: 1]
 
   alias LemonGateway.RunSupervisor
   alias LemonGateway.ExecutionRequest
@@ -446,14 +447,9 @@ defmodule LemonGateway.RunSupervisorTest do
 
       assert_receive {:run_complete, ^pid, %{__event__: :completed, ok: true}}, 2000
 
-      # Wait for process to stop
-      Process.sleep(100)
-      refute Process.alive?(pid)
-
-      # Child should not be restarted
-      children = DynamicSupervisor.which_children(RunSupervisor)
-      child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
-      refute pid in child_pids
+      # Wait for process to stop and be removed from the supervisor (not restarted)
+      assert_process_dead(pid)
+      assert_eventually(fn -> pid not in run_supervisor_child_pids() end)
     end
 
     test "child is not restarted on crash" do
@@ -483,7 +479,6 @@ defmodule LemonGateway.RunSupervisorTest do
       end
 
       # Verify process is not restarted (or still running as single instance)
-      Process.sleep(100)
       children = DynamicSupervisor.which_children(RunSupervisor)
 
       child_pids =
@@ -503,13 +498,8 @@ defmodule LemonGateway.RunSupervisorTest do
 
       assert_receive {:run_complete, ^pid, _}, 2000
 
-      # Wait for cleanup
-      Process.sleep(100)
-
       # Process should be removed from supervisor
-      children = DynamicSupervisor.which_children(RunSupervisor)
-      child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
-      refute pid in child_pids
+      assert_eventually(fn -> pid not in run_supervisor_child_pids() end)
     end
   end
 
@@ -566,10 +556,9 @@ defmodule LemonGateway.RunSupervisorTest do
       assert_receive {:executor_started, ^run_id2, ^prompt2, _run_ref2, task_pid2}, 2000
 
       # Kill the first one's task
+      task_ref = Process.monitor(task_pid1)
       Process.exit(task_pid1, :kill)
-
-      # Wait a bit
-      Process.sleep(100)
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid1, _reason}
 
       # Second process should still be alive
       assert Process.alive?(pid2)
@@ -618,8 +607,9 @@ defmodule LemonGateway.RunSupervisorTest do
       assert_receive {:executor_started, _, _, _, _task_pid1}, 2000
 
       # Kill the child abruptly
+      ref = Process.monitor(pid1)
       Process.exit(pid1, :kill)
-      Process.sleep(100)
+      assert_receive {:DOWN, ^ref, :process, ^pid1, _reason}
 
       # Supervisor should still be alive
       assert Process.alive?(Process.whereis(RunSupervisor))
@@ -681,9 +671,9 @@ defmodule LemonGateway.RunSupervisorTest do
       send(task_pid, {:complete, "done"})
       assert_receive {:run_complete, _, _}, 2000
 
-      Process.sleep(100)
-      final_count = DynamicSupervisor.count_children(RunSupervisor).active
-      assert final_count <= active_count
+      assert_eventually(fn ->
+        DynamicSupervisor.count_children(RunSupervisor).active <= active_count
+      end)
     end
 
     test "DynamicSupervisor.terminate_child terminates a running child" do
@@ -736,8 +726,6 @@ defmodule LemonGateway.RunSupervisorTest do
 
       # Terminate first child
       :ok = DynamicSupervisor.terminate_child(RunSupervisor, pid1)
-
-      Process.sleep(50)
 
       # Second should still be running
       assert Process.alive?(pid2)
@@ -992,7 +980,7 @@ defmodule LemonGateway.RunSupervisorTest do
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # Wait for cleanup
-      Process.sleep(100)
+      assert_eventually(fn -> pid not in run_supervisor_child_pids() end)
 
       final_children = DynamicSupervisor.which_children(RunSupervisor)
       final_count = length(final_children)
@@ -1161,13 +1149,8 @@ defmodule LemonGateway.RunSupervisorTest do
 
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 2000
 
-      # Wait and verify no restart
-      Process.sleep(200)
-
-      children = DynamicSupervisor.which_children(RunSupervisor)
-      child_pids = Enum.map(children, fn {_, child_pid, _, _} -> child_pid end)
-
-      refute pid in child_pids
+      # Verify no restart
+      assert_eventually(fn -> pid not in run_supervisor_child_pids() end)
     end
 
     test "child_spec uses LemonGateway.Run module" do
@@ -1255,5 +1238,11 @@ defmodule LemonGateway.RunSupervisorTest do
                  worker_pid: self()
                })
     end
+  end
+
+  defp run_supervisor_child_pids do
+    RunSupervisor
+    |> DynamicSupervisor.which_children()
+    |> Enum.map(fn {_, child_pid, _, _} -> child_pid end)
   end
 end

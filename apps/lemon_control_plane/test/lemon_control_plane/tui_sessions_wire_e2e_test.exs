@@ -158,7 +158,7 @@ defmodule LemonControlPlane.TuiSessionsWireE2ETest do
   defp restore_env(key, nil), do: Application.delete_env(:lemon_control_plane, key)
   defp restore_env(key, value), do: Application.put_env(:lemon_control_plane, key, value)
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 300)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

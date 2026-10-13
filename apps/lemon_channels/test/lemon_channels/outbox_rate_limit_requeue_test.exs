@@ -40,6 +40,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
       if pid = payload.meta[:test_pid] do
         send(pid, {:delivered, payload.content})
       end
+
       {:ok, make_ref()}
     end
 
@@ -97,7 +98,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
       # Wait for the rate limiter to refill and the message to be delivered
       # Default rate is 30/sec, so tokens refill quickly
       # We give it up to 500ms to be delivered
-      assert_receive {:delivered, content}, 500
+      assert_receive {:delivered, content}
       assert content == payload.content
     end
 
@@ -170,7 +171,7 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
       assert stats.queue_length >= initial_length
 
       # Wait for delivery
-      assert_receive {:delivered, _}, 500
+      assert_receive {:delivered, _}
     end
 
     test "entry is not lost when process_queue triggers during rate limiting" do

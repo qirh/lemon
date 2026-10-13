@@ -86,7 +86,7 @@ defmodule LemonRouter.RunStarterTest do
 
     assert is_pid(pid)
 
-    assert_receive {:started, "run1", opts}, 500
+    assert_receive {:started, "run1", opts}
     assert opts[:run_id] == "run1"
     assert opts[:session_key] == "session-1"
     assert opts[:queue_mode] == :collect

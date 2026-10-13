@@ -1,6 +1,7 @@
 defmodule LemonGateway.SchedulerTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1]
 
   alias Elixir.LemonGateway.ExecutionRequest
   alias Elixir.LemonGateway.Scheduler
@@ -637,7 +638,7 @@ defmodule LemonGateway.SchedulerTest do
       Elixir.LemonGateway.AsyncHelpers.assert_process_alive(pid)
       Scheduler.cancel(pid)
 
-      assert_receive {:got_cancel, :user_requested}, 500
+      assert_receive {:got_cancel, :user_requested}
     end
   end
 
@@ -674,14 +675,14 @@ defmodule LemonGateway.SchedulerTest do
     end
 
     test "submit_execution/1 returns :ok immediately (async)" do
-      request = make_request()
+      # The run stays in flight (20s) for the duration of the call, so a
+      # blocking submit would take far longer than this generous bound.
+      request = make_request(meta: %{delay_ms: 20_000})
 
-      # Submit should return immediately, not block
       {time_us, result} = :timer.tc(fn -> Scheduler.submit_execution(request) end)
 
       assert result == :ok
-      # Should complete in under 10ms (accounting for test overhead)
-      assert time_us < 10_000
+      assert time_us < 10_000_000
     end
 
     test "submit with resume token uses provenance/value as thread_key" do
@@ -1013,14 +1014,14 @@ defmodule LemonGateway.SchedulerTest do
         prompt: "test",
         resume: resume,
         conversation_key: {:session, session_key},
-        meta: %{delay_ms: 200}
+        meta: %{delay_ms: 30_000}
       }
 
       assert :ok == Scheduler.submit_execution(request)
 
-      assert eventually(fn ->
-               is_pid(Elixir.LemonGateway.ThreadRegistry.whereis({:session, session_key}))
-             end)
+      assert_eventually(fn ->
+        is_pid(Elixir.LemonGateway.ThreadRegistry.whereis({:session, session_key}))
+      end)
 
       assert Elixir.LemonGateway.ThreadRegistry.whereis({resume.engine, resume.value}) == nil
     end
@@ -2259,21 +2260,6 @@ defmodule LemonGateway.SchedulerTest do
       assert total_worker_counts == 30
 
       Enum.each(workers, &Process.exit(&1, :kill))
-    end
-  end
-
-  defp eventually(fun, attempts_left \\ 40)
-
-  defp eventually(fun, 0) when is_function(fun, 0) do
-    fun.()
-  end
-
-  defp eventually(fun, attempts_left) when is_function(fun, 0) and attempts_left > 0 do
-    if fun.() do
-      true
-    else
-      Process.sleep(10)
-      eventually(fun, attempts_left - 1)
     end
   end
 end

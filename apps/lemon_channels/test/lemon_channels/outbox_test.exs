@@ -149,8 +149,6 @@ defmodule LemonChannels.OutboxTest do
       assert {:ok, _ref} = Outbox.enqueue(payload1)
       assert {:ok, _ref} = Outbox.enqueue(payload2)
 
-      Process.sleep(50)
-
       state = :sys.get_state(outbox_pid)
       queued = :queue.to_list(state.queue)
 

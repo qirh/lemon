@@ -81,7 +81,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportMessageBufferTest do
       send(self(), {:submitted, inbound})
     end)
 
-    assert_receive {:submitted, submitted}, 200
+    assert_receive {:submitted, submitted}
 
     assert submitted.message.text == "first\n\nsecond\n\nthird"
     assert submitted.message.reply_to_id == 9003

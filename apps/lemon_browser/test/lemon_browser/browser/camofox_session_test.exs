@@ -1,6 +1,8 @@
 defmodule LemonBrowser.CamofoxSessionTest do
   use ExUnit.Case, async: false
 
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+
   alias LemonBrowser.CamofoxSession
 
   setup do
@@ -216,14 +218,14 @@ defmodule LemonBrowser.CamofoxSessionTest do
   end
 
   test "status redacts remote identity and ephemeral sessions are deleted on idle", %{opts: opts} do
-    idle_opts = Keyword.put(opts, :browser_idle_timeout_ms, 40)
-
+    # The idle timer is armed with a long timeout so the status read below
+    # cannot race it; the test fires the timer's message itself.
     assert {:ok, _} =
              CamofoxSession.request(
                "browser.navigate",
                %{"url" => "https://example.com"},
                1_000,
-               idle_opts
+               Keyword.put(opts, :browser_idle_timeout_ms, 5_000)
              )
 
     [status] = CamofoxSession.status()
@@ -237,7 +239,12 @@ defmodule LemonBrowser.CamofoxSessionTest do
     refute rendered =~ "camofox-api-secret"
     refute rendered =~ "camofox.test"
 
-    assert eventually(fn -> CamofoxSession.status() == [] end)
+    [pid] = session_pids()
+    assert is_integer(Process.read_timer(:sys.get_state(pid).idle_timer))
+
+    send(pid, :idle_timeout)
+
+    assert_eventually(fn -> CamofoxSession.status() == [] end)
     assert_received {:delete, delete_url, _}
     assert delete_url =~ "/sessions/lemon_"
   end
@@ -257,7 +264,7 @@ defmodule LemonBrowser.CamofoxSessionTest do
                managed_opts
              )
 
-    assert eventually(fn -> CamofoxSession.status() == [] end)
+    assert_eventually(fn -> CamofoxSession.status() == [] end)
     refute_received {:delete, _, _}
   end
 
@@ -271,15 +278,9 @@ defmodule LemonBrowser.CamofoxSessionTest do
     end)
   end
 
-  defp eventually(fun, attempts \\ 30)
-  defp eventually(fun, 0), do: fun.()
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
+  defp session_pids do
+    LemonBrowser.CamofoxSessionRegistry
+    |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.map(fn {_scope, pid} -> pid end)
   end
 end

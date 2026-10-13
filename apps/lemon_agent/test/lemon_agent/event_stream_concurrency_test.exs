@@ -149,9 +149,8 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
         EventStream.push_async(stream, {:event, i})
       end
 
-      # Wait for all casts to process
-      Process.sleep(200)
-
+      # `stats/1` is a call from the same process, so it is handled after every
+      # cast above
       stats = EventStream.stats(stream)
       assert stats.queue_size == 50
       assert stats.dropped == 950
@@ -174,6 +173,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
         end)
 
       {:ok, stream} = EventStream.start_link(owner: owner)
+      stream_ref = Process.monitor(stream)
 
       # Start multiple waiters
       waiters =
@@ -196,8 +196,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       end
 
       # Stream should be dead
-      Process.sleep(50)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, _reason}, 5_000
 
       # Cleanup tasks
       for task <- waiters, do: Task.await(task, 100)
@@ -247,12 +246,11 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       task_ref = Process.monitor(task_pid)
 
       EventStream.attach_task(stream, task_pid)
-      Process.sleep(20)
 
       EventStream.cancel(stream, :cleanup_test)
 
       # Task should be killed due to stream cancel
-      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 500
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 5_000
     end
 
     test "replacing attached task cleans up previous monitor" do
@@ -287,9 +285,8 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
 
       # Now crash task2 - SHOULD affect stream
       send(task2, :crash)
-      Process.sleep(50)
 
-      result = EventStream.result(stream, 100)
+      result = EventStream.result(stream, 5_000)
       assert {:error, {:task_crashed, :boom2}, nil} = result
     end
 
@@ -442,16 +439,19 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       {:ok, stream} = EventStream.start_link()
 
       # Start pushing events
+      test_pid = self()
+
       pusher =
         Task.async(fn ->
           for i <- 1..100 do
             result = EventStream.push(stream, {:event, i})
+            if i == 1, do: send(test_pid, :first_push_done)
             {i, result}
           end
         end)
 
       # Complete after some pushes
-      Process.sleep(5)
+      assert_receive :first_push_done, 5_000
       EventStream.complete(stream, ["race"])
 
       results = Task.await(pusher, 1000)
@@ -787,8 +787,8 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
           EventStream.events(stream) |> Enum.take(25)
         end)
 
-      # Wait for consumer1 to take some events
-      Process.sleep(50)
+      # Consumer1 drains its 25 events from the buffer before consumer2 joins
+      events1 = Task.await(consumer1, 5_000)
 
       # Second consumer joins
       consumer2 =
@@ -803,8 +803,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
 
       EventStream.complete(stream, [])
 
-      events1 = Task.await(consumer1, 2000)
-      events2 = Task.await(consumer2, 2000)
+      events2 = Task.await(consumer2, 5_000)
 
       # Consumer1 should have exactly 25 events
       assert length(events1) == 25
@@ -1019,7 +1018,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       assert Process.alive?(stream)
 
       # Attached task should be killed
-      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 500
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 5_000
 
       events = EventStream.events(stream) |> Enum.to_list()
       assert events == Enum.map(1..10, &{:event, &1}) ++ [{:canceled, :cleanup_scenario}]
@@ -1039,10 +1038,10 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       EventStream.attach_task(stream, task_pid)
       task_ref = Process.monitor(task_pid)
 
-      wait_until_dead(stream, System.monotonic_time(:millisecond) + 1_000)
+      wait_until_dead(stream, System.monotonic_time(:millisecond) + 5_000)
       refute Process.alive?(stream)
 
-      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 500
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 5_000
     end
 
     test "owner death cleanup with multiple waiters" do
@@ -1054,6 +1053,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
         end)
 
       {:ok, stream} = EventStream.start_link(owner: owner)
+      stream_ref = Process.monitor(stream)
 
       # Multiple result waiters
       result_waiters =
@@ -1089,8 +1089,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       end
 
       # Stream should be dead
-      Process.sleep(50)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, _reason}, 5_000
     end
 
     test "rapid create/destroy cycle does not leak resources" do
@@ -1111,7 +1110,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
         end
 
       # Give some time for cleanup
-      deadline = System.monotonic_time(:millisecond) + 1000
+      deadline = System.monotonic_time(:millisecond) + 5_000
 
       Enum.each(streams, fn pid ->
         wait_until_dead(pid, deadline)

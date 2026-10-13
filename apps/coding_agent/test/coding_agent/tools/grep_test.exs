@@ -620,7 +620,7 @@ defmodule CodingAgent.Tools.GrepTest do
           ripgrep_available?: true,
           ripgrep_timeout_ms: 20,
           rg_cmd_fun: fn "rg", _args, _opts ->
-            Process.sleep(200)
+            Process.sleep(10_000)
             {"", 0}
           end
         )
@@ -647,7 +647,7 @@ defmodule CodingAgent.Tools.GrepTest do
           ripgrep_available?: true,
           ripgrep_timeout_ms: 2_000,
           rg_cmd_fun: fn "rg", _args, _opts ->
-            Process.sleep(500)
+            Process.sleep(10_000)
             {"", 0}
           end
         )

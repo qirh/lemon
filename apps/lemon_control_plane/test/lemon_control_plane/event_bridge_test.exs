@@ -60,6 +60,11 @@ defmodule LemonControlPlane.EventBridgeTest do
     :exit, _ -> :ok
   end
 
+  # Flushes the bridge mailbox. `subscribe_topics/1` is a cast and bus delivery is a plain
+  # message send, so a synchronous `:sys` call returns only once both have been handled (and
+  # exits if the bridge crashed while handling them).
+  defp sync_bridge(bridge_pid), do: :sys.get_state(bridge_pid)
+
   defp flush_events do
     receive do
       {:event, _, _, _} -> flush_events()
@@ -104,7 +109,7 @@ defmodule LemonControlPlane.EventBridgeTest do
   end
 
   describe "dynamic topic subscriptions" do
-    test "subscribes to session topics" do
+    test "subscribes to session topics", %{bridge_pid: bridge_pid} do
       session_key = "session_#{System.unique_integer()}"
       conn_id = "conn_#{System.unique_integer()}"
 
@@ -112,7 +117,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       flush_events()
 
       assert :ok = EventBridge.subscribe_topics(["session:#{session_key}"])
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       event =
         LemonCore.Event.new(
@@ -336,12 +341,12 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "processes run_started events" do
+    test "processes run_started events", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
 
       # Subscribe to the run
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       # The EventBridge should be subscribed to run:run_id topic now
       # Events broadcast to that topic should be processed
@@ -358,7 +363,7 @@ defmodule LemonControlPlane.EventBridgeTest do
         LemonCore.Bus.broadcast("run:#{run_id}", event)
 
         # Give time for processing
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         # EventBridge should still be alive
         assert Process.alive?(Process.whereis(EventBridge))
@@ -367,11 +372,11 @@ defmodule LemonControlPlane.EventBridgeTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "processes delta events" do
+    test "processes delta events", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
 
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         delta = %{run_id: run_id, ts_ms: System.system_time(:millisecond), seq: 1, text: "Hello"}
@@ -379,7 +384,7 @@ defmodule LemonControlPlane.EventBridgeTest do
         event = LemonCore.Event.new(:delta, delta, %{run_id: run_id, session_key: "test"})
         LemonCore.Bus.broadcast("run:#{run_id}", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
 
         # EventBridge should still be alive (didn't crash on the event)
         assert Process.alive?(Process.whereis(EventBridge))
@@ -388,11 +393,11 @@ defmodule LemonControlPlane.EventBridgeTest do
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "processes run_completed events" do
+    test "processes run_completed events", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
 
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -404,14 +409,16 @@ defmodule LemonControlPlane.EventBridgeTest do
 
         LemonCore.Bus.broadcast("run:#{run_id}", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
         assert Process.alive?(Process.whereis(EventBridge))
       end
 
       EventBridge.unsubscribe_run(run_id)
     end
 
-    test "maps nested engine action detail metadata to agent tool_use events" do
+    test "maps nested engine action detail metadata to agent tool_use events", %{
+      bridge_pid: bridge_pid
+    } do
       run_id = "run_#{System.unique_integer()}"
       session_key = "session:event-bridge-tool-failure"
       conn_id = "conn_#{System.unique_integer()}"
@@ -419,10 +426,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
       flush_events()
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
-
-      EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       event =
         LemonCore.Event.engine_action(
@@ -478,7 +482,8 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "sends operator clients the full tool result and structured details instead of the channel preview" do
+    test "sends operator clients the full tool result and structured details instead of the channel preview",
+         %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       session_key = "session:event-bridge-operator-result"
       conn_id = "conn_#{System.unique_integer()}"
@@ -488,7 +493,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
       flush_events()
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       event =
         LemonCore.Event.engine_action(
@@ -555,7 +560,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "maps checkpoint events to agent events" do
+    test "maps checkpoint events to agent events", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       session_key = "session:event-bridge-checkpoint"
       conn_id = "conn_#{System.unique_integer()}"
@@ -564,7 +569,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       flush_events()
 
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       event =
         LemonCore.Event.new(
@@ -600,7 +605,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "maps goal events to goal events" do
+    test "maps goal events to goal events", %{bridge_pid: bridge_pid} do
       run_id = "run_#{System.unique_integer()}"
       session_key = "session:event-bridge-goal"
       conn_id = "conn_#{System.unique_integer()}"
@@ -609,7 +614,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       flush_events()
 
       EventBridge.subscribe_run(run_id)
-      Process.sleep(10)
+      sync_bridge(bridge_pid)
 
       event =
         LemonCore.Event.new(
@@ -795,7 +800,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "subscribes to exec_approvals topic on init" do
+    test "subscribes to exec_approvals topic on init", %{bridge_pid: bridge_pid} do
       # EventBridge should be subscribed to exec_approvals
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
@@ -807,7 +812,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
         LemonCore.Bus.broadcast("exec_approvals", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end
@@ -949,7 +954,7 @@ defmodule LemonControlPlane.EventBridgeTest do
       Presence.unregister(conn_id)
     end
 
-    test "subscribes to cron topic on init" do
+    test "subscribes to cron topic on init", %{bridge_pid: bridge_pid} do
       if Code.ensure_loaded?(LemonCore.Bus) do
         event =
           LemonCore.Event.new(
@@ -965,7 +970,7 @@ defmodule LemonControlPlane.EventBridgeTest do
 
         LemonCore.Bus.broadcast("cron", event)
 
-        Process.sleep(50)
+        sync_bridge(bridge_pid)
         assert Process.alive?(Process.whereis(EventBridge))
       end
     end

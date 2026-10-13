@@ -46,10 +46,12 @@ The workflow serializes release cuts and performs the complete operation:
    notes into the new version section.
 2. GitHub Actions commits that cut to `main`, creates an annotated CalVer tag,
    and checks out the exact tag for every build.
-3. The canonical fast, quality, deterministic eval, and client lanes run
-   against the exact tag. A dispatch with `skip_preflight=true` skips these
-   lanes for an urgent cut; artifact, manifest and container verification
-   still run.
+3. The canonical fast, quality, deterministic eval, install and client lanes
+   are reused from `ci.yml` when it passed on the tagged commit or on the
+   ancestor the cut differs from only by version fields and changelogs
+   (`scripts/ci_verified_commit`); otherwise they run against the exact tag.
+   A dispatch with `skip_preflight=true` skips these lanes for an urgent cut;
+   artifact, manifest and container verification still run.
 4. Native runners build and verify all 11 artifacts. The container builds are
    smoke-tested and merged under the version-specific tag.
 5. The workflow verifies the assembled manifest and artifacts, publishes the

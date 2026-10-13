@@ -35,6 +35,7 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
   test "given binding + child run bus action event started, bridge emits projected parent event" do
     parent_run_id = "run_parent_bridge_1"
     parent_session_key = "agent:default:telegram:default:dm:12345"
+    test_pid = self()
 
     result =
       Task.execute(
@@ -51,7 +52,14 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
         session_key: parent_session_key,
         agent_id: "default",
         run_override: fn _on_update, _signal ->
-          Process.sleep(300)
+          # Keep the child run (and its bridge) alive until the test is done.
+          send(test_pid, {:child_run_started, self()})
+
+          receive do
+            :release -> :ok
+          after
+            10_000 -> :ok
+          end
 
           %LemonAgent.Types.AgentToolResult{
             content: [%LemonAi.Types.TextContent{text: "done"}],
@@ -92,6 +100,9 @@ defmodule CodingAgent.Tools.Task.LiveBridgeTest do
     assert projected.action.detail.child_run_id == child_run_id
     assert meta.run_id == parent_run_id
     assert meta.child_run_id == child_run_id
+
+    assert_receive {:child_run_started, run_pid}, 2_000
+    send(run_pid, :release)
   end
 
   test "given child run completed event, bridge terminates and binding is deleted" do

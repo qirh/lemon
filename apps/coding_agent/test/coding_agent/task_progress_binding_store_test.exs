@@ -320,7 +320,7 @@ defmodule CodingAgent.TaskProgressBindingStoreTest do
     end
   end
 
-  defp wait_for_restarted_binding_server(old_pid, attempts \\ 40)
+  defp wait_for_restarted_binding_server(old_pid, attempts \\ 400)
 
   defp wait_for_restarted_binding_server(_old_pid, attempts) when attempts <= 0 do
     flunk("timed out waiting for TaskProgressBindingServer to restart")

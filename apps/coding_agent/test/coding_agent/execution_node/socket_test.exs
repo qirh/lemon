@@ -86,7 +86,7 @@ defmodule CodingAgent.ExecutionNode.SocketTest do
 
     assert {:ok, connected_state} = Socket.handle_connect(:ignored, state)
     token = connected_state.ping_token
-    assert_receive {:execution_node_ping, ^token}, 100
+    assert_receive {:execution_node_ping, ^token}, 2_000
 
     assert {:reply, {:text, frame}, keepalive_state} =
              Socket.handle_info({:execution_node_ping, token}, connected_state)

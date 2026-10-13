@@ -835,6 +835,7 @@ defmodule LemonAgent.EventStreamTest do
         end)
 
       {:ok, stream} = EventStream.start_link(owner: owner)
+      stream_ref = Process.monitor(stream)
 
       # Start a result waiter
       task =
@@ -853,8 +854,7 @@ defmodule LemonAgent.EventStreamTest do
       result = Task.await(task, 1000)
       assert {:error, {:canceled, :owner_down}} = result
 
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, _reason}, 5_000
     end
 
     test "events stream terminates when owner dies" do
@@ -952,17 +952,17 @@ defmodule LemonAgent.EventStreamTest do
   describe "timeout handling" do
     test "stream auto-cancels on timeout" do
       {:ok, stream} = EventStream.start_link(timeout: 50)
+      stream_ref = Process.monitor(stream)
 
       task =
         Task.async(fn ->
           EventStream.result(stream)
         end)
 
-      result = Task.await(task, 1000)
+      result = Task.await(task, 5_000)
       assert {:error, {:canceled, :timeout}} = result
 
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, _reason}, 5_000
     end
 
     test "events stream receives timeout cancel event" do
@@ -1101,14 +1101,12 @@ defmodule LemonAgent.EventStreamTest do
         end)
 
       EventStream.attach_task(stream, task_pid)
-
-      Process.sleep(20)
+      task_ref = Process.monitor(task_pid)
       assert Process.alive?(task_pid)
 
       EventStream.cancel(stream, :test_cancel)
 
-      Process.sleep(50)
-      refute Process.alive?(task_pid)
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _reason}, 5_000
     end
 
     test "attached task is shutdown when owner dies" do
@@ -1176,8 +1174,8 @@ defmodule LemonAgent.EventStreamTest do
       EventStream.cancel(stream, :duplicate_cancel)
       assert EventStream.result(stream) == {:error, {:canceled, :test_cancel}}
 
-      assert_receive {:saw_shutdown, true}, 500
-      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 1_500
+      assert_receive {:saw_shutdown, true}, 5_000
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 5_000
       assert AbortSignal.aborted?(abort_ref)
       assert Process.alive?(stream)
 
@@ -1210,14 +1208,13 @@ defmodule LemonAgent.EventStreamTest do
       task_ref = Process.monitor(task_pid)
 
       EventStream.attach_task(stream, task_pid)
-      Process.sleep(20)
 
       EventStream.cancel(stream, :test_cancel)
 
-      assert_receive :shutdown_received, 500
-      Process.sleep(20)
-      assert Process.alive?(task_pid)
-      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 1_500
+      # The task trapped the shutdown and got to run its handler (and report it)
+      # before the forced kill, which only arrives after the grace window.
+      assert_receive :shutdown_received, 5_000
+      assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 5_000
     end
 
     test "stream receives error when attached task crashes" do
@@ -1285,15 +1282,15 @@ defmodule LemonAgent.EventStreamTest do
           end
         end)
 
+      task2_ref = Process.monitor(task2_pid)
+
       EventStream.attach_task(stream, task1_pid)
       EventStream.attach_task(stream, task2_pid)
 
-      Process.sleep(20)
       EventStream.cancel(stream, :test)
 
-      Process.sleep(50)
       # Only task2 should be shutdown (it replaced task1)
-      refute Process.alive?(task2_pid)
+      assert_receive {:DOWN, ^task2_ref, :process, ^task2_pid, _reason}, 5_000
       # task1 should still be alive since it was replaced
       assert Process.alive?(task1_pid)
 

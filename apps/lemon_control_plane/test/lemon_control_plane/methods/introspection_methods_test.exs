@@ -487,7 +487,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     Application.put_env(:lemon_router, :session_coordinator, config)
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 300)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

@@ -568,7 +568,7 @@ defmodule LemonAgent.ProxyErrorTest do
         sse_event(%{"type" => "done", "reason" => "stop", "usage" => %{}})
       ]
 
-      port = start_sse_server(chunks, delay: 200)
+      port = start_sse_server(chunks, delay: 1_000)
 
       stream =
         Proxy.stream_proxy(

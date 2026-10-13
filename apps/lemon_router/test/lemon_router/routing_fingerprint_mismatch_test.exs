@@ -58,7 +58,7 @@ defmodule LemonRouter.RoutingFingerprintMismatchTest do
 
   defp seed(pid, key, n \\ 5) do
     for _ <- 1..n, do: GenServer.cast(pid, {:record, key, "success", 1000})
-    Process.sleep(30)
+    :sys.get_state(pid)
   end
 
   defp sample_inputs do

@@ -127,7 +127,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
     assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil})
 
-    assert_receive {:send_message, ^chat_id, notice}, 400
+    assert_receive {:send_message, ^chat_id, notice}
     assert notice =~ "This bot is not paired."
     assert notice =~ "lemon gateway setup telegram"
 
@@ -141,7 +141,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
     assert {:ok, _pid} = start_transport(%{allowed_chat_ids: []})
 
-    assert_receive {:send_message, ^chat_id, notice}, 400
+    assert_receive {:send_message, ^chat_id, notice}
     assert notice =~ "not paired"
     refute_receive {:inbound, _msg}, 250
   end
@@ -152,7 +152,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
     assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil})
 
-    assert_receive {:send_message, ^chat_id, reply}, 400
+    assert_receive {:send_message, ^chat_id, reply}
     assert reply =~ "chat_id: #{chat_id}"
     assert reply =~ "user_id: 99"
     refute reply =~ "not paired"
@@ -165,7 +165,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
     assert {:ok, _pid} = start_transport(%{allowed_chat_ids: nil, allow_all_chats: true})
 
-    assert_receive {:inbound, msg}, 400
+    assert_receive {:inbound, msg}
     assert msg.message.text == "hello from anyone"
   end
 
@@ -226,7 +226,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
                deny_unbound_chats: true
              })
 
-    assert_receive {:inbound, msg}, 400
+    assert_receive {:inbound, msg}
     assert msg.meta[:chat_id] == chat_id
     assert msg.message.text == "hello from bound chat"
   end
@@ -282,7 +282,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
                deny_unbound_chats: true
              })
 
-    assert_receive {:answer_callback, _cb_id, %{"text" => reply}}, 300
+    assert_receive {:answer_callback, _cb_id, %{"text" => reply}}
     assert is_binary(reply) and reply != ""
     refute reply == "Recorded"
     assert {:ok, ^pending} = LemonCore.ExecApprovalStore.fetch_pending(id)

@@ -284,6 +284,54 @@ defmodule LemonAgent.Test.Mocks do
   end
 
   @doc """
+  Creates a stream function whose producer stalls until the test releases it.
+
+  The producer (unlinked task) pushes `{:start, response}` (unless
+  `before_start: true`), then `chunks` text deltas, then sends
+  `{tag, producer_pid}` to `parent` and blocks until it receives
+  `:release_stream` (or `max_block_ms`, default 10s). Only then does it push
+  `{:done, response.stop_reason, response}` and complete the stream.
+
+  This lets tests abort/cancel a run that is deterministically in flight,
+  instead of racing a timer against a fixed-length stream.
+
+  Options: `:tag` (default `:stream_blocked`), `:chunks` (default 0),
+  `:before_start` (default false), `:max_block_ms` (default 10_000).
+  """
+  def blocking_stream_fn(response, parent, opts \\ []) do
+    tag = Keyword.get(opts, :tag, :stream_blocked)
+    chunks = Keyword.get(opts, :chunks, 0)
+    before_start = Keyword.get(opts, :before_start, false)
+    max_block_ms = Keyword.get(opts, :max_block_ms, 10_000)
+
+    fn _model, _context, _options ->
+      {:ok, stream} = LemonAi.EventStream.start_link()
+
+      Task.start(fn ->
+        unless before_start, do: LemonAi.EventStream.push(stream, {:start, response})
+
+        for i <- 1..chunks//1 do
+          LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
+        end
+
+        send(parent, {tag, self()})
+
+        receive do
+          :release_stream -> :ok
+        after
+          max_block_ms -> :ok
+        end
+
+        if before_start, do: LemonAi.EventStream.push(stream, {:start, response})
+        LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+        LemonAi.EventStream.complete(stream, response)
+      end)
+
+      {:ok, stream}
+    end
+  end
+
+  @doc """
   Creates a mock stream function that returns the stream directly.
   """
   def mock_stream_fn_single_direct(response) do

@@ -33,8 +33,8 @@ defmodule LemonAi.CallDispatcherTest do
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
 
-      # Give time for the casts to be processed
-      Process.sleep(10)
+      # record_failure/1 is a cast; the dispatch below is ordered after both casts
+      # because they come from the same process.
 
       result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)
 
@@ -308,7 +308,7 @@ defmodule LemonAi.CallDispatcherTest do
       Application.put_env(
         :lemon_ai,
         CallDispatcher,
-        Keyword.put(previous_dispatcher_config, :stream_result_timeout_ms, 50)
+        Keyword.put(previous_dispatcher_config, :stream_result_timeout_ms, 500)
       )
 
       on_exit(fn ->
@@ -322,7 +322,7 @@ defmodule LemonAi.CallDispatcherTest do
 
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
 
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end, 1_500)
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end, 5_000)
 
       assert {:ok, "after_timeout"} =
                CallDispatcher.dispatch(provider, fn -> {:ok, "after_timeout"} end)
@@ -484,8 +484,9 @@ defmodule LemonAi.CallDispatcherTest do
     end
 
     test "tokens refill over time", %{provider: provider} do
-      # Start with 1 token, refill rate of 100 per second
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 5})
+      # 2 tokens per second (one every 500ms) leaves the empty-bucket assertion
+      # plenty of slack on a slow scheduler.
+      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 2, max_tokens: 5})
 
       # Use the initial tokens
       for _ <- 1..5 do
@@ -495,11 +496,8 @@ defmodule LemonAi.CallDispatcherTest do
       # Should be empty
       assert {:error, :rate_limited} = RateLimiter.acquire(provider)
 
-      # Wait for tokens to refill (100/s = 1 token every 10ms)
-      Process.sleep(50)
-
-      # Should have tokens again
-      assert :ok = RateLimiter.acquire(provider)
+      # Should have tokens again once the bucket refills
+      wait_until(fn -> RateLimiter.acquire(provider) == :ok end, 5_000)
     end
   end
 
@@ -523,14 +521,12 @@ defmodule LemonAi.CallDispatcherTest do
       # Record failures
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       # Still closed (only 2 failures)
       refute CircuitBreaker.open?(provider)
 
       # Third failure should open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       assert CircuitBreaker.open?(provider)
 
@@ -539,20 +535,17 @@ defmodule LemonAi.CallDispatcherTest do
     end
 
     test "transitions to half_open after timeout", %{provider: provider} do
-      # Use a short (but not too short) recovery timeout to avoid timing flakes
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 200)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for recovery timeout
-      Process.sleep(220)
+      # Move time past the recovery timeout
+      advance_clock.(200)
 
       # Should transition to half_open (not open)
       refute CircuitBreaker.open?(provider)
@@ -562,19 +555,17 @@ defmodule LemonAi.CallDispatcherTest do
     end
 
     test "closes after successful requests in half_open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 200)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for half_open
-      Process.sleep(220)
+      # Move time past the recovery timeout
+      advance_clock.(200)
 
       refute CircuitBreaker.open?(provider)
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -582,17 +573,34 @@ defmodule LemonAi.CallDispatcherTest do
 
       # Record successful requests (need 2 for half_open_success_threshold)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       # Should be closed now
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :closed
+    end
+  end
+
+  # Starts a circuit breaker on a manually advanced clock; returns a function
+  # that moves the clock forward by the given milliseconds.
+  defp start_breaker_with_clock(provider, opts) do
+    clock = :atomics.new(1, signed: true)
+
+    start_supervised!(
+      {CircuitBreaker,
+       opts
+       |> Keyword.put(:provider, provider)
+       |> Keyword.put(:monotonic_time, fn -> :atomics.get(clock, 1) end)}
+    )
+
+    fn milliseconds ->
+      # A call from the same process observes all earlier casts before time moves.
+      {:ok, _state} = CircuitBreaker.get_state(provider)
+      :atomics.add_get(clock, 1, milliseconds)
     end
   end
 
@@ -623,7 +631,7 @@ defmodule LemonAi.CallDispatcherTest do
     Map.get(CallDispatcher.get_state().queued, provider, 0)
   end
 
-  defp wait_until(fun, timeout_ms \\ 1_000, step_ms \\ 10) do
+  defp wait_until(fun, timeout_ms \\ 5_000, step_ms \\ 10) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     if fun.() do

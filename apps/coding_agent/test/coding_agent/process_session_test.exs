@@ -12,6 +12,23 @@ defmodule CodingAgent.ProcessSessionTest do
 
   alias CodingAgent.ProcessSession
 
+  import CodingAgent.AsyncHelpers
+
+  defp await_status(process_id, statuses) do
+    assert_eventually(
+      fn ->
+        case ProcessSession.poll(process_id) do
+          {:ok, %{status: status}} -> status in statuses
+          _ -> false
+        end
+      end,
+      timeout: 5_000,
+      message: "process #{process_id} never reached #{inspect(statuses)}"
+    )
+  end
+
+  defp await_finished(process_id), do: await_status(process_id, [:completed, :error, :killed])
+
   # ============================================================================
   # Setup
   # ============================================================================
@@ -35,8 +52,7 @@ defmodule CodingAgent.ProcessSessionTest do
 
       assert Process.alive?(pid)
 
-      # Wait for command to complete
-      Process.sleep(200)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.process_id == process_id
@@ -88,8 +104,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      # Wait for process to complete
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.process_id == process_id
@@ -104,7 +119,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.status in [:completed, :running]
@@ -126,12 +141,9 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      # Give it time to start
-      Process.sleep(100)
-
       assert :ok = ProcessSession.kill(process_id)
 
-      Process.sleep(200)
+      await_status(process_id, [:killed])
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.status == :killed
@@ -144,8 +156,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      # Wait for it to finish
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:error, :process_not_running} = ProcessSession.kill(process_id)
     end
@@ -163,7 +174,6 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      Process.sleep(50)
       assert ProcessSession.alive?(process_id) == true
 
       # Clean up
@@ -188,8 +198,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      # Wait for process to finish
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:error, :process_not_running} = ProcessSession.write_stdin(process_id, "input\n")
     end
@@ -206,8 +215,6 @@ defmodule CodingAgent.ProcessSessionTest do
           command: "sleep 60",
           process_id: process_id
         )
-
-      Process.sleep(50)
 
       assert {:ok, state} = ProcessSession.get_state(process_id)
       assert state.process_id == process_id
@@ -233,7 +240,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.status == :completed
@@ -247,7 +254,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.status == :error
@@ -284,7 +291,7 @@ defmodule CodingAgent.ProcessSessionTest do
           process_id: process_id
         )
 
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       output = Enum.join(result.logs, "\n")
@@ -306,7 +313,7 @@ defmodule CodingAgent.ProcessSessionTest do
           restart_generation: 1
         )
 
-      Process.sleep(500)
+      await_finished(process_id)
 
       assert {:ok, state} = ProcessSession.get_state(process_id)
       # log_count should be capped at max_log_lines
@@ -334,7 +341,7 @@ defmodule CodingAgent.ProcessSessionTest do
         )
 
       # Wait for timeout to trigger
-      Process.sleep(500)
+      await_status(process_id, [:error])
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       assert result.status == :error
@@ -354,7 +361,7 @@ defmodule CodingAgent.ProcessSessionTest do
           cwd: "/tmp"
         )
 
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessSession.poll(process_id)
       # On macOS, /tmp is a symlink to /private/tmp

@@ -25,7 +25,14 @@ defmodule LemonAi.EventStreamBeamTest do
     }
   end
 
-  defp wait_until(fun, timeout_ms \\ 200) do
+  # Waits until `stream` has exactly one waiter registered in `field`
+  # (`:result_waiters` or `:take_waiters`).
+  defp await_waiter(stream, field) do
+    assert wait_until(fn -> :queue.len(Map.fetch!(:sys.get_state(stream), field)) == 1 end),
+           "waiter did not register in #{field}"
+  end
+
+  defp wait_until(fun, timeout_ms \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     Stream.repeatedly(fn -> fun.() end)
@@ -63,11 +70,11 @@ defmodule LemonAi.EventStreamBeamTest do
           1000 -> flunk("Did not receive stream pid")
         end
 
-      # Wait for owner to die and DOWN message to be processed
-      Process.sleep(100)
+      stream_ref = Process.monitor(stream)
 
-      # Stream should have terminated
-      refute Process.alive?(stream)
+      # Wait for owner to die and DOWN message to be processed; the stream
+      # should then terminate
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
     end
 
     test "stream survives when owner is self" do
@@ -151,11 +158,11 @@ defmodule LemonAi.EventStreamBeamTest do
       assert_receive {:task_started, ^task_ref}, 1000
 
       # Cancel the stream
+      task_ref = Process.monitor(task_pid)
       EventStream.cancel(stream, :test_cancel)
 
       # Task should be terminated
-      Process.sleep(100)
-      refute Process.alive?(task_pid)
+      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
     end
   end
 
@@ -349,11 +356,11 @@ defmodule LemonAi.EventStreamBeamTest do
       EventStream.push_async(stream, {:text_delta, 0, "hello", make_message()})
 
       # Cancel
+      stream_ref = Process.monitor(stream)
       EventStream.cancel(stream, :user_canceled)
 
       # Stream should be stopped
-      Process.sleep(50)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
     end
 
     test "cancel emits canceled event" do
@@ -368,8 +375,8 @@ defmodule LemonAi.EventStreamBeamTest do
           EventStream.events(stream) |> Enum.to_list()
         end)
 
-      # Give reader time to start waiting
-      Process.sleep(20)
+      # Wait for reader to consume the first event and start waiting
+      await_waiter(stream, :take_waiters)
 
       # Cancel
       EventStream.cancel(stream, :test_reason)
@@ -398,10 +405,10 @@ defmodule LemonAi.EventStreamBeamTest do
           EventStream.result(stream2, 5000)
         end)
 
-      Process.sleep(20)
+      await_waiter(stream2, :result_waiters)
       EventStream.cancel(stream2, :test_cancel)
 
-      result = Task.await(reader, 1000)
+      result = Task.await(reader, 5_000)
       assert {:error, {:canceled, :test_cancel}} = result
     end
 
@@ -410,8 +417,9 @@ defmodule LemonAi.EventStreamBeamTest do
 
       EventStream.cancel(stream, :canceled)
 
-      # Give time for cancellation to process and stream to stop
-      Process.sleep(50)
+      # Wait for cancellation to be processed and the stream to stop
+      stream_ref = Process.monitor(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
 
       # Push should return canceled error
       result = EventStream.push(stream, {:text_delta, 0, "test", make_message()})
@@ -422,23 +430,21 @@ defmodule LemonAi.EventStreamBeamTest do
   describe "timeouts" do
     test "stream times out after configured duration" do
       {:ok, stream} = EventStream.start_link(timeout: 100)
+      stream_ref = Process.monitor(stream)
 
-      # Don't complete the stream, let it timeout
-      Process.sleep(200)
-
-      # Stream should have terminated
-      refute Process.alive?(stream)
+      # Don't complete the stream, let it timeout; the stream should terminate
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
     end
 
     test "timeout emits canceled event with :timeout reason" do
-      {:ok, stream} = EventStream.start_link(timeout: 100)
+      {:ok, stream} = EventStream.start_link(timeout: 500)
 
       reader =
         Task.async(fn ->
           EventStream.events(stream) |> Enum.to_list()
         end)
 
-      events = Task.await(reader, 1000)
+      events = Task.await(reader, 5_000)
 
       # Should have timeout cancellation
       assert Enum.any?(events, &match?({:canceled, :timeout}, &1))

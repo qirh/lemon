@@ -4,6 +4,43 @@ defmodule CodingAgent.SessionSupervisorTest do
   alias CodingAgent.SessionRegistry
   alias CodingAgent.SessionSupervisor
 
+  import CodingAgent.AsyncHelpers
+
+  defp stop_all_sessions do
+    for pid <- SessionSupervisor.list_sessions() do
+      SessionSupervisor.stop_session(pid)
+    end
+
+    assert_eventually(fn -> SessionSupervisor.list_sessions() == [] end,
+      message: "sessions were not stopped"
+    )
+  end
+
+  defp kill_and_await(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+    :ok
+  end
+
+  setup_all do
+    cwd =
+      Path.join(System.tmp_dir!(), "session_supervisor_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(cwd)
+    :persistent_term.put({__MODULE__, :cwd}, cwd)
+
+    on_exit(fn ->
+      :persistent_term.erase({__MODULE__, :cwd})
+      File.rm_rf(cwd)
+    end)
+
+    :ok
+  end
+
+  # Session init scans the working directory; use a small, empty one.
+  defp session_cwd, do: :persistent_term.get({__MODULE__, :cwd})
+
   setup do
     unless Process.whereis(SessionRegistry) do
       start_supervised!({Registry, keys: :unique, name: SessionRegistry})
@@ -34,7 +71,7 @@ defmodule CodingAgent.SessionSupervisorTest do
   end
 
   test "starts supervised sessions without linking to caller and registers them" do
-    {:ok, pid} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+    {:ok, pid} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
     assert Process.alive?(pid)
 
     {:links, links} = Process.info(self(), :links)
@@ -45,13 +82,13 @@ defmodule CodingAgent.SessionSupervisorTest do
   end
 
   test "stop_session terminates by pid and session_id" do
-    {:ok, pid} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+    {:ok, pid} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
     ref = Process.monitor(pid)
     assert :ok = SessionSupervisor.stop_session(pid)
     assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1_000
 
     {:ok, pid2} =
-      SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+      SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-2"))
 
     stats2 = CodingAgent.Session.get_stats(pid2)
 
@@ -62,21 +99,16 @@ defmodule CodingAgent.SessionSupervisorTest do
 
   describe "health_all/0" do
     test "returns empty list when no sessions" do
-      # Stop any existing sessions
-      for pid <- SessionSupervisor.list_sessions() do
-        SessionSupervisor.stop_session(pid)
-      end
-
-      Process.sleep(50)
+      stop_all_sessions()
 
       assert SessionSupervisor.health_all() == []
     end
 
     test "returns health status for all sessions" do
-      {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+      {:ok, _pid1} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
 
       {:ok, _pid2} =
-        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+        SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-2"))
 
       health_results = SessionSupervisor.health_all()
 
@@ -86,7 +118,7 @@ defmodule CodingAgent.SessionSupervisorTest do
     end
 
     test "new sessions are healthy" do
-      {:ok, _pid} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+      {:ok, _pid} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
 
       health_results = SessionSupervisor.health_all()
       healthy_sessions = Enum.filter(health_results, &(&1.status == :healthy))
@@ -95,15 +127,14 @@ defmodule CodingAgent.SessionSupervisorTest do
     end
 
     test "sorts by status (unhealthy first)" do
-      {:ok, pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+      {:ok, pid1} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
 
       {:ok, _pid2} =
-        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+        SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-2"))
 
       # Kill the agent of the first session to make it unhealthy
       state = CodingAgent.Session.get_state(pid1)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       health_results = SessionSupervisor.health_all()
 
@@ -114,12 +145,7 @@ defmodule CodingAgent.SessionSupervisorTest do
 
   describe "health_summary/0" do
     test "returns no_sessions when no active sessions" do
-      # Stop any existing sessions
-      for pid <- SessionSupervisor.list_sessions() do
-        SessionSupervisor.stop_session(pid)
-      end
-
-      Process.sleep(50)
+      stop_all_sessions()
 
       summary = SessionSupervisor.health_summary()
 
@@ -131,17 +157,12 @@ defmodule CodingAgent.SessionSupervisorTest do
     end
 
     test "returns healthy when all sessions are healthy" do
-      # Stop any existing sessions to ensure a clean slate
-      for pid <- SessionSupervisor.list_sessions() do
-        SessionSupervisor.stop_session(pid)
-      end
+      stop_all_sessions()
 
-      Process.sleep(50)
-
-      {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+      {:ok, _pid1} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
 
       {:ok, _pid2} =
-        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+        SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-2"))
 
       summary = SessionSupervisor.health_summary()
 
@@ -151,15 +172,14 @@ defmodule CodingAgent.SessionSupervisorTest do
     end
 
     test "returns unhealthy when any session is unhealthy" do
-      {:ok, pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+      {:ok, pid1} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
 
       {:ok, _pid2} =
-        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+        SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-2"))
 
       # Kill the agent of the first session to make it unhealthy
       state = CodingAgent.Session.get_state(pid1)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       summary = SessionSupervisor.health_summary()
 
@@ -168,21 +188,16 @@ defmodule CodingAgent.SessionSupervisorTest do
     end
 
     test "returns correct counts" do
-      # Clear existing sessions
-      for pid <- SessionSupervisor.list_sessions() do
-        SessionSupervisor.stop_session(pid)
-      end
-
-      Process.sleep(50)
+      stop_all_sessions()
 
       # Start exactly 3 sessions
-      {:ok, _pid1} = SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model())
+      {:ok, _pid1} = SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model())
 
       {:ok, _pid2} =
-        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-2"))
+        SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-2"))
 
       {:ok, _pid3} =
-        SessionSupervisor.start_session(cwd: System.tmp_dir!(), model: mock_model(id: "mock-3"))
+        SessionSupervisor.start_session(cwd: session_cwd(), model: mock_model(id: "mock-3"))
 
       summary = SessionSupervisor.health_summary()
 

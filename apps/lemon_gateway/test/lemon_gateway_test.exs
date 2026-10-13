@@ -390,8 +390,10 @@ defmodule LemonGatewayTest do
                     %{__event__: :completed, ok: true, answer: "Echo: one"}},
                    2_000
 
-    # Allow worker to stop when idle.
-    Process.sleep(50)
+    # Wait for the worker to stop when idle.
+    LemonGateway.AsyncHelpers.assert_eventually(fn ->
+      LemonGateway.ThreadRegistry.whereis({:session, session_key}) == nil
+    end)
 
     submit_request(request2)
 

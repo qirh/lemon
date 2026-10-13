@@ -231,7 +231,7 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
         RunCompletionWaiter.wait("run_waiter_ok", 1_000, bus_mod: TestBus)
       end)
 
-    assert_receive {:bus_subscribed, "run:run_waiter_ok"}, 500
+    assert_receive {:bus_subscribed, "run:run_waiter_ok"}, 5_000
 
     send(
       task.pid,
@@ -239,7 +239,7 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     )
 
     assert {:ok, "Hello from waiter"} = Task.await(task, 2_000)
-    assert_receive {:bus_unsubscribed, "run:run_waiter_ok"}, 500
+    assert_receive {:bus_unsubscribed, "run:run_waiter_ok"}, 5_000
   end
 
   test "wait/3 returns :timeout and unsubscribes when no completion is received" do
@@ -251,9 +251,9 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
         RunCompletionWaiter.wait("run_waiter_timeout", 20, bus_mod: TestBus)
       end)
 
-    assert_receive {:bus_subscribed, "run:run_waiter_timeout"}, 500
+    assert_receive {:bus_subscribed, "run:run_waiter_timeout"}, 5_000
     assert :timeout = Task.await(task, 1_000)
-    assert_receive {:bus_unsubscribed, "run:run_waiter_timeout"}, 500
+    assert_receive {:bus_unsubscribed, "run:run_waiter_timeout"}, 5_000
   end
 
   test "extract_output_from_completion/1 truncates oversized output" do

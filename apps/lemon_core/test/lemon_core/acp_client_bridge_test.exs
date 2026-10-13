@@ -50,31 +50,24 @@ defmodule LemonCore.ACPClientBridgeTest do
     run_id = run_id("down")
     test = self()
 
-    # A handler that registers, signals ready, then exits without replying.
+    # A handler that registers, signals ready, then exits as soon as the request
+    # lands, without replying.
     handler =
       spawn(fn ->
         :ok = ACPClientBridge.register(run_id)
         send(test, {:registered, self()})
 
         receive do
-          :die -> :ok
+          {:acp_client_request, _request} -> :ok
         after
-          2_000 -> :ok
+          5_000 -> :ok
         end
       end)
 
     assert_receive {:registered, ^handler}
 
-    task =
-      Task.async(fn ->
-        ACPClientBridge.request(run_id, "fs/write_text_file", %{}, 2_000)
-      end)
-
-    # Let the request land, then kill the handler.
-    Process.sleep(20)
-    send(handler, :die)
-
-    assert {:error, :client_down} = Task.await(task)
+    assert {:error, :client_down} =
+             ACPClientBridge.request(run_id, "fs/write_text_file", %{}, 5_000)
   end
 
   test "request/4 returns {:error, :timeout} when the handler never replies" do
@@ -83,10 +76,10 @@ defmodule LemonCore.ACPClientBridgeTest do
 
     # Registers and stays alive but ignores the request.
     handler =
-      spawn(fn ->
+      spawn_link(fn ->
         :ok = ACPClientBridge.register(run_id)
         send(test, {:registered, self()})
-        Process.sleep(1_000)
+        Process.sleep(:infinity)
       end)
 
     assert_receive {:registered, ^handler}

@@ -496,7 +496,7 @@ defmodule LemonSimUi.HostedGameTest do
     end)
 
     send(pid, {:turn_timeout, persisted.match_number, version + 1, actor_id, deadline})
-    Process.sleep(20)
+    :sys.get_state(pid)
     assert HostedGame.raw_room(room.room_id).command_seq == 0
 
     send(pid, {:turn_timeout, persisted.match_number, version, actor_id, deadline})
@@ -638,7 +638,7 @@ defmodule LemonSimUi.HostedGameTest do
        persisted.game_state.world.active_actor_id, deadline}
     )
 
-    Process.sleep(20)
+    :sys.get_state(pid)
     assert HostedGame.raw_room(room.room_id).command_seq == 0
     assert {:error, :hosted_rooms_disabled} = HostedGame.host_view(room.room_id, room.host_token)
     assert {:error, :hosted_rooms_disabled} = HostedGame.join_view(room.join_code)
