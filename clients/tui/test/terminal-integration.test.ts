@@ -103,6 +103,56 @@ test("publishes the finalized native frame before terminal completion becomes ob
 	}
 });
 
+test.each([
+	["Tern", "\x1b]7501;state=idle:app=lemon\x1b\\"],
+	["iTerm.app", "\x1b]9;Lemon: Turn interrupted — Return to Lemon to continue\x07"],
+	["foot", "\x1b]777;notify;Lemon: Turn interrupted;Return to Lemon to continue\x07"],
+])(
+	"cancelled turns clear working status without failure notifications in %s",
+	(program, signal) => {
+		const terminal = new MemoryTerminal();
+		const store = new AppStore("cancelled-turn");
+		store.setConnection("online");
+		const client = new ControlPlaneClient({ url: "ws://127.0.0.1:1/ws" });
+		const integration = new TerminalIntegration(
+			terminal,
+			store,
+			client,
+			"/repo",
+			detectTerminalCapabilities({ TERM_PROGRAM: program }, true),
+		);
+		try {
+			integration.start();
+			store.focused.busy = true;
+			client.events.emit("agent", {
+				type: "started",
+				runId: "cancelled-run",
+				sessionKey: store.focusedKey,
+			});
+			terminal.writes.length = 0;
+			store.focused.busy = false;
+			client.events.emit("agent", {
+				type: "completed",
+				runId: "cancelled-run",
+				sessionKey: store.focusedKey,
+				ok: false,
+				cancelled: true,
+				answer: "",
+				durationMs: 1,
+			});
+			const output = terminal.writes.join("");
+			expect(output).toContain(signal);
+			expect(output).not.toContain("Turn failed");
+			expect(output).not.toContain("Turn complete");
+			expect(output).not.toContain("state=error");
+			expect(output).not.toContain("state=done");
+		} finally {
+			integration.stop();
+			client.close();
+		}
+	},
+);
+
 test("real TUI PTY emits turn/approval signals and restores keyboard, title and terminal modes", async () => {
 	const server = await FakeControlPlane.start();
 	server.respondWith("chat.send", { runId: "terminal-run", sessionKey: "terminal-smoke" });
@@ -207,6 +257,24 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		expect(output).toContain("/src/main.ts#L12\x07");
 		expect(output).toContain("\x1b]8;;https://example.com\x07");
 		expect(output).toContain("\x1b]0;Lemon · terminal-smoke · ready\x07");
+		const cancelledOutputStart = output.length;
+		server.pushEvent("agent", {
+			type: "started",
+			runId: "cancelled-run",
+			sessionKey: "terminal-smoke",
+		});
+		await until(() => output.slice(cancelledOutputStart).includes("state=working"));
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "cancelled-run",
+			sessionKey: "terminal-smoke",
+			ok: false,
+			cancelled: true,
+			answer: "",
+		});
+		await until(() => output.slice(cancelledOutputStart).includes("state=idle:app=lemon"));
+		expect(output.slice(cancelledOutputStart)).not.toContain("state=error");
+		expect(output.slice(cancelledOutputStart)).not.toContain("state=done");
 		// Slash opens the palette; use direct exit to test terminal restoration.
 		terminal.write("\x04");
 		expect(await proc.exited).toBe(0);

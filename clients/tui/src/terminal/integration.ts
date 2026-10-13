@@ -15,7 +15,7 @@ export class TerminalIntegration {
 	readonly #disposers: Array<() => void> = [];
 	readonly #runs = new Set<string>();
 	readonly #approvals = new Set<string>();
-	readonly #outcomes = new Map<string, "done" | "error">();
+	readonly #outcomes = new Map<string, "done" | "error" | "idle">();
 	readonly #cwd: string;
 	readonly #beforeStatusChange: (() => void) | undefined;
 	#updateQueued = false;
@@ -71,9 +71,16 @@ export class TerminalIntegration {
 					this.#outcomes.delete(session);
 				}
 				if (event.type === "completed" && this.#runs.delete(event.runId)) {
-					this.#outcomes.set(session, event.ok === false ? "error" : "done");
+					this.#outcomes.set(
+						session,
+						event.cancelled === true ? "idle" : event.ok === false ? "error" : "done",
+					);
 					this.#notify(
-						event.ok === false ? "Turn failed" : "Turn complete",
+						event.cancelled === true
+							? "Turn interrupted"
+							: event.ok === false
+								? "Turn failed"
+								: "Turn complete",
 						"Return to Lemon to continue",
 					);
 				}

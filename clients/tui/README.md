@@ -201,10 +201,11 @@ The title shows the focused session name (or key) and current status. `lemon_ses
 and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
 terminal client intentionally does **not** claim `tern_acp_session`, which is
 reserved for native ACP chats. Tern receives OSC 7501 program status:
-working, blocked for approval, done, or error. Its pane glow, inbox, completion
+working, blocked for approval, done, or error. Cancelled turns return to neutral
+idle instead of reporting success or failure. Its pane glow, inbox, completion
 banners and Carly waiting state follow those transitions. Other terminals
-receive generic OSC 9 or OSC 777 notifications, never prompts, answers,
-commands, or tool arguments.
+receive generic OSC 9 or OSC 777 notifications (including “Turn interrupted”
+for cancellation), never prompts, answers, commands, or tool arguments.
 
 pi-tui negotiates kitty keyboard support with a capability query rather than
 assuming it from environment variables, preserving the parent keyboard flags.
