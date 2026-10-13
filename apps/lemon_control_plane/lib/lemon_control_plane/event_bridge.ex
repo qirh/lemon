@@ -821,17 +821,16 @@ defmodule LemonControlPlane.EventBridge do
     nil
   end
 
-  # Operator clients get the full-fidelity copies `CodingAgent.Session.Presentation`
-  # attaches next to the channel previews: `result_full` replaces the 500-char
-  # `result`, and reasoning `full_text` replaces the preview `text`. Structured
-  # tool `details` pass through as-is.
+  # Prefer the operator copies over channel previews, then project only bounded
+  # visible data. In particular streaming partial results contain runtime structs.
   defp operator_action_detail(detail) when is_map(detail) and not is_struct(detail) do
     detail
     |> promote_detail_field([:result_full, "result_full"], :result, "result")
     |> promote_reasoning_full_text()
+    |> LemonControlPlane.EventProjection.action_detail()
   end
 
-  defp operator_action_detail(detail), do: detail
+  defp operator_action_detail(detail), do: LemonControlPlane.EventProjection.action_detail(detail)
 
   defp promote_reasoning_full_text(detail) do
     case take_detail_field(detail, [:reasoning, "reasoning"]) do
