@@ -122,8 +122,10 @@ if it is already running. Without a configured token, management pages return
   improve test coverage, pause that goal, and create a board called Coverage
   with one task to add a negative-number test. Do not start any work.” Inspect
   the records in the dashboard before starting a bounded goal loop or board
-  dispatch. These workers edit the target repository; they are not automatically
-  isolated branches. See [automation controls](../user-guide/web.md#manage-automated-coding-work).
+  dispatch. Goal loops edit their target directory directly; Git-backed kanban
+  tasks use separate worktrees whose changes need review before merging. See
+  [automation controls](../user-guide/web.md#manage-automated-coding-work) and the
+  [coding automation guide](../user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
 
 ## If the first turn fails
 
