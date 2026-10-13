@@ -38,7 +38,7 @@ import type {
 	SubmissionDisposition,
 } from "../../composer/drafts.ts";
 import type { PendingImage } from "../../composer/images.ts";
-import { ComposerMedia, type ComposerIO } from "../../composer/media.ts";
+import { type ComposerIO, ComposerMedia } from "../../composer/media.ts";
 import { IMAGE_PATH, parsePastedPaths } from "../../composer/paths.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 

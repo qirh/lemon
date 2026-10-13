@@ -126,8 +126,12 @@ export function isToolCancelled(block: ToolBlock): boolean {
 	if (block.phase !== "completed") return false;
 	const details = toolDetails(block);
 	const meta = asRecord(block.detail?.result_meta);
-	return block.cancelled === true || details.cancelled === true ||
-		details.error_type === "aborted" || meta?.error_type === "aborted";
+	return (
+		block.cancelled === true ||
+		details.cancelled === true ||
+		details.error_type === "aborted" ||
+		meta?.error_type === "aborted"
+	);
 }
 
 /** Whether the action failed: the event said so, or the result carries an error type. */
@@ -338,8 +342,10 @@ export function buildToolView(
 		body: buildBody(formatted, block),
 		isError: state === "error" || formatted.isError === true,
 		// Only a known successful edit can claim its argument diff was applied.
-		diff: state === "error" || state === "cancelled" || state === "unknown"
-			? undefined : extractToolDiff(block, args, toolName),
+		diff:
+			state === "error" || state === "cancelled" || state === "unknown"
+				? undefined
+				: extractToolDiff(block, args, toolName),
 	};
 }
 

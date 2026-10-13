@@ -121,19 +121,21 @@ defmodule LemonCli.TernCommand do
     plugin = Path.join([directory, "plugins", "lemon"])
     link = Path.join([directory, "plugins", "lemon.path"])
 
-    with {:error, :enoent} <- File.lstat(link) do
-      case File.lstat(plugin) do
-        {:error, :enoent} ->
-          :ok
+    case File.lstat(link) do
+      {:error, :enoent} ->
+        case File.lstat(plugin) do
+          {:error, :enoent} ->
+            :ok
 
-        {:ok, %{type: :directory}} ->
-          owned_plugin(plugin, assets)
+          {:ok, %{type: :directory}} ->
+            owned_plugin(plugin, assets)
 
-        _ ->
-          plugin_conflict()
-      end
-    else
-      _ -> plugin_conflict()
+          _ ->
+            plugin_conflict()
+        end
+
+      _ ->
+        plugin_conflict()
     end
   end
 

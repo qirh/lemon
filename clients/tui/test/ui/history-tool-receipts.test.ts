@@ -29,19 +29,32 @@ afterEach(() => {
 
 function call(overrides: Partial<ChatHistoryMessage> = {}): ChatHistoryMessage {
 	return {
-		id: "native-call-row", role: "tool_use", content: "", timestampMs: 1000,
-		toolCallId: "native-call-id", toolName: "bash", title: "Long shell command",
+		id: "native-call-row",
+		role: "tool_use",
+		content: "",
+		timestampMs: 1000,
+		toolCallId: "native-call-id",
+		toolName: "bash",
+		title: "Long shell command",
 		arguments: { command: "printf 'STARTED\\n'; sleep 120" },
-		phase: "started", ok: null, cancelled: false,
+		phase: "started",
+		ok: null,
+		cancelled: false,
 		...overrides,
 	};
 }
 
 function cancelled(overrides: Partial<ChatHistoryMessage> = {}): ChatHistoryMessage {
 	return {
-		id: "native-result-row", role: "tool_result", content: "STARTED\n", timestampMs: 2000,
-		toolCallId: "native-call-id", toolName: "bash", phase: "completed",
-		ok: false, cancelled: true,
+		id: "native-result-row",
+		role: "tool_result",
+		content: "STARTED\n",
+		timestampMs: 2000,
+		toolCallId: "native-call-id",
+		toolName: "bash",
+		phase: "completed",
+		ok: false,
+		cancelled: true,
 		details: { cancelled: true, outcome: "unknown", started: true, partial: true },
 		...overrides,
 	};
@@ -51,7 +64,7 @@ function hydrate(rows: ChatHistoryMessage[]): { session: SessionStore; block: To
 	const session = new SessionStore("history-tools");
 	synthesizeHistory(session, rows);
 	const block = session.blocks.find((entry) => entry.kind === "tool");
-	if (!block || block.kind !== "tool") throw new Error("missing hydrated tool");
+	if (block?.kind !== "tool") throw new Error("missing hydrated tool");
 	return { session, block };
 }
 
@@ -67,10 +80,17 @@ describe("native history tool receipts", () => {
 		expect(session.blocks).toHaveLength(1);
 		expect(session.byActionId.get("native-call-id")).toBe(block);
 		expect(block).toMatchObject({
-			actionId: "native-call-id", title: "Long shell command", phase: "completed",
-			ok: false, cancelled: true, historical: true, at: 1000,
+			actionId: "native-call-id",
+			title: "Long shell command",
+			phase: "completed",
+			ok: false,
+			cancelled: true,
+			historical: true,
+			at: 1000,
 			detail: {
-				name: "bash", args: call().arguments, result: "STARTED\n",
+				name: "bash",
+				args: call().arguments,
+				result: "STARTED\n",
 				details: cancelled().details,
 			},
 		});
@@ -93,7 +113,10 @@ describe("native history tool receipts", () => {
 		const component = card(block);
 		const before = renderPlain(component.render(120));
 		synthesizeHistory(session, [call(), cancelled(), call()]);
-		session.upsertTool({ id: "native-call-id", kind: "tool", title: "stale start", detail: undefined }, "started");
+		session.upsertTool(
+			{ id: "native-call-id", kind: "tool", title: "stale start", detail: undefined },
+			"started",
+		);
 		component.update(block);
 		component.update({ ...block, phase: "started", detail: undefined });
 		expect(session.blocks).toHaveLength(1);
@@ -105,7 +128,9 @@ describe("native history tool receipts", () => {
 
 	test("does not merge two different call IDs with the same tool name", () => {
 		const { session } = hydrate([
-			call(), call({ id: "call-2-row", toolCallId: "call-2" }), cancelled(),
+			call(),
+			call({ id: "call-2-row", toolCallId: "call-2" }),
+			cancelled(),
 			cancelled({ id: "result-2-row", toolCallId: "call-2", content: "second output" }),
 		]);
 		expect(session.blocks).toHaveLength(2);
@@ -115,10 +140,15 @@ describe("native history tool receipts", () => {
 
 	test("preserves ordinary completed and failed outcomes", () => {
 		for (const ok of [true, false]) {
-			const { block } = hydrate([call(), cancelled({
-				cancelled: false, ok, content: ok ? "finished" : "command error",
-				details: { exit_code: ok ? 0 : 1 },
-			})]);
+			const { block } = hydrate([
+				call(),
+				cancelled({
+					cancelled: false,
+					ok,
+					content: ok ? "finished" : "command error",
+					details: { exit_code: ok ? 0 : 1 },
+				}),
+			]);
 			expect(buildToolView(block).state).toBe(ok ? "success" : "error");
 			expect(renderPlain(card(block).render(120))).toContain(ok ? "finished" : "command error");
 		}
@@ -137,9 +167,14 @@ describe("native history tool receipts", () => {
 	});
 
 	test("aborted real results and queued cancellations retain their specific outcomes", () => {
-		const { block } = hydrate([call(), cancelled({
-			cancelled: false, content: "", details: { error_type: "aborted", outcome: "not_started" },
-		})]);
+		const { block } = hydrate([
+			call(),
+			cancelled({
+				cancelled: false,
+				content: "",
+				details: { error_type: "aborted", outcome: "not_started" },
+			}),
+		]);
 		expect(buildToolView(block).state).toBe("cancelled");
 		expect(renderPlain(card(block).render(120))).toContain("Cancelled · not started");
 		expect(buildToolView(block).body).toEqual([]);
@@ -170,7 +205,9 @@ describe("native history tool receipts", () => {
 			for (const rows of [[call()], [call(), cancelled()]]) {
 				const { block } = hydrate(rows);
 				const component = new ToolCardComponent(block, {
-					requestRender: () => { throw new Error("history requested an animation frame"); },
+					requestRender: () => {
+						throw new Error("history requested an animation frame");
+					},
 				});
 				teardown.push(() => component.dispose());
 				expect(intervals).not.toHaveBeenCalled();
@@ -184,18 +221,24 @@ describe("native history tool receipts", () => {
 test("cold session switching and transcript rebuild keep cancelled output expandable", async () => {
 	const server = await FakeControlPlane.start();
 	teardown.push(() => server.stop());
-	server.respondWith("chat.history", { messages: [
-		{ id: "u", role: "user", content: "run the command", timestampMs: 500 },
-		call(), cancelled(),
-		{ id: "a", role: "assistant", content: "Stopped as requested.", timestampMs: 3000 },
-	] });
+	server.respondWith("chat.history", {
+		messages: [
+			{ id: "u", role: "user", content: "run the command", timestampMs: 500 },
+			call(),
+			cancelled(),
+			{ id: "a", role: "assistant", content: "Stopped as requested.", timestampMs: 3000 },
+		],
+	});
 	server.respondWith("sessions.list", { sessions: [] });
 	server.respondWith("sessions.active.list", { sessions: [] });
 	server.respondWith("exec.approvals.get", { approvals: [] });
 	const app = new AppShell({
-		url: server.url, sessionKey: "initial", version: "test",
+		url: server.url,
+		sessionKey: "initial",
+		version: "test",
 		client: new ControlPlaneClient({ url: server.url }),
-		terminal: new MemoryTerminal(), smoothStreaming: false,
+		terminal: new MemoryTerminal(),
+		smoothStreaming: false,
 	});
 	teardown.push(() => app.stop());
 	await app.start();

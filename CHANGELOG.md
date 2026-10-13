@@ -60,6 +60,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- TUI cancellation keeps its interrupted marker when a notice has already
+  sealed the current text segment.
+
 - Accepted runs always receive durable, ordered terminal receipts across
   admission, queue retirement, cancellation and crash recovery; cancelling
   drains in-flight events so tool output and partial prose persist with honest

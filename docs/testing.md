@@ -110,6 +110,9 @@ successful return or a nonempty event list.
   tests.
 - `:python3` (`coding_agent`) marks tests that need a `python3` interpreter.
   The app's `test_helper.exs` excludes the tag only when `python3` is missing.
+- `:ast_grep` (`coding_agent`) marks tests that need the optional ast-grep CLI.
+  The app excludes the tag only when backend discovery fails; set
+  `LEMON_AST_GREP_EXECUTABLE` to select an installed release binary.
 - Skip tags (`@tag :skip`, `@tag skip: ...`, `@moduletag :skip`,
   `@describetag :skip`) fail the `quality` lane. Fix the test or give it a
   named tag with a conditional exclude.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
@@ -179,6 +179,7 @@ test("attachment rows are stable, width bounded, and strip filename control byte
 		expect(list.render(images, false, width)).toBe(rows);
 		for (const row of rows) {
 			expect(Bun.stringWidth(row)).toBeLessThanOrEqual(width);
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Verify terminal control bytes are removed.
 			expect(row).not.toMatch(/[\x1b\x07\n]/);
 		}
 	}

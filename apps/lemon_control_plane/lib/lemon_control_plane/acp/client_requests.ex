@@ -16,10 +16,13 @@ defmodule LemonControlPlane.ACP.ClientRequests do
   def init({run_id, owner, exchange}) do
     Process.flag(:trap_exit, true)
 
-    with :ok <- LemonCore.ACPClientBridge.register(run_id) do
-      {:ok, %{owner: owner, owner_ref: Process.monitor(owner), exchange: exchange, pending: %{}}}
-    else
-      error -> {:stop, error}
+    case LemonCore.ACPClientBridge.register(run_id) do
+      :ok ->
+        {:ok,
+         %{owner: owner, owner_ref: Process.monitor(owner), exchange: exchange, pending: %{}}}
+
+      error ->
+        {:stop, error}
     end
   end
 

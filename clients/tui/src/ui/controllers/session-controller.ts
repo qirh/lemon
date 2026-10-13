@@ -23,7 +23,6 @@
  */
 
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
-import { newSessionKey } from "../../session-key.ts";
 import {
 	ControlPlaneError,
 	NotConnectedError,
@@ -36,6 +35,7 @@ import type {
 	ChatHistoryMessage,
 	SessionSummary,
 } from "../../protocol/types.ts";
+import { newSessionKey } from "../../session-key.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
@@ -495,7 +495,10 @@ export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMe
 					title: message.title ?? call?.title ?? previous?.title ?? historyToolTitle(message),
 					detail: {
 						...previous?.detail,
-						name: message.toolName ?? call?.toolName ?? previous?.detail?.name ??
+						name:
+							message.toolName ??
+							call?.toolName ??
+							previous?.detail?.name ??
 							historyToolTitle(message),
 						args: message.arguments ?? call?.arguments ?? previous?.detail?.args,
 						details,
@@ -507,10 +510,18 @@ export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMe
 					at: message.timestampMs ?? 0,
 					historical: true,
 					ok: message.ok,
-					cancelled: completed && (message.cancelled === true ||
-						message.details?.cancelled === true || message.details?.error_type === "aborted"),
-					durationMs: completed && typeof durationMs === "number" &&
-						Number.isFinite(durationMs) && durationMs >= 0 ? durationMs : undefined,
+					cancelled:
+						completed &&
+						(message.cancelled === true ||
+							message.details?.cancelled === true ||
+							message.details?.error_type === "aborted"),
+					durationMs:
+						completed &&
+						typeof durationMs === "number" &&
+						Number.isFinite(durationMs) &&
+						durationMs >= 0
+							? durationMs
+							: undefined,
 				},
 			);
 			continue;

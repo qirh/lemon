@@ -1,4 +1,16 @@
-ExUnit.configure(exclude: [:integration])
+ast_grep_opts =
+  case System.get_env("LEMON_AST_GREP_EXECUTABLE") do
+    nil -> []
+    executable -> [ast_grep_executable: executable]
+  end
+
+exclude_tags =
+  case CodingAgent.Tools.AstGrep.availability(ast_grep_opts) do
+    {:ok, _} -> [:integration]
+    {:error, _} -> [:integration, :ast_grep]
+  end
+
+ExUnit.configure(exclude: exclude_tags)
 ExUnit.start(capture_log: true)
 
 # Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.

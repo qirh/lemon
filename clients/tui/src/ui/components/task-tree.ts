@@ -1,7 +1,7 @@
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
-import { isTaskTerminal, taskElapsedMs, type TaskTreeRow } from "../../store/task-store.ts";
+import { isTaskTerminal, type TaskTreeRow, taskElapsedMs } from "../../store/task-store.ts";
 import { taskDisplayText } from "../task-progress.ts";
 import { getTheme } from "../theme/theme.ts";
 

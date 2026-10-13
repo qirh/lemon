@@ -174,54 +174,56 @@ defmodule LemonAutomation.KanbanDispatcher do
         {:reply, {:error, :not_running}, state}
 
       dispatcher ->
-        with :ok <- mark_workflow_cancellations(board_id) do
-          if dispatcher.timer, do: Process.cancel_timer(dispatcher.timer)
+        case mark_workflow_cancellations(board_id) do
+          :ok ->
+            if dispatcher.timer, do: Process.cancel_timer(dispatcher.timer)
 
-          state =
-            dispatcher.running
-            |> Enum.reduce(state, fn {ref, worker}, acc ->
-              Process.exit(worker.pid, :kill)
-              Process.demonitor(ref, [:flush])
-              task = KanbanStore.get_task(worker.task_id)
+            state =
+              dispatcher.running
+              |> Enum.reduce(state, fn {ref, worker}, acc ->
+                Process.exit(worker.pid, :kill)
+                Process.demonitor(ref, [:flush])
+                task = KanbanStore.get_task(worker.task_id)
 
-              if not tracked_run?(task),
-                do: KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
+                if not tracked_run?(task),
+                  do: KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
 
-              update_in(acc.refs, &Map.delete(&1, ref))
-            end)
-            |> update_in([:boards], &Map.delete(&1, board_id))
+                update_in(acc.refs, &Map.delete(&1, ref))
+              end)
+              |> update_in([:boards], &Map.delete(&1, board_id))
 
-          aborts =
-            KanbanStore.list_tasks(board_id, limit: 10_000)
-            |> Enum.filter(&tracked_run?/1)
-            |> Enum.map(fn task ->
-              workflow? = KanbanCodingWorkflow.workflow?(task)
-              phase = get_in(task, [:meta, "codingWorkflow", "phase"])
+            aborts =
+              KanbanStore.list_tasks(board_id, limit: 10_000)
+              |> Enum.filter(&tracked_run?/1)
+              |> Enum.map(fn task ->
+                workflow? = KanbanCodingWorkflow.workflow?(task)
+                phase = get_in(task, [:meta, "codingWorkflow", "phase"])
 
-              result =
-                if workflow? and phase not in ["coding", "review"],
-                  do: :outcome_unknown,
-                  else: request_abort(task, dispatcher.worker_opts)
+                result =
+                  if workflow? and phase not in ["coding", "review"],
+                    do: :outcome_unknown,
+                    else: request_abort(task, dispatcher.worker_opts)
 
-              if workflow? do
-                mark_unknown(task.id, lease_id(task))
-              else
-                if result == :ok,
-                  do: fail_card(task.id, lease_id(task), "cancelled")
-              end
+                if workflow? do
+                  mark_unknown(task.id, lease_id(task))
+                else
+                  if result == :ok,
+                    do: fail_card(task.id, lease_id(task), "cancelled")
+                end
 
-              result = if workflow? and result == :ok, do: :outcome_unknown, else: result
+                result = if workflow? and result == :ok, do: :outcome_unknown, else: result
 
-              %{run_id: task.run_id, result: result}
-            end)
+                %{run_id: task.run_id, result: result}
+              end)
 
-          if Enum.any?(aborts, &(&1.result == :outcome_unknown)),
-            do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
+            if Enum.any?(aborts, &(&1.result == :outcome_unknown)),
+              do: Process.send_after(self(), {:reconcile_stopped, board_id}, 1_000)
 
-          stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
-          {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
-        else
-          {:error, reason} -> {:reply, {:error, reason}, state}
+            stopped = public_dispatcher(%{dispatcher | status: "stopped", running: %{}})
+            {:reply, {:ok, Map.put(stopped, :aborts, aborts)}, state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
         end
     end
   end
@@ -313,19 +315,21 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   defp mark_workflow_cancellations(board_id) do
-    with {:ok, tasks} <- KanbanStore.list_tasks(board_id, limit: 10_000, strict: true) do
-      tasks
-      |> Enum.filter(&(tracked_run?(&1) and KanbanCodingWorkflow.workflow?(&1)))
-      |> Enum.reduce_while(:ok, fn task, :ok ->
-        checkpoint = Map.put(task.meta["codingWorkflow"], "cancelRequested", true)
+    case KanbanStore.list_tasks(board_id, limit: 10_000, strict: true) do
+      {:ok, tasks} ->
+        tasks
+        |> Enum.filter(&(tracked_run?(&1) and KanbanCodingWorkflow.workflow?(&1)))
+        |> Enum.reduce_while(:ok, fn task, :ok ->
+          checkpoint = Map.put(task.meta["codingWorkflow"], "cancelRequested", true)
 
-        case KanbanStore.checkpoint_leased_workflow(task.id, lease_id(task), checkpoint) do
-          {:ok, _} -> {:cont, :ok}
-          {:error, _} -> {:halt, {:error, :cancel_intent_unavailable}}
-        end
-      end)
-    else
-      _ -> {:error, :cancel_intent_unavailable}
+          case KanbanStore.checkpoint_leased_workflow(task.id, lease_id(task), checkpoint) do
+            {:ok, _} -> {:cont, :ok}
+            {:error, _} -> {:halt, {:error, :cancel_intent_unavailable}}
+          end
+        end)
+
+      _ ->
+        {:error, :cancel_intent_unavailable}
     end
   end
 

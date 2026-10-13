@@ -13,8 +13,12 @@ export class AttachmentList {
 		this.#images = images;
 		this.#busy = busy;
 		this.#width = width;
-		if (width < 1 || (images.length === 0 && !busy)) return (this.#rows = []);
+		if (width < 1 || (images.length === 0 && !busy)) {
+			this.#rows = [];
+			return this.#rows;
+		}
 		const rows = images.map((image, index) => {
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Filenames must not inject terminal controls.
 			const name = image.name.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 			const size = Math.max(1, Math.ceil(image.byteLength / 1024));
 			return truncateToWidth(
@@ -32,6 +36,7 @@ export class AttachmentList {
 				"",
 			),
 		);
-		return (this.#rows = rows);
+		this.#rows = rows;
+		return this.#rows;
 	}
 }

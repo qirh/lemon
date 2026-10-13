@@ -30,14 +30,12 @@ import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
-import { editInExternalEditor } from "./external-editor.ts";
-import { newSessionKey } from "./session-key.ts";
 import {
 	ComposerDrafts,
 	type ComposerSubmission,
 	type SubmissionDisposition,
 } from "./composer/drafts.ts";
-import type { ImageContent } from "./protocol/types.ts";
+import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient } from "./protocol/client.ts";
 import { ControlPlaneError } from "./protocol/errors.ts";
@@ -46,8 +44,10 @@ import type {
 	AgentCompletedEvent,
 	AgentEvent,
 	ChatHistoryMessage,
+	ImageContent,
 	QueueMode,
 } from "./protocol/types.ts";
+import { newSessionKey } from "./session-key.ts";
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
@@ -64,17 +64,17 @@ import { TranscriptContainer } from "./ui/components/transcript-container.ts";
 import { ClampedText } from "./ui/components/width-safe.ts";
 import { ApprovalController } from "./ui/controllers/approval-controller.ts";
 import { CommandController, type DeliverOptions } from "./ui/controllers/command-controller.ts";
+import { CommandPalette } from "./ui/controllers/command-palette.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
 import { InputController } from "./ui/controllers/input-controller.ts";
-import { CommandPalette } from "./ui/controllers/command-palette.ts";
-import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
-import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
 import {
 	type ConfirmSpec,
 	SessionController,
 	synthesizeHistory,
 } from "./ui/controllers/session-controller.ts";
+import { TaskTreeController } from "./ui/controllers/task-tree-controller.ts";
+import { ToolInspector } from "./ui/controllers/tool-inspector.ts";
 import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";

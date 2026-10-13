@@ -28,7 +28,9 @@ defmodule CodingAgent.Session.ModelAvailabilityTest do
         Base.url_encode64(
           Jason.encode!(%{
             "https://api.openai.com/auth" => %{"chatgpt_account_id" => "synthetic-native-account"}
-          }), padding: false) <> ".signature"
+          }),
+          padding: false
+        ) <> ".signature"
 
     settings = %SettingsManager{
       providers: %{

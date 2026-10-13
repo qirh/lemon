@@ -161,7 +161,7 @@ export class EventController {
 	/** Mark a run the user aborted: keeps partial text, adds the marker. */
 	markInterrupted(runId: string, session: SessionStore = this.#store.focused): void {
 		const block = session.assistantFor(runId);
-		if (block?.status !== "streaming") return;
+		if (!block || session.activeRunId !== runId || !session.busy) return;
 		const component = session === this.#store.focused ? this.#componentFor(block.id) : undefined;
 		// Only this run's own reveal may be flushed and torn down; another run's
 		// stream keeps revealing.

@@ -42,6 +42,7 @@ afterEach(() => {
 async function boot() {
 	const server = await FakeControlPlane.start();
 	teardown.push(() => server.stop());
+	server.respondWith("chat.history", { messages: [] });
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: RUN,
 		sessionKey: params.sessionKey,

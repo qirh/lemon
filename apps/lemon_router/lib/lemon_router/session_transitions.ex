@@ -36,16 +36,18 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp backlog_within_limits?(state) do
-    with {:ok, totals} <- count_pending(state.queue, {0, 0, 0}) do
-      Enum.reduce_while(state.pending_steers, {:ok, totals}, fn {_run_id, entries},
-                                                                {:ok, totals} ->
-        case count_pending_steers(entries, totals) do
-          {:ok, totals} -> {:cont, {:ok, totals}}
-          :over_limit -> {:halt, :over_limit}
-        end
-      end) != :over_limit
-    else
-      :over_limit -> false
+    case count_pending(state.queue, {0, 0, 0}) do
+      {:ok, totals} ->
+        Enum.reduce_while(state.pending_steers, {:ok, totals}, fn {_run_id, entries},
+                                                                  {:ok, totals} ->
+          case count_pending_steers(entries, totals) do
+            {:ok, totals} -> {:cont, {:ok, totals}}
+            :over_limit -> {:halt, :over_limit}
+          end
+        end) != :over_limit
+
+      :over_limit ->
+        false
     end
   end
 

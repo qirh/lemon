@@ -48,10 +48,9 @@ defmodule CodingAgent.Tools.AstGrepTest do
                    nil -> []
                    executable -> [ast_grep_executable: executable]
                  end)
-  @backend AstGrep.availability(@backend_opts)
 
   describe "real ast-grep CLI" do
-    @describetag skip: match?({:error, _}, @backend)
+    @describetag :ast_grep
 
     setup %{tmp_dir: cwd} do
       if Process.whereis(MutationLock) == nil, do: start_supervised!(MutationLock)

@@ -7,6 +7,7 @@ export const IMAGE_PATH = /\.(?:png|jpe?g|gif|webp)$/i;
 /** Shell-style quoting/escaping only: never execute expansions, globs, or commands. */
 export function parsePastedPaths(text: string): string[] | undefined {
 	const source = text.trim();
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: Reject control bytes while allowing pasted path separators.
 	if (!source || source.length > 64 * 1024 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(source)) {
 		return undefined;
 	}
@@ -74,6 +75,7 @@ export function parsePastedPaths(text: string): string[] | undefined {
 			) {
 				return undefined;
 			}
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Decoded paths must not contain terminal controls.
 			if (/[\r\n\x00-\x1f\x7f]/.test(path)) return undefined;
 			paths.push(path);
 		}

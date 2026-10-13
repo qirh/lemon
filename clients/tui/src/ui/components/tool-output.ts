@@ -127,7 +127,10 @@ export class ToolOutputComponent implements Component {
 }
 
 function safeText(text: string): string {
-	return stripVTControlCharacters(text)
-		.replace(/\r\n/g, "\n")
-		.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+	return (
+		stripVTControlCharacters(text)
+			.replace(/\r\n/g, "\n")
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Tool receipts must not inject terminal controls.
+			.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+	);
 }

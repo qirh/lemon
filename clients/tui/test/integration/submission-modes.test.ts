@@ -38,6 +38,7 @@ interface BootOptions {
 async function boot(options: BootOptions = {}) {
 	const server = await FakeControlPlane.start();
 	teardown.push(() => server.stop());
+	server.respondWith("chat.history", { messages: [] });
 	let runSeq = 0;
 	server.onMethod(
 		"chat.send",
@@ -118,7 +119,7 @@ describe("queue mode", () => {
 		await waitFor(() => sends(server).length === 2, { what: "the queued prompt to be sent" });
 		await waitFor(() => app.store.focused.busy, { what: "the drained prompt to start a run" });
 
-		expect(sends(server)[1]).toEqual({ sessionKey: SESSION, prompt: "second" });
+		expect(sends(server)[1]).toEqual({ cwd: process.cwd(), sessionKey: SESSION, prompt: "second" });
 		// One per completion: "third" waits for the run "second" just started.
 		expect(app.store.queue.items(SESSION).map((item) => item.text)).toEqual(["third"]);
 		expect(app.store.focused.busy).toBe(true);
@@ -171,6 +172,7 @@ describe("steer mode", () => {
 		await app.submit("/steer use the smaller patch");
 
 		expect(sends(server)[1]).toEqual({
+			cwd: process.cwd(),
 			sessionKey: SESSION,
 			prompt: "use the smaller patch",
 			queueMode: "steer",
@@ -185,6 +187,7 @@ describe("steer mode", () => {
 		await app.submit("actually, do it this way");
 
 		expect(sends(server)[1]).toEqual({
+			cwd: process.cwd(),
 			sessionKey: SESSION,
 			prompt: "actually, do it this way",
 			queueMode: "steer",
@@ -202,7 +205,11 @@ describe("steer mode", () => {
 		await app.submit("a new thought");
 
 		// No queueMode at all: the daemon's default is collect, and this is a turn.
-		expect(sends(server)[1]).toEqual({ sessionKey: SESSION, prompt: "a new thought" });
+		expect(sends(server)[1]).toEqual({
+			cwd: process.cwd(),
+			sessionKey: SESSION,
+			prompt: "a new thought",
+		});
 		expect(transcript(app)).toContain("the run finished first");
 	});
 
@@ -211,7 +218,11 @@ describe("steer mode", () => {
 		app.store.setSubmissionMode("steer");
 		await app.submit("first thing I ever say");
 
-		expect(sends(server)[0]).toEqual({ sessionKey: SESSION, prompt: "first thing I ever say" });
+		expect(sends(server)[0]).toEqual({
+			cwd: process.cwd(),
+			sessionKey: SESSION,
+			prompt: "first thing I ever say",
+		});
 		expect(transcript(app)).not.toContain("the run finished first");
 	});
 
@@ -244,6 +255,7 @@ describe("redirect mode", () => {
 		await app.submit("/redirect replace the pending approach");
 
 		expect(sends(server)[1]).toEqual({
+			cwd: process.cwd(),
 			sessionKey: SESSION,
 			prompt: "replace the pending approach",
 			queueMode: "redirect",
@@ -258,11 +270,13 @@ describe("redirect mode", () => {
 		await app.submit("discard pending model output and do this");
 
 		expect(sends(server)[1]).toEqual({
+			cwd: process.cwd(),
 			sessionKey: SESSION,
 			prompt: "discard pending model output and do this",
 			queueMode: "redirect",
 		});
-		expect(app.store.focused.assistantFor("run-1")?.status).toBe("streaming");
+		expect(app.store.focused.assistantFor("run-1")?.status).not.toBe("aborted");
+		expect(app.store.focused.busy).toBe(true);
 	});
 
 	test("a refused redirect leaves the prompt editable in the queue", async () => {
@@ -302,6 +316,7 @@ describe("interrupt mode", () => {
 		await app.submit("stop, do this instead");
 
 		expect(sends(server)[1]).toEqual({
+			cwd: process.cwd(),
 			sessionKey: SESSION,
 			prompt: "stop, do this instead",
 			queueMode: "interrupt",
@@ -334,8 +349,9 @@ describe("interrupt mode", () => {
 		await app.submit("never mind");
 
 		const session = app.store.focused;
-		// Nothing was marked interrupted: the run is still going.
-		expect(session.assistantFor("run-1")?.status).toBe("streaming");
+		// The refusal notice seals the text segment, while the run stays active.
+		expect(session.assistantFor("run-1")?.status).not.toBe("aborted");
+		expect(session.activeRunId).toBe("run-1");
 		expect(session.busy).toBe(true);
 		expect(app.store.queue.items(SESSION).map((item) => item.text)).toEqual(["never mind"]);
 	});
