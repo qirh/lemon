@@ -136,7 +136,8 @@ session key. The two flags are mutually exclusive.
 result document with `ok`, `answer`, `error`, `run_id`, and `session_key`.
 `stream-json` prints newline-delimited JSON: an `init` record, run-scoped
 `event` records containing control-plane event names and payloads, and a final
-`result` record. Startup diagnostics stay on stderr. Runs exit 0 only when the
+`result` record. Stdout and stderr use UTF-8 even under an ASCII shell locale,
+so non-ASCII JSON strings remain valid. Startup diagnostics stay on stderr. Runs exit 0 only when the
 agent reports success; submission, connection, provider, and execution failures
 exit 1. Runs are bounded to ten minutes; timeout cancels the submitted run.
 Protocol keepalive pings keep long-running tools connected without adding records
