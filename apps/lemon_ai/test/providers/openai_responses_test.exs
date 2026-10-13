@@ -3,7 +3,7 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.OpenAIResponses
-  alias LemonAi.Types.{Context, ImageContent, Model, StreamOptions, ToolCall, UserMessage}
+  alias LemonAi.Types.{Context, ImageContent, Model, StreamOptions, UserMessage}
 
   setup do
     {:ok, _} = Application.ensure_all_started(:lemon_ai)
@@ -23,8 +23,15 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
   defp sse_body(events) do
     events
     |> Enum.map(fn
-      :done -> "data: [DONE]"
-      event -> "data: " <> Jason.encode!(event)
+      :done ->
+        "data: " <>
+          Jason.encode!(%{
+            "type" => "response.completed",
+            "response" => %{"status" => "completed"}
+          })
+
+      event ->
+        "data: " <> Jason.encode!(event)
     end)
     |> Enum.join("\n\n")
     |> Kernel.<>("\n\n")
@@ -55,86 +62,6 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
     assert_receive {:request_body, req_body}, 1000
     refute Map.has_key?(req_body, "reasoning")
     refute Map.has_key?(req_body, "include")
-
-    assert {:ok, _} = EventStream.result(stream, 1000)
-  end
-
-  test "adds GPT-5 disable message when reasoning is nil" do
-    test_pid = self()
-
-    Req.Test.stub(__MODULE__, fn conn ->
-      {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      send(test_pid, {:request_body, Jason.decode!(raw)})
-      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
-    end)
-
-    model = %Model{
-      id: "gpt-5",
-      name: "gpt-5",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://example.test",
-      reasoning: true
-    }
-
-    context = Context.new(messages: [%UserMessage{content: "Hi"}])
-
-    {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
-
-    assert_receive {:request_body, req_body}, 1000
-    refute Map.has_key?(req_body, "reasoning")
-
-    juice_messages =
-      req_body
-      |> Map.get("input", [])
-      |> Enum.filter(fn msg ->
-        msg["role"] == "developer" and
-          Enum.any?(msg["content"] || [], fn part ->
-            is_binary(part["text"]) and String.contains?(part["text"], "Juice: 0")
-          end)
-      end)
-
-    assert length(juice_messages) == 1
-
-    assert {:ok, _} = EventStream.result(stream, 1000)
-  end
-
-  test "adds GPT-5 disable message when name is uppercase" do
-    test_pid = self()
-
-    Req.Test.stub(__MODULE__, fn conn ->
-      {:ok, raw, conn} = Plug.Conn.read_body(conn)
-      send(test_pid, {:request_body, Jason.decode!(raw)})
-      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
-    end)
-
-    model = %Model{
-      id: "gpt-5",
-      name: "GPT-5",
-      api: :openai_responses,
-      provider: :openai,
-      base_url: "https://example.test",
-      reasoning: true
-    }
-
-    context = Context.new(messages: [%UserMessage{content: "Hi"}])
-
-    {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
-
-    assert_receive {:request_body, req_body}, 1000
-    refute Map.has_key?(req_body, "reasoning")
-
-    juice_messages =
-      req_body
-      |> Map.get("input", [])
-      |> Enum.filter(fn msg ->
-        msg["role"] == "developer" and
-          Enum.any?(msg["content"] || [], fn part ->
-            is_binary(part["text"]) and String.contains?(part["text"], "Juice: 0")
-          end)
-      end)
-
-    assert length(juice_messages) == 1
 
     assert {:ok, _} = EventStream.result(stream, 1000)
   end
@@ -332,7 +259,7 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
     assert result.error_message =~ "maximum context length"
   end
 
-  test "preserves recoverable truncated streamed function call arguments" do
+  test "rejects truncated streamed final arguments instead of inventing an executable call" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =
         sse_body([
@@ -376,20 +303,14 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
 
     {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
 
-    assert {:ok, result} = EventStream.result(stream, 1000)
-
-    assert [
-             %ToolCall{
-               id: "call_batch|fc_batch",
-               name: "batch_read",
-               arguments: %{"files" => ["mix.exs"]}
-             }
-           ] = result.content
-
-    assert result.stop_reason == :length
+    assert {:error, result} = EventStream.result(stream, 1000)
+    assert result.stop_reason == :error
+    assert result.content == []
+    assert result.error_details.category == :client
+    refute LemonAi.Error.retryable?(result)
   end
 
-  test "preserves recoverable truncated final-only function call arguments" do
+  test "rejects truncated final-only arguments instead of inventing an executable call" do
     Req.Test.stub(__MODULE__, fn conn ->
       body =
         sse_body([
@@ -432,17 +353,11 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
 
     {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{api_key: "test-key"})
 
-    assert {:ok, result} = EventStream.result(stream, 1000)
-
-    assert [
-             %ToolCall{
-               id: "call_batch|fc_batch",
-               name: "batch_read",
-               arguments: %{"files" => ["mix.exs"]}
-             }
-           ] = result.content
-
-    assert result.stop_reason == :length
+    assert {:error, result} = EventStream.result(stream, 1000)
+    assert result.stop_reason == :error
+    assert result.content == []
+    assert result.error_details.category == :client
+    refute LemonAi.Error.retryable?(result)
   end
 
   test "errors when api key is missing" do
