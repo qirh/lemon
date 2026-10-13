@@ -66,7 +66,8 @@ defmodule LemonCore.Config.Modular do
     :secrets,
     :features,
     :memory,
-    :automation
+    :automation,
+    model_roles: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -76,6 +77,7 @@ defmodule LemonCore.Config.Modular do
           logging: Logging.t(),
           tui: TUI.t(),
           providers: Providers.t(),
+          model_roles: %{optional(String.t()) => String.t()},
           secrets: Secrets.t(),
           features: Features.t(),
           memory: Memory.t(),
@@ -107,6 +109,7 @@ defmodule LemonCore.Config.Modular do
     settings = load_merged_settings(project_dir)
     check_deprecated_sections!(settings)
     config = resolve_settings(settings)
+    check_model_roles!(config.model_roles)
 
     # Validate if requested
     if validate? do
@@ -241,6 +244,16 @@ defmodule LemonCore.Config.Modular do
     end
   end
 
+  defp check_model_roles!(roles) do
+    case Validator.validate_model_roles(roles) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        raise ValidationError, message: "Invalid model roles", errors: errors
+    end
+  end
+
   # Normalizes settings and resolves each section into the modular config struct.
   defp resolve_settings(settings) do
     settings = normalize_tools_settings(settings)
@@ -252,6 +265,7 @@ defmodule LemonCore.Config.Modular do
       logging: Logging.resolve(settings),
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings),
+      model_roles: Map.get(settings, "model_roles", %{}),
       secrets: Secrets.resolve(settings),
       features: Features.resolve(settings),
       memory: Memory.resolve(settings),

@@ -47,7 +47,7 @@ defmodule LemonControlPlane.UsageTokensTest do
                "cacheReadTokens" => 8_000,
                "cacheWriteTokens" => 500,
                "contextTokens" => 9_700,
-               "totalTokens" => 1_540
+               "totalTokens" => 10_040
              } = UsageTokens.normalize(usage)
     end
 

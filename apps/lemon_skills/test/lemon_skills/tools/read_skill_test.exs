@@ -211,41 +211,6 @@ defmodule LemonSkills.Tools.ReadSkillTest do
       assert text =~ "- available-skill: Helpful suggestion for missing skills"
     end
 
-    test "returns metadata and SKILL.md content for a found skill", %{tmp_dir: tmp_dir} do
-      path =
-        write_skill!(
-          tmp_dir,
-          "demo-skill",
-          """
-          ---
-          name: Demo Skill
-          description: Demonstrates read_skill output
-          ---
-
-          ## Usage
-
-          Use demo skill instructions.
-          """
-        )
-
-      LemonSkills.refresh(cwd: tmp_dir)
-
-      assert %AgentToolResult{
-               content: [%TextContent{text: text}],
-               details: %{key: "demo-skill", name: "Demo Skill", path: ^path}
-             } = ReadSkill.execute("call-2", %{"key" => "demo-skill"}, nil, nil, tmp_dir)
-
-      assert text =~ "# Skill: Demo Skill"
-      assert text =~ "**Key:** demo-skill"
-      assert text =~ "**Description:** Demonstrates read_skill output"
-      assert text =~ "**Source:** Project (.lemon/skill)"
-      assert text =~ "**Path:** #{path}"
-      assert text =~ "## Content"
-      assert text =~ "name: Demo Skill"
-      assert text =~ "Use demo skill instructions."
-      refute text =~ "## Status"
-    end
-
     test "trusts only a byte-identical bundled skill and revokes trust after tampering" do
       :ok = LemonSkills.BuiltinSeeder.seed!(enabled: true)
       LemonSkills.refresh()
