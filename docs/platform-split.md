@@ -131,7 +131,6 @@ tarballs so this class of break fails CI.
   is kept out of the tarball.
 - **Elixir floor.** The packages declare `~> 1.15`; CI proves 1.19 and runs the
   1.15 leg as advisory.
-
 - **`LemonChannels.Plugin.meta/0`** keeps its flag-map capability vocabulary;
   widening it to typed `Capability.spec()` lists waits for a consumer that needs
   sizes, features or rate limits.
