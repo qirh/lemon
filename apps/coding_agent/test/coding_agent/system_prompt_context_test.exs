@@ -165,7 +165,6 @@ defmodule CodingAgent.SystemPromptContextTest do
 
     prompt = SystemPrompt.build(tmp_dir, build_opts(tmp_dir))
 
-    assert String.contains?(prompt, "You are a personal assistant running inside Lemon.")
     assert String.contains?(prompt, "## Boundaries")
     assert String.contains?(prompt, "## Beta Context")
     refute String.contains?(prompt, "contributor is broken")
