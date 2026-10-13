@@ -402,13 +402,17 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
+    # The chat and topic confirmations are separate outbox delivery lanes, so they may be
+    # sent in either order.
     assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
-    assert_receive {:send_message, ^chat_id, chat_msg, _reply_to_or_opts, _parse_mode}, 400
-    assert chat_msg == "Trigger mode set to mentions for this chat."
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, first_msg, _reply_to_or_opts, _parse_mode}, 400
+    assert_receive {:send_message, ^chat_id, second_msg, _reply_to_or_opts, _parse_mode}, 400
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
-    assert_receive {:send_message, ^chat_id, topic_msg, _reply_to_or_opts, _parse_mode}, 400
-    assert topic_msg == "Trigger mode set to all for this topic."
+    assert Enum.sort([first_msg, second_msg]) == [
+             "Trigger mode set to all for this topic.",
+             "Trigger mode set to mentions for this chat."
+           ]
 
     assert_eventually(fn ->
       TriggerMode.resolve("default", chat_id, topic_id).mode == :all
