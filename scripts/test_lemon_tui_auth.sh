@@ -30,6 +30,17 @@ assert_token_absent() {
   fi
 }
 
+# GNU `stat -f` means --file-system and prints filesystem details before
+# failing, so the BSD form's output must be discarded when it fails.
+file_mode() {
+  local mode
+  if mode="$(stat -f '%Lp' "$1" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  else
+    stat -c '%a' "$1"
+  fi
+}
+
 cat > "$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 if [[ -f "$LEMON_TUI_TEST_HEALTH" ]]; then
@@ -158,7 +169,7 @@ fi
 
 managed_token_file="$HOME/.lemon/run/control-plane-${managed_port}.token"
 managed_token="$(<"$managed_token_file")"
-managed_mode="$(stat -f '%Lp' "$managed_token_file" 2>/dev/null || stat -c '%a' "$managed_token_file")"
+managed_mode="$(file_mode "$managed_token_file")"
 [[ "$managed_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$managed_mode" == "600" ]]
 [[ "$(<"$LEMON_TUI_TEST_SOURCE_RUNTIME_TOKEN")" == "$managed_token" ]]
@@ -273,7 +284,7 @@ fi
 
 package_token_file="$package_home/.lemon/run/control-plane-46666.token"
 package_token="$(<"$package_token_file")"
-package_mode="$(stat -f '%Lp' "$package_token_file" 2>/dev/null || stat -c '%a' "$package_token_file")"
+package_mode="$(file_mode "$package_token_file")"
 [[ "$package_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$package_mode" == "600" ]]
 [[ "$(<"$package_runtime_token")" == "$package_token" ]]
