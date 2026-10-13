@@ -550,6 +550,16 @@ export interface SessionsListResult {
 	[key: string]: unknown;
 }
 
+export interface SessionsForkParams {
+	sessionKey: string;
+	cwd: string;
+}
+
+export interface SessionsForkResult {
+	sessionKey: string;
+	sourceSessionKey: string;
+}
+
 export interface SessionsListParams {
 	limit?: number;
 	offset?: number;

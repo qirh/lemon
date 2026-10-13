@@ -45,6 +45,8 @@ import type {
 	SessionSummary,
 	SessionsDeleteResult,
 	SessionsExportResult,
+	SessionsForkParams,
+	SessionsForkResult,
 	SessionsListParams,
 	SessionsListResult,
 	SessionsMetadataPatchParams,
@@ -70,6 +72,7 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
@@ -220,6 +223,13 @@ export class ControlPlaneMethods {
 
 	sessionsList(params?: SessionsListParams, options?: RequestOptions): Promise<SessionsListResult> {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
+	}
+
+	sessionsFork(params: SessionsForkParams, options?: RequestOptions): Promise<SessionsForkResult> {
+		return this.#call<SessionsForkResult>(METHOD.sessionsFork, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsPreview(

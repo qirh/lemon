@@ -1,3 +1,5 @@
+import { hostname } from "node:os";
+import { pathToFileURL } from "node:url";
 import type { Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import type { ControlPlaneClient } from "../protocol/client.ts";
@@ -13,6 +15,9 @@ export class TerminalIntegration {
 	readonly #disposers: Array<() => void> = [];
 	readonly #runs = new Set<string>();
 	readonly #approvals = new Set<string>();
+	readonly #outcomes = new Map<string, "done" | "error">();
+	readonly #cwd: string;
+	#programStatus = "";
 	#active = false;
 	#title = "";
 	#session = "";
@@ -24,12 +29,16 @@ export class TerminalIntegration {
 		terminal: Terminal,
 		store: AppStore,
 		client: ControlPlaneClient,
+		cwd = process.cwd(),
 		capabilities = detectTerminalCapabilities(),
 	) {
 		this.#terminal = terminal;
 		this.#store = store;
 		this.#client = client;
 		this.capabilities = capabilities;
+		const directory = pathToFileURL(cwd);
+		directory.hostname = hostname();
+		this.#cwd = directory.href;
 		this.#previousHyperlinks = TERMINAL.hyperlinks;
 		if (this.capabilities.enabled) TERMINAL.hyperlinks = this.capabilities.hyperlinks;
 	}
@@ -52,8 +61,13 @@ export class TerminalIntegration {
 				this.update();
 			}),
 			this.#client.events.on("agent", (event) => {
-				if (event.type === "started") this.#runs.add(event.runId);
+				const session = event.sessionKey ?? this.#store.focusedKey;
+				if (event.type === "started") {
+					this.#runs.add(event.runId);
+					this.#outcomes.delete(session);
+				}
 				if (event.type === "completed" && this.#runs.delete(event.runId)) {
+					this.#outcomes.set(session, event.ok === false ? "error" : "done");
 					this.#notify(
 						event.ok === false ? "Turn failed" : "Turn complete",
 						"Return to Lemon to continue",
@@ -72,6 +86,8 @@ export class TerminalIntegration {
 		this.#progress = false;
 		this.#setUserVar("lemon_session", "");
 		this.#setUserVar("lemon_status", "");
+		if (this.capabilities.tern) this.#terminal.write("\x1b]7501;state=clear\x1b\\");
+		this.#programStatus = "";
 		// Clear stale status even on terminals (including Tern) that ignore the
 		// title stack. Supporting terminals then restore the saved parent title.
 		this.#terminal.setTitle("");
@@ -84,7 +100,17 @@ export class TerminalIntegration {
 		if (!this.capabilities.enabled || this.#active) return;
 		this.#active = true;
 		this.#terminal.write("\x1b[22;0t");
+		this.#terminal.write(`\x1b]7;${this.#cwd}\x07`);
 		this.update();
+	}
+
+	/** Reassert status when a terminal reconnects to the existing PTY. */
+	handleInput(data: string): { consume: true } | undefined {
+		if (!this.capabilities.tern || (data !== "\x1b]7501;?\x07" && data !== "\x1b]7501;?\x1b\\"))
+			return;
+		this.#programStatus = "";
+		this.update();
+		return { consume: true };
 	}
 
 	update(): void {
@@ -115,6 +141,21 @@ export class TerminalIntegration {
 			this.#setUserVar("lemon_status", status);
 			this.#status = status;
 		}
+		if (this.capabilities.tern) {
+			const state =
+				status === "approval needed"
+					? "blocked:kind=permission"
+					: status === "working"
+						? "working"
+						: status === "ready"
+							? (this.#outcomes.get(store.focusedKey) ?? "idle")
+							: "idle";
+			const programStatus = `state=${state}:app=lemon`;
+			if (programStatus !== this.#programStatus) {
+				this.#terminal.write(`\x1b]7501;${programStatus}\x1b\\`);
+				this.#programStatus = programStatus;
+			}
+		}
 		const progress = status === "working";
 		if (progress !== this.#progress) {
 			// pi-tui owns the keepalive and clears its timer on stop.
@@ -128,6 +169,7 @@ export class TerminalIntegration {
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#runs.clear();
 		this.#approvals.clear();
+		this.#outcomes.clear();
 		TERMINAL.hyperlinks = this.#previousHyperlinks;
 	}
 
@@ -138,6 +180,8 @@ export class TerminalIntegration {
 
 	#notify(title: string, body: string): void {
 		if (!this.#active) return;
+		// Tern's program-status protocol already owns the inbox and banners.
+		if (this.capabilities.tern) return;
 		if (this.capabilities.notifications === "osc9") {
 			this.#terminal.write(`\x1b]9;Lemon: ${title} — ${body}\x07`);
 		} else if (this.capabilities.notifications === "osc777") {

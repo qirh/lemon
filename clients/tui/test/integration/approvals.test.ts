@@ -12,6 +12,7 @@ import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-approvals";
@@ -224,18 +225,18 @@ describe("approval flow", () => {
 		await waitFor(() => app.approvals.panel.visible === false, { what: "the panel to dismiss" });
 	});
 
-	test("a pending request keeps the transcript's live region open, a resolved one lets it close", async () => {
+	test("a pending request stays mutable until its decision is resolved", async () => {
 		const { app, server, terminal } = await boot();
 		requested(server);
 		await waitForPanel(app);
 
 		app.chatContainer.render(80);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeGreaterThan(0);
+		expect(unfinalizedBlocks(app.chatContainer).length).toBeGreaterThan(0);
 
 		terminal.sendInput("1");
 		await waitFor(() => app.store.pendingApprovals === 0, { what: "the approval to clear" });
 		app.chatContainer.render(80);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 
 	test("resolving something that is already gone says so instead of throwing", async () => {
