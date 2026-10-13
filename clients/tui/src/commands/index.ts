@@ -30,6 +30,7 @@ import {
 	tasksCommand,
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { planCommand } from "./plan.ts";
 import { profileCommand, profilesCommand } from "./profiles.ts";
 import { CommandRegistry } from "./registry.ts";
 import {
@@ -79,6 +80,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		resumeCommand,
 		historyCommand,
 		compressCommand,
+		planCommand,
 		heartbeatCommand,
 		profilesCommand,
 		profileCommand,
