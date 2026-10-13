@@ -132,6 +132,8 @@ Tern reply navigation, native markdown/code blocks, and Carly's agent
 start/ask/wait/transcript operations. A delegated prompt waits until the
 connected composer is ready, submits atomically, and preserves any human draft
 in recall history. Configure Carly's agent command as `lemon tui` for this path.
+The final reply is published before the terminal is marked idle, so Carly's
+`wait` observes the complete answer rather than the last streaming fragment.
 
 Tern's native **Run** button on shell fences in replies executes in the pane's
 working directory and displays the output below the fence; **Stop** interrupts
@@ -144,7 +146,7 @@ inline-code file references such as `src/app.ts:42`, and file tool-card titles
 are clickable through OSC 8. File targets are absolute `file://` URLs with an
 optional `#L42` fragment; spaces and special characters are URL-encoded.
 
-The title shows the focused session key and current status. `lemon_session`
+The title shows the focused session name (or key) and current status. `lemon_session`
 and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
 terminal client intentionally does **not** claim `tern_acp_session`, which is
 reserved for native ACP chats. Tern receives OSC 7501 program status:
@@ -221,6 +223,8 @@ is never queued while offline.
 Inside Tern, the child opens in a right-hand split beside the originating pane,
 using the same Lemon source entry point or compiled binary, working directory,
 and control plane. Outside Tern, the current client switches to the child.
+An explicit launch key (including a fork) restores its saved conversation,
+active run, model, and pending approvals before Carly can send the next prompt.
 The operator credential travels through a private one-shot handoff (mode-0700
 directory, mode-0600 file), consumed and removed before connecting and installed
 in the child's environment; it is never placed in command arguments.
@@ -305,7 +309,7 @@ All three pi packages are pinned to 18.10.3. The product frame provider owns the
 row renderer's main/dock split and semantic retirement; Tern's native backend
 uses `describeSurface()` and the same component tree. Native descriptions must
 retain stable node references while unchanged. Chat roles `omp.user`,
-`omp.assistant` and surface `omp.session` are the shared Tern/Carly vocabulary,
+`omp.assistant`, composer `omp.editor`, and surface `omp.session` are the shared Tern/Carly vocabulary,
 not an assertion that the client is omp. Never emit `omp_session_file` or
 `omp_restore`: Lemon sessions are daemon-owned, not omp JSONL files.
 

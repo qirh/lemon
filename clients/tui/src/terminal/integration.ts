@@ -17,6 +17,8 @@ export class TerminalIntegration {
 	readonly #approvals = new Set<string>();
 	readonly #outcomes = new Map<string, "done" | "error">();
 	readonly #cwd: string;
+	readonly #beforeStatusChange: (() => void) | undefined;
+	#updateQueued = false;
 	#programStatus = "";
 	#active = false;
 	#title = "";
@@ -31,11 +33,13 @@ export class TerminalIntegration {
 		client: ControlPlaneClient,
 		cwd = process.cwd(),
 		capabilities = detectTerminalCapabilities(),
+		beforeStatusChange?: () => void,
 	) {
 		this.#terminal = terminal;
 		this.#store = store;
 		this.#client = client;
 		this.capabilities = capabilities;
+		this.#beforeStatusChange = beforeStatusChange;
 		const directory = pathToFileURL(cwd);
 		directory.hostname = hostname();
 		this.#cwd = directory.href;
@@ -114,6 +118,21 @@ export class TerminalIntegration {
 	}
 
 	update(): void {
+		if (!this.#beforeStatusChange) {
+			this.#updateNow();
+			return;
+		}
+		if (!this.#active || this.#updateQueued) return;
+		this.#updateQueued = true;
+		// Store events may fire midway through finalizing a message. Wait until
+		// its component has been sealed, then publish that frame before "idle".
+		queueMicrotask(() => {
+			this.#updateQueued = false;
+			this.#updateNow();
+		});
+	}
+
+	#updateNow(): void {
 		if (!this.#active) return;
 		const store = this.#store;
 		for (const session of store.sessions.values()) {
@@ -127,8 +146,10 @@ export class TerminalIntegration {
 					: store.busySessions() > 0
 						? "working"
 						: "ready";
+		if (status !== this.#status) this.#beforeStatusChange?.();
 		const session = oscText(store.focusedKey);
-		const title = `Lemon · ${session} · ${status}`;
+		const name = oscText(store.focused.title ?? store.focusedKey);
+		const title = `Lemon · ${name} · ${status}`;
 		if (title !== this.#title) {
 			this.#terminal.setTitle(title);
 			this.#title = title;
