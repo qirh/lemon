@@ -37,6 +37,10 @@ defmodule LemonGateway.Application do
         gateway_config: LemonGateway.Config
       )
 
+      # Gateway owns the progress-message index; the store does not know it
+      # exists, so ask it to mirror the table into its read cache.
+      LemonCore.Store.register_cached_table(LemonGateway.ProgressStore.table())
+
       # See https://hexdocs.pm/elixir/Supervisor.html
       # for other strategies and supported options
       opts = [strategy: :one_for_one, name: LemonGateway.Supervisor]

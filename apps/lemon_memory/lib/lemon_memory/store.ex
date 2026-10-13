@@ -600,6 +600,13 @@ defmodule LemonMemory.Store do
   end
 
   @doc """
+  The SQLite file the default store opens from application config
+  (`config :lemon_memory, LemonMemory.Store, path: ...`), without starting it.
+  """
+  @spec database_path() :: Path.t()
+  def database_path, do: resolve_path(Application.get_env(:lemon_memory, __MODULE__, []))
+
+  @doc """
   Full-text search over `prompt_summary` and `answer_summary`.
 
   Any query term may match (see `LemonMemory.Query`); results are ordered by

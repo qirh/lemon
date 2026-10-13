@@ -12,7 +12,7 @@ defmodule LemonCore.StoreCacheCoherenceTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.{ChatStateStore, ProgressStore, Store}
+  alias LemonCore.{ChatStateStore, Store}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
 
@@ -65,13 +65,18 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       assert ReadCache.get(store, :chat, scope) == nil
     end
 
-    test "a progress mapping is not readable after the backend refuses it", %{store: store} do
-      scope = {:coherence, :progress}
+    test "a registered cached table is not readable after the backend refuses it" do
+      store = unique(:coherence_registered)
+      # Registered before boot, the way an owning app registers its hot index.
+      :ok = Store.register_cached_table(store, :hot_index)
+      on_exit(fn -> Store.unregister_cached_table(store, :hot_index) end)
+      start_store(store, backend: RefusingBackend)
 
-      assert {:error, :backend_refused} = ProgressStore.put(store, scope, 42, "run_ghost")
+      assert ReadCache.cached?(store, :hot_index)
+      assert {:error, :backend_refused} = Store.put(store, :hot_index, {:scope, 42}, "run_ghost")
 
-      assert ProgressStore.get_run(store, scope, 42) == nil
-      assert ReadCache.get(store, :progress, {scope, 42}) == nil
+      assert Store.get(store, :hot_index, {:scope, 42}) == nil
+      assert ReadCache.get(store, :hot_index, {:scope, 42}) == nil
     end
 
     test "a generic put into a mirrored table is not readable after refusal" do

@@ -30,14 +30,13 @@ defmodule LemonGateway.Run do
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
   alias LemonCore.{
-    ProgressStore,
     RunPhase,
     RunPhaseGraph,
     RunStore
   }
 
   alias LemonCore.Events
-  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor}
+  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor, ProgressStore}
   alias LemonCore.ResumeToken
 
   @engine_provenance "lemon"

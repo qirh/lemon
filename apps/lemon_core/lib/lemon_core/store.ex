@@ -33,8 +33,9 @@ defmodule LemonCore.Store do
 
   This module is a storage primitive and deliberately knows nothing about chat
   state, policies, memory, chat platforms, or any other domain; typed owners
-  such as `LemonCore.ChatStateStore`, `LemonCore.PolicyStore`, and
-  `LemonCore.ProgressStore` sit on the generic table API. Collaborators attach
+  such as `LemonCore.ChatStateStore` and `LemonCore.PolicyStore` sit on the
+  generic table API, as do owners in other apps (gateway's progress index,
+  channels' Telegram indices). Collaborators attach
   to it instead:
 
     * `:finalize_run_hooks` / `register_finalize_run_hook/2` — notified when a
@@ -92,7 +93,7 @@ defmodule LemonCore.Store do
   # Generic tables mirrored into the read cache by default. Instances override
   # with `:cached_tables`; collaborators add their own with
   # `register_cached_table/2`.
-  @default_cached_tables [:sessions_index, :chat, :progress]
+  @default_cached_tables [:sessions_index, :chat]
   # How many recently indexed run ids each session index entry remembers so a
   # retried finalization does not count its run twice. Bounded on purpose: the
   # entry is copied on every cached read and rewritten on every finalization.

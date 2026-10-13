@@ -50,7 +50,11 @@ apps; optional consumers register at runtime. See [README](README.md),
 - Domain stores are ordinary modules over the generic Store table API. Shared
   callers use their owner wrapper, not ad-hoc table access or domain methods on
   `LemonCore.Store`. Agent workspace stores belong in `lemon_agent`; channel
-  indices belong in `lemon_channels`.
+  indices belong in `lemon_channels`; the progress-message index belongs in
+  `lemon_gateway`. Owners register hot tables with `register_cached_table/2`.
+  A store stays in core only while a consumer outside its target app needs it
+  (see platform-split "Known gaps"); doctor checks for other apps' domains
+  live in those apps and register through `:doctor_checks`.
 - Operator session list/search/stats/export/prune uses `SessionLifecycle`.
   Reads are bounded/redacted; stats preserve exact totals with capped dimensions.
   Delete requires exact-key confirmation and verified completion; prune requires

@@ -73,6 +73,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - TUI cancellation keeps its interrupted marker when a notice has already
   sealed the current text segment.
 
+- `lemon doctor`'s `skills.directory` check inspects the global skills
+  directory Lemon actually installs into (`~/.lemon/agent/skill`, or
+  `LEMON_AGENT_DIR`), not the unused `~/.lemon/skills`. The check now lives in
+  `lemon_skills` and the memory check in `lemon_memory`; both register with the
+  doctor through `config :lemon_core, :doctor_checks`.
+
 - Accepted runs always receive durable, ordered terminal receipts across
   admission, queue retirement, cancellation and crash recovery; cancelling
   drains in-flight events so tool output and partial prose persist with honest

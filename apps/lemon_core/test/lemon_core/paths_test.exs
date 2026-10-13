@@ -161,14 +161,5 @@ defmodule LemonCore.PathsTest do
       assert LemonCore.Config.global_path() == LemonCore.Config.Modular.global_path()
       assert LemonCore.Config.global_path() =~ ".myapp/lemon.toml"
     end
-
-    test "the doctor's skills check follows the state directory" do
-      put_paths(home_state_dir: "/tmp/lemon-paths-test-skills")
-
-      [check] = LemonCore.Doctor.Checks.Skills.run()
-
-      assert check.message =~ "/tmp/lemon-paths-test-skills/skills" or
-               check.remediation =~ "/tmp/lemon-paths-test-skills/skills"
-    end
   end
 end

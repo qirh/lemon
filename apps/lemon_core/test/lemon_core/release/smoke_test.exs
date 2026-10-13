@@ -18,7 +18,7 @@ defmodule LemonCore.Release.SmokeTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime, Skills}
+  alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime}
   alias LemonCore.Doctor.{Check, Report}
   alias LemonCore.Runtime.{Env, Health, Profile}
 
@@ -77,11 +77,7 @@ defmodule LemonCore.Release.SmokeTest do
     end
 
     test "doctor report aggregation works end-to-end" do
-      all_checks =
-        Config.run() ++
-          Runtime.run() ++
-          NodeTools.run() ++
-          Skills.run()
+      all_checks = Config.run() ++ Runtime.run() ++ NodeTools.run()
 
       report = Report.from_checks(all_checks)
       assert is_boolean(Report.ok?(report))

@@ -193,6 +193,7 @@ with `retry_safe: false` and never submit another run.
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: native execution lifecycle, bus events, steer/cancel |
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
 | `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, waiter timeouts, owner-death release, and over-age live-owner observation |
+| `LemonGateway.ProgressStore` | `progress_store.ex` | Progress/status message → run id index in the `:progress` store table (registered for the store read cache at boot); backs cancel-by-message |
 
 `EngineLock` never transfers an exclusive lock because of age alone. Explicit
 release and confirmed owner-process death are the ownership-transfer paths; a
