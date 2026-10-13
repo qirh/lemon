@@ -105,6 +105,32 @@ defmodule LemonControlPlane.HTTP.Router do
     end)
   end
 
+  get "/acp/ws" do
+    local? =
+      conn.remote_ip in [{127, 0, 0, 1}, {0, 0, 0, 0, 0, 0, 0, 1}] and
+        Application.get_env(
+          :lemon_control_plane,
+          :allow_unauthenticated_loopback_operator,
+          false
+        ) == true
+
+    params = %{"role" => "operator", "auth" => %{"token" => bearer_token(conn)}}
+
+    case LemonControlPlane.Auth.Authorize.from_params(params, local?: local?) do
+      {:ok, %{role: :operator, scopes: scopes}} ->
+        if Enum.all?([:read, :write, :approvals], &(&1 in scopes)) do
+          conn
+          |> WebSockAdapter.upgrade(LemonControlPlane.ACP.Connection, [], timeout: :infinity)
+          |> halt()
+        else
+          json(conn, 403, %{"error" => "ACP requires operator read, write and approval scopes"})
+        end
+
+      _ ->
+        json(conn, 401, %{"error" => "Operator authentication is required"})
+    end
+  end
+
   get "/ws" do
     conn
     |> WebSockAdapter.upgrade(

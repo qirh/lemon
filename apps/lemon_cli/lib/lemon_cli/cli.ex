@@ -76,7 +76,10 @@ defmodule LemonCli.CLI do
   @spec main([String.t()]) :: no_return()
   def main(argv) do
     exit_code =
-      LemonCli.Onboarding.LogSilencer.with_quiet_logs("--json" in argv, fn -> run(argv) end)
+      LemonCli.Onboarding.LogSilencer.with_quiet_logs(
+        "--json" in argv or List.first(argv) == "acp",
+        fn -> run(argv) end
+      )
 
     System.halt(exit_code)
   end
@@ -169,6 +172,8 @@ defmodule LemonCli.CLI do
 
   defp run_command(%{name: name}, args), do: run_command(name, args)
 
+  defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
+  defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
   defp run_command("setup", args), do: run_setup(args)
   defp run_command("model", args), do: run_model(args)
   defp run_command("gateway", args), do: run_gateway(args)

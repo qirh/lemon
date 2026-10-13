@@ -47,6 +47,7 @@ export default {
           { text: "Browser interface", link: "/user-guide/web" },
           { text: "Agent profiles", link: "/user-guide/profiles" },
           { text: "CLI & sessions", link: "/user-guide/cli" },
+          { text: "Lemon in Tern", link: "/user-guide/tern" },
           { text: "Reminders & heartbeats", link: "/user-guide/reminders-and-heartbeats" },
           { text: "Learn from sources", link: "/user-guide/learn-from-sources" },
           { text: "Backup and Restore", link: "/user-guide/backups" },
