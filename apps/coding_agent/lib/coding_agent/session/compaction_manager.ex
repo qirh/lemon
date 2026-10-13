@@ -322,6 +322,7 @@ defmodule CodingAgent.Session.CompactionManager do
            }}
 
         broadcast_event_fn.(state, compaction_event)
+        _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
 
         {:ok, %{state | session_manager: session_manager}}
 

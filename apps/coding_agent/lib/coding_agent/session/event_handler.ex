@@ -111,6 +111,7 @@ defmodule CodingAgent.Session.EventHandler do
     Extensions.execute_hooks(state.hooks, :on_agent_end, [messages])
     maybe_record_missed_skills(state, messages)
     maybe_record_missed_learning(state, messages)
+    _ = CodingAgent.Session.ProjectMemory.after_turn(state, messages)
 
     # Complete all event streams with the final event
     callbacks.complete_event_streams.(state, {:agent_end, messages})

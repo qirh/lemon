@@ -245,12 +245,14 @@ defmodule LemonEvals.Evals.AgentLoop do
           search_fn = fn query, opts ->
             Agent.update(search_calls, &[{query, opts} | &1])
 
-            [eval_memory_doc("prior-release-handoff", Keyword.fetch!(opts, :scope_key))]
+            [eval_memory_doc("prior-release-handoff", project_dir, home_dir)]
           end
 
           recall_tool =
             Recall.tool(project_dir,
               workspace_dir: home_dir,
+              agent_id: "eval",
+              session_scope: :main,
               search_fn: search_fn
             )
 
