@@ -6,6 +6,41 @@ defmodule CodingAgent.Tools.MutationCorrectnessTest do
 
   @moduletag :tmp_dir
 
+  test "edit returns an ordered diff with contiguous context", %{tmp_dir: cwd} do
+    File.write!(Path.join(cwd, "ordered.txt"), "alpha\nold value\nomega\n")
+
+    assert %AgentToolResult{trust: :untrusted, details: %{diff: diff}} =
+             edit(cwd, "ordered.txt", "old value", "new value")
+
+    assert diff == " 1\talpha\n-2\told value\n+2\tnew value\n 3\tomega\n 4\t"
+  end
+
+  test "unprefixed Add File content cannot silently create an empty file", %{tmp_dir: cwd} do
+    patch = "*** Begin Patch\n*** Add File: invalid.txt\nunprefixed content\n*** End Patch"
+    assert {:error, _} = Patch.execute("add", %{"patch_text" => patch}, nil, nil, cwd, [])
+    refute File.exists?(Path.join(cwd, "invalid.txt"))
+  end
+
+  test "patch supplies complete bounded per-file snapshots including deletion", %{tmp_dir: cwd} do
+    path = Path.join(cwd, "snapshot.txt")
+    File.write!(path, "old\n")
+    patch = "*** Begin Patch\n*** Update File: snapshot.txt\n@@\n-old\n+new\n*** End Patch"
+    result = Patch.execute("patch", %{"patch_text" => patch}, nil, nil, cwd, [])
+    assert [%{path: ^path, oldText: "old\n", newText: "new\n"}] = result.details.perFileResults
+
+    result =
+      Patch.execute(
+        "delete",
+        %{"patch_text" => "*** Begin Patch\n*** Delete File: snapshot.txt\n*** End Patch"},
+        nil,
+        nil,
+        cwd,
+        []
+      )
+
+    assert [%{path: ^path, oldText: "new\n", newText: nil}] = result.details.perFileResults
+  end
+
   test "exact overlapping edit locations are ambiguous", %{tmp_dir: cwd} do
     path = Path.join(cwd, "overlap.txt")
     File.write!(path, "aaa")

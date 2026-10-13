@@ -117,7 +117,7 @@ defmodule CodingAgent.Tools.Edit do
 
       case result do
         {:error, :aborted} -> {:error, "Operation aborted"}
-        other -> other
+        other -> LemonAgent.Security.ToolResultTrust.untrusted(other, :local_file)
       end
     end
   end
