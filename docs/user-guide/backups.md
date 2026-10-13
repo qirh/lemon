@@ -43,6 +43,11 @@ secrets master key, and execution-node credential files. It cannot export
 platform keychain contents. Backed-up bytes are opaque: neither human nor JSON
 CLI output contains file contents or secret values.
 
+After `lemon secrets rotate-key`, the encrypted secrets in earlier backups are
+still encrypted under the previous master key, which rotation replaces. Keep
+that key (an `--include-credentials` backup taken before rotating holds a
+file-backed key) if you may restore those backups.
+
 `lemon backup contract --json` returns the policy as machine-readable metadata.
 There are no TOML settings for backups; the command's explicit flags and paths
 are the safety boundary.

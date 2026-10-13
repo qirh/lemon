@@ -103,9 +103,6 @@ tarballs so this class of break fails CI.
 - **Gateway reaches into automation.** `LemonGateway.Tools.Cron` resolves
   `LemonAutomation.CronManager` at runtime; it is a reference-only exception in
   the architecture policy.
-- **Secrets key rotation** is not implemented: there is no re-encryption path, so
-  replacing the master key means re-entering secrets. See the "Key rotation"
-  section of the `LemonCore.Secrets` moduledoc.
 - **`LemonChannels.Plugin.meta/0`** keeps its flag-map capability vocabulary;
   widening it to typed `Capability.spec()` lists waits for a consumer that needs
   sizes, features or rate limits.

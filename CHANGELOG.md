@@ -57,6 +57,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   build identity in `--version` and doctor, image input on
   `chat.send`/`profile.chat`, and an opt-in 12-task live coding benchmark
   (`mix lemon.eval.coding`) with omp comparison and token profiling.
+- **Secrets master-key rotation.** `lemon secrets rotate-key` previews how
+  many stored secrets will be re-encrypted and prints a confirmation token;
+  `--confirm <token>` generates a new master key, re-encrypts every secret, and
+  replaces the key in the Keychain entry or key file. It refuses stale tokens,
+  changes nothing if any secret does not decrypt, never touches external
+  sources or environment fallback, refuses while a runtime is running, and
+  keeps every secret readable if interrupted at any step.
 
 ### Fixed
 

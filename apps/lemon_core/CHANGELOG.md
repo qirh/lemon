@@ -58,6 +58,15 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Secrets.KeyRotation` rotates the secrets master key: `preview/1`
+  checks that every stored secret decrypts with the current key and returns a
+  confirmation token bound to the key and the exact record set; `rotate/2`
+  re-encrypts every secret under a generated key and writes it to the provider
+  that supplied the current one. It fails closed on any undecryptable record,
+  leaves external sources and environment fallback alone, and stages ciphertext
+  so every secret stays readable by whichever key loads next if it is
+  interrupted (`Secrets.get/2` reads the staged copy). New task:
+  `mix lemon.secrets.rotate_key [--confirm TOKEN]`.
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
   exposes the check used by router startup; optional callbacks remain optional,
@@ -105,6 +114,14 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.Secrets.KeyProvider.File` replaces the key file through a synced,
+  `0600` temporary file and an atomic rename, so an interrupted write never
+  leaves a truncated key.
+- **Breaking for custom key providers:** `use LemonCore.Secrets.KeyProvider` no
+  longer defines a default `put/2` returning `{:error, :unavailable}`; read-only
+  providers simply omit it, and `KeyProvider.supports_put?/1` now reports real
+  writability. Secret reads update usage metadata with compare-and-swap, so a
+  read never overwrites a concurrent write.
 - `LemonCore.RouterBridge.configure/1` validates the router and run
   orchestrator against explicit behaviours before registration. Command
   functions return `:ok` only for an exact `:ok` callback result. A malformed
@@ -242,8 +259,3 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   - `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN` and `XMTP_WALLET_KEY` left
     `HermeticEnv`'s built-in scrub list for the `:test_credential_env_vars`
     registration described above.
-
-### Known gaps
-
-- Secrets key rotation and re-encryption are not implemented; the gap is
-  documented in `LemonCore.Secrets`'s moduledoc.

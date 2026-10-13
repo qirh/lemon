@@ -26,8 +26,10 @@ apps; optional consumers register at runtime. See [README](README.md),
 ## Secrets and redaction
 
 - Secrets use AES-256-GCM with per-secret salt/HKDF. Master keys are base64
-  32-byte values; raw strings need explicit legacy opt-in. Key rotation is not
-  implemented: do not advertise it as an operator action.
+  32-byte values; raw strings need explicit legacy opt-in. Master-key rotation
+  goes through `Secrets.KeyRotation` only: preview token bound to the exact
+  record set, fail closed on any undecryptable record, and records stay
+  readable by the next-loaded key at every step (staged ciphertext fallback).
 - Master-key lookup is Keychain, env, then private key file. On non-Keychain
   hosts, the launcher normalizes env from canonical `~/.lemon/secrets_master_key`.
   Preserve 0600 permissions. See [resolution contract](../../docs/security/secrets-and-keychain.md).

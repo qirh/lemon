@@ -8,12 +8,16 @@ defmodule LemonCore.Secrets.KeyProvider.File do
 
   This is the provisioning target on platforms without a system keychain: the
   key file is created with `0600` permissions inside a `0700` directory, and the
-  mode is applied before any key material is written.
+  mode is applied before any key material is written. Every write goes to a
+  private temporary file in the same directory that is synced and then renamed
+  over the key file, so a crash leaves either the old key or the new one —
+  never a truncated file.
 
   A key file that is *already* readable beyond its owner — provisioned by hand,
   or restored from a backup that lost its mode — is warned about once per path
   and then used. Refusing it would lock you out of your own secrets over
-  something `chmod 600` fixes, and `put/2` will not overwrite an existing key.
+  something `chmod 600` fixes, and `put/2` will not overwrite an existing key
+  unless passed `force: true` (`mix lemon.secrets.init --force`, key rotation).
   Pass `check_permissions: false` to silence the check.
   """
 
@@ -89,20 +93,38 @@ defmodule LemonCore.Secrets.KeyProvider.File do
     end
   end
 
-  # Create-then-restrict-then-fill: `File.write/2` alone would put key material
-  # on disk at whatever the umask allows and only narrow it afterwards, leaving
-  # a window where the key is world-readable.
+  # Create-then-restrict-then-fill, then rename: `File.write/2` alone would put
+  # key material on disk at whatever the umask allows, and rewriting the key
+  # file in place would leave a truncated key if interrupted. The temporary
+  # file is exclusive, `0600` before it holds key material, and synced before
+  # the rename makes it the key.
   defp write(path, value) do
     dir = Path.dirname(path)
+    suffix = "#{System.pid()}.#{System.unique_integer([:positive])}"
+    temporary = Path.join(dir, ".#{Path.basename(path)}.#{suffix}")
 
     with :ok <- Elixir.File.mkdir_p(dir),
          _ <- Elixir.File.chmod(dir, @dir_mode),
-         :ok <- Elixir.File.touch(path),
-         :ok <- Elixir.File.chmod(path, @file_mode),
-         :ok <- Elixir.File.write(path, String.trim(value) <> "\n") do
+         :ok <- write_private(temporary, String.trim(value) <> "\n"),
+         :ok <- Elixir.File.rename(temporary, path) do
       :ok
     else
-      {:error, reason} -> {:error, {:key_file_write_failed, reason}}
+      {:error, reason} ->
+        _ = Elixir.File.rm(temporary)
+        {:error, {:key_file_write_failed, reason}}
+    end
+  end
+
+  defp write_private(path, contents) do
+    with {:ok, device} <- :file.open(path, [:write, :exclusive, :binary, :raw]) do
+      result =
+        with :ok <- Elixir.File.chmod(path, @file_mode),
+             :ok <- :file.write(device, contents) do
+          :file.sync(device)
+        end
+
+      :ok = :file.close(device)
+      result
     end
   end
 
