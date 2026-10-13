@@ -342,6 +342,8 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS async-task store with direct reads and serialized event, suppression, and monotonic lifecycle writes |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
+The `task` and `agent` schemas keep model-facing guidance compact to reduce repeated prompt overhead. Parameter types, enums, required fields, and persona discovery remain in the tool definitions; this section provides the full delegation workflow reference.
+
 The task tool runs model work in native in-process `CodingAgent.Session`s; swarm coordinators schedule those sessions without an extra model call.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
 When a native task omits `model`, it uses its named persona's `model` or model `role` default, then the configured `task` model role when present, otherwise the live parent session model at execution time. Explicit task `model` always wins. Telegram/session-scoped model overrides therefore still apply to children without a separate task/persona model selection.

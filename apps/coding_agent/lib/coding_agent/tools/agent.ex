@@ -45,89 +45,83 @@ defmodule CodingAgent.Tools.Agent do
           "action" => %{
             "type" => "string",
             "enum" => @valid_actions,
-            "description" => "Action to perform: run (default), poll, or join"
+            "description" => "Default: run"
           },
           "agent_id" => agent_id_property,
           "prompt" => %{
             "type" => "string",
-            "description" => "Prompt to send to the delegated agent"
+            "description" => "Delegated assignment"
           },
           "role" => role_property,
           "description" => %{
             "type" => "string",
-            "description" => "Optional short description for tracking"
+            "description" => "Short tracking label"
           },
           "async" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), run in background and return task_id immediately. ALWAYS use async=true unless you absolutely must wait for the result before continuing."
+            "description" => "Default/recommended true: return receipt immediately; false waits"
           },
           "auto_followup" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), forward delegated completion back into this session"
+            "description" => "Default true: forward completion into this session"
           },
           "continue_session" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), reuse a deterministic delegated session for continuity"
+            "description" => "Default true: reuse the deterministic delegated session"
           },
           "session_key" => %{
             "type" => "string",
-            "description" =>
-              "Optional explicit delegated session key (must be a valid Lemon session key)"
+            "description" => "Explicit delegated session key; must be valid"
           },
           "queue_mode" => %{
             "type" => "string",
             "enum" => @valid_queue_modes,
-            "description" => "Queue mode for delegated run (default: collect)"
+            "description" => "Submission queue; default collect"
           },
           "followup_queue_mode" => %{
             "type" => "string",
             "enum" => @valid_queue_modes,
-            "description" =>
-              "Optional queue mode for delegated completion followup (default: app config, fallback: followup)"
+            "description" => "Completion queue; default configured mode or followup"
           },
           "model" => %{
             "type" => "string",
-            "description" => "Optional model override for delegated run"
+            "description" => "Model override"
           },
           "tool_policy" => %{
             "type" => "object",
-            "description" => "Optional delegated tool policy override map"
+            "description" => "Delegated tool policy"
           },
           "cwd" => %{
             "type" => "string",
             "description" =>
-              "Optional delegated working directory. Local runs default to the current cwd; named-node runs default to the destination cwd."
+              "Working directory; defaults to current cwd locally, destination cwd remotely"
           },
           "node" => %{
             "type" => "string",
             "description" =>
-              "Optional execution node name. Omit or use local for this node; named nodes use their own credentials and default cwd unless cwd is explicit."
+              "Execution node; omit or local for this node. Remote nodes use destination credentials"
           },
           "meta" => %{
             "type" => "object",
-            "description" => "Optional metadata map merged into delegated request"
+            "description" => "Delegated request metadata"
           },
           "timeout_ms" => %{
             "type" => "integer",
-            "description" =>
-              "Timeout for synchronous waiting (action=run and async=false, default: 120000)"
+            "description" => "Synchronous wait timeout; default 120000"
           },
           "task_id" => %{
             "type" => "string",
-            "description" => "Task id to poll (action=poll) or join (single id shortcut)"
+            "description" => "Poll target or single join target"
           },
           "task_ids" => %{
             "type" => "array",
             "items" => %{"type" => "string"},
-            "description" => "Task ids to join (action=join)"
+            "description" => "Join targets"
           },
           "mode" => %{
             "type" => "string",
             "enum" => ["wait_all", "wait_any"],
-            "description" => "Join mode for action=join (default: wait_all)"
+            "description" => "Join mode; default wait_all"
           }
         },
         "required" => []
@@ -1574,34 +1568,11 @@ defmodule CodingAgent.Tools.Agent do
 
   defp build_description do
     """
-    Delegate work to another Lemon agent profile via the router/orchestrator.
-
-    **When to use `agent` vs `task`:**
-    - `agent`: Route work through Lemon's run pipeline using agent profiles, queue modes, and delegated session continuity.
-    - `task`: Run a native focused subtask directly from the current coding session.
-
-    **Default behavior (recommended):** async=true means the delegated run executes in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
-
-    **Agent selection:**
-    - Default: use the same agent_id as the current session (matches your profile/capabilities)
-    - Specialized tasks: choose a different agent if the work requires different tools/privileges
-    - Review/oracle patterns: delegate to a specific agent for independent verification
-
-    **Usage patterns:**
-    - Fire-and-forget: async=true, auto_followup=true (you'll get notified when done)
-    - Check later: async=true, then poll with action=poll and task_id
-    - Wait on many tasks: action=join with task_ids (mode=wait_all or wait_any)
-    - Wait for result: async=false (blocks until completion - use sparingly for simple/quick tasks only)
-
-    **Key parameters:**
-    - action: run (default), poll, or join
-    - role: optional subagent prompt preset applied to the delegated prompt
-    - async: true (default) = non-blocking, false = blocking/wait
-    - auto_followup: true (default) = completion forwards back to this session
-    - queue_mode: delegated run submission mode (default: collect)
-    - followup_queue_mode: delegated completion delivery mode (default: app config, fallback: followup)
-    - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
-    - node: optional named execution node (omitted or "local" runs locally)
+    Delegate via Lemon's router for agent-profile/node workflows and session continuity.
+    Use task for native coding subagents. Prefer async=true: receipts are not answers;
+    join task_ids for required same-turn results. auto_followup delivers later.
+    Delegated sessions preserve continuity by default. Named execution nodes use their
+    own credentials and working directory; cwd overrides the latter explicitly.
     """
     |> String.trim()
   end
@@ -1611,19 +1582,13 @@ defmodule CodingAgent.Tools.Agent do
 
     base = %{
       "type" => "string",
-      "description" =>
-        "Target agent id for action=run. DEFAULT: use the same agent_id as this session (inherits your profile, tools, and capabilities)."
+      "description" => "Target agent profile; normally the current agent_id"
     }
 
     if ids == [] do
       base
     else
-      base
-      |> Map.put("enum", ids)
-      |> Map.put(
-        "description",
-        "Target agent id for action=run. Available: #{Enum.join(ids, ", ")}"
-      )
+      Map.put(base, "enum", ids)
     end
   end
 
@@ -1632,8 +1597,7 @@ defmodule CodingAgent.Tools.Agent do
 
     base = %{
       "type" => "string",
-      "description" =>
-        "Optional role prompt preset (from Subagents) to prepend to the delegated prompt."
+      "description" => "Optional discovered persona preset"
     }
 
     if ids == [] do

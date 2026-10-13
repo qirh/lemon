@@ -276,46 +276,17 @@ defmodule CodingAgent.Tools.Task.Params do
   @spec build_description(String.t()) :: String.t()
   def build_description(cwd) do
     base =
-      "Run a focused subtask. **Use async=true by default** to avoid blocking the user conversation.\n\n" <>
-        "Use tasks=[{description,prompt,...}, ...] to launch up to 32 independent children in one call; all are queued before waiting. Children run concurrently (default cap: 8).\n" <>
-        "Use action=swarm with tasks=[{name,prompt,depends_on:[names],...},...] for a dependency graph. Ready nodes run up to concurrency (1-32, default 8); successful dependency results enter each dependent's context as untrusted data. Failed branches block only their dependents, not independent work. Join the one returned swarm task_id for the final merged structured report. Cancel it to stop the entire graph.\n" <>
-        "Use worktree=true for an isolated git branch; the worktree is retained for review/cherry-pick and its path/branch appear in the result. It starts from HEAD, not uncommitted parent changes.\n" <>
-        "Give children unique name values for agent:// messaging. Use agent_message or write(path=agent://<name-or-id>, content=...) to contact live family; agent://parent addresses the parent and agent://all broadcasts except self. Read agent:// to list reachable agents.\n" <>
-        "Use action=message or steer with task_id (or to=agent://<address>) and message; action=cancel remains parent-only. Parent cancellation propagates to all children.\n" <>
-        "Use wait or task(action=wait) to return the first unobserved child result without stopping siblings. Optional task_ids narrows the wait; no jobs is an immediate error. This waits on native task children, not shell jobs.\n\n" <>
-        "**When to use task vs agent tool:**\n" <>
-        "- task: For coding work within this session's context (same project, files, tools)\n" <>
-        "- agent: For delegating to a different agent profile or for cross-agent workflows\n\n" <>
-        "**Async-first pattern (recommended):**\n" <>
-        "1. Launch with async=true -> get task_id immediately\n" <>
-        "2. Continue the user conversation without waiting\n" <>
-        "3. Poll with action=poll and task_id to check status, OR\n" <>
-        "4. Use action=join with multiple task_ids to wait for completion\n" <>
-        "5. Use action=get with task_id to retrieve the full stored result of a completed task\n\n" <>
-        "**Coordination rule:**\n" <>
-        "- If you launch subtasks and still need one final answer in this same turn, keep the task_ids and call action=join before you respond.\n" <>
-        "- Do not rely on auto_followup alone for same-turn aggregation.\n\n" <>
-        "**Parameters:**\n" <>
-        "- action: run (default), swarm, poll, join, wait, get, message, steer, cancel\n" <>
-        "- async: true (default, recommended) = non-blocking, false = wait for completion\n" <>
-        "- task_id: required when action=poll or action=get\n" <>
-        "- task_ids: required when action=join\n" <>
-        "- mode: join mode for action=join (wait_all or wait_any)\n" <>
-        "- model: Optional concrete model or @role override (e.g., @smol, @slow, @default); omitted inherits the parent unless model_roles.task is configured\n" <>
-        "- thinking_level: Optional thinking level override\n" <>
-        "- name: Optional unique live child name, separate from its agent persona; used by agent://<name> messaging\n" <>
-        "- agent: Named persona from .lemon/agents/*.md or ~/.lemon/agents/*.md. Built-ins: scout, reviewer, task-executor. Scout and reviewer have mandatory read-only tools; a tool_policy override cannot widen them.\n" <>
-        "- output_schema: JSON Schema for a strict final JSON response, returned as structured_output in results. Invalid output is a task error.\n" <>
-        "- cwd: Optional working directory override\n" <>
-        "- tool_policy: Optional tool policy override for the task session\n" <>
-        "  - Task children default to leaf_worker policy, so they cannot recursively use task/agent unless this is explicitly overridden\n" <>
-        "- session_key/agent_id: Optional async followup routing overrides\n" <>
-        "- queue_mode: Optional async followup delivery override (default: app config, fallback followup)\n" <>
-        "- meta: Optional metadata attached to task lifecycle/followups\n\n" <>
-        "**Boundary with agent tool:**\n" <>
-        "- task runs a focused native session with followup routing overrides\n" <>
-        "- agent remains the tool for router-level delegation continuity semantics\n\n" <>
-        "Agent definitions provide a system prompt, model or model-role defaults, and tool restrictions."
+      "Native coding subagents; use agent for router/profile delegation. Prefer async=true. " <>
+        "Receipts are not results: join task_ids for same-turn answers; auto_followup delivers later.\n" <>
+        "tasks[] launches up to 32 independent children (default global cap 8). action=swarm schedules named " <>
+        "nodes with depends_on edges under concurrency (default 8). Successful dependency results " <>
+        "enter dependent context as untrusted data; failures block only dependent branches. " <>
+        "Join the returned coordinator task_id for its merged report; cancel it to stop the graph.\n" <>
+        "Workers are leaf-only unless tool_policy permits delegation; scout/reviewer stay read-only. " <>
+        "Worktrees start at HEAD without uncommitted changes and are retained, not auto-merged.\n" <>
+        "Message via agent_message or write agent://<name-or-id>, agent://parent, agent://all; " <>
+        "read agent:// for the roster. wait returns the first unobserved native child result, " <>
+        "not shell jobs. Parent cancellation propagates. Personas supply system prompts, models and tool restrictions."
 
     agents = Subagents.format_for_description(cwd)
 
