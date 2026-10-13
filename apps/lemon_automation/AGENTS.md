@@ -34,6 +34,10 @@ stores, not a second agent engine. See [README](README.md) and
 - Scheduled retry lineage/due time survives restart. Deterministic root/attempt
   IDs and atomic claims prevent duplicate retries. Manual/wake runs are
   single-shot by default; disabled jobs can run manually but cannot be woken.
+- The `cron` agent tool lives here (`LemonAutomation.Tools.Cron`) and is
+  contributed through `LemonAgent.ToolRegistry` in `Application.start/2`; the
+  gateway and coding agent must not name it. Keep its name, schema, result shape
+  and unavailable-scheduler error stable.
 - Abort by cron run ID persists terminal state and ignores late completions.
 - `CronDelivery` handles explicit none/target, originating channel and owner
   fallback; notifications use a stable per-run idempotency key.

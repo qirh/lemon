@@ -342,15 +342,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp extra_tools(%ExecutionRequest{} = request, opts) do
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
 
-    cron_tool =
-      LemonGateway.Tools.Cron.tool(
-        cwd,
-        session_key: request.session_key,
-        agent_id: request_agent_id(request)
-      )
-
     sms_tools = [
-      cron_tool,
       LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
       LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: request.session_key),
       LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: request.session_key),

@@ -28,7 +28,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_platform_test,
       :lemon_skills
     ],
-    lemon_automation: [:lemon_agent, :lemon_core, :lemon_router, :lemon_skills],
+    lemon_automation: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
     lemon_control_plane: [
       :lemon_ai,
@@ -93,15 +93,14 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_web: [:lemon_agent, :lemon_automation, :lemon_core, :lemon_memory, :lemon_router]
   }
 
-  # Gateway tools still use LemonAi content structs and probe the optional
-  # LemonAutomation cron runtime without making either app a direct dependency.
-  # Keeping these exceptions separate prevents them from silently authorizing a
-  # future mix.exs edge.
+  # Gateway tools still use LemonAi content structs without making it a direct
+  # dependency. Keeping these exceptions separate prevents them from silently
+  # authorizing a future mix.exs edge.
   @reference_only_namespace_exceptions %{
     # The shared CLI registry invokes these bundled runtime command handlers
     # dynamically; setup must not start channel services through a Mix edge.
     lemon_cli: [:lemon_channels, :lemon_media],
-    lemon_gateway: [:lemon_ai, :lemon_automation]
+    lemon_gateway: [:lemon_ai]
   }
 
   @target_allowed_direct_deps @current_allowed_direct_deps

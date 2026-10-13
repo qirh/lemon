@@ -269,7 +269,6 @@ in-process subagents.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Tools.Cron` | `tools/cron.ex` | Manage cron jobs and active cron runs via `LemonAutomation.CronManager`; add/update accept `deliverTo` (`"none"`, `"telegram:<chat>[:<topic>]"`, `"discord:<channel>[:<thread>]"`, `"auto"`), `once` (one-shot), and `timezone: "local"`. Non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
 | `LemonGateway.Tools.SmsGetInboxNumber` | `tools/sms_get_inbox_number.ex` | Get the Twilio inbox phone number |
 | `LemonGateway.Tools.SmsWaitForCode` | `tools/sms_wait_for_code.ex` | Block until a matching SMS verification code arrives |
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |
