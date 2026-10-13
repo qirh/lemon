@@ -58,11 +58,11 @@ defmodule LemonCore.Dedupe.EtsTest do
 
       # ETS reports these flags according to the VM (e.g. write_concurrency is
       # not reported on a single-scheduler VM), so compare against a table
-      # created with the options requested explicitly.
+      # created with the options requested explicitly. The test process owns
+      # the reference table, so it disappears with the test; on_exit runs in
+      # another process and must not touch it.
       reference =
         :ets.new(:dedupe_concurrency_reference, read_concurrency: true, write_concurrency: true)
-
-      on_exit(fn -> if :ets.info(reference) != :undefined, do: :ets.delete(reference) end)
 
       assert info[:read_concurrency] == :ets.info(reference, :read_concurrency)
       assert info[:write_concurrency] == :ets.info(reference, :write_concurrency)
