@@ -125,7 +125,8 @@ mix lemon.memory erase --scope <session|agent|workspace> --key <value>
 | Scope | Database location |
 |---|---|
 | Default local provider | `~/.lemon/store/memory.sqlite3` |
-| Custom store path | `<LEMON_STORE_PATH>/memory.sqlite3` |
+| Custom store directory | `<LEMON_STORE_PATH>/memory.sqlite3` |
+| Explicit primary SQLite file | `memory.sqlite3` beside the file named by `LEMON_STORE_PATH` |
 
 ### Privacy and secrets
 
