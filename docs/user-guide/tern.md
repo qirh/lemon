@@ -25,16 +25,18 @@ Open a **new Tern shell** and type:
 lemon
 ```
 
-Tern wraps the registered command with `tern acp --typed=lemon`, starts
-`lemon acp`, and shows native chat. To bypass shell wrapping or open an ACP chat
-from an existing shell:
+Lemon's launcher recognizes the Tern pane and opens its registered id with
+`tern acp lemon`, which starts `lemon acp` and shows native chat. Installed
+`lemon` must be on PATH; in a source checkout type `./bin/lemon`. To open a chat
+explicitly from an existing shell:
 
 ```bash
 tern acp lemon
 ```
 
-`command lemon` bypasses Tern's wrapper and opens Lemon's own terminal interface.
-Do not use `lemon acp` inside an already wrapped `lemon` command. Native omp's
+Use `lemon tui` to open Lemon's own terminal interface instead. Tern 0.7.2's
+`--typed` wrapping recognizes its built-ins, not custom agent ids; Lemon's
+launcher bridges that gap without a shell alias or plugin. Native omp's
 usual Tern integration uses its terminal surface protocol; custom ACP agents do
 not need to impersonate omp to receive native ACP chat rendering.
 
