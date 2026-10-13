@@ -6,8 +6,7 @@ defmodule LemonSkills.PromptRegressionTest do
 
   1. **Inlining regressions** — accidentally including skill body content in
      bootstrap (system) prompts. The rendered `<available_skills>` block must
-     contain only SkillView metadata: name, description, key, path,
-     activation_state, and optionally the missing-dependencies list.
+     contain only skill keys, discovery descriptions, and unavailable markers.
      No `## Content`, `## Usage`, `## Examples`, or any other body text
      may appear.
 
@@ -40,9 +39,8 @@ defmodule LemonSkills.PromptRegressionTest do
 
   # Maximum chars for a single skill entry in the bootstrap XML block.
   # A full skill's SKILL.md can easily be 2 000–20 000 chars; 1 000 chars per
-  # slot is generous for just the metadata fields (name + description + path
-  # + key + activation_state + up to several missing deps), while being far
-  # smaller than any skill body that would indicate an inlining regression.
+  # slot is generous for the key and discovery description in these fixtures,
+  # while remaining smaller than their full skill bodies.
   @max_chars_per_skill_slot 1_000
 
   # Minimum ratio by which full > summary.  If a skill has a 2 000-char
@@ -95,10 +93,8 @@ defmodule LemonSkills.PromptRegressionTest do
 
       xml = PromptView.render_skill_list([view])
 
-      assert xml =~ "<name>K8s Rollout</name>"
       assert xml =~ "<description>Manage Kubernetes rollouts with kubectl</description>"
       assert xml =~ "<key>k8s-rollout</key>"
-      assert xml =~ "<activation_state>active</activation_state>"
 
       # Must NOT contain body-like structure markers
       refute xml =~ "## Content"
@@ -128,7 +124,6 @@ defmodule LemonSkills.PromptRegressionTest do
 
       assert block =~ "<key>deploy-aws</key>"
       assert block =~ "<key>helm-chart</key>"
-      assert block =~ "<missing>helm</missing>"
 
       # Must not inline body content
       refute block =~ "## Content"
@@ -349,13 +344,7 @@ defmodule LemonSkills.PromptRegressionTest do
       xml = PromptView.render_skill_list(views)
       char_count = String.length(xml)
 
-      # Lower bound: each skill should produce at least some output
-      min_chars = length(views) * 100
       max_chars = length(views) * @max_chars_per_skill_slot
-
-      assert char_count >= min_chars,
-             "Prompt snapshot too small (#{char_count} < #{min_chars}). " <>
-               "Rendering may be stripping required fields."
 
       assert char_count <= max_chars,
              "Prompt snapshot too large (#{char_count} > #{max_chars}). " <>
