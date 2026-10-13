@@ -65,8 +65,10 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
       refute second =~ "one"
       assert second =~ "Status: completed (exit code 0)"
 
-      assert %AgentToolResult{content: [%TextContent{text: third}], details: details} =
+      assert %AgentToolResult{content: third_content, details: details} =
                BashOutput.execute("c3", %{"process_id" => process_id}, nil, nil, tmp_dir, opts)
+
+      third = Enum.map_join(third_content, "\n", fn %TextContent{text: text} -> text end)
 
       assert third =~ "(no new output)"
       assert details.status == :completed
@@ -171,8 +173,10 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
     do: flunk("background output never matched; got: #{inspect(acc)}")
 
   defp await_output(process_id, opts, done?, acc, attempts) do
-    %AgentToolResult{content: [%TextContent{text: text}]} =
+    %AgentToolResult{content: content} =
       BashOutput.execute("poll", %{"process_id" => process_id}, nil, nil, ".", opts)
+
+    text = Enum.map_join(content, "\n", fn %TextContent{text: text} -> text end)
 
     combined = acc <> text
 

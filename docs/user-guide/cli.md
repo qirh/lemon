@@ -143,6 +143,28 @@ Protocol keepalive pings keep long-running tools connected without adding record
 to stdout. A lost connection produces a failed result, not a successful fallback
 or an automatic re-submission of the prompt.
 
+### Token and estimated-spend stops
+
+The canonical [`[budgets]` configuration](../config.md#cumulative-usage-budgets)
+applies to print runs too. `--continue` and `--session` retain cumulative session
+spend; each prompt starts a fresh run counter. Clear, rewind, compaction and fork
+do not erase prior session spend.
+
+A budget stop exits 1 with a readable `error`. Both `--output json` and the final
+`stream-json` result include a `budget` object with `reason: "budget_exceeded"`,
+`scope` (`"run"` or `"session"`), `metric` (`"tokens"` or `"cost_usd"`), `limit`,
+`used`, `run_usage`, and `session_usage`. The accompanying `usage` includes actual
+reported `total_tokens` and estimated `cost.total` for this run, including known
+interrupted/retried usage rather than the configured allowance. Zero-cap stops
+report zero run usage without calling the provider.
+
+Costs are catalog estimates, not invoices. Final-only provider accounting means
+an in-flight response can exceed a positive cap before Lemon stops; unreported
+usage cannot be reconstructed. This is not a hard billing cap.
+Counters cover the prompt agent loop and its reported retries. Compaction and
+project-memory maintenance model calls are not counted; subagent sessions have
+their own counters rather than spending the parent's allowance.
+
 Non-interactive mode never waits for a human approval. `--approval-policy deny`
 (default) denies requested approvals; `allow` approves each request once.
 Existing tool policy still applies. Use `--allowed-tools read,grep,find` and/or

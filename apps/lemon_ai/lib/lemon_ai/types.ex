@@ -319,7 +319,16 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule StreamOptions do
-    @moduledoc "Options for streaming requests"
+    @moduledoc """
+    Options for streaming requests.
+
+    `on_payload` is an opt-in Codex request observer, called with the finalized
+    JSON-safe body and provider/model/session metadata before HTTP submission.
+    `on_usage` observes terminal Codex usage before normalization. Both callbacks
+    run in the provider worker; their return values are ignored and observer
+    errors fail the stream. Bodies can contain private conversation content;
+    observers must keep them in memory and persist only safe measurements.
+    """
     @type thinking_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
             temperature: float() | nil,
@@ -336,7 +345,9 @@ defmodule LemonAi.Types do
             location: String.t() | nil,
             access_token: String.t() | nil,
             service_account_json: String.t() | nil,
-            provider_options: map()
+            provider_options: map(),
+            on_payload: (map(), map() -> term()) | nil,
+            on_usage: (map(), map() -> term()) | nil
           }
     defstruct temperature: nil,
               max_tokens: nil,
@@ -352,6 +363,8 @@ defmodule LemonAi.Types do
               location: nil,
               access_token: nil,
               service_account_json: nil,
-              provider_options: %{}
+              provider_options: %{},
+              on_payload: nil,
+              on_usage: nil
   end
 end

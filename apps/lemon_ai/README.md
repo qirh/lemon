@@ -193,6 +193,17 @@ persisted session ID automatically. Provider cache hits appear in `usage.cache_r
 hits depend on the provider's prefix length, retention and routing, not merely on
 sending a key. Sampling temperature and output-token caps are deliberately omitted
 because the Codex endpoint rejects them.
+Codex sends the same pinned `version: 0.153.0` used for live model discovery;
+caller headers cannot accidentally override that capability version. Function
+tools explicitly use `strict: false` so optional parameters remain optional rather
+than being auto-filled by the endpoint.
+
+For deliberate local diagnostics, `StreamOptions.on_payload` observes the final
+request body and `on_usage` observes raw terminal usage, including vendor
+`attribution.request_fields`. Both receive only provider/model/session metadata,
+have ignored return values, and propagate callback failures as stream errors.
+Bodies can contain private content: retain only counts/hashes, never raw payloads
+or authentication data. These hooks are disabled by default.
 
 Lemon onboarding can explicitly import an existing Codex CLI ChatGPT login with
 `lemon setup --provider openai-codex --auth codex-cli --non-interactive`.
@@ -362,6 +373,27 @@ protocols are not advertised through the text coding APIs.
 Existing integration exclusions remain in effect even when the reference catalog
 still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-preview`
 and `gemini-3.1-pro-preview` are not advertised by Lemon.
+
+Lemon's runtime model picker uses account-scoped Codex discovery, not every
+bundled Codex SKU. The ChatGPT `/codex/models?client_version=0.153.0` result is
+cached for five minutes by account and endpoint; tokens, account identifiers and
+login files are not stored in that cache. Refreshing the picker may explicitly
+bypass the cache (`models.list` with `forceRefresh: true`). A discovery failure
+does not advertise unverified Codex models. Known hidden models remain usable
+when the account advertises support; `visibility` is not an authorization flag.
+
+```elixir
+LemonAi.Models.list_models(
+  discover_codex: true,
+  codex_access_token: concrete_chatgpt_token
+)
+```
+
+Runtime role selectors (`@smol`, `@slow`, custom roles) are checked against the
+same account cache once a concrete ChatGPT credential is available. Unsupported
+roles fail before submitting a model request and identify the role, rejected
+model and supported alternatives; change `[model_roles]` or choose a model from
+the picker. Static registry lookups remain network-free for metadata and tests.
 
 
 You can also skip the registry entirely and hand-build a `%LemonAi.Types.Model{}` — the
