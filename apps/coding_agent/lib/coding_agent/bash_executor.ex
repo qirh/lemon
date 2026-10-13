@@ -20,7 +20,9 @@ defmodule CodingAgent.BashExecutor do
       :cancelled,
       :truncated,
       :full_output_path,
-      timed_out: false
+      timed_out: false,
+      terminal_id: nil,
+      client_output_truncated: false
     ]
 
     @type t :: %__MODULE__{
@@ -29,7 +31,9 @@ defmodule CodingAgent.BashExecutor do
             cancelled: boolean(),
             truncated: boolean(),
             full_output_path: String.t() | nil,
-            timed_out: boolean()
+            timed_out: boolean(),
+            terminal_id: String.t() | nil,
+            client_output_truncated: boolean()
           }
   end
 
