@@ -164,7 +164,9 @@ export class ToolShelfComponent implements Component {
 	seal(): void {
 		if (this.#sealed) return;
 		this.#sealed = true;
-		for (const card of this.#entries) card.dispose();
+		for (const card of this.#entries) {
+			if (card.view.kind !== "subagent" || card.isTranscriptBlockFinalized()) card.dispose();
+		}
 		this.#version++;
 	}
 
@@ -175,8 +177,14 @@ export class ToolShelfComponent implements Component {
 	// -- FinalizableBlock ----------------------------------------------------
 
 	isTranscriptBlockFinalized(): boolean {
-		return this.#sealed;
+		return (
+			this.#sealed &&
+			!this.#entries.some(
+				(card) => card.view.kind === "subagent" && !card.isTranscriptBlockFinalized(),
+			)
+		);
 	}
+
 
 	getTranscriptBlockVersion(): number {
 		return this.#version + this.#entryVersions();

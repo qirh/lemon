@@ -190,6 +190,19 @@ describe("Ctrl+C", () => {
 		h.editor.handleInput(CTRL_C);
 		expect(h.quits).toEqual([]);
 	});
+
+	test("discarded paste stays recoverable after another submission clears paste storage", () => {
+		const h = makeEditor();
+		const paste = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n");
+		h.editor.handleInput(`\x1b[200~${paste}\x1b[201~`);
+		h.editor.handleInput(CTRL_C);
+		h.editor.handleInput("another prompt");
+		h.editor.handleInput(ENTER);
+		h.editor.handleInput(UP);
+		h.editor.handleInput(UP);
+		h.editor.handleInput(ENTER);
+		expect(h.submitted[1]).toBe(paste);
+	});
 });
 
 describe("Ctrl+D and Ctrl+G", () => {
@@ -234,6 +247,16 @@ describe("Esc Esc", () => {
 		h.setNow(1_000_000 + ESC_DISCARD_MS + 1);
 		h.editor.handleInput(ESC);
 		expect(h.editor.getText()).toBe("draft text");
+	});
+
+	test("Escape interrupts without discarding a multiline correction", () => {
+		const h = makeEditor();
+		h.setRunning(true);
+		h.editor.setText("keep this\ncorrection");
+		h.editor.handleInput(ESC);
+		expect(h.aborts).toBe(1);
+		expect(h.editor.getExpandedText()).toBe("keep this\ncorrection");
+		expect(h.quits).toEqual([]);
 	});
 });
 

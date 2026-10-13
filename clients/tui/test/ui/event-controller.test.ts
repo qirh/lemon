@@ -197,3 +197,40 @@ describe("out-of-order run frames", () => {
 		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 });
+
+test("tool boundaries seal each assistant segment before later text reaches the transcript", async () => {
+	const { app, server } = await boot();
+	server.pushEvent("agent", { type: "started", runId: "run-order", sessionKey: SESSION });
+	delta(server, "run-order", 1, "BEFORE_TOOL");
+	server.pushEvent("agent", {
+		type: "tool_use",
+		runId: "run-order",
+		sessionKey: SESSION,
+		phase: "completed",
+		ok: true,
+		action: {
+			id: "read-order",
+			kind: "tool",
+			title: "READ_MARKER",
+			detail: { name: "read", result: "contents" },
+		},
+	});
+	delta(server, "run-order", 2, "AFTER_TOOL");
+	server.pushEvent("agent", {
+		type: "completed",
+		runId: "run-order",
+		sessionKey: SESSION,
+		ok: true,
+		answer: "BEFORE_TOOLAFTER_TOOL",
+	});
+	await waitFor(() => app.store.focused.assistantFor("run-order")?.status === "done", {
+		what: "ordered completion",
+	});
+	const text = transcript(app);
+	expect(text.indexOf("BEFORE_TOOL")).toBeLessThan(text.indexOf("READ_MARKER"));
+	expect(text.indexOf("READ_MARKER")).toBeLessThan(text.indexOf("AFTER_TOOL"));
+	expect(text.match(/BEFORE_TOOL/g)).toHaveLength(1);
+	expect(text.match(/AFTER_TOOL/g)).toHaveLength(1);
+	expect(assistantBlocks(app).filter((block) => block.runId === "run-order")).toHaveLength(2);
+	expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+});

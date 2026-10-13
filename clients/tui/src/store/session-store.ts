@@ -108,6 +108,9 @@ export class SessionStore {
 	readonly #deltaSeqs = new Map<string, number>();
 	/** runId -> the assistant block that run streams into. */
 	readonly #assistantByRun = new Map<string, AssistantBlock>();
+	/** A tool/thinking/user boundary sealed the current contiguous text segment. */
+	readonly #assistantNeedsSegment = new Set<string>();
+	readonly #finishedRuns = new Map<string, AssistantBlock["status"]>();
 	/** Runs whose buffer holds the server's truncated answer, not streamed text. */
 	readonly #answerOnly = new Set<string>();
 
@@ -230,19 +233,19 @@ export class SessionStore {
 	}
 
 	/**
-	 * The assistant block a run streams into, created on first sight. `agent
-	 * started` and the first `chat delta` race in practice, so both call this.
+	 * The current contiguous assistant segment. A new segment starts after a
+	 * tool/thinking boundary, never above already-rendered tool history.
 	 */
 	ensureAssistant(runId: string, at = Date.now()): AssistantBlock {
 		const existing = this.#assistantByRun.get(runId);
-		if (existing) return existing;
+		if (existing && !this.#assistantNeedsSegment.delete(runId)) return existing;
 		const block: AssistantBlock = {
 			id: nextBlockId("assistant"),
 			kind: "assistant",
 			at,
 			runId,
 			text: "",
-			status: "streaming",
+			status: this.#finishedRuns.get(runId) ?? "streaming",
 		};
 		this.#assistantByRun.set(runId, block);
 		this.#push(block);
@@ -262,14 +265,18 @@ export class SessionStore {
 	 * a reveal on a block that is already history.
 	 */
 	appendDelta(runId: string, seq: number, text: string): DeltaResult {
-		const block = this.ensureAssistant(runId);
 		if (Number.isFinite(seq)) {
 			const previous = this.#deltaSeqs.get(runId);
 			if (previous !== undefined && seq <= previous) {
-				return { accepted: false, amended: false, block };
+				return {
+					accepted: false,
+					amended: false,
+					block: this.#assistantByRun.get(runId)!,
+				};
 			}
 			this.#deltaSeqs.set(runId, seq);
 		}
+		const block = this.ensureAssistant(runId);
 		const amended = block.status !== "streaming";
 		// A finalized block whose text came from the truncated `answer` fallback
 		// has no real stream behind it; the first genuine delta supersedes that
@@ -277,10 +284,11 @@ export class SessionStore {
 		if (amended && this.#answerOnly.has(runId)) {
 			this.#answerOnly.delete(runId);
 			this.#buffers.set(runId, "");
+			block.text = "";
 		}
 		const buffer = (this.#buffers.get(runId) ?? "") + (text ?? "");
 		this.#buffers.set(runId, buffer);
-		block.text = buffer;
+		block.text += text ?? "";
 		return { accepted: true, amended, block };
 	}
 
@@ -381,8 +389,15 @@ export class SessionStore {
 	 */
 	finalizeRun(runId: string, options: FinalizeOptions = {}): AssistantBlock | undefined {
 		const answer = options.answer ?? "";
+		const alreadyFinished = this.#finishedRuns.has(runId);
 		const block =
 			this.#assistantByRun.get(runId) ?? (answer ? this.ensureAssistant(runId) : undefined);
+		if (!alreadyFinished) {
+			this.#finishedRuns.set(
+				runId,
+				options.interrupted ? "aborted" : options.ok === false ? "error" : "done",
+			);
+		}
 		if (this.activeRunId === runId) {
 			this.activeRunId = undefined;
 			this.busy = false;
@@ -394,13 +409,13 @@ export class SessionStore {
 			if (reasoning.runId === runId) reasoning.phase = "completed";
 		}
 		if (!block) return undefined;
-		if (block.status !== "streaming") return block;
+		if (block.status !== "streaming" && alreadyFinished) return block;
 
 		const buffered = this.bufferFor(runId);
 		// The buffer wins: `answer` is truncated to 500 bytes server-side.
-		const text = buffered.length > 0 ? buffered : answer;
+		const text = buffered.length > 0 ? block.text : answer;
 		block.text = text;
-		this.#buffers.set(runId, text);
+		if (buffered.length === 0) this.#buffers.set(runId, text);
 		// Remember that this run's text is the server's summary rather than a
 		// stream, so a late delta replaces it instead of appending to it.
 		if (buffered.length === 0 && answer) this.#answerOnly.add(runId);
@@ -428,6 +443,15 @@ export class SessionStore {
 	// -- internals -----------------------------------------------------------
 
 	#push<T extends Block>(block: T): T {
+		const previous = this.lastBlock;
+		if (
+			block.kind !== "assistant" &&
+			previous?.kind === "assistant" &&
+			previous.status === "streaming"
+		) {
+			previous.status = "done";
+			this.#assistantNeedsSegment.add(previous.runId);
+		}
 		this.blocks.push(block);
 		// The user's own message is never "unread" — they just typed it.
 		if (!this.focused && block.kind !== "user") this.unread += 1;

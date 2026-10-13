@@ -34,6 +34,11 @@ export interface StatusBarData {
 	 * tokens for the whole day and is therefore not a context measurement at all.
 	 */
 	contextSource?: ContextSource;
+	/** Last completed run, not the conversation's context size. */
+	runTokens?: number;
+	runCostUsd?: number;
+	/** Client-side follow-ups for the focused session. */
+	pendingPrompts?: number;
 	branch?: string | null;
 	sessionCount: number;
 	busy: boolean;
@@ -167,6 +172,9 @@ function cacheKey(data: StatusBarData): string {
 		data.contextTokens,
 		data.contextWindow,
 		data.contextSource,
+		data.runTokens,
+		data.runCostUsd,
+		data.pendingPrompts,
 		data.branch,
 		data.sessionCount,
 		data.busy,
@@ -239,6 +247,16 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	if (data.thinking && data.thinking !== "off") {
 		segments.push({ text: data.thinking, slot: "muted", priority: 40 });
 	}
+	const usage: string[] = [];
+	if (data.runTokens !== undefined && Number.isFinite(data.runTokens) && data.runTokens >= 0) {
+		usage.push(`${compact(data.runTokens)} tok`);
+	}
+	if (data.runCostUsd !== undefined && Number.isFinite(data.runCostUsd) && data.runCostUsd >= 0) {
+		usage.push(`$${data.runCostUsd.toFixed(data.runCostUsd < 0.01 ? 4 : 2)}`);
+	}
+	if (usage.length > 0) {
+		segments.push({ text: `last ${usage.join(" ")}`, slot: "muted", priority: 55 });
+	}
 	if (data.branch) {
 		segments.push({
 			text: data.branch,
@@ -260,10 +278,21 @@ export function buildSegments(data: StatusBarData): Segment[] {
 		segments.push({
 			text: `${data.sessionCount} sessions${marker}`,
 			slot: marker ? "toolRunning" : "muted",
-			priority: 30,
+			priority: busyCount > 0 ? 65 : 30,
 		});
 	}
-	segments.push({ text: data.mode, slot: "dim", priority: 20 });
+	segments.push({
+		text: data.busy ? `enter:${data.mode} · esc:stop` : data.mode,
+		slot: data.busy ? "info" : "dim",
+		priority: data.busy ? 82 : 20,
+	});
+	if ((data.pendingPrompts ?? 0) > 0) {
+		segments.push({
+			text: `${data.pendingPrompts} queued`,
+			slot: "info",
+			priority: 83,
+		});
+	}
 	segments.push({ text: data.sessionKey, slot: "muted", priority: 10 });
 
 	return segments;

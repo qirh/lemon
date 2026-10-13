@@ -302,7 +302,10 @@ export class ControlPlaneMethods {
 		params: { sessionKey: string },
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, options);
+		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, {
+			...options,
+			timeoutMs: options?.timeoutMs ?? 360_000,
+		});
 	}
 
 	sessionDetail(

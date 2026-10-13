@@ -39,6 +39,10 @@ remains a legacy client-side alias; it does not configure the daemon.
 
 - Streaming markdown using pi-tui's native Tern surface or bounded terminal
   frame provider with semantic scrollback retirement and grapheme-safe reveal.
+  Separate chronological text segments around thinking and tools keep later
+  answers from repainting above already-committed tool history.
+  Ordinary chats run in the directory where the TUI was launched; canonical
+  profile chats retain their daemon-owned workspace.
 - Tool cards with per-tool formatters for Lemon's native tools (read, write,
   edit, patch, bash incl. background runs / `bash_output` / `kill_process`,
   grep, find, ls, todo, task/agent, `browser_*`, webfetch/websearch; anything
@@ -47,6 +51,9 @@ remains a legacy client-side alias; it does not configure the daemon.
   full result (~32 KB) and structured details, so edits render the tool's own
   diff with real file line numbers. Against an older daemon that only sends
   500-char previews, cards fall back to the preview and to unnumbered diffs.
+  Native patch receipts use their actual changed-file list (including Lemon's
+  `*** Update File` format). Child task progress has one independently updated
+  card per task, separate from the completed parent launch receipt.
 - The model's thinking is its own dimmed transcript block, collapsed to its
   first line (up to 16 KB of reasoning is available when expanded).
 - Ctrl+R expands/collapses the latest tool card or thinking block (a merged
@@ -58,6 +65,10 @@ remains a legacy client-side alias; it does not configure the daemon.
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
   replies keep their partial text.
+  The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
+  without discarding a correction in the editor (autocomplete gets Escape first).
+  Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
+  pastes remain recoverable after later submissions.
 - Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
   prompt, close), per-session drafts, unread badges, history hydration.
 - Durable session lifecycle: `/sessions` adds server-backed text, agent,
@@ -65,7 +76,9 @@ remains a legacy client-side alias; it does not configure the daemon.
   inspect, resume, title, pin, archive, preview, privately export, prune, and
   delete through the authenticated server-owned lifecycle. Prune and delete
   are preview-confirm workflows, and offline mutations never claim success.
-- Ctrl+O model picker (two-stage, draft-preserving), capability-aware slash commands with
+- Ctrl+O model picker (two-stage, draft-preserving, provider-qualified routing),
+  Shift+Tab thinking picker (`/think` or `/reasoning` also opens it),
+  capability-aware slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
   Ctrl+G `$EDITOR` handoff. Captured shell escapes have a bounded deadline and
   terminate their complete POSIX process group on timeout so descendants cannot
@@ -88,8 +101,10 @@ remains a legacy client-side alias; it does not configure the daemon.
   before every mutation, never queues activation offline, preserves the profile
   draft after refusal, and reports create-once or unchanged replay without
   retaining manifest prose or executable/source content.
-- Progressive-disclosure status bar (model + context gauge pinned), git
-  branch, connection state, session counters.
+- Progressive-disclosure status bar: model and context gauge stay pinned;
+  last-run token usage and reported USD cost are separate from context size,
+  followed by git branch, connection state, submission mode and session counters.
+  Unknown cost is omitted, never estimated.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
   support in overlays.
 - Native terminal integration: Tern pane detection, prompt/reply navigation
@@ -156,6 +171,7 @@ and control plane authoritative:
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
+| `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compress` | Compact the current session through `sessions.compact`. |
 | `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
