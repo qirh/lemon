@@ -20,7 +20,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Codex do
       mix lemon.onboard.codex --token <token>
       mix lemon.onboard.codex --auth api_key
       mix lemon.onboard.codex --token <token> --set-default
-      mix lemon.onboard.codex --token <token> --set-default --model gpt-5.2
+      mix lemon.onboard.codex --token <token> --set-default --model gpt-5.5
       mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
   """
 

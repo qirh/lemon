@@ -16,6 +16,7 @@ defmodule LemonCli.Onboarding.Runner do
     config_path: :string,
     set_default: :boolean,
     model: :string,
+    non_interactive: :boolean,
     auth: :string
   ]
 
@@ -54,6 +55,21 @@ defmodule LemonCli.Onboarding.Runner do
 
     {cli_opts, _positional, _invalid} =
       OptionParser.parse(args, switches: @common_switches ++ spec.switches)
+
+    if cli_opts[:non_interactive] == true and is_nil(normalize_optional_string(cli_opts[:token])) do
+      fail!(
+        "Non-interactive provider setup requires --token. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
+      )
+    end
+
+    io =
+      if cli_opts[:non_interactive] do
+        io
+        |> Map.put(:prompt, fn _ -> "" end)
+        |> Map.put(:select, fn _ -> :fallback end)
+      else
+        io
+      end
 
     ensure_secrets_ready!()
 

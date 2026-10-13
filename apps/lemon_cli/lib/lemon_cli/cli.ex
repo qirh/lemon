@@ -305,8 +305,9 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp exit_code_for(reason) when reason in [:unknown_subcommand, :unknown_transport],
-    do: @exit_usage
+  defp exit_code_for(reason)
+       when reason in [:unknown_subcommand, :unknown_transport, :invalid_arguments],
+       do: @exit_usage
 
   defp exit_code_for(_reason), do: @exit_error
 
