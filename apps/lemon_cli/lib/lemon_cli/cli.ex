@@ -77,7 +77,7 @@ defmodule LemonCli.CLI do
   def main(argv) do
     exit_code =
       LemonCli.Onboarding.LogSilencer.with_quiet_logs(
-        "--json" in argv or List.first(argv) in ["run", "-p", "--print"],
+        "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp"],
         fn -> run(argv) end
       )
 
@@ -174,6 +174,8 @@ defmodule LemonCli.CLI do
 
   defp run_command(%{name: name}, args), do: run_command(name, args)
 
+  defp run_command("acp", args), do: LemonCli.AcpCommand.run(args)
+  defp run_command("tern", args), do: LemonCli.TernCommand.run(args)
   defp run_command("run", args), do: LemonCli.PrintCommand.run(args)
 
   defp run_command("setup", args), do: run_setup(args)
@@ -312,8 +314,9 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp exit_code_for(reason) when reason in [:unknown_subcommand, :unknown_transport],
-    do: @exit_usage
+  defp exit_code_for(reason)
+       when reason in [:unknown_subcommand, :unknown_transport, :invalid_arguments],
+       do: @exit_usage
 
   defp exit_code_for(_reason), do: @exit_error
 

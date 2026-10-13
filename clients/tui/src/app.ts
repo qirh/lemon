@@ -46,6 +46,7 @@ import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import type { NoticeLevel } from "./store/transcript-model.ts";
+import { TerminalIntegration } from "./terminal/integration.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
 import { PickerOverlay } from "./ui/components/pickers.ts";
@@ -135,6 +136,7 @@ export class AppShell {
 	readonly #version: string;
 	readonly #onExit: ((code: number) => void) | undefined;
 	readonly #cwd: string;
+	readonly #terminalIntegration: TerminalIntegration;
 
 	#disposers: Array<() => void> = [];
 	#started = false;
@@ -159,6 +161,7 @@ export class AppShell {
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
 		this.store = new AppStore(options.sessionKey ?? defaultSessionKey());
+		this.#terminalIntegration = new TerminalIntegration(this.tui.terminal, this.store, this.client);
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
@@ -338,6 +341,7 @@ export class AppShell {
 			() => this.input.dispose(),
 		);
 		this.tui.start();
+		this.#terminalIntegration.start();
 		// After tui.start(), so the terminal is listening when pi-tui's OSC 11
 		// query comes back with the background color.
 		this.appearance.start();
@@ -358,6 +362,7 @@ export class AppShell {
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.events.dispose();
 		this.client.close();
+		this.#terminalIntegration.stop();
 		if (this.#started) this.tui.stop();
 		this.#started = false;
 	}
@@ -416,6 +421,7 @@ export class AppShell {
 	}
 
 	#renderStatus(): void {
+		this.#terminalIntegration.update();
 		this.#statusBar.invalidate();
 		this.tui.requestRender();
 	}
@@ -615,7 +621,18 @@ export class AppShell {
 	async openExternalEditor(): Promise<void> {
 		const draft = this.#editor.getExpandedText();
 		try {
-			const edited = await editInExternalEditor(draft, { tui: this.tui });
+			const edited = await editInExternalEditor(draft, {
+				tui: {
+					stop: () => {
+						this.#terminalIntegration.suspend();
+						this.tui.stop();
+					},
+					start: () => {
+						this.tui.start();
+						this.#terminalIntegration.resume();
+					},
+				},
+			});
 			if (edited === null) return;
 			this.#editor.setText(edited);
 			this.tui.requestRender(true);

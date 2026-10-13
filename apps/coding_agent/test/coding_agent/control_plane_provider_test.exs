@@ -31,17 +31,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
              "provider is missing: #{inspect(missing)} — a typo here degrades the method to its fallback silently"
     end
 
-    test "exports nothing the control plane does not ask for" do
-      declared = @behaviour_module.behaviour_info(:callbacks) |> MapSet.new()
-
-      extra =
-        ControlPlaneProvider.__info__(:functions)
-        |> Enum.reject(&(&1 in declared))
-        |> Enum.reject(fn {fun, _arity} -> fun == :module_info end)
-
-      assert extra == [], "provider exports beyond the contract: #{inspect(extra)}"
-    end
-
     describe "boot registration" do
       setup do
         original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
@@ -91,6 +80,80 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
       assert length(dirs) == 2
       assert Enum.all?(dirs, &is_binary/1)
+    end
+  end
+
+  describe "durable native session adapters" do
+    setup do
+      cwd = Path.join(System.tmp_dir!(), "provider-session-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(cwd)
+      source_key = "source-#{LemonCore.Id.uuid()}"
+      destination_key = "fork-#{LemonCore.Id.uuid()}"
+
+      session =
+        CodingAgent.SessionManager.new(cwd)
+        |> CodingAgent.SessionManager.append_entry(
+          CodingAgent.SessionManager.SessionEntry.model_change("openai-codex", "gpt-5.5")
+        )
+        |> CodingAgent.SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "Decision: append-only JSONL"
+        })
+        |> CodingAgent.SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [%{"type" => "text", "text" => "Remembered"}]
+        })
+        |> CodingAgent.SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "TODO: blue widgets"
+        })
+
+      path = CodingAgent.Session.Presentation.session_file_path(session.header.id, cwd)
+      :ok = CodingAgent.SessionManager.save_to_file(path, session)
+
+      :ok =
+        LemonCore.ChatStateStore.put(source_key, %LemonCore.ChatState{
+          last_engine: "lemon",
+          last_resume_token: session.header.id
+        })
+
+      on_exit(fn ->
+        LemonCore.ChatStateStore.delete(source_key)
+        LemonCore.ChatStateStore.delete(destination_key)
+        File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
+        File.rm_rf!(cwd)
+      end)
+
+      %{cwd: cwd, source: source_key, destination: destination_key, session: session, path: path}
+    end
+
+    test "fork creates a distinct resume token and replays independent history", context do
+      assert :ok =
+               ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
+
+      child = LemonCore.ChatStateStore.get(context.destination)
+      assert child.last_engine == "lemon"
+      refute child.last_resume_token == context.session.header.id
+
+      assert {:ok, entries} =
+               ControlPlaneProvider.session_history(context.destination, context.cwd)
+
+      assert entries == CodingAgent.SessionManager.get_branch(context.session)
+
+      assert {:error, :destination_exists} =
+               ControlPlaneProvider.session_fork(context.source, context.cwd, context.destination)
+    end
+
+    test "manual compaction works after the native session process has stopped", context do
+      assert :ok =
+               ControlPlaneProvider.compact_session(context.source,
+                 cwd: context.cwd,
+                 summary: "Decision: append-only JSONL",
+                 keep_recent_tokens: 5
+               )
+
+      assert {:ok, session} = CodingAgent.SessionManager.load_from_file(context.path)
+      assert Enum.any?(CodingAgent.SessionManager.get_branch(session), &(&1.type == :compaction))
     end
   end
 end

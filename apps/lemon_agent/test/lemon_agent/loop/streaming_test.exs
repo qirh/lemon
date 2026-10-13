@@ -29,6 +29,9 @@ defmodule LemonAgent.Loop.StreamingTest do
       get_api_key: Keyword.get(opts, :get_api_key, nil),
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
+      max_retries: Keyword.get(opts, :max_retries, 3),
+      retry_base_delay_ms: Keyword.get(opts, :retry_base_delay_ms, 1),
+      retry_max_delay_ms: Keyword.get(opts, :retry_max_delay_ms, 30_000),
       stream_options: Keyword.get(opts, :stream_options, %StreamOptions{}),
       stream_fn: Keyword.get(opts, :stream_fn, nil)
     }
@@ -309,5 +312,322 @@ defmodule LemonAgent.Loop.StreamingTest do
              {:message_end, %{role: :assistant, stop_reason: :aborted}} -> true
              _ -> false
            end)
+  end
+
+  test "retries a partial provider failure without committing failed output or tool calls" do
+    parent = self()
+    context = simple_context(messages: [user_message("run")])
+
+    failed = %{
+      Mocks.assistant_message_with_tool_calls([
+        Mocks.tool_call("echo", %{"text" => "never execute"}, id: "failed_call")
+      ])
+      | stop_reason: :error,
+        error_message: "Service temporarily unavailable (HTTP 503)"
+    }
+
+    final = Mocks.assistant_message("recovered")
+    {:ok, responses} = Agent.start_link(fn -> [failed, final] end)
+
+    stream_fn = fn _model, llm_context, _options ->
+      send(parent, {:retry_context, llm_context.messages})
+      response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
+      {:ok, ai_stream} = LemonAi.EventStream.start_link()
+      LemonAi.EventStream.push(ai_stream, {:start, response})
+
+      if response.stop_reason == :error do
+        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, response})
+        LemonAi.EventStream.error(ai_stream, response)
+      else
+        LemonAi.EventStream.complete(ai_stream, response)
+      end
+
+      {:ok, ai_stream}
+    end
+
+    config = simple_config(stream_fn: stream_fn)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, ^final, updated_context} =
+             Streaming.stream_assistant_response(context, config, nil, nil, stream)
+
+    assert updated_context.messages == context.messages ++ [final]
+    assert_receive {:retry_context, first_context}
+    assert_receive {:retry_context, ^first_context}
+
+    EventStream.complete(stream, [])
+    events = Enum.to_list(EventStream.events(stream))
+    refute Enum.any?(events, &match?({:message_end, %{stop_reason: :error}}, &1))
+
+    assert {:provider_retry, %{attempt: 1, delay_ms: 1}} =
+             Enum.find(events, &match?({:provider_retry, _}, &1))
+
+    assert {:provider_retry_end, %{attempt: 1, success: true, canceled: false}} in events
+  end
+
+  test "request failures back off exponentially and exhaust a bounded retry budget" do
+    parent = self()
+    context = simple_context(messages: [user_message("run")])
+
+    stream_fn = fn _, _, _ ->
+      send(parent, :request_attempt)
+      {:error, :timeout}
+    end
+
+    config = simple_config(stream_fn: stream_fn, max_retries: 2, retry_base_delay_ms: 2)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:error, :timeout} =
+             Streaming.stream_assistant_response(context, config, nil, nil, stream)
+
+    assert_receive :request_attempt
+    assert_receive :request_attempt
+    assert_receive :request_attempt
+    refute_received :request_attempt
+
+    EventStream.complete(stream, [])
+    events = Enum.to_list(EventStream.events(stream))
+    assert for({:provider_retry, %{delay_ms: delay}} <- events, do: delay) == [2, 4]
+    assert {:provider_retry_end, %{attempt: 2, success: false, canceled: false}} in events
+  end
+
+  test "context overflow and authentication failures do not consume retry attempts" do
+    for error <- ["maximum context length exceeded", "Invalid API key"] do
+      parent = self()
+      response = %{Mocks.assistant_message("") | stop_reason: :error, error_message: error}
+
+      stream_fn = fn _, _, _ ->
+        send(parent, :request_attempt)
+        Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
+      end
+
+      config = simple_config(stream_fn: stream_fn)
+      context = simple_context(messages: [user_message("run")])
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:ok, %{stop_reason: :error}, _} =
+               Streaming.stream_assistant_response(context, config, nil, nil, stream)
+
+      assert_receive :request_attempt
+      refute_received :request_attempt
+      EventStream.complete(stream, [])
+      refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
+    end
+  end
+
+  test "honors structured retry-after rather than retrying earlier" do
+    parent = self()
+
+    failed = %{
+      Mocks.assistant_message("")
+      | stop_reason: :error,
+        error_message: "Service temporarily unavailable (HTTP 503)",
+        retry_after_ms: 20
+    }
+
+    final = Mocks.assistant_message("done")
+    {:ok, responses} = Agent.start_link(fn -> [failed, final] end)
+
+    stream_fn = fn _, _, _ ->
+      send(parent, {:attempt_at, System.monotonic_time(:millisecond)})
+      response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
+      Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
+    end
+
+    config = simple_config(stream_fn: stream_fn)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    assert {:ok, ^final, _} =
+             Streaming.stream_assistant_response(
+               simple_context(messages: [user_message("run")]),
+               config,
+               nil,
+               nil,
+               stream
+             )
+
+    assert_receive {:attempt_at, first}
+    assert_receive {:attempt_at, second}
+    assert second - first >= 20
+    EventStream.complete(stream, [])
+  end
+
+  test "abort interrupts an idle provider stream and removes unpaired partial tool calls" do
+    parent = self()
+
+    partial =
+      Mocks.assistant_message_with_tool_calls([
+        Mocks.tool_call("echo", %{"text" => "unfinished"}, id: "unfinished_call")
+      ])
+
+    signal = AbortSignal.new()
+    on_exit(fn -> AbortSignal.clear(signal) end)
+
+    stream_fn = fn _, _, _ ->
+      {:ok, ai_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+      LemonAi.EventStream.push(ai_stream, {:start, partial})
+      send(parent, {:idle_stream, ai_stream})
+      {:ok, ai_stream}
+    end
+
+    config = simple_config(stream_fn: stream_fn)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    runner =
+      Task.async(fn ->
+        Streaming.stream_assistant_response(
+          simple_context(messages: [user_message("run")]),
+          config,
+          signal,
+          nil,
+          stream
+        )
+      end)
+
+    assert_receive {:idle_stream, ai_stream}
+    monitor = Process.monitor(ai_stream)
+    AbortSignal.abort(signal)
+
+    assert {:ok, %{stop_reason: :aborted, content: content}, updated_context} =
+             Task.await(runner, 1_000)
+
+    refute Enum.any?(content, &match?(%ToolCall{}, &1))
+    assert LemonAgent.Loop.TranscriptValidator.validate(updated_context.messages) == :ok
+    assert_receive {:DOWN, ^monitor, :process, ^ai_stream, _}, 1_000
+    EventStream.complete(stream, [])
+  end
+
+  test "abort during retry backoff prevents another provider request" do
+    parent = self()
+    signal = AbortSignal.new()
+    on_exit(fn -> AbortSignal.clear(signal) end)
+
+    stream_fn = fn _, _, _ ->
+      send(parent, :request_attempt)
+      {:error, :timeout}
+    end
+
+    config = simple_config(stream_fn: stream_fn, retry_base_delay_ms: 5_000)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    runner =
+      Task.async(fn ->
+        Streaming.stream_assistant_response(
+          simple_context(messages: [user_message("run")]),
+          config,
+          signal,
+          nil,
+          stream
+        )
+      end)
+
+    assert_receive :request_attempt
+    AbortSignal.abort(signal)
+    assert {:ok, %{stop_reason: :aborted}, _} = Task.await(runner, 1_000)
+    refute_received :request_attempt
+    EventStream.complete(stream, [])
+
+    assert {:provider_retry_end, %{attempt: 1, success: false, canceled: true}} in Enum.to_list(
+             EventStream.events(stream)
+           )
+  end
+
+  test "parsed limits and raw HTTP retry-after headers recover, but quota exhaustion does not" do
+    parent = self()
+    final = Mocks.assistant_message("recovered")
+
+    for error <- [
+          %{
+            category: :rate_limit,
+            retryable: true,
+            message: "rate limited",
+            rate_limit_info: %{retry_after: 10}
+          },
+          {:http_error, 503, "Service unavailable", [{"retry-after-ms", "10"}]}
+        ] do
+      {:ok, responses} = Agent.start_link(fn -> [error, final] end)
+
+      stream_fn = fn _, _, _ ->
+        case Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end) do
+          ^final -> Mocks.mock_stream_fn_single_direct(final).(nil, nil, nil)
+          reason -> {:error, reason}
+        end
+      end
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:ok, ^final, _} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 simple_config(stream_fn: stream_fn),
+                 nil,
+                 nil,
+                 stream
+               )
+
+      EventStream.complete(stream, [])
+
+      assert Enum.any?(EventStream.events(stream), fn
+               {:provider_retry, %{delay_ms: 10}} -> true
+               _ -> false
+             end)
+    end
+
+    for error <- [
+          %{category: :rate_limit, retryable: false, message: "account quota exhausted"},
+          "Rate limit exceeded: insufficient_quota",
+          "maximum context length exceeded; temporarily unavailable"
+        ] do
+      stream_fn = fn _, _, _ ->
+        send(parent, :quota_attempt)
+        {:error, error}
+      end
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:error, ^error} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 simple_config(stream_fn: stream_fn),
+                 nil,
+                 nil,
+                 stream
+               )
+
+      assert_receive :quota_attempt
+      refute_received :quota_attempt
+      EventStream.complete(stream, [])
+      refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
+    end
+  end
+
+  test "disabled retries and excessive retry-after hints surface the original failure immediately" do
+    parent = self()
+
+    for {error, max_retries} <- [
+          {:timeout, 0},
+          {%{category: :rate_limit, retryable: true, rate_limit_info: %{retry_after: 120_001}}, 3}
+        ] do
+      stream_fn = fn _, _, _ ->
+        send(parent, :request_attempt)
+        {:error, error}
+      end
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:error, ^error} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 simple_config(stream_fn: stream_fn, max_retries: max_retries),
+                 nil,
+                 nil,
+                 stream
+               )
+
+      assert_receive :request_attempt
+      refute_received :request_attempt
+      EventStream.complete(stream, [])
+      refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
+    end
   end
 end

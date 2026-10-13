@@ -5,7 +5,8 @@ defmodule CodingAgent.Tools.BashOutput do
 
   Each call returns only the complete output lines produced since the
   previous call for that process, followed by its status and exit code. A
-  session can only read processes it started.
+  session can only read processes it started. Truncated or dropped output includes
+  a full-output file path; use `read` with line ranges to retrieve the archive.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -41,12 +42,13 @@ defmodule CodingAgent.Tools.BashOutput do
 
   @spec execute(String.t(), map(), reference() | nil, function() | nil, String.t(), keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
-  def execute(_tool_call_id, params, _signal, _on_update, _cwd, opts) do
+  def execute(_tool_call_id, params, _signal, _on_update, cwd, opts) do
     with {:ok, process_id} <- fetch_process_id(params),
          :ok <- authorize(process_id, opts),
          {:ok, output} <- read(process_id) do
       output
       |> format_output()
+      |> CodingAgent.Artifacts.attach(cwd, opts)
       |> ToolResultTrust.untrusted(:shell)
     end
   end
@@ -92,15 +94,23 @@ defmodule CodingAgent.Tools.BashOutput do
 
     body = if text == "", do: "(no new output)", else: text
     status_line = "Status: #{describe_status(output.status, output.exit_code)}"
+    full_output_path = Map.get(output, :full_output_path)
+
+    spill_note =
+      if (truncated? or output.dropped_lines > 0) and is_binary(full_output_path),
+        do:
+          "\n\n[Full output saved to: #{full_output_path}. Use read with offset/limit to retrieve it.]",
+        else: ""
 
     %AgentToolResult{
-      content: [%TextContent{text: dropped_note <> body <> "\n\n" <> status_line}],
+      content: [%TextContent{text: dropped_note <> body <> "\n\n" <> status_line <> spill_note}],
       details: %{
         process_id: output.process_id,
         status: output.status,
         exit_code: output.exit_code,
         new_lines: length(output.lines),
         dropped_lines: output.dropped_lines,
+        full_output_path: full_output_path,
         truncated: truncated?
       }
     }

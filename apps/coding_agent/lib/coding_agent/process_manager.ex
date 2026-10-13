@@ -258,7 +258,7 @@ defmodule CodingAgent.ProcessManager do
   `read_output/1` call, advancing the read cursor.
 
   Returns `%{process_id, status, exit_code, command, owner, lines,
-  dropped_lines}`; `dropped_lines` counts lines that scrolled out of the
+  dropped_lines, full_output_path}`; `dropped_lines` counts lines that scrolled out of the
   bounded log before they were read. Works for running and finished
   processes (finished ones are read from `ProcessStore`).
   """
@@ -292,6 +292,7 @@ defmodule CodingAgent.ProcessManager do
            exit_code: Map.get(record, :exit_code),
            command: Map.get(record, :command),
            owner: Map.get(record, :owner),
+           full_output_path: Map.get(record, :full_output_path),
            lines: Enum.drop(logs, start - first_buffered),
            dropped_lines: start - cursor
          }}

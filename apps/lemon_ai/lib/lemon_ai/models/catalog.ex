@@ -88,6 +88,7 @@ defmodule LemonAi.Models.Catalog do
   ]
 
   @compat_boolean_fields %{
+    "anthropic_thinking_display" => :anthropic_thinking_display,
     "supports_store" => :supports_store,
     "supports_developer_role" => :supports_developer_role,
     "supports_reasoning_effort" => :supports_reasoning_effort,
@@ -154,6 +155,7 @@ defmodule LemonAi.Models.Catalog do
       input: to_input(Map.fetch!(entry, "input")),
       cost: to_cost(Map.fetch!(entry, "cost")),
       context_window: fetch_non_neg_integer!(entry, "context_window"),
+      service_tier_cost: to_service_tier_cost(Map.get(entry, "service_tier_cost", %{})),
       max_tokens: fetch_non_neg_integer!(entry, "max_tokens"),
       headers: optional_map!(entry, "headers", %{}),
       compat: entry |> optional_map!("compat", nil) |> to_compat()
@@ -178,12 +180,42 @@ defmodule LemonAi.Models.Catalog do
       input: fetch_non_neg_number!(cost, "input", "cost.input"),
       output: fetch_non_neg_number!(cost, "output", "cost.output"),
       cache_read: fetch_non_neg_number!(cost, "cache_read", "cost.cache_read"),
-      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.cache_write")
+      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.cache_write"),
+      long_context: to_long_context(Map.get(cost, "long_context"))
     }
   end
 
   defp to_cost(other),
     do: raise(ArgumentError, "expected cost to be an object, got: #{inspect(other)}")
+
+  defp to_service_tier_cost(%{} = tiers) do
+    Map.new(tiers, fn
+      {tier, multiplier}
+      when tier in ["flex", "priority"] and is_number(multiplier) and multiplier > 0 ->
+        {tier, multiplier}
+
+      entry ->
+        raise ArgumentError, "invalid service_tier_cost entry: #{inspect(entry)}"
+    end)
+  end
+
+  defp to_service_tier_cost(other),
+    do: raise(ArgumentError, "expected service_tier_cost to be an object, got: #{inspect(other)}")
+
+  defp to_long_context(nil), do: nil
+
+  defp to_long_context(%{} = cost) do
+    %{
+      input_threshold: fetch_non_neg_integer!(cost, "input_threshold"),
+      input: fetch_non_neg_number!(cost, "input", "cost.long_context.input"),
+      output: fetch_non_neg_number!(cost, "output", "cost.long_context.output"),
+      cache_read: fetch_non_neg_number!(cost, "cache_read", "cost.long_context.cache_read"),
+      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.long_context.cache_write")
+    }
+  end
+
+  defp to_long_context(other),
+    do: raise(ArgumentError, "expected cost.long_context to be an object, got: #{inspect(other)}")
 
   defp to_input(input) when is_list(input),
     do: Enum.map(input, &normalize_atom!(:input, &1, @inputs))

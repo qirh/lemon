@@ -29,7 +29,7 @@ defmodule LemonAi.Models do
   OAuth-only model IDs.
   """
 
-  alias LemonAi.Types.{Model, ModelCost}
+  alias LemonAi.Types.Model
 
   @default_openai_base_url "https://api.openai.com/v1"
   @default_openai_discovery_timeout_ms 4_000
@@ -38,70 +38,7 @@ defmodule LemonAi.Models do
   # Provider Submodule Imports
   # ============================================================================
 
-  @openai_codex_oauth_only_models %{
-    "codex-mini-latest" => %Model{
-      id: "codex-mini-latest",
-      name: "Codex Mini",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://chatgpt.com",
-      reasoning: true,
-      input: [:text],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 200_000,
-      max_tokens: 100_000
-    },
-    "gpt-5.3-codex-spark" => %Model{
-      id: "gpt-5.3-codex-spark",
-      name: "GPT-5.3 Codex Spark",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://chatgpt.com",
-      reasoning: true,
-      reasoning_efforts: [:low, :medium, :high, :xhigh],
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 128_000,
-      max_tokens: 32_000
-    },
-    # Overrides the direct-API gpt-5.5 entry: the Codex surface serves a
-    # 400k window rather than the API's 1.05M.
-    "gpt-5.5" => %Model{
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://chatgpt.com",
-      reasoning: true,
-      reasoning_efforts: [:low, :medium, :high, :xhigh],
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 400_000,
-      max_tokens: 128_000
-    }
-  }
-
-  # OpenAI Codex (ChatGPT OAuth) uses the Codex Responses endpoint.
-  # Most models mirror the direct OpenAI Responses API, but some IDs are only
-  # available through the ChatGPT/Codex auth surface and should not be inferred
-  # from the direct `/v1/models` API-key catalog.
-  @openai_codex_models LemonAi.Models.OpenAI.models()
-                       |> Enum.into(%{}, fn {id, model} ->
-                         {id,
-                          %Model{
-                            model
-                            | api: :openai_codex_responses,
-                              provider: :"openai-codex",
-                              base_url: "https://chatgpt.com",
-                              cost: %ModelCost{
-                                input: 0.0,
-                                output: 0.0,
-                                cache_read: 0.0,
-                                cache_write: 0.0
-                              }
-                          }}
-                       end)
-                       |> Map.merge(@openai_codex_oauth_only_models)
+  @openai_codex_models LemonAi.Models.OpenAI.codex_models()
 
   # ============================================================================
   # Combined Registry

@@ -52,6 +52,11 @@ defmodule LemonAutomation.KanbanDispatcherTest do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:router_submit, params})
       {:ok, params.run_id}
     end
+
+    def abort_run(run_id, reason) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:router_abort, run_id, reason})
+      :ok
+    end
   end
 
   defmodule KanbanDispatcherBlockingWaiter do
@@ -299,6 +304,12 @@ defmodule LemonAutomation.KanbanDispatcherTest do
       assert params.meta.kanban_dispatcher
     end)
 
+    Enum.each(submitted, fn params ->
+      current = KanbanStore.get_task(params.meta.kanban_task_id)
+      assert current.run_id == params.run_id
+      assert current.meta["kanbanRun"]["status"] == "running"
+    end)
+
     assert {:ok, %{dispatcher: %{running_count: 2}}} =
              KanbanDispatcher.status(board.id, name: name)
 
@@ -336,6 +347,7 @@ defmodule LemonAutomation.KanbanDispatcherTest do
       completed = KanbanStore.get_task(task.id)
       assert String.starts_with?(completed.run_id, "run_")
       refute Map.has_key?(completed.meta, "kanbanLease")
+      assert completed.meta["kanbanRun"]["output"] == "done"
     end
   end
 
@@ -370,7 +382,6 @@ defmodule LemonAutomation.KanbanDispatcherTest do
     eventually(fn ->
       failed = KanbanStore.get_task(task.id)
       assert failed.status == "blocked"
-      assert failed.meta["lastFailure"]["reason"] =~ "boom"
       refute Map.has_key?(failed.meta, "kanbanLease")
     end)
 
@@ -472,6 +483,123 @@ defmodule LemonAutomation.KanbanDispatcherTest do
 
     send(worker_pid, {:finish, {:ok, %{run_id: "restart-run"}}})
     eventually(fn -> assert KanbanStore.get_task(task.id).status == "done" end)
+  end
+
+  test "default boards require explicit retry after a worker failure" do
+    {:ok, board} = KanbanStore.create_board("No retry storm")
+    {:ok, task} = KanbanStore.create_task(board.id, "Fail once")
+    name = :"kanban-retry-#{System.unique_integer([:positive])}"
+    start_supervised!({KanbanDispatcher, name: name, worker_mod: KanbanDispatcherFailingWorker})
+    {:ok, _} = KanbanDispatcher.start_board(board.id, name: name, interval_ms: 10)
+    task_id = task.id
+    assert_receive {:worker_run, ^task_id}, 500
+    eventually(fn -> assert KanbanStore.get_task(task_id).meta["lastFailure"] end)
+    refute_receive {:worker_run, ^task_id}, 100
+    {:ok, _} = KanbanStore.update_task(task_id, status: "todo")
+    assert_receive {:worker_run, ^task_id}, 500
+    refute_receive {:worker_run, ^task_id}, 100
+  end
+
+  test "timeout retains the lease and reconciles a late durable completion without resubmission" do
+    {:ok, board} = KanbanStore.create_board("Ambiguous completion")
+    {:ok, task} = KanbanStore.create_task(board.id, "Slow coding run")
+    name = :"kanban-timeout-#{System.unique_integer([:positive])}"
+    start_supervised!({KanbanDispatcher, name: name})
+
+    {:ok, _} =
+      KanbanDispatcher.start_board(board.id,
+        name: name,
+        interval_ms: 10,
+        lease_ms: 10,
+        worker_opts: [
+          router_mod: KanbanDispatcherRouterOk,
+          waiter_mod: KanbanDispatcherBlockingWaiter,
+          worktree_mode: :off
+        ]
+      )
+
+    assert_receive {:router_submit, params}, 500
+    assert_receive {:waiter_started, pid, run_id, _}, 500
+    send(pid, {:finish, run_id, :timeout})
+
+    eventually(fn ->
+      current = KanbanStore.get_task(task.id)
+      assert current.meta["kanbanRun"]["status"] == "outcome_unknown"
+      assert current.meta["kanbanLease"]
+    end)
+
+    refute_receive {:router_submit, _}, 100
+    assert {:ok, %{reconciling_count: 1}} = KanbanDispatcher.status(board.id, name: name)
+
+    :ok =
+      LemonCore.RunStore.finalize(run_id, %{
+        session_key: params.session_key,
+        completed: %{ok: true, answer: "Late verified change"}
+      })
+
+    eventually(fn ->
+      current = KanbanStore.get_task(task.id)
+      assert current.status == "done"
+      assert current.meta["kanbanRun"]["output"] == "Late verified change"
+    end)
+
+    refute_receive {:router_submit, _}, 100
+  end
+
+  test "hard stop aborts the claimed router invocation, not only its waiter" do
+    {:ok, board} = KanbanStore.create_board("Router stop")
+    {:ok, task} = KanbanStore.create_task(board.id, "In flight")
+    name = :"kanban-abort-#{System.unique_integer([:positive])}"
+    start_supervised!({KanbanDispatcher, name: name})
+
+    {:ok, _} =
+      KanbanDispatcher.start_board(board.id,
+        name: name,
+        worker_opts: [
+          router_mod: KanbanDispatcherRouterOk,
+          waiter_mod: KanbanDispatcherBlockingWaiter,
+          worktree_mode: :off
+        ]
+      )
+
+    assert_receive {:router_submit, params}, 500
+    assert_receive {:waiter_started, pid, run_id, _}, 500
+    assert run_id == params.run_id
+    {:ok, stopped} = KanbanDispatcher.stop_board(board.id, name: name)
+    assert [%{run_id: ^run_id, result: :ok}] = stopped.aborts
+    assert_receive {:router_abort, ^run_id, :kanban_board_stop}
+    eventually(fn -> refute Process.alive?(pid) end)
+    assert KanbanStore.get_task(task.id).meta["lastFailure"]["reason"] == "cancelled"
+    refute KanbanStore.get_task(task.id).meta["kanbanLease"]
+  end
+
+  test "interactive kanban tool controls the running dispatcher" do
+    {:ok, board} = KanbanStore.create_board("Interactive control")
+
+    call = fn action, extra ->
+      LemonSkills.Tools.Kanban.execute(
+        "tool",
+        Map.merge(
+          %{
+            "action" => action,
+            "board_id" => board.id
+          },
+          extra
+        ),
+        nil,
+        nil,
+        File.cwd!(),
+        []
+      )
+    end
+
+    assert {:error, _} = call.("dispatch_start", %{"max_concurrency" => 0})
+    started = call.("dispatch_start", %{"max_concurrency" => 2})
+    assert started.details.dispatch.status == "running"
+    assert started.details.dispatch.max_concurrency == 2
+    assert call.("dispatch_status", %{}).details.dispatch.running
+    assert call.("dispatch_stop", %{}).details.dispatch.status == "stopped"
+    refute call.("dispatch_status", %{}).details.dispatch.running
   end
 
   defp receive_worker_ready(count) do

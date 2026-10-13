@@ -61,11 +61,8 @@ defmodule LemonAutomation.GoalLoop do
         case completion do
           {:ok, _output} ->
             maybe_sleep(opts)
-            run_autonomous_tick(session_key, opts, tick_count + 1, max_ticks, result)
-
-          :timeout ->
-            GoalStore.pause(session_key, run_id: run_id)
-            {:error, {:run_timeout, run_id}}
+            next_opts = Keyword.drop(opts, [:run_id, :judge_run_id])
+            run_autonomous_tick(session_key, next_opts, tick_count + 1, max_ticks, result)
 
           {:error, reason} ->
             GoalStore.pause(session_key, run_id: run_id)
@@ -160,7 +157,7 @@ defmodule LemonAutomation.GoalLoop do
       :needs_input ->
         verdict = %{
           action: :needs_input,
-          reason: "judge failed: #{inspect(reason, limit: 80)}",
+          reason: "judge failed; user input required",
           source: "judge_failure_policy"
         }
 
@@ -170,7 +167,7 @@ defmodule LemonAutomation.GoalLoop do
         end
 
       _pause ->
-        GoalStore.record_loop_status(session_key, :error, error: inspect(reason, limit: 80))
+        GoalStore.record_loop_status(session_key, :error, error: "goal judge failed")
         GoalStore.pause(session_key, opts)
         {:error, {:judge_failed, reason}}
     end

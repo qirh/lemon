@@ -85,6 +85,7 @@ defmodule CodingAgent.Tools.Task.Params do
     thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
     async? = Map.get(params, "async", true)
     auto_followup = Map.get(params, "auto_followup", true)
+    worktree = Map.get(params, "worktree", false)
     delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
@@ -148,6 +149,9 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_boolean(auto_followup) ->
         {:error, "auto_followup must be a boolean"}
 
+      not is_boolean(worktree) ->
+        {:error, "worktree must be a boolean"}
+
       true ->
         {effective_prompt, guarded_tool_policy} =
           apply_prompt_tool_guardrails(prompt, tool_policy)
@@ -167,6 +171,7 @@ defmodule CodingAgent.Tools.Task.Params do
            thinking_level: thinking_level,
            async: async?,
            auto_followup: auto_followup,
+           worktree: worktree,
            cwd: delegated_cwd,
            tool_policy: effective_tool_policy,
            meta: meta || %{},
@@ -211,6 +216,9 @@ defmodule CodingAgent.Tools.Task.Params do
   def build_description(cwd) do
     base =
       "Run a focused subtask. **Use async=true by default** to avoid blocking the user conversation.\n\n" <>
+        "Use tasks=[{description,prompt,...}, ...] to launch up to 32 independent children in one call; all are queued before waiting. Children run concurrently (default cap: 8).\n" <>
+        "Use worktree=true for an isolated git branch; the worktree is retained for review/cherry-pick and its path/branch appear in the result. It starts from HEAD, not uncommitted parent changes.\n" <>
+        "Use action=message or steer with task_id and message to redirect a running child; action=cancel cancels it. Parent cancellation propagates to all children.\n\n" <>
         "**When to use task vs agent tool:**\n" <>
         "- task: For coding work within this session's context (same project, files, tools)\n" <>
         "- agent: For delegating to a different agent profile or for cross-agent workflows\n\n" <>
@@ -304,7 +312,11 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:agent_id, validated[:agent_id])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
 
-    [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
+    [
+      {:cwd, cwd},
+      {:register, true},
+      {:session_scope, :subagent} | Keyword.merge(base_opts, override_opts)
+    ]
   end
 
   defp resolve_inherited_model(opts) do

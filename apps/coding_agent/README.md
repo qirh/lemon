@@ -142,6 +142,26 @@ CodingAgent.Supervisor (one_for_one)
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
 
+**Read-only internal references.** The `read` tool accepts these in its `path`:
+
+- `skill://<skill-key>` opens the selected bundle's `SKILL.md`, using the same
+  cwd-aware registry and project-over-user precedence as `read_skill`.
+- `skill://<skill-key>/references/example.md` opens a supporting file within that
+  bundle. Traversal and symlinks beneath the bundle are rejected.
+- `artifact://<id>` retrieves full output advertised by a truncated tool result.
+  Use the exact returned handle, with `offset` (one-based line number) and `limit`
+  to retrieve just the relevant portion rather than putting the entire output
+  back into context.
+
+Foreground `bash`, `bash_output`, and context guardrails expose artifact handles
+for their spilled output. Handles are indexed on disk in the session's spill
+directory, so they remain usable when that session is resumed while the
+underlying output file remains available. They do not grant another session
+access to the file, duplicate large output, or change its untrusted status.
+They are for `read`, not mutation tools or remote ACP filesystem operations.
+When registration is unavailable, results retain the existing absolute output
+path instead of advertising a nonexistent handle.
+
 The `agent` tool accepts an optional `node` string for delegated runs. Omit it
 or pass `"local"` to use the controller host. A named value must resolve to a
 currently connected execution node. If `cwd` is omitted, the destination uses
@@ -323,7 +343,15 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 The task tool runs all work in a native in-process `CodingAgent.Session`.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
 When a native task omits `model`, the child session inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
-Native task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
+Task workers monitor their native sessions: a crash, provider failure, abort, or configured `task_session_timeout_ms` is reported as an error, never promoted to success because partial text or a tool result exists. The default model wait is unbounded; parent cancellation and worker/session death still end it.
+
+Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32 independent children. Each child inherits common top-level options, launches in the background, and returns a `task_id`/`run_id` receipt; `async: false` launches the entire batch before joining. Native tasks share a monitored semaphore with a default cap of eight running children; excess children queue without starting model calls. Dead holders and queued callers release capacity. Individual failures are retained alongside successful sibling results.
+
+Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>`, retain the source cwd's relative subdirectory, and are **not** merged or deleted automatically. Uncommitted changes and local credentials/config are not copied. `poll`/`get`/`join` report `cwd`, `worktree_path`, and `branch`; review or cherry-pick the child's commits, then remove the worktree with `git worktree remove` when no longer needed. A non-git cwd is a task error, not a fallback to the shared checkout.
+
+Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver instructions at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. These operations and result reads are bound to the parent session/agent; another session receives not-found. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
+
+Task progress is delivered directly to parent session subscribers even after the launch tool call ends, with `details.task_id`, `run_id`, `description`, `status`, child `session_id` when allocated, and optional `current_action` (`title`, `kind`, `phase`). A final progress update settles each child as `completed`, `error`, or `aborted`. Join results include structured visible `output` and `error` per child; hidden reasoning is not included.
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
@@ -464,6 +492,28 @@ Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
 logical runtime session key used by clients.
 
+Live sessions synchronously append completed messages, tool calls/results, model
+changes and compaction entries to their JSONL file. They do not depend on a
+graceful shutdown or an explicit `Session.save/1`. Resuming with `:session_file`
+restores the recorded working directory, selected branch, model and thinking
+level; explicit model/thinking options override the recorded selection. An
+unreadable session is an error, never a silently empty conversation. A torn
+last append is recovered; completed corrupt lines remain errors. Interrupted
+tool calls receive an explicit interrupted-result marker, not a fabricated
+successful result.
+Usage checkpoints preserve response costs and cache-write durations as well as
+token counts, so reopening a session does not reset its recorded cost. Rewinding
+a live branch preserves the selected provider API, including ChatGPT/Codex models.
+
+`SessionManager.list_sessions/1` lists most recently modified sessions first.
+`Session.navigate_tree/3` persists branch selection even before another message
+is sent. `SessionManager.fork_file/3` creates an independent branch file with
+parent-session provenance; it refuses to overwrite an existing destination.
+The control-plane provider exposes history replay and fork through its runtime
+seam, binding forked files to independent native resume tokens. Its manual
+compaction adapter accepts `cwd:` and also works for an idle saved session after
+the previous run's process has exited.
+
 ### Tool Execution
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
@@ -489,11 +539,21 @@ When conversations grow large, auto-compaction kicks in:
 4. A compaction entry is appended to the session tree
 5. Overflow recovery handles cases where the context window is exhausted mid-run
 
-Auto-compaction runs in a tracked background worker after a completed turn. If
-a new prompt arrives before that worker finishes, Session cancels and demonitors
-the stale snapshot immediately, clears its timeout, and starts the prompt
-without waiting. Any already-sent late result is ignored by signature/state
-checks and cannot append a compaction entry to the new turn.
+Auto-compaction runs in a tracked background worker after a completed turn and
+before dispatching a new prompt that would exceed the reserve threshold. A new
+prompt cancels a stale background snapshot, then checks its own full request
+budget (including the incoming message) before dispatch. Cancellation remains
+available while this preflight compaction runs. Late results are ignored by
+signature/state checks. Repeated compaction summarizes the previous summary
+plus newly retired messages, preserving decisions, outstanding work and file
+operations without repeatedly replaying the entire original transcript.
+
+`Session.compact/2` forces manual compaction by default and waits for the summary
+instead of timing out after five seconds. It accepts `:custom_instructions` or
+an explicit `:summary`; compacting or switching branches while a turn is
+streaming returns `{:error, :busy}`. Summaries use the session's configured
+provider credentials. Compaction start/completion events are forwarded to
+terminal and ACP clients.
 
 Settings: `compaction_enabled` (default: true), `reserve_tokens` (default: 16,384), `keep_recent_tokens` (default: 20,000).
 
@@ -549,7 +609,7 @@ result.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane concurrency caps for `LaneQueue` |
-| `:task_max_concurrency` | `Parallel.default_max_concurrency()` | Max concurrent tasks for `Parallel.Semaphore` |
+| `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
 
 ### Workspace Bootstrap Files

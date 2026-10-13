@@ -42,6 +42,8 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Start TUI (interactive no-argument launch) | `lemon` | `./bin/lemon` |
 | Foreground runtime | `lemon start` | `./bin/lemon start` |
 | Non-interactive coding | `lemon -p "prompt"` or `lemon run` | `./bin/lemon -p "prompt"` or `./bin/lemon run` |
+| ACP over stdio | `lemon acp` | `./bin/lemon acp` |
+| Register native Tern integration | `lemon tern install` | `./bin/lemon tern install` |
 | Background runtime | `lemon daemon` | `./bin/lemon daemon` |
 | First-time setup | `lemon setup` | `./bin/lemon setup` |
 | Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |
@@ -92,6 +94,24 @@ error. Both launchers export `LEMON_CLI_LAUNCHER` (`source` or `release`) for
 availability filtering and `LEMON_LAUNCHER` (their own path) so
 `LemonCli.LocalRuntime` can run `$LEMON_LAUNCHER daemon` when a command needs
 the runtime.
+
+Source startup probes the local daemon before compiling, never installs or
+updates dependencies, and compiles only once on a cold interactive launch.
+Install source dependencies explicitly with `mix deps.get` before launching.
+An already healthy daemon is reused without a Mix or distributed-node boot.
+
+Source runtime state is private and port-scoped:
+`~/.lemon/run/lemon-PORT.pid`, `lemon-PORT.log`, and `lemon-PORT.lock`.
+`LEMON_RUNTIME_PID_FILE` and `LEMON_RUNTIME_LOG_FILE` can override the first two.
+Concurrent starts serialize on the lock; abandoned locks with a dead recorded
+owner are reclaimed. An empty lock is not automatically deleted: inspect it
+and remove it only after confirming there is no startup in progress.
+An occupied non-Lemon control port fails immediately with a port-selection fix.
+An alive but unhealthy managed runtime requires inspection of its log and an
+explicit stop, rather than starting another daemon. Stop verifies the process
+start identity in the pid record before sending a signal, so stale/reused PIDs
+cannot terminate an unrelated process. Select the same
+`LEMON_CONTROL_PLANE_PORT` for start, stop, restart, and status.
 
 ## Safe managed-release updates
 
@@ -304,6 +324,22 @@ key only when it is absent, skips a provider that is already usable, and
 re-derives state before reporting the final result. It never replaces an
 existing config or secrets master key.
 
+The full wizard makes the onboarded provider/model the default automatically;
+accepting prompts no longer stores a credential while leaving coding unusable.
+Choose **OpenAI Codex → Sign in with ChatGPT** for a ChatGPT subscription, or run
+`lemon setup --provider chatgpt` directly. OAuth remains interactive. For scripts,
+`lemon setup --non-interactive --provider openai --token "$OPENAI_API_KEY" --model gpt-5 --skip-verify`
+creates config/secrets, stores the credential, and sets defaults without asking
+questions. Omit `--skip-verify` to verify online. Incomplete setup exits nonzero;
+rerunning an already configured setup preserves credentials and does not sign
+in again.
+
+`lemon doctor` fails when the selected default has a missing/mismatched model or
+an unreadable credential, rather than accepting the mere presence of a secret
+reference. It reports offline credential usability, not an unperformed API
+login check. An occupied control-plane port that does not return Lemon's health
+body is a failure with an explicit stop/change-port remedy.
+
 When setup onboards a provider, it always performs offline configuration checks
 and performs the provider's live credential check by default. Use
 `lemon setup --skip-verify` or `lemon setup provider --skip-verify` only to
@@ -399,15 +435,15 @@ falls back to accepting the callback URL or authorization code manually.
 # Installed release
 lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
 lemon model --provider gemini --project-id your-gcp-project
-lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+lemon model --provider openai-codex --token <token> --set-default --model gpt-5.5
 lemon model --provider github-copilot --enterprise-domain company.ghe.com
 
 # Source checkout
 ./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
 ./bin/lemon model --provider gemini --project-id your-gcp-project
-./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.5
 ./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
 
 # Contributors can invoke the underlying Mix task directly.
-mix lemon.onboard codex --token <token> --set-default --model gpt-5.2
+mix lemon.onboard codex --token <token> --set-default --model gpt-5.5
 ```

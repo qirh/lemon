@@ -10,7 +10,7 @@
 # Run `./bin/lemon --help` for the command list.
 #
 #   ./bin/lemon                    # interactive terminal: TUI (starts the runtime if needed)
-#   ./bin/lemon start|run [opts]   # foreground runtime (see `./bin/lemon start --help`)
+#   ./bin/lemon start [opts]       # foreground runtime (see `./bin/lemon start --help`)
 #   ./bin/lemon daemon|stop|restart|status
 #   ./bin/lemon <command> [args]   # setup, doctor, sessions, send, node, ... via LemonCli.CLI
 
@@ -32,8 +32,6 @@ LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TUI_DIR="$LEMON_ROOT/clients/tui"
 LEMON_HOME_DIR="$HOME/.lemon"
 STATE_DIR="$LEMON_HOME_DIR/run"
-PIDFILE="$STATE_DIR/lemon.pid"
-LOG_FILE="/tmp/lemon-runtime.log"
 export LEMON_PATH="$LEMON_ROOT"
 export LEMON_CLI_LAUNCHER=source LEMON_LAUNCHER="$SCRIPT_DIR/lemon" LEMON_NODE_LAUNCH_CWD="$LAUNCH_CWD"
 
@@ -46,6 +44,78 @@ NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_
 DISTRIBUTED=1
 DEBUG=""
 
+# Lifecycle state is per control-plane port, including when --port is supplied.
+runtime_paths() {
+  PIDFILE="${LEMON_RUNTIME_PID_FILE:-$STATE_DIR/lemon-$PORT.pid}"
+  LOG_FILE="${LEMON_RUNTIME_LOG_FILE:-$STATE_DIR/lemon-$PORT.log}"
+  LOCK_DIR="$STATE_DIR/lemon-$PORT.lock"
+}
+runtime_paths
+
+process_identity() { ps -p "$1" -o lstart= 2>/dev/null; }
+
+owned_runtime_pid() {
+  local pid born
+  [ -f "$PIDFILE" ] && [ ! -L "$PIDFILE" ] && [ -O "$PIDFILE" ] || return 1
+  { IFS= read -r pid; IFS= read -r born; } < "$PIDFILE" || return 1
+  [[ "$pid" =~ ^[0-9]+$ ]] && [ -n "$born" ] || return 1
+  [ "$(process_identity "$pid")" = "$born" ] || return 1
+  printf '%s' "$pid"
+}
+
+record_runtime_pid() {
+  local temporary
+  temporary="$(mktemp "$STATE_DIR/.pid.XXXXXX")"
+  printf '%s\n%s\n' "$1" "$(process_identity "$1")" > "$temporary"
+  chmod 600 "$temporary"
+  mv "$temporary" "$PIDFILE"
+}
+
+release_start_lock() {
+  [ "${HAVE_START_LOCK:-0}" = 1 ] || return 0
+  rm -f "$LOCK_DIR/owner"
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  HAVE_START_LOCK=0
+}
+
+acquire_start_lock() {
+  local owner attempt
+  umask 077
+  mkdir -p "$STATE_DIR"
+  for ((attempt = 0; attempt < 120; attempt++)); do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      printf '%s\n' "$$" > "$LOCK_DIR/owner"
+      HAVE_START_LOCK=1
+      trap release_start_lock EXIT
+      trap 'exit 130' INT
+      trap 'exit 143' TERM
+      return 0
+    fi
+    owner="$(cat "$LOCK_DIR/owner" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null &&
+       mkdir "$LOCK_DIR/reaping" 2>/dev/null; then
+      # Only one reaper may unlink the dead owner's record. rmdir, not rm -rf,
+      # prevents an old waiter from deleting a newly acquired lock.
+      rm -f "$LOCK_DIR/owner"
+      rmdir "$LOCK_DIR/reaping" "$LOCK_DIR" 2>/dev/null || true
+      continue
+    fi
+    sleep 0.25
+  done
+  error "startup is locked at $LOCK_DIR; check its owner before removing an abandoned lock"
+  return 1
+}
+
+control_port_in_use() {
+  # Bash TCP redirection avoids a dependency on platform-specific nc flags.
+  (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null
+}
+
+compile_source() {
+  [ "${SOURCE_COMPILED:-0}" = 1 ] && return 0
+  (cd "$LEMON_ROOT" && mix compile) || return
+  SOURCE_COMPILED=1
+}
 # ── Managed operator credential: lets a later TUI or CLI process authenticate
 # to a daemon without putting the bearer in argv. Explicit tokens stay
 # caller-owned and are never persisted. ──
@@ -101,7 +171,7 @@ ensure_managed_token() {
 
 # ── A 200 from /healthz is not proof that Lemon answered it; require the
 # documented bodies before reusing whatever holds the port. ──
-healthz() { curl -fsS --connect-timeout 1 --max-time 5 "http://127.0.0.1:$1/healthz" 2>/dev/null || true; }
+healthz() { curl --noproxy '*' -fsS --connect-timeout 1 --max-time 1 "http://127.0.0.1:$1/healthz" 2>/dev/null || true; }
 control_plane_healthy() {
   local ok='"ok"[[:space:]]*:[[:space:]]*true'
   [[ "$(healthz "$PORT")" =~ $ok ]]
@@ -121,8 +191,8 @@ wait_until() {
 # then pass argv as data through the same fixed expression releases use.
 run_cli() {
   cd "$LEMON_ROOT"
-  mix deps.check >/dev/null 2>&1 || mix deps.get >/dev/null
-  mix compile >/dev/null
+  # Dependencies are installed explicitly; launching must never mutate them.
+  compile_source >/dev/null
   exec mix run --no-start --no-compile --no-deps-check -e 'LemonCli.CLI.main(System.argv())' -- "$@"
 }
 
@@ -147,6 +217,7 @@ parse_runtime_options() {
     esac
     shift
   done
+  runtime_paths
 }
 
 # Long-lived BEAM processes may be denied keychain reads, and stale session env
@@ -167,11 +238,12 @@ load_secrets_master_key() {
 
 # Starts the unified runtime in the foreground (exec) or background.
 start_runtime() {
-  local mode="$1" pid attempt pidfile="${LEMON_RUNTIME_PID_FILE:-$PIDFILE}"
-  local cmd=(mix run --no-start --no-halt -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
+  local mode="$1" pid attempt
+  local cmd=(mix run --no-start --no-halt --no-compile --no-deps-check -e 'LemonCore.Runtime.Boot.start!(:runtime_full)')
   local port
   for port in "$PORT" "$WEB_PORT" "$SIM_PORT"; do
-    [[ "$port" =~ ^[0-9]+$ ]] || { error "invalid port value: $port"; exit 2; }
+    [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port > 0 && 10#$port <= 65535)) ||
+      { error "invalid port value: $port (expected 1-65535)"; exit 2; }
   done
   # Reuse guard before compiling or registering the Erlang node name: a
   # duplicate lemon@host registration would fail before the in-VM Boot guard.
@@ -180,6 +252,22 @@ start_runtime() {
     if [ "$mode" = "daemon" ]; then return 0; fi
     exit 0
   fi
+  acquire_start_lock || exit 1
+  # Another launcher may have finished while this one waited.
+  if control_plane_healthy; then
+    release_start_lock
+    info "a healthy Lemon runtime is already running on port $PORT; reusing it"
+    return 0
+  fi
+  if control_port_in_use; then
+    error "port $PORT is occupied but does not answer Lemon health checks; free it or use --port <port>"
+    exit 1
+  fi
+  if pid="$(owned_runtime_pid)"; then
+    error "managed runtime pid $pid is alive but unhealthy; inspect $LOG_FILE, then run './bin/lemon stop' before retrying"
+    exit 1
+  fi
+  rm -f "$PIDFILE"
   if [ "$DISTRIBUTED" = "1" ]; then
     [ -n "$NODE_COOKIE" ] || { error "distributed mode requires a non-empty --cookie"; exit 2; }
     if [ -z "$NODE_MODE" ]; then
@@ -194,8 +282,7 @@ start_runtime() {
   load_secrets_master_key
 
   cd "$LEMON_ROOT"
-  mix deps.get
-  mix compile
+  compile_source
   info "Control plane: ws://localhost:$PORT/ws"
   info "Web UI:        http://localhost:$WEB_PORT/"
   info "Sim UI:        http://localhost:$SIM_PORT/"
@@ -204,38 +291,42 @@ start_runtime() {
 
   if [ "$mode" = "foreground" ]; then
     [ "$DISTRIBUTED" = "0" ] || info "Distributed node: --$NODE_MODE $NODE_NAME (attach with iex --remsh and the same cookie)"
+    record_runtime_pid "$$"
+    release_start_lock
     exec "${cmd[@]}"
   fi
 
   nohup "${cmd[@]}" > "$LOG_FILE" 2>&1 &
   pid=$!
-  (umask 077 && mkdir -p "$(dirname "$pidfile")" && printf '%s\n' "$pid" > "$pidfile")
-  for ((attempt = 0; attempt < 60; attempt++)); do
+  record_runtime_pid "$pid"
+  for ((attempt = 0; attempt < 240; attempt++)); do
     if control_plane_healthy; then
       info "Runtime started in background (pid: $pid); logs: $LOG_FILE"
+      release_start_lock
       return 0
     fi
     kill -0 "$pid" 2>/dev/null || break
-    sleep 1
+    sleep 0.25
   done
   error "Runtime did not become healthy on port $PORT. See $LOG_FILE"
+  # Never leave a failed launch occupying ports or holding an unexplained pid.
+  kill -TERM "$pid" 2>/dev/null || true
+  rm -f "$PIDFILE"
   exit 1
 }
 
 stop_runtime() {
   local pid attempt
-  pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-  if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then
-    rm -f "$PIDFILE"
-    error "not running (no live pid in $PIDFILE)"
+  if ! pid="$(owned_runtime_pid)"; then
+    error "not running (missing, stale, or unowned pid record in $PIDFILE); no process was signalled"
     return 1
   fi
   kill -TERM "$pid"
   for ((attempt = 0; attempt < 30; attempt++)); do
-    kill -0 "$pid" 2>/dev/null || break
+    [ "$(owned_runtime_pid || true)" = "$pid" ] || break
     sleep 1
   done
-  ! kill -0 "$pid" 2>/dev/null || kill -KILL "$pid"
+  [ "$(owned_runtime_pid || true)" != "$pid" ] || kill -KILL "$pid"
   rm -f "$PIDFILE"
   info "stopped"
 }
@@ -260,17 +351,31 @@ open_browser() {
 
 COMMAND="${1:-}"
 if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
+  # Tern's --typed wrapper recognizes built-ins, not custom ACP agents.
+  # Use the registered Lemon id directly; explicit `lemon tui` stays terminal.
+  if [ -n "${TERN_PANE:-}" ]; then
+    tern_bin="${TERN_ACP:-}"
+    [ -n "$tern_bin" ] || tern_bin="$(command -v tern || true)"
+    [ -z "$tern_bin" ] || exec "$tern_bin" acp lemon
+  fi
   COMMAND="tui"
   set -- tui
 fi
 
 case "$COMMAND" in
-  tui|web|start|run|daemon|stop|restart|status)
+  tui|web|start|daemon|stop|restart|status)
     case "${2:-}" in -h|--help) run_cli help "$COMMAND" ;; esac
     ;;
 esac
 
 case "$COMMAND" in
+  acp)
+    shift
+    case "${1:-}" in -h|--help) run_cli acp --help ;; esac
+    ensure_managed_token || exit 1
+    if ! control_plane_healthy; then start_runtime daemon >&2; fi
+    run_cli acp "$@"
+    ;;
   tui)
     shift
     command -v bun >/dev/null 2>&1 || { error "Bun is required to run the TUI; install Bun and put 'bun' on PATH."; exit 1; }
@@ -284,6 +389,7 @@ case "$COMMAND" in
     if ! control_plane_healthy; then
       # First launch only: finish setup in one VM before starting a daemon.
       if [ -t 0 ] && [ -t 1 ]; then
+        compile_source >/dev/null
         (run_cli setup --if-required) || exit 1
       fi
       start_runtime daemon
@@ -315,7 +421,7 @@ case "$COMMAND" in
     [ "${2:-}" = "--no-open" ] || open_browser "http://127.0.0.1:$WEB_PORT/"
     ;;
 
-  start|run)
+  start)
     shift
     parse_runtime_options "$@"
     start_runtime foreground
@@ -327,7 +433,11 @@ case "$COMMAND" in
     start_runtime daemon
     ;;
 
-  stop) stop_runtime ;;
+  stop)
+    shift
+    parse_runtime_options "$@"
+    stop_runtime
+    ;;
 
   restart)
     shift
@@ -337,16 +447,21 @@ case "$COMMAND" in
     ;;
 
   status)
-    pid="$(cat "$PIDFILE" 2>/dev/null || true)"
-    [ -f "$PIDFILE" ] || { echo "lemon: not running (no pidfile)"; exit 1; }
-    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-      echo "lemon: not running (stale pidfile: ${pid:-empty})"
+    shift
+    parse_runtime_options "$@"
+    if ! pid="$(owned_runtime_pid)"; then
+      if control_plane_healthy; then
+        echo "lemon: healthy on port $PORT (not managed by this HOME)"
+        exit 0
+      fi
+      echo "lemon: not running (missing, stale, or unowned pid record)"
       exit 1
     fi
     if control_plane_healthy; then
       echo "lemon: running (pid $pid), control-plane healthy on port $PORT"
     else
       echo "lemon: running (pid $pid), control-plane not reachable on port $PORT"
+      exit 1
     fi
     ;;
 

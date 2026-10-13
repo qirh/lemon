@@ -6,6 +6,19 @@ defmodule CodingAgent.Tools.GrepTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+  test "fallback skips explicitly targeted binary files", %{tmp_dir: tmp_dir} do
+    File.write!(Path.join(tmp_dir, "binary.dat"), <<"needle", 0, 255>>)
+
+    assert %AgentToolResult{details: %{match_count: 0}} =
+             Grep.execute(
+               "binary",
+               %{"pattern" => "needle", "path" => "binary.dat"},
+               nil,
+               nil,
+               tmp_dir,
+               ripgrep_available?: false
+             )
+  end
 
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do
