@@ -76,10 +76,10 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 
 		sessionsCommand,
 		sessionCommand,
+		forkCommand,
 		nameCommand,
 		treeCommand,
 		rewindCommand,
-		forkCommand,
 		resetCommand,
 		resumeCommand,
 		historyCommand,

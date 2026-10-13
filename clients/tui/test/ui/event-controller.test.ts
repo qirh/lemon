@@ -232,4 +232,5 @@ test("tool boundaries seal each assistant segment before later text reaches the 
 	expect(text.match(/BEFORE_TOOL/g)).toHaveLength(1);
 	expect(text.match(/AFTER_TOOL/g)).toHaveLength(1);
 	expect(assistantBlocks(app).filter((block) => block.runId === "run-order")).toHaveLength(2);
+
 });

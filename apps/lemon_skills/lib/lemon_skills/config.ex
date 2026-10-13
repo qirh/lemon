@@ -676,6 +676,7 @@ defmodule LemonSkills.Config do
   defp do_validate_mcp_config({:stdio, command, args, opts})
        when is_binary(command) and is_list(args) and is_list(opts) do
     with :ok <- do_validate_mcp_config({:stdio, command, args}),
+         :ok <- validate_mcp_metadata(opts),
          :ok <- validate_mcp_filter_opts(opts),
          :ok <- validate_mcp_env(Keyword.get(opts, :env, [])),
          true <- is_nil(opts[:cwd]) or is_binary(opts[:cwd]) do
@@ -749,13 +750,33 @@ defmodule LemonSkills.Config do
         mcp_servers()
 
     # Convert JSON format to tuple format
-    servers = Enum.flat_map(merged_servers, &parse_mcp_server_config/1)
+    servers =
+      merged_servers
+      |> Enum.flat_map(&parse_mcp_server_config/1)
+      |> Enum.reduce({[], MapSet.new()}, fn config, {configs, names} ->
+        name = mcp_server_name(config)
+
+        if is_binary(name) and MapSet.member?(names, name) do
+          {configs, names}
+        else
+          {[config | configs], if(is_binary(name), do: MapSet.put(names, name), else: names)}
+        end
+      end)
+      |> elem(0)
+      |> Enum.reverse()
 
     %{
       servers: servers,
       enabled: Map.get(project_config, "enabled", Map.get(global_config, "enabled", true))
     }
   end
+
+  defp mcp_server_name({:stdio, _, _, opts}), do: Keyword.get(opts, :name)
+
+  defp mcp_server_name({transport, _, opts}) when transport in [:http, :sse],
+    do: Keyword.get(opts, :name)
+
+  defp mcp_server_name(_), do: nil
 
   @doc """
   Get the global MCP configuration file path.
@@ -818,15 +839,15 @@ defmodule LemonSkills.Config do
     end
   end
 
-  # Parse MCP server config from JSON format to tuple format
-  defp parse_mcp_server_config(%{"type" => "stdio", "command" => command} = config)
-       when is_binary(command) do
+  @doc false
+  def parse_mcp_server_config(%{"type" => "stdio", "command" => command} = config)
+      when is_binary(command) do
     args = Map.get(config, "args", [])
 
     opts =
       mcp_timeout_opts(config) ++
         mcp_env_opts(config) ++
-        mcp_filter_opts(config) ++ sampling_config_opts(config)
+        mcp_filter_opts(config) ++ sampling_config_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:stdio, command, args}]
@@ -835,9 +856,9 @@ defmodule LemonSkills.Config do
     end
   end
 
-  defp parse_mcp_server_config(%{"type" => "http", "url" => url} = config)
-       when is_binary(url) do
-    opts = http_config_opts(config)
+  def parse_mcp_server_config(%{"type" => "http", "url" => url} = config)
+      when is_binary(url) do
+    opts = http_config_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:http, url}]
@@ -846,9 +867,9 @@ defmodule LemonSkills.Config do
     end
   end
 
-  defp parse_mcp_server_config(%{"type" => "sse", "url" => url} = config)
-       when is_binary(url) do
-    opts = sse_config_opts(config)
+  def parse_mcp_server_config(%{"type" => "sse", "url" => url} = config)
+      when is_binary(url) do
+    opts = sse_config_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:sse, url}]
@@ -858,19 +879,51 @@ defmodule LemonSkills.Config do
   end
 
   # Already in tuple format (from Application config)
-  defp parse_mcp_server_config({:stdio, _command, _args} = config), do: [config]
-  defp parse_mcp_server_config({:stdio, _command, _args, _opts} = config), do: [config]
-  defp parse_mcp_server_config({:http, _url} = config), do: [config]
-  defp parse_mcp_server_config({:http, _url, _opts} = config), do: [config]
-  defp parse_mcp_server_config({:sse, _url} = config), do: [config]
-  defp parse_mcp_server_config({:sse, _url, _opts} = config), do: [config]
+  def parse_mcp_server_config({:stdio, _command, _args} = config), do: [config]
+  def parse_mcp_server_config({:stdio, _command, _args, _opts} = config), do: [config]
+  def parse_mcp_server_config({:http, _url} = config), do: [config]
+  def parse_mcp_server_config({:http, _url, _opts} = config), do: [config]
+  def parse_mcp_server_config({:sse, _url} = config), do: [config]
+  def parse_mcp_server_config({:sse, _url, _opts} = config), do: [config]
 
   # Unknown format - skip
-  defp parse_mcp_server_config(_config) do
+  def parse_mcp_server_config(_config) do
     require Logger
     Logger.debug("Skipping unknown MCP server config format")
     []
   end
+
+  defp mcp_metadata_opts(config) do
+    Enum.flat_map(
+      [{"name", :name}, {"approval", :approval}, {"tool_approvals", :tool_approvals}],
+      fn
+        {key, option} ->
+          case Map.fetch(config, key) do
+            {:ok, value} ->
+              value =
+                case option do
+                  :approval ->
+                    normalize_mcp_approval(value)
+
+                  :tool_approvals when is_map(value) ->
+                    Map.new(value, fn {tool, policy} -> {tool, normalize_mcp_approval(policy)} end)
+
+                  _ ->
+                    value
+                end
+
+              [{option, value}]
+
+            :error ->
+              []
+          end
+      end
+    )
+  end
+
+  defp normalize_mcp_approval("always"), do: :always
+  defp normalize_mcp_approval("never"), do: :never
+  defp normalize_mcp_approval(value), do: value
 
   defp http_config_opts(config) do
     header_opts =
@@ -995,6 +1048,38 @@ defmodule LemonSkills.Config do
     end
   end
 
+  @doc false
+  def validate_mcp_metadata(opts) do
+    cond do
+      Keyword.has_key?(opts, :name) and not valid_mcp_metadata_name?(opts[:name]) ->
+        {:error, "name must be a nonempty string without control characters"}
+
+      Keyword.has_key?(opts, :approval) and
+          opts[:approval] not in [:always, :never, "always", "never"] ->
+        {:error, "approval must be always or never"}
+
+      Keyword.has_key?(opts, :tool_approvals) and
+          not valid_mcp_tool_approvals?(opts[:tool_approvals]) ->
+        {:error, "tool_approvals must map tool names to always or never"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_mcp_metadata_name?(name) do
+    is_binary(name) and name != "" and String.valid?(name) and
+      not Regex.match?(~r/[\x00-\x1f\x7f-\x9f]/u, name)
+  end
+
+  defp valid_mcp_tool_approvals?(policies) when is_map(policies) do
+    Enum.all?(policies, fn {name, policy} ->
+      valid_mcp_metadata_name?(name) and policy in [:always, :never, "always", "never"]
+    end)
+  end
+
+  defp valid_mcp_tool_approvals?(_), do: false
+
   defp validate_mcp_filter_opts(opts) do
     allowed_keys = [
       :allow_tools,
@@ -1077,6 +1162,7 @@ defmodule LemonSkills.Config do
 
   defp validate_http_opts(opts) do
     with :ok <- validate_mcp_filter_opts(opts),
+         :ok <- validate_mcp_metadata(opts),
          :ok <- validate_http_headers(Keyword.get(opts, :headers, [])),
          :ok <- validate_http_token_persistence(opts),
          :ok <- validate_http_oauth(Keyword.get(opts, :oauth, [])) do

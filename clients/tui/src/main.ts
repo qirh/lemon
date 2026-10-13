@@ -11,6 +11,7 @@ import { loadConfig } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
 import { consumeForkHandoff } from "./terminal/fork.ts";
 
+
 /** Injected by `scripts/build-binary.ts` via Bun's `define`. */
 declare const LEMON_TUI_VERSION: string | undefined;
 

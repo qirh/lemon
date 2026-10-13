@@ -256,6 +256,31 @@ defmodule LemonCore.StoreInstanceTest do
 
       assert File.exists?(Path.join(tmp_dir, "run_history_run_history_instance_test.sqlite3"))
     end
+
+    @tag :tmp_dir
+    test "starts history beside an explicit primary SQLite file", %{tmp_dir: tmp_dir} do
+      primary_path = Path.join(tmp_dir, "primary.sqlite3")
+      {:ok, primary} = SqliteBackend.init(path: primary_path)
+      on_exit(fn -> SqliteBackend.close(primary) end)
+      name = :run_history_primary_file_test
+
+      start_supervised!(
+        Supervisor.child_spec({LemonCore.RunHistoryStore, name: name, path: primary_path},
+          id: name
+        )
+      )
+
+      :ok =
+        LemonCore.RunHistoryStore.put(name, "file-store-session", 1_000, "run_file", %{
+          summary: %{}
+        })
+
+      assert [{"run_file", %{summary: %{}}}] =
+               LemonCore.RunHistoryStore.get(name, "file-store-session", limit: 10)
+
+      assert File.exists?(Path.join(tmp_dir, "run_history_run_history_primary_file_test.sqlite3"))
+      refute File.dir?(primary_path)
+    end
   end
 
   describe "ConfigCache instances" do

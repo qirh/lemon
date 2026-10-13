@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Opt-in production CLI benchmark. Only aggregate, code-authored data is retained."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def task(name, prompt, files, verify):
+    return {"name": name, "prompt": prompt, "files": files, "verify": verify}
+
+
+def tasks():
+    return [
+        task("bug_fix", "Fix the slug function so punctuation does not leave repeated or edge hyphens. Run the existing tests.",
+             {"slug.py": "def slug(text):\n    return text.lower().replace(' ', '-')\n",
+              "test_slug.py": "import unittest\nfrom slug import slug\nclass SlugTest(unittest.TestCase):\n def test_slug(self):\n  self.assertEqual(slug(' Hello,   World!! '), 'hello-world')\n  self.assertEqual(slug('---'), '')\nif __name__ == '__main__': unittest.main()\n"},
+             "from slug import slug\nassert slug(' Hello,   World!! ') == 'hello-world'\nassert slug('A_B / C') == 'a-b-c'\nassert slug('---') == ''\n"),
+        task("multi_file_refactor", "Refactor currency formatting into money.py as format_money(cents). Update both consumers, preserve their public behavior, and remove duplicated formatting. Add tests.",
+             {"invoice.py": "def invoice_total(cents):\n return '$%.2f' % (cents / 100)\n",
+              "receipt.py": "def receipt_total(cents):\n return '$%.2f' % (cents / 100)\n"},
+             "from money import format_money\nfrom invoice import invoice_total\nfrom receipt import receipt_total\nfrom pathlib import Path\nfor value in [0, 123, -450]:\n expected = '$%.2f' % (value / 100)\n assert format_money(value) == invoice_total(value) == receipt_total(value) == expected\nfor name in ['invoice.py','receipt.py']:\n text=Path(name).read_text()\n assert 'format_money' in text and ' / 100' not in text\nassert list(Path('.').glob('test*.py'))\n"),
+        task("feature_and_test", "Add paginate(items, page, page_size) to paging.py: one-based pages, return the selected slice, reject nonpositive page/page_size with ValueError, and return [] beyond the end. Add unittest regression tests and run them.",
+             {"paging.py": '"""Collection helpers."""\n'},
+             "from paging import paginate\nfrom pathlib import Path\nassert paginate(list(range(8)),2,3)==[3,4,5]\nassert paginate([1],3,2)==[]\nfor args in [(0,2),(1,0),(-1,3)]:\n try: paginate([1],*args)\n except ValueError: pass\n else: raise AssertionError('invalid pagination accepted')\nassert list(Path('.').glob('test*.py'))\n"),
+        task("read_and_answer", "Inspect the source and configuration. Explain which port production uses and why staging differs. Do not modify files. Include both numeric port values in your answer.",
+             {"config.json": '{"base_port": 7300, "environments": {"production": {"offset": 17}, "staging": {"offset": 4}}}\n',
+              "ports.py": "import json\ndef port(environment):\n with open('config.json') as f: config=json.load(f)\n return config['base_port']+config['environments'][environment]['offset']\n"},
+             "import os\nanswer=os.environ['BENCHMARK_ANSWER']\nassert '7317' in answer and '7304' in answer\n"),
+        task("bash_debugging", "The report command `python3 report.py` fails. Diagnose by running it and inspecting the local CSV. Fix parsing and aggregation so the command prints exactly TOTAL=42. Preserve the input file.",
+             {"data.csv": "name,amount\nalpha, 10\nbeta,12\ngamma,20\n",
+              "report.py": "from pathlib import Path\nrows=Path('data.csv').read_text().splitlines()\nprint('TOTAL=' + str(sum(int(row.split(',')[0]) for row in rows)))\n"},
+             "import subprocess\nfrom pathlib import Path\nr=subprocess.run(['python3','report.py'],capture_output=True,text=True)\nassert r.returncode==0 and r.stdout.strip()=='TOTAL=42'\nassert Path('data.csv').read_text()=='name,amount\\nalpha, 10\\nbeta,12\\ngamma,20\\n'\n"),
+        task("large_file_edit", "Fix lookup('target') in catalog.py to return 999999 instead of -1. Preserve every other catalog entry and formatting; this is a targeted edit in a large file.",
+             {"catalog.py": "VALUES = {\n" + ''.join(f"    'item_{i:05d}': {i},\n" for i in range(12000)) + "    'target': -1,\n}\ndef lookup(key):\n    return VALUES[key]\n"},
+             "from catalog import lookup, VALUES\nassert lookup('target')==999999\nassert len(VALUES)==12001\nfor i in range(12000): assert lookup('item_%05d' % i)==i\n"),
+        task("repo_search", "Find every obsolete API_TOKEN_V1 environment reference across this repository, migrate them to API_TOKEN_V2, and update the shared credential reader to use the new name. Preserve unrelated settings and add a regression test.",
+             {"service/auth.py": "import os\ndef token(): return os.environ.get('API_TOKEN_V1')\n",
+              "scripts/launch.sh": "#!/bin/sh\nexport API_TOKEN_V1=local-example\n",
+              "docs/config.txt": "API_TOKEN_V1 is the credential variable.\nTIMEOUT=30\n",
+              "service/__init__.py": ""},
+             "import os\nfrom pathlib import Path\nos.environ['API_TOKEN_V2']='benchmark-token'\nfrom service.auth import token\nassert token()=='benchmark-token'\nfor name in ['service/auth.py','scripts/launch.sh','docs/config.txt']:\n assert 'API_TOKEN_V1' not in Path(name).read_text()\n assert 'API_TOKEN_V2' in Path(name).read_text()\nassert 'TIMEOUT=30' in Path('docs/config.txt').read_text()\nassert list(Path('.').rglob('test*.py'))\n"),
+        task("tool_failure_recovery", "First run `python3 missing_check.py` to observe its failure. Recover by inspecting calculator.py and running the real test_calculator.py instead. Fix the integer division bug in average; empty input must raise ValueError. Add an empty-input regression test.",
+             {"calculator.py": "def average(values):\n return sum(values) // len(values)\n",
+              "test_calculator.py": "import unittest\nfrom calculator import average\nclass AverageTest(unittest.TestCase):\n def test_fraction(self): self.assertEqual(average([1,2]),1.5)\nif __name__=='__main__': unittest.main()\n"},
+             "from calculator import average\nassert average([1,2])==1.5\nassert average([-1,2])==0.5\ntry: average([])\nexcept ValueError: pass\nelse: raise AssertionError('empty average accepted')\n"),
+    ]
+
+
+def command(argv, cwd, **kwargs):
+    return subprocess.run(argv, cwd=cwd, text=True, capture_output=True, **kwargs)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--lemon', required=True)
+    parser.add_argument('--model', default='openai-codex:gpt-5.5')
+    parser.add_argument('--output', required=True)
+    parser.add_argument('--timeout', type=int, default=660)
+    parser.add_argument('--failure-dir', help='Opt-in private failure bundles; may contain raw model output')
+    args = parser.parse_args()
+    lemon = str(Path(args.lemon).resolve())
+    rows = []
+    for case in tasks():
+        with tempfile.TemporaryDirectory(prefix='lemon-coding-bench-') as tmp:
+            root = Path(tmp)
+            (root / '.gitignore').write_text('__pycache__/\n*.py[cod]\n')
+            for name, content in case['files'].items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            for argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
+                command(argv, root, check=True)
+            started = time.monotonic()
+            result = {}
+            failure = None
+            invocation = verifier = tests = None
+            try:
+                invocation = command([lemon, '-p', case['prompt'] + ' Use Python standard-library unittest for any tests; do not install dependencies.', '--output', 'json', '--model', args.model,
+                                      '--cwd', str(root), '--approval-policy', 'allow'], root, timeout=args.timeout)
+                try:
+                    result = json.loads(invocation.stdout)
+                except (ValueError, TypeError):
+                    failure = 'invalid_cli_json'
+                if not failure and (invocation.returncode != 0 or result.get('ok') is not True):
+                    failure = 'agent_failed'
+                env = dict(os.environ, BENCHMARK_ANSWER=result.get('answer') or '')
+                # The verifier lives outside the task repo: agents cannot edit the grading oracle.
+                verifier = command([sys.executable, '-c', case['verify']], root, env=env, timeout=30)
+                if verifier.returncode != 0 and not failure:
+                    failure = 'verifier_failed'
+                if case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root).stdout:
+                    failure = 'unexpected_mutation'
+                # Feature tasks must also have runnable tests, not only a filename.
+                if case['name'] in {'bug_fix','multi_file_refactor','feature_and_test','repo_search','tool_failure_recovery'}:
+                    tests = command([sys.executable,'-m','unittest','discover','-v'], root, timeout=30)
+                    if (tests.returncode != 0 or 'Ran 0 tests' in tests.stderr) and not failure:
+                        failure = 'tests_failed'
+            except subprocess.TimeoutExpired:
+                failure = 'timeout'
+            except OSError:
+                failure = 'invocation_failed'
+            usage = result.get('usage') or {}
+            metrics = result.get('metrics') or {}
+            tool_errors = metrics.get('tool_errors', usage.get('tool_errors'))
+            if case['name'] == 'tool_failure_recovery' and not failure:
+                if not isinstance(tool_errors, int) or tool_errors < 1:
+                    failure = 'recovery_not_observed'
+            if failure and args.failure_dir:
+                bundle = Path(args.failure_dir) / case['name']
+                bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
+                shutil.copytree(root, bundle / 'repo')
+                (bundle / 'verify.py').write_text(case['verify'])
+                for label, completed in [('cli', invocation), ('verifier', verifier), ('tests', tests)]:
+                    if completed is not None:
+                        (bundle / (label + '.stdout')).write_text(completed.stdout)
+                        (bundle / (label + '.stderr')).write_text(completed.stderr)
+            rows.append({'task': case['name'], 'passed': failure is None, 'failure': failure,
+                         'turns': metrics.get('turns', usage.get('turns')),
+                         'tokens': usage.get('totalTokens'), 'wall_seconds': round(time.monotonic()-started, 2),
+                         'tool_errors': tool_errors})
+            print(f"{case['name']}: {'PASS' if failure is None else 'FAIL ('+failure+')'}", flush=True)
+    report = {'schema_version': 1, 'suite': 'live_agentic_coding', 'model': args.model,
+              'passed': sum(row['passed'] for row in rows), 'total': len(rows), 'results': rows}
+    destination = Path(args.output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + '.tmp')
+    temporary.write_text(json.dumps(report, indent=2) + '\n')
+    temporary.replace(destination)
+    table = ['| Task | Result | Turns | Tokens | Wall (s) | Tool errors |', '| --- | --- | ---: | ---: | ---: | ---: |']
+    for row in rows:
+        values = [row['task'], 'PASS' if row['passed'] else 'FAIL', row['turns'], row['tokens'], row['wall_seconds'], row['tool_errors']]
+        table.append('| ' + ' | '.join('n/a' if value is None else str(value) for value in values) + ' |')
+    markdown = '\n'.join(table) + '\n\nMissing runtime metrics are n/a, never inferred from tool-call counts.\n'
+    destination.with_suffix('.md').write_text(markdown)
+    print(markdown)
+    return 0 if report['passed'] == report['total'] else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

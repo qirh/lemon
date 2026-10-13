@@ -56,6 +56,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:session_key, session_key)
     |> maybe_add_opt(:agent_id, agent_id)
     |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
+    |> maybe_add_opt(:acp_mcp_session_id, Keyword.get(opts, :acp_mcp_session_id))
     |> maybe_add_opt(
       :acp_client_fs_read_text_file,
       Keyword.get(opts, :acp_client_fs_read_text_file)
@@ -281,7 +282,10 @@ defmodule CodingAgent.Session.Presentation do
 
   def reasoning_action({:thinking_start, idx, partial}, %ReasoningAccumulator{} = acc) do
     {block, acc} = new_reasoning_block(idx, partial, acc)
-    {:emit, reasoning_action(block, :started, nil), acc}
+    delta = block.text
+    block = %{block | emitted_bytes: byte_size(block.text)}
+    acc = put_reasoning_block(acc, idx, block)
+    {:emit, reasoning_action(block, :started, nil, delta), acc}
   end
 
   def reasoning_action(
@@ -293,9 +297,10 @@ defmodule CodingAgent.Session.Presentation do
     block = %{block | text: block.text <> text}
 
     if byte_size(block.text) - block.emitted_bytes >= acc.threshold do
+      delta = un_emitted_reasoning(block)
       block = %{block | emitted_bytes: byte_size(block.text)}
       acc = put_reasoning_block(acc, idx, block)
-      {:emit, reasoning_action(block, :updated, nil), acc}
+      {:emit, reasoning_action(block, :updated, nil, delta), acc}
     else
       {:skip, put_reasoning_block(acc, idx, block)}
     end
@@ -307,9 +312,11 @@ defmodule CodingAgent.Session.Presentation do
       ) do
     {block, acc} = get_or_new_reasoning_block(idx, acc)
     text = reasoning_end_text(text, partial, idx, block.text)
-    block = %{block | text: text, emitted_bytes: byte_size(text)}
+    block = %{block | text: text}
+    delta = un_emitted_reasoning(block)
+    block = %{block | emitted_bytes: byte_size(text)}
     acc = delete_reasoning_block(acc, idx)
-    {:emit, reasoning_action(block, :completed, true), acc}
+    {:emit, reasoning_action(block, :completed, true, delta), acc}
   end
 
   def reasoning_action({:thinking_end, idx, partial}, %ReasoningAccumulator{} = acc) do
@@ -983,10 +990,44 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def merge_usage(acc, usage) do
-    Map.merge(acc, usage, fn _k, v1, v2 ->
-      if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
-    end)
+    merged =
+      Map.merge(acc, usage, fn _key, first, second ->
+        if is_number(first) and is_number(second), do: first + second, else: second
+      end)
+
+    previous_cost = Map.get(acc, :cost) || Map.get(acc, "cost")
+    current_cost = Map.get(usage, :cost) || Map.get(usage, "cost")
+
+    if is_map(previous_cost) or is_map(current_cost) do
+      merged |> Map.delete("cost") |> Map.put(:cost, merge_cost(previous_cost, current_cost))
+    else
+      merged
+    end
   end
+
+  defp merge_cost(previous, current) do
+    Enum.reduce(
+      [:input, :output, :cache_read, :cache_write, :cache_write_long, :total],
+      %{},
+      fn key, cost ->
+        first = cost_component(previous, key)
+        second = cost_component(current, key)
+
+        if is_nil(first) and is_nil(second),
+          do: cost,
+          else: Map.put(cost, key, (first || 0) + (second || 0))
+      end
+    )
+  end
+
+  defp cost_component(cost, key) when is_map(cost) do
+    case Map.get(cost, key, Map.get(cost, Atom.to_string(key))) do
+      value when is_number(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp cost_component(_cost, _key), do: nil
 
   defp new_reasoning_block(idx, partial, %ReasoningAccumulator{} = acc) do
     seq = acc.seq + 1
@@ -1015,7 +1056,12 @@ defmodule CodingAgent.Session.Presentation do
     %{acc | blocks: Map.delete(acc.blocks, idx)}
   end
 
-  defp reasoning_action(block, phase, ok) do
+  defp un_emitted_reasoning(block) do
+    offset = min(block.emitted_bytes, byte_size(block.text))
+    binary_part(block.text, offset, byte_size(block.text) - offset)
+  end
+
+  defp reasoning_action(block, phase, ok, delta) do
     text = block.text || ""
 
     %{
@@ -1024,13 +1070,12 @@ defmodule CodingAgent.Session.Presentation do
       title: reasoning_title(text),
       phase: phase,
       ok: ok,
-      detail: %{reasoning: reasoning_payload(text, phase)}
+      detail: %{reasoning: reasoning_payload(text, phase, delta)}
     }
   end
 
-  # `text` is the channel preview; `full_text` is always the operator copy,
-  # bounded to 16 KB, so streaming clients can recover faithful prefix deltas.
-  defp reasoning_payload(text, phase) do
+  # Bounded cumulative previews are separate from faithful incremental deltas.
+  defp reasoning_payload(text, phase, delta) do
     preview = reasoning_payload_text(text, phase)
 
     full =
@@ -1038,7 +1083,7 @@ defmodule CodingAgent.Session.Presentation do
         marker: fn removed -> "\n… [#{removed} bytes of reasoning omitted]" end
       )
 
-    %{text: preview, full_text: full, source: "lemon_reasoning"}
+    %{text: preview, full_text: full, delta: delta, source: "lemon_reasoning"}
   end
 
   defp reasoning_payload_text(text, :updated) when byte_size(text) <= 500, do: text

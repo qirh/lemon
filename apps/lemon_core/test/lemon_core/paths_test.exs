@@ -87,6 +87,28 @@ defmodule LemonCore.PathsTest do
     end
   end
 
+  describe "store directory" do
+    @tag :tmp_dir
+    test "resolves companion databases beside explicit primary files", %{tmp_dir: dir} do
+      for extension <- [".db", ".sqlite", ".sqlite3", ".SQLITE3"] do
+        assert Paths.store_dir(Path.join(dir, "primary" <> extension)) == dir
+      end
+
+      assert Paths.store_dir(Path.join(dir, "store")) == Path.join(dir, "store")
+    end
+
+    @tag :tmp_dir
+    test "preserves database-named directories and explicit directory paths", %{tmp_dir: dir} do
+      existing = Path.join(dir, "existing.db")
+      File.mkdir_p!(existing)
+
+      assert Paths.store_dir(existing) == existing
+
+      assert Paths.store_dir(Path.join(dir, "new.sqlite3") <> "/") ==
+               Path.join(dir, "new.sqlite3")
+    end
+  end
+
   describe "checkpoint directory" do
     test "defaults under the system temp dir, resolved per call" do
       assert Paths.checkpoint_dir() == Path.join(System.tmp_dir!(), "lemon_checkpoints")

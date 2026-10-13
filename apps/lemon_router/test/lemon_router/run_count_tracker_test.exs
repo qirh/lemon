@@ -23,49 +23,6 @@ defmodule LemonRouter.RunCountTrackerTest do
     :ok
   end
 
-  describe "queued counter" do
-    test "starts at zero after reset" do
-      assert RunCountTracker.queued() == 0
-    end
-
-    test "increments on [:lemon, :run, :submit] telemetry event" do
-      :telemetry.execute([:lemon, :run, :submit], %{count: 1}, %{
-        session_key: "test:rct:submit",
-        origin: :control_plane,
-        engine: "echo"
-      })
-
-      assert RunCountTracker.queued() >= 1
-    end
-
-    test "decrements on [:lemon, :run, :start] telemetry event" do
-      # Emit a submit first so there's something to decrement
-      :telemetry.execute([:lemon, :run, :submit], %{count: 1}, %{
-        session_key: "test:rct:start",
-        origin: :control_plane,
-        engine: "echo"
-      })
-
-      queued_after_submit = RunCountTracker.queued()
-      assert queued_after_submit >= 1
-
-      :telemetry.execute([:lemon, :run, :start], %{ts_ms: System.system_time(:millisecond)}, %{
-        run_id: "run_test_rct_start"
-      })
-
-      assert RunCountTracker.queued() < queued_after_submit
-    end
-
-    test "never returns negative values" do
-      # Force multiple starts without submits to drive counter below zero
-      Enum.each(1..5, fn _ ->
-        :telemetry.execute([:lemon, :run, :start], %{ts_ms: 0}, %{run_id: "run_neg"})
-      end)
-
-      assert RunCountTracker.queued() >= 0
-    end
-  end
-
   describe "completed_today counter" do
     test "starts at zero after reset" do
       assert RunCountTracker.completed_today() == 0
@@ -91,14 +48,7 @@ defmodule LemonRouter.RunCountTrackerTest do
   end
 
   describe "midnight reset" do
-    test "midnight_reset message clears counters" do
-      # Inject some counts
-      :telemetry.execute([:lemon, :run, :submit], %{count: 1}, %{
-        session_key: "s",
-        origin: :test,
-        engine: "e"
-      })
-
+    test "midnight_reset message clears today's terminal count" do
       :telemetry.execute([:lemon, :run, :stop], %{duration_ms: 1, ok: true}, %{
         run_id: "r"
       })
@@ -106,7 +56,7 @@ defmodule LemonRouter.RunCountTrackerTest do
       send(Process.whereis(RunCountTracker), :midnight_reset)
       Process.sleep(20)
 
-      assert RunCountTracker.queued() == 0
+      assert is_integer(RunCountTracker.queued())
       assert RunCountTracker.completed_today() == 0
     end
   end

@@ -35,6 +35,8 @@ defmodule LemonGateway.Runtime do
   @impl true
   @spec cancel_by_run_id(binary(), term()) :: :ok
   def cancel_by_run_id(run_id, reason \\ :user_requested) when is_binary(run_id) do
+    LemonGateway.Scheduler.cancel_execution(run_id, reason)
+
     case run_pid(run_id) do
       run_pid when is_pid(run_pid) ->
         LemonGateway.Scheduler.cancel(run_pid, reason)

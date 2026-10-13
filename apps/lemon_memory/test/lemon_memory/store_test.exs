@@ -32,6 +32,30 @@ defmodule LemonMemory.StoreTest do
     %{store_pid: pid, dir: dir}
   end
 
+  test "starts memory beside an explicit primary SQLite file", %{dir: dir} do
+    primary_path = Path.join(dir, "primary.sqlite3")
+    {:ok, primary} = LemonCore.Store.SqliteBackend.init(path: primary_path)
+    on_exit(fn -> LemonCore.Store.SqliteBackend.close(primary) end)
+    name = :memory_primary_file_test
+
+    {:ok, store} =
+      start_supervised(Supervisor.child_spec({Store, name: name, path: primary_path}, id: name))
+
+    doc =
+      Document.new(
+        session_key: "file-store-session",
+        agent_id: "file-store-agent",
+        prompt_summary: "feature",
+        answer_summary: "implemented"
+      )
+
+    assert :ok = Store.put_sync(store, doc)
+    assert {:ok, persisted} = Store.get_document(store, doc.doc_id)
+    assert persisted.doc_id == doc.doc_id
+    assert File.exists?(Path.join(dir, "memory.sqlite3"))
+    refute File.dir?(primary_path)
+  end
+
   test "put_sync returns only after the document is queryable", %{store_pid: store} do
     doc =
       Document.new(
