@@ -159,7 +159,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     }
 
     updates =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "id", "read", result, false}
       )
@@ -182,7 +182,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     }
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "id", "edit", result, false},
         cwd: "/workspace"
@@ -193,8 +193,10 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
   end
 
   test "internal resource subjects never become editor paths" do
-    notification =
-      SessionUpdates.tool_call("session", "id", "write", %{path: "xd://tool", content: "{}"},
+    [notification] =
+      updates_for(
+        "session",
+        {:tool_execution_start, "id", "write", %{path: "xd://tool", content: "{}"}},
         cwd: "/workspace"
       )
 
@@ -205,7 +207,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
   test "usage, compaction and failed tools use client supported updates" do
     [notification] =
-      SessionUpdates.session_updates("session", %{
+      updates_for("session", %{
         type: :usage,
         payload: %{contextWindow: 200_000, context_tokens: 123, total_tokens: 500}
       })
@@ -214,7 +216,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert update(notification)["used"] == 123
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:compaction_complete, %{id: "compact", summary: "short"}}
       )
@@ -227,7 +229,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
            }
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "id", "bash", "failed", true}
       )
@@ -285,6 +287,219 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
              updates,
              &update/1
            )
+  end
+
+  test "latest request context gauge is distinct from cumulative usage" do
+    messages = [
+      %AssistantMessage{usage: %Usage{input: 10, output: 5, total_tokens: 15}},
+      %AssistantMessage{usage: %Usage{input: 20, output: 3, cache_read: 7, total_tokens: 30}}
+    ]
+
+    usage = CodingAgent.Session.Presentation.build_usage(messages)
+    assert usage.total_tokens == 45
+    assert usage.context_tokens == 30
+
+    {updates, _state} =
+      SessionUpdates.map_event(
+        SessionUpdates.new("session", context_window: 200_000),
+        {:agent_end, messages}
+      )
+
+    assert update(hd(updates))["sessionUpdate"] == "usage_update"
+    assert update(hd(updates))["used"] == 30
+  end
+
+  test "native images and deletion diffs use valid ACP content fields" do
+    result = %AgentToolResult{
+      content: [%LemonAi.Types.ImageContent{mime_type: "image/png", data: "eA=="}],
+      details: %{path: "/workspace/deleted", oldText: "old"}
+    }
+
+    [notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "delete", "delete", result, false}
+      )
+
+    assert %{
+             "type" => "content",
+             "content" => %{"type" => "image", "mimeType" => "image/png", "data" => "eA=="}
+           } in update(notification)["content"]
+
+    assert %{
+             "type" => "diff",
+             "path" => "/workspace/deleted",
+             "oldText" => "old",
+             "newText" => ""
+           } in update(notification)["content"]
+  end
+
+  test "thought deltas continue beyond the cumulative preview bound" do
+    presentation = CodingAgent.Session.Presentation
+
+    {:emit, _start, accumulator} =
+      presentation.reasoning_action(
+        {:thinking_start, 0, nil},
+        presentation.new_reasoning_accumulator()
+      )
+
+    piece = String.duplicate("t", 1_000)
+
+    {accumulator, mapper, emitted} =
+      Enum.reduce(1..40, {accumulator, SessionUpdates.new("session"), []}, fn _,
+                                                                              {accumulator,
+                                                                               mapper, emitted} ->
+        {:emit, action, accumulator} =
+          presentation.reasoning_action({:thinking_delta, 0, piece, nil}, accumulator)
+
+        {updates, mapper} =
+          SessionUpdates.map_event(mapper, %{
+            type: :engine_action,
+            payload: %{action: action, phase: action.phase}
+          })
+
+        {accumulator, mapper, emitted ++ updates}
+      end)
+
+    {:emit, action, _accumulator} =
+      presentation.reasoning_action(
+        {:thinking_end, 0, String.duplicate(piece, 40), nil},
+        accumulator
+      )
+
+    {updates, _mapper} =
+      SessionUpdates.map_event(mapper, %{
+        type: :engine_action,
+        payload: %{action: action, phase: action.phase}
+      })
+
+    assert updates == []
+    assert Enum.map_join(emitted, &update(&1)["content"]["text"]) == String.duplicate(piece, 40)
+  end
+
+  test "raw tool output omits hidden thinking and malformed locations stay bounded" do
+    result = %AgentToolResult{
+      content: [
+        %TextContent{text: "visible", text_signature: "private"},
+        %LemonAi.Types.ThinkingContent{thinking: "hidden"}
+      ],
+      details: %{
+        path: "/workspace/file",
+        first_changed_line: %{text: String.duplicate("x", 100_000)}
+      }
+    }
+
+    [notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "call", "read", result, false}
+      )
+
+    assert update(notification)["rawOutput"]["content"] == [
+             %{"type" => "text", "text" => "visible"}
+           ]
+
+    assert update(notification)["locations"] == [%{"path" => "/workspace/file"}]
+    assert byte_size(Jason.encode!(notification)) < 40_000
+  end
+
+  test "multi-response costs add every component instead of replacing the previous response" do
+    merged =
+      CodingAgent.Session.Presentation.merge_usage(
+        %{
+          "cost" => %{"input" => 0.1, "output" => 0.2, "total" => 0.3, "cache_write_long" => 0.04}
+        },
+        %{
+          cost: %LemonAi.Types.Cost{
+            input: 0.3,
+            output: 0.4,
+            total: 0.7,
+            cache_read: 0.2,
+            cache_write: 0.1
+          }
+        }
+      )
+
+    assert_in_delta merged.cost.input, 0.4, 0.000001
+    assert_in_delta merged.cost.output, 0.6, 0.000001
+    assert_in_delta merged.cost.total, 1.0, 0.000001
+    assert merged.cost.cache_read == 0.2
+    assert merged.cost.cache_write == 0.1
+    assert merged.cost.cache_write_long == 0.04
+    refute Map.has_key?(merged, "cost")
+  end
+
+  test "plans preserve native priorities and canonical structured state" do
+    entries = [
+      %{content: "Urgent", status: "in_progress", priority: "high"},
+      %{content: "Later", status: "pending", priority: "low"}
+    ]
+
+    result = %{
+      details: %{todos: [%{content: "Filtered", status: "pending"}], plan: %{entries: entries}}
+    }
+
+    [_tool, notification] =
+      updates_for("session", {:tool_execution_end, "todo", "todo", result, false})
+
+    assert update(notification)["entries"] == [
+             %{"content" => "Urgent", "status" => "in_progress", "priority" => "high"},
+             %{"content" => "Later", "status" => "pending", "priority" => "low"}
+           ]
+
+    [_tool, notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "todo", "todo", %{details: %{todos: entries}}, false}
+      )
+
+    assert hd(update(notification)["entries"])["priority"] == "high"
+  end
+
+  test "oversized plan entries obey the rendered collection budget" do
+    entries =
+      Enum.map(1..100, fn _ -> %{content: String.duplicate("x", 4_000), status: "pending"} end)
+
+    [_tool, notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "todo", "todo", %{details: %{plan: %{entries: entries}}}, false}
+      )
+
+    assert length(update(notification)["entries"]) < 100
+    assert byte_size(Jason.encode!(update(notification)["entries"])) < 66_000
+  end
+
+  test "semantic cancellation emits no fabricated assistant error but real failures remain visible" do
+    state = SessionUpdates.new("session")
+    {[], cancelled} = SessionUpdates.map_event(state, {:cancel_requested})
+
+    {[], _state} =
+      SessionUpdates.map_event(cancelled, %{
+        type: :run_completed,
+        payload: %{ok: false, error: "acp_cancel"}
+      })
+
+    assert [] ==
+             updates_for("session", %{
+               type: :run_completed,
+               payload: %{ok: false, error: :acp_cancel}
+             })
+
+    [notice] =
+      updates_for("session", %{
+        type: :run_completed,
+        payload: %{ok: false, error: "Provider denied the request"}
+      })
+
+    assert update(notice)["sessionUpdate"] == "notice"
+    assert update(notice)["severity"] == "error"
+    assert update(notice)["description"] == "Provider denied the request"
+  end
+
+  defp updates_for(session_id, event, opts \\ []) do
+    {updates, _state} = SessionUpdates.map_event(SessionUpdates.new(session_id, opts), event)
+    updates
   end
 
   defp update(notification), do: notification["params"]["update"]
