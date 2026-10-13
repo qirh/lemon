@@ -25,6 +25,11 @@ defmodule CodingAgent.Tools.Edit do
   - When the session has read the file, the edit is refused if the file
     changed on disk since that read (`CodingAgent.FileReadTracker`).
   - UTF-8 BOM, CRLF/LF line endings, and the trailing newline are preserved.
+  - Binary data (invalid UTF-8 or NUL bytes) is rejected before matching.
+
+  Successful results include the absolute `path` and complete `oldText`/`newText`
+  snapshots only when both are at most 16 KiB. Otherwise both snapshots are
+  omitted; the existing diff and first changed line remain available.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -130,6 +135,7 @@ defmodule CodingAgent.Tools.Edit do
   defp do_execute_acp(path, resolved_path, old_text, new_text, signal, opts) do
     with :ok <- check_aborted(signal),
          {:ok, raw_content} <- ACPFileBridge.read_text_file(resolved_path, nil, nil, opts),
+         :ok <- FileValidation.check_text_content(raw_content, path),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
@@ -151,7 +157,9 @@ defmodule CodingAgent.Tools.Edit do
             text: "Successfully replaced text in #{path}.\n\n#{diff}"
           }
         ],
-        details: %{diff: diff, first_changed_line: first_changed_line, acp_client: true}
+        details:
+          %{diff: diff, first_changed_line: first_changed_line, acp_client: true}
+          |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
       }
     else
       error -> format_error(error, path)
@@ -168,8 +176,13 @@ defmodule CodingAgent.Tools.Edit do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
     with :ok <- check_aborted(signal),
-         :ok <- check_file_access(resolved_path),
+         :ok <-
+           FileValidation.check_mutation_target(
+             resolved_path,
+             Keyword.put(opts, :mutation_root, cwd)
+           ),
          {:ok, raw_content} <- File.read(resolved_path),
+         :ok <- FileValidation.check_text_content(raw_content, path),
          :ok <- FileReadTracker.check(opts, resolved_path, raw_content),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
@@ -205,6 +218,7 @@ defmodule CodingAgent.Tools.Edit do
         details:
           %{diff: diff, first_changed_line: first_changed_line}
           |> CheckpointGuard.put_details(checkpoint)
+          |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
           |> maybe_put_diagnostics(diagnostics)
       }
     else
@@ -260,7 +274,12 @@ defmodule CodingAgent.Tools.Edit do
     {:error, "Missing required parameter: #{param_name}"}
   end
 
-  defp validate_required_param(_value, _param_name), do: :ok
+  defp validate_required_param(value, param_name) when is_binary(value) do
+    FileValidation.check_text_content(value, param_name)
+  end
+
+  defp validate_required_param(_value, param_name),
+    do: {:error, "#{param_name} must be a string"}
 
   defp validate_old_text(""), do: {:error, "old_text must not be empty"}
   defp validate_old_text(_old_text), do: :ok
@@ -275,9 +294,6 @@ defmodule CodingAgent.Tools.Edit do
   # ============================================================================
   # File Access
   # ============================================================================
-
-  @spec check_file_access(String.t()) :: :ok | {:error, atom()}
-  defp check_file_access(path), do: FileValidation.check_write_access(path)
 
   # ============================================================================
   # Text Matching
@@ -303,10 +319,28 @@ defmodule CodingAgent.Tools.Edit do
   # Returns the byte index and byte length of the unique match in `content`.
   @spec find_match(String.t(), String.t()) :: match_result()
   defp find_match(content, search_text) do
-    case :binary.matches(content, search_text) do
+    case overlapping_matches(content, search_text) do
       [{index, length}] -> {:ok, index, length}
       [] -> find_line_match(content, search_text)
       matches -> multiple_occurrences(content, Enum.map(matches, &elem(&1, 0)))
+    end
+  end
+
+  # :binary.matches/2 skips overlapping matches (e.g. "aa" in "aaa").
+  # Advance one byte so uniqueness means every possible replacement location.
+  defp overlapping_matches(content, needle), do: overlapping_matches(content, needle, 0, [])
+
+  defp overlapping_matches(content, needle, offset, acc) do
+    if offset + byte_size(needle) > byte_size(content) do
+      Enum.reverse(acc)
+    else
+      case :binary.match(content, needle, scope: {offset, byte_size(content) - offset}) do
+        :nomatch ->
+          Enum.reverse(acc)
+
+        {index, length} ->
+          overlapping_matches(content, needle, index + 1, [{index, length} | acc])
+      end
     end
   end
 
@@ -383,7 +417,7 @@ defmodule CodingAgent.Tools.Edit do
       norm = elem(file.norms, index)
 
       norm
-      |> :binary.matches(needle)
+      |> overlapping_matches(needle)
       |> Enum.flat_map(fn {pos, len} ->
         with {:ok, start} <- span_start(file, index, pos, search.leading_space?),
              {:ok, stop} <- span_end(file, index, pos + len, search.trailing_space?) do
@@ -600,119 +634,20 @@ defmodule CodingAgent.Tools.Edit do
           {:same | :removed | :added, non_neg_integer(), String.t()}
         ]
   defp compute_line_changes(old_lines, new_lines) do
-    # Simple diff algorithm using longest common subsequence approach
-    # For each line, mark as same, removed, or added
-    lcs_diff(old_lines, new_lines)
-  end
-
-  @spec lcs_diff([String.t()], [String.t()]) :: [
-          {:same | :removed | :added, non_neg_integer(), String.t()}
-        ]
-  defp lcs_diff(old_lines, new_lines) do
-    # Build LCS matrix
-    m = length(old_lines)
-    n = length(new_lines)
-
-    # Convert to 0-indexed arrays for easier access
-    old_arr = :array.from_list(old_lines)
-    new_arr = :array.from_list(new_lines)
-
-    # Build the DP table
-    dp = build_lcs_table(old_arr, new_arr, m, n)
-
-    # Backtrack to find the diff
-    backtrack_diff(old_arr, new_arr, dp, m, n)
-  end
-
-  @spec build_lcs_table(
-          :array.array(String.t()),
-          :array.array(String.t()),
-          non_neg_integer(),
-          non_neg_integer()
-        ) ::
-          :array.array(:array.array(non_neg_integer()))
-  defp build_lcs_table(old_arr, new_arr, m, n) do
-    # Initialize (m+1) x (n+1) table with zeros
-    initial_row = :array.new(n + 1, default: 0)
-    dp = :array.new(m + 1, default: initial_row)
-
-    # Fill the table
-    Enum.reduce(1..m, dp, fn i, dp_acc ->
-      row =
-        Enum.reduce(1..n, :array.get(i, dp_acc), fn j, row_acc ->
-          old_line = :array.get(i - 1, old_arr)
-          new_line = :array.get(j - 1, new_arr)
-
-          value =
-            if old_line == new_line do
-              :array.get(j - 1, :array.get(i - 1, dp_acc)) + 1
-            else
-              max(
-                :array.get(j, :array.get(i - 1, dp_acc)),
-                :array.get(j - 1, row_acc)
-              )
-            end
-
-          :array.set(j, value, row_acc)
+    {changes, _old_line, _new_line} =
+      old_lines
+      |> List.myers_difference(new_lines)
+      |> Enum.reduce({[], 1, 1}, fn {kind, lines}, state ->
+        Enum.reduce(lines, state, fn text, {acc, old_line, new_line} ->
+          case kind do
+            :eq -> {[{:same, old_line, text} | acc], old_line + 1, new_line + 1}
+            :del -> {[{:removed, old_line, text} | acc], old_line + 1, new_line}
+            :ins -> {[{:added, new_line, text} | acc], old_line, new_line + 1}
+          end
         end)
+      end)
 
-      :array.set(i, row, dp_acc)
-    end)
-  end
-
-  @spec backtrack_diff(
-          :array.array(String.t()),
-          :array.array(String.t()),
-          :array.array(:array.array(non_neg_integer())),
-          non_neg_integer(),
-          non_neg_integer()
-        ) ::
-          [{:same | :removed | :added, non_neg_integer(), String.t()}]
-  defp backtrack_diff(old_arr, new_arr, dp, m, n) do
-    do_backtrack(old_arr, new_arr, dp, m, n, [])
-  end
-
-  defp do_backtrack(_old_arr, _new_arr, _dp, 0, 0, acc), do: acc
-
-  defp do_backtrack(old_arr, _new_arr, _dp, i, 0, acc) do
-    # All remaining old lines are removals
-    entries =
-      for idx <- (i - 1)..0//-1, idx >= 0 do
-        {:removed, idx + 1, :array.get(idx, old_arr)}
-      end
-      |> Enum.reverse()
-
-    entries ++ acc
-  end
-
-  defp do_backtrack(_old_arr, new_arr, _dp, 0, j, acc) do
-    # All remaining new lines are additions
-    entries =
-      for idx <- (j - 1)..0//-1, idx >= 0 do
-        {:added, idx + 1, :array.get(idx, new_arr)}
-      end
-      |> Enum.reverse()
-
-    entries ++ acc
-  end
-
-  defp do_backtrack(old_arr, new_arr, dp, i, j, acc) do
-    old_line = :array.get(i - 1, old_arr)
-    new_line = :array.get(j - 1, new_arr)
-
-    if old_line == new_line do
-      do_backtrack(old_arr, new_arr, dp, i - 1, j - 1, [{:same, i, old_line} | acc])
-    else
-      # Choose the direction with the higher LCS value
-      up_val = :array.get(j, :array.get(i - 1, dp))
-      left_val = :array.get(j - 1, :array.get(i, dp))
-
-      if up_val >= left_val do
-        do_backtrack(old_arr, new_arr, dp, i - 1, j, [{:removed, i, old_line} | acc])
-      else
-        do_backtrack(old_arr, new_arr, dp, i, j - 1, [{:added, j, new_line} | acc])
-      end
-    end
+    Enum.reverse(changes)
   end
 
   @spec format_diff(
@@ -761,22 +696,15 @@ defmodule CodingAgent.Tools.Edit do
     indices
     |> Enum.reduce([], fn idx, acc ->
       case acc do
-        [] ->
-          [[idx]]
+        [[previous | _] = current | rest] when idx == previous + 1 ->
+          [[idx | current] | rest]
 
-        [current_hunk | rest] ->
-          last_in_hunk = List.last(current_hunk)
-
-          if idx - last_in_hunk <= 1 do
-            # Prepend to hunk for O(1) instead of O(n) append
-            [[idx | current_hunk] | rest]
-          else
-            [[idx], Enum.reverse(current_hunk) | rest]
-          end
+        _ ->
+          [[idx] | acc]
       end
     end)
-    |> Enum.map(&Enum.reverse/1)
     |> Enum.reverse()
+    |> Enum.map(&Enum.reverse/1)
   end
 
   @spec format_hunk([{:same | :removed | :added, non_neg_integer(), String.t()}], [

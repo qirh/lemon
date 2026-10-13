@@ -11,6 +11,8 @@ defmodule CodingAgent.Tools.Patch do
   - Special file type detection (symlinks, devices, etc.)
   - Path length validation
   - File size limits for safe operation
+  - Text updates reject invalid UTF-8 and NUL bytes before normalization
+  - Hunk context must identify one location; repeated context is rejected
 
   ## Supported Operations
 
@@ -230,10 +232,12 @@ defmodule CodingAgent.Tools.Patch do
   # ============================================================================
 
   defp get_patch_text(%{"patch_text" => patch_text}) when is_binary(patch_text) do
-    if String.trim(patch_text) == "" do
-      {:error, "patch_text is required"}
-    else
-      {:ok, patch_text}
+    with :ok <- FileValidation.check_text_content(patch_text, "patch_text") do
+      if String.trim(patch_text) == "" do
+        {:error, "patch_text is required"}
+      else
+        {:ok, patch_text}
+      end
     end
   end
 
@@ -589,14 +593,37 @@ defmodule CodingAgent.Tools.Patch do
 
   defp parse_patch(text) do
     lines = String.split(text, ~r/\r?\n/, trim: false)
-    {ops, _idx} = parse_lines(lines, 0, [])
 
-    if ops == [] do
-      {:error, "No patch operations found"}
-    else
-      {:ok, Enum.reverse(ops)}
+    try do
+      {ops, _idx} = parse_lines(lines, 0, [])
+      operations = Enum.reverse(ops)
+
+      cond do
+        operations == [] ->
+          {:error,
+           "No patch operations found. Use *** Update File: path followed by @@ and +/- changes."}
+
+        Enum.any?(operations, &empty_update?/1) ->
+          {:error,
+           "Update File requires an @@ hunk containing +added or -removed lines (or *** Move to: for a rename). No files changed."}
+
+        true ->
+          {:ok, operations}
+      end
+    catch
+      {:invalid_patch_line, index, line} ->
+        {:error,
+         "Invalid patch syntax at line #{index + 1}: #{inspect(line)}. Prefix hunk lines with a space (context), + (add), or - (remove); start each hunk with @@. No files changed."}
     end
   end
+
+  defp empty_update?(%{type: :update, move_to: nil, hunks: hunks}) do
+    not Enum.any?(hunks, fn hunk ->
+      Enum.any?(hunk.changes, &(&1.type in [:add, :remove]))
+    end)
+  end
+
+  defp empty_update?(_operation), do: false
 
   defp parse_lines(lines, idx, ops) do
     if idx >= length(lines) do
@@ -623,8 +650,11 @@ defmodule CodingAgent.Tools.Patch do
           {op, next_idx} = parse_delete(lines, idx)
           parse_lines(lines, next_idx, [op | ops])
 
-        true ->
+        line == "" ->
           parse_lines(lines, idx + 1, ops)
+
+        true ->
+          throw({:invalid_patch_line, idx, line})
       end
     end
   end
@@ -670,8 +700,11 @@ defmodule CodingAgent.Tools.Patch do
           {hunk, next_idx} = parse_hunk(lines, idx + 1, [])
           parse_hunks(lines, next_idx, [hunk | hunks])
 
-        true ->
+        line == "" ->
           parse_hunks(lines, idx + 1, hunks)
+
+        true ->
+          throw({:invalid_patch_line, idx, line})
       end
     end
   end
@@ -698,8 +731,11 @@ defmodule CodingAgent.Tools.Patch do
           content = String.slice(line, 1..-1//1)
           parse_hunk(lines, idx + 1, [%{type: :add, content: content} | changes])
 
-        true ->
+        line == "" ->
           parse_hunk(lines, idx + 1, changes)
+
+        true ->
+          throw({:invalid_patch_line, idx, line})
       end
     end
   end
@@ -1180,6 +1216,12 @@ defmodule CodingAgent.Tools.Patch do
   end
 
   defp apply_hunks(content, hunks, signal) do
+    with :ok <- FileValidation.check_text_content(content, "Patch source") do
+      apply_text_hunks(content, hunks, signal)
+    end
+  end
+
+  defp apply_text_hunks(content, hunks, signal) do
     lines = String.split(content, ~r/\r?\n/, trim: false)
     newline = if String.contains?(content, "\r\n"), do: "\r\n", else: "\n"
 
@@ -1213,20 +1255,26 @@ defmodule CodingAgent.Tools.Patch do
       |> Enum.filter(fn change -> change.type in [:keep, :remove] end)
       |> Enum.map(& &1.content)
 
-    start_idx = find_pattern(lines, pattern)
+    case find_pattern(lines, pattern) do
+      {:ok, start_idx} ->
+        do_apply_changes(lines, changes, start_idx)
 
-    if start_idx == nil do
-      # Provide more helpful error message
-      context_preview =
-        pattern
-        |> Enum.take(3)
-        |> Enum.map(&"  #{inspect(&1)}")
-        |> Enum.join("\n")
+      {:error, matches} ->
+        locations = Enum.map_join(Enum.take(matches, 10), ", ", &Integer.to_string(&1 + 1))
 
-      {:error,
-       "Context not found for patch hunk. Expected context starting with:\n#{context_preview}"}
-    else
-      do_apply_changes(lines, changes, start_idx)
+        {:error,
+         "Ambiguous patch hunk: context matches #{length(matches)} locations at lines #{locations}. " <>
+           "Include more surrounding context to identify one location."}
+
+      :not_found ->
+        context_preview =
+          pattern
+          |> Enum.take(3)
+          |> Enum.map(&"  #{inspect(&1)}")
+          |> Enum.join("\n")
+
+        {:error,
+         "Context not found for patch hunk. Expected context starting with:\n#{context_preview}"}
     end
   end
 
@@ -1262,14 +1310,22 @@ defmodule CodingAgent.Tools.Patch do
     cond do
       plen == 0 ->
         # Empty pattern matches at end of file
-        length(lines)
+        {:ok, length(lines)}
 
       length(lines) < plen ->
-        nil
+        :not_found
 
       true ->
-        0..(length(lines) - plen)
-        |> Enum.find(fn idx -> Enum.slice(lines, idx, plen) == pattern end)
+        matches =
+          Enum.filter(0..(length(lines) - plen), fn idx ->
+            Enum.slice(lines, idx, plen) == pattern
+          end)
+
+        case matches do
+          [] -> :not_found
+          [idx] -> {:ok, idx}
+          matches -> {:error, matches}
+        end
     end
   end
 
