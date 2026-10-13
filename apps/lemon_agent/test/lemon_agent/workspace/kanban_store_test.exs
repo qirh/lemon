@@ -12,6 +12,32 @@ defmodule LemonAgent.Workspace.KanbanStoreTest do
     :ok
   end
 
+  test "workflow checkpoint is lease-bound and cancellation cannot be cleared by late writes" do
+    {:ok, board} = KanbanStore.create_board("Review gate", meta: %{"codingWorkflow" => %{}})
+    {:ok, task} = KanbanStore.create_task(board.id, "Reviewed change")
+    {:ok, leased} = KanbanStore.lease_task(board.id, "worker")
+    lease_id = leased.meta["kanbanLease"]["id"]
+    assert {:error, :stale_lease} = KanbanStore.checkpoint_leased_workflow(task.id, "wrong", %{})
+
+    checkpoint = %{
+      "phase" => "completed",
+      "commitSha" => String.duplicate("a", 40),
+      "review" => %{"approved" => true}
+    }
+
+    assert {:ok, _} =
+             KanbanStore.checkpoint_leased_workflow(
+               task.id,
+               lease_id,
+               Map.put(checkpoint, "cancelRequested", true)
+             )
+
+    assert {:ok, late} = KanbanStore.checkpoint_leased_workflow(task.id, lease_id, checkpoint)
+    assert late.meta["codingWorkflow"]["cancelRequested"]
+    assert {:error, :review_required} = KanbanStore.complete_leased_task(task.id, lease_id)
+    assert {:error, :review_required} = KanbanStore.update_task(task.id, status: "done")
+  end
+
   test "creates boards, moves tasks, comments, lists, archives, and clears" do
     assert {:ok, board} =
              KanbanStore.create_board("Hermes parity",
