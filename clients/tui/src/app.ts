@@ -263,6 +263,7 @@ export class AppShell {
 			// from under a question the daemon is blocked on.
 			hasOverlay: () => this.selectors.isOpen || this.approvals.panel.visible,
 			openModelPicker: () => this.#modelPicker.open(),
+			openThinkingPicker: () => this.submit("/think"),
 			openSessionSwitcher: () => this.#switcher.open(),
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
@@ -429,6 +430,9 @@ export class AppShell {
 			contextTokens: context.tokens,
 			contextWindow: context.window,
 			contextSource: context.source,
+			runTokens: session.usage?.totalTokens ?? undefined,
+			runCostUsd: session.usage?.costUsd ?? undefined,
+			pendingPrompts: this.store.queue.length(session.key),
 			sessionCount: this.store.sessions.size,
 			busy: session.busy,
 			busySessions: this.store.busySessions(),
@@ -745,6 +749,7 @@ export class AppShell {
 		) {
 			return await this.methods.chatSend({
 				sessionKey,
+				cwd: this.#cwd,
 				prompt,
 				...(queueMode ? { queueMode } : {}),
 			});
@@ -766,6 +771,7 @@ export class AppShell {
 				return await this.methods.chatSend({
 					sessionKey,
 					prompt,
+					cwd: this.#cwd,
 					...(queueMode ? { queueMode } : {}),
 				});
 			}
@@ -787,6 +793,7 @@ export class AppShell {
 			return await this.methods.chatSend({
 				sessionKey,
 				prompt,
+				cwd: this.#cwd,
 				...(queueMode ? { queueMode } : {}),
 			});
 		}

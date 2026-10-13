@@ -21,7 +21,10 @@ import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { getTheme } from "../theme/theme.ts";
 import { getSelectListTheme } from "../theme/tui-adapters.ts";
 
-export interface PickerItem extends SelectItem {}
+export interface PickerItem extends SelectItem {
+	/** Undecorated identifier, when the label includes a current/installed badge. */
+	searchValue?: string;
+}
 
 export interface PickerOptions {
 	title: string;
@@ -61,11 +64,22 @@ export interface PickerOptions {
 export function filterItems(items: readonly PickerItem[], query: string): PickerItem[] {
 	const trimmed = query.trim();
 	if (trimmed.length === 0) return [...items];
-	return fuzzyRank(
+	const exact: PickerItem[] = [];
+	const fuzzy: PickerItem[] = [];
+	const normalized = trimmed.toLowerCase();
+	for (const entry of fuzzyRank(
 		[...items],
 		trimmed,
 		(item) => `${item.label} ${item.value} ${item.description ?? ""}`,
-	).map((entry) => entry.item);
+	)) {
+		const item = entry.item;
+		const match =
+			item.searchValue?.toLowerCase() === normalized ||
+			item.label.toLowerCase() === normalized ||
+			item.value.toLowerCase() === normalized;
+		(match ? exact : fuzzy).push(item);
+	}
+	return exact.concat(fuzzy);
 }
 
 export class PickerOverlay implements Component, MouseRoutable {

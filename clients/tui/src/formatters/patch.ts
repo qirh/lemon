@@ -88,6 +88,18 @@ function parsePatchOperations(patchText: string): FileOperation[] {
 	};
 
 	for (const line of lines) {
+		const envelope = line.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/);
+		if (envelope) {
+			flushOperation();
+			currentMinus = envelope[1] === "Add" ? "/dev/null" : envelope[2]!;
+			currentPlus = envelope[1] === "Delete" ? "/dev/null" : envelope[2]!;
+			continue;
+		}
+		const moved = line.match(/^\*\*\* Move to: (.+)$/);
+		if (moved) {
+			currentPlus = moved[1]!;
+			continue;
+		}
 		// Check for --- header
 		const minusMatch = line.match(/^--- (?:a\/)?(.+)$/);
 		if (minusMatch) {
@@ -127,18 +139,7 @@ function parsePatchOperations(patchText: string): FileOperation[] {
  * @returns Array of unique file paths
  */
 function extractFilePaths(patchText: string): string[] {
-	const paths = new Set<string>();
-	const lines = patchText.split(/\r?\n/);
-
-	for (const line of lines) {
-		// Match --- a/path or +++ b/path
-		const match = line.match(/^(?:---|\+\+\+) (?:[ab]\/)?(.+)$/);
-		if (match && match[1] !== "/dev/null") {
-			paths.add(match[1]);
-		}
-	}
-
-	return Array.from(paths);
+	return [...new Set(parsePatchOperations(patchText).map((operation) => operation.path))];
 }
 
 /**
@@ -215,28 +216,21 @@ export const patchFormatter: ToolFormatter = {
 		if (result && typeof result === "object") {
 			const obj = result as Record<string, unknown>;
 			// Check for error indicators
-			if (obj.error || obj.isError) {
+			if (obj.error || obj.isError || obj.is_error) {
 				isError = true;
-			}
-			// Check content for error text
-			if (Array.isArray(obj.content)) {
-				for (const block of obj.content) {
-					if (
-						block &&
-						typeof block === "object" &&
-						"text" in block &&
-						typeof block.text === "string"
-					) {
-						if (block.text.toLowerCase().includes("error") || block.text.includes("failed")) {
-							isError = true;
-							break;
-						}
-					}
-				}
 			}
 		}
 
-		const fileCount = operations.length;
+		const resultDetails =
+			result && typeof result === "object" && "details" in result ? result.details : undefined;
+		const changed =
+			resultDetails &&
+			typeof resultDetails === "object" &&
+			"changed" in resultDetails &&
+			Array.isArray(resultDetails.changed)
+				? resultDetails.changed.filter((path): path is string => typeof path === "string")
+				: undefined;
+		const fileCount = changed?.length ?? operations.length;
 
 		// Summary: "N files patched" or "Failed"
 		const summary = isError
@@ -252,6 +246,8 @@ export const patchFormatter: ToolFormatter = {
 			for (const op of operations) {
 				details.push(formatFileOperation(op));
 			}
+		} else if (changed && changed.length > 0) {
+			details.push(...changed.map((path) => formatPath(path)));
 		} else {
 			details.push("No file operations detected");
 		}

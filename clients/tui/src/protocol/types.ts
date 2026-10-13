@@ -302,6 +302,8 @@ export interface ChatSendParams {
 	sessionKey: string;
 	prompt: string;
 	agentId?: string;
+	/** Launch workspace for ordinary TUI sessions; profiles keep server-owned cwd. */
+	cwd?: string;
 	queueMode?: QueueMode;
 }
 
