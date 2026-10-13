@@ -113,6 +113,7 @@ defmodule CodingAgent.Tools.Bash do
     else
       params
       |> do_execute(signal, on_update, cwd, opts)
+      |> CodingAgent.Artifacts.attach(cwd, opts)
       |> ToolResultTrust.untrusted(:shell)
     end
   end
