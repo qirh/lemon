@@ -208,6 +208,19 @@ export class EventController {
 	 */
 	cycleAccordionOverride(): AccordionState | undefined {
 		const override = accordionSettings.cycleOverride();
+		this.#applyAccordionOverride();
+		return override;
+	}
+
+	/** Binary whole-transcript toggle, without disturbing the model-picker key. */
+	toggleToolOutputs(): AccordionState {
+		const next = accordionSettings.override === "collapsed" ? "expanded" : "collapsed";
+		accordionSettings.setOverride(next);
+		this.#applyAccordionOverride();
+		return next;
+	}
+
+	#applyAccordionOverride(): void {
 		for (const shelf of new Set(this.#shelves.values())) shelf.applyAccordionOverride();
 		for (const component of this.#components.values()) {
 			if (component instanceof ReasoningComponent) {
@@ -215,7 +228,6 @@ export class EventController {
 			}
 		}
 		this.#scheduleRender();
-		return override;
 	}
 
 	/**
