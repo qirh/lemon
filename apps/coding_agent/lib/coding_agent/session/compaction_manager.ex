@@ -44,7 +44,16 @@ defmodule CodingAgent.Session.CompactionManager do
   @spec clear_auto_compaction_state(map()) :: map()
   def clear_auto_compaction_state(state) do
     state = clear_auto_compaction_task_tracking(state)
-    %{state | auto_compaction: %{state.auto_compaction | in_progress: false, signature: nil}}
+
+    %{
+      state
+      | auto_compaction: %{
+          state.auto_compaction
+          | in_progress: false,
+            signature: nil,
+            pending_prompt: nil
+        }
+    }
   end
 
   @spec clear_auto_compaction_task_tracking(map()) :: map()
@@ -72,7 +81,9 @@ defmodule CodingAgent.Session.CompactionManager do
         state
 
       true ->
-        clear_auto_compaction_state(state)
+        state
+        |> CodingAgent.Session.CompactionLifecycle.resume_pending_prompt()
+        |> clear_auto_compaction_state()
     end
   end
 
@@ -228,6 +239,7 @@ defmodule CodingAgent.Session.CompactionManager do
     opts
     |> maybe_put_keep_recent_tokens(compaction_settings)
     |> maybe_put_keep_recent_messages(message_budget)
+    |> summary_options(state)
   end
 
   @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
@@ -235,6 +247,20 @@ defmodule CodingAgent.Session.CompactionManager do
 
   def get_compaction_settings(%CodingAgent.SettingsManager{} = settings) do
     CodingAgent.SettingsManager.get_compaction_settings(settings)
+  end
+
+  @doc false
+  def summary_options(opts, state) do
+    resolver = CodingAgent.Session.ModelResolver
+
+    stream_options =
+      resolver.build_stream_options(state.model, state.settings_manager, nil, state.cwd)
+
+    api_key = resolver.build_get_api_key(state.settings_manager).(state.model.provider)
+
+    opts
+    |> Keyword.put_new(:stream_options, stream_options)
+    |> Keyword.put_new(:api_key, api_key)
   end
 
   # ============================================================================
