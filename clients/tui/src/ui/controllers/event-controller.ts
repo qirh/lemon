@@ -214,7 +214,7 @@ export class EventController {
 
 	/** Binary whole-transcript toggle, without disturbing the model-picker key. */
 	toggleToolOutputs(): AccordionState {
-		const next = accordionSettings.override === "collapsed" ? "expanded" : "collapsed";
+		const next = accordionSettings.override === "expanded" ? "collapsed" : "expanded";
 		accordionSettings.setOverride(next);
 		this.#applyAccordionOverride();
 		return next;
