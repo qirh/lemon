@@ -40,7 +40,7 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Purpose | Installed release | Source checkout |
 | --- | --- | --- |
 | Start TUI (interactive no-argument launch) | `lemon` | `./bin/lemon` |
-| Foreground runtime | `lemon start` or `lemon run` | `./bin/lemon start` or `./bin/lemon run` |
+| Foreground runtime | `lemon start` | `./bin/lemon start` |
 | Background runtime | `lemon daemon` | `./bin/lemon daemon` |
 | First-time setup | `lemon setup` | `./bin/lemon setup` |
 | Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |
@@ -84,13 +84,31 @@ in source and packaged runtimes, including `send`, `media`, `models`, `policy`,
 their existing Mix tasks are thin source-development adapters.
 
 Lifecycle commands are registry entries too (for help and completion), but the
-launcher shell executes them: `tui`, `web`, `start`, `run`, `daemon`, `stop`,
+launcher shell executes them: `tui`, `web`, `start`, `daemon`, `stop`,
 `restart`, and `status` work in both launchers; `remote`, `eval`, and `rpc` are
 release-only. Reaching a lifecycle command inside `LemonCli.CLI` is a usage
 error. Both launchers export `LEMON_CLI_LAUNCHER` (`source` or `release`) for
 availability filtering and `LEMON_LAUNCHER` (their own path) so
 `LemonCli.LocalRuntime` can run `$LEMON_LAUNCHER daemon` when a command needs
 the runtime.
+
+Source startup probes the local daemon before compiling, never installs or
+updates dependencies, and compiles only once on a cold interactive launch.
+Install source dependencies explicitly with `mix deps.get` before launching.
+An already healthy daemon is reused without a Mix or distributed-node boot.
+
+Source runtime state is private and port-scoped:
+`~/.lemon/run/lemon-PORT.pid`, `lemon-PORT.log`, and `lemon-PORT.lock`.
+`LEMON_RUNTIME_PID_FILE` and `LEMON_RUNTIME_LOG_FILE` can override the first two.
+Concurrent starts serialize on the lock; abandoned locks with a dead recorded
+owner are reclaimed. An empty lock is not automatically deleted: inspect it
+and remove it only after confirming there is no startup in progress.
+An occupied non-Lemon control port fails immediately with a port-selection fix.
+An alive but unhealthy managed runtime requires inspection of its log and an
+explicit stop, rather than starting another daemon. Stop verifies the process
+start identity in the pid record before sending a signal, so stale/reused PIDs
+cannot terminate an unrelated process. Select the same
+`LEMON_CONTROL_PLANE_PORT` for start, stop, restart, and status.
 
 ## Safe managed-release updates
 
