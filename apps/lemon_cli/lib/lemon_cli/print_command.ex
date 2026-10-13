@@ -182,7 +182,7 @@ defmodule LemonCli.PrintCommand do
             payload["type"] == "completed" ->
               case Client.call(conn, "agent.wait", %{"runId" => run_id, "timeoutMs" => 1000}) do
                 {:ok, result} ->
-                  result
+                  Map.merge(Map.take(payload, ["usage", "model", "durationMs"]), result)
 
                 _ ->
                   %{
