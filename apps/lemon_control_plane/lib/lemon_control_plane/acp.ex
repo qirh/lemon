@@ -5,8 +5,8 @@ defmodule LemonControlPlane.ACP do
   ACP sessions retain model, thinking and approval settings across reconnects.
   Loading replays redacted durable run history; closing releases the active run
   without deleting that history. Session configuration is applied to the next
-  prompt through the router boundary. Raw media and client-supplied MCP servers
-  are rejected until a session-scoped safe transport contract is available.
+  prompt through the router boundary. Raw media is rejected. Client MCP servers
+  are connection-owned, session-scoped, and never stored with durable sessions.
 
   `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
   load the selected workspace skill. Native resume identities survive the chat
@@ -31,7 +31,7 @@ defmodule LemonControlPlane.ACP do
   def capabilities do
     %{
       "loadSession" => true,
-      "mcpCapabilities" => %{"http" => false, "sse" => false},
+      "mcpCapabilities" => %{"http" => mcp_available?(), "sse" => mcp_available?()},
       "promptCapabilities" => %{
         "audio" => false,
         "embeddedContext" => false,
@@ -150,11 +150,13 @@ defmodule LemonControlPlane.ACP do
   def new_session(params, opts \\ [])
 
   def new_session(params, opts) when is_map(params) do
+    session_id = "acp_" <> LemonCore.Id.uuid()
+
     with {:ok, cwd} <- required_cwd(params),
-         :ok <- validate_mcp_servers(params) do
+         :ok <- validate_mcp_servers(params),
+         :ok <- open_session_mcp(session_id, cwd, params, opts) do
       agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
       client_capabilities = client_capabilities(params, opts)
-      session_id = "acp_" <> LemonCore.Id.uuid()
       session_key = "agent:#{agent_id}:acp-#{short_hash(session_id)}"
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -188,7 +190,8 @@ defmodule LemonControlPlane.ACP do
          {:ok, existing} <- existing_session(session_id),
          {:ok, cwd} <- required_cwd(params),
          :ok <- validate_mcp_servers(params),
-         true <- cwd == existing.cwd do
+         true <- cwd == existing.cwd,
+         :ok <- open_session_mcp(session_id, cwd, params, opts) do
       session =
         existing
         |> Map.put(:closed, false)
@@ -228,6 +231,7 @@ defmodule LemonControlPlane.ACP do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- existing_session(session_id),
          :ok <- cancel_last_run(session) do
+      close_session_mcp(session_id)
       put_session(session_id, Map.put(session, :closed, true))
       {:ok, %{}}
     end
@@ -408,15 +412,55 @@ defmodule LemonControlPlane.ACP do
 
   defp validate_mcp_servers(params) do
     case Map.get(params, "mcpServers", []) do
-      [] ->
-        :ok
-
       servers when is_list(servers) ->
-        {:error, -32_602, "client MCP servers are not supported; configure MCP in Lemon"}
+        if Enum.all?(servers, &is_map/1),
+          do: :ok,
+          else: {:error, -32_602, "mcpServers entries must be objects"}
 
       _ ->
         {:error, -32_602, "mcpServers must be an array"}
     end
+  end
+
+  defp mcp_available? do
+    Code.ensure_loaded?(LemonSkills.McpSession) and
+      function_exported?(LemonSkills.McpSession, :open, 4)
+  end
+
+  defp open_session_mcp(session_id, cwd, params, opts) do
+    case Map.get(params, "mcpServers", []) do
+      [] ->
+        close_session_mcp(session_id)
+
+      servers ->
+        owner = Keyword.get(opts, :connection_pid)
+
+        cond do
+          not mcp_available?() ->
+            {:error, -32_000, "session MCP runtime is unavailable"}
+
+          not is_pid(owner) ->
+            {:error, -32_602, "client MCP servers require a persistent ACP connection"}
+
+          true ->
+            case LemonSkills.McpSession.open(session_id, cwd, servers, owner) do
+              :ok ->
+                :ok
+
+              {:error, reason}
+              when reason in [:invalid_id, :invalid_cwd, :invalid_owner, :invalid_config] ->
+                {:error, -32_602, "invalid client MCP server configuration"}
+
+              _ ->
+                {:error, -32_000, "client MCP server connection or discovery failed"}
+            end
+        end
+    end
+  end
+
+  defp close_session_mcp(session_id) do
+    if mcp_available?(), do: LemonSkills.McpSession.close(session_id)
+    :ok
   end
 
   defp parse_cursor(nil), do: {:ok, 0}
@@ -756,7 +800,8 @@ defmodule LemonControlPlane.ACP do
       id = "acp_" <> LemonCore.Id.uuid()
       key = "agent:#{source.agent_id}:acp-#{short_hash(id)}"
 
-      with :ok <- fork_native_session(source, key) do
+      with :ok <- open_session_mcp(id, cwd, params, opts),
+           :ok <- fork_native_session(source, key) do
         session =
           source
           |> Map.merge(%{
@@ -770,6 +815,10 @@ defmodule LemonControlPlane.ACP do
         remember_native_resume(id)
         bootstrap(id, session, opts)
         {:ok, Map.put(session_response(session), "sessionId", id)}
+      else
+        error ->
+          close_session_mcp(id)
+          error
       end
     else
       false -> {:error, -32_602, "cwd must match the stored session"}
@@ -814,6 +863,7 @@ defmodule LemonControlPlane.ACP do
           origin: :acp,
           thinking_level: Map.get(session, :thinking, "off"),
           acp_session_id: session_id,
+          acp_mcp_session_id: session_id,
           acp_wait_requested: not queue_only?,
           acp_resource_link_count: resource_link_count(params["prompt"]),
           acp_client_capabilities: client_capabilities_json(client_capabilities),
@@ -963,6 +1013,18 @@ defmodule LemonControlPlane.ACP do
               deadline_ms
             )
 
+          %{type: :approval_resolved, payload: payload} ->
+            id = map_get(payload, :approval_id)
+            {pid, pending} = Map.pop(Map.get(result, :approval_requests, %{}), id)
+            if is_pid(pid), do: Process.exit(pid, :kill)
+
+            update_wait_loop(
+              Map.put(result, :approval_requests, pending),
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
+
           %LemonCore.Event{type: :approval_requested, payload: payload} ->
             result = maybe_perform_approval_request(result, payload, client_request_callback)
 
@@ -1047,27 +1109,26 @@ defmodule LemonControlPlane.ACP do
         "options" => approval_options()
       })
 
-    summary =
-      case safe_client_request(callback, request) do
-        {:ok, response} ->
-          resolve_approval_from_response(approval_id, response)
-          summarize_client_response("session/request_permission", response)
-
-        {:error, _reason} ->
-          deny_if_pending(approval_id)
-
-          %{
-            "method" => "session/request_permission",
-            "status" => "failed",
-            "reason" => "client permission request failed"
-          }
-
-        response ->
-          resolve_approval_from_response(approval_id, response)
-          summarize_client_response("session/request_permission", response)
+    timeout =
+      case map_get(pending, :expires_at_ms) do
+        ms when is_integer(ms) -> max(ms - LemonCore.Clock.now_ms(), 0)
+        _ -> :infinity
       end
 
-    add_client_request_result(result, summary)
+    pid =
+      spawn(fn ->
+        case LemonCore.ACPClientBridge.request(
+               result.run_id,
+               request["method"],
+               request["params"],
+               timeout
+             ) do
+          {:ok, response} -> resolve_approval_from_response(approval_id, response)
+          _ -> deny_if_pending(approval_id)
+        end
+      end)
+
+    Map.update(result, :approval_requests, %{approval_id => pid}, &Map.put(&1, approval_id, pid))
   end
 
   defp perform_approval_request(result, pending, _callback) do
