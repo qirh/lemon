@@ -31,6 +31,12 @@ passage. Writes that exceed the file limit, ambiguous or missing replacement tex
 targets are rejected. Content is screened for common secrets, prompt-injection phrases, NUL bytes,
 and invisible or bidirectional control characters.
 
+When adding a new fact, omit `replaces` or set it to JSON `null`—never use an
+empty string or a placeholder. For deletion, omit `text` or set it to `null`.
+Before correcting or deleting a project fact, use `recall` with `scope: "project"`
+and relevant query keywords, then copy the exact saved fact into `replaces`.
+A missing replacement target leaves memory unchanged; it never falls back to adding.
+
 These files are included in the main-session workspace bootstrap context. `USER.md` is for
 stable human profile facts; `MEMORY.md` is for concise curated context. Save reusable procedures
 as skills instead of memory facts.
