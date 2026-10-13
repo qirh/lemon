@@ -48,6 +48,11 @@ export interface ToolBlock extends BlockBase {
 	phase: ToolPhase;
 	ok: boolean | undefined;
 	message: string | undefined;
+	/** A saved receipt, not a currently executing call (even if its outcome is unknown). */
+	historical?: boolean;
+	cancelled?: boolean;
+	/** Known execution time; history must never derive this from hydration time. */
+	durationMs?: number;
 }
 
 /**

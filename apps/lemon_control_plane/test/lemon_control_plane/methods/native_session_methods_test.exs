@@ -18,6 +18,12 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     @behaviour LemonControlPlane.AgentRuntime.Provider
 
     @impl true
+    def session_create(key, cwd) do
+      send(self(), {:create, key, cwd})
+      Process.get(:create_result)
+    end
+
+    @impl true
     def session_tree(key, cwd, opts) do
       send(self(), {:tree, key, cwd, opts})
       Process.get(:tree_result)
@@ -54,6 +60,37 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
     :ok
+  end
+
+  test "explicit creation validates identity and scope before returning a bound native receipt" do
+    Process.put(
+      :create_result,
+      {:ok, %{"sessionId" => "native", "created" => true, "private" => "hidden"}}
+    )
+
+    assert {:ok,
+            %{
+              "sessionKey" => "agent:native_methods:main",
+              "sessionId" => "native",
+              "created" => true
+            } = receipt} =
+             Registry.dispatch("sessions.create", target(), ctx([:write]))
+
+    assert_receive {:create, "agent:native_methods:main", "/workspace"}
+    refute Map.has_key?(receipt, "private")
+    assert {:error, _} = Registry.dispatch("sessions.create", target(), ctx([:read]))
+
+    assert {:error, _} =
+             Registry.dispatch(
+               "sessions.create",
+               Map.put(target(), "sessionKey", "legacy-unknown"),
+               ctx([:write])
+             )
+
+    assert {:error, _} =
+             Registry.dispatch("sessions.create", Map.delete(target(), "cwd"), ctx([:write]))
+
+    refute_receive {:create, _, _}
   end
 
   test "registered tree delegates pagination and projects only native tree fields" do

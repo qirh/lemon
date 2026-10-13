@@ -154,6 +154,52 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert json["usage"]["cost"]["total"] == 0.5
     end
 
+    test "typed usage with runtime metrics is projected before encoding the wait response" do
+      run_id = "run_wait_typed_usage_#{System.unique_integer([:positive, :monotonic])}"
+      session_key = "agent:wait:typed-usage:#{System.unique_integer([:positive])}"
+
+      usage =
+        %LemonAi.Types.Usage{
+          input: 10,
+          output: 5,
+          cache_write: 4,
+          cache_write_long: 2,
+          total_tokens: 19,
+          cost: %LemonAi.Types.Cost{total: 0.5, cache_write: 0.1}
+        }
+        |> Map.merge(%{
+          turns: 2,
+          tool_errors: 1,
+          context_tokens: 19,
+          context_budget: %{used_tokens: 19, available_tokens: 100},
+          tokens: 19,
+          cost_usd: 0.5,
+          private: "must not cross the wire"
+        })
+
+      LemonCore.RunStore.finalize(run_id, %{
+        completed: %{run_id: run_id, ok: false, error: "Cancelled", usage: usage},
+        session_key: session_key
+      })
+
+      on_exit(fn -> LemonCore.RunStore.delete_session(session_key) end)
+
+      assert {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+      json = result |> Jason.encode!() |> Jason.decode!()
+      assert json["usage"]["total_tokens"] == 19
+      assert json["usage"]["cache_write_long"] == 2
+      assert json["usage"]["cost"]["total"] == 0.5
+      assert json["usage"]["cost"]["cache_write"] == 0.1
+      assert json["usage"]["turns"] == 2
+      assert json["usage"]["tool_errors"] == 1
+      assert json["usage"]["context_tokens"] == 19
+      assert is_map(json["usage"]["context_budget"])
+      assert json["usage"]["tokens"] == 19
+      assert json["usage"]["cost_usd"] == 0.5
+      refute Map.has_key?(json["usage"], "__struct__")
+      refute Map.has_key?(json["usage"], "private")
+    end
+
     test "handle/2 redacts sensitive answer and error values" do
       run_id = "run_wait_redaction_#{System.unique_integer([:positive, :monotonic])}"
       session_key = "agent:wait:redaction:#{System.unique_integer([:positive])}"

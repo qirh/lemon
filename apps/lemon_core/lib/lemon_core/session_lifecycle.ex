@@ -568,10 +568,18 @@ defmodule LemonCore.SessionLifecycle do
     |> Enum.map(fn event ->
       action = read(event, :action) || %{}
       detail = read(action, :detail)
+      action_id = read(action, :id)
+      tool_call_id = read(detail, :tool_call_id) || action_id
+      redacted_action_id = maybe_redact(action_id, redact?)
+
+      tool_id =
+        if tool_call_id == action_id,
+          do: redacted_action_id,
+          else: maybe_redact(tool_call_id, redact?)
 
       %{
-        id: maybe_redact(read(detail, :tool_call_id) || read(action, :id), redact?),
-        action_id: maybe_redact(read(action, :id), redact?),
+        id: tool_id,
+        action_id: redacted_action_id,
         title: maybe_redact(read(action, :title), redact?),
         kind: stringify(read(action, :kind)),
         phase: stringify(read(event, :phase)),

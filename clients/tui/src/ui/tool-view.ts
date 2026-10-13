@@ -33,8 +33,8 @@ import { defaultRegistry, type FormatterRegistry } from "../formatters/index.ts"
 import type { FormattedOutput } from "../formatters/types.ts";
 import type { ToolBlock } from "../store/transcript-model.ts";
 
-/** The four lifecycle states a tool card renders. */
-export type ToolCardState = "streaming" | "running" | "success" | "error";
+/** Live execution states and durable outcomes, including incomplete history. */
+export type ToolCardState = "streaming" | "running" | "success" | "error" | "cancelled" | "unknown";
 
 /** A diff the card can render in colour, over and above the formatter's lines. */
 export interface ToolDiff {
@@ -121,8 +121,18 @@ export function normalizeToolResult(block: ToolBlock, toolName?: string): unknow
 	};
 }
 
+/** Cancellation is a terminal outcome, not an execution failure. */
+export function isToolCancelled(block: ToolBlock): boolean {
+	if (block.phase !== "completed") return false;
+	const details = toolDetails(block);
+	const meta = asRecord(block.detail?.result_meta);
+	return block.cancelled === true || details.cancelled === true ||
+		details.error_type === "aborted" || meta?.error_type === "aborted";
+}
+
 /** Whether the action failed: the event said so, or the result carries an error type. */
 export function isToolError(block: ToolBlock): boolean {
+	if (isToolCancelled(block)) return false;
 	if (block.ok === false) return true;
 	const meta = asRecord(block.detail?.result_meta);
 	return meta?.error_type !== undefined && meta.error_type !== null;
@@ -133,7 +143,12 @@ export function isToolError(block: ToolBlock): boolean {
  * announced and its arguments arriving.
  */
 export function toolCardState(block: ToolBlock): ToolCardState {
-	if (block.phase === "completed") return isToolError(block) ? "error" : "success";
+	if (isToolCancelled(block)) return "cancelled";
+	if (block.phase === "completed") {
+		if (block.historical && block.ok === undefined && !isToolError(block)) return "unknown";
+		return isToolError(block) ? "error" : "success";
+	}
+	if (block.historical) return "unknown";
 	if (block.phase === "started" && block.detail === undefined) return "streaming";
 	return "running";
 }
@@ -291,6 +306,20 @@ export function buildToolView(
 		// yields placeholder noise (`unknown`, `(no arguments)`), so the card shows
 		// its header alone until the arguments land.
 		formatted = { summary: "", details: [] };
+	} else if (state === "cancelled" || state === "unknown") {
+		const details = toolDetails(block);
+		const labels = [state === "cancelled" ? "Cancelled" : "Outcome unknown"];
+		if (state === "cancelled" && details.outcome === "unknown") labels.push("outcome unknown");
+		if (details.outcome === "not_started") labels.push("not started");
+		// Do not ask a success-oriented formatter to infer effects from arguments
+		// (for example, a write's proposed content is not an applied file change).
+		const output: string[] = [];
+		for (const value of [block.detail?.result, details.stdout, details.stderr]) {
+			if (typeof value === "string" && value.length > 0 && !output.includes(value)) {
+				output.push(value);
+			}
+		}
+		formatted = { summary: labels.join(" · "), details: output };
 	} else if (state === "success" || state === "error") {
 		formatted = formatCompleted(block, args, toolName, registry);
 	} else if (block.detail?.partial_result !== undefined) {
@@ -308,8 +337,9 @@ export function buildToolView(
 		summary: firstLine(formatted.summary),
 		body: buildBody(formatted, block),
 		isError: state === "error" || formatted.isError === true,
-		// A failed edit changed nothing; its old/new pair is not a diff of the file.
-		diff: state === "error" ? undefined : extractToolDiff(block, args, toolName),
+		// Only a known successful edit can claim its argument diff was applied.
+		diff: state === "error" || state === "cancelled" || state === "unknown"
+			? undefined : extractToolDiff(block, args, toolName),
 	};
 }
 

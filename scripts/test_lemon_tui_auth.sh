@@ -23,6 +23,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+assert_token_absent() {
+  if grep -Fq -- "$1" "$2"; then
+    echo "credential leaked into $2" >&2
+    exit 1
+  fi
+}
+
 cat > "$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 if [[ -f "$LEMON_TUI_TEST_HEALTH" ]]; then
@@ -41,6 +48,7 @@ fi
 
 printf '%s' "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" > "$LEMON_TUI_TEST_CLIENT_TOKEN"
 printf '%s\n' "$@" > "$LEMON_TUI_TEST_CLIENT_ARGS"
+pwd -P > "$LEMON_TUI_TEST_CLIENT_CWD"
 EOF
 
 cat > "$TEST_DIR/runtime-launcher" <<'EOF'
@@ -64,10 +72,16 @@ for arg in "$@"; do
   if [[ "$arg" == "--no-halt" ]]; then
     printf '%s' "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" > "$LEMON_TUI_TEST_SOURCE_RUNTIME_TOKEN"
     touch "$LEMON_TUI_TEST_HEALTH"
-    sleep 300
-    exit 0
+    exec sleep 300
   fi
 done
+EOF
+
+cat > "$FAKE_BIN/elixir" <<'EOF'
+#!/usr/bin/env bash
+while [[ "$#" -gt 0 && "$1" != "-S" ]]; do shift; done
+shift
+exec "$@"
 EOF
 
 cat > "$FAKE_BIN/security" <<'EOF'
@@ -75,7 +89,7 @@ cat > "$FAKE_BIN/security" <<'EOF'
 exit 1
 EOF
 
-chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/bun" "$FAKE_BIN/mix" "$FAKE_BIN/security" "$TEST_DIR/runtime-launcher"
+chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/bun" "$FAKE_BIN/mix" "$FAKE_BIN/elixir" "$FAKE_BIN/security" "$TEST_DIR/runtime-launcher"
 
 export PATH="$FAKE_BIN:$PATH"
 export HOME="$TEST_DIR/home"
@@ -85,6 +99,7 @@ export LEMON_TUI_TEST_HEALTH="$TEST_DIR/health"
 export LEMON_TUI_TEST_INSTALL_TOKEN="$TEST_DIR/install-token"
 export LEMON_TUI_TEST_CLIENT_TOKEN="$TEST_DIR/client-token"
 export LEMON_TUI_TEST_CLIENT_ARGS="$TEST_DIR/client-args"
+export LEMON_TUI_TEST_CLIENT_CWD="$TEST_DIR/client-cwd"
 export LEMON_TUI_TEST_RUNTIME_TOKEN="$TEST_DIR/runtime-token"
 export LEMON_TUI_TEST_RUNTIME_ARGS="$TEST_DIR/runtime-args"
 export LEMON_TUI_TEST_RUNTIME_PID="$TEST_DIR/runtime.pid"
@@ -107,8 +122,8 @@ runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
 [[ ! -s "$LEMON_TUI_TEST_INSTALL_TOKEN" ]]
 grep -qx -- 'daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
 grep -qx -- '--test-argument' "$LEMON_TUI_TEST_CLIENT_ARGS"
-! grep -Fq -- "$runtime_token" "$LEMON_TUI_TEST_CLIENT_ARGS"
-! grep -Fq -- "$runtime_token" "$bootstrap_output"
+assert_token_absent "$runtime_token" "$LEMON_TUI_TEST_CLIENT_ARGS"
+assert_token_absent "$runtime_token" "$bootstrap_output"
 
 for _ in $(seq 1 50); do
   kill -0 "$runtime_pid" 2>/dev/null || break
@@ -156,7 +171,7 @@ if ! "$ROOT/bin/lemon-tui" > "$TEST_DIR/managed-attach-output" 2>&1; then
 fi
 
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
-! grep -Fq -- "$managed_token" "$TEST_DIR/managed-attach-output"
+assert_token_absent "$managed_token" "$TEST_DIR/managed-attach-output"
 
 # The unified source entrypoint must load the same credential and refuse an
 # unsafe credential file before launching a client.
@@ -173,6 +188,19 @@ chmod 600 "$managed_token_file"
 
 IFS= read -r managed_runtime_pid < "$managed_pid_file"
 kill -TERM "$managed_runtime_pid" 2>/dev/null || true
+
+# A cold TUI compiles and starts the daemon from the checkout, but must launch
+# the client in the user's repository, including paths containing spaces.
+project_dir="$TEST_DIR/coding project"
+mkdir -p "$project_dir"
+rm -f "$LEMON_TUI_TEST_HEALTH"
+(
+  cd "$project_dir"
+  "$ROOT/bin/lemon" tui > "$TEST_DIR/source-cold-tui-output" 2>&1
+  [[ "$(<"$LEMON_TUI_TEST_CLIENT_CWD")" == "$(pwd -P)" ]]
+)
+IFS= read -r managed_runtime_pid < "$managed_pid_file"
+kill -TERM "$managed_runtime_pid" 2>/dev/null || true
 unset LEMON_CONTROL_PLANE_PORT
 unset LEMON_RUNTIME_PID_FILE
 
@@ -186,7 +214,7 @@ fi
 
 [[ "$(<"$LEMON_TUI_TEST_RUNTIME_TOKEN")" == "$stable_token" ]]
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$stable_token" ]]
-! grep -Fq -- "$stable_token" "$TEST_DIR/stable-output"
+assert_token_absent "$stable_token" "$TEST_DIR/stable-output"
 
 stable_runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
 for _ in $(seq 1 50); do
@@ -250,7 +278,7 @@ package_mode="$(stat -f '%Lp' "$package_token_file" 2>/dev/null || stat -c '%a' 
 [[ "$package_mode" == "600" ]]
 [[ "$(<"$package_runtime_token")" == "$package_token" ]]
 [[ "$(<"$package_client_token")" == "$package_token" ]]
-! grep -Fq -- "$package_token" "$TEST_DIR/package-first-output"
+assert_token_absent "$package_token" "$TEST_DIR/package-first-output"
 
 rm -f "$package_client_token"
 if ! "$release_root/bin/lemon" tui > "$TEST_DIR/package-attach-output" 2>&1; then
@@ -259,7 +287,7 @@ if ! "$release_root/bin/lemon" tui > "$TEST_DIR/package-attach-output" 2>&1; the
 fi
 
 [[ "$(<"$package_client_token")" == "$package_token" ]]
-! grep -Fq -- "$package_token" "$TEST_DIR/package-attach-output"
+assert_token_absent "$package_token" "$TEST_DIR/package-attach-output"
 
 chmod 644 "$package_token_file"
 rm -f "$package_client_token"

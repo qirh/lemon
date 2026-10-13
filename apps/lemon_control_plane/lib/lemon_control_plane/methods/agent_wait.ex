@@ -113,7 +113,12 @@ defmodule LemonControlPlane.Methods.AgentWait do
     meta = completed_value(completed, :meta, "meta") || %{}
 
     result
-    |> maybe_put("usage", completed_value(completed, :usage, "usage"))
+    |> maybe_put(
+      "usage",
+      completed
+      |> completed_value(:usage, "usage")
+      |> LemonControlPlane.EventProjection.action_detail()
+    )
     |> maybe_put("budget", completed_value(meta, :budget, "budget"))
     |> Map.put("summary", summary(result))
   end

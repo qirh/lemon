@@ -8,12 +8,18 @@ commands are dispatched by the CLI registry.
 
 This behavior is identical in source checkouts and packaged installs:
 
-- In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI.
+- In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI; in a registered Tern pane it opens [native ACP chat](tern.md). Use `lemon tui` to choose the standalone terminal UI explicitly.
 - Without a TTY, `lemon` fails immediately with status 2 and points to `lemon -p`, `lemon daemon`, and `lemon --help`. It does not compile, initialize HOME state, or start a daemon.
 - `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
 
 Use `./bin/lemon` instead of `lemon` in the examples below when running from a
 source checkout.
+
+Launch from the repository you want to work on. Source compilation runs in the
+Lemon checkout, but the TUI and project-scoped CLI commands retain the calling
+directory, including on a cold daemon start.
+Source build and bootstrap diagnostics, including waits for another compiler,
+go to stderr; concurrent JSON commands keep stdout reserved for their result.
 
 ## Commands and availability
 

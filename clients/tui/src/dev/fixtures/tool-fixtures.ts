@@ -455,6 +455,10 @@ export function fixturePhases(fixture: ToolFixture, state: ToolCardState): Fixtu
 			return fixture.updated ? [started, { detail: fixture.updated, phase: "updated" }] : [started];
 		case "success":
 			return [started, { detail: fixture.completed, phase: "completed", ok: true }];
+		case "cancelled":
+			return [started, { detail: { ...fixture.updated, details: { cancelled: true, outcome: "unknown" } }, phase: "completed", ok: false }];
+		case "unknown":
+			return [started];
 		case "error":
 			return [
 				started,
@@ -493,6 +497,7 @@ export function fixtureBlock(
 	if (!block) throw new Error(`fixture ${fixture.name} produced no block`);
 	// A deterministic start time keeps the gallery's elapsed readings stable.
 	if (options.at !== undefined) block.at = options.at;
+	if (state === "unknown") block.historical = true;
 	return block;
 }
 
