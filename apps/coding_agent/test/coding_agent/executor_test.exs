@@ -17,6 +17,57 @@ defmodule CodingAgent.ExecutorTest do
   alias LemonCore.{NodeRegistry, ResumeToken}
   alias LemonGateway.ExecutionRequest
 
+  @tag :tmp_dir
+  test "transient instrumentation preserves native execution and existing stream options", %{
+    tmp_dir: tmp_dir
+  } do
+    previous = Application.get_env(:coding_agent, :executor_stream_options_hook)
+    on_exit(fn -> Executor.configure_stream_options(previous) end)
+    parent = self()
+
+    Executor.configure_stream_options(fn run_id, options ->
+      send(parent, {:instrumented, run_id, options.temperature})
+      %{options | temperature: 0.25}
+    end)
+
+    native_stream =
+      mock_stream_fn(List.duplicate(assistant_message("instrumented native run"), 2))
+
+    stream = fn model, context, options ->
+      send(parent, {:observed_temperature, options.temperature})
+      native_stream.(model, context, options)
+    end
+
+    for {shape, index} <- Enum.with_index([:map, :keyword]) do
+      run_id = "run-instrumented-#{index}"
+
+      run_options = [
+        stream_fn: stream,
+        stream_options: %LemonAi.Types.StreamOptions{temperature: 0.125}
+      ]
+
+      opts = if shape == :map, do: Map.new(run_options), else: run_options
+
+      req =
+        request(tmp_dir,
+          run_id: run_id,
+          prompt: "exercise native instrumentation",
+          stream_fn: stream
+        )
+
+      {:ok, run_ref, _ctx} = Executor.start_run(req, opts, self())
+
+      assert {:engine_event, ^run_ref, %{__event__: :completed, ok: true}} =
+               List.last(collect_until_completed(run_ref))
+
+      assert_receive {:instrumented, ^run_id, 0.125}
+      assert_receive {:observed_temperature, 0.25}
+    end
+
+    Executor.configure_stream_options(nil)
+    assert Application.get_env(:coding_agent, :executor_stream_options_hook) == nil
+  end
+
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do

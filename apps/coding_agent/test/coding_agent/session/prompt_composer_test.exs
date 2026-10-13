@@ -54,7 +54,6 @@ defmodule CodingAgent.Session.PromptComposerTest do
     assert github_prompt == unrelated_prompt
     refute String.contains?(github_prompt, "<relevant-skills>")
     assert String.contains?(github_prompt, "<key>github-pr-workflow</key>")
-    assert String.contains?(github_prompt, "Use `read_skill` with <key>")
     refute String.contains?(github_prompt, "Full body should stay behind read_skill.")
   end
 

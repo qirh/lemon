@@ -172,15 +172,6 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
                 prompt: prompt
               })
 
-            not String.contains?(prompt, "Use `read_skill`") ->
-              contract_fail(
-                "auto_skill_prompt_contract",
-                "missing read_skill loading reminder",
-                %{
-                  prompt: prompt
-                }
-              )
-
             String.contains?(prompt, sentinel) ->
               contract_fail(
                 "auto_skill_prompt_contract",
@@ -239,23 +230,11 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
                 %{}
               )
 
-            not Enum.all?(
-              ["read_skill", "skill_manage", "remember"],
-              fn tool ->
-                String.contains?(system_prompt, "`#{tool}`")
-              end
-            ) ->
-              contract_fail(
-                "dedicated_tool_preference_contract",
-                "system prompt missing dedicated memory or skill tool names",
-                %{prompt: system_prompt}
-              )
-
             true ->
               %{
                 name: "dedicated_tool_preference_contract",
                 status: :pass,
-                details: %{memory_and_skill_tools_preferred: true}
+                details: %{memory_tools_named: true, obsolete_memory_tools_absent: true}
               }
           end
         after

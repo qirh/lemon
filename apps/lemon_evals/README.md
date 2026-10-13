@@ -91,9 +91,12 @@ LemonEvals.PayloadProfile.install!("/tmp/lemon-payload-profile.jsonl",
 ```
 
 Its Python environment requires `tiktoken` (`python3 -m venv /tmp/profile-venv`
-then `/tmp/profile-venv/bin/pip install tiktoken`). The normal executor still
-runs the real native coding session. Optional Codex callbacks observe final
-request bodies and raw terminal usage in memory. Only counts, builtin tool names,
+then `/tmp/profile-venv/bin/pip install tiktoken`). Installation uses the transient
+`CodingAgent.Executor.configure_stream_options/1` hook; it does not replace the
+gateway executor. Clear the hook with `CodingAgent.Executor.configure_stream_options(nil)`
+when ending profiling. The native coding session and provider configuration remain
+unchanged. Optional Codex callbacks observe final request bodies and raw terminal
+usage in memory. Only counts, declared tool names,
 and hashes are written to an owner-only JSONL file; raw prompts, arguments, tool
 outputs, encrypted replay values, headers, and credentials are never retained.
 Profile work is asynchronous and opt-in; the ordinary runtime has no observer.
