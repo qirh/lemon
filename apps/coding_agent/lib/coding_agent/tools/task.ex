@@ -27,8 +27,7 @@ defmodule CodingAgent.Tools.Task do
         "properties" => %{
           "action" => %{
             "type" => "string",
-            "description" =>
-              "Run tasks or a dependency-aware swarm, poll/join/get results, message/steer a child, or cancel it",
+            "description" => "Default: run",
             "enum" => [
               "run",
               "swarm",
@@ -45,107 +44,97 @@ defmodule CodingAgent.Tools.Task do
             "type" => "integer",
             "minimum" => 1,
             "maximum" => 32,
-            "description" =>
-              "Maximum active swarm children (default 8); global task capacity still applies"
+            "description" => "Active swarm limit; default 8, also subject to global/budget caps"
           },
           "name" => %{
             "type" => "string",
             "description" =>
-              "Optional unique live task name for agent:// messaging; 1-64 ASCII letters, digits, underscores or hyphens, starting with a letter"
+              "Messaging alias: 1-64 ASCII letters/digits/_/-, starting with a letter; unique in batch"
           },
           "to" => %{
             "type" => "string",
-            "description" =>
-              "Message target: agent://<task-id-or-name>, agent://parent, or agent://all"
+            "description" => "Message address: agent://<name-or-id>, parent, or all"
           },
           "description" => %{
             "type" => "string",
-            "description" => "Short (3-5 words) description of the task"
+            "description" => "Short task label"
           },
           "prompt" => %{
             "type" => "string",
-            "description" => "The task for the agent to perform"
+            "description" => "Child assignment"
           },
           "message" => %{
             "type" => "string",
-            "description" =>
-              "Instruction delivered to the child at its next safe steering boundary"
+            "description" => "Peer input delivered at the next steering boundary"
           },
           "worktree" => %{
             "type" => "boolean",
-            "description" =>
-              "Create an isolated git worktree from HEAD; retain it and its branch for review"
+            "description" => "Use a retained, isolated git worktree from HEAD"
           },
           "task_id" => %{
             "type" => "string",
-            "description" => "Task id to poll (when action=poll) or get (when action=get)"
+            "description" => "Target for poll/get/message/steer/cancel"
           },
           "task_ids" => %{
             "type" => "array",
             "items" => %{"type" => "string"},
-            "description" => "Task ids to join (when action=join)"
+            "description" => "Targets for join/wait"
           },
           "mode" => %{
             "type" => "string",
             "enum" => ["wait_all", "wait_any"],
-            "description" => "Join mode for action=join (default: wait_all)"
+            "description" => "Join mode; default wait_all"
           },
           "model" => %{
             "type" => "string",
-            "description" => "Optional model override for the native task session"
+            "description" => "Model or @role; omitted uses persona/task defaults, then parent"
           },
           "thinking_level" => %{
             "type" => "string",
-            "description" => "Optional thinking level override for the native task session"
+            "description" => "Thinking level override"
           },
           "agent" => %{
             "type" => "string",
             "description" =>
-              "Named agent persona: scout (read-only discovery), reviewer (read-only review), task-executor, or a local .lemon/agents/*.md definition"
+              "Persona: scout/reviewer are read-only; task-executor or discovered definitions"
           },
           "output_schema" => %{
             "type" => ["object", "boolean"],
             "description" =>
-              "JSON Schema for the child's final JSON response. Invalid output fails the task; validated data is returned as structured_output."
+              "Final JSON Schema; invalid output fails. Valid data becomes structured_output"
           },
           "async" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (recommended), run in background and return task_id immediately. Use async=true by default to keep user conversations responsive. Only use async=false for simple tasks that complete instantly."
+            "description" => "Default/recommended true: return receipt immediately; false waits"
           },
           "auto_followup" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), async task completion is automatically posted back into this session."
+            "description" => "Default true: deliver completion back to this session"
           },
           "cwd" => %{
             "type" => "string",
-            "description" => "Optional working directory override for this task run"
+            "description" => "Child working directory"
           },
           "tool_policy" => %{
             "type" => "object",
-            "description" => "Optional tool policy override for the task session"
+            "description" => "Child tool policy; cannot widen read-only personas"
           },
           "meta" => %{
             "type" => "object",
-            "description" =>
-              "Optional metadata map attached to task lifecycle and async followup routing"
+            "description" => "Lifecycle/followup metadata"
           },
           "session_key" => %{
             "type" => "string",
-            "description" =>
-              "Optional parent session key override used for async followup routing and lifecycle metadata"
+            "description" => "Parent session routing override"
           },
           "agent_id" => %{
             "type" => "string",
-            "description" =>
-              "Optional parent agent id override used for async followup routing and lifecycle metadata"
+            "description" => "Parent agent routing override"
           },
           "queue_mode" => %{
             "type" => "string",
             "enum" => Params.valid_queue_modes(),
-            "description" =>
-              "Queue mode for async followup routing via router fallback (default: followup)"
+            "description" => "Followup delivery queue; default followup"
           }
         },
         "required" => []
@@ -226,8 +215,7 @@ defmodule CodingAgent.Tools.Task do
       |> Map.put("depends_on", %{
         "type" => "array",
         "items" => %{"type" => "string"},
-        "description" =>
-          "For action=swarm, names of prerequisite tasks. Launch only after all succeed; their visible results enter this child's context."
+        "description" => "Swarm prerequisite names; all must succeed before this node starts"
       })
 
     tasks = %{
@@ -235,7 +223,7 @@ defmodule CodingAgent.Tools.Task do
       "minItems" => 1,
       "maxItems" => 32,
       "description" =>
-        "Up to 32 children. action=run launches independent tasks; action=swarm requires unique names and accepts depends_on DAG edges. A swarm returns one task_id for its merged report. Common child options are inherited.",
+        "Children inherit top-level options. Swarm nodes require unique names; depends_on defines their DAG.",
       "items" => %{"type" => "object", "properties" => child_properties, "required" => ["prompt"]}
     }
 
