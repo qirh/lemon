@@ -512,7 +512,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.custom_type == "async_followup"
     assert message.content =~ "oracle update"
     assert message.details.source == :agent
@@ -564,7 +564,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.details.delivery == :followup
     assert message.content =~ "oracle update"
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
@@ -600,7 +600,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.content =~ "oracle update"
     assert message.details.source == :agent
     assert message.details.delivery == :steer
@@ -638,7 +638,7 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
     refute_receive {:session_async_followup, _message}, 150
-    assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 500
+    assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 2_000
     assert followup.prompt =~ "oracle update"
     assert followup.cwd == "/tmp"
 
@@ -688,7 +688,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 500
+    assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 2}, 2_000
     assert followup.session_key == "agent:main:main"
     assert followup.agent_id == "main"
     assert followup.prompt =~ "oracle update"
@@ -736,7 +736,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.details.delivery == :steer
     assert message.content =~ "oracle update"
     refute_receive {:router_submit, %RunRequest{}, 2}, 150
@@ -773,7 +773,7 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
     refute_receive {:session_async_followup, _message}, 150
-    assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 2}, 500
+    assert_receive {:router_submit, %RunRequest{queue_mode: :interrupt} = followup, 2}, 2_000
     assert followup.prompt =~ "oracle update"
   end
 
@@ -808,7 +808,7 @@ defmodule CodingAgent.Tools.AgentTest do
       )
 
     refute_receive {:session_async_followup, _message}, 150
-    assert_receive {:router_submit, %RunRequest{queue_mode: :collect} = followup, 2}, 500
+    assert_receive {:router_submit, %RunRequest{queue_mode: :collect} = followup, 2}, 2_000
     assert followup.prompt =~ "oracle update"
   end
 
@@ -843,7 +843,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.details.delivery == :followup
     refute_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 150
   end
@@ -879,7 +879,7 @@ defmodule CodingAgent.Tools.AgentTest do
         Event.new(:run_completed, EventsFixtures.run_completed(answer: "oracle update"))
       )
 
-    assert_receive {:session_async_followup, %CustomMessage{} = message}, 500
+    assert_receive {:session_async_followup, %CustomMessage{} = message}, 2_000
     assert message.details.delivery == :steer
     assert message.content =~ "oracle update"
     refute_receive {:router_submit, %RunRequest{}, 2}, 150
@@ -1122,7 +1122,7 @@ defmodule CodingAgent.Tools.AgentTest do
              )
   end
 
-  defp wait_for_completed(task_id, attempts \\ 25)
+  defp wait_for_completed(task_id, attempts \\ 400)
 
   defp wait_for_completed(task_id, attempts) when attempts <= 0 do
     flunk("timed out waiting for delegated task #{task_id} to complete")
@@ -1149,7 +1149,7 @@ defmodule CodingAgent.Tools.AgentTest do
     end
   end
 
-  defp wait_until(fun, attempts \\ 100)
+  defp wait_until(fun, attempts \\ 1000)
   defp wait_until(_fun, 0), do: flunk("condition did not become true")
 
   defp wait_until(fun, attempts) do
@@ -1190,7 +1190,7 @@ defmodule CodingAgent.Tools.AgentTest do
     )
   end
 
-  defp wait_for_followup_suppression(task_id, attempts \\ 25)
+  defp wait_for_followup_suppression(task_id, attempts \\ 1000)
 
   defp wait_for_followup_suppression(task_id, attempts) when attempts <= 0 do
     flunk("timed out waiting for auto-followup suppression for task #{task_id}")

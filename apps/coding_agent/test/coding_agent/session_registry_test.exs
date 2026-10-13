@@ -66,10 +66,8 @@ defmodule CodingAgent.SessionRegistryTest do
       {:ok, pid} = Agent.start_link(fn -> :ok end, name: via)
       Agent.stop(pid)
 
-      # Give registry time to process the termination
-      Process.sleep(10)
-
-      assert :error = SessionRegistry.lookup(session_id)
+      # The registry processes the termination asynchronously
+      assert wait_until(fn -> SessionRegistry.lookup(session_id) == :error end, 2_000)
     end
   end
 
@@ -196,11 +194,8 @@ defmodule CodingAgent.SessionRegistryTest do
       # Wait for DOWN message to ensure the process is stopped
       assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
 
-      # Give registry time to process the termination
-      Process.sleep(20)
-
-      # Lookup should return error, not crash
-      assert :error = SessionRegistry.lookup(session_id)
+      # Lookup should return error (not crash) once the registry has processed the exit
+      assert wait_until(fn -> SessionRegistry.lookup(session_id) == :error end, 2_000)
     end
 
     test "via tuple works with GenServer" do

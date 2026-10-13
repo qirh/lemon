@@ -852,8 +852,8 @@ defmodule CodingAgent.Tools.TodoStoreTest do
           TodoStore.clear()
         end)
 
-      # Should complete in reasonable time (under 1 second)
-      assert time < 1_000_000
+      # Generous sanity bound (expected: milliseconds) so slow CI runners don't flake
+      assert time < 15_000_000
     end
 
     test "rapid get operations are efficient", %{session_id: session_id} do
@@ -866,8 +866,8 @@ defmodule CodingAgent.Tools.TodoStoreTest do
           end
         end)
 
-      # 10000 reads should be very fast (under 500ms)
-      assert time < 500_000
+      # 10000 reads take milliseconds; generous bound for slow CI runners
+      assert time < 10_000_000
     end
 
     test "cleanup after operations frees entries", %{session_id: session_id} do

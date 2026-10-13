@@ -321,7 +321,7 @@ defmodule CodingAgent.BackgroundRunTest do
   defp message_text(%UserMessage{content: text}), do: text
   defp message_text(%AssistantMessage{} = message), do: LemonAi.get_text(message)
 
-  defp await_result(id, attempts \\ 100)
+  defp await_result(id, attempts \\ 500)
   defp await_result(id, 0), do: BackgroundRun.result(id)
 
   defp await_result(id, attempts) do

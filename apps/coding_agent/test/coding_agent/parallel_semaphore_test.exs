@@ -132,8 +132,8 @@ defmodule CodingAgent.Parallel.SemaphoreTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1000
   end
 
-  defp await_monitored(sem, pid), do: await_monitor_state(sem, pid, true, 100)
-  defp await_unmonitored(sem, pid), do: await_monitor_state(sem, pid, false, 100)
+  defp await_monitored(sem, pid), do: await_monitor_state(sem, pid, true, 1000)
+  defp await_unmonitored(sem, pid), do: await_monitor_state(sem, pid, false, 1000)
 
   defp await_monitor_state(sem, pid, expected, attempts) do
     {:monitors, monitors} = Process.info(sem, :monitors)

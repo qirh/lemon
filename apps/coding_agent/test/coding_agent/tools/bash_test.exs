@@ -6,6 +6,8 @@ defmodule CodingAgent.Tools.BashTest do
   alias LemonAgent.AbortSignal
   alias LemonAi.Types.TextContent
 
+  import CodingAgent.AsyncHelpers
+
   @moduletag :tmp_dir
 
   describe "tool/2" do
@@ -333,7 +335,7 @@ defmodule CodingAgent.Tools.BashTest do
           nil,
           nil,
           tmp_dir,
-          timeout_ms: 100
+          timeout_ms: 1_000
         )
 
       assert %AgentToolResult{
@@ -342,7 +344,7 @@ defmodule CodingAgent.Tools.BashTest do
                is_error: true
              } = result
 
-      assert text =~ "timed out after 100 ms"
+      assert text =~ "timed out after 1000 ms"
       assert text =~ "started"
       refute text =~ "finished"
       assert details.exit_code == nil
@@ -398,7 +400,7 @@ defmodule CodingAgent.Tools.BashTest do
         end)
 
       # Wait for some output
-      Process.sleep(200)
+      assert_eventually(fn -> Agent.get(agent, & &1) != [] end, timeout: 5_000)
 
       # Abort
       AbortSignal.abort(signal)

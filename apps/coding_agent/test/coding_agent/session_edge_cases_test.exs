@@ -14,6 +14,8 @@ defmodule CodingAgent.SessionEdgeCasesTest do
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
 
+  import CodingAgent.AsyncHelpers
+
   alias LemonAi.Types.{
     AssistantMessage,
     TextContent,
@@ -126,6 +128,22 @@ defmodule CodingAgent.SessionEdgeCasesTest do
     session
   end
 
+  # A stream_fn that parks until the test sends the reported pid `:release`,
+  # so the run stays in flight for exactly as long as the test needs.
+  defp gated_stream_fn(parent, text) do
+    fn _model, _context, _options ->
+      send(parent, {:stream_called, self()})
+
+      receive do
+        :release -> :ok
+      after
+        10_000 -> :ok
+      end
+
+      {:ok, response_to_event_stream(assistant_message(text))}
+    end
+  end
+
   defp wait_for_streaming_complete(session, timeout \\ 5000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     do_wait_for_streaming_complete(session, deadline)
@@ -219,12 +237,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
   describe "state management edge cases" do
     test "state is consistent after rapid prompts" do
-      slow_response = fn _model, _context, _options ->
-        Process.sleep(50)
-        {:ok, response_to_event_stream(assistant_message("Slow response"))}
-      end
-
-      session = start_session(stream_fn: slow_response)
+      session = start_session(stream_fn: gated_stream_fn(self(), "Slow response"))
 
       # First prompt
       :ok = Session.prompt(session, "First")
@@ -233,6 +246,8 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       result = Session.prompt(session, "Second")
       assert result == {:error, :already_streaming}
 
+      assert_receive {:stream_called, stream_pid}, 2_000
+      send(stream_pid, :release)
       wait_for_streaming_complete(session)
 
       # State should be consistent
@@ -298,17 +313,13 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
       # Kill first subscriber process
       send(Enum.at(pids, 0), :unsubscribe)
-      Process.sleep(50)
 
-      state = Session.get_state(session)
-      assert length(state.event_listeners) == 2
+      assert_eventually(fn -> length(Session.get_state(session).event_listeners) == 2 end)
 
       # Kill remaining processes
       Enum.each(Enum.drop(pids, 1), &send(&1, :unsubscribe))
-      Process.sleep(50)
 
-      state = Session.get_state(session)
-      assert state.event_listeners == []
+      assert_eventually(fn -> Session.get_state(session).event_listeners == [] end)
     end
 
     test "stream subscribers are tracked separately from direct subscribers" do
@@ -349,8 +360,8 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       # Should receive error event
       assert_receive {:session_event, _session_id, {:error, _reason, _partial}}, 5000
 
-      # Wait and check state
-      Process.sleep(100)
+      # Wait for the run to wind down, then check state
+      wait_for_streaming_complete(session)
       state = Session.get_state(session)
       assert state.is_streaming == false
     end
@@ -592,19 +603,13 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       assert length(results) == 10
 
       # After all tasks, should have no listeners
-      Process.sleep(50)
-      state = Session.get_state(session)
-      assert state.event_listeners == []
+      assert_eventually(fn -> Session.get_state(session).event_listeners == [] end)
     end
 
     test "handles concurrent stats calls during streaming" do
-      slow_stream_fn = fn _model, _context, _options ->
-        Process.sleep(100)
-        {:ok, response_to_event_stream(assistant_message("Response"))}
-      end
-
-      session = start_session(stream_fn: slow_stream_fn)
+      session = start_session(stream_fn: gated_stream_fn(self(), "Response"))
       :ok = Session.prompt(session, "Hello!")
+      assert_receive {:stream_called, stream_pid}, 2_000
 
       # Get stats concurrently while streaming
       tasks =
@@ -622,6 +627,7 @@ defmodule CodingAgent.SessionEdgeCasesTest do
         assert Map.has_key?(stats, :message_count)
       end)
 
+      send(stream_pid, :release)
       wait_for_streaming_complete(session)
     end
   end
@@ -771,21 +777,15 @@ defmodule CodingAgent.SessionEdgeCasesTest do
       GenServer.stop(session, :normal)
 
       # Agent should be stopped
-      Process.sleep(50)
-      refute Process.alive?(agent_pid)
+      assert_process_dead(agent_pid)
     end
 
     test "session can be stopped during streaming" do
-      slow_stream_fn = fn _model, _context, _options ->
-        Process.sleep(500)
-        {:ok, response_to_event_stream(assistant_message("Slow"))}
-      end
-
-      session = start_session(stream_fn: slow_stream_fn)
+      session = start_session(stream_fn: gated_stream_fn(self(), "Slow"))
       :ok = Session.prompt(session, "Hello!")
 
       # Stop while streaming
-      Process.sleep(50)
+      assert_receive {:stream_called, _stream_pid}, 2_000
       GenServer.stop(session, :normal)
 
       # Should not raise

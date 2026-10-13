@@ -1448,7 +1448,7 @@ defmodule CodingAgent.Tools.FindTest do
           fd_available?: false,
           elixir_timeout_ms: 20,
           wildcard_fun: fn _pattern, _opts ->
-            Process.sleep(200)
+            Process.sleep(10_000)
             []
           end
         )
@@ -1475,7 +1475,7 @@ defmodule CodingAgent.Tools.FindTest do
           fd_available?: false,
           elixir_timeout_ms: 2_000,
           wildcard_fun: fn _pattern, _opts ->
-            Process.sleep(500)
+            Process.sleep(10_000)
             []
           end
         )

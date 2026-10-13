@@ -200,8 +200,15 @@ defmodule CodingAgent.IntrospectionTest do
           agent_id: "introspection_agent"
         )
 
-      # Give init a moment to complete the introspection record call
-      Process.sleep(50)
+      # Wait for init's introspection record call to land
+      wait_until(
+        fn ->
+          [session_key: session_key, limit: 20]
+          |> Introspection.list()
+          |> Enum.any?(&(&1.event_type == :session_started))
+        end,
+        5_000
+      )
 
       events = Introspection.list(session_key: session_key, limit: 20)
       started = Enum.filter(events, &(&1.event_type == :session_started))
@@ -236,10 +243,18 @@ defmodule CodingAgent.IntrospectionTest do
 
       # Stop the session to trigger terminate/2
       GenServer.stop(session, :normal)
-      Process.sleep(100)
 
       # session_ended doesn't pass session_key in opts, so query by event_type
       # and match on the session_id payload field
+      wait_until(
+        fn ->
+          [event_type: :session_ended, limit: 50]
+          |> Introspection.list()
+          |> Enum.any?(&(&1.payload.session_id == session_id))
+        end,
+        5_000
+      )
+
       events = Introspection.list(event_type: :session_ended, limit: 50)
 
       ended =
@@ -315,11 +330,17 @@ defmodule CodingAgent.IntrospectionTest do
       :ok = Session.prompt(session, "Use echo to say introspection test")
       wait_for_streaming_complete(session)
 
-      # Allow time for introspection events to be persisted
-      Process.sleep(100)
-
       # tool_call_dispatched doesn't pass session_key in opts, so query by
       # event_type and match on the unique tool_call_id in the payload
+      wait_until(
+        fn ->
+          [event_type: :tool_call_dispatched, limit: 50]
+          |> Introspection.list()
+          |> Enum.any?(&(&1.payload.tool_call_id == "call_introspection_#{token}"))
+        end,
+        5_000
+      )
+
       events = Introspection.list(event_type: :tool_call_dispatched, limit: 50)
 
       tool_events =
@@ -517,7 +538,15 @@ defmodule CodingAgent.IntrospectionTest do
       # The compact call may have returned {:error, :cannot_compact}, which does
       # NOT emit :compaction_triggered. Verify that at least session_started was
       # emitted through the real code path.
-      Process.sleep(50)
+      wait_until(
+        fn ->
+          [session_key: session_key, limit: 20]
+          |> Introspection.list()
+          |> Enum.any?(&(&1.event_type == :session_started))
+        end,
+        5_000
+      )
+
       events = Introspection.list(session_key: session_key, limit: 20)
       started = Enum.filter(events, &(&1.event_type == :session_started))
       assert started != []

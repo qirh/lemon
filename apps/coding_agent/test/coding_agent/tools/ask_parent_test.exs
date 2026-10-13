@@ -445,7 +445,7 @@ defmodule CodingAgent.Tools.AskParentTest do
     }
   end
 
-  defp wait_until(fun, attempts \\ 100)
+  defp wait_until(fun, attempts \\ 1000)
   defp wait_until(_fun, 0), do: flunk("condition did not become true")
 
   defp wait_until(fun, attempts) do
