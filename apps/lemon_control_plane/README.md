@@ -118,6 +118,9 @@ durable session index with independent lifecycle metadata. The result is
 `sessions.list` immediately, with zero runs of its own; no synthetic run is
 created. If acknowledgement or registration is uncertain, error details retain
 the generated keys and `retrySafe: false`; reconcile instead of retrying.
+Existing plain keys such as `tui-*` are valid fork sources when their durable
+session index identifies the source agent. Children still use canonical keys
+for that same agent; an unknown source never falls back to a guessed default.
 
 Name a child with the existing `sessions.metadata.patch` method using
 `{sessionKey, title}` (`operator.admin`); `title: null` clears its name.
