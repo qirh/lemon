@@ -242,6 +242,12 @@ open_browser() {
 
 COMMAND="${1:-}"
 if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
+  # Custom ACP agents are not recognized by Tern's built-in --typed wrapper.
+  if [ -n "${TERN_PANE:-}" ]; then
+    tern_bin="${TERN_ACP:-}"
+    [ -n "$tern_bin" ] || tern_bin="$(command -v tern || true)"
+    [ -z "$tern_bin" ] || exec "$tern_bin" acp lemon
+  fi
   COMMAND="tui"
   set -- tui
 fi

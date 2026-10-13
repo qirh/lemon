@@ -351,6 +351,13 @@ open_browser() {
 
 COMMAND="${1:-}"
 if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
+  # Tern's --typed wrapper recognizes built-ins, not custom ACP agents.
+  # Use the registered Lemon id directly; explicit `lemon tui` stays terminal.
+  if [ -n "${TERN_PANE:-}" ]; then
+    tern_bin="${TERN_ACP:-}"
+    [ -n "$tern_bin" ] || tern_bin="$(command -v tern || true)"
+    [ -z "$tern_bin" ] || exec "$tern_bin" acp lemon
+  fi
   COMMAND="tui"
   set -- tui
 fi
