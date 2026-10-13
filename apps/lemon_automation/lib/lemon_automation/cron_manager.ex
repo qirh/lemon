@@ -20,6 +20,14 @@ defmodule LemonAutomation.CronManager do
   4. Updates next run times
   5. Emits events for monitoring
 
+  Prompt jobs use `cwd` as the native coding session's repository. Each run
+  owns a fixed router ID before submission. Wait timeouts, worker death, and
+  ambiguous submissions or aborts retain active ownership with
+  `meta.outcome_unknown: true`; ticks and restart reconcile the durable router
+  result rather than scheduling another editor. Only confirmed terminal
+  failures are retryable. Pausing prevents future scheduled runs; aborting
+  cancels the exact owned router run and does not repeat an ambiguous abort.
+
   ## API
 
       # List all jobs
@@ -166,6 +174,19 @@ defmodule LemonAutomation.CronManager do
     GenServer.call(__MODULE__, {:update, job_id, params}, @call_timeout_ms)
   end
 
+  @doc "Update only the exact job revision inspected by an operator."
+  def update(job_id, params, expected_revision) do
+    GenServer.call(__MODULE__, {:update, job_id, params, expected_revision}, @call_timeout_ms)
+  end
+
+  @doc "Opaque revision for a job or run; never exposes its private content."
+  def control_revision(record) do
+    record
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
   @doc """
   Re-capture the current global default model for an unpinned agent job.
 
@@ -188,17 +209,33 @@ defmodule LemonAutomation.CronManager do
   @doc """
   Trigger a job to run immediately.
   """
-  @spec run_now(binary()) :: {:ok, CronRun.t()} | {:error, :not_found}
+  @spec run_now(binary()) :: {:ok, CronRun.t()} | {:error, :not_found | :outcome_unknown}
   def run_now(job_id) do
     GenServer.call(__MODULE__, {:run_now, job_id}, @call_timeout_ms)
+  end
+
+  @doc "Run only the exact job revision inspected by an operator."
+  def run_now(job_id, expected_revision) do
+    GenServer.call(__MODULE__, {:run_now, job_id, expected_revision}, @call_timeout_ms)
+  end
+
+  @doc false
+  def wake(job_id, opts \\ []) do
+    GenServer.call(__MODULE__, {:wake, job_id, opts}, @call_timeout_ms)
   end
 
   @doc """
   Abort an active cron run by cron run ID.
   """
-  @spec abort_run(binary()) :: {:ok, CronRun.t()} | {:error, :not_found | :not_active}
+  @spec abort_run(binary()) ::
+          {:ok, CronRun.t()} | {:error, :not_found | :not_active | :outcome_unknown}
   def abort_run(run_id) do
     GenServer.call(__MODULE__, {:abort_run, run_id}, @call_timeout_ms)
+  end
+
+  @doc "Abort only the exact invocation revision inspected by an operator."
+  def abort_run(run_id, expected_revision) do
+    GenServer.call(__MODULE__, {:abort_run, run_id, expected_revision}, @call_timeout_ms)
   end
 
   @doc """
@@ -209,8 +246,9 @@ defmodule LemonAutomation.CronManager do
   - `:limit` - Maximum number of runs (default: 100)
   - `:status` - Filter by status
   - `:since_ms` - Filter by start time
+  - `:strict` - Return `{:ok, runs}` or a store error, never false empty history
   """
-  @spec runs(binary(), keyword()) :: [CronRun.t()]
+  @spec runs(binary(), keyword()) :: [CronRun.t()] | {:ok, [CronRun.t()]} | {:error, term()}
   def runs(job_id, opts \\ []) do
     GenServer.call(__MODULE__, {:runs, job_id, opts}, @call_timeout_ms)
   end
@@ -358,6 +396,20 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
+  def handle_call({:update, job_id, params, expected}, from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        if expected == control_revision(job) do
+          handle_call({:update, job_id, params}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   @impl true
   def handle_call({:update, job_id, params}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
@@ -443,6 +495,20 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
+  def handle_call({:run_now, job_id, expected}, from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        if expected == control_revision(job) do
+          handle_call({:run_now, job_id}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   @impl true
   def handle_call({:run_now, job_id}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
@@ -453,10 +519,70 @@ defmodule LemonAutomation.CronManager do
           triggered_by: :manual
         })
 
-        {run, state} = execute_job(job, :manual, [], state)
-        {:reply, {:ok, run}, state}
+        if unknown_run_locked?(job) do
+          {:reply, {:error, :outcome_unknown}, state}
+        else
+          {run, state} = execute_job(job, :manual, [], state)
+          {:reply, {:ok, run}, state}
+        end
 
       :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:wake, job_id, opts}, _from, state) do
+    case CronStore.get_job(job_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      %CronJob{enabled: false} ->
+        {:reply, {:error, :job_disabled}, state}
+
+      job ->
+        if unknown_run_locked?(job) or
+             (Keyword.get(opts, :skip_if_running, false) and job_active_run_locked?(job)) do
+          {:reply, {:error, :already_running}, state}
+        else
+          state = put_in(state.jobs[job.id], job)
+          {run, state} = execute_job(job, :wake, opts, state)
+          {:reply, {:ok, run}, state}
+        end
+    end
+  end
+
+  @impl true
+  def handle_call({:claim_submission, cron_id, router_id, session_key}, _from, state) do
+    case CronStore.get_run(cron_id) do
+      %CronRun{status: :running, run_id: ^router_id} = run ->
+        if meta_value(run.meta, :abort_requested) do
+          {:reply, {:error, :aborted}, state}
+        else
+          meta =
+            (run.meta || %{})
+            |> Map.put(:submission_started, true)
+            |> Map.put(:router_session_key, session_key)
+
+          result = CronStore.put_run(%{run | meta: meta})
+          {:reply, result, state}
+        end
+
+      _ ->
+        {:reply, {:error, :not_active}, state}
+    end
+  end
+
+  def handle_call({:abort_run, run_id, expected}, from, state) do
+    case CronStore.get_run(run_id) do
+      %CronRun{} = run ->
+        if expected == control_revision(run) do
+          handle_call({:abort_run, run_id}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
+
+      _ ->
         {:reply, {:error, :not_found}, state}
     end
   end
@@ -469,14 +595,26 @@ defmodule LemonAutomation.CronManager do
 
       %CronRun{} = run ->
         if CronRun.active?(run) do
-          abort_router_run(run)
+          if meta_value(run.meta, :abort_requested) do
+            {:reply, {:error, :outcome_unknown}, state}
+          else
+            run = %{run | meta: Map.put(run.meta || %{}, :abort_requested, true)}
+            :ok = CronStore.put_run(run)
 
-          {aborted, state} =
-            terminalize_run(state, run, {:aborted, "Run aborted by operator"},
-              audit_action: :run_aborted
-            )
+            case abort_router_run(run) do
+              :ok ->
+                {aborted, state} =
+                  terminalize_run(state, run, {:aborted, "Run aborted by operator"},
+                    audit_action: :run_aborted
+                  )
 
-          {:reply, {:ok, aborted}, stop_tracked_task(state, run.id)}
+                {:reply, {:ok, aborted}, stop_tracked_task(state, run.id)}
+
+              _ ->
+                {_run, state} = retain_unknown_run(state, run, :abort_outcome_unknown)
+                {:reply, {:error, :outcome_unknown}, stop_tracked_task(state, run.id)}
+            end
+          end
         else
           {:reply, {:error, :not_active}, state}
         end
@@ -528,9 +666,16 @@ defmodule LemonAutomation.CronManager do
   @impl true
   def handle_info({:submit_claimed_run, job_id, run_id}, state) do
     state =
-      with %CronJob{enabled: true} = job <- Map.get(state.jobs, job_id),
+      with %CronJob{} = job <- Map.get(state.jobs, job_id),
            %CronRun{status: :running} = run <- CronStore.get_run(run_id) do
-        submit_claimed_run(job, run, state)
+        if job.enabled or (job.once and run.triggered_by == :schedule) do
+          submit_claimed_run(job, run, state)
+        else
+          {_run, state} =
+            terminalize_run(state, run, {:aborted, "Job paused before submission"}, [])
+
+          state
+        end
       else
         %CronRun{} = run ->
           Logger.debug(
@@ -578,7 +723,7 @@ defmodule LemonAutomation.CronManager do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     case Map.get(state.task_refs, ref) do
       nil ->
         {:noreply, state}
@@ -590,7 +735,7 @@ defmodule LemonAutomation.CronManager do
           terminalize_run_id(
             state,
             run_id,
-            {:error, "cron worker exited before terminal result: #{inspect(reason, limit: 120)}"},
+            {:worker_down, :worker_exited},
             audit_action: :worker_down
           )
 
@@ -613,19 +758,12 @@ defmodule LemonAutomation.CronManager do
 
   defp abort_router_run(%CronRun{run_id: router_run_id})
        when is_binary(router_run_id) and router_run_id != "" do
-    if LemonRouter.available?() do
-      LemonRouter.abort_run(router_run_id, :cron_aborted)
-    else
-      :ok
-    end
+    router = Application.get_env(:lemon_automation, :cron_router_mod, LemonRouter)
+    router.abort_run(router_run_id, :cron_aborted)
   rescue
-    error ->
-      Logger.warning("[CronManager] Failed to abort router run: #{Exception.message(error)}")
-      :ok
+    _ -> {:error, :outcome_unknown}
   catch
-    :exit, reason ->
-      Logger.warning("[CronManager] Failed to abort router run: #{inspect(reason)}")
-      :ok
+    _, _ -> {:error, :outcome_unknown}
   end
 
   defp abort_router_run(_run), do: :ok
@@ -653,6 +791,14 @@ defmodule LemonAutomation.CronManager do
     |> schedule_retry_tick()
   end
 
+  defp unknown_run_locked?(job) do
+    Enum.any?(CronStore.active_runs(job.id), &meta_value(&1.meta, :outcome_unknown))
+  rescue
+    _ -> true
+  catch
+    _, _ -> true
+  end
+
   defp job_active_run_locked?(%CronJob{} = job) do
     CronStore.active_runs(job.id) != []
   rescue
@@ -661,37 +807,73 @@ defmodule LemonAutomation.CronManager do
         "[CronManager] Failed to check active cron runs for #{job.id}: #{Exception.message(error)}"
       )
 
-      false
+      true
   end
 
   defp recover_stale_active_runs(state, now \\ LemonCore.Clock.now_ms()) do
-    Enum.reduce(Map.values(state.jobs), state, fn job, state ->
-      recover_stale_active_runs(job, now, state)
-    end)
-  end
+    # Include orphaned runs: removing a job must not drop ownership of its editor.
+    Enum.reduce(CronStore.active_runs(), state, fn run, state ->
+      job = Map.get(state.jobs, run.job_id)
 
-  defp recover_stale_active_runs(%CronJob{} = job, now, state) do
-    Enum.reduce(CronStore.active_runs(job.id), state, fn run, state ->
-      if stale_run?(run, job, now) do
-        {_timed_out, state} =
-          terminalize_run(state, run, :timeout, audit_action: :stale_run_recovered)
+      cond do
+        not CronRun.active?(run) ->
+          state
 
-        Logger.warning(
-          "[CronManager] Recovered stale active run #{run.id} for job #{job.id} as timeout"
-        )
+        is_binary(run.run_id) ->
+          case durable_result(run.run_id) do
+            {:terminal, result} ->
+              result =
+                if meta_value(run.meta, :abort_requested),
+                  do: {:aborted, "Run stopped by operator"},
+                  else: result
 
-        state
-      else
-        state
+              {_run, state} = terminalize_run(state, run, result, audit_action: :run_reconciled)
+              stop_tracked_task(state, run.id)
+
+            :unknown ->
+              if meta_value(run.meta, :outcome_unknown) == true or stale_run?(run, job, now) do
+                {_run, state} = retain_unknown_run(state, run, :completion_outcome_unknown)
+                state
+              else
+                state
+              end
+          end
+
+        stale_run?(run, job, now) ->
+          {_run, state} =
+            terminalize_run(state, run, :timeout, audit_action: :stale_run_recovered)
+
+          stop_tracked_task(state, run.id)
+
+        true ->
+          state
       end
     end)
   rescue
-    error ->
-      Logger.warning(
-        "[CronManager] Failed to recover stale active cron runs for #{job.id}: #{Exception.message(error)}"
-      )
-
+    _ ->
+      Logger.warning("[CronManager] Active run reconciliation unavailable")
       state
+  end
+
+  defp durable_result(run_id) do
+    case RunStore.fetch(run_id) do
+      {:ok, %{summary: summary}} when is_map(summary) ->
+        completed = Map.get(summary, :completed) || Map.get(summary, "completed")
+
+        if is_map(completed) do
+          {:terminal,
+           LemonAutomation.RunCompletionWaiter.extract_output_from_completion(completed)}
+        else
+          :unknown
+        end
+
+      _ ->
+        :unknown
+    end
+  rescue
+    _ -> :unknown
+  catch
+    _, _ -> :unknown
   end
 
   defp stale_run?(%CronRun{started_at_ms: started_at_ms}, %CronJob{timeout_ms: timeout_ms}, now)
@@ -718,6 +900,8 @@ defmodule LemonAutomation.CronManager do
             agent_id: job.agent_id,
             session_key: job.session_key,
             job_name: job.name,
+            cwd: job.cwd,
+            wake_context: Keyword.get(opts, :context),
             retry_attempt: retry_attempt,
             retry_root_id: retry_root_id
           })
@@ -813,12 +997,27 @@ defmodule LemonAutomation.CronManager do
   end
 
   defp submit_claimed_run(%CronJob{} = job, %CronRun{} = run, state) do
+    manager = self()
+
     fun = fn ->
       case preflight_mod().check(job) do
         :ok ->
           case CronJob.execution_mode(job) do
-            :command -> command_runner().submit(job, run, run_id: run.run_id)
-            :agent -> run_submitter().submit(job, run, run_id: run.run_id)
+            :command ->
+              command_runner().submit(job, run, run_id: run.run_id)
+
+            :agent ->
+              run_submitter().submit(job, run,
+                run_id: run.run_id,
+                append_memory: false,
+                on_submitting: fn router_id, session_key ->
+                  GenServer.call(
+                    manager,
+                    {:claim_submission, run.id, router_id, session_key},
+                    @call_timeout_ms
+                  )
+                end
+              )
           end
 
         {:skip, failure} ->
@@ -957,6 +1156,16 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
+  defp terminalize_run(state, %CronRun{run_id: run_id} = run, result, opts)
+       when is_binary(run_id) and
+              (result == :timeout or elem(result, 0) == :worker_down) do
+    retain_unknown_run(state, run, :completion_outcome_unknown, opts)
+  end
+
+  defp terminalize_run(state, run, {:error, {:outcome_unknown, _run_id}}, opts) do
+    retain_unknown_run(state, run, :completion_outcome_unknown, opts)
+  end
+
   defp terminalize_run(state, %CronRun{} = run, result, opts) do
     if CronRun.finished?(run) do
       {run, state}
@@ -977,9 +1186,36 @@ defmodule LemonAutomation.CronManager do
       {updated_run, retry_intent} = persist_retry_intent(job, updated_run)
 
       updated_run =
-        %{updated_run | meta: Map.put(updated_run.meta || %{}, :terminalization_applied, true)}
+        %{
+          updated_run
+          | error: if(updated_run.status == :completed, do: nil, else: updated_run.error)
+        }
+
+      updated_run =
+        %{
+          updated_run
+          | meta:
+              (updated_run.meta || %{})
+              |> Map.put(:terminalization_applied, true)
+              |> Map.put(:outcome_unknown, false)
+        }
 
       CronStore.put_run(updated_run)
+
+      if job && CronJob.execution_mode(job) == :agent do
+        memory_result =
+          if updated_run.status == :completed,
+            do: {:ok, updated_run.output},
+            else: {:error, updated_run.error}
+
+        LemonAutomation.CronMemory.append_run(
+          job,
+          updated_run,
+          meta_value(run.meta, :router_session_key) || job.session_key,
+          memory_result
+        )
+      end
+
       maybe_record_terminal_audit(Keyword.get(opts, :audit_action), updated_run)
       maybe_record_retry_audit(job, updated_run, retry_intent)
       Events.emit_run_completed(updated_run)
@@ -994,6 +1230,20 @@ defmodule LemonAutomation.CronManager do
       {updated_run, state}
     end
   end
+
+  defp retain_unknown_run(state, run, reason, opts \\ []) do
+    if CronRun.finished?(run) do
+      {run, state}
+    else
+      meta = Map.put(run.meta || %{}, :outcome_unknown, true)
+      updated = %{run | status: :running, error: Atom.to_string(reason), meta: meta}
+      :ok = CronStore.put_run(updated)
+      maybe_record_terminal_audit(Keyword.get(opts, :audit_action), updated)
+      {updated, state}
+    end
+  end
+
+  defp terminal_result(run, {:worker_down, _reason}), do: CronRun.fail(run, "cron worker exited")
 
   defp terminal_result(run, {:ok, output}), do: CronRun.complete(run, output)
   defp terminal_result(run, :timeout), do: CronRun.timeout(run)
@@ -1199,6 +1449,7 @@ defmodule LemonAutomation.CronManager do
   # re-checks.
   defp retryable_run?(%CronRun{status: status, triggered_by: triggered_by} = run) do
     is_nil(meta_value(run.meta, :preflight_failure)) and
+      meta_value(run.meta, :abort_requested) != true and
       status in [:failed, :timeout] and triggered_by in [:schedule, :retry]
   end
 
@@ -1363,11 +1614,32 @@ defmodule LemonAutomation.CronManager do
   # normalized params (atom keys, trimmed values) or an `{:invalid_target,
   # reason}` tuple that each caller maps onto its own error shape.
   defp validate_feature_fields(params, mode, job_id) do
-    with {:ok, params} <- validate_monitor_flags(params),
+    with {:ok, params} <- validate_cwd(params),
+         {:ok, params} <- validate_monitor_flags(params),
          {:ok, params} <- validate_model_field(params, mode),
          {:ok, params} <- validate_context_from(params, mode, job_id),
          {:ok, params} <- validate_deliver_to(params) do
       validate_once(params)
+    end
+  end
+
+  defp validate_cwd(params) do
+    case fetch_param(params, :cwd) do
+      :error ->
+        {:ok, params}
+
+      {:ok, nil} ->
+        {:ok, params}
+
+      {:ok, cwd} when is_binary(cwd) ->
+        if String.trim(cwd) != "" do
+          {:ok, params |> Map.delete("cwd") |> Map.put(:cwd, Path.expand(cwd))}
+        else
+          {:invalid_target, "cwd must be a non-empty directory path"}
+        end
+
+      _ ->
+        {:invalid_target, "cwd must be a directory path"}
     end
   end
 
@@ -1490,7 +1762,7 @@ defmodule LemonAutomation.CronManager do
     mode = CronJob.execution_mode(job)
 
     cond do
-      has_any_key?(params, [:command, "command", :cwd, "cwd", :env, "env"]) and mode != :command ->
+      has_any_key?(params, [:command, "command", :env, "env"]) and mode != :command ->
         {:invalid_target, "Command fields can only update command cron jobs"}
 
       has_any_key?(params, [:prompt, "prompt"]) and mode != :agent ->

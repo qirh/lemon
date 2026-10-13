@@ -1,195 +1,121 @@
-# ACP Preview
+# Agent Client Protocol
 
-Lemon exposes a preview Agent Client Protocol bridge for ACP-shaped clients
-that need to create sessions and submit prompt turns into Lemon. The bridge is
-intentionally thin: it maps ACP JSON-RPC requests onto the existing Lemon router
-run graph instead of creating a separate runtime path.
+Lemon can be launched as an ACP stdio agent by Tern and other ACP clients:
 
-The current preview is implemented by `LemonControlPlane.ACP`, exposed over HTTP
-at `POST /acp`, and packaged for spawned stdio clients through
-`scripts/lemon_acp_stdio.exs`. It follows the official ACP JSON-RPC method shape
-for the methods it advertises, while keeping unsupported media and editor
-features out of the capability response.
+```bash
+lemon acp
+# Source checkout:
+./bin/lemon acp
+```
 
-## Supported Methods
+The launcher probes the local control plane and reuses a healthy daemon. If
+needed, it starts the daemon using the same managed credential and lifecycle
+path as the TUI. The stdio process is only a duplex client of that runtime: it
+never starts a second router, scheduler, or session store. Runtime logs stay in
+the daemon log; launch diagnostics go to stderr. Stdout contains only ACP JSON.
 
-| Method | Status | Behavior |
-| --- | --- | --- |
-| `initialize` | Preview | Negotiates protocol version and returns Lemon agent metadata plus honest capabilities and a safe summary of advertised client filesystem capabilities. |
-| `session/new` | Preview | Creates a Lemon-backed ACP session for an absolute `cwd`, records safe client filesystem capability booleans, and returns an opaque `sessionId`. |
-| `session/resume` | Preview | Recreates a session mapping for an existing ACP `sessionId` and `cwd`, preserving or refreshing safe client filesystem capability booleans. |
-| `session/list` | Preview | Lists store-backed ACP sessions, with optional `cwd` filtering and redacted client filesystem capability metadata. |
-| `session/prompt` | Preview | Converts ACP `text` and `resource_link` prompt blocks into a Lemon prompt, submits a router run, emits stdio `session/update` notifications while waiting, and returns ACP `stopReason` plus Lemon metadata. |
-| `session/cancel` | Preview | Cancels the latest known run for the ACP session through `LemonRouter.abort_run/2`. |
-| `session/close` | Preview | Cancels the latest known run and removes the ACP session mapping from the cache and store. |
+See [Lemon in Tern](../user-guide/tern.md) for native chat registration.
 
-The bridge advertises `sessionCapabilities.close`, `sessionCapabilities.list`,
-and `sessionCapabilities.resume`. It does not advertise image, audio, embedded
-resource, MCP HTTP, or MCP SSE support yet.
+## Configure a client
 
-## Request Shape
-
-`POST /acp` accepts JSON-RPC 2.0 request objects or batches:
+Use a command and argument array, not a shell command string:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": "init-1",
-  "method": "initialize",
-  "params": {
-    "protocolVersion": "1",
-    "clientInfo": {
-      "name": "example-client",
-      "version": "0.1.0"
-    }
-  }
+  "command": "lemon",
+  "args": ["acp"]
 }
 ```
 
-Create a session:
+Launch in the project directory. ACP `session/new` takes an absolute `cwd`; if a
+client omits it, Lemon supplies the original launcher directory rather than the
+source checkout. A Tern launch sends the pane directory explicitly. Model keys
+and OAuth state are resolved by the existing runtime from Lemon's configuration
+and encrypted secret store, not by the spawned stdio process.
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "new-1",
-  "method": "session/new",
-  "params": {
-    "cwd": "/home/z80/dev/lemon",
-    "mcpServers": []
-  }
-}
-```
+`LEMON_CONTROL_PLANE_PORT` selects the runtime (default `4040`). Managed
+launchers load the port's operator credential; explicitly managed runtimes can
+use `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` or `LEMON_WS_TOKEN`. Credentials are not
+passed in argv or ACP messages. The internal `GET /acp/ws` duplex endpoint
+requires operator read/write/approval authorization. Tokenless access is
+available only under the existing explicit direct-loopback compatibility policy.
 
-Submit a prompt:
+## Framing and lifecycle
 
-```json
-{
-  "jsonrpc": "2.0",
-  "id": "prompt-1",
-  "method": "session/prompt",
-  "params": {
-    "sessionId": "acp_...",
-    "prompt": [
-      {
-        "type": "text",
-        "text": "Review the current checkout."
-      },
-      {
-        "type": "resource_link",
-        "name": "mix.exs",
-        "uri": "file:///home/z80/dev/lemon/mix.exs",
-        "mimeType": "text/x-elixir"
-      }
-    ],
-    "_meta": {
-      "lemon": {
-        "timeoutMs": 60000,
-        "model": "openai:gpt-5"
-      }
-    }
-  }
-}
-```
+ACP uses newline-delimited JSON-RPC 2.0. Each nonempty stdin line is one request,
+notification, or response to an agent-to-client request. Responses and live
+`session/update` notifications are one JSON document per stdout line. Empty
+lines are ignored and malformed JSON receives `-32700`.
 
-By default, `session/prompt` waits through the same `agent.wait` path used by
-the control-plane API. Set `_meta.lemon.wait` to `false` to submit a queued run
-and return immediately. The response includes ACP `stopReason` and a
-`_meta.lemon` object with `runId`, `sessionId`, `sessionKey`, status, and the
-completed answer when a wait succeeds.
-
-## Session Updates
-
-When a stdio `session/prompt` waits for a Lemon run, the NDJSON runner
-subscribes to the run topic and emits ACP `session/update` notifications before
-the final prompt response:
-
-- Lemon `:delta` events become `agent_message_chunk` updates with text content.
-- Lemon `:engine_action` events become `tool_call_update` updates with tool
-  call id, title, kind, status, and redacted message content.
-
-The same stdio transport can also round-trip ACP agent-to-client JSON-RPC
-requests while a prompt is waiting. Lemon currently uses this preview bridge
-for `session/request_permission`, `fs/read_text_file`, and
-`fs/write_text_file`, `fs/delete_file`, and `fs/rename_file` events emitted on
-the run bus. It also subscribes to the shared `LemonCore.ExecApprovals` bus for
-the active ACP session key and maps matching approval requests to ACP
-`session/request_permission` decisions. The final prompt response records only
-redacted request summaries, such as method names, permission outcomes, content
-byte counts, and content hashes.
-
-During stdio `initialize`, Lemon captures only safe booleans from
-`clientCapabilities.fs.readTextFile` and
-`clientCapabilities.fs.writeTextFile`, `clientCapabilities.fs.deleteFile`, and
-`clientCapabilities.fs.renameFile`. Those booleans are carried into
-`session/new` and `session/resume`, surfaced through `session/list`, and copied
-into the Lemon run request metadata as `acp_client_fs_read_text_file`,
-`acp_client_fs_write_text_file`, `acp_client_fs_delete_file`, and
-`acp_client_fs_rename_file`. Raw client capability blobs are not stored in
-prompt metadata.
-
-When both the ACP session metadata and tool options show filesystem support,
-Lemon's model-facing `read`, `write`, `edit`, and `patch` tools route text file
-operations through the ACP client instead of the local filesystem. The bridge
-uses the run bus to emit correlated `fs/read_text_file` and
-`fs/write_text_file`, `fs/delete_file`, and `fs/rename_file` requests and waits
-for the stdio ACP response. `patch` supports add, update, delete, and move-only
-operations through ACP when the matching client filesystem capabilities are
-available. Update+move patches that change content use read/write/delete because
-the target content is rewritten before the old path is removed.
-
-HTTP `/acp` remains a single request/response JSON-RPC endpoint. Use stdio or a
-future streaming transport when clients need live ACP update notifications.
-
-## Authentication
-
-Set `:acp_api_token` in `:lemon_control_plane` config or
-`LEMON_ACP_API_TOKEN` in the environment to require authentication on `/acp`.
-Authenticated clients can send either:
-
-```text
-Authorization: Bearer <token>
-```
-
-or:
-
-```text
-x-api-key: <token>
-```
-
-The stdio runner does not perform HTTP header auth. Use it only in contexts
-where the spawned local process boundary is already trusted, or wrap it with the
-client/editor's own launch policy.
-
-## Stdio Runner
-
-ACP's TypeScript SDK documents newline-delimited JSON as the common stdio stream
-format. Lemon's stdio preview uses the same line-oriented shape:
+For example, this negotiates capabilities against the real runtime:
 
 ```bash
 printf '%s\n' \
-  '{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":"1"}}' \
-  | mix run --no-start scripts/lemon_acp_stdio.exs
+  '{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"protocolVersion":1}}' \
+  | lemon acp
 ```
 
-Each non-empty input line must be a JSON-RPC request or notification. Each
-response is emitted as one JSON line. Waiting prompt calls can also emit
-intermediate `session/update` notification lines and agent-to-client request
-lines before the final response. Clients answer those request lines by sending a
-normal JSON-RPC response with the same id. Empty input lines are ignored, parse
-errors return JSON-RPC `-32700`, and notifications with no `id` do not emit a
-response. The `--no-start` form is useful for protocol-shape smoke tests that do
-not submit runs. Spawned clients that need `session/prompt` to reach the router
-must run the script in a Lemon runtime where the router is started.
+Interactive clients keep stdin open. `session/prompt` streams updates before
+its final response. Clients answer `session/request_permission` and filesystem
+requests with ordinary JSON-RPC responses carrying the request's id. A pending
+permission does not prevent receiving cancel or other control messages.
 
-## Boundaries
+Prompt turns wait up to ten minutes by default; clients can override the bounded
+wait through `_meta.lemon.timeoutMs`. The `/compact [instructions]` command
+compacts the idle native session, retaining the durable transcript. Session
+load/resume replay persisted native messages and tool history; close cancels an
+active turn and retains the session for later resume. Fork creates a durable
+branch rather than a new empty chat.
 
-The preview session store uses Lemon's shared store with an ETS read cache. It
-is suitable for early editor/client integration proof, but it is not a full
-editor workspace/session index.
-Stable ACP support still needs:
+Session configuration exposes code/plan mode, registry model selection,
+thinking level and approval policy. Plan mode is read-only; approval choices
+cannot override administrator restrictions. Existing local provider credentials
+use the `agent` authentication method. Image/audio/embedded resources and
+client-provided MCP transports are rejected unless actually supported by the
+negotiated capabilities.
 
-- real editor UI compatibility proof against a deployed ACP editor
-- raw media/artifact support before advertising image, audio, or embedded
-  resource prompt capabilities
-- ACP delete/rename compatibility proof against a real editor client
+`session/cancel` cancels the session's active turn. `$/cancel_request` maps the
+original prompt request id to its session and cancels that turn, waking any
+pending client callbacks. Stdin EOF closes the connection and cancels active
+turns, without stopping the daemon or deleting durable sessions. Short piped
+requests are drained before exit. Transport failures exit `1`; invalid CLI
+arguments exit `2`; clean EOF exits `0`.
 
+Session creation/fork bootstrap updates are delivered after their result so
+clients know the session id before processing updates. History replay on load
+is delivered before the load result. Use the capabilities returned by
+`initialize` as the authoritative supported feature set.
+
+## Rich session updates
+
+Lemon maps runtime events to ACP text/thought chunks and tool calls. Tool calls
+begin with `tool_call` and advance through `tool_call_update`; editor locations
+use absolute paths. Small complete file changes use typed ACP diff content
+(up to 16 KiB per side); larger changes use a bounded textual preview. Tool
+text previews are bounded to 4 KiB and raw previews share a 32 KiB bound.
+
+Usage with a known context window is exposed as `usage_update`; accounting
+without a known window uses vendor metadata instead of inventing a context
+percentage. Compaction events use ACP compaction updates. The runtime preserves
+message and tool ids so a client can append streams and update cards rather
+than duplicating them.
+
+Negotiated client filesystem support lets model-facing coding tools read and
+write editor-managed text buffers through the existing ACP client bridge. Raw
+client capability blobs and editor contents are not copied into management
+projections. Unsupported media or MCP capabilities must not be inferred from
+registration: inspect the negotiated capabilities.
+
+## HTTP integration
+
+`POST /acp` remains a single request/response endpoint for JSON-RPC requests or
+batches. It cannot round-trip client requests or stream notifications; use
+`lemon acp` for interactive integrations.
+
+The HTTP endpoint's optional `LEMON_ACP_API_TOKEN` (or application setting
+`:acp_api_token`) is independent of the internal runtime operator credential.
+When configured, send it as `Authorization: Bearer <token>` or `x-api-key`.
+
+The obsolete `scripts/lemon_acp_stdio.exs` runtime-boot script is removed. Client
+configurations must use `lemon acp`; there is no second runtime or fake runtime
+mode in the stdio agent.

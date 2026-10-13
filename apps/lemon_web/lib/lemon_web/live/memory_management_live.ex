@@ -189,6 +189,7 @@ defmodule LemonWeb.MemoryManagementLive do
                 <option value="all" selected={@filters["kind"] == "all"}>All memory</option>
                 <option value="run" selected={@filters["kind"] == "run"}>Run memory</option>
                 <option value="learned_source" selected={@filters["kind"] == "learned_source"}>Reviewed learning</option>
+                <option value="project_learning" selected={@filters["kind"] == "project_learning"}>Project learnings</option>
               </select>
             </label>
             <label class="memory-field">
@@ -427,6 +428,7 @@ defmodule LemonWeb.MemoryManagementLive do
     do: value |> String.replace("_", " ") |> String.capitalize()
 
   defp kind_label("learned_source"), do: "Reviewed learning"
+  defp kind_label("project_learning"), do: "Project learnings"
   defp kind_label(_), do: "Run memory"
   defp yes_no(true), do: "yes"
   defp yes_no(_), do: "no"

@@ -17,7 +17,7 @@ defmodule CodingAgent.Application do
       Application.get_env(
         :coding_agent,
         :task_max_concurrency,
-        CodingAgent.Parallel.default_max_concurrency()
+        8
       )
 
     children = [
@@ -35,6 +35,7 @@ defmodule CodingAgent.Application do
       CodingAgent.Tools.Task.LiveBridgeSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
+      CodingAgent.Tools.Task.Control,
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},

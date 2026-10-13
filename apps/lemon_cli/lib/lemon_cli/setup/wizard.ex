@@ -43,39 +43,47 @@ defmodule LemonCli.Setup.Wizard do
 
     # parse_head stops at the first non-flag argument (the subcommand name),
     # leaving subcommand-specific flags untouched so subcommand parsers get them.
-    {parsed, rest, _invalid} =
+    {parsed, rest, invalid} =
       OptionParser.parse_head(args,
-        switches: [
+        strict: [
           non_interactive: :boolean,
           config_path: :string,
           provider: :string,
           skip_verify: :boolean,
-          daily_brief: :string
+          daily_brief: :string,
+          token: :string,
+          auth: :string,
+          codex_auth_path: :string,
+          model: :string
         ],
         aliases: [n: :non_interactive]
       )
 
-    case rest do
-      ["provider" | provider_args] ->
+    case {invalid, rest} do
+      {[_ | _], _} ->
+        io.error.("Unknown or invalid setup options. Run `#{usage_command} --help`.")
+        {:error, :invalid_arguments}
+
+      {[], ["provider" | provider_args]} ->
         Provider.run(provider_args, io, setup_verify_opts(opts))
 
-      ["runtime" | runtime_args] ->
+      {[], ["runtime" | runtime_args]} ->
         run_runtime(runtime_args, io, parsed)
 
-      ["gateway" | gateway_args] ->
+      {[], ["gateway" | gateway_args]} ->
         Gateway.run(gateway_args, io)
 
-      ["doctor" | doctor_args] ->
+      {[], ["doctor" | doctor_args]} ->
         case LemonCli.CLI.doctor(doctor_args) do
           0 -> :ok
           _ -> {:error, :doctor_failed}
         end
 
-      [] ->
+      {[], []} ->
         Runner.ensure_required_apps!()
         run_full([], io, Keyword.merge(opts, parsed))
 
-      [subcommand | _] ->
+      {[], [subcommand | _]} ->
         io.error.("Unknown subcommand: #{inspect(subcommand)}")
         io.info.("")
         io.info.("Usage: #{usage_command} [provider|runtime|gateway|doctor] [options]")
@@ -139,8 +147,14 @@ defmodule LemonCli.Setup.Wizard do
       step_offer_runtime(io, non_interactive?)
     end
 
-    print_summary(io, Verification.setup_state(config_path: config_path), result)
+    state = Verification.setup_state(config_path: config_path)
 
+    result =
+      if result == :ok and not LemonCore.Setup.Readiness.ready?(state),
+        do: {:error, :setup_incomplete},
+        else: result
+
+    print_summary(io, state, result)
     result
   end
 
@@ -338,8 +352,14 @@ defmodule LemonCli.Setup.Wizard do
 
         if answer do
           provider_args =
-            ["--config-path", config_path] ++
-              if(forced, do: ["--provider", forced], else: [])
+            ["--config-path", config_path, "--set-default"] ++
+              if(forced, do: ["--provider", forced], else: []) ++
+              if(non_interactive?, do: ["--non-interactive"], else: []) ++
+              Enum.flat_map([:token, :auth, :model, :codex_auth_path], fn key ->
+                flag = key |> Atom.to_string() |> String.replace("_", "-")
+                if value = opts[key], do: ["--#{flag}", value], else: []
+              end) ++
+              if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
 
           Provider.run(provider_args, io, setup_verify_opts(opts))
         else
@@ -487,6 +507,7 @@ defmodule LemonCli.Setup.Wizard do
     case Verification.pending_steps(state) do
       [] when result == :ok ->
         io.info.("Setup complete. Next steps:")
+        io.info.("  lemon                        — start coding in this directory")
         io.info.("  lemon config validate        — verify configuration")
         io.info.("  lemon setup provider         — onboard another AI provider")
         io.info.("  lemon setup runtime          — change runtime profile / ports")

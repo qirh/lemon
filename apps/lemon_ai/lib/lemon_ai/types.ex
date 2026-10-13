@@ -87,6 +87,7 @@ defmodule LemonAi.Types do
             usage: LemonAi.Types.Usage.t(),
             stop_reason: stop_reason(),
             error_message: String.t() | nil,
+            error_details: LemonAi.Error.parsed_error() | nil,
             retry_after_ms: non_neg_integer() | nil,
             timestamp: integer()
           }
@@ -100,6 +101,7 @@ defmodule LemonAi.Types do
               usage: nil,
               stop_reason: nil,
               error_message: nil,
+              error_details: nil,
               retry_after_ms: nil,
               timestamp: 0
   end
@@ -145,16 +147,26 @@ defmodule LemonAi.Types do
   end
 
   defmodule Usage do
-    @moduledoc "Token usage and cost for a response"
+    @moduledoc """
+    Token usage and cost for a response. `cache_write_long` is the hourly
+    Anthropic cache-write subset of `cache_write`, not an additional token count.
+    """
     @type t :: %__MODULE__{
             input: non_neg_integer(),
             output: non_neg_integer(),
             cache_read: non_neg_integer(),
             cache_write: non_neg_integer(),
+            cache_write_long: non_neg_integer(),
             total_tokens: non_neg_integer(),
             cost: Cost.t()
           }
-    defstruct input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: %Cost{}
+    defstruct input: 0,
+              output: 0,
+              cache_read: 0,
+              cache_write: 0,
+              cache_write_long: 0,
+              total_tokens: 0,
+              cost: %Cost{}
   end
 
   # ============================================================================
@@ -233,14 +245,19 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule ModelCost do
-    @moduledoc "Cost per million tokens for a model"
+    @moduledoc """
+    Per-million-token prices. Optional `long_context` supplies `input_threshold`
+    and replacement input/output/cache prices when total input (including cache)
+    exceeds the threshold.
+    """
     @type t :: %__MODULE__{
             input: float(),
             output: float(),
             cache_read: float(),
-            cache_write: float()
+            cache_write: float(),
+            long_context: map() | nil
           }
-    defstruct input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0
+    defstruct input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, long_context: nil
   end
 
   defmodule Model do
@@ -257,6 +274,9 @@ defmodule LemonAi.Types do
       * `reasoning_efforts` - the Lemon reasoning levels the model accepts
         natively, in ascending order. An empty list means undeclared: levels
         pass through unchanged. See `LemonAi.Models.reasoning_effort_for/2`.
+
+    `service_tier_cost` maps `"flex"` / `"priority"` to billing multipliers;
+    absent entries retain base prices for that surface.
     """
     @type input_type :: :text | :image
     @type reasoning_level :: :minimal | :low | :medium | :high | :xhigh
@@ -272,6 +292,7 @@ defmodule LemonAi.Types do
             input: [input_type()],
             cost: ModelCost.t(),
             context_window: non_neg_integer(),
+            service_tier_cost: %{optional(String.t()) => number()},
             max_tokens: non_neg_integer(),
             headers: map(),
             compat: map() | nil
@@ -287,6 +308,7 @@ defmodule LemonAi.Types do
               input: [:text],
               cost: %ModelCost{},
               context_window: 0,
+              service_tier_cost: %{},
               max_tokens: 0,
               headers: %{},
               compat: nil

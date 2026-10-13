@@ -44,7 +44,16 @@ defmodule CodingAgent.Session.CompactionManager do
   @spec clear_auto_compaction_state(map()) :: map()
   def clear_auto_compaction_state(state) do
     state = clear_auto_compaction_task_tracking(state)
-    %{state | auto_compaction: %{state.auto_compaction | in_progress: false, signature: nil}}
+
+    %{
+      state
+      | auto_compaction: %{
+          state.auto_compaction
+          | in_progress: false,
+            signature: nil,
+            pending_prompt: nil
+        }
+    }
   end
 
   @spec clear_auto_compaction_task_tracking(map()) :: map()
@@ -72,7 +81,9 @@ defmodule CodingAgent.Session.CompactionManager do
         state
 
       true ->
-        clear_auto_compaction_state(state)
+        state
+        |> CodingAgent.Session.CompactionLifecycle.resume_pending_prompt()
+        |> clear_auto_compaction_state()
     end
   end
 
@@ -228,6 +239,7 @@ defmodule CodingAgent.Session.CompactionManager do
     opts
     |> maybe_put_keep_recent_tokens(compaction_settings)
     |> maybe_put_keep_recent_messages(message_budget)
+    |> summary_options(state)
   end
 
   @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
@@ -235,6 +247,50 @@ defmodule CodingAgent.Session.CompactionManager do
 
   def get_compaction_settings(%CodingAgent.SettingsManager{} = settings) do
     CodingAgent.SettingsManager.get_compaction_settings(settings)
+  end
+
+  @doc false
+  def summary_options(opts, state) do
+    resolver = CodingAgent.Session.ModelResolver
+
+    model =
+      resolver.resolve_compaction_model(
+        Keyword.get(opts, :model),
+        state.settings_manager,
+        state.model
+      )
+
+    existing_stream_options =
+      if Keyword.has_key?(opts, :api_key) do
+        Map.put(
+          Keyword.get(opts, :stream_options) || %{},
+          :api_key,
+          Keyword.fetch!(opts, :api_key)
+        )
+      else
+        Keyword.get(opts, :stream_options)
+      end
+
+    stream_options =
+      resolver.build_stream_options(
+        model,
+        state.settings_manager,
+        existing_stream_options,
+        state.cwd
+      )
+
+    api_key =
+      if Keyword.has_key?(opts, :api_key) do
+        Keyword.fetch!(opts, :api_key)
+      else
+        stream_options.api_key ||
+          resolver.build_get_api_key(state.settings_manager).(model.provider)
+      end
+
+    opts
+    |> Keyword.put(:model, model)
+    |> Keyword.put(:stream_options, stream_options)
+    |> Keyword.put(:api_key, api_key)
   end
 
   # ============================================================================
@@ -296,6 +352,7 @@ defmodule CodingAgent.Session.CompactionManager do
            }}
 
         broadcast_event_fn.(state, compaction_event)
+        _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
 
         {:ok, %{state | session_manager: session_manager}}
 

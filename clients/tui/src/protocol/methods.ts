@@ -14,6 +14,13 @@
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
 import { MethodUnavailableError } from "./errors.ts";
 import type {
+	SessionRewindPreview,
+	SessionRewindResult,
+	SessionRewindTarget,
+	SessionTreeParams,
+	SessionTreeResult,
+} from "./session-tree.ts";
+import type {
 	ApprovalResolveParams,
 	BlueprintActivationResult,
 	BlueprintInspectResult,
@@ -45,6 +52,8 @@ import type {
 	SessionSummary,
 	SessionsDeleteResult,
 	SessionsExportResult,
+	SessionsForkParams,
+	SessionsForkResult,
 	SessionsListParams,
 	SessionsListResult,
 	SessionsMetadataPatchParams,
@@ -70,6 +79,7 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
@@ -80,6 +90,8 @@ export const METHOD = {
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
+	sessionsTree: "sessions.tree",
+	sessionsRewind: "sessions.rewind",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -222,6 +234,13 @@ export class ControlPlaneMethods {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
 	}
 
+	sessionsFork(params: SessionsForkParams, options?: RequestOptions): Promise<SessionsForkResult> {
+		return this.#call<SessionsForkResult>(METHOD.sessionsFork, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
 	sessionsPreview(
 		params: { sessionKey: string; limit?: number },
 		options?: RequestOptions,
@@ -245,6 +264,41 @@ export class ControlPlaneMethods {
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.sessionsPatch, params, options);
+	}
+
+	sessionsTree(params: SessionTreeParams, options?: RequestOptions): Promise<SessionTreeResult> {
+		return this.#call<SessionTreeResult>(METHOD.sessionsTree, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsRewindPreview(
+		params: SessionRewindTarget,
+		options?: RequestOptions,
+	): Promise<SessionRewindPreview> {
+		return this.#call<SessionRewindPreview>(
+			METHOD.sessionsRewind,
+			{ ...params, dryRun: true },
+			{
+				...options,
+				queueIfOffline: false,
+			},
+		);
+	}
+
+	sessionsRewindConfirm(
+		params: SessionRewindTarget & { confirmationToken: string },
+		options?: RequestOptions,
+	): Promise<SessionRewindResult> {
+		return this.#call<SessionRewindResult>(
+			METHOD.sessionsRewind,
+			{ ...params, dryRun: false },
+			{
+				...options,
+				queueIfOffline: false,
+			},
+		);
 	}
 
 	sessionsMetadataPatch(
@@ -292,7 +346,10 @@ export class ControlPlaneMethods {
 		params: { sessionKey: string },
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, options);
+		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, {
+			...options,
+			timeoutMs: options?.timeoutMs ?? 360_000,
+		});
 	}
 
 	sessionDetail(

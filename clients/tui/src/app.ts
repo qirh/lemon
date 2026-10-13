@@ -4,17 +4,15 @@
  * Flat container order (later phases slot components into the same seams):
  *
  *   banner        welcome + connection state
- *   chat          TranscriptContainer: the blocks, with the native-scrollback
- *                 commit seam (`getNativeScrollbackLiveRegionStart`)
+ *   chat          TranscriptContainer: ordered semantic history and live blocks
  *   queue         the editable backlog, when there is one
  *   approval      the decision panel, when a tool is waiting
  *   status        spare slot above the status line
  *   statusLine    one line: session, activity, approvals
  *   editor        the prompt
  *
- * The two panels sit *below* the transcript on purpose: everything under the
- * transcript's live region is repainted every frame, so a panel that appears,
- * grows and vanishes can never strand a row in the terminal's own scrollback.
+ * RowFrameProvider splits main (banner/transcript) from the mutable dock
+ * (queue/approval/status/editor). Dock rows never enter native scrollback.
  *
  * Wiring rules this file keeps to, because later phases depend on them:
  *   - controllers own the stores and the UI; components stay dumb
@@ -46,6 +44,8 @@ import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
 import type { NoticeLevel } from "./store/transcript-model.ts";
+import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
+import { TerminalIntegration } from "./terminal/integration.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
 import { PickerOverlay } from "./ui/components/pickers.ts";
@@ -64,6 +64,7 @@ import {
 	SessionController,
 	synthesizeHistory,
 } from "./ui/controllers/session-controller.ts";
+import { RowFrameProvider } from "./ui/row-frame-provider.ts";
 import { AppearanceController, type ThemePreference } from "./ui/theme/appearance.ts";
 import { getTheme } from "./ui/theme/theme.ts";
 import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
@@ -135,9 +136,13 @@ export class AppShell {
 	readonly #version: string;
 	readonly #onExit: ((code: number) => void) | undefined;
 	readonly #cwd: string;
+	readonly #forkConnection: Pick<ForkLaunch, "url" | "operatorToken">;
+	readonly #terminalIntegration: TerminalIntegration;
 
 	#disposers: Array<() => void> = [];
 	#started = false;
+	#sessionReady = false;
+	#initialSessionLoad: Promise<void> | undefined;
 	#queueMounted = false;
 	/** True while the queue panel, rather than the editor, owns the keyboard. */
 	#queueFocused = false;
@@ -154,15 +159,31 @@ export class AppShell {
 		this.#version = options.version ?? "dev";
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
+		this.#forkConnection = { url: options.url, operatorToken: options.operatorToken };
 		this.client =
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
 		this.store = new AppStore(options.sessionKey ?? defaultSessionKey());
+		this.#terminalIntegration = new TerminalIntegration(
+			this.tui.terminal,
+			this.store,
+			this.client,
+			this.#cwd,
+			undefined,
+			() => {
+				if (this.tui.nativeRendering) this.tui.renderNow();
+			},
+		);
 		// Editor construction needs a theme: pi-tui ships no defaults.
 		this.#editor = new CustomEditor({
 			theme: getEditorTheme(),
 			onSubmit: (text) => this.submit(text),
+			canSubmit: () =>
+				this.#sessionReady &&
+				this.client.online &&
+				!this.selectors.isOpen &&
+				!this.approvals.panel.visible,
 			onAbort: () => this.#abortActiveRun(),
 			onQuit: (code) => this.requestExit(code),
 			onExternalEdit: () => this.openExternalEditor(),
@@ -222,6 +243,7 @@ export class AppShell {
 			events: this.events,
 			tui: this.tui,
 			editor: this.#editor,
+			cwd: this.#cwd,
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
@@ -263,6 +285,7 @@ export class AppShell {
 			// from under a question the daemon is blocked on.
 			hasOverlay: () => this.selectors.isOpen || this.approvals.panel.visible,
 			openModelPicker: () => this.#modelPicker.open(),
+			openThinkingPicker: () => this.submit("/think"),
 			openSessionSwitcher: () => this.#switcher.open(),
 			openExternalEditor: () => this.openExternalEditor(),
 			clearTranscript: () => this.#host.clearTranscript(),
@@ -303,7 +326,23 @@ export class AppShell {
 		this.events.attach();
 		this.approvals.attach();
 		this.#disposers.push(
+			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
 			this.client.events.on("state", () => this.#renderConnection()),
+			this.client.events.on("hello-ok", () => {
+				if (this.#sessionReady || this.#initialSessionLoad) return;
+				this.#initialSessionLoad = this.sessions
+					.initialize()
+					.then(() => {
+						this.#sessionReady = true;
+					})
+					.catch((error: unknown) =>
+						this.events.notice(`could not load session: ${describeError(error)}`, "error"),
+					)
+					.finally(() => {
+						this.#initialSessionLoad = undefined;
+						this.tui.requestRender();
+					});
+			}),
 			this.client.events.on("queued", () => {
 				this.#renderConnection();
 				this.syncQueuePanel();
@@ -337,6 +376,7 @@ export class AppShell {
 			() => this.input.dispose(),
 		);
 		this.tui.start();
+		this.#terminalIntegration.start();
 		// After tui.start(), so the terminal is listening when pi-tui's OSC 11
 		// query comes back with the background color.
 		this.appearance.start();
@@ -344,9 +384,9 @@ export class AppShell {
 		this.#renderStatus();
 		try {
 			await this.client.connect();
-			// Only now are the daemon's methods known, so this is the first moment the
-			// status bar can name the model instead of guessing at "no model".
-			void this.sessions.hydrateRouting(this.store.focused);
+			// The explicit session may be a durable fork. Restore it before
+			// advertising a sendable composer to terminal automation.
+			await this.#initialSessionLoad;
 		} catch (error) {
 			// The socket keeps retrying in the background; just say so.
 			this.events.notice(`connection failed: ${describeError(error)}`, "error");
@@ -357,6 +397,7 @@ export class AppShell {
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.events.dispose();
 		this.client.close();
+		this.#terminalIntegration.stop();
 		if (this.#started) this.tui.stop();
 		this.#started = false;
 	}
@@ -387,6 +428,22 @@ export class AppShell {
 		this.tui.addChild(this.statusContainer);
 		this.tui.addChild(this.statusLineContainer);
 		this.tui.addChild(this.editorContainer);
+		// A width replay replaces the old presentation instead of duplicating it.
+		this.tui.setResizeScrollback("rebuild");
+		this.tui.setFrameProvider(
+			new RowFrameProvider(
+				this.chatContainer,
+				[this.bannerContainer],
+				[
+					this.queueContainer,
+					this.approvalContainer,
+					this.statusContainer,
+					this.statusLineContainer,
+					this.editorContainer,
+				],
+				this.tui,
+			),
+		);
 		this.tui.setFocus(this.#editor);
 		this.#renderConnection();
 	}
@@ -415,6 +472,7 @@ export class AppShell {
 	}
 
 	#renderStatus(): void {
+		this.#terminalIntegration.update();
 		this.#statusBar.invalidate();
 		this.tui.requestRender();
 	}
@@ -429,6 +487,9 @@ export class AppShell {
 			contextTokens: context.tokens,
 			contextWindow: context.window,
 			contextSource: context.source,
+			runTokens: session.usage?.totalTokens ?? undefined,
+			runCostUsd: session.usage?.costUsd ?? undefined,
+			pendingPrompts: this.store.queue.length(session.key),
 			sessionCount: this.store.sessions.size,
 			busy: session.busy,
 			busySessions: this.store.busySessions(),
@@ -611,7 +672,18 @@ export class AppShell {
 	async openExternalEditor(): Promise<void> {
 		const draft = this.#editor.getExpandedText();
 		try {
-			const edited = await editInExternalEditor(draft, { tui: this.tui });
+			const edited = await editInExternalEditor(draft, {
+				tui: {
+					stop: () => {
+						this.#terminalIntegration.suspend();
+						this.tui.stop();
+					},
+					start: () => {
+						this.tui.start();
+						this.#terminalIntegration.resume();
+					},
+				},
+			});
 			if (edited === null) return;
 			this.#editor.setText(edited);
 			this.tui.requestRender(true);
@@ -745,6 +817,7 @@ export class AppShell {
 		) {
 			return await this.methods.chatSend({
 				sessionKey,
+				cwd: this.#cwd,
 				prompt,
 				...(queueMode ? { queueMode } : {}),
 			});
@@ -766,6 +839,7 @@ export class AppShell {
 				return await this.methods.chatSend({
 					sessionKey,
 					prompt,
+					cwd: this.#cwd,
 					...(queueMode ? { queueMode } : {}),
 				});
 			}
@@ -787,6 +861,7 @@ export class AppShell {
 			return await this.methods.chatSend({
 				sessionKey,
 				prompt,
+				cwd: this.#cwd,
 				...(queueMode ? { queueMode } : {}),
 			});
 		}
@@ -825,6 +900,7 @@ export class AppShell {
 						description: item.description,
 					})),
 					footer: spec.footer,
+					detail: () => spec.detail,
 					onSelect: (item) => {
 						this.selectors.close();
 						void spec.onSelect(item);
@@ -879,6 +955,10 @@ export class AppShell {
 			closeOverlay: () => this.selectors.close(),
 			openSessionSwitcher: () => void this.#switcher.open(),
 			switchSession: (sessionKey: string) => this.sessions.switch(sessionKey),
+			openFork: (sessionKey: string) =>
+				openForkSession({ ...this.#forkConnection, sessionKey, cwd: this.#cwd }, (key) =>
+					this.sessions.switch(key),
+				),
 			openProfile: async (profileId: string, sessionKey: string) => {
 				this.#profileSessions.set(sessionKey, profileId);
 				await this.sessions.switch(sessionKey);
@@ -894,6 +974,7 @@ export class AppShell {
 			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
 			forgetDeletedSession: (sessionKey: string) => this.sessions.forgetDeleted(sessionKey),
 			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
+			reloadSession: (sessionKey: string) => this.sessions.reload(sessionKey),
 			focusQueue: () => this.focusQueue(),
 			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),
 			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),

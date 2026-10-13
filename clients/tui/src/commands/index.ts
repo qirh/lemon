@@ -19,6 +19,7 @@ import {
 	themeCommand,
 } from "./core.ts";
 import { costCommand, logsCommand, statusCommand, usageCommand } from "./diagnostics.ts";
+import { forkCommand } from "./fork.ts";
 import {
 	agentsCommand,
 	backgroundCommand,
@@ -41,11 +42,13 @@ import {
 } from "./run.ts";
 import {
 	historyCommand,
+	nameCommand,
 	resetCommand,
 	resumeCommand,
 	sessionCommand,
 	sessionsCommand,
 } from "./session.ts";
+import { rewindCommand, treeCommand } from "./session-tree.ts";
 import { skillsCommand } from "./skills.ts";
 
 export interface RegistryOptions {
@@ -68,6 +71,10 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 
 		sessionsCommand,
 		sessionCommand,
+		forkCommand,
+		nameCommand,
+		treeCommand,
+		rewindCommand,
 		resetCommand,
 		resumeCommand,
 		historyCommand,

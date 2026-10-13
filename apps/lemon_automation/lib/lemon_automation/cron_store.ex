@@ -149,6 +149,7 @@ defmodule LemonAutomation.CronStore do
         agent_id: job.agent_id,
         session_key: job.session_key,
         job_name: job.name,
+        cwd: job.cwd,
         scheduled_for_ms: scheduled_for_ms,
         retry_attempt: 0,
         retry_root_id: run_id
@@ -185,6 +186,7 @@ defmodule LemonAutomation.CronStore do
           agent_id: job.agent_id,
           session_key: job.session_key,
           job_name: job.name,
+          cwd: job.cwd,
           retry_attempt: attempt,
           retry_of: source_run.id,
           retry_root_id: root_id,
@@ -255,8 +257,9 @@ defmodule LemonAutomation.CronStore do
   - `:limit` - Maximum number of runs to return (default: 100)
   - `:status` - Filter by status atom
   - `:since_ms` - Only include runs started after this timestamp
+  - `:strict` - Return `{:ok, runs}` or a store error instead of collapsing failure to an empty list
   """
-  @spec list_runs(binary(), keyword()) :: [CronRun.t()]
+  @spec list_runs(binary(), keyword()) :: [CronRun.t()] | {:ok, [CronRun.t()]} | {:error, term()}
   def list_runs(job_id, opts \\ []) do
     query_runs(opts, fn run -> run.job_id == job_id end)
   end
@@ -276,12 +279,17 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
-  Get currently active runs for a job.
+  Get all currently active runs, optionally restricted to a job.
   """
-  @spec active_runs(binary()) :: [CronRun.t()]
-  def active_runs(job_id) do
-    list_runs(job_id, limit: 1000)
+  @spec active_runs(binary() | nil) :: [CronRun.t()]
+  def active_runs(job_id \\ nil) do
+    {:ok, rows} = LemonCore.Store.fetch_all(@runs_table)
+
+    rows
+    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+    |> Enum.filter(fn run -> is_nil(job_id) or run.job_id == job_id end)
     |> Enum.filter(&CronRun.active?/1)
+    |> Enum.sort_by(& &1.started_at_ms, :desc)
   end
 
   @doc """
@@ -308,7 +316,7 @@ defmodule LemonAutomation.CronStore do
 
     Enum.each(jobs, fn job ->
       runs = list_runs(job.id, limit: 10_000)
-      to_delete = Enum.drop(runs, keep_per_job)
+      to_delete = runs |> Enum.filter(&CronRun.finished?/1) |> Enum.drop(keep_per_job)
 
       Enum.each(to_delete, fn run ->
         delete_run(run.id)
@@ -489,18 +497,21 @@ defmodule LemonAutomation.CronStore do
   defp meta_value(_meta, _key), do: nil
 
   defp query_runs(opts, extra_filter \\ nil) do
-    limit = Keyword.get(opts, :limit, 100)
-    status_filter = Keyword.get(opts, :status)
-    since_ms = Keyword.get(opts, :since_ms)
+    project = fn records ->
+      records
+      |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
+      |> maybe_filter(extra_filter)
+      |> maybe_filter_status(Keyword.get(opts, :status))
+      |> maybe_filter_since(Keyword.get(opts, :since_ms))
+      |> Enum.sort_by(& &1.started_at_ms, :desc)
+      |> Enum.take(Keyword.get(opts, :limit, 100))
+    end
 
-    @runs_table
-    |> LemonCore.Store.list()
-    |> Enum.map(fn {_id, map} -> CronRun.from_map(map) end)
-    |> maybe_filter(extra_filter)
-    |> maybe_filter_status(status_filter)
-    |> maybe_filter_since(since_ms)
-    |> Enum.sort_by(& &1.started_at_ms, :desc)
-    |> Enum.take(limit)
+    if opts[:strict] do
+      with {:ok, records} <- LemonCore.Store.fetch_all(@runs_table), do: {:ok, project.(records)}
+    else
+      project.(LemonCore.Store.list(@runs_table))
+    end
   end
 
   defp maybe_filter(runs, nil), do: runs

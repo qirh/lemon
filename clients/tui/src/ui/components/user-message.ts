@@ -7,8 +7,11 @@
  */
 
 import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
+import { card } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { Container } from "@oh-my-pi/pi-tui/tui";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { TranscriptMarks } from "../../terminal/marks.ts";
 import { getTheme } from "../theme/theme.ts";
 import { getMarkdownTheme } from "../theme/tui-adapters.ts";
 import { WidthClamp } from "./width-safe.ts";
@@ -22,8 +25,10 @@ export class UserMessageComponent extends Container {
 	// reference-stable for the transcript's incremental assembly, and never
 	// mutates the Markdown child's own cached array.
 	#source: readonly string[] | undefined;
-	#lines: string[] | undefined;
+	#lines: readonly string[] | undefined;
 	readonly #clamp = new WidthClamp();
+	readonly #marks = new TranscriptMarks();
+	#native: NativeNode | undefined;
 
 	constructor(text: string) {
 		super();
@@ -33,6 +38,11 @@ export class UserMessageComponent extends Container {
 				color: (value) => theme.fg("userText", value),
 			}),
 		);
+	}
+
+	override describe(): NativeNode {
+		this.#native ??= card({ role: "omp.user", tone: "user" }, this.children);
+		return this.#native;
 	}
 
 	override render(width: number): readonly string[] {
@@ -55,8 +65,8 @@ export class UserMessageComponent extends Container {
 					first.slice(GUTTER)
 				: first;
 		this.#source = lines;
-		this.#lines = wrapped;
-		return wrapped;
+		this.#lines = this.#marks.apply(wrapped, "prompt");
+		return this.#lines;
 	}
 
 	override invalidate(): void {

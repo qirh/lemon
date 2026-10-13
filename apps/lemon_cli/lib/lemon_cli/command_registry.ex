@@ -64,6 +64,58 @@ defmodule LemonCli.CommandRegistry do
 
   @commands [
     %{
+      name: "acp",
+      summary: "Serve ACP over stdio using the local runtime",
+      usage: "lemon acp",
+      subcommands: [],
+      options: []
+    },
+    %{
+      name: "tern",
+      summary: "Register Lemon as a native Tern ACP agent",
+      usage: "lemon tern install [--config-dir PATH]",
+      subcommands: [%{name: "install", summary: "Merge Lemon into Tern's custom agents"}],
+      options: [
+        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
+      ]
+    },
+    %{
+      name: "run",
+      summary: "Run a prompt non-interactively (-p, --print)",
+      usage: "lemon run [PROMPT] [--output text|json|stream-json] [options]",
+      subcommands: [],
+      options: [
+        option("--output FORMAT", ["--output"], "text, json, or stream-json"),
+        option("--model MODEL", ["--model"], "Provider:model override"),
+        option("--cwd PATH", ["--cwd"], "Working directory"),
+        option("--session KEY", ["--session"], "Resume a session"),
+        option("--continue", ["--continue"], "Continue the latest CLI session"),
+        option(
+          "--approval-policy deny|allow",
+          ["--approval-policy"],
+          "Deny or allow approval requests"
+        ),
+        option("--allowed-tools LIST", ["--allowed-tools"], "Comma-separated tool allowlist"),
+        option("--denied-tools LIST", ["--denied-tools"], "Comma-separated tool denylist")
+      ]
+    },
+    %{
+      name: "acp",
+      summary: "Serve ACP over stdio using the local runtime",
+      usage: "lemon acp",
+      subcommands: [],
+      options: []
+    },
+    %{
+      name: "tern",
+      summary: "Register Lemon as a native Tern ACP agent",
+      usage: "lemon tern install [--config-dir PATH]",
+      subcommands: [%{name: "install", summary: "Merge Lemon into Tern's custom agents"}],
+      options: [
+        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
+      ]
+    },
+    %{
       name: "setup",
       summary: "Run first-time setup and configuration",
       usage: "lemon setup [provider|runtime|gateway|doctor] [options]",
@@ -77,6 +129,23 @@ defmodule LemonCli.CommandRegistry do
         option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts"),
         option("--config-path PATH", ["--config-path"], "Config file to read or write"),
         option("--skip-verify", ["--skip-verify"], "Defer live provider verification"),
+        option(
+          "--provider NAME",
+          ["--provider"],
+          "Provider to sign in to (openai-codex for ChatGPT)"
+        ),
+        option("--token TOKEN", ["--token"], "Credential for non-interactive provider setup"),
+        option(
+          "--auth oauth|api_key|codex-cli",
+          ["--auth"],
+          "Authentication mode (import is opt-in)"
+        ),
+        option(
+          "--codex-auth-path PATH",
+          ["--codex-auth-path"],
+          "Auth file for --auth codex-cli only"
+        ),
+        option("--model MODEL", ["--model"], "Model to make the default after onboarding"),
         option(
           "--if-required",
           ["--if-required"],
@@ -92,7 +161,17 @@ defmodule LemonCli.CommandRegistry do
       options: [
         option("--provider NAME", ["--provider"], "Provider id"),
         option("--token TOKEN", ["--token"], "Provider credential"),
-        option("--auth oauth|api_key", ["--auth"], "Authentication mode"),
+        option(
+          "--auth oauth|api_key|codex-cli",
+          ["--auth"],
+          "Authentication mode (import is opt-in)"
+        ),
+        option(
+          "--codex-auth-path PATH",
+          ["--codex-auth-path"],
+          "Auth file for --auth codex-cli only"
+        ),
+        option("--non-interactive", ["--non-interactive"], "Require --token or --auth codex-cli"),
         option("--secret-name NAME", ["--secret-name"], "Encrypted secret name"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
@@ -146,6 +225,41 @@ defmodule LemonCli.CommandRegistry do
           ["--project-dir", "-p"],
           "Project directory for project config"
         )
+      ]
+    },
+    %{
+      name: "mcp",
+      summary: "Manage and test named MCP servers",
+      usage:
+        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list|remove NAME|test NAME [options]",
+      subcommands: subcommands(~w(add list remove test)),
+      options: [
+        option(
+          "--global",
+          ["--global"],
+          "Use the global agent MCP file instead of project config"
+        ),
+        option("--cwd PATH", ["--cwd"], "Project root (default: current directory)"),
+        option("--stdio COMMAND", ["--stdio"], "Executable; pass its arguments after --"),
+        option("--http URL", ["--http"], "Streamable HTTP MCP endpoint"),
+        option("--env KEY=VALUE", ["--env"], "Stdio environment entry (repeatable)"),
+        option("--header KEY=VALUE", ["--header"], "HTTP header (repeatable)"),
+        option(
+          "--approval always|never",
+          ["--approval"],
+          "Server approval default (add: always)"
+        ),
+        option(
+          "--tool-approval TOOL=always|never",
+          ["--tool-approval"],
+          "Exact remote tool override (repeatable)"
+        ),
+        option(
+          "--replace",
+          ["--replace"],
+          "Replace a unique existing name, preserving extensions"
+        ),
+        option("--json", ["--json"], "Emit redacted JSON")
       ]
     },
     %{
@@ -394,10 +508,10 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "version",
-      summary: "Print the Lemon version",
-      usage: "lemon version",
+      summary: "Print the Lemon version (--version includes build identity)",
+      usage: "lemon version [--verbose]",
       subcommands: [],
-      options: []
+      options: [option("--verbose", ["--verbose"], "Show source/release, commit, and channel")]
     },
     runtime(
       "send",
@@ -516,9 +630,6 @@ defmodule LemonCli.CommandRegistry do
       @both_launchers,
       [@runtime_options_detail]
     ),
-    lifecycle("run", "lemon run [runtime options]", "Alias for start", @both_launchers, [
-      @runtime_options_detail
-    ]),
     lifecycle(
       "daemon",
       "lemon daemon [runtime options]",
@@ -526,14 +637,18 @@ defmodule LemonCli.CommandRegistry do
       @both_launchers,
       [@runtime_options_detail]
     ),
-    lifecycle("stop", "lemon stop", "Stop the background runtime", @both_launchers),
+    lifecycle("stop", "lemon stop", "Stop the background runtime", @both_launchers, [
+      "Select the daemon with LEMON_CONTROL_PLANE_PORT; source checkouts also accept --port N and verify the recorded process start identity before signalling it."
+    ]),
     lifecycle(
       "restart",
       "lemon restart [runtime options]",
       "Restart the background runtime",
       @both_launchers
     ),
-    lifecycle("status", "lemon status", "Report runtime pid and health", @both_launchers),
+    lifecycle("status", "lemon status", "Report runtime pid and health", @both_launchers, [
+      "Select the daemon with LEMON_CONTROL_PLANE_PORT; source checkouts also accept --port N."
+    ]),
     lifecycle("remote", "lemon remote", "Attach a remote IEx shell to the runtime", [:release]),
     lifecycle("eval", "lemon eval EXPR", "Evaluate EXPR in a fresh release VM", [:release]),
     lifecycle("rpc", "lemon rpc EXPR", "Evaluate EXPR on the running runtime", [:release])

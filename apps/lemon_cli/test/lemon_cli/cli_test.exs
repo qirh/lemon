@@ -23,6 +23,8 @@ defmodule LemonCli.CLITest do
     original_openai_api_key = System.get_env("OPENAI_API_KEY")
     original_default_provider = System.get_env("LEMON_DEFAULT_PROVIDER")
     original_default_model = System.get_env("LEMON_DEFAULT_MODEL")
+    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -33,6 +35,10 @@ defmodule LemonCli.CLITest do
     clear_secrets_table()
 
     on_exit(fn ->
+      if original_secrets_config,
+        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 
       if original_master_key,
@@ -89,6 +95,94 @@ defmodule LemonCli.CLITest do
     assert get_in(config, ["providers", "openai", "api_key_secret"]) == "runtime_cli_test_token"
     assert get_in(config, ["defaults", "provider"]) == "openai"
     assert get_in(config, ["defaults", "model"]) == "openai:gpt-5"
+  end
+
+  test "explicit CLI import stores encrypted OAuth without HTTP or source writes", %{
+    tmp_dir: tmp_dir
+  } do
+    previous_defaults = Req.default_options()
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+    Req.Test.stub(__MODULE__, fn _ -> flunk("CLI import must not call HTTP") end)
+    codex_home = System.get_env("CODEX_HOME")
+    System.delete_env("CODEX_HOME")
+
+    on_exit(fn ->
+      Req.default_options(previous_defaults)
+      Req.Test.set_req_test_to_private(%{})
+      restore_env("CODEX_HOME", codex_home)
+    end)
+
+    claims = %{
+      "exp" => System.system_time(:second) + 3_600,
+      "https://api.openai.com/auth" => %{"chatgpt_account_id" => "cli-import-account"}
+    }
+
+    token = "header." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".signature"
+
+    source =
+      Jason.encode!(%{
+        "auth_mode" => "chatgpt",
+        "tokens" => %{
+          "access_token" => token,
+          "refresh_token" => "cli-import-refresh",
+          "account_id" => "cli-import-account",
+          "id_token" => token
+        }
+      })
+
+    auth_path = Path.join([System.fetch_env!("HOME"), ".codex", "auth.json"])
+    File.mkdir_p!(Path.dirname(auth_path))
+    File.write!(auth_path, source)
+
+    for auth <- ["codex-cli", "codex_cli"] do
+      config_path = Path.join(tmp_dir, "#{auth}.toml")
+
+      File.write!(config_path, """
+      [providers.openai-codex]
+      auth_source = "api_key"
+      api_key_secret = "old-secret"
+      """)
+
+      path_args = if auth == "codex_cli", do: ["--codex-auth-path", auth_path], else: []
+
+      output =
+        capture_io(fn ->
+          assert CLI.run(
+                   [
+                     "model",
+                     "--provider",
+                     "openai-codex",
+                     "--auth",
+                     auth,
+                     "--non-interactive",
+                     "--config-path",
+                     config_path
+                   ] ++ path_args
+                 ) == 0
+        end)
+
+      assert output =~ "OpenAI Codex onboarding complete."
+      refute output =~ "cli-import-refresh"
+
+      assert {:ok, stored} =
+               Secrets.get("llm_openai_codex_api_key", prefer_env: false, env_fallback: false)
+
+      assert {:ok, secret} = LemonAi.Auth.OpenAICodexOAuth.decode_secret(stored)
+      assert secret["refresh_token"] == "cli-import-refresh"
+      assert secret["access_token"] == token
+      records = LemonCore.Store.list(Secrets.table()) |> inspect()
+      refute records =~ "cli-import-refresh"
+      refute records =~ token
+      assert records =~ "ciphertext"
+      assert {:ok, config} = Toml.decode_file(config_path)
+      provider = config["providers"]["openai-codex"]
+      assert provider["auth_source"] == "oauth"
+      assert provider["oauth_secret"] == "llm_openai_codex_api_key"
+      refute Map.has_key?(provider, "api_key_secret")
+      refute File.read!(config_path) =~ "cli-import-refresh"
+      assert File.read!(auth_path) == source
+    end
   end
 
   test "reports unknown commands as a user-facing usage error" do

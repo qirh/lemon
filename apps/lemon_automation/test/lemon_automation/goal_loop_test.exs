@@ -79,7 +79,11 @@ defmodule LemonAutomation.GoalLoopTest do
     end
 
     def abort_run(run_id, reason) do
-      send(:persistent_term.get({__MODULE__, :test_pid}), {:crash_abort_dispatched, run_id, reason})
+      send(
+        :persistent_term.get({__MODULE__, :test_pid}),
+        {:crash_abort_dispatched, run_id, reason}
+      )
+
       Process.exit(self(), :kill)
     end
   end
@@ -189,7 +193,7 @@ defmodule LemonAutomation.GoalLoopTest do
 
     def wait_already_subscribed(run_id, timeout_ms, _opts) do
       send(Process.get(:goal_loop_test_pid), {:judge_wait, run_id, timeout_ms})
-      {:ok, ~s({"action":"done","reason":"finished by judge"})}
+      {:ok, ~s({"action":"done","reason":"finished by judge","run_id":"forged_model_value"})}
     end
   end
 
@@ -438,6 +442,7 @@ defmodule LemonAutomation.GoalLoopTest do
     session_key: session_key
   } do
     assert {:ok, _goal} = GoalStore.set(session_key, "Judge via router", agent_id: "agent_1")
+    assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
              GoalLoop.run_once(session_key,
@@ -445,6 +450,7 @@ defmodule LemonAutomation.GoalLoopTest do
                judge_router_mod: JudgeRouterOk,
                judge_waiter_mod: JudgeWaiterDone,
                judge_wait_timeout_ms: 123,
+               run_id: "not_a_judge_run",
                judge_run_id: "run_judge",
                judge_model: "judge-model"
              )
@@ -459,6 +465,9 @@ defmodule LemonAutomation.GoalLoopTest do
     assert verdict.action == :done
     assert verdict.reason == "finished by judge"
     assert verdict.source == "judge:judge-model"
+    assert verdict.run_id == "run_judge"
+    assert completed.last_run_id == "previous_continuation"
+    assert completed.meta["goalLoop"]["lastVerdict"]["runId"] == "run_judge"
   end
 
   test "router judge runner completes through LemonRouter and RunCompletionWaiter", %{
@@ -582,7 +591,8 @@ defmodule LemonAutomation.GoalLoopTest do
     assert result.status == :limit_reached
     assert result.tick_count == 2
     assert_receive {:wait_for_run, "run_auto", 42}
-    assert_receive {:wait_for_run, "run_auto", 42}
+    assert_receive {:wait_for_run, next_run_id, 42}
+    refute next_run_id == "run_auto"
     assert GoalStore.get(session_key).continuation_count == 2
   end
 
@@ -896,6 +906,14 @@ defmodule LemonAutomation.GoalLoopTest do
     goal = GoalStore.get(session_key)
     assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"
     assert get_in(goal.meta, ["goalLoop", "lastRunId"]) == run_id
+    assert get_in(goal.meta, ["goalLoop", "abortAttempted"]) == true
+    assert get_in(goal.meta, ["goalLoop", "abortResult"]) == "accepted"
+    refute Map.has_key?(goal.meta["goalLoop"], "lastError")
+
+    assert {:ok, %{goal: status_goal, running: false, loop: nil}} =
+             GenServer.call(manager, {:status, session_key})
+
+    assert status_goal.meta["goalLoop"] == goal.meta["goalLoop"]
   end
 
   test "hard-stop restart never repeats an abort dispatched after durable intent", %{
@@ -1321,6 +1339,39 @@ defmodule LemonAutomation.GoalLoopTest do
              GenServer.call(manager, {:start_loop, session_key, [max_ticks: 1]})
   end
 
+  test "managed one-shot owns uncertain runs and blocks all restart paths", %{session_key: key} do
+    assert {:ok, _} = GoalStore.set(key, "One guarded continuation")
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_once_guard_#{System.unique_integer([:positive])}", scheduler_interval_ms: 0}
+      )
+
+    assert {:error, {:submission_outcome_unknown, "guarded_once"}} =
+             GenServer.call(
+               manager,
+               {:run_once, key,
+                [
+                  verdict: :continue,
+                  run_id: "guarded_once",
+                  router_mod: AmbiguousLoopRouter,
+                  waiter_mod: WaiterTimeout,
+                  wait_timeout_ms: 10
+                ]}
+             )
+
+    assert {:ok, %{running: true, loop: %{status: "reconciling"}}} =
+             GenServer.call(manager, {:status, key})
+
+    assert {:error, :already_running} = GenServer.call(manager, {:run_once, key, []})
+    assert {:error, :already_running} = GenServer.call(manager, {:set_goal, key, "Replace", []})
+    assert {:error, :already_running} = GenServer.call(manager, {:start_loop, key, []})
+
+    assert {:ok, %{router_abort: :accepted}} =
+             GenServer.call(manager, {:stop_loop, key, :hard})
+  end
+
   test "run_once call timeout encloses judge and continuation wait deadlines" do
     assert GoalLoopManager.call_timeout(judge_wait_timeout_ms: 75_000) == 80_000
 
@@ -1328,7 +1379,7 @@ defmodule LemonAutomation.GoalLoopTest do
              judge_wait_timeout_ms: 75_000,
              wait_timeout_ms: 90_000,
              await_completion: true
-           ) == 95_000
+           ) == 170_000
 
     assert GoalLoopManager.call_timeout(call_timeout_ms: 123_000) == 123_000
   end

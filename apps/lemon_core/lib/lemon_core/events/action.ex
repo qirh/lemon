@@ -1,7 +1,9 @@
 defmodule LemonCore.Events.Action do
   @moduledoc """
-  A single unit of engine activity — a tool call, command, file change, search, subagent
-  or reasoning step. Carried inside `LemonCore.Events.EngineAction`.
+  A single unit of engine activity — a tool call, command, file change, search, subagent,
+  reasoning step, approval, or context compaction. Carried inside
+  `LemonCore.Events.EngineAction`. Approval and compaction retain their semantic kinds
+  across typed and JSON event boundaries so clients can render their dedicated controls.
   """
 
   use LemonCore.Events.Payload,
@@ -9,9 +11,28 @@ defmodule LemonCore.Events.Action do
     enforce: [:id, :kind, :title],
     fields: [id: nil, kind: nil, title: nil, detail: %{}]
 
-  @kinds [:tool, :command, :file_change, :web_search, :subagent, :reasoning, :note]
+  @kinds [
+    :tool,
+    :command,
+    :file_change,
+    :web_search,
+    :subagent,
+    :reasoning,
+    :note,
+    :approval,
+    :compaction
+  ]
 
-  @type kind :: :tool | :command | :file_change | :web_search | :subagent | :reasoning | :note
+  @type kind ::
+          :tool
+          | :command
+          | :file_change
+          | :web_search
+          | :subagent
+          | :reasoning
+          | :note
+          | :approval
+          | :compaction
   @type t :: %__MODULE__{
           id: String.t(),
           kind: kind(),

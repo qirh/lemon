@@ -229,6 +229,26 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "archived" => :boolean
       }
     },
+    "sessions.get" => %{required: %{"sessionKey" => :string}, optional: %{}},
+    "sessions.history" => %{
+      required: %{"sessionKey" => :string},
+      optional: %{"limit" => :integer}
+    },
+    "sessions.tree" => %{
+      required: %{"sessionKey" => :string, "cwd" => :string},
+      optional: %{"limit" => :integer, "offset" => :integer}
+    },
+    "sessions.rewind" => %{
+      required: %{"sessionKey" => :string, "cwd" => :string, "entryId" => :string},
+      optional: %{
+        "restoreFiles" => :boolean,
+        "dryRun" => :boolean,
+        "confirmationToken" => :string
+      }
+    },
+    "sessions.fork" => %{
+      required: %{"sessionKey" => :string, "cwd" => :string}
+    },
     "sessions.stats" => %{
       optional: %{
         "agentId" => :string,
@@ -468,6 +488,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "chat.history" => %{
       optional: %{
         "sessionKey" => :string,
+        "cwd" => :string,
         "limit" => :integer,
         "beforeId" => :string,
         "includeFullText" => :boolean

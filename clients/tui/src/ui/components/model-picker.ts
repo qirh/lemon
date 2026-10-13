@@ -110,8 +110,12 @@ export class ModelPicker {
 		return this.#entries
 			.filter((entry) => provider === undefined || entry.provider === provider)
 			.map((entry) => ({
-				value: entry.id,
-				label: entry.id === current ? `${entry.id} (current)` : entry.id,
+				value: `${entry.provider}:${entry.id}`,
+				searchValue: entry.id,
+				label:
+					entry.id === current || `${entry.provider}:${entry.id}` === current
+						? `${entry.id} (current)`
+						: entry.id,
 				description: describeModel(entry),
 			}));
 	}
@@ -138,7 +142,7 @@ export class ModelPicker {
 			if (this.#providers().length > 1) {
 				this.#stage = "provider";
 				this.#provider = undefined;
-				this.#rebuild();
+				this.#rebuild("");
 				return true;
 			}
 		}
@@ -146,9 +150,8 @@ export class ModelPicker {
 	}
 
 	/** Rebuild the overlay in place so title/footer follow the stage. */
-	#rebuild(): void {
+	#rebuild(filter = this.#overlay?.filter ?? ""): void {
 		if (!this.#overlay) return;
-		const filter = this.#overlay.filter;
 		this.#close?.();
 		this.#overlay = new PickerOverlay({
 			title: this.#title(),
@@ -166,7 +169,7 @@ export class ModelPicker {
 		if (this.#stage === "model" && this.#providers().length > 1) {
 			this.#stage = "provider";
 			this.#provider = undefined;
-			this.#rebuild();
+			this.#rebuild("");
 			return;
 		}
 		this.close();
@@ -176,7 +179,7 @@ export class ModelPicker {
 		if (this.#stage === "provider") {
 			this.#provider = item.value;
 			this.#stage = "model";
-			this.#rebuild();
+			this.#rebuild("");
 			return;
 		}
 		const modelId = item.value;
@@ -184,7 +187,13 @@ export class ModelPicker {
 		const session = this.#host.session();
 		try {
 			await this.#host.methods.sessionsPatch({ sessionKey: session.key, model: modelId });
-			session.model = modelId;
+			const entry = this.#entries.find(
+				(candidate) => `${candidate.provider}:${candidate.id}` === modelId,
+			);
+			session.setModel(
+				{ model: modelId, provider: entry?.provider, contextWindow: entry?.contextWindow },
+				"local",
+			);
 			this.#host.refreshStatus();
 			this.#host.notice(`model: ${modelId} (session ${session.key})`);
 		} catch (error) {
@@ -195,7 +204,9 @@ export class ModelPicker {
 			return;
 		}
 		if (!this.#persistGlobally) return;
-		const entry = this.#entries.find((candidate) => candidate.id === modelId);
+		const entry = this.#entries.find(
+			(candidate) => `${candidate.provider}:${candidate.id}` === modelId,
+		);
 		try {
 			await saveConfigKey("agent", {
 				default_model: modelId,

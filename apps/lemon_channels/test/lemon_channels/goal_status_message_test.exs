@@ -1,5 +1,5 @@
 defmodule LemonChannels.GoalStatusMessageTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonChannels.Adapters.Telegram.Transport.Commands
   alias LemonChannels.GoalStatusMessage
@@ -71,6 +71,7 @@ defmodule LemonChannels.GoalStatusMessageTest do
   end
 
   setup do
+    {:ok, _} = Application.ensure_all_started(:lemon_automation)
     Process.put(:goal_status_message_test_pid, self())
     :ok
   end
@@ -107,6 +108,25 @@ defmodule LemonChannels.GoalStatusMessageTest do
     assert set_text =~ "Goal Set"
     assert set_text =~ "Max continuations: 3"
     assert status_text =~ "Max continuations: 3"
+  end
+
+  test "cannot replace a goal while its run outcome is unresolved" do
+    key = session_key()
+    assert GoalStatusMessage.handle(key, "set Original") =~ "Goal Set"
+    run_id = "run_goal_channel_#{System.unique_integer([:positive])}"
+
+    {:ok, _} =
+      GoalStore.record_loop_status(key, :reconciling, run_id: run_id, run_kind: :continuation)
+
+    on_exit(fn ->
+      LemonCore.RunStore.finalize(run_id, %{completed: %{ok: false, error: :aborted}})
+      LemonAutomation.GoalLoopManager.status(key)
+      GoalStore.clear(key)
+    end)
+
+    text = GoalStatusMessage.handle(key, "set Replacement")
+    assert text =~ "active or unresolved work"
+    assert GoalStore.get(key).objective == "Original"
   end
 
   test "clears goal state" do

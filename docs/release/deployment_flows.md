@@ -48,13 +48,13 @@ under `~/.lemon`:
 ~/.lemon/versions/current      symlink to the active version
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 ~/.lemon/{cookie,env}          generated once by the launcher, mode 600 from creation
-~/.lemon/run/                  pid, runtime-root, and mode-600 port-token records; directory mode 700
+~/.lemon/run/                  port-scoped pid/root records and mode-600 port tokens; directory mode 700
 ~/.lemon/store                 default store path for user installs
 ```
 
 `bin/lemon` inside every release is a launcher shim that picks the bundled
 profile and applies user-install defaults before delegating to
-`bin/<profile>`. Its lifecycle commands include `tui`, `web`, `start`, `run`,
+`bin/<profile>`. Its lifecycle commands include `tui`, `web`, `start`,
 `daemon`, `stop`, `restart`, and `status`; release VM tools are `remote`,
 `eval`, and `rpc`. The full and minimal runtime profiles dispatch `setup`,
 `model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers`,
@@ -89,6 +89,11 @@ lemon doctor --json                 # ordinary runtime diagnostics
 lemon doctor --bundle               # redacted support bundle
 ```
 
+Doctor runs in a fresh client VM. When a separate healthy daemon is detected,
+it reports that the daemon's memory health was not checked rather than treating
+the client's inactive memory store as a daemon failure. Missing memory modules
+or native dependencies remain actionable warnings.
+
 Updating stages the checksum/size-authenticated runtime and matching TUI
 artifacts together for full/min profiles, then flips the symlink; the sim
 profile has no TUI artifact. Planning is non-mutating and apply needs its exact
@@ -106,6 +111,12 @@ to take effect. See [the update safety contract](../user-guide/updates.md).
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
 fixture release served from localhost, with no published release required.
+
+Installer `--verify` uses a temporary HOME, Store, agent directory, release
+pipe/log directory, isolated distributed node, and separate ephemeral control,
+web, sim, gateway-health, and router-health ports. It stops that node and removes
+the scratch state on success, failure, or interruption rather than booting a
+second scheduler against the operator's saved state.
 
 ### Publish
 
@@ -131,7 +142,7 @@ MIX_ENV=prod mix release lemon_runtime_min
 
 # Full local runtime (+ automation, skills, web UI, sim UI)
 MIX_ENV=prod mix sim_ui.assets.deploy
-MIX_ENV=prod mix phx.digest apps/lemon_web/priv/static -o apps/lemon_web/priv/static
+MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 
 # Public sim broadcast site (dashboard + spectator UI)
@@ -156,12 +167,33 @@ Releases are written to `_build/prod/rel/<profile>/`. Release automation also
 builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
 artifacts total: three min, three full, two sim, and three TUI artifacts.
 
-Release automation packages the assembled release directory as a `.tar.gz`:
+Mix's `:tar` release step already produces the clean runtime archive. Publish
+that file directly rather than compressing the assembled directory again.
+With `--path DIR`, Mix puts the archive inside `DIR` instead; do not re-archive
+that directory, which would include the archive itself and any local smoke logs.
 
 ```bash
-tar -czf lemon-<version>-<channel>-<platform>-<profile>.tar.gz \
-  -C ./_build/prod/rel/<profile> .
+cp "_build/prod/<profile>-<version>.tar.gz" \
+  "lemon-<version>-<channel>-<platform>-<profile>.tar.gz"
 ```
+
+The TUI is a separate artifact, not a file produced by `mix release`. Build its
+native binary and matching addon before testing an interactive installation:
+
+```bash
+(cd clients/tui && bun install --frozen-lockfile && \
+  bun run build:binary --target darwin-arm64 --outdir dist)
+tar -czf "lemon-<version>-<channel>-darwin-arm64-lemon_tui.tar.gz" \
+  -C clients/tui/dist/darwin-arm64 tui
+```
+
+The installer combines the runtime and TUI artifacts from the same schema-2
+manifest. For a local smoke, serve the manifest and both archives under
+`releases/download/v<version>/` on a loopback HTTP server, then point
+`LEMON_INSTALL_BASE_URL` at that server and set `LEMON_VERSION=<version>`.
+Use an isolated HOME; `--skip-setup` defers login and `--verify` checks an
+isolated daemon boot. Plain HTTP is a local test seam, not a distribution
+transport.
 
 Platform tags are `linux-x86_64`, `linux-arm64`, and `darwin-arm64`; see
 `docs/release/versioning_and_channels.md`.

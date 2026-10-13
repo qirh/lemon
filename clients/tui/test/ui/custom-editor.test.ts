@@ -87,6 +87,39 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
+test("native delegation preserves drafts and waits for submission readiness", async () => {
+	const submitted: string[] = [];
+	let ready = false;
+	const pending = Promise.withResolvers<void>();
+	const settled = Promise.withResolvers<void>();
+	const editor = new CustomEditor({
+		theme: getEditorTheme(),
+		canSubmit: () => ready,
+		onSubmit: async (text) => {
+			submitted.push(text);
+			await pending.promise;
+		},
+		requestRender: () => {
+			if (submitted.length === 1 && editor.getText() === "") settled.resolve();
+		},
+	});
+	editor.setText("human draft");
+	const prompt = { type: "send" as const, key: "", text: "delegated prompt" };
+	editor.handleNativeEvent(prompt);
+	expect(submitted).toEqual([]);
+	expect(editor.getText()).toBe("human draft");
+	ready = true;
+	editor.handleNativeEvent({ ...prompt, text: "   " });
+	expect(editor.getText()).toBe("human draft");
+	editor.handleNativeEvent(prompt);
+	expect(submitted).toEqual(["delegated prompt"]);
+	expect(editor.history).toEqual(["human draft", "delegated prompt"]);
+	editor.handleNativeEvent({ ...prompt, text: "concurrent duplicate" });
+	expect(submitted).toHaveLength(1);
+	pending.resolve();
+	await settled.promise;
+});
+
 describe("typing and submitting", () => {
 	test("plain text reaches the buffer and Enter submits it", () => {
 		const h = makeEditor();
@@ -157,6 +190,19 @@ describe("Ctrl+C", () => {
 		h.editor.handleInput(CTRL_C);
 		expect(h.quits).toEqual([]);
 	});
+
+	test("discarded paste stays recoverable after another submission clears paste storage", () => {
+		const h = makeEditor();
+		const paste = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n");
+		h.editor.handleInput(`\x1b[200~${paste}\x1b[201~`);
+		h.editor.handleInput(CTRL_C);
+		h.editor.handleInput("another prompt");
+		h.editor.handleInput(ENTER);
+		h.editor.handleInput(UP);
+		h.editor.handleInput(UP);
+		h.editor.handleInput(ENTER);
+		expect(h.submitted[1]).toBe(paste);
+	});
 });
 
 describe("Ctrl+D and Ctrl+G", () => {
@@ -201,6 +247,16 @@ describe("Esc Esc", () => {
 		h.setNow(1_000_000 + ESC_DISCARD_MS + 1);
 		h.editor.handleInput(ESC);
 		expect(h.editor.getText()).toBe("draft text");
+	});
+
+	test("Escape interrupts without discarding a multiline correction", () => {
+		const h = makeEditor();
+		h.setRunning(true);
+		h.editor.setText("keep this\ncorrection");
+		h.editor.handleInput(ESC);
+		expect(h.aborts).toBe(1);
+		expect(h.editor.getExpandedText()).toBe("keep this\ncorrection");
+		expect(h.quits).toEqual([]);
 	});
 });
 

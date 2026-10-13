@@ -850,7 +850,8 @@ defmodule LemonAi.Providers.OpenAIResponsesSharedTest do
       %{
         "type" => "response.output_item.done",
         "item" => %{"type" => "reasoning", "summary" => [%{"text" => "Step 1"}]}
-      }
+      },
+      %{"type" => "response.completed", "response" => %{"status" => "completed"}}
     ]
 
     output = %AssistantMessage{

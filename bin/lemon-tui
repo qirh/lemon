@@ -102,21 +102,8 @@ load_managed_operator_token() {
 
 cleanup() {
   if [[ "$STARTED_RUNTIME" == "1" && -n "$RUNTIME_PID_FILE" && -f "$RUNTIME_PID_FILE" ]]; then
-    runtime_pid="$(<"$RUNTIME_PID_FILE")"
-
-    if [[ "$runtime_pid" =~ ^[0-9]+$ && "$runtime_pid" -gt 1 ]] && kill -0 "$runtime_pid" 2>/dev/null; then
-      info "Stopping launcher-owned runtime (pid: $runtime_pid)"
-      kill -TERM "$runtime_pid" 2>/dev/null || true
-
-      for _ in $(seq 1 50); do
-        kill -0 "$runtime_pid" 2>/dev/null || break
-        sleep 0.1
-      done
-
-      if kill -0 "$runtime_pid" 2>/dev/null; then
-        kill -KILL "$runtime_pid" 2>/dev/null || true
-      fi
-    fi
+    # Reuse the launcher's process-start identity check and bounded shutdown.
+    "$LEMON_ROOT/bin/lemon" stop --port "$PORT" || true
   fi
 
   if [[ -n "$RUNTIME_PID_FILE" ]]; then
@@ -149,7 +136,8 @@ if [[ ! -d "node_modules" ]]; then
 fi
 
 runtime_healthy() {
-  curl -sS -m 2 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
+  local ok='"ok"[[:space:]]*:[[:space:]]*true'
+  [[ "$(curl --noproxy '*' -fsS --max-time 1 "http://127.0.0.1:${PORT}/healthz" 2>/dev/null || true)" =~ $ok ]]
 }
 
 managed_token_status=0
@@ -196,7 +184,7 @@ if ! runtime_healthy; then
 
   if [[ "$ready" != "1" ]]; then
     error "Runtime did not become healthy on :${PORT}"
-    error "Check logs: /tmp/lemon-runtime.log"
+    error "Check logs: ${LEMON_RUNTIME_LOG_FILE:-$HOME/.lemon/run/lemon-${PORT}.log}"
     exit 1
   fi
 

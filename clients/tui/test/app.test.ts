@@ -53,12 +53,49 @@ function chatText(app: AppShell): string {
 }
 
 describe("AppShell", () => {
+	test("restores a cold launch session before accepting native delegation", async () => {
+		const server = await FakeControlPlane.start();
+		teardown.push(() => server.stop());
+		const history = Promise.withResolvers<{
+			messages: Array<{ id: string; role: string; content: string }>;
+		}>();
+		server.onMethod("chat.history", () => history.promise);
+		server.respondWith("chat.send", { runId: "fork-next", sessionKey: "saved-fork" });
+		const app = new AppShell({
+			url: server.url,
+			sessionKey: "saved-fork",
+			terminal: new MemoryTerminal(),
+		});
+		teardown.push(() => app.stop());
+		const starting = app.start();
+		await server.waitForRequest("chat.history");
+		const send = { type: "send" as const, key: "", text: "continue the branch" };
+		app.editor.handleNativeEvent(send);
+		expect(server.requestsFor("chat.send")).toHaveLength(0);
+		history.resolve({
+			messages: [
+				{ id: "u1", role: "user", content: "remember the saved branch" },
+				{ id: "a1", role: "assistant", content: "saved branch answer" },
+			],
+		});
+		await starting;
+		expect(chatText(app)).toContain("saved branch answer");
+		app.editor.handleNativeEvent(send);
+		const request = await server.waitForRequest("chat.send");
+		expect(request.params).toMatchObject({ prompt: "continue the branch" });
+		expect(chatText(app).match(/saved branch answer/g)).toHaveLength(1);
+	});
+
 	test("submitting a prompt sends chat.send for the active session", async () => {
 		const { app, server } = await bootApp("tui-session-a");
 		await app.submit("what is the status?");
 
 		const frame = server.requestsFor("chat.send")[0];
-		expect(frame.params).toEqual({ sessionKey: "tui-session-a", prompt: "what is the status?" });
+		expect(frame.params).toEqual({
+			sessionKey: "tui-session-a",
+			prompt: "what is the status?",
+			cwd: process.cwd(),
+		});
 		expect(chatText(app)).toContain("what is the status?");
 	});
 

@@ -19,7 +19,7 @@ defmodule LemonGateway.Tools.Cron do
   @default_limit 100
 
   @spec tool(String.t(), keyword()) :: AgentTool.t()
-  def tool(_cwd, opts \\ []) do
+  def tool(cwd, opts \\ []) do
     session_key = normalize_string(Keyword.get(opts, :session_key))
     agent_id = normalize_string(Keyword.get(opts, :agent_id))
 
@@ -27,9 +27,9 @@ defmodule LemonGateway.Tools.Cron do
       name: "cron",
       label: "Cron",
       description:
-        "Manage Lemon internal cron jobs (not OS crontab): status, list, add, update, pause, resume, remove, run, and runs. Add/update accepts 5-field cron plus supported shorthands like 'every 30m', 'daily at 9am', and 'weekdays at 09:30'. Results reach the user's paired chat automatically; use once=true for one-off reminders and timezone='local' for wall-clock times.",
+        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron and shorthands like 'every 30m'. Results reach the user's paired chat automatically; use deliverTo='none' to opt out.",
       parameters: tool_schema(),
-      execute: &execute(&1, &2, &3, &4, session_key, agent_id)
+      execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, session_key, agent_id)
     }
   end
 
@@ -49,6 +49,19 @@ defmodule LemonGateway.Tools.Cron do
   def execute(_tool_call_id, _params, _signal, _on_update, _session_key, _default_agent_id) do
     error_result("Invalid parameters (expected object).")
   end
+
+  defp inherit_cwd(params, cwd) when is_map(params) do
+    if fetch_param(params, "action") == "add" do
+      case nested_map(params, "job") do
+        nil -> Map.put_new(params, "cwd", fetch_param(params, "cwd") || cwd)
+        job -> Map.put(params, "job", Map.put_new(job, "cwd", fetch_param(job, "cwd") || cwd))
+      end
+    else
+      params
+    end
+  end
+
+  defp inherit_cwd(params, _cwd), do: params
 
   defp tool_schema do
     %{
@@ -93,6 +106,16 @@ defmodule LemonGateway.Tools.Cron do
           "type" => "string",
           "description" => "Prompt text to run when the job fires."
         },
+        "cwd" => %{
+          "type" => "string",
+          "description" =>
+            "Target repository directory (add/update). Defaults to the current tool working directory on add."
+        },
+        "model" => %{
+          "type" => "string",
+          "description" =>
+            "Optional provider:model pin for the native coding session (add/update)."
+        },
         "memoryFile" => %{
           "type" => "string",
           "description" =>
@@ -127,7 +150,8 @@ defmodule LemonGateway.Tools.Cron do
         },
         "maxRetries" => %{
           "type" => "integer",
-          "description" => "Scheduled-run retry count after failure/timeout (default: 0)."
+          "description" =>
+            "Scheduled-run retry count after confirmed failure (default: 0). Unknown submission or completion outcomes never retry automatically."
         },
         "retryBackoffMs" => %{
           "type" => "integer",
@@ -225,6 +249,8 @@ defmodule LemonGateway.Tools.Cron do
             agent_id: agent_id,
             session_key: target_session_key,
             prompt: prompt,
+            cwd: normalize_string(fetch_param(source, "cwd")),
+            model: normalize_string(fetch_param(source, "model")),
             memory_file:
               normalize_string(
                 fetch_param(source, "memoryFile") || fetch_param(source, "memory_file")
@@ -287,6 +313,8 @@ defmodule LemonGateway.Tools.Cron do
       %{}
       |> maybe_put(:name, normalize_string(fetch_param(patch_source, "name")))
       |> maybe_put(:schedule, normalize_string(fetch_param(patch_source, "schedule")))
+      |> maybe_put(:cwd, normalize_string(fetch_param(patch_source, "cwd")))
+      |> maybe_put(:model, normalize_string(fetch_param(patch_source, "model")))
       |> maybe_put(
         :prompt,
         normalize_string(
@@ -413,6 +441,16 @@ defmodule LemonGateway.Tools.Cron do
           }
 
           {:ok, {"Cron run aborted", payload}}
+
+        {:ok, {:error, :outcome_unknown}} ->
+          {:ok,
+           {"Cron abort outcome unknown",
+            %{
+              "runId" => run_id,
+              "aborted" => false,
+              "outcomeUnknown" => true,
+              "retrySafe" => false
+            }}}
 
         {:ok, {:error, :not_found}} ->
           {:error, "Cron run not found: #{run_id}"}
@@ -625,6 +663,8 @@ defmodule LemonGateway.Tools.Cron do
       "agentId" => Map.get(job, :agent_id),
       "sessionKey" => Map.get(job, :session_key),
       "prompt" => Map.get(job, :prompt),
+      "cwd" => Map.get(job, :cwd),
+      "model" => Map.get(job, :model),
       "memoryFile" => resolved_memory_file(job),
       "deliverTo" => Map.get(job, :deliver_to),
       "once" => Map.get(job, :once) == true,
@@ -644,6 +684,11 @@ defmodule LemonGateway.Tools.Cron do
     %{
       "id" => Map.get(run, :id),
       "jobId" => Map.get(run, :job_id),
+      "routerRunId" => Map.get(run, :run_id),
+      "sessionKey" => meta_value(run, :router_session_key),
+      "outcomeUnknown" => meta_value(run, :outcome_unknown) == true,
+      "reconciling" => meta_value(run, :outcome_unknown) == true,
+      "abortRequested" => meta_value(run, :abort_requested) == true,
       "status" => run |> Map.get(:status) |> to_string(),
       "triggeredBy" => run |> Map.get(:triggered_by) |> to_string(),
       "retryAttempt" => retry_attempt(run),

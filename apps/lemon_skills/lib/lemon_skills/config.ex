@@ -25,6 +25,10 @@ defmodule LemonSkills.Config do
       ├── some-skill/
       │   └── SKILL.md
 
+  OMP (`~/.omp/agent/skills`) and Claude (`~/.claude/skills`) user bundles are
+  also discovered unless existing directory overrides isolate the runtime.
+  See `global_skills_dirs/0` for explicit compatibility-root overrides.
+
   ### Project Skills
 
   Project skills are discovered from:
@@ -41,19 +45,13 @@ defmodule LemonSkills.Config do
 
   ### Ancestor Discovery
 
-  Skills in `.agents/skills` directories are discovered automatically from the
-  current working directory up to the git repository root (or filesystem root
-  when not in a git repo). This allows organizing skills at different levels
-  of a project hierarchy.
+  Skills in `.agents/skills`, `.omp/skills`, and `.claude/skills` directories
+  are discovered automatically from the current working directory up to the
+  git repository root (or filesystem root when not in a git repo).
 
-  For example, in a monorepo at `/home/user/myrepo` with cwd at
-  `/home/user/myrepo/packages/feature`, the following skill directories
-  would be discovered (in precedence order):
-
-      1. /home/user/myrepo/packages/feature/.lemon/skill
-      2. /home/user/myrepo/packages/feature/.agents/skills
-      3. /home/user/myrepo/packages/.agents/skills
-      4. /home/user/myrepo/.agents/skills
+  The cwd's `.lemon/skill` wins, then ancestors are searched closest-first.
+  At each ancestor, `.agents` wins over `.omp`, which wins over `.claude`.
+  Ancestor `.lemon/skill` roots are not searched.
 
   ## Overrides
 
@@ -133,13 +131,30 @@ defmodule LemonSkills.Config do
   Directories are returned in precedence order (first wins on key collisions):
   1. Lemon global skills (`~/.lemon/agent/skill` or `LEMON_AGENT_DIR/skill`)
   2. Harness-compatible skills (`~/.agents/skills`)
+  3. OMP skills (`~/.omp/agent/skills`)
+  4. Claude skills (`~/.claude/skills`)
+
+  OMP/Claude defaults are omitted when the agent or harness directory is overridden.
+  Explicit `LEMON_OMP_SKILLS_DIR` / `LEMON_CLAUDE_SKILLS_DIR` (or the corresponding
+  `:omp_global_skills_dir` / `:claude_global_skills_dir` app settings) still apply.
   """
   @spec global_skills_dirs() :: [String.t()]
   def global_skills_dirs do
     [
       global_skills_dir(),
-      harness_global_skills_dir()
+      harness_global_skills_dir(),
+      compatible_global_skills_dir(
+        "LEMON_OMP_SKILLS_DIR",
+        :omp_global_skills_dir,
+        ".omp/agent/skills"
+      ),
+      compatible_global_skills_dir(
+        "LEMON_CLAUDE_SKILLS_DIR",
+        :claude_global_skills_dir,
+        ".claude/skills"
+      )
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
 
@@ -153,6 +168,25 @@ defmodule LemonSkills.Config do
     System.get_env("LEMON_HARNESS_SKILLS_DIR") ||
       Application.get_env(:lemon_skills, :harness_global_skills_dir) ||
       Path.join([System.user_home!(), ".agents", "skills"])
+  end
+
+  defp compatible_global_skills_dir(env, key, default) do
+    System.get_env(env) ||
+      Application.get_env(:lemon_skills, key) ||
+      if not isolated_skill_roots?(), do: Path.join(System.user_home!(), default)
+  end
+
+  defp isolated_skill_roots? do
+    Enum.any?(
+      [
+        System.get_env("LEMON_AGENT_DIR"),
+        System.get_env("LEMON_HARNESS_SKILLS_DIR"),
+        Application.get_env(:lemon_skills, :agent_dir),
+        Application.get_env(:coding_agent, :agent_dir),
+        Application.get_env(:lemon_skills, :harness_global_skills_dir)
+      ],
+      &(&1 != nil)
+    )
   end
 
   @doc """
@@ -170,14 +204,14 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
-  Get all project skills directories including `.agents/skills` paths.
+  Get all project skills directories.
 
-  Discovers skills in `.agents/skills` directories from cwd up to git repo root
-  (or filesystem root if not in a git repo), following Pi's package-manager pattern.
+  Discovers `.agents/skills`, `.omp/skills`, and `.claude/skills` from cwd up to
+  the git repo root (or filesystem root when outside a git repository).
 
   Directories are returned in precedence order (first wins on key collisions):
   1. Project `.lemon/skill` (highest precedence)
-  2. `.agents/skills` directories from cwd up to git root
+  2. At each ancestor, closest first: `.agents/skills`, `.omp/skills`, `.claude/skills`
 
   ## Parameters
 
@@ -201,13 +235,17 @@ defmodule LemonSkills.Config do
   """
   @spec project_skills_dirs(String.t()) :: [String.t()]
   def project_skills_dirs(cwd) do
-    # Start with the primary project skills directory
-    dirs = [project_skills_dir(cwd)]
+    cwd = Path.expand(cwd)
+    git_root = find_git_repo_root(cwd)
 
-    # Collect .agents/skills directories from cwd up to git root or filesystem root
-    dirs = dirs ++ collect_ancestor_agents_skill_dirs(cwd)
+    ancestor_dirs =
+      cwd
+      |> collect_ancestors(git_root)
+      |> Enum.flat_map(fn dir ->
+        Enum.map([".agents", ".omp", ".claude"], &Path.join([dir, &1, "skills"]))
+      end)
 
-    dirs
+    [project_skills_dir(cwd) | ancestor_dirs]
     |> Enum.uniq()
     |> Enum.filter(&File.dir?/1)
   end
@@ -628,18 +666,24 @@ defmodule LemonSkills.Config do
   # to avoid circular dependency
   defp do_validate_mcp_config({:stdio, command, args})
        when is_binary(command) and is_list(args) do
-    if String.trim(command) == "" do
-      {:error, "stdio command cannot be empty"}
-    else
-      :ok
+    cond do
+      String.trim(command) == "" -> {:error, "stdio command cannot be empty"}
+      not Enum.all?(args, &is_binary/1) -> {:error, "stdio args must be strings"}
+      true -> :ok
     end
   end
 
   defp do_validate_mcp_config({:stdio, command, args, opts})
        when is_binary(command) and is_list(args) and is_list(opts) do
     with :ok <- do_validate_mcp_config({:stdio, command, args}),
-         :ok <- validate_mcp_filter_opts(opts) do
+         :ok <- validate_mcp_metadata(opts),
+         :ok <- validate_mcp_filter_opts(opts),
+         :ok <- validate_mcp_env(Keyword.get(opts, :env, [])),
+         true <- is_nil(opts[:cwd]) or is_binary(opts[:cwd]) do
       :ok
+    else
+      false -> {:error, "cwd must be a string"}
+      error -> error
     end
   end
 
@@ -669,6 +713,15 @@ defmodule LemonSkills.Config do
     {:error, "invalid MCP server config: #{inspect(config)}"}
   end
 
+  defp validate_mcp_env(env) when is_list(env) do
+    if Enum.all?(env, fn
+         {key, value} when is_binary(key) and is_binary(value) -> true
+         _ -> false
+       end), do: :ok, else: {:error, "env must contain string key/value pairs"}
+  end
+
+  defp validate_mcp_env(_), do: {:error, "env must contain string key/value pairs"}
+
   @doc """
   Get MCP configuration for a specific project.
 
@@ -697,13 +750,33 @@ defmodule LemonSkills.Config do
         mcp_servers()
 
     # Convert JSON format to tuple format
-    servers = Enum.flat_map(merged_servers, &parse_mcp_server_config/1)
+    servers =
+      merged_servers
+      |> Enum.flat_map(&parse_mcp_server_config/1)
+      |> Enum.reduce({[], MapSet.new()}, fn config, {configs, names} ->
+        name = mcp_server_name(config)
+
+        if is_binary(name) and MapSet.member?(names, name) do
+          {configs, names}
+        else
+          {[config | configs], if(is_binary(name), do: MapSet.put(names, name), else: names)}
+        end
+      end)
+      |> elem(0)
+      |> Enum.reverse()
 
     %{
       servers: servers,
       enabled: Map.get(project_config, "enabled", Map.get(global_config, "enabled", true))
     }
   end
+
+  defp mcp_server_name({:stdio, _, _, opts}), do: Keyword.get(opts, :name)
+
+  defp mcp_server_name({transport, _, opts}) when transport in [:http, :sse],
+    do: Keyword.get(opts, :name)
+
+  defp mcp_server_name(_), do: nil
 
   @doc """
   Get the global MCP configuration file path.
@@ -766,13 +839,15 @@ defmodule LemonSkills.Config do
     end
   end
 
-  # Parse MCP server config from JSON format to tuple format
-  defp parse_mcp_server_config(%{"type" => "stdio", "command" => command} = config)
-       when is_binary(command) do
+  @doc false
+  def parse_mcp_server_config(%{"type" => "stdio", "command" => command} = config)
+      when is_binary(command) do
     args = Map.get(config, "args", [])
 
     opts =
-      mcp_ready_timeout_opts(config) ++ mcp_filter_opts(config) ++ sampling_config_opts(config)
+      mcp_timeout_opts(config) ++
+        mcp_env_opts(config) ++
+        mcp_filter_opts(config) ++ sampling_config_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:stdio, command, args}]
@@ -781,9 +856,9 @@ defmodule LemonSkills.Config do
     end
   end
 
-  defp parse_mcp_server_config(%{"type" => "http", "url" => url} = config)
-       when is_binary(url) do
-    opts = http_config_opts(config)
+  def parse_mcp_server_config(%{"type" => "http", "url" => url} = config)
+      when is_binary(url) do
+    opts = http_config_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:http, url}]
@@ -792,9 +867,9 @@ defmodule LemonSkills.Config do
     end
   end
 
-  defp parse_mcp_server_config(%{"type" => "sse", "url" => url} = config)
-       when is_binary(url) do
-    opts = sse_config_opts(config)
+  def parse_mcp_server_config(%{"type" => "sse", "url" => url} = config)
+      when is_binary(url) do
+    opts = sse_config_opts(config) ++ mcp_metadata_opts(config)
 
     if opts == [] do
       [{:sse, url}]
@@ -804,19 +879,51 @@ defmodule LemonSkills.Config do
   end
 
   # Already in tuple format (from Application config)
-  defp parse_mcp_server_config({:stdio, _command, _args} = config), do: [config]
-  defp parse_mcp_server_config({:stdio, _command, _args, _opts} = config), do: [config]
-  defp parse_mcp_server_config({:http, _url} = config), do: [config]
-  defp parse_mcp_server_config({:http, _url, _opts} = config), do: [config]
-  defp parse_mcp_server_config({:sse, _url} = config), do: [config]
-  defp parse_mcp_server_config({:sse, _url, _opts} = config), do: [config]
+  def parse_mcp_server_config({:stdio, _command, _args} = config), do: [config]
+  def parse_mcp_server_config({:stdio, _command, _args, _opts} = config), do: [config]
+  def parse_mcp_server_config({:http, _url} = config), do: [config]
+  def parse_mcp_server_config({:http, _url, _opts} = config), do: [config]
+  def parse_mcp_server_config({:sse, _url} = config), do: [config]
+  def parse_mcp_server_config({:sse, _url, _opts} = config), do: [config]
 
   # Unknown format - skip
-  defp parse_mcp_server_config(_config) do
+  def parse_mcp_server_config(_config) do
     require Logger
     Logger.debug("Skipping unknown MCP server config format")
     []
   end
+
+  defp mcp_metadata_opts(config) do
+    Enum.flat_map(
+      [{"name", :name}, {"approval", :approval}, {"tool_approvals", :tool_approvals}],
+      fn
+        {key, option} ->
+          case Map.fetch(config, key) do
+            {:ok, value} ->
+              value =
+                case option do
+                  :approval ->
+                    normalize_mcp_approval(value)
+
+                  :tool_approvals when is_map(value) ->
+                    Map.new(value, fn {tool, policy} -> {tool, normalize_mcp_approval(policy)} end)
+
+                  _ ->
+                    value
+                end
+
+              [{option, value}]
+
+            :error ->
+              []
+          end
+      end
+    )
+  end
+
+  defp normalize_mcp_approval("always"), do: :always
+  defp normalize_mcp_approval("never"), do: :never
+  defp normalize_mcp_approval(value), do: value
 
   defp http_config_opts(config) do
     header_opts =
@@ -826,7 +933,7 @@ defmodule LemonSkills.Config do
       end
 
     header_opts ++
-      oauth_config_opts(config) ++ mcp_ready_timeout_opts(config) ++ mcp_filter_opts(config)
+      oauth_config_opts(config) ++ mcp_timeout_opts(config) ++ mcp_filter_opts(config)
   end
 
   defp sse_config_opts(config) do
@@ -923,11 +1030,15 @@ defmodule LemonSkills.Config do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp mcp_ready_timeout_opts(config) do
-    [
-      ready_timeout_ms: Map.get(config, "ready_timeout_ms") || Map.get(config, "ready-timeout-ms")
-    ]
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  defp mcp_env_opts(config) do
+    env_opts =
+      case Map.get(config, "env") do
+        nil -> []
+        env when is_map(env) -> [env: Map.to_list(env)]
+        env -> [env: env]
+      end
+
+    if Map.has_key?(config, "cwd"), do: [{:cwd, config["cwd"]} | env_opts], else: env_opts
   end
 
   defp string_list(config, key) do
@@ -936,6 +1047,38 @@ defmodule LemonSkills.Config do
       _ -> []
     end
   end
+
+  @doc false
+  def validate_mcp_metadata(opts) do
+    cond do
+      Keyword.has_key?(opts, :name) and not valid_mcp_metadata_name?(opts[:name]) ->
+        {:error, "name must be a nonempty string without control characters"}
+
+      Keyword.has_key?(opts, :approval) and
+          opts[:approval] not in [:always, :never, "always", "never"] ->
+        {:error, "approval must be always or never"}
+
+      Keyword.has_key?(opts, :tool_approvals) and
+          not valid_mcp_tool_approvals?(opts[:tool_approvals]) ->
+        {:error, "tool_approvals must map tool names to always or never"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp valid_mcp_metadata_name?(name) do
+    is_binary(name) and name != "" and String.valid?(name) and
+      not Regex.match?(~r/[\x00-\x1f\x7f-\x9f]/u, name)
+  end
+
+  defp valid_mcp_tool_approvals?(policies) when is_map(policies) do
+    Enum.all?(policies, fn {name, policy} ->
+      valid_mcp_metadata_name?(name) and policy in [:always, :never, "always", "never"]
+    end)
+  end
+
+  defp valid_mcp_tool_approvals?(_), do: false
 
   defp validate_mcp_filter_opts(opts) do
     allowed_keys = [
@@ -1019,6 +1162,7 @@ defmodule LemonSkills.Config do
 
   defp validate_http_opts(opts) do
     with :ok <- validate_mcp_filter_opts(opts),
+         :ok <- validate_mcp_metadata(opts),
          :ok <- validate_http_headers(Keyword.get(opts, :headers, [])),
          :ok <- validate_http_token_persistence(opts),
          :ok <- validate_http_oauth(Keyword.get(opts, :oauth, [])) do

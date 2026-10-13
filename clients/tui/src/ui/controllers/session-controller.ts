@@ -58,6 +58,7 @@ export interface SessionControllerOptions {
 	events: EventController;
 	tui: TUI;
 	editor: DraftEditor;
+	cwd?: string;
 	/** Sends a prompt as the user (used by "new session with a first prompt"). */
 	sendPrompt?: (text: string) => void | Promise<void>;
 	refreshStatus?: () => void;
@@ -81,6 +82,7 @@ export class SessionController {
 	readonly #events: EventController;
 	readonly #tui: TUI;
 	readonly #editor: DraftEditor;
+	readonly #cwd: string | undefined;
 	readonly #sendPrompt: ((text: string) => void | Promise<void>) | undefined;
 	readonly #refreshStatus: (() => void) | undefined;
 	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
@@ -95,6 +97,7 @@ export class SessionController {
 		this.#events = options.events;
 		this.#tui = options.tui;
 		this.#editor = options.editor;
+		this.#cwd = options.cwd;
 		this.#sendPrompt = options.sendPrompt;
 		this.#refreshStatus = options.refreshStatus;
 		this.#confirm = options.confirm;
@@ -112,6 +115,19 @@ export class SessionController {
 	}
 
 	// -- switching -----------------------------------------------------------
+
+	/** Hydrate an explicit launch key before the initial composer is ready. */
+	async initialize(): Promise<void> {
+		const session = this.#store.focused;
+		await Promise.all([
+			this.#hydrateIfCold(session),
+			this.hydrateRouting(session),
+			this.#resyncActive(),
+			this.#resyncApprovals(),
+		]);
+		this.#events.rebuildFocused();
+		this.#refreshStatus?.();
+	}
 
 	/**
 	 * Focus `key`, hydrating and rebuilding as needed.
@@ -225,15 +241,32 @@ export class SessionController {
 	resetLocal(key: string = this.#store.focusedKey): void {
 		const session = this.#store.sessions.get(key);
 		if (!session) return;
-		session.blocks.length = 0;
-		session.byActionId.clear();
-		session.reasoningByActionId.clear();
+		session.resetTranscript();
 		// The transcript is gone, so the stored history may legitimately be
 		// re-pulled on a later switch.
 		this.#hydrated.delete(key);
 		if (key !== this.#store.focusedKey) return;
 		this.#events.rebuildFocused();
 		this.#tui.requestRender(true, { clearScrollback: true });
+	}
+
+	/** Replace abandoned history only after the daemon returned its active branch. */
+	async reload(key: string): Promise<void> {
+		const result = await this.#methods.chatHistory({
+			sessionKey: key,
+			cwd: this.#cwd,
+			limit: HYDRATE_LIMIT,
+			includeFullText: true,
+		});
+		const session = this.#store.session(key);
+		session.resetTranscript();
+		synthesizeHistory(session, result.messages ?? []);
+		this.#hydrated.add(key);
+		if (key === this.#store.focusedKey) {
+			this.#events.rebuildFocused();
+			this.#tui.requestRender(true, { clearScrollback: true });
+			this.#refreshStatus?.();
+		}
 	}
 
 	// -- hydration -----------------------------------------------------------
@@ -252,6 +285,10 @@ export class SessionController {
 		try {
 			const result = await this.#methods.sessionDetail({ sessionKey: session.key });
 			const detail = (result?.session ?? {}) as Record<string, unknown>;
+			const previousTitle = session.title;
+			if (typeof detail.title === "string" || detail.title === null) {
+				session.title = asString(detail.title);
+			}
 			const changed = session.setModel(
 				{
 					model: asString(detail.model),
@@ -261,7 +298,7 @@ export class SessionController {
 				},
 				"detail",
 			);
-			if (changed) this.#refreshStatus?.();
+			if (changed || previousTitle !== session.title) this.#refreshStatus?.();
 		} catch {
 			// Nothing to show and nothing to say: the status bar keeps what it had.
 		}
@@ -270,7 +307,7 @@ export class SessionController {
 	/** Pull stored history for a session that has nothing on screen yet. */
 	async #hydrateIfCold(session: SessionStore): Promise<void> {
 		if (this.#hydrated.has(session.key)) return;
-		if (session.blocks.length > 0) {
+		if (session.blocks.some((block) => block.kind !== "notice")) {
 			// Live events already built a transcript; stored history would double it.
 			this.#hydrated.add(session.key);
 			return;
@@ -280,6 +317,7 @@ export class SessionController {
 		try {
 			const result = await this.#methods.chatHistory({
 				sessionKey: session.key,
+				cwd: this.#cwd,
 				limit: HYDRATE_LIMIT,
 				includeFullText: true,
 			});
@@ -353,6 +391,7 @@ export class SessionController {
 		const result = await this.#methods
 			.chatHistory({
 				sessionKey: session.key,
+				cwd: this.#cwd,
 				limit: cold ? HYDRATE_LIMIT : RESYNC_TAIL_LIMIT,
 				includeFullText: true,
 			})

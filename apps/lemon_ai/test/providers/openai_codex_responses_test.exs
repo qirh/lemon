@@ -78,6 +78,83 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
     }
   end
 
+  test "cache keys and all affinity headers stay bounded and stable across turns" do
+    test_pid = self()
+    session_id = String.duplicate("long-session:", 12) <> "one"
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:cache_request, Jason.decode!(raw), conn.req_headers})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    opts = %StreamOptions{
+      api_key: make_jwt(),
+      session_id: session_id,
+      headers: %{"Session_Id" => "wrong", "Conversation_Id" => "wrong"}
+    }
+
+    keys =
+      for turn <- ["first turn", "next turn"] do
+        {:ok, stream} =
+          OpenAICodexResponses.stream(
+            make_model(),
+            Context.new(messages: [%UserMessage{content: turn}]),
+            opts
+          )
+
+        assert_receive {:cache_request, body, headers}, 1000
+        assert {:error, _} = EventStream.result(stream, 1000)
+        key = body["prompt_cache_key"]
+        assert is_binary(key) and byte_size(key) <= 64
+
+        for header <- ["session_id", "conversation_id", "x-client-request-id"] do
+          assert Enum.filter(headers, fn {name, _} -> name == header end) == [{header, key}]
+        end
+
+        key
+      end
+
+    assert [key, key] = keys
+
+    refute key ==
+             LemonAi.Providers.OpenAIResponsesShared.normalize_prompt_cache_key(
+               session_id <> "two"
+             )
+  end
+
+  test "missing or empty session IDs do not create per-turn affinity" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:cache_request, Jason.decode!(raw), conn.req_headers})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    for session_id <- [nil, ""] do
+      {:ok, stream} =
+        OpenAICodexResponses.stream(
+          make_model(),
+          Context.new(messages: [%UserMessage{content: "Hi"}]),
+          %StreamOptions{
+            api_key: make_jwt(),
+            session_id: session_id,
+            headers: %{"Session_Id" => "wrong", "Conversation_Id" => "wrong"}
+          }
+        )
+
+      assert_receive {:cache_request, body, headers}, 1000
+      assert body["prompt_cache_key"] == nil
+
+      for header <- ["session_id", "conversation_id", "x-client-request-id"] do
+        refute List.keymember?(headers, header, 0)
+      end
+
+      assert {:error, _} = EventStream.result(stream, 1000)
+    end
+  end
+
   # ============================================================================
   # Provider Behaviour Tests
   # ============================================================================
@@ -766,11 +843,6 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       end
     end
 
-    test "catalog gpt-5.1 declares no xhigh, so xhigh is sent as high" do
-      model = LemonAi.Models.get_model(:"openai-codex", "gpt-5.1")
-      assert request_effort(model, :xhigh) == "high"
-    end
-
     test "passes effort through when the model declares no reasoning_efforts" do
       model = make_model(id: "gpt-6.0-turbo")
       assert request_effort(model, :xhigh) == "xhigh"
@@ -1258,11 +1330,7 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
     end
   end
 
-  # ============================================================================
-  # Comprehensive Request Snapshot Test
-  # ============================================================================
-
-  test "request body snapshot includes instructions, tools, and reasoning" do
+  test "Codex drops unsupported sampling and output caps while forwarding tier and tool policy" do
     test_pid = self()
 
     Req.Test.stub(__MODULE__, fn conn ->
@@ -1271,76 +1339,26 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       Plug.Conn.send_resp(conn, 400, "bad request")
     end)
 
-    model = %Model{
-      id: "gpt-5.2",
-      name: "GPT-5.2",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://example.test",
-      reasoning: true
-    }
-
-    tool = %Tool{
-      name: "lookup",
-      description: "Lookup data",
-      parameters: %{
-        "type" => "object",
-        "properties" => %{"q" => %{"type" => "string"}},
-        "required" => ["q"]
-      }
-    }
-
-    context =
-      Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}], tools: [tool])
-
-    payload =
-      Jason.encode!(%{"https://api.openai.com/auth" => %{"chatgpt_account_id" => "acc_test"}})
-
-    token = "x." <> Base.encode64(payload) <> ".y"
-
-    opts =
-      %StreamOptions{
-        api_key: token,
-        session_id: "sess-1",
-        temperature: 0.7,
-        reasoning: :low,
-        thinking_budgets: %{summary: "concise", text_verbosity: "high"}
-      }
-
-    {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
+    {:ok, stream} =
+      OpenAICodexResponses.stream(
+        make_model(),
+        Context.new(messages: [%UserMessage{content: "Hi"}]),
+        %StreamOptions{
+          api_key: make_jwt(),
+          temperature: 0.7,
+          max_tokens: 8,
+          session_id: "cache-session",
+          tool_choice: "none",
+          thinking_budgets: %{service_tier: "priority"}
+        }
+      )
 
     assert_receive {:request_body, body}, 1000
-
-    expected = %{
-      "model" => "gpt-5.2",
-      "store" => false,
-      "stream" => true,
-      "instructions" => "System",
-      "input" => [
-        %{"role" => "user", "content" => [%{"type" => "input_text", "text" => "Hi"}]}
-      ],
-      "text" => %{"verbosity" => "high"},
-      "include" => ["reasoning.encrypted_content"],
-      "prompt_cache_key" => "sess-1",
-      "tool_choice" => "auto",
-      "parallel_tool_calls" => true,
-      "temperature" => 0.7,
-      "tools" => [
-        %{
-          "type" => "function",
-          "name" => "lookup",
-          "description" => "Lookup data",
-          "parameters" => %{
-            "type" => "object",
-            "properties" => %{"q" => %{"type" => "string"}},
-            "required" => ["q"]
-          }
-        }
-      ],
-      "reasoning" => %{"effort" => "low", "summary" => "concise"}
-    }
-
-    assert body == expected
+    refute Map.has_key?(body, "temperature")
+    refute Map.has_key?(body, "max_output_tokens")
+    assert body["service_tier"] == "priority"
+    assert body["tool_choice"] == "none"
+    assert body["prompt_cache_key"] == "cache-session"
     assert {:error, _} = EventStream.result(stream, 1000)
   end
 

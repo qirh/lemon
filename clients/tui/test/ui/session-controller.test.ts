@@ -196,7 +196,9 @@ describe("SessionController.create", () => {
 		const send = server.requestsFor("chat.send").at(-1);
 		expect(send?.params).toMatchObject({ sessionKey: key, prompt: "first thing" });
 		// A minted session has no stored history worth a round-trip.
-		expect(server.requestsFor("chat.history")).toHaveLength(0);
+		expect(server.requestsFor("chat.history")).not.toContainEqual(
+			expect.objectContaining({ params: expect.objectContaining({ sessionKey: key }) }),
+		);
 	});
 
 	test("accepts an explicit key and creates nothing daemon-side without a prompt", async () => {
@@ -486,5 +488,24 @@ describe("SessionController routing hydration", () => {
 		// No `session.detail` responder is registered, so the call rejects.
 		await app.sessions.hydrateRouting(app.store.focused);
 		expect(app.store.focused.model).toBeUndefined();
+	});
+});
+
+test("rewind reload replaces abandoned history with full active-branch messages and retains the draft", async () => {
+	const { app, server } = await bootApp("tui-a");
+	app.store.focused.appendDelta("history:a", Number.NaN, "abandoned answer");
+	app.store.focused.finalizeRun("history:a", { ok: true });
+	app.editor.setText("recalled prompt");
+	server.respondWith("chat.history", {
+		messages: [{ id: "a", role: "assistant", content: "active answer", timestampMs: 10 }],
+	});
+	await app.sessions.reload("tui-a");
+	expect(chatText(app)).toContain("active answer");
+	expect(chatText(app)).not.toContain("abandoned answer");
+	expect(app.editor.getExpandedText()).toBe("recalled prompt");
+	expect(server.requestsFor("chat.history").at(-1)?.params).toMatchObject({
+		sessionKey: "tui-a",
+		cwd: process.cwd(),
+		includeFullText: true,
 	});
 });

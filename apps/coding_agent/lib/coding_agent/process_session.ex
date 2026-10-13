@@ -12,7 +12,8 @@ defmodule CodingAgent.ProcessSession do
   - Integration with ProcessStore for persistence
 
   The session monitors the OS process via a Port and maintains
-  a bounded ring buffer of output lines.
+  a bounded ring buffer of output lines. Complete output is archived in a
+  private temporary file, retrievable even after unread lines leave the ring.
   """
 
   use GenServer
@@ -128,6 +129,15 @@ defmodule CodingAgent.ProcessSession do
     on_exit = Keyword.get(opts, :on_exit)
     owner = Keyword.get(opts, :owner)
 
+    output_path =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-process-#{:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)}.log"
+      )
+
+    {:ok, output_file} = File.open(output_path, [:write, :binary, :exclusive])
+    File.chmod!(output_path, 0o600)
+
     # Create the process entry in the store
     ProcessStore.new_process(%{
       id: process_id,
@@ -137,6 +147,7 @@ defmodule CodingAgent.ProcessSession do
       backend: backend,
       terminal_capabilities: terminal_capabilities,
       max_log_lines: max_log_lines,
+      full_output_path: output_path,
       timeout_ms: timeout_ms,
       restarted_from: Keyword.get(opts, :restarted_from),
       restart_generation: Keyword.get(opts, :restart_generation, 0),
@@ -177,6 +188,8 @@ defmodule CodingAgent.ProcessSession do
       partial_line: "",
       total_lines: 0,
       read_cursor: 0,
+      output_file: output_file,
+      full_output_path: output_path,
       owner: owner,
       owner_monitor: owner_monitor,
       timeout_ref: timeout_ref,
@@ -241,6 +254,7 @@ defmodule CodingAgent.ProcessSession do
       command: state.command,
       owner: state.owner,
       lines: lines,
+      full_output_path: state.full_output_path,
       dropped_lines: start - state.read_cursor
     }
 
@@ -277,6 +291,7 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
+    :ok = IO.binwrite(state.output_file, data)
     parts = String.split(state.partial_line <> data, "\n")
     {lines, [partial]} = Enum.split(parts, -1)
 
@@ -380,6 +395,7 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def terminate(_reason, state) do
+    File.close(state.output_file)
     # Ensure port is closed
     if state.port do
       try do

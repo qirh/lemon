@@ -42,6 +42,27 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @doc "Compacts a live session. `{:error, :session_not_found}` when it is not running."
   @callback compact_session(session_key(), keyword()) :: :ok | {:error, term()}
 
+  @doc "Loads persisted native session messages for replay."
+  @callback session_history(session_key(), Path.t()) :: {:ok, [map()]} | {:error, term()}
+
+  @doc "Forks native session state into an independent destination resume mapping."
+  @callback session_fork(session_key(), Path.t(), session_key()) :: :ok | {:error, term()}
+
+  @doc "Returns a bounded native tree page with string-keyed entries and branch summaries."
+  @callback session_tree(session_key(), Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
+
+  @doc """
+  Previews or executes a confirmation-bound native session rewind.
+
+  Options are `:restore_files` (default false), `:dry_run` (default true),
+  and `:confirmation_token`. Execution must reject missing or stale previews.
+  """
+  @callback session_rewind(session_key(), Path.t(), String.t(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Returns the tool policy for a named runtime mode."
+  @callback tool_policy(atom()) :: map()
+
   @doc "Starts an isolated durable background agent session."
   @callback background_start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
 
@@ -103,6 +124,11 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       todo_progress: 1,
                       feature_progress: 1,
                       compact_session: 2,
+                      session_history: 2,
+                      session_fork: 3,
+                      session_tree: 3,
+                      session_rewind: 4,
+                      tool_policy: 1,
                       background_start: 2,
                       background_list: 1,
                       background_status: 1,

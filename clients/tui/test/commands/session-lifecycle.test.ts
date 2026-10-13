@@ -169,6 +169,7 @@ describe("session metadata and resume", () => {
 
 		expect(harness.server.requestsFor("chat.history")[0]?.params).toEqual({
 			sessionKey,
+			cwd: workdir,
 			limit: 25,
 			includeFullText: true,
 		});

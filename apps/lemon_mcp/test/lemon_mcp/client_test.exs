@@ -534,6 +534,9 @@ defmodule LemonMCP.ClientTest do
           timeout_ms: 2_000
         )
 
+      Process.unlink(client)
+      monitor = Process.monitor(client)
+
       assert_receive {:sampling_params,
                       %{
                         "sawSamplingCapability" => true,
@@ -544,7 +547,7 @@ defmodule LemonMCP.ClientTest do
                       }},
                      2_000
 
-      assert LemonMCP.Client.state(client) in [:ready, :disconnected]
+      assert_receive {:DOWN, ^monitor, :process, ^client, {:transport_died, :normal}}, 2_000
     end
 
     test "sampling policy advertises sampling and routes requests through review" do
@@ -581,6 +584,9 @@ defmodule LemonMCP.ClientTest do
           timeout_ms: 2_000
         )
 
+      Process.unlink(client)
+      monitor = Process.monitor(client)
+
       assert_receive {:sampling_review,
                       %{
                         message_count: 1,
@@ -603,7 +609,7 @@ defmodule LemonMCP.ClientTest do
                       }, ^review_summary},
                      2_000
 
-      assert LemonMCP.Client.state(client) in [:ready, :disconnected]
+      assert_receive {:DOWN, ^monitor, :process, ^client, {:transport_died, :normal}}, 2_000
     end
   end
 

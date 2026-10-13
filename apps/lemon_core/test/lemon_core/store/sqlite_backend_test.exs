@@ -28,6 +28,14 @@ defmodule LemonCore.Store.SqliteBackendTest do
       :ok = SqliteBackend.close(state)
     end
 
+    test "preserves a trailing slash on a database-named directory", %{tmp_dir: tmp_dir} do
+      directory = Path.join(tmp_dir, "store.sqlite3")
+      assert {:ok, state} = SqliteBackend.init(path: directory <> "/")
+      assert state.path == Path.join(directory, "store.sqlite3")
+      assert File.dir?(directory)
+      :ok = SqliteBackend.close(state)
+    end
+
     test "creates SQLite database file with explicit file path", %{tmp_dir: tmp_dir} do
       db_path = Path.join(tmp_dir, "custom.db")
       assert {:ok, state} = SqliteBackend.init(path: db_path)

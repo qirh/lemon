@@ -92,4 +92,39 @@ defmodule CodingAgent.Session.MessageSerializationSignatureTest do
              %{"type" => "text", "text" => "hi"}
            ]
   end
+
+  test "durable session resume preserves cache accounting and every cost component" do
+    usage = %Usage{
+      input: 123,
+      output: 45,
+      cache_read: 678,
+      cache_write: 90,
+      cache_write_long: 40,
+      total_tokens: 936,
+      cost: %LemonAi.Types.Cost{
+        input: 0.01,
+        output: 0.02,
+        cache_read: 0.03,
+        cache_write: 0.04,
+        total: 0.1
+      }
+    }
+
+    message = %{assistant([%TextContent{text: "answer"}]) | usage: usage}
+    dir = Path.join(System.tmp_dir!(), "usage-resume-#{System.unique_integer([:positive])}")
+    path = Path.join(dir, "session.jsonl")
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    session =
+      CodingAgent.SessionManager.new(dir)
+      |> CodingAgent.SessionManager.append_message(
+        MessageSerialization.serialize_message(message)
+      )
+
+    assert :ok = CodingAgent.SessionManager.save_to_file(path, session)
+    assert {:ok, loaded} = CodingAgent.SessionManager.load_from_file(path)
+    assert [restored] = CodingAgent.Session.Persistence.restore_messages_from_session(loaded)
+    assert restored.usage == usage
+    assert MessageSerialization.deserialize_usage(Map.from_struct(usage)) == usage
+  end
 end

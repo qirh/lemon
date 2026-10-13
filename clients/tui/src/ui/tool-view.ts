@@ -272,6 +272,20 @@ export function buildToolView(
 	const generic = toolName === undefined || !registry.hasFormatter(toolName);
 
 	let formatted: FormattedOutput;
+	if (kind === "note") {
+		const retry = asRecord(block.detail?.retry);
+		return {
+			state,
+			kind,
+			toolName,
+			generic: false,
+			title: block.title,
+			summary: asString(block.detail?.text) ?? "",
+			body: retry && asString(retry.reason) ? [asString(retry.reason)!] : [],
+			isError: state === "error",
+			diff: undefined,
+		};
+	}
 	if (state === "streaming") {
 		// Nothing is known yet. Running the formatters on an empty argument map
 		// yields placeholder noise (`unknown`, `(no arguments)`), so the card shows

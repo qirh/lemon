@@ -5,12 +5,11 @@ defmodule CodingAgent.Tools.Task.Async do
 
   alias LemonAgent.Types.AgentToolResult
   alias CodingAgent.BudgetEnforcer
-  alias CodingAgent.LaneQueue
   alias CodingAgent.Parallel
   alias CodingAgent.RunGraph
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Followup, LiveBridge, Projection}
+  alias CodingAgent.Tools.Task.{Control, Followup, LiveBridge, Projection}
   alias CodingAgent.Tools.Task.Result
   alias LemonCore.Introspection
 
@@ -23,13 +22,26 @@ defmodule CodingAgent.Tools.Task.Async do
 
     supervisor = Map.get(lifecycle_context, :task_supervisor, CodingAgent.TaskSupervisor)
 
+    Control.register(
+      task_id,
+      lifecycle_context.signal,
+      lifecycle_context[:parent_signal],
+      lifecycle_context[:parent_session_pid],
+      fn reason ->
+        finalize_async(task_id, run_id, {:error, reason}, followup_context, lifecycle_context)
+      end
+    )
+
     case start_async_worker(supervisor, fn ->
            Logger.debug(
              "Task tool async start task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}"
            )
 
-           result = safe_run(task_id, run_id, run_fun, lifecycle_context)
-           finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
+           with :ok <- Control.attach_worker(task_id) do
+             result = safe_run(task_id, run_id, run_fun, lifecycle_context)
+             finalize_async(task_id, run_id, result, followup_context, lifecycle_context)
+             Control.complete(task_id)
+           end
          end) do
       {:ok, _pid} ->
         :ok
@@ -43,24 +55,8 @@ defmodule CodingAgent.Tools.Task.Async do
         )
 
         finalize_launch_failure(task_id, run_id, launch_error, lifecycle_context)
+        Control.complete(task_id)
         {:error, launch_error}
-    end
-  end
-
-  @spec run_sync((-> term())) :: term()
-  def run_sync(run_fun) do
-    result =
-      if lane_queue_available?() do
-        LaneQueue.run(CodingAgent.LaneQueue, :subagent, run_fun, %{})
-      else
-        {:ok, run_fun.()}
-      end
-
-    case result do
-      {:ok, %AgentToolResult{} = tool_result} -> tool_result
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
-      {:ok, other} -> other
     end
   end
 
@@ -70,13 +66,29 @@ defmodule CodingAgent.Tools.Task.Async do
 
   def wrap_on_update(task_id, lifecycle_context, on_update) do
     fn %AgentToolResult{} = result ->
-      TaskStore.append_event(task_id, result)
-      maybe_emit_child_engine_action(result, lifecycle_context)
+      case result.details do
+        %{task_id: descendant_id} when is_binary(descendant_id) and descendant_id != task_id ->
+          # A native child relays its descendants through this callback. Their
+          # own worker already persists these events; do not relabel or duplicate them.
+          notify_progress(lifecycle_context, on_update, result)
 
-      if is_function(on_update, 1) do
-        on_update.(result)
-      else
-        :ok
+        _ ->
+          result = %{
+            result
+            | details:
+                (result.details || %{})
+                |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(lifecycle_context))
+                |> Map.merge(%{
+                  task_id: task_id,
+                  run_id: lifecycle_context[:run_id],
+                  description: lifecycle_context[:description]
+                })
+          }
+
+          TaskStore.append_event(task_id, result)
+          maybe_emit_child_engine_action(result, lifecycle_context)
+
+          notify_progress(lifecycle_context, on_update, result)
       end
     end
   end
@@ -100,21 +112,22 @@ defmodule CodingAgent.Tools.Task.Async do
 
   defp safe_run(task_id, run_id, run_fun, lifecycle_context) do
     wrapped = fn ->
-      maybe_mark_running(task_id, run_id, lifecycle_context)
-      run_fun.()
+      if LemonAgent.AbortSignal.aborted?(lifecycle_context[:signal]) do
+        {:error, "Task aborted"}
+      else
+        maybe_mark_running(task_id, run_id, lifecycle_context)
+        result = run_fun.()
+
+        if LemonAgent.AbortSignal.aborted?(lifecycle_context[:signal]),
+          do: {:error, "Task aborted"},
+          else: result
+      end
     end
 
     try do
       maybe_acquire_task_semaphore()
 
-      if lane_queue_available?() do
-        LaneQueue.run(CodingAgent.LaneQueue, :subagent, wrapped, %{
-          task_id: task_id,
-          run_id: run_id
-        })
-      else
-        {:ok, wrapped.()}
-      end
+      {:ok, wrapped.()}
     rescue
       e -> {:error, {e, __STACKTRACE__}}
     catch
@@ -129,31 +142,31 @@ defmodule CodingAgent.Tools.Task.Async do
       "Task tool async finalize task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} result_type=#{inspect(async_result_type(result))}"
     )
 
+    emit_terminal_update(task_id, run_id, result, lifecycle_context)
+
     case result do
       {:ok, %AgentToolResult{} = tool_result} ->
-        maybe_finish_run(run_id, tool_result)
         TaskStore.finish(task_id, tool_result)
+        maybe_finish_run(run_id, tool_result)
         emit_task_terminal_event(task_id, run_id, {:ok, tool_result}, lifecycle_context)
         maybe_record_budget_completion(run_id, tool_result)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, tool_result})
 
       {:ok, {:error, reason}} ->
-        maybe_fail_run(run_id, reason)
-        TaskStore.fail(task_id, reason)
+        terminalize_error(task_id, run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:error, reason} ->
-        maybe_fail_run(run_id, reason)
-        TaskStore.fail(task_id, reason)
+        terminalize_error(task_id, run_id, reason)
         emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
         maybe_record_budget_completion(run_id, %{error: reason})
         maybe_send_async_followup(followup_context, task_id, run_id, {:error, reason})
 
       {:ok, other} ->
-        maybe_finish_run(run_id, other)
         TaskStore.finish(task_id, other)
+        maybe_finish_run(run_id, other)
         emit_task_terminal_event(task_id, run_id, {:ok, other}, lifecycle_context)
         maybe_record_budget_completion(run_id, other)
         maybe_send_async_followup(followup_context, task_id, run_id, {:ok, other})
@@ -214,6 +227,7 @@ defmodule CodingAgent.Tools.Task.Async do
     end
 
     emit_task_terminal_event(task_id, run_id, {:error, reason}, lifecycle_context)
+    emit_terminal_update(task_id, run_id, {:error, reason}, lifecycle_context)
     maybe_record_budget_completion(run_id, %{error: reason})
     delete_progress_binding(run_id)
     :ok
@@ -226,13 +240,6 @@ defmodule CodingAgent.Tools.Task.Async do
   end
 
   defp delete_progress_binding(_run_id), do: :ok
-
-  defp lane_queue_available? do
-    case Process.whereis(CodingAgent.LaneQueue) do
-      nil -> false
-      _pid -> true
-    end
-  end
 
   defp maybe_mark_running(nil, _run_id, _lifecycle_context), do: :ok
 
@@ -285,6 +292,67 @@ defmodule CodingAgent.Tools.Task.Async do
     })
 
     emit_task_lifecycle(event_type, payload, lifecycle_context)
+  end
+
+  defp terminalize_error(task_id, run_id, reason) do
+    if aborted_reason?(normalize_task_reason(reason)) do
+      TaskStore.cancel(task_id, reason)
+    else
+      TaskStore.fail(task_id, reason)
+    end
+
+    maybe_fail_run(run_id, reason)
+  end
+
+  defp emit_terminal_update(task_id, run_id, result, context) do
+    {status, text} =
+      case result do
+        {:ok, {:error, reason}} -> terminal_error(reason)
+        {:error, reason} -> terminal_error(reason)
+        {:ok, value} -> {"completed", Result.visible_output_text(value)}
+        other -> terminal_error(other)
+      end
+
+    result_details =
+      case result do
+        {:ok, %AgentToolResult{details: details}} when is_map(details) ->
+          Map.take(details, [:session_id, :cwd, :worktree_path, :branch, :structured_output])
+
+        _ ->
+          %{}
+      end
+
+    callback = context[:on_update]
+
+    notify_progress(context, callback, %AgentToolResult{
+      content: [%LemonAi.Types.TextContent{text: text}],
+      details:
+        result_details
+        |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(context))
+        |> Map.merge(%{
+          task_id: task_id,
+          run_id: run_id,
+          description: context[:description],
+          status: status
+        })
+    })
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
+  end
+
+  defp terminal_error(reason) do
+    text = normalize_task_reason(reason)
+    {if(aborted_reason?(text), do: "aborted", else: "error"), text}
+  end
+
+  defp notify_progress(context, callback, result) do
+    if context[:direct_progress] == true and is_pid(context[:parent_session_pid]) do
+      send(context.parent_session_pid, {:task_progress, context.root_action_id, result})
+    else
+      if is_function(callback, 1), do: callback.(result), else: :ok
+    end
   end
 
   defp classify_task_terminal_event({:ok, result}) do

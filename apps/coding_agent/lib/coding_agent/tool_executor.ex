@@ -109,6 +109,7 @@ defmodule CodingAgent.ToolExecutor do
            tool_name,
            args,
            timeout_ms,
+           context[:tool_call_id],
            approval_request_fun
          ) do
       {:ok, :approved, scope} when scope in @approval_scopes ->
@@ -144,18 +145,28 @@ defmodule CodingAgent.ToolExecutor do
         tool.name,
         params,
         fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        context
+        Map.put(context, :tool_call_id, tool_call_id)
       )
     end
 
     %{tool | execute: wrapped_execute}
   end
 
-  defp request_approval(run_id, session_id, session_key, tool_name, args, timeout_ms, request_fun) do
+  defp request_approval(
+         run_id,
+         session_id,
+         session_key,
+         tool_name,
+         args,
+         timeout_ms,
+         tool_call_id,
+         request_fun
+       ) do
     request_fun.(%{
       run_id: run_id,
       session_id: session_id,
       session_key: session_key,
+      tool_call_id: tool_call_id,
       tool: tool_name,
       action: args,
       rationale: "Tool execution: #{tool_name}",

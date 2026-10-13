@@ -9,6 +9,29 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
     {:ok, session_key: session_key}
   end
 
+  test "terminal loop status retains the judge identity rather than a previous continuation", %{
+    session_key: session_key
+  } do
+    assert {:ok, _} = GoalStore.set(session_key, "Verify the completed change")
+    assert {:ok, _} = GoalStore.record_continuation(session_key, "prior_continuation")
+
+    assert {:ok, _} =
+             GoalStore.record_loop_status(session_key, :running,
+               run_id: "terminal_judge",
+               run_kind: "judge"
+             )
+
+    assert {:ok, goal} = GoalStore.record_loop_status(session_key, :finished)
+    assert goal.last_run_id == "prior_continuation"
+    assert goal.meta["goalLoop"]["lastRunId"] == "terminal_judge"
+    assert goal.meta["goalLoop"]["lastRunKind"] == "judge"
+
+    assert {:ok, goal} =
+             GoalStore.record_loop_verdict(session_key, %{action: :done, source: "manual"})
+
+    refute Map.has_key?(goal.meta["goalLoop"]["lastVerdict"], "runId")
+  end
+
   test "sets, transitions, lists, and clears a goal", %{session_key: session_key} do
     assert {:ok, goal} =
              GoalStore.set(session_key, "Ship Hermes parity",
@@ -109,6 +132,48 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
 
     refute inspect(diagnostics) =~ "private objective text"
     refute inspect(diagnostics) =~ session_key
+  end
+
+  test "persists cwd without inventing a nil agent id", %{session_key: session_key} do
+    assert {:ok, goal} = GoalStore.set(session_key, "Work here", cwd: ".")
+    assert goal.cwd == Path.expand(".")
+    assert goal.agent_id == nil
+    assert {:ok, updated} = GoalStore.set(session_key, "Still here")
+    assert updated.cwd == goal.cwd
+    assert GoalStore.get(session_key).cwd == goal.cwd
+  end
+
+  test "late completion preserves pause and records bounded result once", %{session_key: key} do
+    assert {:ok, _} = GoalStore.set(key, "Bound results")
+    assert {:ok, _} = GoalStore.record_continuation(key, "run_result")
+    assert {:ok, _} = GoalStore.pause(key)
+
+    assert {:ok, goal} =
+             GoalStore.record_continuation(key, "run_result",
+               completion: {:ok, String.duplicate("x", 9_000)}
+             )
+
+    assert goal.status == "paused"
+    assert goal.continuation_count == 1
+    assert goal.meta["lastResult"]["runId"] == "run_result"
+    assert goal.meta["lastResult"]["status"] == "completed"
+    assert String.length(goal.meta["lastResult"]["output"]) == 8_000
+  end
+
+  test "new run clears prior abort intent", %{session_key: key} do
+    assert {:ok, _} = GoalStore.set(key, "Restart explicitly")
+
+    assert {:ok, _} =
+             GoalStore.record_loop_status(key, :reconciling,
+               run_id: "old",
+               abort_attempted: true,
+               abort_result: :outcome_unknown
+             )
+
+    assert {:ok, goal} = GoalStore.record_loop_status(key, :running, run_id: "new")
+    assert goal.meta["goalLoop"]["lastRunId"] == "new"
+    refute Map.has_key?(goal.meta["goalLoop"], "abortAttempted")
+    refute Map.has_key?(goal.meta["goalLoop"], "abortResult")
   end
 
   test "rejects empty objectives", %{session_key: session_key} do

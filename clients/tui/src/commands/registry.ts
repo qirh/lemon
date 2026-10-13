@@ -33,6 +33,8 @@ export interface PickerSpec {
 	items: PickerChoice[];
 	/** Hint line under the list. */
 	footer?: string;
+	/** Preview lines above the choices, visible while the modal is open. */
+	detail?: readonly string[];
 	onSelect: (choice: PickerChoice) => void | Promise<void>;
 	onCancel?: () => void;
 }
@@ -82,6 +84,8 @@ export interface CommandHost {
 	openSessionSwitcher?(): void;
 	/** Focus another session, hydrating it if cold. */
 	switchSession?(sessionKey: string): void | Promise<void>;
+	/** Open an already-durable fork in a Tern split, or focus it in this client. */
+	openFork?(sessionKey: string): Promise<void>;
 	/** Remember one server-confirmed profile route and open its canonical chat. */
 	openProfile?(profileId: string, sessionKey: string): void | Promise<void>;
 	/** Forget a route after the server deletes that profile. */
@@ -94,6 +98,8 @@ export interface CommandHost {
 	forgetDeletedSession?(sessionKey: string): void | Promise<void>;
 	/** Forget a session's transcript locally without touching the daemon. */
 	resetSession?(sessionKey: string): void;
+	/** Replace local transcript with the daemon's active branch after a rewind. */
+	reloadSession?(sessionKey: string): Promise<void>;
 	/** Focus the pending-queue panel (`/queue`, Ctrl+Q). */
 	focusQueue?(): boolean;
 	/** Deliver a command-supplied prompt through the normal submission state machine. */
