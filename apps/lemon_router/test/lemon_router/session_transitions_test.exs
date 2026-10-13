@@ -57,6 +57,53 @@ defmodule LemonRouter.SessionTransitionsTest do
     end
   end
 
+  test "backlog bounds count pending steers and preserve full-queue replay" do
+    queued = for n <- 1..127, do: submission("queued-#{n}", "s1", :collect, "queued")
+    steer = submission("pending-steer", "s1", :steer, "correction")
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active", session_key: "s1"},
+      queue: queued,
+      pending_steers: %{"active" => [{steer, :followup}]}
+    }
+
+    assert {:error, :session_queue_full} =
+             SessionTransitions.submit(
+               state,
+               submission("overflow", "s1", :interrupt, "new"),
+               100
+             )
+
+    assert {:ok, ^state, [:noop]} =
+             SessionTransitions.submit(state, List.first(queued), 100)
+
+    assert {:ok, released, _} = SessionTransitions.abort_run(state, steer.run_id, :user_requested)
+
+    assert {:ok, _accepted, []} =
+             SessionTransitions.submit(released, submission("new", "s1", :collect, "new"), 100)
+  end
+
+  test "debounce cannot grow a merged prompt past the byte bound" do
+    previous = submission("previous", "s1", :followup, String.duplicate("a", 1_048_570))
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active", session_key: "s1"},
+      queue: [previous],
+      last_followup_at_ms: 100
+    }
+
+    assert {:error, :session_queue_full} =
+             SessionTransitions.submit(
+               state,
+               submission("overflow", "s1", :followup, "123456"),
+               200
+             )
+
+    assert state.queue == [previous]
+  end
+
   test "cancel clears queue and pending steers and emits cancel effect when active exists" do
     state = %SessionState{
       conversation_key: {:session, "s1"},

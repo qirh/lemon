@@ -516,7 +516,7 @@ defmodule LemonRouter.RunProcess do
           }
         )
 
-      Bus.broadcast(Bus.run_topic(state.run_id), event)
+      LemonRouter.RunCompletion.publish(state.execution_request, event)
       {:noreply, state}
     end
   end
@@ -555,7 +555,7 @@ defmodule LemonRouter.RunProcess do
             }
           )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        LemonRouter.RunCompletion.publish(state.execution_request, event)
         {:noreply, state}
     end
   end
@@ -623,7 +623,7 @@ defmodule LemonRouter.RunProcess do
             }
           )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        LemonRouter.RunCompletion.publish(state.execution_request, event)
         {:noreply, state}
     end
   end
@@ -1034,7 +1034,7 @@ defmodule LemonRouter.RunProcess do
         }
       )
 
-    Bus.broadcast(Bus.run_topic(state.run_id), event)
+    LemonRouter.RunCompletion.publish(state.execution_request, event)
 
     state
     |> cancel_gateway_submit_deadline()

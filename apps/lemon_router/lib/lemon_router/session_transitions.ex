@@ -7,9 +7,11 @@ defmodule LemonRouter.SessionTransitions do
   alias LemonRouter.{QueueEffect, SessionState, Submission}
 
   @followup_debounce_ms 500
+  @max_pending_submissions 128
+  @max_pending_prompt_bytes 1_048_576
 
   @spec submit(SessionState.t(), Submission.t(), integer()) ::
-          {:ok, SessionState.t(), [QueueEffect.t()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]} | {:error, :session_queue_full}
   def submit(%SessionState{} = state, %Submission{} = submission, now_ms) do
     if retained_run_id?(state, submission.run_id) do
       # A caller can lose the acknowledgement after this coordinator accepted
@@ -21,11 +23,27 @@ defmodule LemonRouter.SessionTransitions do
       requested_mode = submission.queue_mode
       submission = maybe_promote_auto_followup(submission, state)
 
-      {state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
-      effects = maybe_request_start_next(state, effects)
+      {next_state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
 
-      {:ok, state, effects}
+      if backlog_within_limits?(next_state) do
+        {:ok, next_state, maybe_request_start_next(next_state, effects)}
+      else
+        {:error, :session_queue_full}
+      end
     end
+  end
+
+  defp backlog_within_limits?(state) do
+    submissions =
+      state.queue ++
+        Enum.flat_map(state.pending_steers, fn {_run_id, entries} ->
+          Enum.map(entries, fn {submission, _fallback_mode} -> submission end)
+        end)
+
+    length(submissions) <= @max_pending_submissions and
+      Enum.reduce(submissions, 0, fn submission, bytes ->
+        bytes + byte_size(submission.execution_request.prompt || "")
+      end) <= @max_pending_prompt_bytes
   end
 
   defp retained_run_id?(%SessionState{} = state, run_id)
