@@ -423,8 +423,8 @@ defmodule LemonSkills.Tools.ReadSkill do
     }
   end
 
-  defp format_source(:global), do: "Global (~/.lemon/agent/skill)"
-  defp format_source(:project), do: "Project (.lemon/skill)"
+  defp format_source(:global), do: "Global"
+  defp format_source(:project), do: "Project"
   defp format_source(url) when is_binary(url), do: url
   defp format_source(other), do: inspect(other)
 

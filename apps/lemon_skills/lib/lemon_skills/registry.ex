@@ -7,15 +7,13 @@ defmodule LemonSkills.Registry do
 
   ## Architecture
 
-  Skills are loaded from global and project locations:
-  1. Global (primary): `~/.lemon/agent/skill/*/SKILL.md`
-  2. Global (compat): `~/.agents/skills/*/SKILL.md`
-  3. Project: `<cwd>/.lemon/skill/*/SKILL.md`
-  4. Ancestor `.agents/skills`: `.agents/skills/*/SKILL.md` from cwd up to git root
+  Skills are loaded from `Config.global_skills_dirs/0` and
+  `Config.project_skills_dirs/1`. These include Lemon, harness, OMP, and Claude
+  SKILL.md bundles, one directory level below each skill root.
 
-  Project skills override global skills with the same key.
-  Ancestor `.agents/skills` directories are discovered automatically,
-  following Pi's package-manager pattern.
+  Project skills override global skills with the same directory key. Within a
+  scope, the first configured directory wins; ancestors are closest-first.
+  Display names do not change a skill's key.
 
   ## Online Discovery
 
@@ -497,15 +495,14 @@ defmodule LemonSkills.Registry do
   end
 
   defp load_project_skills(state, cwd) when is_binary(cwd) do
-    # Load skills from all project directories including .agents/skills paths
+    # Load roots in precedence order, including ancestor compatibility paths.
     skills =
       Config.project_skills_dirs(cwd)
       |> Enum.reduce(%{}, fn dir, acc ->
         dir_skills = load_skills_from_dir(dir, :project)
 
         # Keep first-seen entries so directory order controls precedence.
-        # Project .lemon/skill has highest precedence, then .agents/skills
-        # from cwd up to git root.
+        # Project .lemon/skill has highest precedence, then closest ancestor.
         Map.merge(acc, dir_skills, fn _key, existing, _incoming -> existing end)
       end)
 
@@ -521,6 +518,7 @@ defmodule LemonSkills.Registry do
     if File.dir?(dir) do
       dir
       |> File.ls!()
+      |> Enum.sort()
       |> Enum.filter(fn name ->
         path = Path.join(dir, name)
         File.dir?(path) and File.exists?(Path.join(path, "SKILL.md"))

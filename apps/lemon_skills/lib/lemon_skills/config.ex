@@ -25,6 +25,10 @@ defmodule LemonSkills.Config do
       ├── some-skill/
       │   └── SKILL.md
 
+  OMP (`~/.omp/agent/skills`) and Claude (`~/.claude/skills`) user bundles are
+  also discovered unless existing directory overrides isolate the runtime.
+  See `global_skills_dirs/0` for explicit compatibility-root overrides.
+
   ### Project Skills
 
   Project skills are discovered from:
@@ -41,19 +45,13 @@ defmodule LemonSkills.Config do
 
   ### Ancestor Discovery
 
-  Skills in `.agents/skills` directories are discovered automatically from the
-  current working directory up to the git repository root (or filesystem root
-  when not in a git repo). This allows organizing skills at different levels
-  of a project hierarchy.
+  Skills in `.agents/skills`, `.omp/skills`, and `.claude/skills` directories
+  are discovered automatically from the current working directory up to the
+  git repository root (or filesystem root when not in a git repo).
 
-  For example, in a monorepo at `/home/user/myrepo` with cwd at
-  `/home/user/myrepo/packages/feature`, the following skill directories
-  would be discovered (in precedence order):
-
-      1. /home/user/myrepo/packages/feature/.lemon/skill
-      2. /home/user/myrepo/packages/feature/.agents/skills
-      3. /home/user/myrepo/packages/.agents/skills
-      4. /home/user/myrepo/.agents/skills
+  The cwd's `.lemon/skill` wins, then ancestors are searched closest-first.
+  At each ancestor, `.agents` wins over `.omp`, which wins over `.claude`.
+  Ancestor `.lemon/skill` roots are not searched.
 
   ## Overrides
 
@@ -133,13 +131,30 @@ defmodule LemonSkills.Config do
   Directories are returned in precedence order (first wins on key collisions):
   1. Lemon global skills (`~/.lemon/agent/skill` or `LEMON_AGENT_DIR/skill`)
   2. Harness-compatible skills (`~/.agents/skills`)
+  3. OMP skills (`~/.omp/agent/skills`)
+  4. Claude skills (`~/.claude/skills`)
+
+  OMP/Claude defaults are omitted when the agent or harness directory is overridden.
+  Explicit `LEMON_OMP_SKILLS_DIR` / `LEMON_CLAUDE_SKILLS_DIR` (or the corresponding
+  `:omp_global_skills_dir` / `:claude_global_skills_dir` app settings) still apply.
   """
   @spec global_skills_dirs() :: [String.t()]
   def global_skills_dirs do
     [
       global_skills_dir(),
-      harness_global_skills_dir()
+      harness_global_skills_dir(),
+      compatible_global_skills_dir(
+        "LEMON_OMP_SKILLS_DIR",
+        :omp_global_skills_dir,
+        ".omp/agent/skills"
+      ),
+      compatible_global_skills_dir(
+        "LEMON_CLAUDE_SKILLS_DIR",
+        :claude_global_skills_dir,
+        ".claude/skills"
+      )
     ]
+    |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
   end
 
@@ -153,6 +168,25 @@ defmodule LemonSkills.Config do
     System.get_env("LEMON_HARNESS_SKILLS_DIR") ||
       Application.get_env(:lemon_skills, :harness_global_skills_dir) ||
       Path.join([System.user_home!(), ".agents", "skills"])
+  end
+
+  defp compatible_global_skills_dir(env, key, default) do
+    System.get_env(env) ||
+      Application.get_env(:lemon_skills, key) ||
+      if not isolated_skill_roots?(), do: Path.join(System.user_home!(), default)
+  end
+
+  defp isolated_skill_roots? do
+    Enum.any?(
+      [
+        System.get_env("LEMON_AGENT_DIR"),
+        System.get_env("LEMON_HARNESS_SKILLS_DIR"),
+        Application.get_env(:lemon_skills, :agent_dir),
+        Application.get_env(:coding_agent, :agent_dir),
+        Application.get_env(:lemon_skills, :harness_global_skills_dir)
+      ],
+      &(&1 != nil)
+    )
   end
 
   @doc """
@@ -170,14 +204,14 @@ defmodule LemonSkills.Config do
   end
 
   @doc """
-  Get all project skills directories including `.agents/skills` paths.
+  Get all project skills directories.
 
-  Discovers skills in `.agents/skills` directories from cwd up to git repo root
-  (or filesystem root if not in a git repo), following Pi's package-manager pattern.
+  Discovers `.agents/skills`, `.omp/skills`, and `.claude/skills` from cwd up to
+  the git repo root (or filesystem root when outside a git repository).
 
   Directories are returned in precedence order (first wins on key collisions):
   1. Project `.lemon/skill` (highest precedence)
-  2. `.agents/skills` directories from cwd up to git root
+  2. At each ancestor, closest first: `.agents/skills`, `.omp/skills`, `.claude/skills`
 
   ## Parameters
 
@@ -201,13 +235,17 @@ defmodule LemonSkills.Config do
   """
   @spec project_skills_dirs(String.t()) :: [String.t()]
   def project_skills_dirs(cwd) do
-    # Start with the primary project skills directory
-    dirs = [project_skills_dir(cwd)]
+    cwd = Path.expand(cwd)
+    git_root = find_git_repo_root(cwd)
 
-    # Collect .agents/skills directories from cwd up to git root or filesystem root
-    dirs = dirs ++ collect_ancestor_agents_skill_dirs(cwd)
+    ancestor_dirs =
+      cwd
+      |> collect_ancestors(git_root)
+      |> Enum.flat_map(fn dir ->
+        Enum.map([".agents", ".omp", ".claude"], &Path.join([dir, &1, "skills"]))
+      end)
 
-    dirs
+    [project_skills_dir(cwd) | ancestor_dirs]
     |> Enum.uniq()
     |> Enum.filter(&File.dir?/1)
   end
@@ -628,18 +666,23 @@ defmodule LemonSkills.Config do
   # to avoid circular dependency
   defp do_validate_mcp_config({:stdio, command, args})
        when is_binary(command) and is_list(args) do
-    if String.trim(command) == "" do
-      {:error, "stdio command cannot be empty"}
-    else
-      :ok
+    cond do
+      String.trim(command) == "" -> {:error, "stdio command cannot be empty"}
+      not Enum.all?(args, &is_binary/1) -> {:error, "stdio args must be strings"}
+      true -> :ok
     end
   end
 
   defp do_validate_mcp_config({:stdio, command, args, opts})
        when is_binary(command) and is_list(args) and is_list(opts) do
     with :ok <- do_validate_mcp_config({:stdio, command, args}),
-         :ok <- validate_mcp_filter_opts(opts) do
+         :ok <- validate_mcp_filter_opts(opts),
+         :ok <- validate_mcp_env(Keyword.get(opts, :env, [])),
+         true <- is_nil(opts[:cwd]) or is_binary(opts[:cwd]) do
       :ok
+    else
+      false -> {:error, "cwd must be a string"}
+      error -> error
     end
   end
 
@@ -668,6 +711,15 @@ defmodule LemonSkills.Config do
   defp do_validate_mcp_config(config) do
     {:error, "invalid MCP server config: #{inspect(config)}"}
   end
+
+  defp validate_mcp_env(env) when is_list(env) do
+    if Enum.all?(env, fn
+         {key, value} when is_binary(key) and is_binary(value) -> true
+         _ -> false
+       end), do: :ok, else: {:error, "env must contain string key/value pairs"}
+  end
+
+  defp validate_mcp_env(_), do: {:error, "env must contain string key/value pairs"}
 
   @doc """
   Get MCP configuration for a specific project.
@@ -772,7 +824,9 @@ defmodule LemonSkills.Config do
     args = Map.get(config, "args", [])
 
     opts =
-      mcp_ready_timeout_opts(config) ++ mcp_filter_opts(config) ++ sampling_config_opts(config)
+      mcp_timeout_opts(config) ++
+        mcp_env_opts(config) ++
+        mcp_filter_opts(config) ++ sampling_config_opts(config)
 
     if opts == [] do
       [{:stdio, command, args}]
@@ -826,7 +880,7 @@ defmodule LemonSkills.Config do
       end
 
     header_opts ++
-      oauth_config_opts(config) ++ mcp_ready_timeout_opts(config) ++ mcp_filter_opts(config)
+      oauth_config_opts(config) ++ mcp_timeout_opts(config) ++ mcp_filter_opts(config)
   end
 
   defp sse_config_opts(config) do
@@ -923,11 +977,15 @@ defmodule LemonSkills.Config do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp mcp_ready_timeout_opts(config) do
-    [
-      ready_timeout_ms: Map.get(config, "ready_timeout_ms") || Map.get(config, "ready-timeout-ms")
-    ]
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+  defp mcp_env_opts(config) do
+    env_opts =
+      case Map.get(config, "env") do
+        nil -> []
+        env when is_map(env) -> [env: Map.to_list(env)]
+        env -> [env: env]
+      end
+
+    if Map.has_key?(config, "cwd"), do: [{:cwd, config["cwd"]} | env_opts], else: env_opts
   end
 
   defp string_list(config, key) do
