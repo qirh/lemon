@@ -13,6 +13,9 @@
  * nothing else wants it, and the poll is stopped by `dispose()`.
  */
 
+import { node } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { styledSpans } from "@oh-my-pi/pi-tui/native/spans";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ConnectionState } from "../../protocol/types.ts";
@@ -78,12 +81,14 @@ export interface StatusBarOptions {
 export class StatusBar implements Component {
 	readonly #options: StatusBarOptions;
 	#branch: string | null = null;
-	#timer: ReturnType<typeof setInterval> | undefined;
+	#timer: NodeJS.Timeout | undefined;
 	#disposed = false;
 
 	#cachedRows: string[] | undefined;
 	#cachedWidth = -1;
 	#cachedKey = "";
+	#native: NativeNode | undefined;
+	#nativeKey = "";
 
 	constructor(options: StatusBarOptions) {
 		this.#options = options;
@@ -115,12 +120,34 @@ export class StatusBar implements Component {
 
 	dispose(): void {
 		this.#disposed = true;
-		if (this.#timer) clearInterval(this.#timer);
+		clearInterval(this.#timer);
 		this.#timer = undefined;
 	}
 
 	invalidate(): void {
 		this.#cachedRows = undefined;
+		this.#native = undefined;
+	}
+
+	describe(): NativeNode {
+		const live = this.#options.data();
+		const data: StatusBarData = { ...live, branch: live.branch ?? this.#branch };
+		const key = cacheKey(data);
+		if (!this.#native || this.#nativeKey !== key) {
+			const theme = getTheme();
+			this.#native = node(
+				"status",
+				{},
+				buildSegments(data).map((segment) =>
+					node("seg", {
+						spans: styledSpans(theme.fg(segment.slot, segment.text)),
+						priority: segment.priority,
+					}),
+				),
+			);
+			this.#nativeKey = key;
+		}
+		return this.#native;
 	}
 
 	render(width: number): readonly string[] {

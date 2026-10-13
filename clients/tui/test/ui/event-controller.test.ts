@@ -14,6 +14,7 @@ import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-ec";
@@ -128,7 +129,7 @@ describe("rebuildFocused", () => {
 		expect(text).toContain("a completed reply");
 		expect(text).toContain("Error: provider exploded");
 		// A sealed block must not reopen the native-scrollback seam.
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 
 	test("restores an aborted block with its interrupted marker", async () => {
@@ -144,7 +145,7 @@ describe("rebuildFocused", () => {
 		const text = renderPlain(app.chatContainer.render(80));
 		expect(text).toContain("half a thou");
 		expect(text).toContain("[interrupted]");
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 		// The marker lives in the component, never in the stored block text.
 		expect(session.assistantFor("run-1")?.text).toBe("half a thou");
 	});
@@ -173,7 +174,7 @@ describe("out-of-order run frames", () => {
 		expect(session.assistantFor("run-1")?.text).toBe("the answer is forty-two");
 		// Amending must not reopen the seam on a block that is already history.
 		app.chatContainer.render(80);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 
 	test("completed arriving before started still shows the answer", async () => {
@@ -193,7 +194,7 @@ describe("out-of-order run frames", () => {
 		await waitFor(() => transcript(app).includes("an answer nobody announced"), {
 			what: "the answer to render",
 		});
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 });
 

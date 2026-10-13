@@ -37,12 +37,11 @@ remains a legacy client-side alias; it does not configure the daemon.
 
 ## Features
 
-- Streaming markdown transcript committed to native terminal scrollback
-  mid-stream, with separate chronological text segments around thinking and
-  tools so later answers never repaint above already-committed tool history.
-  Text uses a 30fps grapheme-safe reveal.
-  Ordinary chats run in the directory where the TUI was launched; canonical
-  profile chats retain their daemon-owned workspace.
+- Streaming markdown using pi-tui's native Tern surface or bounded terminal
+  frame provider with semantic scrollback retirement and grapheme-safe reveal.
+  Separate chronological text segments around thinking and tools keep later
+  answers below tool history. Ordinary chats run in the directory where the
+  TUI was launched; canonical profile chats retain their daemon-owned workspace.
 - Tool cards with per-tool formatters for Lemon's native tools (read, write,
   edit, patch, bash incl. background runs / `bash_output` / `kill_process`,
   grep, find, ls, todo, task/agent, `browser_*`, webfetch/websearch; anything
@@ -124,20 +123,34 @@ remains a legacy client-side alias; it does not configure the daemon.
 
 ### Tern and modern terminals
 
-Run `lemon` in a Tern pane as in any terminal. The TUI detects `TERN_PANE` or
-`TERM_PROGRAM=Tern`; its transcript marks stay attached to prompt/reply rows
-as they enter native scrollback, enabling Tern's command/reply navigation.
-Markdown URLs, inline-code file references such as `src/app.ts:42`, and file
-tool-card titles are clickable. File targets are absolute `file://` URLs with
-an optional `#L42` fragment; paths with spaces and special characters are
-URL-encoded.
+Run `lemon tui` in a Tern pane for the terminal client (plain `lemon` may select
+the native ACP chat instead). The TUI detects `TERN_PANE` or `TERM_PROGRAM=tern`
+and negotiates pi-tui's Tern Surface Protocol (TSP). Prompts, replies, tool calls
+and the composer are semantic nodes, not painted cell screenshots. This gives
+Tern reply navigation, native markdown/code blocks, and Carly's agent
+start/ask/wait/transcript operations. A delegated prompt waits until the
+connected composer is ready, submits atomically, and preserves any human draft
+in recall history. Configure Carly's agent command as `lemon tui` for this path.
+
+Tern's native **Run** button on shell fences in replies executes in the pane's
+working directory and displays the output below the fence; **Stop** interrupts
+that command. Execution belongs to Tern and always requires the user's Run
+gesture. The client reports its working directory using OSC 7.
+
+Other terminals, or `PI_TUI_NATIVE=0`, use the row renderer. OSC 133 marks stay
+attached to prompt/reply rows as they enter scrollback. Markdown URLs,
+inline-code file references such as `src/app.ts:42`, and file tool-card titles
+are clickable through OSC 8. File targets are absolute `file://` URLs with an
+optional `#L42` fragment; spaces and special characters are URL-encoded.
 
 The title shows the focused session key and current status. `lemon_session`
 and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
 terminal client intentionally does **not** claim `tern_acp_session`, which is
-reserved for native ACP chats. Notifications contain only generic status,
-never prompts, answers, commands, or tool arguments. Tern receives OSC 9;
-other terminals receive OSC 9 or OSC 777 according to their identity.
+reserved for native ACP chats. Tern receives OSC 7501 program status:
+working, blocked for approval, done, or error. Its pane glow, inbox, completion
+banners and Carly waiting state follow those transitions. Other terminals
+receive generic OSC 9 or OSC 777 notifications, never prompts, answers,
+commands, or tool arguments.
 
 pi-tui negotiates kitty keyboard support with a capability query rather than
 assuming it from environment variables, preserving the parent keyboard flags.
@@ -145,9 +158,11 @@ Exit and external-editor handoff restore the keyboard, cursor and raw mode,
 clear the progress indicator and remove the session markers. The title is
 restored where the terminal supports the xterm title stack, otherwise cleared
 so an exited client never leaves a stale working/approval status.
-`LEMON_TUI_NOTIFICATIONS=0` disables desktop notifications.
+`LEMON_TUI_NOTIFICATIONS=0` disables OSC 9/777 notifications; Tern's program
+status inbox and banners follow Tern's own notification settings.
 `LEMON_TUI_TERMINAL_INTEGRATION=0` disables Lemon's terminal side channels and
-transcript marks. `PI_NO_HYPERLINKS=1` disables links; pi-tui's multiplexer
+row transcript marks. `PI_TUI_NATIVE=0` disables native surfaces, and
+`PI_NO_HYPERLINKS=1` disables row-renderer links. pi-tui's multiplexer
 capability policy remains authoritative. Non-TTY and `TERM=dumb` output do not
 emit Lemon's side channels.
 
@@ -194,6 +209,26 @@ Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript
 without resetting daemon-side session history. Use `/reset` when history should
 also be forgotten.
+
+### Forking a session
+
+`/fork` asks the authenticated daemon's `sessions.fork` method to create an
+independent durable branch of the current native session; the original remains
+unchanged. The command is unavailable on daemons that do not advertise it and
+is never queued while offline.
+
+Inside Tern, the child opens in a right-hand split beside the originating pane,
+using the same Lemon source entry point or compiled binary, working directory,
+and control plane. Outside Tern, the current client switches to the child.
+The operator credential travels through a private one-shot handoff (mode-0700
+directory, mode-0600 file), consumed and removed before connecting and installed
+in the child's environment; it is never placed in command arguments.
+
+The source transcript reports the new session key before opening it. If the
+split cannot launch, the durable child is retained: use the displayed
+`/session open <child-key>` command to recover it. A fork does not start a second
+daemon; if the original source launcher owns the daemon, that launcher's lifetime
+still controls the shared connection.
 
 ## Development
 
@@ -251,6 +286,7 @@ src/ui/          components (pi-tui Component impls) + controllers + theme
 src/commands/    slash-command registry (capability-gated via hello-ok)
 src/formatters/  pure per-tool formatters -> {summary, details[]}
 src/dev/         fake server, gallery, fixtures
+src/terminal/   terminal capabilities, status/marks/links, secure split launching
 scripts/         build-binary.ts (bun --compile, per-platform artifacts)
 ```
 
@@ -263,6 +299,14 @@ and keep to the house rules: return the same array reference from
 `visibleWidth`, never `.length`); never declare a settled row that could
 still change; animate via `requestComponentRender` only; `initTheme()`
 before constructing any component.
+
+All three pi packages are pinned to 18.10.3. The product frame provider owns the
+row renderer's main/dock split and semantic retirement; Tern's native backend
+uses `describeSurface()` and the same component tree. Native descriptions must
+retain stable node references while unchanged. Chat roles `omp.user`,
+`omp.assistant` and surface `omp.session` are the shared Tern/Carly vocabulary,
+not an assertion that the client is omp. Never emit `omp_session_file` or
+`omp_restore`: Lemon sessions are daemon-owned, not omp JSONL files.
 
 ### Releasing
 
