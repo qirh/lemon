@@ -66,6 +66,14 @@ The event bridge maps Bus run/chat/approval/cron/goal/presence traffic to socket
 events. Non-node clients receive the general event stream; nodes receive only
 targeted node traffic. State-version counters let clients reconcile changed
 presence, health and cron data. They are not durable event replay cursors.
+
+Completed `agent` events include an authoritative `cancelled` boolean taken
+from the durable completion's metadata, plus a bounded, redacted `error` value.
+Clients must not infer cancellation from error wording or from whether the
+correlated `chat.abort` acknowledgement has arrived; the terminal event can
+legitimately arrive first. Failure and budget-stop completions remain
+`cancelled: false` unless a cancellation producer explicitly marked them.
+
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
@@ -80,6 +88,10 @@ signatures, callbacks and runtime state are excluded; complete diff snapshots
 are omitted rather than truncated into misleading edits. Unexpected JSON
 encoding failures drop only the offending event frame and leave the socket
 connected for later output and completion.
+Malformed method responses are replaced with a correlated
+`RESPONSE_ENCODING_FAILED` internal error and `retrySafe: false`, not a socket
+disconnect or a fabricated success. Encoding logs contain only a static failure
+classification; clients must reconcile any potentially completed mutation.
 
 Ordinary `chat.send` requests may supply `cwd`: a nonempty absolute existing
 directory forwarded to the native coding session and its tools. Relative,
@@ -167,8 +179,10 @@ invalidates the previous token. Previews and receipts include redacted
 effects of M shell commands are not reverted” and list those commands before
 confirmation. A successful partial restoration returns `partialRestore: true`.
 Missing non-shell checkpoints, unavailable/truncated command text, or more than
-100 shell invocations cannot be bypassed with partial consent. Other shell
-effects are never undone or represented as restored.
+100 shell invocations cannot be bypassed with partial consent. Applied AST
+rewrites require checkpoints even after interruption or failure; AST search and
+dry-run previews remain read-only. Other shell effects are never undone or
+represented as restored.
 
 `sessions.fork` requires `operator.write` and accepts only the source
 `sessionKey` and `cwd`. The server generates an independent canonical child key,
@@ -198,8 +212,9 @@ silently rebound. Metadata patches still refuse unknown session IDs by default.
 
 When reopening native conversations, pass `cwd` to `chat.history`. Its
 successful native response is authoritative, including an empty active branch
-after rewind. Only visible user/assistant text is projected; abandoned turns,
-thought blocks, tool results, and structural tree entries are excluded.
+after rewind. Visible user/assistant text and sanitized native tool calls/results
+are projected, preserving call identity and actual output for resumed tool cards.
+Abandoned turns, thought blocks, and structural tree entries are excluded.
 `limit`, `beforeId`, and `includeFullText` remain available. Native pages are
 chronological, defaulting to the latest messages; a `beforeId` cursor selects
 messages following that entry, matching the existing cursor contract.

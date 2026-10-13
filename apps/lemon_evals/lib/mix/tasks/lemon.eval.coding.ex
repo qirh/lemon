@@ -22,7 +22,11 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
           lemon: :string,
           output: :string,
           timeout: :integer,
-          failure_dir: :string
+          failure_dir: :string,
+          compare_omp: :boolean,
+          omp: :string,
+          omp_model: :string,
+          tasks: :string
         ]
       )
 
@@ -49,6 +53,17 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
       if opts[:failure_dir],
         do: argv ++ ["--failure-dir", Path.expand(opts[:failure_dir])],
         else: argv
+
+    argv = if opts[:compare_omp], do: argv ++ ["--compare-omp"], else: argv
+
+    argv =
+      Enum.reduce(
+        [{:omp, "--omp"}, {:omp_model, "--omp-model"}, {:tasks, "--tasks"}],
+        argv,
+        fn {key, flag}, current ->
+          if opts[key], do: current ++ [flag, opts[key]], else: current
+        end
+      )
 
     {_output, status} =
       System.cmd(python, argv, into: IO.stream(:stdio, :line), stderr_to_stdout: true)

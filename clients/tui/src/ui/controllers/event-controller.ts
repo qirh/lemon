@@ -343,6 +343,13 @@ export class EventController {
 				const block = session.finalizeRun(completed.runId, {
 					ok: completed.ok,
 					answer: completed.answer,
+					interrupted: completed.cancelled === true,
+					error:
+						typeof completed.error === "string"
+							? completed.error
+							: completed.error == null
+								? undefined
+								: JSON.stringify(completed.error),
 				});
 				// finalizeRun may have created the block (completed outran started),
 				// so resolve its component only after the tree is in step.
@@ -356,7 +363,7 @@ export class EventController {
 				// The run is over, so the trailing run of tool activity is too: seal it
 				// and let its rows reach native scrollback.
 				if (focused) this.#sealOpenShelf();
-				if (completed.ok === false && !block) {
+				if (completed.ok === false && !completed.cancelled && !block) {
 					this.notice(`run ${completed.runId} failed`, "error", session);
 				}
 				this.#scheduleRender();

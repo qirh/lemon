@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
+from coding_benchmark_tasks import additional_tasks
 
 
 def task(name, prompt, files, verify):
@@ -49,11 +51,91 @@ def tasks():
              {"calculator.py": "def average(values):\n return sum(values) // len(values)\n",
               "test_calculator.py": "import unittest\nfrom calculator import average\nclass AverageTest(unittest.TestCase):\n def test_fraction(self): self.assertEqual(average([1,2]),1.5)\nif __name__=='__main__': unittest.main()\n"},
              "from calculator import average\nassert average([1,2])==1.5\nassert average([-1,2])==0.5\ntry: average([])\nexcept ValueError: pass\nelse: raise AssertionError('empty average accepted')\n"),
-    ]
+    ] + additional_tasks(task)
 
 
 def command(argv, cwd, **kwargs):
-    return subprocess.run(argv, cwd=cwd, text=True, capture_output=True, **kwargs)
+    return subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL, text=True, capture_output=True, **kwargs)
+
+
+def parse_omp(output):
+    events = [json.loads(line) for line in output.splitlines() if line.strip()]
+    assistants = [event['message'] for event in events if event.get('type') == 'message_end' and event.get('message', {}).get('role') == 'assistant']
+    last = assistants[-1] if assistants else {}
+    usage = [message.get('usage') or {} for message in assistants]
+    answer = ''.join(part.get('text', '') for part in last.get('content', []) if part.get('type') == 'text')
+    return {'ok': bool(assistants) and any(event.get('type') == 'agent_end' for event in events) and last.get('stopReason') not in ('error', 'aborted'),
+            'answer': answer, 'model': last.get('model'),
+            'usage': {'totalTokens': sum(value.get('totalTokens', 0) for value in usage),
+                      'inputTokens': sum(value.get('input', 0) for value in usage),
+                      'outputTokens': sum(value.get('output', 0) for value in usage),
+                      'cacheReadTokens': sum(value.get('cacheRead', 0) for value in usage)},
+            'metrics': {'turns': sum(event.get('type') == 'turn_end' for event in events),
+                        'tool_errors': sum(event.get('type') == 'tool_execution_end' and event.get('isError') is True for event in events)}}
+
+
+def run_case(case, agent, executable, model, args):
+    with tempfile.TemporaryDirectory(prefix='lemon-coding-bench-' + agent + '-') as tmp:
+        root = Path(tmp)
+        (root / '.gitignore').write_text('__pycache__/\n*.py[cod]\n')
+        for name, content in case['files'].items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        for argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
+            command(argv, root, check=True)
+        started = time.monotonic()
+        result, failure = {}, None
+        invocation = verifier = tests = None
+        prompt = case['prompt'] + ' Use Python standard-library unittest for any tests; do not install dependencies.'
+        if agent == 'lemon':
+            argv = [executable, '-p', prompt, '--output', 'json', '--model', model, '--cwd', str(root), '--approval-policy', 'allow']
+        else:
+            argv = [executable, '-p', prompt, '--mode', 'json', '--model', model, '--cwd', str(root), '--no-session', '--no-title', '--auto-approve', '--max-time', str(args.timeout)]
+        verifier_passed = tests_passed = None
+        try:
+            invocation = command(argv, root, timeout=args.timeout + 15)
+            try:
+                result = json.loads(invocation.stdout) if agent == 'lemon' else parse_omp(invocation.stdout)
+            except (ValueError, TypeError):
+                failure = 'invalid_cli_json'
+            if not failure and (invocation.returncode != 0 or result.get('ok') is not True):
+                failure = 'agent_failed'
+            env = dict(os.environ, BENCHMARK_ANSWER=result.get('answer') or '')
+            verifier = command([sys.executable, '-c', case['verify']], root, env=env, timeout=30)
+            verifier_passed = verifier.returncode == 0
+            if not verifier_passed and not failure: failure = 'verifier_failed'
+            if case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root).stdout:
+                failure = 'unexpected_mutation'
+            requires_tests = case['name'] in {'multi_file_refactor','feature_and_test','repo_search'} or any(Path(name).name.startswith('test') and name.endswith('.py') for name in case['files'])
+            if requires_tests:
+                tests = command([sys.executable,'-m','unittest','discover','-v'], root, timeout=30)
+                tests_passed = tests.returncode == 0 and 'Ran 0 tests' not in tests.stderr
+                if not tests_passed and not failure: failure = 'tests_failed'
+        except subprocess.TimeoutExpired:
+            failure = 'timeout'
+        except OSError:
+            failure = 'invocation_failed'
+        usage = result.get('usage') or {}
+        metrics = result.get('metrics') or {}
+        tool_errors = metrics.get('tool_errors', usage.get('tool_errors'))
+        if case['name'] == 'tool_failure_recovery' and not failure:
+            if not isinstance(tool_errors, int) or tool_errors < 1: failure = 'recovery_not_observed'
+        if failure and args.failure_dir:
+            bundle = Path(args.failure_dir) / agent / case['name']
+            bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
+            shutil.copytree(root, bundle / 'repo')
+            (bundle / 'verify.py').write_text(case['verify'])
+            for label, completed in [('cli', invocation), ('verifier', verifier), ('tests', tests)]:
+                if completed is not None:
+                    (bundle / (label + '.stdout')).write_text(completed.stdout)
+                    (bundle / (label + '.stderr')).write_text(completed.stderr)
+        return {'task': case['name'], 'agent': agent, 'passed': failure is None, 'failure': failure,
+                'verifier_passed': verifier_passed, 'tests_passed': tests_passed,
+                'turns': metrics.get('turns', usage.get('turns')), 'tokens': usage.get('totalTokens'),
+                'uncached_input_tokens': usage.get('inputTokens'), 'cached_input_tokens': usage.get('cacheReadTokens'),
+                'output_tokens': usage.get('outputTokens'), 'wall_seconds': round(time.monotonic()-started, 2),
+                'tool_errors': tool_errors, 'run_id': result.get('run_id')}
 
 
 def main():
@@ -63,80 +145,59 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--timeout', type=int, default=660)
     parser.add_argument('--failure-dir', help='Opt-in private failure bundles; may contain raw model output')
+    parser.add_argument('--compare-omp', action='store_true')
+    parser.add_argument('--omp', default='omp')
+    parser.add_argument('--omp-model')
+    parser.add_argument('--tasks', help='Comma-separated task names; omitted runs all twelve')
     args = parser.parse_args()
     lemon = str(Path(args.lemon).resolve())
+    agents = [('lemon', lemon, args.model)]
+    if args.compare_omp:
+        executable = shutil.which(args.omp)
+        if not executable: parser.error('omp executable is required for --compare-omp')
+        agents.append(('omp', executable, args.omp_model or args.model.replace(':', '/', 1)))
+    cases = tasks()
+    if args.tasks:
+        names = set(args.tasks.split(','))
+        if not names <= {case['name'] for case in cases}: parser.error('unknown task selection')
+        cases = [case for case in cases if case['name'] in names]
     rows = []
-    for case in tasks():
-        with tempfile.TemporaryDirectory(prefix='lemon-coding-bench-') as tmp:
-            root = Path(tmp)
-            (root / '.gitignore').write_text('__pycache__/\n*.py[cod]\n')
-            for name, content in case['files'].items():
-                path = root / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(content)
-            for argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
-                command(argv, root, check=True)
-            started = time.monotonic()
-            result = {}
-            failure = None
-            invocation = verifier = tests = None
-            try:
-                invocation = command([lemon, '-p', case['prompt'] + ' Use Python standard-library unittest for any tests; do not install dependencies.', '--output', 'json', '--model', args.model,
-                                      '--cwd', str(root), '--approval-policy', 'allow'], root, timeout=args.timeout)
-                try:
-                    result = json.loads(invocation.stdout)
-                except (ValueError, TypeError):
-                    failure = 'invalid_cli_json'
-                if not failure and (invocation.returncode != 0 or result.get('ok') is not True):
-                    failure = 'agent_failed'
-                env = dict(os.environ, BENCHMARK_ANSWER=result.get('answer') or '')
-                # The verifier lives outside the task repo: agents cannot edit the grading oracle.
-                verifier = command([sys.executable, '-c', case['verify']], root, env=env, timeout=30)
-                if verifier.returncode != 0 and not failure:
-                    failure = 'verifier_failed'
-                if case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root).stdout:
-                    failure = 'unexpected_mutation'
-                # Feature tasks must also have runnable tests, not only a filename.
-                if case['name'] in {'bug_fix','multi_file_refactor','feature_and_test','repo_search','tool_failure_recovery'}:
-                    tests = command([sys.executable,'-m','unittest','discover','-v'], root, timeout=30)
-                    if (tests.returncode != 0 or 'Ran 0 tests' in tests.stderr) and not failure:
-                        failure = 'tests_failed'
-            except subprocess.TimeoutExpired:
-                failure = 'timeout'
-            except OSError:
-                failure = 'invocation_failed'
-            usage = result.get('usage') or {}
-            metrics = result.get('metrics') or {}
-            tool_errors = metrics.get('tool_errors', usage.get('tool_errors'))
-            if case['name'] == 'tool_failure_recovery' and not failure:
-                if not isinstance(tool_errors, int) or tool_errors < 1:
-                    failure = 'recovery_not_observed'
-            if failure and args.failure_dir:
-                bundle = Path(args.failure_dir) / case['name']
-                bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
-                shutil.copytree(root, bundle / 'repo')
-                (bundle / 'verify.py').write_text(case['verify'])
-                for label, completed in [('cli', invocation), ('verifier', verifier), ('tests', tests)]:
-                    if completed is not None:
-                        (bundle / (label + '.stdout')).write_text(completed.stdout)
-                        (bundle / (label + '.stderr')).write_text(completed.stderr)
-            rows.append({'task': case['name'], 'passed': failure is None, 'failure': failure,
-                         'turns': metrics.get('turns', usage.get('turns')),
-                         'tokens': usage.get('totalTokens'), 'wall_seconds': round(time.monotonic()-started, 2),
-                         'tool_errors': tool_errors})
-            print(f"{case['name']}: {'PASS' if failure is None else 'FAIL ('+failure+')'}", flush=True)
-    report = {'schema_version': 1, 'suite': 'live_agentic_coding', 'model': args.model,
-              'passed': sum(row['passed'] for row in rows), 'total': len(rows), 'results': rows}
+    with ThreadPoolExecutor(max_workers=len(agents)) as pool:
+        for case in cases:
+            futures = [pool.submit(run_case, case, agent, executable, model, args) for agent, executable, model in agents]
+            for future in futures:
+                row = future.result()
+                rows.append(row)
+                checkpoint = Path(args.output)
+                checkpoint.parent.mkdir(parents=True, exist_ok=True)
+                checkpoint.write_text(json.dumps({'schema_version': 2, 'suite': 'live_agentic_coding',
+                    'model': args.model, 'models': {agent: model for agent, _, model in agents},
+                    'passed': sum(item['passed'] for item in rows), 'total': len(rows),
+                    'complete': False, 'results': rows}, indent=2) + '\n')
+                print(f"{row['task']} / {row['agent']}: {'PASS' if row['passed'] else 'FAIL ('+row['failure']+')'}", flush=True)
+    report = {'schema_version': 2, 'suite': 'live_agentic_coding', 'model': args.model,
+              'models': {agent: model for agent, _, model in agents},
+              'passed': sum(row['passed'] for row in rows), 'total': len(rows), 'complete': True, 'results': rows}
     destination = Path(args.output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + '.tmp')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
     temporary.replace(destination)
-    table = ['| Task | Result | Turns | Tokens | Wall (s) | Tool errors |', '| --- | --- | ---: | ---: | ---: | ---: |']
-    for row in rows:
-        values = [row['task'], 'PASS' if row['passed'] else 'FAIL', row['turns'], row['tokens'], row['wall_seconds'], row['tool_errors']]
-        table.append('| ' + ' | '.join('n/a' if value is None else str(value) for value in values) + ' |')
-    markdown = '\n'.join(table) + '\n\nMissing runtime metrics are n/a, never inferred from tool-call counts.\n'
+    if args.compare_omp:
+        table = ['| Task | Lemon | Turns | Tokens | Wall (s) | omp | Turns | Tokens | Wall (s) |',
+                 '| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |']
+        for case in cases:
+            values = [case['name']]
+            for agent, _, _ in agents:
+                row = next(row for row in rows if row['task'] == case['name'] and row['agent'] == agent)
+                values.extend(['PASS' if row['passed'] else 'FAIL', row['turns'], row['tokens'], row['wall_seconds']])
+            table.append('| ' + ' | '.join('n/a' if value is None else str(value) for value in values) + ' |')
+    else:
+        table = ['| Task | Result | Turns | Tokens | Wall (s) | Tool errors |', '| --- | --- | ---: | ---: | ---: | ---: |']
+        for row in rows:
+            values = [row['task'], 'PASS' if row['passed'] else 'FAIL', row['turns'], row['tokens'], row['wall_seconds'], row['tool_errors']]
+            table.append('| ' + ' | '.join('n/a' if value is None else str(value) for value in values) + ' |')
+    markdown = '\n'.join(table) + '\n\nTokens include provider-reported cached input. Turns are completed parent assistant turns. Missing metrics are n/a. One trial per task, not a statistical ranking.\n'
     destination.with_suffix('.md').write_text(markdown)
     print(markdown)
     return 0 if report['passed'] == report['total'] else 1

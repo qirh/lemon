@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
-import { AppShell, defaultSessionKey } from "../src/app.ts";
+import { AppShell } from "../src/app.ts";
 import { imageFromBytes } from "../src/composer/images.ts";
 import { FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
+import { newSessionKey } from "../src/session-key.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "./helpers/memory-terminal.ts";
@@ -250,9 +251,10 @@ describe("AppShell", () => {
 		}
 	});
 
-	test("defaultSessionKey is stable and timestamped", () => {
-		const key = defaultSessionKey(new Date("2026-08-16T12:34:56.000Z"));
-		expect(key).toBe("tui-20260816T123456");
+	test("fresh sessions are distinct canonical local channel peers", () => {
+		const key = newSessionKey();
+		expect(key).toMatch(/^agent:default:tui:local:dm:[0-9a-f-]{36}$/);
+		expect(newSessionKey()).not.toBe(key);
 	});
 });
 

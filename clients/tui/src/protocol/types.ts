@@ -71,6 +71,10 @@ export interface AgentCompletedEvent {
 	runId: string;
 	sessionKey: Nullable<string>;
 	ok: Nullable<boolean>;
+	/** Authoritative terminal cancellation; never inferred from a failed run. */
+	cancelled?: boolean;
+	/** Bounded/redacted JSON value projected by the daemon. */
+	error?: unknown;
 	/**
 	 * Server-truncated to 500 bytes. The accumulated delta buffer is the source
 	 * of truth for final text; this is a fallback for runs with no deltas.

@@ -113,6 +113,151 @@ describe("draft preservation", () => {
 	});
 });
 
+describe("typed slash commands", () => {
+	test("exact /quit submits with one Enter even while discovery is pending", async () => {
+		const opening = palette.open(undefined, "typed-slash");
+		for (const key of "quit\r") palette.overlay?.handleInput(key);
+		expect(harness.host.exits).toEqual([0]);
+		expect(harness.host.draft).toBe("");
+		expect(palette.overlay).toBeUndefined();
+		await opening;
+		expect(palette.overlay).toBeUndefined();
+		expect(closed).toBe(1);
+	});
+
+	test("an exact alias dispatches as typed, including alias-specific availability", async () => {
+		const names: string[] = [];
+		harness.registry.register({
+			name: "aliascommand",
+			aliases: ["aliasname"],
+			summary: "alias-sensitive action",
+			availableWhen: (ctx) => ctx.name === "aliasname",
+			run: (ctx) => {
+				names.push(ctx.name);
+			},
+		});
+		await palette.open(undefined, "typed-slash");
+		palette.overlay?.handleInput("ALIASNAME");
+		palette.overlay?.handleInput("\r");
+		expect(names).toEqual(["aliasname"]);
+		expect(harness.host.draft).toBe("");
+		expect(palette.overlay).toBeUndefined();
+	});
+
+	test("exact commands with usage still dispatch their no-argument behavior", async () => {
+		await palette.open(undefined, "typed-slash");
+		palette.overlay?.handleInput("help");
+		palette.overlay?.handleInput("\r");
+		expect(harness.host.text).toContain("/quit");
+		expect(harness.host.draft).toBe("");
+		expect(palette.overlay).toBeUndefined();
+	});
+
+	test.each(["name", "reasoning"])(
+		"whitespace after /%s hands the entire query back without sending",
+		async (name) => {
+			await palette.open(undefined, "typed-slash");
+			palette.overlay?.handleInput(name);
+			palette.overlay?.handleInput("  first argument ");
+			expect(harness.host.draft).toBe(`/${name}  first argument `);
+			expect(palette.overlay).toBeUndefined();
+			expect(harness.server.requestsFor("sessions.metadata.patch")).toHaveLength(0);
+			expect(harness.server.requestsFor("sessions.patch")).toHaveLength(0);
+			expect(harness.host.deliveries).toEqual([]);
+		},
+	);
+
+	test("space alone hands off immediately, including before resource discovery finishes", async () => {
+		const opening = palette.open(undefined, "typed-slash");
+		palette.overlay?.handleInput("name");
+		palette.overlay?.handleInput(" ");
+		expect(harness.host.draft).toBe("/name ");
+		expect(palette.overlay).toBeUndefined();
+		await opening;
+		expect(harness.host.draft).toBe("/name ");
+		expect(palette.overlay).toBeUndefined();
+	});
+
+	test("a partial fuzzy destructive match only inserts", async () => {
+		await palette.open(undefined, "typed-slash");
+		palette.overlay?.handleInput("qui");
+		expect(palette.overlay?.selected?.value).toBe("command:quit");
+		palette.overlay?.handleInput("\r");
+		expect(harness.host.draft).toBe("/quit ");
+		expect(harness.host.exits).toEqual([]);
+	});
+
+	test.each(["", "qui", "qui  unfinished"])(
+		"Escape retains the typed slash and complete query %j",
+		async (query) => {
+			await palette.open(undefined, "typed-slash");
+			if (query) palette.overlay?.handleInput(query);
+			expect(palette.overlay).toBeDefined();
+			palette.overlay?.handleInput("\x1b");
+			expect(harness.host.draft).toBe(`/${query}`);
+			expect(palette.overlay).toBeUndefined();
+			expect(harness.host.exits).toEqual([]);
+		},
+	);
+
+	test.each(["\x1b", " argument", "\r"])(
+		"a stale slash query cannot overwrite a changed draft via %j",
+		async (key) => {
+			await palette.open(undefined, "typed-slash");
+			palette.overlay?.handleInput("quit");
+			harness.host.draft = "new draft elsewhere";
+			palette.overlay?.handleInput(key);
+			expect(harness.host.draft).toBe("new draft elsewhere");
+			expect(harness.host.exits).toEqual([]);
+			expect(harness.host.text).toContain("Draft or session changed");
+			expect(palette.overlay).toBeUndefined();
+		},
+	);
+
+	test("availability is rechecked before direct submission and the query remains recoverable", async () => {
+		let available = true;
+		let runs = 0;
+		harness.registry.register({
+			name: "changing",
+			summary: "dynamic capability",
+			availableWhen: () => available,
+			run: () => {
+				runs += 1;
+			},
+		});
+		await palette.open(undefined, "typed-slash");
+		palette.overlay?.handleInput("changing");
+		available = false;
+		palette.overlay?.handleInput("\r");
+		expect(runs).toBe(0);
+		expect(harness.host.text).toContain("unavailable");
+		expect(palette.overlay).toBeDefined();
+		palette.overlay?.handleInput("\x1b");
+		expect(harness.host.draft).toBe("/changing");
+	});
+
+	test("a later discovery opening does not retain typed-slash submission semantics", async () => {
+		await palette.open(undefined, "typed-slash");
+		palette.overlay?.handleInput("\x1b");
+		harness.host.draft = "unfinished\n  draft";
+		await palette.open();
+		palette.overlay?.handleInput("quit");
+		palette.overlay?.handleInput("\r");
+		expect(harness.host.draft).toBe("/quit unfinished\n  draft");
+		expect(harness.host.exits).toEqual([]);
+	});
+
+	test("discovery keeps recognized command arguments as a query and preserves its draft", async () => {
+		harness.host.draft = "unfinished\n  draft";
+		await palette.open("name");
+		palette.overlay?.handleInput("  search terms");
+		expect(palette.overlay?.filter).toBe("name  search terms");
+		expect(harness.host.draft).toBe("unfinished\n  draft");
+		palette.overlay?.handleInput("\x1b");
+		expect(harness.host.draft).toBe("unfinished\n  draft");
+	});
+});
+
 describe("capabilities and discovery", () => {
 	test("unavailable commands stay explained and cannot execute or replace a draft", async () => {
 		harness.registry.register({

@@ -2,6 +2,7 @@ import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type {
 	SessionRewindPreview,
+	SessionRewindResult,
 	SessionRewindTarget,
 	SessionTreeEntry,
 } from "../protocol/session-tree.ts";
@@ -134,31 +135,93 @@ async function previewRewind(
 	ctx: CommandContext,
 	entry: SessionTreeEntry,
 	restoreFiles: boolean,
+	allowPartialRestore = false,
 ): Promise<void> {
 	const target: SessionRewindTarget = {
 		sessionKey: ctx.session.key,
 		cwd: ctx.cwd ?? process.cwd(),
 		entryId: entry.id,
 		restoreFiles,
+		allowPartialRestore,
 	};
 	try {
 		const preview = await ctx.methods.sessionsRewindPreview(target);
 		if (ctx.store.focusedKey !== target.sessionKey) return;
 		if (!matchesPreview(preview, target)) throw new Error("unexpected rewind preview");
+		const commandCount = preview.unrestorableCommandCount;
+		const commands = preview.unrestorableCommands ?? [];
+		const hasUnrestorableEffects = preview.unrestorableTools.length > 0 || (commandCount ?? 0) > 0;
+		const commandsReviewable = commandCount !== undefined && commandCount === commands.length;
+		const blocked =
+			restoreFiles &&
+			hasUnrestorableEffects &&
+			(!allowPartialRestore || !commandsReviewable || preview.canAllowPartialRestore !== true);
+		const canAllowPartial =
+			restoreFiles &&
+			!allowPartialRestore &&
+			hasUnrestorableEffects &&
+			commandsReviewable &&
+			preview.canAllowPartialRestore === true &&
+			preview.restoreFiles === true &&
+			preview.allowPartialRestore === false;
 		const previewLines = [
 			`${preview.discardedMessages} message(s) leave the active branch (preserved in /tree)`,
 			restoreFiles
-				? `restore ${preview.restorePaths.length} checkpointed file(s)`
+				? commandCount === undefined
+					? `restore ${preview.restorePaths.length} checkpointed files`
+					: `restore ${preview.restorePaths.length} checkpointed files; effects of ${commandCount} shell commands are not reverted`
 				: "history only · files stay unchanged",
-			...preview.restorePaths.map((path) => `restore: ${path}`),
+			...commands.map((command) => `shell effects remain: ${command}`),
+			...(restoreFiles ? preview.restorePaths.map((path) => `restore: ${path}`) : []),
 			...(preview.unrestorableTools.length
 				? [`non-restorable tool effects: ${preview.unrestorableTools.join(", ")}`]
+				: []),
+			...(blocked
+				? [
+						canAllowPartial
+							? "File restoration is blocked without explicit partial-restoration consent."
+							: "File restoration is blocked; the daemon cannot safely restore these effects.",
+					]
+				: []),
+			...(restoreFiles && commandCount !== undefined && !commandsReviewable
+				? ["Partial restoration is unavailable: not all shell commands fit in this preview."]
+				: []),
+			...(restoreFiles && hasUnrestorableEffects && commandCount === undefined
+				? ["This daemon does not provide the command details required for partial restoration."]
 				: []),
 			"The selected prompt returns to the editor; nothing is sent automatically.",
 		];
 		ctx.ui.noticeBlock(["rewind preview", ...previewLines], "warning");
+		const items: PickerChoice[] = [
+			{ value: "cancel", label: "Cancel — keep history, files and draft" },
+		];
+		if (!blocked) {
+			items.push({
+				value: "confirm",
+				label: restoreFiles
+					? allowPartialRestore
+						? "Rewind and restore only checkpointed files — shell effects remain"
+						: "Rewind history and restore previewed files"
+					: "Rewind history only",
+				description: `${preview.discardedMessages} message(s) · ${entry.id}`,
+			});
+		}
+		if (canAllowPartial) {
+			items.push({
+				value: "allow-partial",
+				label: "Allow partial restoration — get a fresh preview",
+				description: "Only checkpointed files can be restored; shell effects are not reverted.",
+			});
+		}
+		if (allowPartialRestore) {
+			items.push({
+				value: "require-complete",
+				label: "Revoke partial consent — get a fresh preview",
+			});
+		}
+		items.push({ value: "inspect", label: "Read full preview in transcript (cancel)" });
 		ctx.ui.openPicker({
-			title: "confirm this exact rewind?",
+			title: blocked ? "file rewind is blocked" : "confirm this exact rewind?",
 			detail: [
 				`Before: ${entry.text ?? entry.id}`,
 				...previewLines.slice(0, 6),
@@ -166,22 +229,20 @@ async function previewRewind(
 					? ["More preview details in transcript; choose read full preview below."]
 					: []),
 			],
-			items: [
-				{ value: "cancel", label: "Cancel — keep history, files and draft" },
-				{
-					value: "confirm",
-					label: restoreFiles
-						? "Rewind history and restore previewed files"
-						: "Rewind history only",
-					description: `${preview.discardedMessages} message(s) · ${entry.id}`,
-				},
-				{ value: "inspect", label: "Read full preview in transcript (cancel)" },
-			],
-			footer: "cancel is selected by default · choose rewind then enter to confirm",
+			items,
+			footer:
+				canAllowPartial || allowPartialRestore
+					? "cancel is selected by default · changing consent only requests a fresh preview"
+					: "cancel is selected by default · choose rewind then enter to confirm",
 			onSelect: async (choice) => {
-				if (choice.value !== "confirm") return;
+				if (!items.some((item) => item.value === choice.value)) return;
+				if (choice.value === "cancel" || choice.value === "inspect") return;
 				if (ctx.store.focusedKey !== target.sessionKey) {
 					ctx.ui.notice("rewind canceled because the focused session changed", "warning");
+					return;
+				}
+				if (choice.value === "allow-partial" || choice.value === "require-complete") {
+					await previewRewind(ctx, entry, restoreFiles, choice.value === "allow-partial");
 					return;
 				}
 				try {
@@ -189,13 +250,7 @@ async function previewRewind(
 						...target,
 						confirmationToken: preview.confirmationToken,
 					});
-					if (
-						result.sessionKey !== target.sessionKey ||
-						result.entryId !== target.entryId ||
-						result.sessionId !== preview.sessionId ||
-						typeof result.prompt !== "string" ||
-						!Array.isArray(result.restoredPaths)
-					) {
+					if (!matchesResult(result, preview, target)) {
 						ctx.ui.notice(
 							"rewind outcome could not be verified; inspect /tree before doing anything else",
 							"error",
@@ -208,7 +263,7 @@ async function previewRewind(
 					try {
 						await ctx.ui.reloadSession!(target.sessionKey);
 						ctx.ui.notice(
-							`rewound · ${result.restoredPaths.length} file(s) restored · edit the recalled prompt to continue`,
+							`rewound · ${restoreFiles ? `${result.restoredPaths.length} checkpointed file(s) restored` : "history only · files unchanged"}${result.partialRestore ? `; effects of ${commandCount} shell commands are not reverted` : ""} · edit the recalled prompt to continue`,
 						);
 					} catch (error) {
 						ctx.ui.notice(
@@ -234,11 +289,61 @@ function matchesPreview(preview: SessionRewindPreview, target: SessionRewindTarg
 		typeof preview.confirmationToken === "string" &&
 		preview.confirmationToken.length > 0 &&
 		typeof preview.prompt === "string" &&
+		(preview.restoreFiles === undefined || preview.restoreFiles === target.restoreFiles) &&
+		(preview.allowPartialRestore === undefined ||
+			preview.allowPartialRestore === target.allowPartialRestore) &&
+		(preview.canAllowPartialRestore === undefined ||
+			typeof preview.canAllowPartialRestore === "boolean") &&
+		(!target.allowPartialRestore ||
+			(preview.restoreFiles === true &&
+				preview.allowPartialRestore === true &&
+				preview.unrestorableCommands !== undefined &&
+				preview.unrestorableCommandCount !== undefined &&
+				typeof preview.canAllowPartialRestore === "boolean")) &&
 		Number.isInteger(preview.discardedMessages) &&
+		preview.discardedMessages >= 0 &&
 		Array.isArray(preview.restorePaths) &&
 		preview.restorePaths.every((path) => typeof path === "string") &&
 		Array.isArray(preview.unrestorableTools) &&
-		preview.unrestorableTools.every((tool) => typeof tool === "string")
+		preview.unrestorableTools.every((tool) => typeof tool === "string") &&
+		((preview.unrestorableCommands === undefined &&
+			preview.unrestorableCommandCount === undefined) ||
+			(Array.isArray(preview.unrestorableCommands) &&
+				preview.unrestorableCommands.every((command) => typeof command === "string") &&
+				Number.isInteger(preview.unrestorableCommandCount) &&
+				preview.unrestorableCommandCount! >= preview.unrestorableCommands.length))
+	);
+}
+
+function matchesResult(
+	result: SessionRewindResult,
+	preview: SessionRewindPreview,
+	target: SessionRewindTarget,
+): boolean {
+	return (
+		result.sessionKey === target.sessionKey &&
+		result.entryId === target.entryId &&
+		result.sessionId === preview.sessionId &&
+		result.prompt === preview.prompt &&
+		result.restoreFiles === target.restoreFiles &&
+		result.confirmationToken === preview.confirmationToken &&
+		result.allowPartialRestore === target.allowPartialRestore &&
+		result.partialRestore ===
+			(target.restoreFiles &&
+				target.allowPartialRestore &&
+				(preview.unrestorableCommandCount ?? 0) > 0) &&
+		sameStrings(result.restoredPaths, target.restoreFiles ? preview.restorePaths : []) &&
+		sameStrings(result.unrestorableTools, preview.unrestorableTools) &&
+		sameStrings(result.unrestorableCommands, preview.unrestorableCommands ?? []) &&
+		result.unrestorableCommandCount === (preview.unrestorableCommandCount ?? 0)
+	);
+}
+
+function sameStrings(actual: unknown, expected: readonly string[]): boolean {
+	return (
+		Array.isArray(actual) &&
+		actual.length === expected.length &&
+		actual.every((value, index) => value === expected[index])
 	);
 }
 

@@ -1,36 +1,65 @@
 defmodule LemonControlPlane.Methods.ModelsListTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.ModelsList
 
-  test "returns the registered model catalog instead of falling back to defaults" do
-    assert ModelsList.name() == "models.list"
-    assert ModelsList.scopes() == [:read]
+  setup do
+    previous = Application.fetch_env(:lemon_control_plane, :model_catalog)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:lemon_control_plane, :model_catalog, value)
+        :error -> Application.delete_env(:lemon_control_plane, :model_catalog)
+      end
+    end)
+
+    :ok
+  end
+
+  test "returns only account-available models with their advertised capabilities" do
+    parent = self()
+
+    fixture = %LemonAi.Types.Model{
+      provider: :"openai-codex",
+      id: "fixture-account-model",
+      name: "Available account model",
+      context_window: 64_000,
+      max_tokens: 4_096,
+      reasoning: true,
+      input: [:text, :image]
+    }
+
+    Application.put_env(:lemon_control_plane, :model_catalog, fn opts ->
+      send(parent, {:catalog_options, opts})
+      [fixture]
+    end)
 
     assert {:ok,
             %{
-              "models" => models,
+              "models" => [model],
               "summary" => summary,
               "includesCredentials" => false,
               "includesSecretValues" => false
-            }} = ModelsList.handle(%{}, %{})
+            }} = ModelsList.handle(%{"discoverOpenAI" => false, "forceRefresh" => true}, %{})
 
-    assert length(models) > 3
-    assert summary["source"] in ["ai_models", "fallback"]
-    assert summary["total"] == length(models)
-    assert summary["providerCount"] >= 1
-    assert is_list(summary["providers"])
-    assert is_integer(summary["visionModelCount"])
-    assert is_integer(summary["thinkingModelCount"])
-    assert is_integer(summary["streamingModelCount"])
+    assert_receive {:catalog_options, [discover_openai: false, force_refresh: true]}
+    assert model["id"] == fixture.id
+    assert model["provider"] == "openai-codex"
+    assert model["contextWindow"] == fixture.context_window
+    assert model["maxOutput"] == fixture.max_tokens
+    assert model["supportsThinking"]
+    assert model["supportsVision"]
+    assert model["supportsStreaming"]
+    assert summary["total"] == 1
+    assert summary["providers"] == ["openai-codex"]
+    assert summary["visionModelCount"] == 1
+    assert summary["thinkingModelCount"] == 1
+  end
 
-    assert Enum.any?(models, fn model ->
-             model["provider"] == "anthropic" and model["id"] == "claude-3-5-haiku-20241022" and
-               model["maxOutput"] == 8192 and model["supportsThinking"] == false and
-               model["supportsStreaming"] == true
-           end)
-
-    assert Enum.any?(models, &(&1["provider"] == "zai"))
-    assert Enum.any?(models, &(&1["provider"] == "openai-codex"))
+  test "an empty available catalog never reintroduces static or default models" do
+    Application.put_env(:lemon_control_plane, :model_catalog, fn _opts -> [] end)
+    assert {:ok, %{"models" => [], "summary" => summary}} = ModelsList.handle(%{}, %{})
+    assert summary["total"] == 0
+    assert summary["providerCount"] == 0
   end
 end

@@ -551,7 +551,12 @@ defmodule CodingAgent.Session.RunTranslator do
           answer: t.accumulated_text,
           resume: t.resume_token,
           usage: usage,
-          meta: if(t.budget_stop, do: %{budget: t.budget_stop}, else: %{})
+          meta:
+            Map.put(
+              if(t.budget_stop, do: %{budget: t.budget_stop}, else: %{}),
+              :cancelled,
+              not is_nil(t.cancel_reason)
+            )
         })
 
       %{t | emitter_state: emitter_state, completed_emitted: true}

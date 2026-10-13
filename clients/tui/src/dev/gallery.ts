@@ -172,7 +172,7 @@ export function renderToolSection(options: GalleryOptions, width: number): strin
 }
 
 function cardFor(fixture: ToolFixture, state: ToolCardState): ToolCardComponent {
-	return new ToolCardComponent(fixtureBlock(fixture, state, { at: STARTED_AT }), {
+	return new ToolCardComponent(fixtureBlock(fixture, state, { at: STARTED_AT, completedAt: NOW }), {
 		now: () => NOW,
 	});
 }
@@ -230,14 +230,16 @@ export function renderShelfSection(width: number): string[] {
 
 	out.push(...subheading("  one completed tool: keeps its full card", width));
 	const single = new ToolShelfComponent({ now: () => NOW });
-	single.add(fixtureBlock(TOOL_FIXTURES[0] as ToolFixture, "success", { at: STARTED_AT }));
+	single.add(
+		fixtureBlock(TOOL_FIXTURES[0] as ToolFixture, "success", { at: STARTED_AT, completedAt: NOW }),
+	);
 	for (const line of single.render(width)) out.push(line);
 
 	out.push(...subheading("  a run of four: merged to one line each", width));
 	const shelf = new ToolShelfComponent({ now: () => NOW });
 	for (const name of names) {
 		const fixture = TOOL_FIXTURES.find((item) => item.name === name);
-		if (fixture) shelf.add(fixtureBlock(fixture, "success", { at: STARTED_AT }));
+		if (fixture) shelf.add(fixtureBlock(fixture, "success", { at: STARTED_AT, completedAt: NOW }));
 	}
 	for (const line of shelf.render(width)) out.push(line);
 
@@ -245,7 +247,7 @@ export function renderShelfSection(width: number): string[] {
 	const live = new ToolShelfComponent({ now: () => NOW });
 	for (const name of ["read", "grep"]) {
 		const fixture = TOOL_FIXTURES.find((item) => item.name === name);
-		if (fixture) live.add(fixtureBlock(fixture, "success", { at: STARTED_AT }));
+		if (fixture) live.add(fixtureBlock(fixture, "success", { at: STARTED_AT, completedAt: NOW }));
 	}
 	const running = TOOL_FIXTURES.find((item) => item.name === "bash");
 	if (running) live.add(fixtureBlock(running, "running", { at: STARTED_AT }));

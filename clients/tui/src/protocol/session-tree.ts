@@ -34,6 +34,7 @@ export interface SessionRewindTarget {
 	cwd: string;
 	entryId: string;
 	restoreFiles: boolean;
+	allowPartialRestore: boolean;
 }
 
 export interface SessionRewindPreview {
@@ -45,6 +46,12 @@ export interface SessionRewindPreview {
 	discardedMessages: number;
 	restorePaths: string[];
 	unrestorableTools: string[];
+	/** Older daemons omit partial-restoration metadata; absence never grants consent. */
+	restoreFiles?: boolean;
+	allowPartialRestore?: boolean;
+	unrestorableCommands?: string[];
+	unrestorableCommandCount?: number;
+	canAllowPartialRestore?: boolean;
 }
 
 export interface SessionRewindResult {
@@ -54,4 +61,11 @@ export interface SessionRewindResult {
 	prompt: string;
 	leafId: string | null;
 	restoredPaths: string[];
+	restoreFiles: boolean;
+	allowPartialRestore: boolean;
+	confirmationToken: string;
+	partialRestore: boolean;
+	unrestorableTools: string[];
+	unrestorableCommands: string[];
+	unrestorableCommandCount: number;
 }

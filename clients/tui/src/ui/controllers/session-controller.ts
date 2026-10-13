@@ -23,6 +23,7 @@
  */
 
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
+import { newSessionKey } from "../../session-key.ts";
 import {
 	ControlPlaneError,
 	NotConnectedError,
@@ -64,8 +65,6 @@ export interface SessionControllerOptions {
 	refreshStatus?: () => void;
 	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
 	confirm?: (spec: ConfirmSpec) => void;
-	/** Clock seam for the generated session keys tests assert on. */
-	now?: () => Date;
 }
 
 export interface ConfirmSpec {
@@ -86,7 +85,6 @@ export class SessionController {
 	readonly #sendPrompt: ((text: string) => void | Promise<void>) | undefined;
 	readonly #refreshStatus: (() => void) | undefined;
 	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
-	readonly #now: () => Date;
 
 	/** Sessions whose stored history has been pulled (or never needed pulling). */
 	readonly #hydrated = new Set<string>();
@@ -101,7 +99,6 @@ export class SessionController {
 		this.#sendPrompt = options.sendPrompt;
 		this.#refreshStatus = options.refreshStatus;
 		this.#confirm = options.confirm;
-		this.#now = options.now ?? (() => new Date());
 	}
 
 	/** Sessions this client has already hydrated (or minted, so never will). */
@@ -440,14 +437,8 @@ export class SessionController {
 		return fallback?.key ?? this.#mintKey();
 	}
 
-	/** `tui-20260817T101112`, with a counter when two land in the same second. */
 	#mintKey(): string {
-		const base = `tui-${this.#now().toISOString().replace(/[-:.]/g, "").slice(0, 15)}`;
-		if (!this.#store.sessions.has(base)) return base;
-		for (let suffix = 2; ; suffix++) {
-			const candidate = `${base}-${suffix}`;
-			if (!this.#store.sessions.has(candidate)) return candidate;
-		}
+		return newSessionKey();
 	}
 
 	#notice(text: string, level: NoticeLevel = "info"): void {

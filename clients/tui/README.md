@@ -53,6 +53,9 @@ remains a legacy client-side alias; it does not configure the daemon.
   Native patch receipts use their actual changed-file list (including Lemon's
   `*** Update File` format). Child task progress has one independently updated
   card per task, separate from the completed parent launch receipt.
+  Elapsed time freezes when completion is observed and survives session switches
+  and transcript rebuilding. Historical receipts without authoritative timing
+  omit duration instead of measuring their age as tool runtime.
   Saved tool calls and results pair by native call ID, retaining arguments,
   output and details. Cancelled receipts stay terminal (distinct from failed)
   with captured partial output available on expansion. Saved calls without a
@@ -60,6 +63,8 @@ remains a legacy client-side alias; it does not configure the daemon.
   invents elapsed time, and only a recorded duration is shown.
 - The model's thinking is its own dimmed transcript block, collapsed to its
   first line (up to 16 KB of reasoning is available when expanded).
+  Native Tern rendering uses a semantic thinking block and Markdown body, not
+  a row-fallback badge; collapsed/expanded/hidden state stays intact.
 - Ctrl+R expands/collapses the latest tool card or thinking block (a merged
   shelf line opens into a full card); Ctrl+T cycles detail for the whole
   transcript: collapsed → expanded → per-kind default.
@@ -77,7 +82,8 @@ remains a legacy client-side alias; it does not configure the daemon.
 - Four submission modes while the agent is busy: `queue` (client-side,
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
-  replies keep their partial text.
+  replies keep their partial text. Authoritative cancellation receipts render
+  as interrupted, not as a generic failed run; real failures retain their error.
   The busy status line shows `enter:<mode>` and `esc:stop`; Escape interrupts
   without discarding a correction in the editor (autocomplete gets Escape first).
   Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
@@ -103,10 +109,17 @@ remains a legacy client-side alias; it does not configure the daemon.
   are preview-confirm workflows, and offline mutations never claim success.
 - `/tree` inspects active and preserved branches; `/rewind` picks an earlier
   active user prompt, previews the change, then requires confirmation bound to
-  that exact preview. History-only rewind leaves files untouched; `--files`
-  explicitly requests checkpoint restoration. Cancel is the default. Success
-  reloads the active branch and recalls the selected prompt into the editor
-  without sending it. `/name` gives the current session a durable title.
+  that exact preview. History-only rewind leaves files untouched and does not
+  list files as restoration targets. `--files` requests checkpoint restoration;
+  non-restorable effects block confirmation by default. When the daemon permits
+  partial restoration, explicitly choosing “Allow partial restoration” obtains
+  a fresh preview: “restore N checkpointed files; effects of M shell commands
+  are not reverted,” followed by the command list. Only checkpointed files are
+  restored. Cancel is the default; changing consent requires another preview.
+  Success reloads the active branch and recalls the selected prompt into the
+  editor without sending it. `/name` gives the current session a durable title.
+  Before the first turn, a fresh local session is explicitly persisted through
+  `sessions.create` before naming; this sends no prompt and enters no plan.
 - Ctrl+O model picker (two-stage, draft-preserving, provider-qualified routing),
   Shift+Tab thinking picker (`/think` or `/reasoning` also opens it),
   capability-aware slash commands with
@@ -116,8 +129,11 @@ remains a legacy client-side alias; it does not configure the daemon.
   outlive the command or hold the TUI's capture pipes open.
   Ctrl+P, `/palette`, or `/` in an empty editor opens one fuzzy command palette
   for command names, aliases, descriptions, local skills, and prompt templates.
-  Actions that need arguments insert into the editor without sending. Templates
-  are discovered from `.lemon/prompts`, `.claude/prompts`, and
+  Ctrl+P and `/palette` keep destructive selections and argument-taking actions
+  as drafts rather than sending them. When typing `/` directly, Enter executes
+  an exact command or alias; a space after a recognized command returns its full
+  text to the editor for arguments. Escape preserves the typed slash query.
+  Templates are discovered from `.lemon/prompts`, `.claude/prompts`, and
   `$LEMON_AGENT_DIR/prompts` (default `~/.lemon/agent/prompts`), with project names
   taking precedence. Local skills insert an explicit `read_skill` request; the
   palette does not claim that a remote daemon or selected profile installed them.
@@ -248,6 +264,11 @@ Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript
 without resetting daemon-side session history. Use `/reset` when history should
 also be forgotten.
+
+Fresh startup and `/session new` sessions use canonical local channel-peer keys:
+`agent:default:tui:local:dm:<UUID>`. Separate launches get distinct keys, so
+automation goals and session views can validate and route them consistently.
+Explicit `--session` keys and resumed legacy `tui-…` sessions remain unchanged.
 
 ### Planning and approval
 
@@ -401,3 +422,17 @@ linux-arm64 and darwin-arm64 via `scripts/build-binary.ts` and ships them in
 `manifest.json` alongside the runtime tarballs; `install.sh` and
 `lemon update` stage both atomically. The three `@oh-my-pi/*` packages are
 exact-pinned and must be bumped together (upstream releases in lockstep).
+
+Release binaries contain precompiled bytecode plus syntax/whitespace-minified
+JavaScript, with component identifiers preserved and linked source maps for
+original stack locations. Startup measurements end at the first real frame,
+not at a placeholder or readiness timer.
+
+The checked-in Bun patch for pi-tui narrows its thinking-level import to the
+public leaf module, avoiding eager provider/catalog initialization. It also
+restores saved POSIX terminal attributes with `TCSANOW`: Bun's `TCSADRAIN`
+restore otherwise waits indefinitely when a PTY reader stops consuming output.
+App cleanup runs before the terminal output pump closes, and already-restored
+terminals are not restored again through unbounded direct writes. Keep these
+fixes when updating the pinned pi packages until equivalent upstream fixes
+are included; use `bun install --frozen-lockfile` to apply the patch reproducibly.

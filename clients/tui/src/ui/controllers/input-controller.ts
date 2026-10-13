@@ -11,6 +11,7 @@
 
 import { KeybindingsManager, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
+import type { CommandPaletteMode } from "./command-palette.ts";
 
 export const LEMON_KEYBINDINGS = {
 	"lemon.picker.model": { defaultKeys: "ctrl+o", description: "Pick a model" },
@@ -56,7 +57,7 @@ export interface InputControllerOptions {
 	toggleLatest?: () => boolean;
 	/** Cycle the global accordion override and apply it to the transcript. */
 	cycleDetail?: () => void;
-	openCommandPalette?: () => void | Promise<void>;
+	openCommandPalette?: (mode: CommandPaletteMode) => void | Promise<void>;
 	isComposerEmpty?: () => boolean;
 	toggleTaskTree?: () => void;
 	toggleToolOutputs?: () => void;
@@ -89,12 +90,10 @@ export class InputController {
 		if (this.#dispose) return;
 		this.#dispose = this.#options.tui.addInputListener((data) => {
 			if (this.#options.hasOverlay()) return undefined;
-			if (
-				this.#matches(data, "lemon.palette.open") ||
-				(data === "/" && this.#editorFocused() && this.#options.isComposerEmpty?.())
-			) {
+			const typedSlash = data === "/" && this.#editorFocused() && this.#options.isComposerEmpty?.();
+			if (this.#matches(data, "lemon.palette.open") || typedSlash) {
 				if (this.#options.openCommandPalette) {
-					void this.#options.openCommandPalette();
+					void this.#options.openCommandPalette(typedSlash ? "typed-slash" : "discovery");
 					return { consume: true };
 				}
 			}

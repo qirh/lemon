@@ -4,6 +4,7 @@ import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import type { ChatHistoryMessage } from "../../src/protocol/types.ts";
 import { SessionStore } from "../../src/store/session-store.ts";
+import { ToolCardComponent } from "../../src/ui/components/tool-card.ts";
 import {
 	pendingApprovalsFrom,
 	synthesizeHistory,
@@ -192,7 +193,7 @@ describe("SessionController.create", () => {
 		const key = await app.sessions.create(undefined, "first thing");
 
 		expect(app.sessionKey).toBe(key);
-		expect(key.startsWith("tui-")).toBe(true);
+		expect(key).toMatch(/^agent:default:tui:local:dm:[0-9a-f-]{36}$/);
 		const send = server.requestsFor("chat.send").at(-1);
 		expect(send?.params).toMatchObject({ sessionKey: key, prompt: "first thing" });
 		// A minted session has no stored history worth a round-trip.
@@ -419,6 +420,28 @@ describe("synthesizeHistory", () => {
 			title: "bash",
 			ok: true,
 		});
+	});
+
+	test("a historical receipt without authoritative timing omits duration after remount", () => {
+		const session = build([
+			{ id: "old-tool", role: "tool", name: "read", content: "saved output", timestampMs: 6 },
+		]);
+		const block = session.blocks[0];
+		if (block?.kind !== "tool") throw new Error("expected historical tool");
+		expect(block.completedAt).toBeUndefined();
+		let original: string | undefined;
+		for (const clock of [600_000, 1_200_000]) {
+			const component = new ToolCardComponent(block, { now: () => clock });
+			component.update(block);
+			const text = renderPlain(component.render(100));
+			expect(text).toContain("saved output");
+			expect(text.split("\n")[0]).not.toMatch(/\d+(ms|s)\s*$/);
+			expect(component.describe().p).not.toHaveProperty("took");
+			expect(component.describe().p).not.toHaveProperty("age");
+			if (original !== undefined) expect(text).toBe(original);
+			original = text;
+			component.dispose();
+		}
 	});
 
 	test("keeps anything else as a notice rather than dropping it", () => {

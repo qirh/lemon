@@ -4,13 +4,14 @@
  * versions, same-array memoization, and never exceeding the render width.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import {
 	fixtureBlock,
 	fixtureByName,
 	TOOL_FIXTURES,
 } from "../../src/dev/fixtures/tool-fixtures.ts";
+import { SessionStore } from "../../src/store/session-store.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { AccordionComponent, accordionSettings } from "../../src/ui/components/accordion.ts";
 import {
@@ -41,7 +42,7 @@ afterEach(() => {
 function card(name: string, state: ToolCardState): ToolCardComponent {
 	const fixture = fixtureByName(name);
 	if (!fixture) throw new Error(`no fixture ${name}`);
-	return new ToolCardComponent(fixtureBlock(fixture, state, { at: NOW - 2400 }), {
+	return new ToolCardComponent(fixtureBlock(fixture, state, { at: NOW - 2400, completedAt: NOW }), {
 		now: () => NOW,
 	});
 }
@@ -52,7 +53,7 @@ describe("lifecycle rendering", () => {
 			for (const state of STATES) {
 				for (const width of [40, 80, 120]) {
 					const component = new ToolCardComponent(
-						fixtureBlock(fixture, state, { at: NOW - 2400 }),
+						fixtureBlock(fixture, state, { at: NOW - 2400, completedAt: NOW }),
 						{ now: () => NOW },
 					);
 					const lines = component.render(width);
@@ -117,18 +118,108 @@ describe("elapsed time", () => {
 		expect(formatElapsed(185_000)).toBe("3m 05s");
 	});
 
-	test("freezes at completion — a finalized card's bytes must never change", () => {
-		const fixture = fixtureByName("bash");
-		if (!fixture) throw new Error("no bash fixture");
+	test("completed tools retain their observed elapsed time after a delayed update and remount", () => {
 		let clock = NOW;
-		const component = new ToolCardComponent(fixtureBlock(fixture, "running", { at: NOW - 1000 }), {
-			now: () => clock,
-		});
-		component.update(fixtureBlock(fixture, "success", { at: NOW - 1000 }));
-		const sealed = renderPlain(component.render(80));
-		clock = NOW + 60_000;
-		component.invalidate();
-		expect(renderPlain(component.render(80))).toBe(sealed);
+		const now = spyOn(Date, "now").mockImplementation(() => clock);
+		try {
+			for (const outcome of [
+				{ name: "read", elapsed: 2, ok: true, details: {} },
+				{ name: "edit", elapsed: 8, ok: false, details: {} },
+				{ name: "bash", elapsed: 42, ok: false, details: { cancelled: true } },
+			]) {
+				clock = NOW;
+				const session = new SessionStore("elapsed");
+				const action = {
+					id: outcome.name,
+					kind: "tool",
+					title: outcome.name,
+					detail: { name: outcome.name, args: { path: "file.ts", command: "sleep 10" } },
+				};
+				const block = session.upsertTool(action, "started");
+				const component = new ToolCardComponent(block, { now: () => clock });
+				clock += outcome.elapsed;
+				session.upsertTool(
+					{ ...action, detail: { ...action.detail, result: "receipt", details: outcome.details } },
+					"completed",
+					{ ok: outcome.ok },
+				);
+
+				// Rendering can lag the terminal event, even without a session switch.
+				clock += 2000;
+				component.update(block);
+				const sealed = renderPlain(component.render(120));
+				expect(sealed.split("\n")[0]).toEndWith(`${outcome.elapsed}ms`);
+				const native = component.describe();
+				expect(native).toMatchObject({ k: "tool", p: { took: outcome.elapsed } });
+				component.dispose();
+
+				clock += 600_000;
+				component.invalidate();
+				expect(renderPlain(component.render(120))).toBe(sealed);
+				const remounted = new ToolCardComponent(block, { now: () => clock });
+				expect(renderPlain(remounted.render(120))).toBe(sealed);
+				expect(remounted.describe()).toEqual(native);
+				expect(remounted.describe()).toBe(remounted.describe());
+				remounted.dispose();
+			}
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	test("a live clock advances across streaming, updates and remounts, including a zero start", () => {
+		let clock = 0;
+		const now = spyOn(Date, "now").mockImplementation(() => clock);
+		try {
+			const session = new SessionStore("elapsed");
+			const action = { id: "read", kind: "tool", title: "read", detail: null };
+			const block = session.upsertTool(action, "started");
+			clock = 100;
+			const component = new ToolCardComponent(block, { now: () => clock });
+			expect(renderPlain(component.render(80)).split("\n")[0]).not.toMatch(/\d+(ms|s)\s*$/);
+			expect(component.describe().p).not.toHaveProperty("age");
+
+			session.upsertTool(
+				{ ...action, detail: { name: "read", args: { path: "file.ts" } } },
+				"updated",
+			);
+			component.update(block);
+			expect(renderPlain(component.render(80)).split("\n")[0]).toEndWith("100ms");
+			expect(component.describe()).toMatchObject({ k: "tool", p: { age: 100 } });
+			clock = 2400;
+			component.invalidate();
+			expect(renderPlain(component.render(80)).split("\n")[0]).toEndWith("2.4s");
+			component.dispose();
+			const remounted = new ToolCardComponent(block, { now: () => clock });
+			expect(renderPlain(remounted.render(80)).split("\n")[0]).toEndWith("2.4s");
+			expect(remounted.describe()).toMatchObject({ k: "tool", p: { age: 2400 } });
+			remounted.dispose();
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	test("a completed receipt without an observed start has no row or native duration", () => {
+		const session = new SessionStore("receipt");
+		const block = session.upsertTool(
+			{ id: "receipt", kind: "tool", title: "read", detail: { name: "read", result: "saved" } },
+			"completed",
+			{ ok: true },
+		);
+		// A persisted timestamp by itself does not tell us how long a tool ran.
+		block.at = NOW - 600_000;
+		for (const clock of [NOW, NOW + 600_000]) {
+			const component = new ToolCardComponent(block, { now: () => clock });
+			component.update(block);
+			expect(renderPlain(component.render(80)).split("\n")[0]).not.toMatch(/\d+(ms|s)\s*$/);
+			expect(component.describe().p).not.toHaveProperty("took");
+			expect(component.describe().p).not.toHaveProperty("age");
+			const version = component.getTranscriptBlockVersion();
+			component.update({ ...block, phase: "updated" });
+			expect(component.isTranscriptBlockFinalized()).toBe(true);
+			expect(component.getTranscriptBlockVersion()).toBe(version);
+			component.dispose();
+		}
 	});
 
 	test("streaming shows no clock at all — nothing has started being measured", () => {
@@ -174,7 +265,7 @@ describe("render contract", () => {
 		const component = new ToolCardComponent(fixtureBlock(fixture, "running", { at: NOW - 2400 }), {
 			now: () => NOW,
 		});
-		component.update(fixtureBlock(fixture, "success", { at: NOW - 2400 }));
+		component.update(fixtureBlock(fixture, "success", { at: NOW - 2400, completedAt: NOW }));
 		const sealed = component.render(80);
 		const version = component.getTranscriptBlockVersion();
 
@@ -194,7 +285,7 @@ describe("render contract", () => {
 			for (const state of STATES) {
 				for (const width of [1, 2, 3, 4, 5, 8, 12]) {
 					const component = new ToolCardComponent(
-						fixtureBlock(fixture, state, { at: NOW - 2400 }),
+						fixtureBlock(fixture, state, { at: NOW - 2400, completedAt: NOW }),
 						{ now: () => NOW },
 					);
 					for (const line of component.render(width)) {
