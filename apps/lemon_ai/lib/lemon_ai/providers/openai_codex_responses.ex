@@ -60,7 +60,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   @codex_url "https://chatgpt.com/backend-api/codex/responses"
   @jwt_claim_path "https://api.openai.com/auth"
   @affinity_headers ["session_id", "conversation_id", "x-client-request-id"]
-  @client_version "0.153.0"
+  @client_version "0.159.0"
   @controlled_headers ["version" | @affinity_headers]
 
   # Providers that use OpenAI-style tool call IDs

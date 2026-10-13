@@ -46,7 +46,7 @@ Public routes are served separately from admin routes. `LobbyLive` handles `/` a
 
 On the model-arena Werewolf board, the current day's public discussion transcript remains visible until it is archived into day history, and the most recent archived day opens expanded by default. The admin detail and model-broadcast watcher share that full-story surface, including model wolf chat, meetings, journals, and generated lore. Hosted human rooms never reuse this omniscient board: they use dedicated player and public projections so roles, night actors, votes, pack chat, investigations, meetings, items, and journals are only delivered to an entitled session.
 
-Admin surfaces are private and fail closed. Production startup fails unless `LEMON_SIM_UI_ACCESS_TOKEN` is at least 32 bytes, and development also requires a configured token before the control room can be opened. Browsers enter the token through the CSRF-protected `/admin/login` form; the raw token is never accepted from a URL or stored in the cookie. A signed digest marker authenticates `/admin` and `/admin/sims/:sim_id` for eight hours by default, logout deletes it, and rotating the deployment token invalidates every existing admin session. JSON `/api/admin/*` routes remain stateless and accept only `Authorization: Bearer` credentials, never browser cookies or query parameters. All admin and login responses are `private, no-store`. The public lobby (`/`), leaderboard route (`/leaderboards`), spectator route (`/watch/:sim_id`), liveness route (`/healthz`), and readiness route (`/readyz`) remain public. The control-room overview shows the active Werewolf broadcast, automation owner, running/stored counts, and recent simulations; the detail view links to a separate public watch page without adding operator controls to it. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby shows the configured VendingBench launcher presets. Presets come from `config :lemon_sim_ui, :vending_launcher_presets`; malformed entries are logged and skipped, and the default presets are GLM 5.1 on Z.AI and GPT 5.5 on Codex OAuth. Public pages publish a Werewolf-specific Open Graph/X share card from `priv/static/assets/werewolf/og-live.png`.
+Admin surfaces are private and fail closed. Production startup fails unless `LEMON_SIM_UI_ACCESS_TOKEN` is at least 32 bytes, and development also requires a configured token before the control room can be opened. Browsers enter the token through the CSRF-protected `/admin/login` form; the raw token is never accepted from a URL or stored in the cookie. A signed digest marker authenticates `/admin` and `/admin/sims/:sim_id` for eight hours by default, logout deletes it, and rotating the deployment token invalidates every existing admin session. JSON `/api/admin/*` routes remain stateless and accept only `Authorization: Bearer` credentials, never browser cookies or query parameters. All admin and login responses are `private, no-store`. The public lobby (`/`), leaderboard route (`/leaderboards`), spectator route (`/watch/:sim_id`), liveness route (`/healthz`), and readiness route (`/readyz`) remain public. The control-room overview shows the active Werewolf broadcast, automation owner, running/stored counts, and recent simulations; the detail view links to a separate public watch page without adding operator controls to it. If `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER=true`, the public lobby shows the configured VendingBench launcher presets. Presets come from `config :lemon_sim_ui, :vending_launcher_presets`; malformed entries are logged and skipped, and the default presets are GLM 5.1 on Z.AI and GPT 6.1 Sol on Codex OAuth. Public pages publish a Werewolf-specific Open Graph/X share card from `priv/static/assets/werewolf/og-live.png`.
 
 ### Hosted Werewolf rooms
 
@@ -308,10 +308,10 @@ config :lemon_sim_ui, :vending_launcher_presets, [
     max_turns: 300
   },
   %{
-    id: "codex_gpt_5_5",
-    label: "GPT 5.5",
-    model: "openai-codex:gpt-5.5",
-    worker_model: "openai-codex:gpt-5.5",
+    id: "codex_gpt_6_1_sol",
+    label: "GPT 6.1 Sol",
+    model: "openai-codex:gpt-6.1-sol",
+    worker_model: "openai-codex:gpt-6.1-sol",
     max_days: 30,
     max_turns: 300
   }
@@ -427,7 +427,7 @@ The VendingBench public watcher renders a live run log below the board. It is dr
     "google_gemini_cli:gemini-3-flash-preview",
     "anthropic:claude-sonnet-4-20250514",
     "google_gemini_cli:gemini-2.5-flash",
-    "openai-codex:gpt-5.3-codex-spark",
+    "openai-codex:gpt-6-luna",
     "google_gemini_cli:gemini-3-pro-preview",
     "deepseek:deepseek-chat"
   ]

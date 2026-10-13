@@ -436,15 +436,15 @@ falls back to accepting the callback URL or authorization code manually.
 # Installed release
 lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
 lemon model --provider gemini --project-id your-gcp-project
-lemon model --provider openai-codex --token <token> --set-default --model gpt-5.5
+lemon model --provider openai-codex --token <token> --set-default --model gpt-6.1-sol
 lemon model --provider github-copilot --enterprise-domain company.ghe.com
 
 # Source checkout
 ./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
 ./bin/lemon model --provider gemini --project-id your-gcp-project
-./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.5
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-6.1-sol
 ./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
 
 # Contributors can invoke the underlying Mix task directly.
-mix lemon.onboard codex --token <token> --set-default --model gpt-5.5
+mix lemon.onboard codex --token <token> --set-default --model gpt-6.1-sol
 ```

@@ -15,10 +15,10 @@ defmodule LemonSimUi.VendingBenchLauncher do
       max_turns: 300
     },
     %{
-      id: "codex_gpt_5_5",
-      label: "GPT 5.5",
-      model: "openai-codex:gpt-5.5",
-      worker_model: "openai-codex:gpt-5.5",
+      id: "codex_gpt_6_1_sol",
+      label: "GPT 6.1 Sol",
+      model: "openai-codex:gpt-6.1-sol",
+      worker_model: "openai-codex:gpt-6.1-sol",
       max_days: 30,
       max_turns: 300
     }

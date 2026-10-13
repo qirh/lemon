@@ -90,7 +90,7 @@ Live model runs require configured providers and credentials:
 ```bash
 mix lemon.sim.tic_tac_toe --no-persist --max-turns 10
 mix lemon.sim.werewolf --player-count 6 --no-persist --max-turns 50
-mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-5.4-mini,kimi:k2p5
+mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-6-luna,kimi:k2p5
 mix run apps/lemon_sim/priv/scripts/werewolf_5model.exs
 ```
 

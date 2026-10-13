@@ -8,9 +8,9 @@ Mix.Tasks.Lemon.Sim.Werewolf.run([
       "google_gemini_cli:gemini-3-pro-preview",
       "google_gemini_cli:gemini-2.5-flash",
       "google_gemini_cli:gemini-2.5-pro",
-      "openai-codex:gpt-5.4-mini",
-      "openai-codex:gpt-5.3-codex-spark",
-      "openai-codex:gpt-5.5",
+      "openai-codex:gpt-6-luna",
+      "openai-codex:gpt-5.6-luna",
+      "openai-codex:gpt-6.1-sol",
       "kimi:k2p5"
     ],
     ","

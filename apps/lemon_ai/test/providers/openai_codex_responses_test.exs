@@ -917,7 +917,7 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       assert headers_map["originator"] == "pi"
       assert headers_map["accept"] == "text/event-stream"
       assert headers_map["content-type"] == "application/json"
-      assert headers_map["version"] == "0.153.0"
+      assert headers_map["version"] == "0.159.0"
 
       EventStream.result(stream, 1000)
     end

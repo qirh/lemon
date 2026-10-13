@@ -82,7 +82,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
         config_path,
         "--set-default",
         "--model",
-        "gpt-5.5"
+        "gpt-6.1-sol"
       ])
     end)
 
@@ -94,7 +94,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
              "llm_openai_codex_api_key"
 
     assert get_in(config_map, ["defaults", "provider"]) == "openai-codex"
-    assert get_in(config_map, ["defaults", "model"]) == "openai-codex:gpt-5.5"
+    assert get_in(config_map, ["defaults", "model"]) == "openai-codex:gpt-6.1-sol"
   end
 
   test "raises for unknown explicit model", %{tmp_dir: tmp_dir} do

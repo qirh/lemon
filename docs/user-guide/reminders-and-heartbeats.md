@@ -139,7 +139,7 @@ Ask for a `cron` job with `prompt`, `schedule`, and an optional `cwd` and `model
 For example:
 
 > Create a disabled cron job in this repository to fix arithmetic.py and run
-> its Python tests. Use gpt-5.5 and no chat delivery, then run it once now.
+> its Python tests. Use gpt-6.1-sol and no chat delivery, then run it once now.
 
 The tool's `add` action inherits the current coding directory unless `cwd` is
 specified. The directory is persisted, so daemon cwd and future interactive

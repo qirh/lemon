@@ -35,7 +35,7 @@ defmodule LemonSimUi.LobbyLiveTest do
     {:ok, _view, html} = live(conn, "/")
 
     refute html =~ "Start a New Run"
-    refute html =~ "GPT 5.5"
+    refute html =~ "GPT 6.1 Sol"
   end
 
   test "shows fixed public VendingBench launcher when enabled", %{conn: conn} do
@@ -46,10 +46,10 @@ defmodule LemonSimUi.LobbyLiveTest do
     assert html =~ "Start a New Run"
     assert html =~ "GLM 5.1"
     assert html =~ "zai:glm-5.1"
-    assert html =~ "GPT 5.5"
-    assert html =~ "openai-codex:gpt-5.5"
+    assert html =~ "GPT 6.1 Sol"
+    assert html =~ "openai-codex:gpt-6.1-sol"
     assert html =~ ~s(href="/vending_bench/start/zai_glm_5_1")
-    assert html =~ ~s(href="/vending_bench/start/codex_gpt_5_5")
+    assert html =~ ~s(href="/vending_bench/start/codex_gpt_6_1_sol")
   end
 
   test "shows configured VendingBench launcher presets and skips malformed entries", %{conn: conn} do
@@ -60,7 +60,7 @@ defmodule LemonSimUi.LobbyLiveTest do
         id: "alpha",
         label: "Alpha",
         model: "zai:glm-5.1",
-        worker_model: "openai-codex:gpt-5.5",
+        worker_model: "openai-codex:gpt-6.1-sol",
         max_days: 7,
         max_turns: 70
       },

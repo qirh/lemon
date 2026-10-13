@@ -42,7 +42,7 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
       "--lemon",
       launcher,
       "--model",
-      opts[:model] || "openai-codex:gpt-5.5",
+      opts[:model] || "openai-codex:gpt-6.1-sol",
       "--output",
       Path.expand(opts[:output] || "/tmp/lemon-coding-benchmark.json"),
       "--timeout",

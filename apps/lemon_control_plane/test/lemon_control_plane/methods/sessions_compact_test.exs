@@ -153,7 +153,7 @@ defmodule LemonControlPlane.Methods.SessionsCompactTest do
     session =
       SessionManager.new(cwd)
       |> SessionManager.append_entry(
-        SessionManager.SessionEntry.model_change("openai-codex", "gpt-5.5")
+        SessionManager.SessionEntry.model_change("openai-codex", "gpt-6.1-sol")
       )
       |> SessionManager.append_message(%{
         "role" => "user",

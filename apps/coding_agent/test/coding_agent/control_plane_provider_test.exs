@@ -37,7 +37,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       File.write!(Path.join(agents, "reviewer.md"), """
       ---
       description: Local review policy
-      model: openai-codex:gpt-5.5
+      model: openai-codex:gpt-6.1-sol
       read_only: false
       tools: [read, write, bash]
       ---
@@ -46,7 +46,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
       assert {:ok, persona} = ControlPlaneProvider.resolve_subagent(cwd, "reviewer")
       assert persona.prompt =~ "Check the exact proposed changes"
-      assert persona.model == "openai-codex:gpt-5.5"
+      assert persona.model == "openai-codex:gpt-6.1-sol"
       assert persona.tool_policy.allow == ["read"]
       refute Map.has_key?(persona, :source)
 
@@ -93,7 +93,7 @@ defmodule CodingAgent.ControlPlaneProviderTest do
       session =
         CodingAgent.SessionManager.new(cwd)
         |> CodingAgent.SessionManager.append_entry(
-          CodingAgent.SessionManager.SessionEntry.model_change("openai-codex", "gpt-5.5")
+          CodingAgent.SessionManager.SessionEntry.model_change("openai-codex", "gpt-6.1-sol")
         )
         |> CodingAgent.SessionManager.append_message(%{
           "role" => "user",

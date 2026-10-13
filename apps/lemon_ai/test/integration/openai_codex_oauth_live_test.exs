@@ -29,7 +29,7 @@ defmodule LemonAi.Integration.OpenAICodexOAuthLiveTest do
     assert is_binary(token)
     assert token != ""
 
-    model = Models.get_model(:"openai-codex", "gpt-5.5")
+    model = Models.get_model(:"openai-codex", "gpt-6.1-sol")
 
     assert model != nil
 

@@ -16,10 +16,6 @@ defmodule LemonAi.Models.CurrentCatalogTest do
 
   test "Codex lists only supported OAuth models with surface-specific limits" do
     expected = %{
-      "gpt-5.3-codex-spark" => {128_000, 2},
-      "gpt-5.4" => {272_000, 2},
-      "gpt-5.4-mini" => {272_000, 2},
-      "gpt-5.5" => {272_000, 2.5},
       "gpt-5.6-luna" => {1_000_000, 2.5},
       "gpt-5.6-sol" => {1_000_000, 2.5},
       "gpt-5.6-terra" => {1_000_000, 2.5},
@@ -43,7 +39,6 @@ defmodule LemonAi.Models.CurrentCatalogTest do
       assert model.cost.input > 0
     end
 
-    assert Models.get_model(:"openai-codex", "gpt-5.3-codex-spark").input == [:text]
     assert Models.get_model(:"openai-codex", "gpt-daybreak-blue-latest").cost.long_context == nil
   end
 

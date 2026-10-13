@@ -32,14 +32,14 @@ defmodule CodingAgent.Session.ModelResolverTest do
     session =
       CodingAgent.SessionManager.new("/workspace")
       |> CodingAgent.SessionManager.append_entry(
-        CodingAgent.SessionManager.SessionEntry.model_change(:"openai-codex", "gpt-5.5")
+        CodingAgent.SessionManager.SessionEntry.model_change(:"openai-codex", "gpt-6.1-sol")
       )
 
     context = CodingAgent.SessionManager.build_session_context(session)
     model = ModelResolver.resolve_session_model(context.model, %SettingsManager{})
     assert model.provider == :"openai-codex"
     assert model.api == :openai_codex_responses
-    assert model.id == "gpt-5.5"
+    assert model.id == "gpt-6.1-sol"
   end
 
   test "default model routing falls back to a ready provider with the same model id" do

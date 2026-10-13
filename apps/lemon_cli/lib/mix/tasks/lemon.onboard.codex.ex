@@ -23,7 +23,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Codex do
       mix lemon.onboard.codex --auth codex-cli --non-interactive
       mix lemon.onboard.codex --auth codex-cli --codex-auth-path /path/to/auth.json
       mix lemon.onboard.codex --token <token> --set-default
-      mix lemon.onboard.codex --token <token> --set-default --model gpt-5.5
+      mix lemon.onboard.codex --token <token> --set-default --model gpt-6.1-sol
       mix lemon.onboard.codex --token <token> --config-path /path/to/config.toml
   """
 

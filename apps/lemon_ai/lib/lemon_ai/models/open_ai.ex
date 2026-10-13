@@ -7,10 +7,9 @@ defmodule LemonAi.Models.OpenAI do
   per-million-token pricing. Edit the JSON to add a model or change a price;
   `mix lemon.models` lists what is currently defined.
 
-  `codex_models/0` exposes the ChatGPT OAuth models declared by the reference
-  catalog, with their own limits and service-tier pricing, plus earlier ChatGPT
-  models kept for existing configs. OAuth subscription access does not imply
-  zero token cost in usage estimates.
+  `codex_models/0` exposes only the ChatGPT OAuth models declared by the
+  reference catalog, with their own limits and service-tier pricing. OAuth
+  subscription access does not imply zero token cost in usage estimates.
   """
 
   alias LemonAi.Models.Catalog
@@ -79,43 +78,11 @@ defmodule LemonAi.Models.OpenAI do
                    }}
                 end)
 
-  # Earlier ChatGPT models that omp no longer lists. Kept so existing configs,
-  # sessions and defaults still resolve; live Codex discovery decides what a
-  # given account can use. They inherit direct-API metadata from open_ai.json.
-  @legacy_codex_specs [
-    {"gpt-5.3-codex-spark", "gpt-5.3-codex", 128_000, 2},
-    {"gpt-5.4", "gpt-5.4", 272_000, 2},
-    {"gpt-5.4-mini", "gpt-5.4-mini", 272_000, 2},
-    {"gpt-5.5", "gpt-5.5", 272_000, 2.5}
-  ]
-
-  @legacy_codex_models Map.new(@legacy_codex_specs, fn {id, source, context_window, priority} ->
-                         model = %Model{
-                           Map.fetch!(@models, source)
-                           | id: id,
-                             api: :openai_codex_responses,
-                             provider: :"openai-codex",
-                             base_url: "https://chatgpt.com",
-                             context_window: context_window,
-                             max_tokens: 128_000,
-                             service_tier_cost: %{"flex" => 0.5, "priority" => priority}
-                         }
-
-                         model =
-                           if id == "gpt-5.3-codex-spark",
-                             do: %Model{model | name: "GPT-5.3 Codex Spark", input: [:text]},
-                             else: model
-
-                         {id, model}
-                       end)
-
-  @all_codex_models Map.merge(@legacy_codex_models, @codex_models)
-
   @doc "Returns all OpenAI model definitions as a map."
   @spec models() :: %{String.t() => Model.t()}
   def models, do: @models
 
   @doc "Returns the supported ChatGPT OAuth model catalog."
   @spec codex_models() :: %{String.t() => Model.t()}
-  def codex_models, do: @all_codex_models
+  def codex_models, do: @codex_models
 end

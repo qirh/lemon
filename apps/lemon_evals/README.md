@@ -25,7 +25,7 @@ production `lemon -p --output json` client. It is never part of the fast lane:
 
 ```bash
 LEMON_CONTROL_PLANE_PORT=4210 mix lemon.eval.coding \
-  --model openai-codex:gpt-5.5 \
+  --model openai-codex:gpt-6.1-sol \
   --output /tmp/lemon-coding-benchmark.json
 ```
 
@@ -62,7 +62,7 @@ them. Without that explicit flag, every temporary repository is removed.
 
 ```bash
 LEMON_CONTROL_PLANE_PORT=4210 mix lemon.eval.coding --compare-omp \
-  --model openai-codex:gpt-5.5 --omp-model openai-codex/gpt-5.5 \
+  --model openai-codex:gpt-6.1-sol --omp-model openai-codex/gpt-6.1-sol \
   --output /tmp/lemon-vs-omp.json
 ```
 

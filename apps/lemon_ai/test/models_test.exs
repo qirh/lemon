@@ -33,36 +33,30 @@ defmodule LemonAi.ModelsLegacyTest do
     end
 
     test "returns openai-codex model by id (Codex subscription provider)" do
-      model = Models.get_model(:"openai-codex", "gpt-5.4")
+      model = Models.get_model(:"openai-codex", "gpt-6-sol")
 
       assert %Model{} = model
-      assert model.id == "gpt-5.4"
+      assert model.id == "gpt-6-sol"
       assert model.api == :openai_codex_responses
       assert model.provider == :"openai-codex"
       assert model.base_url == "https://chatgpt.com"
       assert %ModelCost{} = model.cost
-      assert model.cost.input == 2.5
+      assert model.cost.input == 2
     end
 
     test "returns oauth-only openai-codex model ids" do
-      spark = Models.get_model(:"openai-codex", "gpt-5.3-codex-spark")
-      astra = Models.get_model(:"openai-codex", "gpt-6-astra")
-      gpt55 = Models.get_model(:"openai-codex", "gpt-5.5")
+      for id <- ["gpt-6-astra", "gpt-6.1-sol"] do
+        model = Models.get_model(:"openai-codex", id)
 
-      assert %Model{} = spark
-      assert spark.api == :openai_codex_responses
-      assert spark.provider == :"openai-codex"
-      assert spark.base_url == "https://chatgpt.com"
+        assert %Model{} = model
+        assert model.api == :openai_codex_responses
+        assert model.provider == :"openai-codex"
+        assert model.base_url == "https://chatgpt.com"
+      end
 
-      assert %Model{} = astra
-      assert astra.api == :openai_codex_responses
-      assert astra.provider == :"openai-codex"
-      assert astra.base_url == "https://chatgpt.com"
-
-      assert %Model{} = gpt55
-      assert gpt55.api == :openai_codex_responses
-      assert gpt55.provider == :"openai-codex"
-      assert gpt55.base_url == "https://chatgpt.com"
+      for retired <- ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"] do
+        assert Models.get_model(:"openai-codex", retired) == nil
+      end
     end
 
     test "returns google model by id" do
@@ -154,7 +148,7 @@ defmodule LemonAi.ModelsLegacyTest do
       assert is_list(models)
       assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :"openai-codex"}, &1))
-      assert Enum.any?(models, &(&1.id == "gpt-5.3-codex-spark"))
+      assert Enum.any?(models, &(&1.id == "gpt-6.1-sol"))
       assert Enum.any?(models, &(&1.id == "gpt-6-astra"))
       refute Enum.any?(models, &(&1.id == "codex-mini-latest"))
     end

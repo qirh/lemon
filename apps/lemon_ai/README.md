@@ -193,7 +193,7 @@ persisted session ID automatically. Provider cache hits appear in `usage.cache_r
 hits depend on the provider's prefix length, retention and routing, not merely on
 sending a key. Sampling temperature and output-token caps are deliberately omitted
 because the Codex endpoint rejects them.
-Codex sends the same pinned `version: 0.153.0` used for live model discovery;
+Codex sends the same pinned `version: 0.159.0` used for live model discovery;
 caller headers cannot accidentally override that capability version. Function
 tools explicitly use `strict: false` so optional parameters remain optional rather
 than being auto-filled by the endpoint.
@@ -217,7 +217,7 @@ For Responses and Codex, `thinking_budgets: %{summary: "auto", service_tier: "pr
 selects reasoning summaries and a service tier (`"auto"`, `"default"`, `"flex"` or
 `"priority"` where the model supports it). Codex honors `tool_choice`. Returned
 service tiers take precedence for billing; Codex tier multipliers come from model
-metadata (for example GPT-5.5 priority is 2.5×). Reasoning output tokens are already
+metadata (for example GPT-6.1 Sol priority is 2.5×). Reasoning output tokens are already
 included in the provider's output count, not charged twice.
 
 Native Anthropic requests support `provider_options: %{anthropic: %{cache_retention: :none | :short | :long}}`.
@@ -365,9 +365,9 @@ LemonAi.Models.find_by_id("gpt-4o")                         # search all provide
 LemonAi.Models.get_models(:openai)                          # all models for a provider
 LemonAi.Models.get_providers()                              # all known provider atoms
 ```
-The bundled current families include GPT-5.5 and GPT-5.6 API models, ChatGPT Codex
-GPT-5.5 / GPT-5.6 Luna, Sol and Terra / GPT-6 Astra, Claude Opus 4.8 and Claude 5
-families, and Gemini 3.1 Pro through Gemini 3.8 Flash. Limits and per-million-token
+The bundled current families include GPT-5.6 and GPT-6 API models, ChatGPT Codex
+GPT-5.6 Luna, Sol and Terra / GPT-6 Astra, Luna and Sol / GPT-6.1 Sol, Claude 5 and
+5.5 families, and Gemini 3.1 Pro through Gemini 3.8 Flash. Limits and per-million-token
 prices track the local omp catalog; unsupported realtime/audio/image-generation
 protocols are not advertised through the text coding APIs.
 Existing integration exclusions remain in effect even when the reference catalog
@@ -375,7 +375,7 @@ still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-pre
 and `gemini-3.1-pro-preview` are not advertised by Lemon.
 
 Lemon's runtime model picker uses account-scoped Codex discovery, not every
-bundled Codex SKU. The ChatGPT `/codex/models?client_version=0.153.0` result is
+bundled Codex SKU. The ChatGPT `/codex/models?client_version=0.159.0` result is
 cached for five minutes by account and endpoint; tokens, account identifiers and
 login files are not stored in that cache. Refreshing the picker may explicitly
 bypass the cache (`models.list` with `forceRefresh: true`). A discovery failure

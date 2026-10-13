@@ -96,7 +96,7 @@ choice. Lemon never discovers or imports CLI credentials automatically.
 
 ```bash
 lemon model --provider openai-codex --auth codex-cli --non-interactive \
-  --set-default --model gpt-5.5
+  --set-default --model gpt-6.1-sol
 # Optionally select a copied login file instead:
 lemon model --provider openai-codex --auth codex-cli \
   --codex-auth-path /path/to/auth.json --non-interactive
@@ -126,7 +126,7 @@ successful authentication. This is a one-time copy, not ongoing synchronization.
 ```bash
 lemon -p "Explain this repository"
 echo 'list files' | lemon -p --output stream-json
-lemon run "Fix the failing parser" --cwd ./project --model openai-codex:gpt-5.5 \
+lemon run "Fix the failing parser" --cwd ./project --model openai-codex:gpt-6.1-sol \
   --approval-policy allow --output json | jq .
 lemon run "Continue the fix" --continue
 lemon run "Review the changes" --session agent:default:cli-SESSION

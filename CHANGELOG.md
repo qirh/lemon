@@ -8,7 +8,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- **ChatGPT model discovery.** Codex requests and model discovery send client
+  version 0.159.0 (matching omp). With 0.153.0 the ChatGPT backend omitted
+  GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol, so they never appeared as available.
+
+### Removed
+
+- **Retired ChatGPT models.** `openai-codex` no longer lists `gpt-5.5`,
+  `gpt-5.4`, `gpt-5.4-mini` or `gpt-5.3-codex-spark`, matching omp and the live
+  ChatGPT model list. Configs that pin them should switch, for example to
+  `openai-codex:gpt-6.1-sol` or `openai-codex:gpt-6-luna`. Sim and eval
+  defaults now use the GPT-6 models.
 
 ---
 

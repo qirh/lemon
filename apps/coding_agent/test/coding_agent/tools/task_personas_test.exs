@@ -22,7 +22,7 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
 
     opts = [
       parent_session: unique_id(),
-      model: "openai-codex:gpt-5.5",
+      model: "openai-codex:gpt-6.1-sol",
       system_prompt: "Parent custom instruction.",
       stream_fn: fn model, context, options ->
         send(owner, {:child_context, context})
@@ -230,7 +230,7 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
         fn update -> send(owner, {:tree_progress, update.details}) end,
         cwd,
         parent_session: unique_id(),
-        model: "openai-codex:gpt-5.5",
+        model: "openai-codex:gpt-6.1-sol",
         stream_fn: stream_fn
       )
 

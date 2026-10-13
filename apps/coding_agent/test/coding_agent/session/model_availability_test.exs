@@ -40,12 +40,12 @@ defmodule CodingAgent.Session.ModelAvailabilityTest do
           base_url: "https://example.invalid/backend-api"
         }
       },
-      model_roles: %{"smol" => "openai-codex:gpt-5.4-mini", "slow" => "openai-codex:gpt-5.5"},
+      model_roles: %{"smol" => "openai-codex:gpt-6-luna", "slow" => "openai-codex:gpt-6.1-sol"},
       provider_routing: %{enabled: false}
     }
 
     Req.Test.stub(__MODULE__, fn conn ->
-      Req.Test.json(conn, %{"models" => [%{"slug" => "gpt-5.5", "supported_in_api" => true}]})
+      Req.Test.json(conn, %{"models" => [%{"slug" => "gpt-6.1-sol", "supported_in_api" => true}]})
     end)
 
     %{settings: settings}
@@ -54,13 +54,13 @@ defmodule CodingAgent.Session.ModelAvailabilityTest do
   test "picker offers only account-supported Codex IDs", %{settings: settings} do
     models = ModelCatalog.available_models(config: settings)
     codex = Enum.filter(models, &(&1.provider == :"openai-codex"))
-    assert Enum.map(codex, & &1.id) == ["gpt-5.5"]
-    refute Enum.any?(codex, &(&1.id == "gpt-5.4-mini"))
+    assert Enum.map(codex, & &1.id) == ["gpt-6.1-sol"]
+    refute Enum.any?(codex, &(&1.id == "gpt-6-luna"))
   end
 
   test "session, task and compaction roles fail before a provider request with an actionable account error",
        %{settings: settings} do
-    parent = LemonAi.Models.get_model(:"openai-codex", "gpt-5.5")
+    parent = LemonAi.Models.get_model(:"openai-codex", "gpt-6.1-sol")
 
     for resolve <- [
           fn -> ModelResolver.resolve_session_model("@smol", settings) end,
@@ -71,10 +71,10 @@ defmodule CodingAgent.Session.ModelAvailabilityTest do
       assert error.message =~ "@smol"
       assert error.message =~ "not available for this ChatGPT account"
       assert error.message =~ "config.toml"
-      assert error.message =~ "gpt-5.5"
+      assert error.message =~ "gpt-6.1-sol"
     end
 
-    assert ModelResolver.resolve_session_model("@slow", settings).id == "gpt-5.5"
+    assert ModelResolver.resolve_session_model("@slow", settings).id == "gpt-6.1-sol"
   end
 
   test "default role is checked too, while static resolution remains possible without concrete ChatGPT identity",
@@ -88,6 +88,6 @@ defmodule CodingAgent.Session.ModelAvailabilityTest do
       | providers: %{"openai-codex" => %{auth_source: "api_key", api_key: "synthetic-non-jwt"}}
     }
 
-    assert ModelResolver.resolve_session_model("@smol", static).id == "gpt-5.4-mini"
+    assert ModelResolver.resolve_session_model("@smol", static).id == "gpt-6-luna"
   end
 end

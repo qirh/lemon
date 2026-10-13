@@ -1145,7 +1145,7 @@ defmodule LemonSimUi.SimDashboardLive do
   # -- Model helpers --
 
   @default_provider :"openai-codex"
-  @default_model_id "gpt-5.3-codex-spark"
+  @default_model_id "gpt-6-luna"
 
   defp default_provider, do: @default_provider
 

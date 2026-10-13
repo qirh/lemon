@@ -141,7 +141,7 @@ def run_case(case, agent, executable, model, args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lemon', required=True)
-    parser.add_argument('--model', default='openai-codex:gpt-5.5')
+    parser.add_argument('--model', default='openai-codex:gpt-6.1-sol')
     parser.add_argument('--output', required=True)
     parser.add_argument('--timeout', type=int, default=660)
     parser.add_argument('--failure-dir', help='Opt-in private failure bundles; may contain raw model output')

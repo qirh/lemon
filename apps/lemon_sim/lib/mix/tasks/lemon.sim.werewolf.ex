@@ -13,7 +13,7 @@ defmodule Mix.Tasks.Lemon.Sim.Werewolf do
       mix lemon.sim.werewolf
       mix lemon.sim.werewolf --no-persist --max-turns 25
       mix lemon.sim.werewolf --offline-strategy heuristic --seed 1 --deterministic-artifacts --artifact-dir /tmp/ww
-      mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-5.4-mini,kimi:k2p5
+      mix lemon.sim.werewolf --player-count 5 --models anthropic:claude-sonnet-4-20250514,openai:gpt-4.1,google_gemini_cli:gemini-2.5-flash,openai-codex:gpt-6-luna,kimi:k2p5
 
   Multi-model assignments are applied in sorted Werewolf seat-name order for the
   seeded run. `--offline-strategy heuristic` plays every seat with a

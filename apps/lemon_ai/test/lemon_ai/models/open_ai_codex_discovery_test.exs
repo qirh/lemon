@@ -20,12 +20,12 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
       assert conn.request_path == "/backend-api/codex/models"
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer " <> token]
       assert Plug.Conn.get_req_header(conn, "chatgpt-account-id") == ["synthetic-account"]
-      assert Plug.Conn.fetch_query_params(conn).params["client_version"] == "0.153.0"
+      assert Plug.Conn.fetch_query_params(conn).params["client_version"] == "0.159.0"
 
       Req.Test.json(conn, %{
         "models" => [
-          %{"slug" => "gpt-5.5", "visibility" => "hide", "supported_in_api" => true},
-          %{"slug" => "gpt-5.4-mini", "supported_in_api" => false},
+          %{"slug" => "gpt-6.1-sol", "visibility" => "hide", "supported_in_api" => true},
+          %{"slug" => "gpt-6-luna", "supported_in_api" => false},
           %{"slug" => "unknown-unpriced-model"},
           %{"slug" => 42},
           %{},
@@ -36,8 +36,8 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
 
     opts = options(token)
     assert {:ok, [model]} = Discovery.discover(opts)
-    assert model.id == "gpt-5.5"
-    assert model.cost == Models.get_model(:"openai-codex", "gpt-5.5").cost
+    assert model.id == "gpt-6.1-sol"
+    assert model.cost == Models.get_model(:"openai-codex", "gpt-6.1-sol").cost
     assert_receive :requested
     assert {:ok, [^model]} = Discovery.discover(options(token("synthetic-account", "renewed")))
     refute_receive :requested, 20
@@ -51,14 +51,14 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     Req.Test.stub(__MODULE__, fn conn ->
       id =
         if Plug.Conn.get_req_header(conn, "chatgpt-account-id") == ["account-one"],
-          do: "gpt-5.5",
-          else: "gpt-5.4"
+          do: "gpt-6.1-sol",
+          else: "gpt-6-sol"
 
       Req.Test.json(conn, %{"models" => [%{"slug" => id}]})
     end)
 
-    assert {:ok, [%{id: "gpt-5.5"}]} = Discovery.discover(options(token("account-one")))
-    assert {:ok, [%{id: "gpt-5.4"}]} = Discovery.discover(options(token("account-two")))
+    assert {:ok, [%{id: "gpt-6.1-sol"}]} = Discovery.discover(options(token("account-one")))
+    assert {:ok, [%{id: "gpt-6-sol"}]} = Discovery.discover(options(token("account-two")))
     assert ModelCache.stats().entries == 2
 
     assert {:ok, _} =
@@ -86,7 +86,7 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     assert_receive :requested
     assert {:ok, []} = Discovery.discover(opts)
     refute_receive :requested, 20
-    model = Models.get_model(:"openai-codex", "gpt-5.4-mini")
+    model = Models.get_model(:"openai-codex", "gpt-6-luna")
     assert {:error, message} = Discovery.ensure_available(model, opts)
     assert message =~ "not available for this ChatGPT account"
     assert message =~ "[model_roles]"
@@ -123,14 +123,17 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
 
     Req.Test.stub(__MODULE__, fn conn ->
       n = Agent.get_and_update(calls, &{&1, &1 + 1})
-      id = if n == 0, do: "gpt-5.4", else: "gpt-5.5"
+      id = if n == 0, do: "gpt-6-sol", else: "gpt-6.1-sol"
       Req.Test.json(conn, %{"data" => [%{"id" => id}]})
     end)
 
     opts = options(token("changing-account"))
-    assert {:ok, [%{id: "gpt-5.4"}]} = Discovery.discover(opts)
-    assert {:ok, [%{id: "gpt-5.5"}]} = Discovery.discover(Keyword.put(opts, :force_refresh, true))
-    assert {:ok, [%{id: "gpt-5.5"}]} = Discovery.discover(Keyword.put(opts, :ttl_ms, 0))
+    assert {:ok, [%{id: "gpt-6-sol"}]} = Discovery.discover(opts)
+
+    assert {:ok, [%{id: "gpt-6.1-sol"}]} =
+             Discovery.discover(Keyword.put(opts, :force_refresh, true))
+
+    assert {:ok, [%{id: "gpt-6.1-sol"}]} = Discovery.discover(Keyword.put(opts, :ttl_ms, 0))
     assert Agent.get(calls, & &1) == 3
   end
 
@@ -138,11 +141,11 @@ defmodule LemonAi.Models.OpenAICodexDiscoveryTest do
     Req.Test.stub(__MODULE__, fn conn ->
       case conn.request_path do
         "/backend-api/codex/models" -> Req.Test.json(conn, %{"unexpected" => []})
-        "/backend-api/models" -> Req.Test.json(conn, %{"data" => [%{"id" => "gpt-5.5"}]})
+        "/backend-api/models" -> Req.Test.json(conn, %{"data" => [%{"id" => "gpt-6.1-sol"}]})
       end
     end)
 
-    assert {:ok, [%{id: "gpt-5.5"}]} = Discovery.discover(options(token("alternate-account")))
+    assert {:ok, [%{id: "gpt-6.1-sol"}]} = Discovery.discover(options(token("alternate-account")))
     Req.Test.stub(__MODULE__, fn _ -> flunk("invalid token must not make a request") end)
     assert {:error, :invalid_chatgpt_access_token} = Discovery.discover(options("not-a-jwt"))
     assert {:error, :missing_chatgpt_credentials} = Discovery.discover()

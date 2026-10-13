@@ -10,15 +10,15 @@ defmodule LemonAi.Models.OpenAICodexDiscovery do
 
   Only models whose coding protocol and pricing are present in the bundled
   registry are selectable. `visibility` is a presentation hint, not access
-  control: a known model marked hidden can still be explicitly used by an account
-  (for example GPT-5.5). An explicit `supported_in_api: false` excludes a model.
+  control: a known model marked hidden can still be explicitly used by an account.
+  An explicit `supported_in_api: false` excludes a model.
   """
 
   alias LemonAi.{ModelCache, Models}
   alias LemonAi.Types.Model
 
   @base_url "https://chatgpt.com/backend-api"
-  @client_version "0.153.0"
+  @client_version "0.159.0"
   @ttl_ms 300_000
   @timeout_ms 5_000
   @claim_path "https://api.openai.com/auth"
