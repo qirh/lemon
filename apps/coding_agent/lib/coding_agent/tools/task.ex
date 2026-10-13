@@ -8,7 +8,7 @@ defmodule CodingAgent.Tools.Task do
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias CodingAgent.Tools.Task.{Control, Execution, Messaging, Params, Result, Wait}
+  alias CodingAgent.Tools.Task.{Control, Execution, Messaging, Params, Result, Swarm, Wait}
 
   @doc """
   Returns the Task tool definition.
@@ -28,8 +28,25 @@ defmodule CodingAgent.Tools.Task do
           "action" => %{
             "type" => "string",
             "description" =>
-              "Run tasks, poll/join/get results, message/steer a child, or cancel it",
-            "enum" => ["run", "poll", "join", "wait", "get", "message", "steer", "cancel"]
+              "Run tasks or a dependency-aware swarm, poll/join/get results, message/steer a child, or cancel it",
+            "enum" => [
+              "run",
+              "swarm",
+              "poll",
+              "join",
+              "wait",
+              "get",
+              "message",
+              "steer",
+              "cancel"
+            ]
+          },
+          "concurrency" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 32,
+            "description" =>
+              "Maximum active swarm children (default 8); global task capacity still applies"
           },
           "name" => %{
             "type" => "string",
@@ -155,6 +172,9 @@ defmodule CodingAgent.Tools.Task do
       {:error, "Operation aborted"}
     else
       case Params.normalize_action(Map.get(params, "action")) do
+        "swarm" ->
+          Swarm.execute(tool_call_id, params, signal, on_update, cwd, opts)
+
         "wait" ->
           Wait.execute(params, signal, opts)
 
@@ -203,13 +223,19 @@ defmodule CodingAgent.Tools.Task do
         "worktree",
         "tool_policy"
       ])
+      |> Map.put("depends_on", %{
+        "type" => "array",
+        "items" => %{"type" => "string"},
+        "description" =>
+          "For action=swarm, names of prerequisite tasks. Launch only after all succeed; their visible results enter this child's context."
+      })
 
     tasks = %{
       "type" => "array",
       "minItems" => 1,
       "maxItems" => 32,
       "description" =>
-        "Independent children launched together. Common top-level options are inherited. Use action=join with returned task_ids to aggregate.",
+        "Up to 32 children. action=run launches independent tasks; action=swarm requires unique names and accepts depends_on DAG edges. A swarm returns one task_id for its merged report. Common child options are inherited.",
       "items" => %{"type" => "object", "properties" => child_properties, "required" => ["prompt"]}
     }
 

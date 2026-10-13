@@ -83,6 +83,7 @@ defmodule CodingAgent.Tools.Task.Execution do
         session_key: parent_session_key,
         agent_id: parent_agent_id,
         owner: Control.owner(opts),
+        orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
         role: role_id,
         queue_mode: validated.queue_mode,
         meta: validated.meta
@@ -103,6 +104,8 @@ defmodule CodingAgent.Tools.Task.Execution do
       queue_mode: validated.resolved_queue_mode,
       meta: validated.meta,
       parent_session_pid: Keyword.get(opts, :session_pid),
+      task_owner_pid: Keyword.get(opts, :task_owner_pid),
+      orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
       direct_progress: Keyword.get(opts, :session_module, Session) == Session,
       task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
     }
@@ -184,65 +187,74 @@ defmodule CodingAgent.Tools.Task.Execution do
       run_override = Keyword.get(opts, :run_override)
 
       result =
-        if is_function(run_override, 2) do
-          run_override.(on_update_safe, signal)
-        else
-          with {:ok, workspace} <- prepare_workspace(execution) do
-            CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
-              Map.put(record, :workspace, workspace)
-            end)
+        cond do
+          is_function(run_override, 3) ->
+            run_override.(
+              on_update_safe,
+              signal,
+              Map.put(execution.lifecycle_context, :prompt, execution.prompt)
+            )
 
-            if workspace[:worktree_path] do
-              on_update_safe.(%LemonAgent.Types.AgentToolResult{
-                content: [
-                  %LemonAi.Types.TextContent{
-                    text: "Working in isolated branch #{workspace.branch}"
-                  }
-                ],
-                details: Map.put(workspace, :status, "running")
-              })
-            end
+          is_function(run_override, 2) ->
+            run_override.(on_update_safe, signal)
 
-            result =
-              Runner.start_session_with_prompt(
-                CodingAgent.Tools.Task.Params.build_session_opts(
-                  workspace.cwd,
-                  build_child_session_opts(opts, execution),
-                  execution.validated
-                ),
-                execution.prompt,
-                execution.description,
-                signal,
-                on_update_safe,
-                execution.role_id,
-                [task_id: execution.task_id] ++
-                  Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
-              )
+          true ->
+            with {:ok, workspace} <- prepare_workspace(execution) do
+              CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
+                Map.put(record, :workspace, workspace)
+              end)
 
-            case result do
-              %LemonAgent.Types.AgentToolResult{} = result ->
-                %{
-                  result
-                  | details:
-                      Map.merge(
-                        result.details,
-                        workspace
-                        |> Map.merge(
-                          CodingAgent.Tools.Task.Result.lineage_details(
-                            execution.lifecycle_context
+              if workspace[:worktree_path] do
+                on_update_safe.(%LemonAgent.Types.AgentToolResult{
+                  content: [
+                    %LemonAi.Types.TextContent{
+                      text: "Working in isolated branch #{workspace.branch}"
+                    }
+                  ],
+                  details: Map.put(workspace, :status, "running")
+                })
+              end
+
+              result =
+                Runner.start_session_with_prompt(
+                  CodingAgent.Tools.Task.Params.build_session_opts(
+                    workspace.cwd,
+                    build_child_session_opts(opts, execution),
+                    execution.validated
+                  ),
+                  execution.prompt,
+                  execution.description,
+                  signal,
+                  on_update_safe,
+                  execution.role_id,
+                  [task_id: execution.task_id] ++
+                    Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
+                )
+
+              case result do
+                %LemonAgent.Types.AgentToolResult{} = result ->
+                  %{
+                    result
+                    | details:
+                        Map.merge(
+                          result.details,
+                          workspace
+                          |> Map.merge(
+                            CodingAgent.Tools.Task.Result.lineage_details(
+                              execution.lifecycle_context
+                            )
                           )
+                          |> Map.merge(%{
+                            task_id: execution.task_id,
+                            run_id: execution.run_id
+                          })
                         )
-                        |> Map.merge(%{
-                          task_id: execution.task_id,
-                          run_id: execution.run_id
-                        })
-                      )
-                }
+                  }
 
-              error ->
-                error
+                error ->
+                  error
+              end
             end
-          end
         end
 
       validate_output(result, execution.validated[:output_schema])

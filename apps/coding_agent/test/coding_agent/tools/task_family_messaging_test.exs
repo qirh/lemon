@@ -11,6 +11,10 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
     def start_link(owner), do: GenServer.start_link(__MODULE__, owner)
     def init(owner), do: {:ok, owner}
 
+    def handle_call({:cancel_owned, id}, _from, owner) do
+      {:reply, CodingAgent.Tools.Task.Control.cancel_owned(id), owner}
+    end
+
     def handle_cast({:steer, text}, owner) do
       send(owner, {:peer_message, self(), text})
       {:noreply, owner}
@@ -104,7 +108,16 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
 
     for identity <- roster do
       assert Map.keys(identity) --
-               [:task_id, :name, :run_id, :session_id, :parent_run_id, :relation, :status] == []
+               [
+                 :task_id,
+                 :name,
+                 :run_id,
+                 :session_id,
+                 :parent_run_id,
+                 :relation,
+                 :status,
+                 :messaging
+               ] == []
 
       refute Enum.any?(Map.values(identity), &(is_pid(&1) or is_reference(&1)))
     end
@@ -465,15 +478,70 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
                },
                nil,
                nil,
-               "/tmp", run_override: fn _, _ -> raise "must not launch" end)
+               "/tmp",
+               run_override: fn _, _ -> raise "must not launch" end
+             )
 
     assert {:error, _} = Control.send_message("all", "   ", [])
+  end
+
+  test "swarm coordinators reject messages without breaking live-agent broadcasts", %{
+    parent: parent,
+    opts: opts
+  } do
+    {coordinator, _, _} =
+      child(Keyword.put(opts, :orchestration_worker, true), parent, "Swarm", false)
+
+    {leaf, leaf_pid, _} = child(opts, parent, "Leaf")
+
+    assert {:ok, roster} = Control.roster(opts)
+    assert %{messaging: false} = Enum.find(roster, &(&1[:task_id] == coordinator))
+
+    assert {:error, "Swarm coordinator has no model session; message a launched child instead"} =
+             Control.send_message(coordinator, "do not silently queue", opts)
+
+    assert {:error, _} = Control.command(coordinator, "message", "do not silently queue", opts)
+
+    assert {:ok, %{recipients: [%{task_id: ^leaf}]}} =
+             Control.send_message("all", "real workers only", opts)
+
+    assert message(leaf_pid)["body"] == "real workers only"
+  end
+
+  test "scheduler death cancels its child without replacing the real messaging parent", %{
+    parent: parent,
+    opts: opts
+  } do
+    scheduler = mailbox()
+    {id, pid, child_opts} = child(Keyword.put(opts, :task_owner_pid, scheduler), parent, "Leaf")
+    assert {:ok, _} = Control.send_message("parent", "actual parent", child_opts)
+    assert message(parent)["body"] == "actual parent"
+
+    GenServer.stop(scheduler)
+    assert_receive {:peer_abort, ^pid}
+    assert Process.alive?(parent)
+    assert {:ok, roster} = Control.roster(opts)
+    assert %{status: :cancelled} = Enum.find(roster, &(&1[:task_id] == id))
+  end
+
+  test "owned cancellation survives missing records and authenticates the scheduler process", %{
+    parent: parent,
+    opts: opts
+  } do
+    scheduler = mailbox()
+    {id, pid, _} = child(Keyword.put(opts, :task_owner_pid, scheduler), parent, "Leaf")
+    TaskStore.delete_task(id)
+    assert :ok = Control.cancel_owned(id)
+    refute_receive {:peer_abort, ^pid}
+    assert :ok = GenServer.call(scheduler, {:cancel_owned, id})
+    assert_receive {:peer_abort, ^pid}
   end
 
   defp child(opts, parent, name, attach? \\ true) do
     id =
       TaskStore.new_task(%{
         owner: Control.owner(opts),
+        orchestration_worker: Keyword.get(opts, :orchestration_worker, false),
         name: name,
         run_id: unique_id(),
         parent_run_id: unique_id(),
@@ -482,7 +550,7 @@ defmodule CodingAgent.Tools.TaskFamilyMessagingTest do
       })
 
     signal = AbortSignal.new()
-    :ok = Control.register(id, signal, nil, parent, fn _ -> :ok end)
+    :ok = Control.register(id, signal, nil, parent, fn _ -> :ok end, opts[:task_owner_pid])
 
     on_exit(fn ->
       if Process.whereis(Control), do: Control.complete(id)

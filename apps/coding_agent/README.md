@@ -342,12 +342,37 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS async-task store with direct reads and serialized event, suppression, and monotonic lifecycle writes |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
-The task tool runs all work in a native in-process `CodingAgent.Session`.
+The task tool runs model work in native in-process `CodingAgent.Session`s; swarm coordinators schedule those sessions without an extra model call.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
 When a native task omits `model`, it uses its named persona's `model` or model `role` default, then the configured `task` model role when present, otherwise the live parent session model at execution time. Explicit task `model` always wins. Telegram/session-scoped model overrides therefore still apply to children without a separate task/persona model selection.
 Task workers monitor their native sessions: a crash, provider failure, abort, or configured `task_session_timeout_ms` is reported as an error, never promoted to success because partial text or a tool result exists. The default model wait is unbounded; parent cancellation and worker/session death still end it.
 
 Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32 independent children. Each child inherits common top-level options, launches in the background, and returns a `task_id`/`run_id` receipt; `async: false` launches the entire batch before joining. Native tasks share a monitored semaphore with a default cap of eight running children; excess children queue without starting model calls. Dead holders and queued callers release capacity. Individual failures are retained alongside successful sibling results.
+
+Use `action: "swarm"` for a dependency graph of up to 32 named tasks. Each node has a unique `name`, its normal task options, and optional `depends_on: ["OtherName"]`. The entire graph, names, native task parameters, and dependency edges are validated before any work starts; cycles, self-dependencies and unknown names are errors. Ready nodes are admitted in declaration order up to `concurrency` (1–32, default 8), including children waiting for global model capacity. Busy native child-budget slots also apply backpressure rather than turning ready nodes into failures. The coordinator consumes no model slot, so a cap of one still works.
+
+```json
+{
+  "action": "swarm",
+  "description": "Inspect and improve pricing",
+  "async": true,
+  "auto_followup": false,
+  "concurrency": 3,
+  "tasks": [
+    {"name": "API", "agent": "scout", "prompt": "Inspect pricing.py and report the bug and corrected formula."},
+    {"name": "Cases", "agent": "scout", "prompt": "Read cases.json and report inputs and expected totals."},
+    {"name": "Workflow", "agent": "scout", "prompt": "Read README.md and report the verification command and constraints."},
+    {"name": "Implement", "depends_on": ["API", "Cases", "Workflow"], "prompt": "Use dependency findings to fix pricing.py, add regression tests, and run verification."},
+    {"name": "Document", "depends_on": ["API", "Cases", "Workflow"], "prompt": "Use dependency findings to document the API, examples, and verification command in USAGE.md."}
+  ]
+}
+```
+
+Async swarms return **one coordinator task ID**. Join/get that ID (or pass it explicitly to `wait`) for the merged report, rather than mistaking an individual node result for completion of the graph. `async: false` waits for the same report. A node launches only after all its direct dependencies succeed; their visible results are appended to its user prompt as bounded untrusted peer data, not system instructions. The dependency context is capped at 32 KiB and grants no access to sibling-private histories. Node `agent`, model, output schema, worktree, and tool policy options use the existing isolation rules.
+
+Failed, cancelled, lost or missing child results block their dependents transitively; independent branches keep running. The final `structured_output` contains declaration-ordered `tasks`, status/counts, and launched task/run IDs. Status is `completed` when every node succeeds or `partial_failure` otherwise; errors and blocked nodes are explicit. Output/error previews are bounded to 4 KiB/1 KiB and structured values larger than 4 KiB are explicitly omitted. The owning parent can use each node's task ID to retrieve its full stored result. This merges reports, **not git branches or worktree changes**.
+
+Progress includes graph counts and node identities alongside normal child tool updates. Cancelling the coordinator stops active children and prevents further launches; parent or scheduler death also cancels its work. The coordinator has no model session: its roster entry has `messaging: false`, direct messages fail clearly, and broadcasts skip it. Launched children keep normal scoped parent/sibling messaging and parent-only cancellation.
 
 Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>`, retain the source cwd's relative subdirectory, and are **not** merged or deleted automatically. Uncommitted changes and local credentials/config are not copied. `poll`/`get`/`join` report `cwd`, `worktree_path`, and `branch`; review or cherry-pick the child's commits, then remove the worktree with `git worktree remove` when no longer needed. A non-git cwd is a task error, not a fallback to the shared checkout.
 
