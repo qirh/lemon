@@ -60,6 +60,20 @@ its final response. Clients answer `session/request_permission` and filesystem
 requests with ordinary JSON-RPC responses carrying the request's id. A pending
 permission does not prevent receiving cancel or other control messages.
 
+Prompt turns wait up to ten minutes by default; clients can override the bounded
+wait through `_meta.lemon.timeoutMs`. The `/compact [instructions]` command
+compacts the idle native session, retaining the durable transcript. Session
+load/resume replay persisted native messages and tool history; close cancels an
+active turn and retains the session for later resume. Fork creates a durable
+branch rather than a new empty chat.
+
+Session configuration exposes code/plan mode, registry model selection,
+thinking level and approval policy. Plan mode is read-only; approval choices
+cannot override administrator restrictions. Existing local provider credentials
+use the `agent` authentication method. Image/audio/embedded resources and
+client-provided MCP transports are rejected unless actually supported by the
+negotiated capabilities.
+
 `session/cancel` cancels the session's active turn. `$/cancel_request` maps the
 original prompt request id to its session and cancels that turn, waking any
 pending client callbacks. Stdin EOF closes the connection and cancels active
