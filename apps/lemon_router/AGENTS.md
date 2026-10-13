@@ -12,7 +12,8 @@ See [README](README.md) and [architecture](../../docs/architecture/overview.md).
   `LemonGateway.Runtime` or gateway-private request structs.
 - `SessionCoordinator` owns one active pointer/backlog per conversation key,
   follow-up debounce/merge, steering fallback and interrupt semantics. A key is
-  `{:resume, engine, token}` when known, otherwise `{:session, session_key}`.
+  `{:resume, engine, token}` for an explicit shared token, otherwise
+  `{:session, session_key}` (including auto-resume).
 - Task/delegated auto-followups prefer steer with follow-up fallback. Do not merge
   separate provenance-bearing async completions during debounce. Record the final
   delivery disposition/receipt after router mutation, not before.

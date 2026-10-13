@@ -233,7 +233,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
         }
       )
 
-    LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(state.run_id), event)
+    LemonRouter.RunCompletion.publish(state.execution_request, event)
   end
 
   defp put_in_watchdog_confirmation(state, ref) do

@@ -123,7 +123,11 @@ defmodule LemonRouter.SubmissionBuilder do
 
       resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
-      conversation_key = ConversationKey.resolve(session_key, resolved_resume)
+      # Auto-resume can become available while a session backlog is draining.
+      # Keep that backlog under its original session owner; explicit shared
+      # resume tokens still coordinate across session keys.
+      conversation_key =
+        ConversationKey.resolve(session_key, if(resume_source == :explicit, do: resolved_resume))
 
       enriched_meta =
         meta
