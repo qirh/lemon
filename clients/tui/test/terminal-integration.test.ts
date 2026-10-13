@@ -42,9 +42,7 @@ test("transcript marks preserve width, cached rows, and completion marks", () =>
 });
 
 test("file links encode special characters, line anchors and reject control injection", () => {
-	expect(fileTarget("src/a b#c.ts:42", undefined, "/repo")).toBe(
-		"file:///repo/src/a%20b%23c.ts#L42",
-	);
+	expect(fileTarget("src/a b#c.ts", 42, "/repo")).toBe("file:///repo/src/a%20b%23c.ts#L42");
 	expect(fileTarget("src/a.ts\x1b]9;injected\x07")).toBeUndefined();
 	const previous = TERMINAL.hyperlinks;
 	try {

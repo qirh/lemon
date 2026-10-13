@@ -15,9 +15,11 @@ lemon tern install
 
 From a source checkout, use `./bin/lemon tern install`. The installer records
 that launcher's absolute path, merges the `lemon` custom-agent entry into Tern's
-`settings.json`, preserves unrelated preferences and agents, and enables ACP
-shell wrapping. It does not change Lemon credentials or start a daemon. Re-run
-after moving the checkout or switching installations.
+`settings.json`, and installs the Lemon palette plugin in `plugins/lemon`.
+Unrelated preferences, agents and plugin files are preserved. ACP shell wrapping
+is enabled; explicitly disabled plugins stay disabled. Installation does not
+change Lemon credentials or start a daemon. Re-run after moving the checkout or
+switching installations. Modified or linked Lemon plugin files are not overwritten.
 
 Open a **new Tern shell** and type:
 
@@ -39,6 +41,33 @@ Use `lemon tui` to open Lemon's own terminal interface instead. Tern 0.7.2's
 launcher bridges that gap without a shell alias or plugin. Native omp's
 usual Tern integration uses its terminal surface protocol; custom ACP agents do
 not need to impersonate omp to receive native ACP chat rendering.
+
+## Native terminal workspace
+
+Run `tern plugin reload` after installation, or restart Tern. The command palette
+then offers:
+
+- **Lemon: New session in split** — opens `lemon tui` beside the focused pane,
+  using its working directory and the launcher recorded during installation.
+  With no focused pane it opens a new tab. Launching is available on the local
+  POSIX host, not remote panes with an unrelated installation.
+- **Lemon: Focus existing session** — lists live native Lemon TUI panes, including
+  parked panes, and reveals the selected one without sending input.
+
+These actions do not submit a prompt or convert ACP conversations into TUI
+sessions. The TUI still reuses the local daemon and authenticates normally.
+If the actions are absent, check Tern's plugin settings: installation preserves
+`plugins=false` and entries in `plugins_disabled`.
+
+Native file-tool cards carry editor locations. **⌘-click** an edit/read/patch
+target (**Ctrl-click** on PC) to open Tern's file block at the reported changed
+line or read offset; a plain click only folds the tool card. Resolved file paths,
+including spaces and `#`, are preserved. The row-rendered TUI exposes the same
+location through OSC 8 links. Nothing opens automatically when a tool runs.
+For an explicit command, use `tern open --split right path/to/file:42`.
+
+Use `/name <title>` to name a conversation. Its saved name is restored on the next
+launch and appears in the Tern pane title and the plugin's session picker.
 
 ## Manual registration
 

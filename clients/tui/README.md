@@ -139,6 +139,13 @@ Tern's native **Run** button on shell fences in replies executes in the pane's
 working directory and displays the output below the fence; **Stop** interrupts
 that command. Execution belongs to Tern and always requires the user's Run
 gesture. The client reports its working directory using OSC 7.
+Native file-tool targets open Tern's editor block with **⌘-click** (**Ctrl-click**
+on PC), at the reported changed line or read offset. They share their location
+with row-renderer OSC 8 links; a normal click folds the card and tools never
+open editor panes automatically. Patch cards target the first surviving changed
+file. `lemon tern install` also provides palette actions to open a native TUI
+split in the focused pane's cwd or focus an existing Lemon pane; see the
+[Tern guide](../../docs/user-guide/tern.md).
 
 Other terminals, or `PI_TUI_NATIVE=0`, use the row renderer. OSC 133 marks stay
 attached to prompt/reply rows as they enter scrollback. Markdown URLs,
