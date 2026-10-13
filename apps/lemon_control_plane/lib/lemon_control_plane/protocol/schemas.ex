@@ -479,6 +479,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       },
       optional: %{
         "agentId" => :string,
+        "cwd" => :string,
         "queueMode" => :string
       }
     },
