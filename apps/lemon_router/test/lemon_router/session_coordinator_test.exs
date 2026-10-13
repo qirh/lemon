@@ -545,7 +545,16 @@ defmodule LemonRouter.SessionCoordinatorTest do
     :ok = SessionCoordinator.abort_run(cancelled)
     assert_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^cancelled}}, 500
 
-    assert %{summary: %{completed: %{ok: false, error: :user_requested, run_id: ^cancelled}}} =
+    assert %{
+             summary: %{
+               completed: %{
+                 ok: false,
+                 error: :user_requested,
+                 run_id: ^cancelled,
+                 meta: %{cancelled: true}
+               }
+             }
+           } =
              LemonCore.RunStore.get(cancelled)
 
     assert GenServer.call(pid, :pending_count) == 1

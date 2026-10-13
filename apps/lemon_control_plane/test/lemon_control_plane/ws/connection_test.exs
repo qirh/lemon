@@ -28,6 +28,67 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     end
   end
 
+  defmodule InvalidResultHandler do
+    @behaviour LemonControlPlane.Method
+    @impl true
+    def name, do: "connection.test.invalid_result"
+    @impl true
+    def scopes, do: []
+    @impl true
+    def handle(_params, _ctx), do: {:ok, %{"usage" => %LemonAi.Types.Usage{input: 1}}}
+  end
+
+  test "unsupported inline and async responses preserve the socket with reconciliation errors" do
+    :ok = Registry.register(InvalidResultHandler)
+    on_exit(fn -> Registry.unregister(InvalidResultHandler.name()) end)
+
+    state = %Connection{
+      conn_id: "encoding-test",
+      auth: %{role: :operator, scopes: [:read, :write], client_id: "test"},
+      connected: true
+    }
+
+    request =
+      Jason.encode!(%{
+        "type" => "req",
+        "id" => "invalid-result",
+        "method" => InvalidResultHandler.name(),
+        "params" => %{}
+      })
+
+    for {operation, id} <- [
+          {fn -> Connection.handle_in({request, [opcode: :text]}, state) end, "invalid-result"},
+          {fn ->
+             Connection.handle_info(
+               {:method_result, "invalid-async", {:ok, %{private_value: self()}}},
+               state
+             )
+           end, "invalid-async"}
+        ] do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:push, {:text, frame}, ^state} = operation.()
+
+          assert %{
+                   "id" => ^id,
+                   "ok" => false,
+                   "error" => %{
+                     "code" => "INTERNAL_ERROR",
+                     "details" => %{"code" => "RESPONSE_ENCODING_FAILED", "retrySafe" => false}
+                   }
+                 } = Jason.decode!(frame)
+        end)
+
+      refute log =~ "private_value"
+      refute log =~ "LemonAi.Types.Usage"
+    end
+
+    assert {:push, {:text, valid}, ^state} =
+             Connection.handle_info({:method_result, "healthy", {:ok, %{ok: true}}}, state)
+
+    assert %{"id" => "healthy", "ok" => true} = Jason.decode!(valid)
+  end
+
   describe "async method dispatch" do
     test "keeps event delivery live while an approval-style method is waiting" do
       :ok = Registry.register(AsyncHandler)

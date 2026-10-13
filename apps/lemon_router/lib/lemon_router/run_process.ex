@@ -519,6 +519,7 @@ defmodule LemonRouter.RunProcess do
               Events.Completion.new(%{
                 ok: false,
                 error: {:gateway_run_down, reason},
+                meta: %{cancelled: state.aborted},
                 answer: ""
               }),
             duration_ms: nil
@@ -558,6 +559,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: reason,
+                  meta: %{cancelled: true},
                   answer: ""
                 }),
               duration_ms: nil
@@ -626,6 +628,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: :gateway_run_missing_after_start,
+                  meta: %{cancelled: state.aborted},
                   answer: ""
                 }),
               duration_ms: nil
@@ -1036,6 +1039,7 @@ defmodule LemonRouter.RunProcess do
             Events.Completion.new(%{
               ok: false,
               error: error,
+              meta: %{cancelled: state.aborted},
               answer: ""
             }),
           duration_ms: LemonCore.Clock.now_ms() - state.start_ts_ms

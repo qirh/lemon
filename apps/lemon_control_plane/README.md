@@ -66,6 +66,14 @@ The event bridge maps Bus run/chat/approval/cron/goal/presence traffic to socket
 events. Non-node clients receive the general event stream; nodes receive only
 targeted node traffic. State-version counters let clients reconcile changed
 presence, health and cron data. They are not durable event replay cursors.
+
+Completed `agent` events include an authoritative `cancelled` boolean taken
+from the durable completion's metadata, plus a bounded, redacted `error` value.
+Clients must not infer cancellation from error wording or from whether the
+correlated `chat.abort` acknowledgement has arrived; the terminal event can
+legitimately arrive first. Failure and budget-stop completions remain
+`cancelled: false` unless a cancellation producer explicitly marked them.
+
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
@@ -80,6 +88,10 @@ signatures, callbacks and runtime state are excluded; complete diff snapshots
 are omitted rather than truncated into misleading edits. Unexpected JSON
 encoding failures drop only the offending event frame and leave the socket
 connected for later output and completion.
+Malformed method responses are replaced with a correlated
+`RESPONSE_ENCODING_FAILED` internal error and `retrySafe: false`, not a socket
+disconnect or a fabricated success. Encoding logs contain only a static failure
+classification; clients must reconcile any potentially completed mutation.
 
 Ordinary `chat.send` requests may supply `cwd`: a nonempty absolute existing
 directory forwarded to the native coding session and its tools. Relative,

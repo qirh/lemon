@@ -118,7 +118,10 @@ defmodule CodingAgent.Session.RunTranslatorTest do
       )
 
     assert_receive {:action_event, %{phase: :completed, ok: false}}
-    assert_receive {:completed, %{ok: false, usage: %{turns: 1, tool_errors: 1}}}
+
+    assert_receive {:completed,
+                    %{ok: false, meta: %{cancelled: true}, usage: %{turns: 1, tool_errors: 1}}}
+
     assert t.pending_actions == %{}
     assert t.completed_emitted
     RunTranslator.handle_event(t, {:canceled, :assistant_aborted})

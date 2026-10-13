@@ -445,7 +445,7 @@ defmodule LemonGateway.ThreadWorker do
           error: error,
           run_id: request.run_id,
           session_key: request.session_key,
-          meta: %{synthetic: true, failure_stage: stage}
+          meta: %{synthetic: true, failure_stage: stage, cancelled: stage == :cancelled}
         })
 
       :ok =
