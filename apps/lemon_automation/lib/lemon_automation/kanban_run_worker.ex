@@ -37,7 +37,7 @@ defmodule LemonAutomation.KanbanRunWorker do
            bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
            timeout_ms: Keyword.get(opts, :timeout_ms, @default_timeout_ms),
            wait_opts: Keyword.get(opts, :wait_opts, []),
-           on_submitting: submission_claim(opts, params, workspace)
+           on_submitting: submission_claim(opts, params, workspace, task)
          ) do
       {:ok, completed_run_id, output} ->
         {:ok, %{run_id: completed_run_id, output: output, session_key: params.session_key}}
@@ -64,19 +64,21 @@ defmodule LemonAutomation.KanbanRunWorker do
     :exit, _reason -> {:error, :worker_failed}
   end
 
-  defp submission_claim(opts, params, workspace) do
-    case Keyword.get(opts, :on_submitting) do
-      callback when is_function(callback, 2) ->
-        fn run_id ->
-          callback.(run_id, %{
-            "sessionKey" => params.session_key,
-            "cwd" => workspace.cwd,
-            "branch" => workspace.worktree && workspace.worktree.branch
-          })
-        end
+  defp submission_claim(opts, params, workspace, task) do
+    fn run_id ->
+      with :ok <- LemonAutomation.RunNotifications.bind_kanban(task, params) do
+        case Keyword.get(opts, :on_submitting) do
+          callback when is_function(callback, 2) ->
+            callback.(run_id, %{
+              "sessionKey" => params.session_key,
+              "cwd" => workspace.cwd,
+              "branch" => workspace.worktree && workspace.worktree.branch
+            })
 
-      _ ->
-        nil
+          _ ->
+            :ok
+        end
+      end
     end
   end
 

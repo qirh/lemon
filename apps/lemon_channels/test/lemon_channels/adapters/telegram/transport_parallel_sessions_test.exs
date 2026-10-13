@@ -461,31 +461,64 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         thread_id: Integer.to_string(topic_id)
       })
 
+    config_key = :"Elixir.LemonGateway.Config"
+    previous_config = Application.get_env(:lemon_gateway, config_key)
+    previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
+    Application.put_env(:lemon_core, :config_test_mode, true)
+
+    Application.put_env(:lemon_gateway, config_key, %{
+      telegram: %{
+        bot_token: "fake-approval-token",
+        api_mod: ParallelMockAPI,
+        account_id: "default",
+        use_markdown: false
+      }
+    })
+
+    previous_plugin = LemonChannels.Registry.get_plugin("telegram")
+    :ok = LemonChannels.Registry.register(LemonChannels.Adapters.Telegram)
+
+    on_exit(fn ->
+      LemonChannels.Registry.unregister("telegram")
+      if previous_plugin, do: LemonChannels.Registry.register(previous_plugin)
+    end)
+
+    on_exit(fn ->
+      if is_nil(previous_config),
+        do: Application.delete_env(:lemon_gateway, config_key),
+        else: Application.put_env(:lemon_gateway, config_key, previous_config)
+
+      if is_nil(previous_test_mode),
+        do: Application.delete_env(:lemon_core, :config_test_mode),
+        else: Application.put_env(:lemon_core, :config_test_mode, previous_test_mode)
+    end)
+
     assert {:ok, transport_pid} =
              start_transport(%{
                allowed_chat_ids: [chat_id],
                deny_unbound_chats: false
              })
 
+    pending =
+      LemonCore.Events.ApprovalPending.new(%{
+        id: approval_id,
+        run_id: "run_#{approval_id}",
+        session_key: session_key,
+        tool: "shell",
+        action: %{"cmd" => "pwd"}
+      })
+
+    :ok = LemonCore.ExecApprovalStore.put_pending(approval_id, pending)
+    on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(approval_id) end)
+
     event =
-      LemonCore.Event.new(
-        :approval_requested,
-        %{
-          approval_id: approval_id,
-          pending: %{
-            id: approval_id,
-            session_key: session_key,
-            tool: "shell",
-            action: %{"cmd" => "pwd"}
-          }
-        }
-      )
+      LemonCore.Event.new(:approval_requested, %{approval_id: approval_id, pending: pending})
 
     send(transport_pid, event)
 
-    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 800
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 2_000
     assert text =~ "Approval requested"
-    assert opts["message_thread_id"] == topic_id
+    assert (opts[:message_thread_id] || opts["message_thread_id"]) == topic_id
   end
 
   test "ignores topic creation events and waits for the next topic message" do

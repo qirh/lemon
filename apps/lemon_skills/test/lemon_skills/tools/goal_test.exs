@@ -44,6 +44,32 @@ defmodule LemonSkills.Tools.GoalTest do
              )
   end
 
+  test "goal supervision destination is normalized and invalid targets never create a goal" do
+    session = "agent:default:main:sub:goal_supervision_#{System.unique_integer([:positive])}"
+    tool = Goal.tool(System.tmp_dir!(), session_key: session)
+
+    assert {:error, _} =
+             tool.execute.(
+               "call",
+               %{"action" => "set", "objective" => "Work", "deliver_to" => "wrong"},
+               nil,
+               nil
+             )
+
+    assert %{} == LemonAgent.Workspace.GoalStore.get(session)
+
+    assert %LemonAgent.Types.AgentToolResult{details: %{goal: goal}} =
+             tool.execute.(
+               "call",
+               %{"action" => "set", "objective" => "Work", "deliver_to" => " NONE "},
+               nil,
+               nil
+             )
+
+    assert goal.meta["deliverTo"] == "none"
+    on_exit(fn -> LemonAgent.Workspace.GoalStore.clear(session) end)
+  end
+
   test "start rejects unbounded tick counts before dispatch" do
     tool = Goal.tool(System.tmp_dir!(), session_key: "agent:default:goal-test")
 

@@ -207,7 +207,7 @@ defmodule LemonAutomation.KanbanDispatcher do
                 mark_unknown(task.id, lease_id(task))
               else
                 if result == :ok,
-                  do: KanbanStore.fail_leased_task(task.id, lease_id(task), "cancelled")
+                  do: fail_card(task.id, lease_id(task), "cancelled")
               end
 
               result = if workflow? and result == :ok, do: :outcome_unknown, else: result
@@ -392,13 +392,13 @@ defmodule LemonAutomation.KanbanDispatcher do
 
         case result do
           :ok ->
-            KanbanStore.complete_leased_task(task_id, lease_id)
+            complete_card(task_id, lease_id)
 
           {:ok, attrs} when is_map(attrs) ->
-            KanbanStore.complete_leased_task(task_id, lease_id, Map.to_list(attrs))
+            complete_card(task_id, lease_id, Map.to_list(attrs))
 
           {:ok, _value} ->
-            KanbanStore.complete_leased_task(task_id, lease_id)
+            complete_card(task_id, lease_id)
 
           {:outcome_unknown, _run_id} ->
             mark_unknown(task_id, lease_id)
@@ -407,14 +407,14 @@ defmodule LemonAutomation.KanbanDispatcher do
             if tracked_run?(KanbanStore.get_task(task_id)) do
               mark_unknown(task_id, lease_id)
             else
-              KanbanStore.fail_leased_task(task_id, lease_id, Atom.to_string(reason))
+              fail_card(task_id, lease_id, Atom.to_string(reason))
             end
 
           {:error, reason} ->
-            KanbanStore.fail_leased_task(task_id, lease_id, failure_class(reason))
+            fail_card(task_id, lease_id, failure_class(reason))
 
           _other ->
-            KanbanStore.fail_leased_task(task_id, lease_id, "invalid_worker_result")
+            fail_card(task_id, lease_id, "invalid_worker_result")
         end
 
         state
@@ -429,20 +429,20 @@ defmodule LemonAutomation.KanbanDispatcher do
 
         if checkpoint["cancelRequested"] == true and checkpoint["phase"] != "publish_pending" and
              KanbanCodingWorkflow.ready_to_resume?(task) do
-          KanbanStore.fail_leased_task(task.id, lease_id(task), "cancelled")
+          fail_card(task.id, lease_id(task), "cancelled")
         end
       else
         case LemonCore.RunStore.get(task.run_id) do
           %{summary: summary} when not is_nil(summary) ->
             case LemonAutomation.RunCompletionWaiter.extract_output_from_completion(summary) do
               {:ok, output} ->
-                KanbanStore.complete_leased_task(task.id, lease_id(task),
+                complete_card(task.id, lease_id(task),
                   run_id: task.run_id,
                   output: output
                 )
 
               {:error, _reason} ->
-                KanbanStore.fail_leased_task(task.id, lease_id(task), "run_failed")
+                fail_card(task.id, lease_id(task), "run_failed")
             end
 
           _ ->
@@ -451,6 +451,21 @@ defmodule LemonAutomation.KanbanDispatcher do
       end
     end)
   end
+
+  defp complete_card(task_id, lease_id, opts \\ []) do
+    notify_card(KanbanStore.complete_leased_task(task_id, lease_id, opts), lease_id)
+  end
+
+  defp fail_card(task_id, lease_id, reason) do
+    notify_card(KanbanStore.fail_leased_task(task_id, lease_id, reason), lease_id)
+  end
+
+  defp notify_card({:ok, task} = result, lease_id) do
+    LemonAutomation.RunNotifications.kanban_finished(task, lease_id)
+    result
+  end
+
+  defp notify_card(result, _lease_id), do: result
 
   defp unowned_runs(board_id, running) do
     active = MapSet.new(Enum.map(running, fn {_ref, worker} -> worker.task_id end))

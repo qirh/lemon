@@ -1985,24 +1985,8 @@ defmodule LemonAutomation.CronManager do
   # The bus broadcast above only reaches processes subscribed at that moment
   # (usually none), so the chat delivery is what actually notifies the user.
   defp deliver_to_channel(%CronRun{} = run, job) do
-    session_key = meta_value(run.meta, :session_key) || (job && job.session_key)
-    job_name = meta_value(run.meta, :job_name) || (job && job.name)
-
-    case CronDelivery.target(job, session_key) do
-      {:ok, target} ->
-        body = extract_summary_body(run.output, run.status, run.error)
-
-        text =
-          job_name
-          |> CronDelivery.channel_text(run, body)
-          |> truncate_to_bytes(@forwarded_summary_max_bytes)
-
-        _ = CronDelivery.deliver(target, text, run)
-        :ok
-
-      :none ->
-        :ok
-    end
+    summary = extract_summary_body(run.output, run.status, run.error)
+    LemonAutomation.RunNotifications.cron_finished(job, run, summary)
   rescue
     e ->
       Logger.warning("[CronManager] Failed to deliver cron result: #{Exception.message(e)}")

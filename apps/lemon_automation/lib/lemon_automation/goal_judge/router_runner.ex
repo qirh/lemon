@@ -28,7 +28,8 @@ defmodule LemonAutomation.GoalJudge.RouterRunner do
       }
       |> maybe_put(:model, Map.get(context, :model))
 
-    with {:ok, submitted_run_id, output} <-
+    with :ok <- LemonAutomation.RunNotifications.bind_goal(goal, params),
+         {:ok, submitted_run_id, output} <-
            RunCompletionWaiter.submit_and_wait(params,
              router_mod: router_mod,
              waiter_mod: waiter_mod,

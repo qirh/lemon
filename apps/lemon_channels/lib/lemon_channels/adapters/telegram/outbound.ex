@@ -20,16 +20,22 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   Deliver an outbound payload to Telegram.
   """
   @spec deliver(OutboundPayload.t()) :: {:ok, term()} | {:error, term()}
-  def deliver(%OutboundPayload{kind: :text} = payload) do
+  def deliver(%OutboundPayload{} = payload) do
+    with {:ok, config} <- account_config(payload.account_id) do
+      deliver_payload(payload, config)
+    end
+  end
+
+  defp deliver_payload(%OutboundPayload{kind: :text} = payload, config) do
     Logger.debug(
       "Telegram outbound delivering text: chat_id=#{payload.peer.id} " <>
         "text_length=#{String.length(payload.content || "")}"
     )
 
     chat_id = String.to_integer(payload.peer.id)
-    {text, md_opts} = format_text(payload.content, telegram_use_markdown())
+    {text, md_opts} = format_text(payload.content, telegram_use_markdown(config))
     opts = build_send_opts(payload, md_opts)
-    {token, api_mod} = telegram_config()
+    {token, api_mod} = telegram_config(config)
 
     # Use existing Telegram API if available
     if Code.ensure_loaded?(api_mod) do
@@ -58,19 +64,20 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  def deliver(
-        %OutboundPayload{kind: :edit, content: %{message_id: message_id, text: text}} = payload
-      ) do
+  defp deliver_payload(
+         %OutboundPayload{kind: :edit, content: %{message_id: message_id, text: text}} = payload,
+         config
+       ) do
     Logger.debug(
       "Telegram outbound editing message: chat_id=#{payload.peer.id} message_id=#{message_id}"
     )
 
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
-    {formatted_text, md_opts} = format_text(text, telegram_use_markdown())
+    {formatted_text, md_opts} = format_text(text, telegram_use_markdown(config))
     reply_markup = extract_reply_markup(payload.meta)
     md_opts = maybe_merge_reply_markup(md_opts, reply_markup)
-    {token, api_mod} = telegram_config()
+    {token, api_mod} = telegram_config(config)
 
     if Code.ensure_loaded?(api_mod) do
       case token do
@@ -104,14 +111,17 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  def deliver(%OutboundPayload{kind: :delete, content: %{message_id: message_id}} = payload) do
+  defp deliver_payload(
+         %OutboundPayload{kind: :delete, content: %{message_id: message_id}} = payload,
+         config
+       ) do
     Logger.debug(
       "Telegram outbound deleting message: chat_id=#{payload.peer.id} message_id=#{message_id}"
     )
 
     chat_id = String.to_integer(payload.peer.id)
     msg_id = parse_message_id(message_id)
-    {token, api_mod} = telegram_config()
+    {token, api_mod} = telegram_config(config)
 
     if Code.ensure_loaded?(api_mod) do
       case token do
@@ -163,11 +173,11 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  def deliver(%OutboundPayload{kind: :file, content: content} = payload) do
+  defp deliver_payload(%OutboundPayload{kind: :file, content: content} = payload, config) do
     Logger.debug("Telegram outbound delivering file: chat_id=#{payload.peer.id}")
 
     chat_id = String.to_integer(payload.peer.id)
-    {token, api_mod} = telegram_config()
+    {token, api_mod} = telegram_config(config)
 
     case normalize_file_content(content) do
       {:ok, normalized_content} ->
@@ -211,7 +221,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  def deliver(%OutboundPayload{kind: kind}) do
+  defp deliver_payload(%OutboundPayload{kind: kind}, _config) do
     Logger.error("Telegram outbound unsupported payload kind: #{inspect(kind)}")
     {:error, {:unsupported_kind, kind}}
   end
@@ -598,8 +608,23 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  defp telegram_config do
+  defp account_config(account_id) when is_binary(account_id) and account_id != "" do
     config = telegram_runtime_config()
+
+    configured_account =
+      case fetch_config(config, :account_id) do
+        {:ok, value} -> value
+        :error -> "default"
+      end
+
+    if account_id == configured_account,
+      do: {:ok, config},
+      else: {:error, :telegram_account_mismatch}
+  end
+
+  defp account_config(_), do: {:error, :telegram_account_mismatch}
+
+  defp telegram_config(config) do
     token = config[:bot_token] || config["bot_token"] || resolve_bot_token_secret(config)
 
     api_mod =
@@ -622,9 +647,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
     end
   end
 
-  defp telegram_use_markdown do
-    config = telegram_runtime_config()
-
+  defp telegram_use_markdown(config) do
     case fetch_config(config, :use_markdown) do
       {:ok, nil} -> true
       {:ok, v} -> v

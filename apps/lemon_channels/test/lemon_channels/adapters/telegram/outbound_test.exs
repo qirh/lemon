@@ -506,10 +506,15 @@ defmodule LemonChannels.Adapters.Telegram.OutboundTest do
   end
 
   defp put_telegram_config(config) when is_map(config) do
-    base = %{files: %{outbound_send_delay_ms: 0}}
+    base = %{account_id: "acct", files: %{outbound_send_delay_ms: 0}}
     telegram = deep_merge(base, config)
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
-    Application.put_env(:lemon_gateway, @gateway_config_key, Map.put(existing, :telegram, telegram))
+
+    Application.put_env(
+      :lemon_gateway,
+      @gateway_config_key,
+      Map.put(existing, :telegram, telegram)
+    )
   end
 
   defp deep_merge(left, right) when is_map(left) and is_map(right) do
