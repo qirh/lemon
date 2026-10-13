@@ -133,6 +133,60 @@ defmodule LemonControlPlane.EventBridgeTest do
   end
 
   describe "event forwarding" do
+    test "completed exposes authoritative cancellation independent of abort acknowledgement" do
+      conn_id = "cancel_wire_#{System.unique_integer([:positive])}"
+      :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      on_exit(fn -> Presence.unregister(conn_id) end)
+      flush_events()
+
+      for {completion_meta, expected} <- [
+            {%{cancelled: true, budget: %{limit: 10}}, true},
+            {%{"cancelled" => true}, true},
+            {%{}, false}
+          ] do
+        send(
+          Process.whereis(EventBridge),
+          LemonCore.Event.new(
+            :run_completed,
+            %{completed: %{ok: false, error: "Cancelled", meta: completion_meta}},
+            %{run_id: "cancel-wire"}
+          )
+        )
+
+        assert_receive {:event, "agent", %{"type" => "completed"} = payload, _}, 1_000
+        assert payload["cancelled"] == expected
+        assert payload["error"] == "Cancelled"
+        assert payload["ok"] == false
+      end
+    end
+
+    test "completed error projection is bounded and redacts credential fields" do
+      conn_id = "error_wire_#{System.unique_integer([:positive])}"
+      :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      on_exit(fn -> Presence.unregister(conn_id) end)
+      flush_events()
+
+      error = %{
+        message: String.duplicate("x", 100_000),
+        api_key: "test-secret-token",
+        state: self()
+      }
+
+      send(
+        Process.whereis(EventBridge),
+        LemonCore.Event.new(:run_completed, %{completed: %{ok: false, error: error}}, %{
+          run_id: "error-wire"
+        })
+      )
+
+      assert_receive {:event, "agent", %{"type" => "completed"} = payload, _}, 1_000
+      encoded = Jason.encode!(payload["error"])
+      assert byte_size(encoded) <= 32 * 1024
+      refute encoded =~ "test-secret-token"
+      refute Map.has_key?(payload["error"], :state)
+      assert payload["cancelled"] == false
+    end
+
     test "never forwards prompt, chat, tool, or approval events to node clients" do
       operator_pid = start_event_collector(:operator)
       node_pid = start_event_collector(:node)
