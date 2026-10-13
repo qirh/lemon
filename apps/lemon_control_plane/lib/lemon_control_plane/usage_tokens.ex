@@ -11,6 +11,8 @@ defmodule LemonControlPlane.UsageTokens do
   falls back to cache-inclusive input accounting, excluding output, as used by
   `LemonRouter.RunProcess.CompactionTrigger.usage_input_tokens/1`. Cumulative
   `total_tokens` is never substituted for current context.
+  Conversely, a cumulative total fallback includes reported cache counts and
+  output; it does not reuse an explicit latest-turn context measurement.
   """
 
   @input_keys [:input_tokens, :input, :prompt_tokens]
@@ -30,18 +32,22 @@ defmodule LemonControlPlane.UsageTokens do
     cache_read = first_integer(usage, @cache_read_keys)
     cache_write = first_integer(usage, @cache_write_keys)
     total = first_integer(usage, @total_keys)
+    reported_context = first_integer(usage, [:context_tokens, :contextTokens])
+
+    cumulative_input =
+      if is_nil(total) or is_nil(reported_context),
+        do: context_tokens(usage, input, cache_read, cache_write)
+
     cost = cost_usd(usage)
 
-    context =
-      first_integer(usage, [:context_tokens, :contextTokens]) ||
-        context_tokens(usage, input, cache_read, cache_write)
+    context = reported_context || cumulative_input
 
     normalized = %{
       "inputTokens" => input,
       "outputTokens" => output,
       "cacheReadTokens" => cache_read,
       "cacheWriteTokens" => cache_write,
-      "totalTokens" => total || sum_or_nil([context, output]),
+      "totalTokens" => total || sum_or_nil([cumulative_input, output]),
       "contextTokens" => context,
       "costUsd" => cost,
       "turns" => first_integer(usage, [:turns]),
