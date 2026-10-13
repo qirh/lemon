@@ -228,6 +228,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "archived" => :boolean
       }
     },
+    "sessions.get" => %{required: %{"sessionKey" => :string}, optional: %{}},
+    "sessions.history" => %{
+      required: %{"sessionKey" => :string},
+      optional: %{"limit" => :integer}
+    },
     "sessions.tree" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},
       optional: %{"limit" => :integer, "offset" => :integer}

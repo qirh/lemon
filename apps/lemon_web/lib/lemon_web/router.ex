@@ -34,6 +34,7 @@ defmodule LemonWeb.Router do
     pipe_through(:management_browser)
 
     live("/", ManagementLive, :index)
+    live("/work", WorkManagementLive, :index)
     live("/blueprints", BlueprintManagementLive, :index)
     live("/memory", MemoryManagementLive, :index)
     live("/profiles", ProfileManagementLive, :index)

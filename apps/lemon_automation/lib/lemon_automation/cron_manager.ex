@@ -174,6 +174,19 @@ defmodule LemonAutomation.CronManager do
     GenServer.call(__MODULE__, {:update, job_id, params}, @call_timeout_ms)
   end
 
+  @doc "Update only the exact job revision inspected by an operator."
+  def update(job_id, params, expected_revision) do
+    GenServer.call(__MODULE__, {:update, job_id, params, expected_revision}, @call_timeout_ms)
+  end
+
+  @doc "Opaque revision for a job or run; never exposes its private content."
+  def control_revision(record) do
+    record
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
   @doc """
   Re-capture the current global default model for an unpinned agent job.
 
@@ -201,6 +214,11 @@ defmodule LemonAutomation.CronManager do
     GenServer.call(__MODULE__, {:run_now, job_id}, @call_timeout_ms)
   end
 
+  @doc "Run only the exact job revision inspected by an operator."
+  def run_now(job_id, expected_revision) do
+    GenServer.call(__MODULE__, {:run_now, job_id, expected_revision}, @call_timeout_ms)
+  end
+
   @doc false
   def wake(job_id, opts \\ []) do
     GenServer.call(__MODULE__, {:wake, job_id, opts}, @call_timeout_ms)
@@ -215,6 +233,11 @@ defmodule LemonAutomation.CronManager do
     GenServer.call(__MODULE__, {:abort_run, run_id}, @call_timeout_ms)
   end
 
+  @doc "Abort only the exact invocation revision inspected by an operator."
+  def abort_run(run_id, expected_revision) do
+    GenServer.call(__MODULE__, {:abort_run, run_id, expected_revision}, @call_timeout_ms)
+  end
+
   @doc """
   Get run history for a job.
 
@@ -223,8 +246,9 @@ defmodule LemonAutomation.CronManager do
   - `:limit` - Maximum number of runs (default: 100)
   - `:status` - Filter by status
   - `:since_ms` - Filter by start time
+  - `:strict` - Return `{:ok, runs}` or a store error, never false empty history
   """
-  @spec runs(binary(), keyword()) :: [CronRun.t()]
+  @spec runs(binary(), keyword()) :: [CronRun.t()] | {:ok, [CronRun.t()]} | {:error, term()}
   def runs(job_id, opts \\ []) do
     GenServer.call(__MODULE__, {:runs, job_id, opts}, @call_timeout_ms)
   end
@@ -372,6 +396,20 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
+  def handle_call({:update, job_id, params, expected}, from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        if expected == control_revision(job) do
+          handle_call({:update, job_id, params}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   @impl true
   def handle_call({:update, job_id, params}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
@@ -457,6 +495,20 @@ defmodule LemonAutomation.CronManager do
     end
   end
 
+  def handle_call({:run_now, job_id, expected}, from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        if expected == control_revision(job) do
+          handle_call({:run_now, job_id}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
   @impl true
   def handle_call({:run_now, job_id}, _from, state) do
     case Map.fetch(state.jobs, job_id) do
@@ -518,6 +570,20 @@ defmodule LemonAutomation.CronManager do
 
       _ ->
         {:reply, {:error, :not_active}, state}
+    end
+  end
+
+  def handle_call({:abort_run, run_id, expected}, from, state) do
+    case CronStore.get_run(run_id) do
+      %CronRun{} = run ->
+        if expected == control_revision(run) do
+          handle_call({:abort_run, run_id}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :not_found}, state}
     end
   end
 

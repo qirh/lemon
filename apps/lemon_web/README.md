@@ -66,7 +66,8 @@ authentication establishes the same marker without redirecting.
 
 | Path | Handler | Description |
 |------|---------|-------------|
-| `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage` | `ManagementLive` | Live active runs, runtime/node status, and searchable active/archived sessions |
+| `/manage/work` | `WorkManagementLive` | Live kanban, goal, and cron status with revision-bound preview/confirm controls |
 | `/manage/memory` | `MemoryManagementLive` | Bounded, redacted durable-memory search, provenance inspection, and exact digest-confirmed deletion |
 | `/manage/blueprints` | `BlueprintManagementLive` | Content-free catalog inspection, validation, exact preview, and digest-confirmed activation |
 | `/manage/profiles` | `ProfileManagementLive` | Bounded roster plus preview-first create, clone, rename, recoverable delete, and canonical-chat links |
@@ -91,7 +92,7 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - Transcript rendered as a LiveView stream (`stream/3`): a streaming delta re-inserts only the active reply, so per-token diffs do not grow with the transcript
 - Finished assistant replies rendered as sanitized markdown (`LemonWeb.Markdown`: headings, lists, tables, links, code blocks with a `language-*` class); raw HTML, script-capable links, inline attributes, and images never become markup. A reply renders as plain text while it is still streaming
 - Multi-file upload (up to 5 files, 20 MB each) with progress tracking and cancellation
-- Tool call cards, collapsed by default, showing tool name, a one-line argument summary, and running/done/failed status; each card updates in place by action id, and expanding it shows the (credential-masked) arguments and result
+- Tool call cards, collapsed by default, showing tool name, a one-line argument summary, and running/done/failed status; each card updates in place by action id, including partial output while the tool is running, and expanding it shows the (credential-masked) arguments and result
 - Approval panel for this session's pending tool approvals with the TUI's choices (approve once, approve for this session, always approve, deny), resolved through `LemonCore.ExecApprovals.resolve/2`
 - System notifications for run lifecycle events (started, completed, failed)
 - Active-run stop control through `LemonRouter.abort_run/2`
@@ -99,7 +100,8 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
   an initial lookup failure renders a disabled "Run status unavailable" state,
   while a later failure preserves the last known running/stopping state and draft
 - Transcript capped at 250 messages (stream limit)
-- Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume
+- Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume; historical phases collapse by run/action identity and subsequent live events update that same card
+- Bounded, session-scoped subagent tree from actual task records and run-graph edges, refreshed every two seconds only after connection; up to 50 nodes and eight levels, with explicit unavailable state and no child prompt/result/path projection
 
 **Session key resolution:**
 1. If `params["session_key"]` is present and valid, use it directly
@@ -142,6 +144,17 @@ run/tool inspection, and redacted JSON/Markdown export. Runtime status comes
 from `LemonCore.Runtime.Health`; live named-node presence comes from
 `LemonCore.NodeRegistry` with node metadata deliberately omitted from the UI.
 
+Connected management pages refresh every three seconds without clearing search
+filters or pending previews. A separate allowlisted `Working now` projection
+uses shared router state to discover up to 40 active runs, including sessions
+that have not completed their first run. It retains its last known rows on
+lookup failure and links directly to live transcripts. Durable search remains
+owned by `SessionLifecycle` and bounded to 200 rows.
+
+In-page metadata and history pass through `LemonWeb.ManagementText`: shared
+operator credential redaction, path-token omission, UTF-8 bounds, and bounded
+nested collections. This does not change the private chat resume contract.
+
 Guarded prune is preview-first and defaults to archived, unpinned sessions.
 The confirmation token binds the threshold, policy flags, stable session keys,
 index timestamps, and lifecycle metadata. If anything changes, execution fails
@@ -152,6 +165,22 @@ Management inspection and downloads are always redacted and never expose raw
 run records or event payloads. Chat resume is an internal trusted consumer of
 unredacted history so the user can continue their own conversation; no operator
 JSON-RPC method offers that mode.
+
+### WorkManagementLive (`/manage/work`)
+
+The required-auth automation dashboard delegates to the existing kanban, goal,
+and cron stores and managers. Connected refreshes show safe IDs, labels,
+statuses, progress/retry counts, and actual run/session links. Prompts,
+objectives, cwd/worktree paths, environment values, raw results, and runtime
+error terms never enter its management projection.
+
+Board start/stop, bounded goal start/pause/resume/stop, cron run/pause/resume,
+and exact cron-run cancellation are preview-first. The server keeps the target
+and opaque revision; automation managers compare expected state inside their
+serialized mutation boundary. Changed targets reject stale confirmation.
+Unknown outcomes remain owned and visible rather than being labeled finished
+or starting a replacement editor. The page operates existing work; creation
+continues through the `kanban`, `goal`, and `cron` tools.
 
 ### ProviderManagementLive (`/manage/providers`)
 

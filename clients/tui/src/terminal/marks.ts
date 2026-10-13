@@ -27,9 +27,4 @@ export class TranscriptMarks {
 		this.#lines = marked;
 		return marked;
 	}
-
-	/** Keep the row that will receive D mutable until the turn finishes. */
-	settledRows(count: number): number {
-		return this.#enabled ? Math.min(count, Math.max(0, this.#lines.length - 1)) : count;
-	}
 }

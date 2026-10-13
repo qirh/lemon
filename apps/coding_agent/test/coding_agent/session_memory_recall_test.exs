@@ -15,6 +15,18 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     assert is_pid(Process.whereis(LemonMemory.Store)), "durable memory store must be running"
 
     agent_id = "recall_e2e_#{System.unique_integer([:positive])}"
+    cwd = tmp_cwd()
+    workspace_dir = Path.join(cwd, "profile")
+    Process.put(:recall_cwd, cwd)
+    Process.put(:recall_workspace, workspace_dir)
+
+    {:ok, identity} =
+      LemonMemory.Project.scope(%{
+        cwd: cwd,
+        workspace_dir: workspace_dir,
+        agent_id: agent_id,
+        session_scope: :main
+      })
 
     # Run N: finished in another session and ingested like any finalized run.
     :ok =
@@ -24,6 +36,8 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         summary: %{
           session_key: "agent:#{agent_id}:telegram:1",
           agent_id: agent_id,
+          workspace_key: identity.root,
+          meta: %{"home_digest" => identity.home_digest},
           prompt: "My sister Priya's birthday is on March 14th, please keep that in mind.",
           completed: %{ok: true, answer: "Noted: Priya's birthday is March 14th."}
         }
@@ -50,7 +64,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
       start_supervised!(
         {Session,
          cwd: cwd,
-         workspace_dir: Path.join(cwd, "profile"),
+         workspace_dir: Process.get(:recall_workspace),
          agent_id: agent_id,
          session_key: "agent:#{agent_id}:tui:2",
          model: Mocks.mock_model(),
@@ -82,7 +96,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   end
 
   test "run N's fact is attached to run N+1's opening message", %{agent_id: agent_id} do
-    session = start_session(agent_id, tmp_cwd())
+    session = start_session(agent_id, Process.get(:recall_cwd))
 
     :ok = Session.prompt(session, "What could I get Priya for her birthday?")
     {text, system_prompt} = sent_user_text()
@@ -94,7 +108,7 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   end
 
   test "[memory] auto_recall = false attaches nothing", %{agent_id: agent_id} do
-    cwd = tmp_cwd()
+    cwd = Process.get(:recall_cwd)
     File.mkdir_p!(Path.join(cwd, ".lemon"))
     File.write!(Path.join([cwd, ".lemon", "config.toml"]), "[memory]\nauto_recall = false\n")
 
@@ -109,12 +123,12 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   test "remembered USER.md facts accompany scoped recall without another tool call", %{
     agent_id: agent_id
   } do
-    cwd = tmp_cwd()
-    workspace_dir = Path.join(cwd, "profile")
+    cwd = Process.get(:recall_cwd)
+    workspace_dir = Process.get(:recall_workspace)
     fact = "Prefers handmade wooden birthday gifts."
 
     result =
-      LemonSkills.Tools.Remember.tool(cwd, workspace_dir: workspace_dir).execute.(
+      LemonSkills.Tools.Remember.tool(cwd, workspace_dir: workspace_dir, session_scope: :main).execute.(
         "remember-profile",
         %{"target" => "user", "text" => fact},
         nil,

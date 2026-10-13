@@ -27,10 +27,13 @@
  *     must never change again: they may already be in native scrollback.
  */
 
+import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ToolBlock } from "../../store/transcript-model.ts";
 import { toolLink } from "../../terminal/links.ts";
+import { nativeTool } from "../../terminal/native-tool.ts";
 import { getTheme, type Theme } from "../theme/theme.ts";
 import { buildToolView, type ToolCardState, type ToolView } from "../tool-view.ts";
 import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
@@ -145,6 +148,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#cachedWidth = -1;
 	#cachedAccordion = -1;
 	#cached: readonly string[] = [];
+	#native: NativeNode | undefined;
+	#nativeVersion = -1;
 
 	constructor(block: ToolBlock, options: ToolCardOptions = {}) {
 		this.#block = block;
@@ -235,6 +240,27 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	// -- render --------------------------------------------------------------
+
+	describe(): NativeNode {
+		this.#syncAnimation();
+		const version = this.getTranscriptBlockVersion();
+		if (!this.#native || this.#nativeVersion !== version) {
+			this.#native = nativeTool(
+				this.#block,
+				this.#view,
+				this.#accordion.state === "collapsed",
+				(this.#completedAt ?? this.#now()) - this.#startedAt,
+			);
+			this.#nativeVersion = version;
+		}
+		return this.#native;
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "toggle") return;
+		this.setAccordionState(event.collapsed ? "collapsed" : "expanded");
+		this.#requestRender?.(this);
+	}
 
 	render(width: number): readonly string[] {
 		const accordionVersion = this.#accordion.version;
@@ -343,7 +369,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	#syncAnimation(): void {
-		const live = this.#block.phase !== "completed";
+		const live = this.#block.phase !== "completed" && !isNativeRendering();
 		if (live && this.#requestRender && this.#spinnerTimer === undefined) {
 			this.#spinnerFrame = sharedSpinnerFrame(getTheme().spinnerFrames.length, this.#now());
 			this.#spinnerTimer = setInterval(() => {

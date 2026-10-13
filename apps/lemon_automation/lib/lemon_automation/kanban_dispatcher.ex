@@ -9,6 +9,11 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   Starting a board reclaims only unsubmitted leases left by the same worker
   ID. Tracked invocations reconcile against durable run completion instead.
+
+  Operator callers may pass `expected_revision:` from `status/2` to start or
+  stop. The manager checks it before mutation, binding confirmation to the board,
+  its durable cards and the exact dispatcher invocation and owned workers.
+  Drift returns `{:error, :stale}` without touching the replacement invocation.
   """
 
   use GenServer
@@ -20,11 +25,17 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   def start_board(board_id, opts \\ []) do
-    GenServer.call(Keyword.get(opts, :name, __MODULE__), {:start_board, board_id, opts})
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:start_board, board_id, opts, Keyword.get(opts, :expected_revision)}
+    )
   end
 
   def stop_board(board_id, opts \\ []) do
-    GenServer.call(Keyword.get(opts, :name, __MODULE__), {:stop_board, board_id})
+    GenServer.call(
+      Keyword.get(opts, :name, __MODULE__),
+      {:stop_board, board_id, Keyword.get(opts, :expected_revision)}
+    )
   end
 
   def status(board_id, opts \\ []) do
@@ -48,6 +59,14 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   @impl true
+  def handle_call({:start_board, board_id, opts, expected}, from, state) do
+    if is_nil(expected) or expected == control_revision(board_id, state) do
+      handle_call({:start_board, board_id, opts}, from, state)
+    else
+      {:reply, {:error, :stale}, state}
+    end
+  end
+
   def handle_call({:start_board, board_id, opts}, _from, state) do
     case KanbanStore.get_board(board_id) do
       %{} = board when map_size(board) == 0 ->
@@ -62,6 +81,7 @@ defmodule LemonAutomation.KanbanDispatcher do
 
           dispatcher = %{
             board_id: board.id,
+            invocation_id: make_ref(),
             status: "running",
             interval_ms: Keyword.get(opts, :interval_ms, 1_000),
             max_concurrency: Keyword.get(opts, :max_concurrency, 1),
@@ -104,6 +124,14 @@ defmodule LemonAutomation.KanbanDispatcher do
       end
 
     {:reply, reply, state}
+  end
+
+  def handle_call({:stop_board, board_id, expected}, from, state) do
+    if is_nil(expected) or expected == control_revision(board_id, state) do
+      handle_call({:stop_board, board_id}, from, state)
+    else
+      {:reply, {:error, :stale}, state}
+    end
   end
 
   def handle_call({:stop_board, board_id}, _from, state) do
@@ -157,6 +185,7 @@ defmodule LemonAutomation.KanbanDispatcher do
      {:ok,
       %{
         running: not is_nil(dispatcher),
+        control_revision: control_revision(board_id, state),
         reconciling_count:
           length(unowned_runs(board_id, if(dispatcher, do: dispatcher.running, else: %{}))),
         dispatcher: dispatcher && public_dispatcher(dispatcher)
@@ -395,6 +424,19 @@ defmodule LemonAutomation.KanbanDispatcher do
 
         put_in(state.boards[board_id].timer, timer)
     end
+  end
+
+  # Bind operator confirmation to the exact dispatcher and durable leases/runs.
+  defp control_revision(board_id, state) do
+    dispatcher = Map.get(state.boards, board_id)
+
+    invocation =
+      dispatcher && {dispatcher.invocation_id, dispatcher.started_at_ms, dispatcher.running}
+
+    {KanbanStore.get_board(board_id), KanbanStore.list_tasks(board_id, limit: 10_000), invocation}
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
   end
 
   defp public_dispatcher(dispatcher) do

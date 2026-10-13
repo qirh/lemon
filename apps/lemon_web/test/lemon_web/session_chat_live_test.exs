@@ -115,6 +115,54 @@ defmodule LemonWeb.SessionChatLiveTest do
   end
 
   describe "tool call cards" do
+    test "resumed history collapses action phases and live events update the same card" do
+      key = session_key("resumed-tools")
+      run_id = "run-#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+      detail = %{name: "bash", args: %{command: "printf progress"}}
+
+      for id <- ["first-call", "second-call"], phase <- [:started, :updated, :completed] do
+        event = action(run_id, id, phase, Map.put(detail, :result, id), ok: true)
+        LemonCore.RunStore.append_event(run_id, event.payload)
+      end
+
+      :ok =
+        LemonCore.RunStore.finalize(run_id, %{
+          session_key: key,
+          agent_id: "default",
+          origin: :web,
+          prompt: "Inspect two files",
+          completed: %{ok: true, answer: "Inspected"}
+        })
+
+      assert_eventually(fn -> LemonCore.RunStore.history(key, limit: 1) != [] end)
+      {:ok, view, _html} = live(build_conn(), "/sessions/#{key}")
+
+      cards = fn ->
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(".tool-call-card")
+        |> LazyHTML.attribute("id")
+      end
+
+      ids = cards.()
+      assert length(ids) == 2
+      refute has_element?(view, ".tool-call-card[data-status=running]")
+      assert has_element?(view, ".tool-call-card[data-status=done]", "first-call")
+      assert has_element?(view, ".tool-call-card[data-status=done]", "second-call")
+
+      send(
+        view.pid,
+        action(run_id, "second-call", :completed, Map.put(detail, :result, "Final live result"),
+          ok: true
+        )
+      )
+
+      assert has_element?(view, ".tool-call-card[data-status=done]", "Final live result")
+      assert cards.() == ids
+    end
+
     test "one collapsed card per action, updated in place with name, arguments, and status" do
       {:ok, view, _html} = live(build_conn(), "/sessions/#{session_key("tools")}")
 
@@ -167,6 +215,89 @@ defmodule LemonWeb.SessionChatLiveTest do
 
       assert position(html, "Run started (lemon).") < position(html, "ls -la")
       assert position(html, "ls -la") < position(html, "read: README.md")
+    end
+
+    test "router partial results stream in place and retain false completion and run identity" do
+      key = session_key("tool-progress")
+      {:ok, view, _html} = live(build_conn(), "/sessions/#{key}")
+      topic = LemonCore.Bus.session_topic(key)
+      detail = %{name: "bash", args: %{command: "printf progress"}}
+
+      broadcast = fn run_id, phase, detail, opts ->
+        event = action(run_id, "same-call", phase, detail, opts)
+        # Router payloads may carry the run identity without a metadata copy.
+        event = %{event | payload: Map.put(event.payload, :run_id, run_id), meta: %{}}
+        LemonCore.Bus.broadcast(topic, event)
+      end
+
+      broadcast.("progress-one", :started, detail, [])
+      assert_eventually(fn -> has_element?(view, ".tool-call-card[data-phase=started]") end)
+
+      ids_before =
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(".tool-call-card")
+        |> LazyHTML.attribute("id")
+
+      progress =
+        Map.put(detail, :partial_result, %{
+          output: "Working through files",
+          api_key: "sk-progress-secret"
+        })
+
+      broadcast.("progress-one", :updated, progress, [])
+
+      assert_eventually(fn ->
+        has_element?(view, ".tool-call-card[data-phase=updated] summary", "Working through files")
+      end)
+
+      assert view
+             |> render()
+             |> LazyHTML.from_fragment()
+             |> LazyHTML.query(".tool-call-card")
+             |> LazyHTML.attribute("id") == ids_before
+
+      refute render(view) =~ "sk-progress-secret"
+
+      text_progress =
+        Map.put(detail, :partial_result, %{
+          content: [%{type: "text", text: "Next file is ready"}],
+          details: %{api_key: "sk-progress-secret"}
+        })
+
+      broadcast.("progress-one", :updated, text_progress, [])
+
+      assert_eventually(fn ->
+        has_element?(view, ".tool-call-progress", "Next file is ready")
+      end)
+
+      refute has_element?(view, ".tool-call-progress", "Working through files")
+      refute has_element?(view, ".tool-call-progress", "content")
+
+      broadcast.(
+        "progress-one",
+        :completed,
+        Map.put(detail, :result, %{ok: false, password: "hidden-result"}),
+        ok: false
+      )
+
+      assert_eventually(fn ->
+        has_element?(view, ".tool-call-card[data-status=failed]", "false")
+      end)
+
+      refute has_element?(view, ".tool-call-progress")
+      refute render(view) =~ "hidden-result"
+
+      broadcast.("progress-two", :started, detail, [])
+
+      assert_eventually(fn ->
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(".tool-call-card")
+        |> Enum.count() == 2
+      end)
     end
   end
 

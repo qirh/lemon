@@ -535,11 +535,8 @@ defmodule CodingAgent.SessionEdgeCasesTest do
 
       state = Session.get_state(session)
 
-      model_changes =
-        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
-
-      assert length(model_changes) == 1
-      assert hd(model_changes).model_id == "another-model"
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.model == %{provider: new_model.provider, model_id: new_model.id}
     end
 
     test "set_thinking_level to all valid levels" do
@@ -668,15 +665,21 @@ defmodule CodingAgent.SessionEdgeCasesTest do
     end
 
     @tag :tmp_dir
-    test "handles corrupted session file", %{tmp_dir: tmp_dir} do
+    test "rejects a corrupted session file without replacing it", %{tmp_dir: tmp_dir} do
       corrupted_file = Path.join(tmp_dir, "corrupted.jsonl")
-      File.write!(corrupted_file, "not{valid}json\n{also:bad}")
+      contents = "not{valid}json\n{also:bad}"
+      File.write!(corrupted_file, contents)
+      previous_trap_exit = Process.flag(:trap_exit, true)
 
-      # Should start with new session
-      session = start_session(session_file: corrupted_file, cwd: tmp_dir)
-      messages = Session.get_messages(session)
+      try do
+        assert {:error, {%ArgumentError{} = error, _stacktrace}} =
+                 Session.start_link(default_opts(session_file: corrupted_file, cwd: tmp_dir))
 
-      assert messages == []
+        assert Exception.message(error) =~ "cannot resume session: %Jason.DecodeError{"
+        assert File.read!(corrupted_file) == contents
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
     end
   end
 

@@ -15,6 +15,11 @@ defmodule LemonControlPlane.ACP do
   Permission requests retain the native tool-call identity and bounded target
   preview; approval summaries never persist raw tool arguments. Client calls
   are concurrent so terminal exit waits cannot block output or cancellation.
+  Remembered approval is scoped to the same tool and action arguments within
+  the session, not a blanket grant to that tool.
+  Historical interrupted tools are reconciled against finalized run events:
+  retained partial output is replayed, and missing completion results are
+  explicitly identified rather than leaving a finished run's card running.
   """
 
   alias LemonControlPlane.AgentRuntime
@@ -683,7 +688,10 @@ defmodule LemonControlPlane.ACP do
     case native_history(session) do
       {:ok, entries} ->
         state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
-        Enum.reduce(entries, state, &replay_native_entry(session_id, &1, opts, &2))
+
+        entries
+        |> Enum.reduce(state, &replay_native_entry(session_id, &1, opts, &2))
+        |> replay_unfinished_tools(session, opts)
 
       :unavailable ->
         LemonCore.SessionLifecycle.history(session.session_key, limit: 200)
@@ -704,6 +712,91 @@ defmodule LemonControlPlane.ACP do
             )
           end
         end)
+    end
+  end
+
+  # A killed tool worker can leave an assistant tool call without a journaled
+  # result. Only finalized runs can reconcile such cards. Preserve the last
+  # durable partial output, but never invent a tool result or cancellation cause.
+  defp replay_unfinished_tools(%{tools: tools} = state, _session, _opts)
+       when map_size(tools) == 0,
+       do: state
+
+  defp replay_unfinished_tools(state, session, opts) do
+    LemonCore.RunStore.history(session.session_key, limit: 200)
+    |> Enum.reduce(state, fn
+      {_run_id, %{summary: %{completed: completed}, events: events}}, state
+      when not is_nil(completed) ->
+        events
+        |> Enum.reduce(%{}, fn event, latest ->
+          action = map_get(event, :action) |> ensure_map()
+          detail = map_get(action, :detail) |> ensure_map()
+          action_id = map_get(action, :id)
+
+          id =
+            map_get(detail, :tool_call_id) ||
+              Enum.find_value(state.tools, fn {id, _tool} ->
+                if is_binary(id) and action_id in [id, "tool_" <> id], do: id
+              end)
+
+          if Map.has_key?(state.tools, id), do: Map.put_new(latest, id, event), else: latest
+        end)
+        |> Enum.reduce(state, fn {id, event}, state ->
+          replay_ended_tool(state, id, event, opts)
+        end)
+
+      _, state ->
+        state
+    end)
+  end
+
+  defp replay_ended_tool(state, id, event, opts) do
+    event = LemonCore.Redact.map(event)
+    action = map_get(event, :action)
+    detail = action |> map_get(:detail) |> ensure_map() |> Map.put(:tool_call_id, id)
+    event = Map.put(event, :action, Map.put(action, :detail, detail))
+
+    {updates, next} =
+      if map_get(event, :phase) in [:updated, :completed, "updated", "completed"] do
+        LemonControlPlane.ACP.SessionUpdates.map_event(state, %{
+          type: :engine_action,
+          payload: event
+        })
+      else
+        {[], state}
+      end
+
+    if Map.has_key?(next.tools, id) do
+      update =
+        Enum.find_value(updates, fn notification ->
+          update = get_in(notification, ["params", "update"])
+          if update["toolCallId"] == id, do: update
+        end) || %{"toolCallId" => id}
+
+      content = Enum.reject(Map.get(update, "content", []), &(&1["type"] == "terminal"))
+
+      notice = %{
+        "type" => "content",
+        "content" => %{
+          "type" => "text",
+          "text" => "No completion result was recorded before this run ended."
+        }
+      }
+
+      emit(
+        state.session_id,
+        Map.merge(update, %{
+          "sessionUpdate" => "tool_call_update",
+          "status" => "failed",
+          "content" => content ++ [notice]
+        }),
+        opts
+      )
+
+      %{next | tools: Map.delete(next.tools, id)}
+    else
+      Enum.each(updates, &emit(state.session_id, get_in(&1, ["params", "update"]), opts))
+      next
     end
   end
 
@@ -1092,6 +1185,7 @@ defmodule LemonControlPlane.ACP do
 
     if map_get(pending, :session_key) == result.session_key and
          map_get(pending, :run_id) == result.run_id and is_binary(approval_id) and
+         not Map.has_key?(Map.get(result, :approval_requests, %{}), approval_id) and
          not is_nil(LemonCore.ExecApprovalStore.get_pending(approval_id)) do
       perform_approval_request(result, pending, callback)
     else
@@ -1202,7 +1296,11 @@ defmodule LemonControlPlane.ACP do
   defp approval_options do
     [
       %{"optionId" => "allow-once", "name" => "Allow once", "kind" => "allow_once"},
-      %{"optionId" => "allow-session", "name" => "Allow for session", "kind" => "allow_always"},
+      %{
+        "optionId" => "allow-session",
+        "name" => "Allow this action for session",
+        "kind" => "allow_always"
+      },
       %{"optionId" => "reject-once", "name" => "Reject", "kind" => "reject_once"}
     ]
   end

@@ -14,6 +14,7 @@ agent platform. It is usable on its own — its only Lemon dependency is
 | `LemonMemory.Store` | SQLite-backed store with OR/BM25 lexical search; the built-in durable backend |
 | `LemonMemory.Query` | Builds sanitized OR-joined FTS5 search terms |
 | `LemonMemory.Recall` | Bounded local lexical search used for automatic conversation recall |
+| `LemonMemory.Project` | Bounded repository/assistant-home/agent-scoped coding learnings in the same durable store |
 | `LemonMemory.Providers` | Fan-out registry — queries every registered provider, isolates failures and timeouts |
 | `LemonMemory.Providers.Local` | The built-in provider over `LemonMemory.Store` |
 | `LemonMemory.Ingest` | Writes finished runs into memory, invoked from the store's finalize-run hook |
