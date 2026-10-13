@@ -6,12 +6,24 @@ defmodule LemonControlPlane.HTTP.RouterTest do
 
   alias LemonControlPlane.HTTP.Router
 
+  @available_model %LemonAi.Types.Model{
+    provider: :openai,
+    id: "fixture-account-model",
+    name: "Available account model",
+    context_window: 64_000,
+    max_tokens: 4_096,
+    reasoning: true,
+    input: [:text, :image]
+  }
+
   setup do
     previous = Application.get_env(:lemon_control_plane, :openai_compat_submitter)
     previous_waiter = Application.get_env(:lemon_control_plane, :openai_compat_waiter)
     previous_run_getter = Application.get_env(:lemon_control_plane, :openai_compat_run_getter)
     previous_canceller = Application.get_env(:lemon_control_plane, :openai_compat_canceller)
     previous_token = Application.get_env(:lemon_control_plane, :openai_compat_api_token)
+    previous_catalog = Application.fetch_env(:lemon_control_plane, :model_catalog)
+    Application.put_env(:lemon_control_plane, :model_catalog, fn _opts -> [@available_model] end)
 
     previous_image_url_fetch =
       Application.fetch_env(:lemon_control_plane, :openai_compat_image_url_fetch)
@@ -56,6 +68,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       restore_env(:openai_compat_image_url_fetch, previous_image_url_fetch)
       restore_env(:openai_compat_image_url_allowed_hosts, previous_image_url_allowed_hosts)
       restore_env(:openai_compat_image_url_fetcher, previous_image_url_fetcher)
+      restore_env(:model_catalog, previous_catalog)
     end)
 
     :ok
@@ -104,6 +117,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     assert response.body["object"] == "list"
     assert is_list(response.body["data"])
     assert Enum.any?(response.body["data"], &(&1["object"] == "model"))
+    assert Enum.map(response.body["data"], & &1["id"]) == [@available_model.id]
     assert Enum.all?(response.body["data"], &Map.has_key?(&1, "lemon"))
     assert Enum.all?(response.body["data"], &is_boolean(&1["lemon"]["supportsVision"]))
   end
@@ -115,7 +129,8 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       |> Router.call([])
       |> json_response()
 
-    model_id = list.body["data"] |> List.first() |> Map.fetch!("id")
+    model_id = @available_model.id
+    assert Enum.map(list.body["data"], & &1["id"]) == [model_id]
 
     response =
       :get
