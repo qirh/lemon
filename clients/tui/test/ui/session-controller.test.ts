@@ -196,7 +196,9 @@ describe("SessionController.create", () => {
 		const send = server.requestsFor("chat.send").at(-1);
 		expect(send?.params).toMatchObject({ sessionKey: key, prompt: "first thing" });
 		// A minted session has no stored history worth a round-trip.
-		expect(server.requestsFor("chat.history")).toHaveLength(0);
+		expect(server.requestsFor("chat.history")).not.toContainEqual(
+			expect.objectContaining({ params: expect.objectContaining({ sessionKey: key }) }),
+		);
 	});
 
 	test("accepts an explicit key and creates nothing daemon-side without a prompt", async () => {

@@ -24,6 +24,10 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
     detail = fetch(action, :detail)
     detail = if is_map(detail), do: detail, else: %{}
     status = status(fetch(assigns.event, :phase), fetch(assigns.event, :ok), detail)
+
+    progress =
+      if status == :running, do: format_progress(fetch(detail, :partial_result)), else: nil
+
     name = tool_name(action, detail)
 
     assigns =
@@ -31,16 +35,18 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
       |> assign(:name, name)
       |> assign(:summary, summary(fetch(action, :title), name))
       |> assign(:status, status)
-      |> assign(:args, Payload.format(LemonCore.Redact.map(fetch(detail, :args))))
+      |> assign(:args, format_detail(fetch(detail, :args)))
       |> assign(:result, result(detail, status))
       |> assign(:cancellation_notice, cancellation_notice(detail, status))
-      |> assign(:message, Payload.format(fetch(assigns.event, :message)))
+      |> assign(:progress, progress)
+      |> assign(:message, format_detail(fetch(assigns.event, :message)))
 
     ~H"""
     <details
       id={@id}
       phx-mounted={JS.ignore_attributes("open")}
       data-status={@status}
+      data-phase={fetch(@event, :phase)}
       class="tool-call-card w-full max-w-[90%] rounded-xl border border-slate-200 bg-white text-sm text-slate-800 shadow-sm sm:max-w-[75%]"
     >
       <summary class="flex cursor-pointer list-none items-center gap-2 rounded-xl px-3 py-2 hover:bg-slate-50 focus:outline-none focus:ring">
@@ -49,12 +55,19 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
         <span :if={@summary} class="min-w-0 flex-1 truncate font-mono text-xs text-slate-500">
           {@summary}
         </span>
+        <span :if={@progress} class="tool-call-progress min-w-0 flex-1 truncate text-xs text-slate-500">
+          Live output: {String.slice(@progress, 0, 180)}
+        </span>
         <span class={status_badge_class(@status)}>{status_label(@status)}</span>
       </summary>
       <div class="space-y-2 border-t border-slate-100 px-3 py-2">
         <div :if={@args}>
           <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Arguments</p>
           <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2 font-mono text-xs text-slate-800">{@args}</pre>
+        </div>
+        <div :if={@progress}>
+          <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Streaming output</p>
+          <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2 font-mono text-xs text-slate-800">{@progress}</pre>
         </div>
         <div :if={@result}>
           <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">Result</p>
@@ -64,7 +77,10 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
         <p :if={@cancellation_notice} class="whitespace-pre-wrap break-words text-xs text-slate-600">
           {@cancellation_notice}
         </p>
-        <p :if={!@args and !@result and !@message and !@cancellation_notice} class="text-xs text-slate-500">
+        <p
+          :if={!@args and !@result and !@progress and !@message and !@cancellation_notice}
+          class="text-xs text-slate-500"
+        >
           No details reported yet.
         </p>
       </div>
@@ -72,10 +88,19 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
     """
   end
 
+  defp format_progress(value), do: value |> visible_text() |> format_detail()
+
+  defp format_detail(value) do
+    case value |> LemonCore.Redact.map() |> Payload.format() do
+      nil -> nil
+      text -> String.slice(text, 0, 16_000)
+    end
+  end
+
   defp tool_name(action, detail) do
     case fetch(detail, :name) do
       name when is_binary(name) and name != "" ->
-        name
+        LemonCore.Redact.text(name)
 
       _ ->
         case fetch(action, :kind) do
@@ -87,7 +112,7 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
   end
 
   defp summary(title, name) when is_binary(title) do
-    title = title |> String.replace("`", "") |> String.trim()
+    title = title |> LemonCore.Redact.text() |> String.replace("`", "") |> String.trim()
 
     cond do
       title == "" or title == name -> nil
@@ -99,14 +124,25 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
   defp summary(_title, _name), do: nil
 
   defp result(detail, status) do
-    full = visible_text(fetch(detail, :result_full))
-    preview = visible_text(fetch(detail, :result))
-    partial = visible_text(fetch(detail, :partial_result))
+    full = detail |> fetch(:result_full) |> visible_text() |> format_detail()
+    preview = detail |> fetch(:result) |> format_result()
+    partial = format_progress(fetch(detail, :partial_result))
 
-    if status == :cancelled,
-      do: full || partial || preview,
-      else: full || preview || partial
+    case status do
+      :cancelled -> full || partial || preview
+      :running -> full || preview
+      _ -> full || preview || partial
+    end
   end
+
+  defp format_result(value) when is_map(value) do
+    if fetch(value, :type) != nil or fetch(value, :content) != nil,
+      do: format_progress(value),
+      else: format_detail(value)
+  end
+
+  defp format_result(value) when is_list(value), do: format_progress(value)
+  defp format_result(value), do: format_detail(value)
 
   # Partial results may be AgentToolResult structs or JSON maps. Only visible
   # text content belongs in the receipt, never thinking or arbitrary metadata.
@@ -123,7 +159,7 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
   defp visible_text(value) when is_map(value) do
     case fetch(value, :type) do
       type when type in [:text, "text"] -> visible_text(fetch(value, :text))
-      nil -> visible_text(fetch(value, :content))
+      nil -> visible_text(fetch(value, :content)) || visible_text(fetch(value, :output))
       _ -> nil
     end
   end

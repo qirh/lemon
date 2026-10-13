@@ -120,17 +120,39 @@ defmodule LemonAgent.Loop.ToolCalls do
        ) do
     cond do
       aborted?(signal) ->
-        stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
+        aborted_tasks = stop_aborted_tools(pending_by_ref, pending_by_mon, tool_task_supervisor)
 
-        pending_tool_calls =
-          pending_by_ref
-          |> Map.values()
-          |> Enum.map(& &1.tool_call)
+        {context, new_messages, results} =
+          Enum.reduce(aborted_tasks, {context, new_messages, results}, fn {_ref, pending},
+                                                                          {ctx, messages,
+                                                                           collected} ->
+            {result, is_error} = aborted_task_result(pending)
+
+            LemonCore.Telemetry.emit(
+              [:lemon_agent, :tool_task, :end],
+              %{system_time: System.system_time()},
+              %{
+                tool_name: pending.tool_call.name,
+                tool_call_id: pending.tool_call.id,
+                is_error: is_error
+              }
+            )
+
+            emit_tool_result(
+              pending.tool_call,
+              result,
+              is_error,
+              ctx,
+              messages,
+              collected,
+              stream
+            )
+          end)
 
         {context, new_messages, results} =
           emit_tool_errors(
-            pending_tool_calls ++ remaining_tool_calls,
-            tool_aborted_result(),
+            remaining_tool_calls,
+            tool_aborted_result(nil, false),
             context,
             new_messages,
             results,
@@ -197,6 +219,10 @@ defmodule LemonAgent.Loop.ToolCalls do
             {context, new_messages, pending_by_ref, pending_by_mon, results}
           else
             receive do
+              {:tool_task_update, ref, partial} ->
+                pending_by_ref = remember_partial(pending_by_ref, ref, partial)
+                {context, new_messages, pending_by_ref, pending_by_mon, results}
+
               {:tool_task_result, ref, tool_call, result, is_error} ->
                 if Map.has_key?(pending_by_ref, ref) do
                   {pending_by_ref, pending_by_mon} =
@@ -453,7 +479,9 @@ defmodule LemonAgent.Loop.ToolCalls do
                             mon_ref: mon_ref,
                             pid: pid,
                             timeout_ref: timeout_ref,
-                            parallel_safe: parallel_safe?
+                            parallel_safe: parallel_safe?,
+                            partial: nil,
+                            result: nil
                           }),
                           Map.put(by_mon, mon_ref, ref),
                           rest,
@@ -501,7 +529,7 @@ defmodule LemonAgent.Loop.ToolCalls do
   defp start_tool_task(tool_task_supervisor, parent, ref, tool, tool_call, signal, stream) do
     try do
       Task.Supervisor.start_child(tool_task_supervisor, fn ->
-        {result, is_error} = execute_tool_call(tool, tool_call, signal, stream)
+        {result, is_error} = execute_tool_call(tool, tool_call, signal, stream, parent, ref)
         send(parent, {:tool_task_result, ref, tool_call, result, is_error})
       end)
     catch
@@ -600,13 +628,11 @@ defmodule LemonAgent.Loop.ToolCalls do
     {context, new_messages, results}
   end
 
-  defp execute_tool_call(tool, tool_call, signal, stream) do
-    execute_single_tool(tool, tool_call, signal, stream)
-  end
-
-  defp execute_single_tool(tool, tool_call, signal, stream) do
+  defp execute_tool_call(tool, tool_call, signal, stream, parent, ref) do
     # Create update callback
     on_update = fn partial_result ->
+      send(parent, {:tool_task_update, ref, partial_result})
+
       EventStream.push(
         stream,
         {:tool_execution_update, tool_call.id, tool_call.name, tool_call.arguments,
@@ -950,12 +976,46 @@ defmodule LemonAgent.Loop.ToolCalls do
     }
   end
 
-  defp tool_aborted_result do
+  defp tool_aborted_result(partial, started) do
+    content = if partial, do: partial.content, else: []
+
+    notice =
+      if started,
+        do: "Tool execution aborted; no final result was received. Mutation outcome is unknown.",
+        else: "Tool execution aborted before the call started."
+
     %AgentToolResult{
-      content: [%TextContent{type: :text, text: "Tool execution aborted"}],
-      details: %{error_type: :aborted}
+      content: content ++ [%TextContent{type: :text, text: notice}],
+      trust: if(partial, do: partial.trust, else: :trusted),
+      is_error: true,
+      details: %{
+        error_type: :aborted,
+        cancelled: true,
+        started: started,
+        outcome: if(started, do: :unknown, else: :not_started),
+        partial: partial != nil,
+        partial_details: if(partial, do: partial.details, else: nil)
+      }
     }
   end
+
+  defp aborted_task_result(%{result: {result, false}}), do: {result, false}
+
+  defp aborted_task_result(%{result: {%AgentToolResult{} = result, true}}) do
+    details =
+      case result.details do
+        value when is_map(value) -> value
+        nil -> %{}
+        value -> %{tool_details: value}
+      end
+      |> Map.put(:cancelled, true)
+      |> Map.put_new(:error_type, :aborted)
+      |> Map.put_new(:outcome, :unknown)
+
+    {%{result | details: details, is_error: true}, true}
+  end
+
+  defp aborted_task_result(%{partial: partial}), do: {tool_aborted_result(partial, true), true}
 
   defp tool_skipped_result do
     %AgentToolResult{
@@ -1021,10 +1081,11 @@ defmodule LemonAgent.Loop.ToolCalls do
 
     # Give cooperative tools time to stop external work before killing their
     # BEAM worker. The run's abort signal stays set throughout this drain.
-    remaining =
+    {remaining, finished} =
       await_tool_cleanup(
         pending_by_ref,
         pending_by_mon,
+        %{},
         System.monotonic_time(:millisecond) + @tool_abort_grace_ms
       )
 
@@ -1032,30 +1093,49 @@ defmodule LemonAgent.Loop.ToolCalls do
       Task.Supervisor.terminate_child(supervisor, pending.pid)
       Process.demonitor(pending.mon_ref, [:flush])
     end)
+
+    Map.merge(finished, remaining)
   end
 
-  defp await_tool_cleanup(pending_by_ref, _pending_by_mon, _deadline)
-       when map_size(pending_by_ref) == 0, do: pending_by_ref
+  defp await_tool_cleanup(pending_by_ref, _pending_by_mon, finished, _deadline)
+       when map_size(pending_by_ref) == 0, do: {pending_by_ref, finished}
 
-  defp await_tool_cleanup(pending_by_ref, pending_by_mon, deadline) do
+  defp await_tool_cleanup(pending_by_ref, pending_by_mon, finished, deadline) do
     remaining_ms = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
       {:DOWN, mon_ref, :process, _pid, _reason} when is_map_key(pending_by_mon, mon_ref) ->
         ref = Map.fetch!(pending_by_mon, mon_ref)
+        {pending, pending_by_ref} = Map.pop!(pending_by_ref, ref)
 
         await_tool_cleanup(
-          Map.delete(pending_by_ref, ref),
+          pending_by_ref,
           Map.delete(pending_by_mon, mon_ref),
+          Map.put(finished, ref, pending),
           deadline
         )
 
-      {:tool_task_result, ref, _call, _result, _is_error} when is_map_key(pending_by_ref, ref) ->
-        await_tool_cleanup(pending_by_ref, pending_by_mon, deadline)
+      {:tool_task_result, ref, _call, result, is_error} when is_map_key(pending_by_ref, ref) ->
+        pending_by_ref =
+          Map.update!(pending_by_ref, ref, &%{&1 | result: {result, is_error}})
+
+        await_tool_cleanup(pending_by_ref, pending_by_mon, finished, deadline)
+
+      {:tool_task_update, ref, partial} when is_map_key(pending_by_ref, ref) ->
+        pending_by_ref = remember_partial(pending_by_ref, ref, partial)
+        await_tool_cleanup(pending_by_ref, pending_by_mon, finished, deadline)
     after
-      remaining_ms -> pending_by_ref
+      remaining_ms -> {pending_by_ref, finished}
     end
   end
+
+  defp remember_partial(pending_by_ref, ref, %AgentToolResult{} = partial) do
+    if Map.has_key?(pending_by_ref, ref),
+      do: Map.update!(pending_by_ref, ref, &%{&1 | partial: partial}),
+      else: pending_by_ref
+  end
+
+  defp remember_partial(pending_by_ref, _ref, _partial), do: pending_by_ref
 
   defp aborted?(signal), do: AbortSignal.aborted?(signal)
 

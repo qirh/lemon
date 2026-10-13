@@ -25,12 +25,15 @@ defmodule LemonGateway.Scheduler do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
-  @doc "Submits an execution request for scheduling."
-  @spec submit_execution(ExecutionRequest.t()) :: :ok
-  def submit_execution(%ExecutionRequest{} = request) do
+  @doc "Submits an execution request with a caller-fixed, nonempty run ID."
+  @spec submit_execution(ExecutionRequest.t()) :: :ok | {:error, :invalid_run_id}
+  def submit_execution(%ExecutionRequest{run_id: run_id} = request)
+      when is_binary(run_id) and run_id != "" do
     request = ExecutionRequest.ensure_conversation_key(request)
     GenServer.cast(__MODULE__, {:submit_execution, request})
   end
+
+  def submit_execution(%ExecutionRequest{}), do: {:error, :invalid_run_id}
 
   @doc "Requests an execution slot for the given worker. Grants immediately or queues the request."
   @spec request_slot(pid(), term()) :: :ok

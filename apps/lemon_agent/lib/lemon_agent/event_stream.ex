@@ -51,6 +51,19 @@ defmodule LemonAgent.EventStream do
   - `{:agent_end, messages}` - Successful completion with final message list
   - `{:error, reason, partial_state}` - Error with reason and any partial state
   - `{:canceled, reason}` - Stream was canceled
+
+  Explicit cancellation rejects further pushes and preserves buffered events in FIFO
+  order before a single `{:canceled, reason}` terminal. Cancellation reserves one
+  additional terminal slot without dropping accepted events or changing `max_queue`.
+  Result waiters are notified immediately, and the attached task is cooperatively
+  aborted and shut down. Repeated cancellation is a no-op, as is cancellation after
+  successful or error completion.
+
+  The stream stops when the cancellation terminal is consumed, or immediately if
+  no events were buffered (waking waiting consumers first). Owner death and timeout
+  still stop the stream immediately; owner monitoring also cleans up canceled streams
+  whose buffered events are never consumed. Once the process stops, its result and
+  cancellation reason are no longer available through the stream PID.
   """
 
   use GenServer
@@ -129,20 +142,20 @@ defmodule LemonAgent.EventStream do
   """
   @spec start_link([option()]) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts)
+    GenServer.start_link(__MODULE__, Keyword.put_new(opts, :owner, self()))
   end
 
   @doc """
   Start a new event stream without linking to the caller.
 
-  This is useful when the stream should outlive the calling process,
-  such as when the caller is a short-lived runner process.
+  To outlive a short-lived caller, supply a longer-lived `:owner` explicitly.
+  Without that option, the caller is monitored as the owner even though it is not linked.
 
   See `start_link/1` for options.
   """
   @spec start([option()]) :: GenServer.on_start()
   def start(opts \\ []) do
-    GenServer.start(__MODULE__, opts)
+    GenServer.start(__MODULE__, Keyword.put_new(opts, :owner, self()))
   end
 
   @doc """
@@ -236,10 +249,16 @@ defmodule LemonAgent.EventStream do
   Cancel the stream with a reason.
 
   This will:
-  1. Mark the stream as canceled
-  2. Shutdown any attached task
-  3. Wake up all waiters with a terminal event
-  4. Stop the GenServer
+  1. Mark an unfinished stream as canceled and reject further pushes
+  2. Abort and shut down any attached task
+  3. Notify result waiters immediately
+  4. Preserve buffered events before a single cancellation terminal
+  5. Stop after that terminal is consumed (or delivered directly to a waiting consumer)
+
+  An unconsumed cancellation terminal remains owner-bound even if no earlier events
+  were buffered, so a late consumer receives the original cancellation reason.
+
+  Canceling an already completed or canceled stream has no effect.
 
   ## Examples
 
@@ -410,7 +429,13 @@ defmodule LemonAgent.EventStream do
   def handle_call(:take, from, state) do
     case :queue.out(state.events) do
       {{:value, event}, remaining} ->
-        {:reply, {:event, event}, %{state | events: remaining, queue_size: state.queue_size - 1}}
+        state = %{state | events: remaining, queue_size: state.queue_size - 1}
+
+        if state.canceled and state.queue_size == 0 do
+          {:stop, :normal, {:event, event}, state}
+        else
+          {:reply, {:event, event}, state}
+        end
 
       {:empty, _} ->
         if state.done or state.canceled do
@@ -504,9 +529,18 @@ defmodule LemonAgent.EventStream do
     end
   end
 
+  def handle_cast({:cancel, _reason}, %{done: true} = state) do
+    {:noreply, state}
+  end
+
   def handle_cast({:cancel, reason}, state) do
     state = do_cancel(state, reason)
-    {:stop, :normal, state}
+
+    if state.queue_size > 0 do
+      {:noreply, state}
+    else
+      {:stop, :normal, state}
+    end
   end
 
   @impl true
@@ -560,6 +594,10 @@ defmodule LemonAgent.EventStream do
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
     # Unknown process died - ignore
+    {:noreply, state}
+  end
+
+  def handle_info(:stream_timeout, %{canceled: true} = state) do
     {:noreply, state}
   end
 
@@ -703,6 +741,8 @@ defmodule LemonAgent.EventStream do
     %{state | result_waiters: :queue.new(), take_waiters: :queue.new()}
   end
 
+  defp do_cancel(%{canceled: true} = state, _reason), do: state
+
   defp do_cancel(state, reason) do
     # Cancel the timeout timer
     if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
@@ -717,10 +757,8 @@ defmodule LemonAgent.EventStream do
 
     state =
       if not state.done do
-        case handle_push(cancel_event, %{state | max_queue: state.max_queue + 1}, []) do
-          {:ok, new_state} -> new_state
-          {:overflow, new_state} -> new_state
-        end
+        # Reserve one terminal slot without evicting accepted events.
+        deliver_or_buffer(cancel_event, state)
       else
         state
       end
@@ -732,7 +770,8 @@ defmodule LemonAgent.EventStream do
         cancel_reason: reason,
         done: true,
         task_pid: nil,
-        task_ref: nil
+        task_ref: nil,
+        timeout_ref: nil
     }
 
     # If no result set, set a cancel result

@@ -19,14 +19,16 @@
  * own queue.
  */
 
+import type { PendingImage } from "../composer/images.ts";
 import { Emitter } from "./events.ts";
 
-export type QueueItemState = "queued-local" | "waiting-connection";
+export type QueueItemState = "queued-local" | "waiting-connection" | "needs-review";
 
 export interface QueueItem {
 	/** Unique across the process; stable while the item sits in the queue. */
 	id: string;
 	text: string;
+	attachments?: readonly PendingImage[];
 	state: QueueItemState;
 	/** Wall-clock ms when the item was queued. */
 	at: number;
@@ -90,12 +92,25 @@ export class QueueStore {
 		sessionKey: string,
 		text: string,
 		state: QueueItemState = "queued-local",
+		attachments: readonly PendingImage[] = [],
 	): QueueItem | undefined {
-		if (text.trim().length === 0) return undefined;
-		const item: QueueItem = { id: nextQueueId(), text, state, at: Date.now() };
+		if (text.trim().length === 0 && attachments.length === 0) return undefined;
+		const item: QueueItem = {
+			id: nextQueueId(),
+			text,
+			state,
+			at: Date.now(),
+			...(attachments.length ? { attachments } : {}),
+		};
 		this.#listFor(sessionKey).push(item);
 		this.#changed(sessionKey);
 		return item;
+	}
+
+	/** A refused/uncertain send stays inspectable, but must not auto-retry. */
+	restoreForReview(sessionKey: string, item: QueueItem): void {
+		this.#listFor(sessionKey).unshift({ ...item, state: "needs-review" });
+		this.#changed(sessionKey);
 	}
 
 	/** Take the head — what a finished run pops and sends. */
@@ -122,7 +137,7 @@ export class QueueStore {
 	replace(sessionKey: string, id: string, text: string): QueueItem | undefined {
 		const item = this.find(sessionKey, id);
 		if (!item) return undefined;
-		if (text.trim().length === 0) return this.remove(sessionKey, id);
+		if (text.trim().length === 0 && !item.attachments?.length) return this.remove(sessionKey, id);
 		item.text = text;
 		this.#changed(sessionKey);
 		return item;

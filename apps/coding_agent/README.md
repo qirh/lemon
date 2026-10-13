@@ -196,18 +196,20 @@ browser-context cookies, current-page local/session storage, and buffered events
 by default; pass `clearCookies`, `clearStorage`, or `clearEvents` to narrow it.
 
 `remember` is implemented as `LemonSkills.Tools.Remember`. It saves compact
-assistant-home facts to `USER.md` or `MEMORY.md` using `text`, `target`
-(`user` or `memory`), and `replaces`; exact replacement text is required for
-replace/remove. Duplicate additions are ignored, file limits are enforced, and
-writes are screened for secrets and unsafe content.
+assistant-home facts to `USER.md` or `MEMORY.md`, or scoped repository learnings
+with target `project`, using `text` and exact `replaces` mutations. Duplicate
+additions are ignored, storage limits are enforced, and writes are screened for
+secrets and unsafe content. Successful turns and compactions also capture bounded
+project facts in the background; explicit saves do not depend on that extraction.
 
 `recall` is the read-only search tool, implemented as `LemonSkills.Tools.Recall`.
 It searches past conversation summaries and longer workspace notes under
 `memory/`. Conversation results use OR/BM25 lexical search, so paraphrases that
-share a keyword can match. Lemon may also attach a bounded **Relevant memory**
-block to each user message automatically; `[memory] auto_recall = false`
-disables it, as does `[features] session_search = "off"`. The old scroll/browse
-interface for session messages is removed and has no replacement.
+share a keyword can match. Automatic **Relevant memory** is stricter: project
+learnings and relevant prior outcomes must stay within the repository, agent,
+and assistant-home boundary. It never injects previous user prompts or performs
+a model/network call. See the [memory guide](../../docs/user-guide/memory.md) for
+bounds, configuration, capture behavior, and isolation.
 
 
 The media tools are implemented in `LemonSkills.Tools` and registered by
@@ -306,8 +308,8 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.Compaction` | Context compaction engine -- finds valid cut points, generates LLM summaries, preserves file context |
 | `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
 | `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
-| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + stable available-skills metadata + memory workflow + runtime metadata) |
-| `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd hierarchy up to root, then home directory; also loads prompts, themes, and skills |
+| `CodingAgent.SystemPrompt` | Builds coding-first, tool-aware working rules, skills and memory guidance, and existing assistant-home context; omitted or empty bootstrap files are not injected |
+| `CodingAgent.ResourceLoader` | Loads global CLAUDE.md/AGENTS.md first, then ancestors root→cwd with directory scope and local precedence; physical-file aliases appear once. Also loads prompts, themes, and skills |
 
 ### Extensions and WASM
 
@@ -349,13 +351,33 @@ Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32
 
 Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>`, retain the source cwd's relative subdirectory, and are **not** merged or deleted automatically. Uncommitted changes and local credentials/config are not copied. `poll`/`get`/`join` report `cwd`, `worktree_path`, and `branch`; review or cherry-pick the child's commits, then remove the worktree with `git worktree remove` when no longer needed. A non-git cwd is a task error, not a fallback to the shared checkout.
 
-Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver instructions at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. These operations and result reads are bound to the parent session/agent; another session receives not-found. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
+Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver peer input at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. Cancellation and result reads remain bound to the owning parent session/agent; messaging additionally permits the immediate family described below. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
+
+Give a task an optional `name`, separate from its persona `agent`, to address it as `agent://<name>`. Names are case-sensitive, 1–64 ASCII letters/digits/underscores/hyphens, start with a letter, and cannot be `parent`, `self`, or `all`. Batch names must be unique; ambiguous names among existing live tasks fail rather than choosing a recipient. Task IDs remain stable addresses and take precedence over aliases.
+
+Use `agent_message` with `{to: "agent://Worker", message: "..."}`, or `write` with `{path: "agent://Worker", content: "..."}`. `task action=message` also accepts `to` for an address. A child can message `agent://parent`, its siblings, or its own children; a parent can message its direct children. `agent://all` broadcasts to reachable live relatives except the sender. `read agent://` or `agent_message action=list` returns the scoped roster; `read agent://<name-or-task-id>` returns one public identity, not private task history. Unknown, completed, ambiguous, cancelled, and foreign targets produce explicit errors. Messages cannot cancel siblings or grant access to their stored results.
+
+Sender identity is authenticated from captured session options, never supplied message fields. Messages are labeled untrusted peer content and use the recipient's steering queue, without starting another prompt turn. Unattached children retain FIFO messages, capped at 64 messages / 256 KiB including envelopes; individual UTF-8 message bodies are capped at 32 KiB. Broadcast checks all recipient queue capacities before sending. An accepted receipt means queued peer input, not a completed response or permission to override system/tool restrictions.
+
+The `wait` tool (also `task action=wait`) blocks until the first owned native child returns a result, including failure or cancellation, without stopping siblings. With no `task_ids`, it includes already-finished but unobserved children, then marks only the returned winner observed; the next implicit wait consumes the next result. Explicit `task_ids` restrict the set and may revisit an earlier result. No outstanding/unobserved children is an immediate error. Waiting uses existing join cancellation, parent-question yielding, and winner-only followup suppression; this primitive does not wait on shell/background-process jobs.
+
+For example, after launching a child named `Reviewer`, the parent can make these separate tool calls (the message receipt does not replace waiting for the child's result):
+
+```json
+{"tool": "read", "arguments": {"path": "agent://"}}
+{"tool": "agent_message", "arguments": {"to": "agent://Reviewer", "message": "Focus on cancellation and report concrete failure cases."}}
+{"tool": "wait", "arguments": {}}
+```
+
+The child can reply with `agent_message` addressed to `agent://parent`; siblings can exchange findings through their roster names or stable task IDs. Use explicit `task_ids` on `wait` when the next result must come from a particular subset rather than any unobserved child.
 
 Task progress is delivered directly to parent session subscribers even after the launch tool call ends, with `details.task_id`, `run_id`, `description`, `status`, child `session_id` when allocated, and optional `current_action` (`title`, `kind`, `phase`). Receipts, progress, and result rows also carry available `parent_run_id`, `parent_session_id`, and named persona `agent`; tree consumers can index children by `run_id` and attach them to `parent_run_id` without guessing from completion order. A final progress update settles each child as `completed`, `error`, or `aborted`. Join results include structured visible `output` and `error` per child; hidden reasoning is not included.
 
+Translated operator/run events keep the completed launch action separate from each child: child action IDs are `task_<task_id>`, with the launcher recorded in parent-action metadata. Actual child terminal status emits a completed phase with success/failure and visible output; later stale progress cannot reopen it or complete a still-running sibling.
+
 If a child's tool policy explicitly permits further delegation, descendant progress is relayed through native ancestors to the subscribed root session. Descendant task/run/session identities are preserved, including terminal updates; relay events are not relabeled or stored as the ancestor's own work.
 
-Pass `agent: "scout"`, `"reviewer"`, or `"task-executor"` to select a named persona. Persona instructions are composed into the child **system prompt**, not the user's task. The scout and reviewer are strictly read-only: only `read`, `grep`, `find`, and `ls` may be exposed, intersected with any narrower policy. Neither a project override, `read_only: false`, an explicit `tool_policy`, nor MCP/extra tools can grant those identities write, shell, or delegation capabilities. Other personas retain the leaf-worker policy unless explicitly restricted or overridden. The coordinator uses the same persona/session-option path.
+Pass `agent: "scout"`, `"reviewer"`, or `"task-executor"` to select a named persona. Persona instructions are composed into the child **system prompt**, not the user's task. The scout and reviewer expose only `read`, `grep`, `find`, `ls`, and scoped `agent_message`, intersected with any narrower policy. Neither a project override, `read_only: false`, an explicit `tool_policy`, nor MCP/extra tools can grant those identities write, shell, or delegation capabilities. Messaging shares findings without relaxing filesystem/profile isolation. Other personas retain the leaf-worker policy unless explicitly restricted or overridden. The coordinator uses the same persona/session-option path.
 
 Set `output_schema` on a task or batch child to require a JSON-only final response. Validated data appears as `structured_output` in completion, `poll`, `get`, `join` task rows, and live final progress; JSON `null` remains an explicitly present field. Invalid JSON or a schema mismatch fails the task rather than silently accepting prose. Supported JSON Schema constraints include types/unions, objects (`properties`, `required`, `additionalProperties`), arrays (`items`, bounds, uniqueness), strings (length and Unicode regex `pattern`), numeric bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`. Boolean schemas are supported. References, formats, and unsupported keywords are rejected before launching work. Schemas are bounded to 64 KiB encoded JSON and 32 nesting levels; validation errors name the failed JSON path without echoing response values.
 
@@ -443,7 +465,7 @@ Inspect the relevant implementation before answering. Cite paths and explain
 the existing contracts; do not change files.
 ```
 
-The filename is the agent name; optional `name` must match it. `description` and a nonempty Markdown instruction body are required. Optional `model` names a concrete `provider:model` or `@role`; `role` names a configured model role without `@` (`model` wins if both are supplied). `tools` is an allow-list intersected with the effective task policy, not a grant that bypasses it. `read_only: true` further restricts tools to the four read-only built-ins. Project definitions override global definitions, which override shipped definitions; an invalid higher-priority definition is an error, never a silent fallback. Definitions are read locally without creating config files. Legacy `.lemon/subagents.json` and the task `role` parameter are replaced by Markdown definitions and `agent`; router-level `agent` delegation retains its separate `role` persona selector.
+The filename is the agent name; optional `name` must match it. `description` and a nonempty Markdown instruction body are required. Optional `model` names a concrete `provider:model` or `@role`; `role` names a configured model role without `@` (`model` wins if both are supplied). `tools` is an allow-list intersected with the effective task policy, not a grant that bypasses it. `read_only: true` further restricts tools to the four read-only filesystem built-ins and scoped `agent_message`. Project definitions override global definitions, which override shipped definitions; an invalid higher-priority definition is an error, never a silent fallback. Definitions are read locally without creating config files. Legacy `.lemon/subagents.json` and the task `role` parameter are replaced by Markdown definitions and `agent`; router-level `agent` delegation retains its separate `role` persona selector.
 
 ### Harness and Checkpointing
 
@@ -523,6 +545,8 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Native identities remain unchanged in their headers; oversized or path-unsafe
+identities use deterministic portable journal filenames inside the session directory.
 Usage checkpoints preserve response costs and cache-write durations as well as
 token counts, so reopening a session does not reset its recorded cost. Rewinding
 a live branch preserves the selected provider API, including ChatGPT/Codex models.
@@ -643,7 +667,7 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 
 | File | Scope | Purpose |
 |------|-------|---------|
-| `AGENTS.md` | main + subagent | Project guidelines for AI agents |
+| `AGENTS.md` | main + subagent | Assistant-wide operating guidelines, separate from repository-local rules |
 | `SOUL.md` | main only | Agent personality/identity |
 | `TOOLS.md` | main + subagent | Tool documentation |
 | `IDENTITY.md` | main only | Identity configuration |
@@ -651,6 +675,17 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 | `HEARTBEAT.md` | main only | Checklist the scheduled heartbeat cron job reads (`HEARTBEAT_OK` = nothing to report) |
 | `BOOTSTRAP.md` | main only | Startup instructions |
 | `MEMORY.md` | main only | Persistent memory (optional) |
+
+### Coding Session Context
+
+The default prompt treats Lemon as a coding agent: inspect relevant code before editing, use the tools actually available to the session, preserve user changes, finish the requested behavior, and report only verification that was observed. Behavioral changes call for focused checks and relevant edge cases—not an unrelated full-suite sweep. Read-only requests stay read-only. One-off coding tasks do not require creating skills or saving temporary facts merely to finalize.
+
+Repository instructions load from global home locations first, followed by ancestors from filesystem root to the working directory. Each directory includes its root, `.claude/`, and `.lemon/` `AGENTS.md`/`CLAUDE.md` files. Source headers state the applicable directory scope; deeper instructions override broader guidance. Duplicate symlink or hard-link aliases load once using their most specific location.
+
+At session start, Lemon captures the actual Git worktree root, branch/status, a bounded top-level layout, and descendant instruction-file paths. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
+
+This environment snapshot is appended after the stable prompt and reused across turns to preserve provider caching. It does not update as files or branches change; use tools for fresh state when needed. Assistant-home identity and memory remain separate from repository context, missing/empty bootstrap files are omitted, and subagents still receive only the allowed `AGENTS.md`/`TOOLS.md` workspace files.
+
 
 ## Usage Examples
 

@@ -69,12 +69,14 @@ defmodule LemonEvals.Evals.LiveModel do
         search_fn = fn query, opts ->
           Agent.update(search_calls, &[{query, opts} | &1])
 
-          [eval_memory_doc("prior-release-handoff", Keyword.fetch!(opts, :scope_key))]
+          [eval_memory_doc("prior-release-handoff", project_dir, home_dir)]
         end
 
         search_tool =
           Recall.tool(project_dir,
             workspace_dir: home_dir,
+            agent_id: "eval",
+            session_scope: :main,
             search_fn: search_fn
           )
 
@@ -157,6 +159,8 @@ defmodule LemonEvals.Evals.LiveModel do
         search_tool =
           Recall.tool(project_dir,
             workspace_dir: home_dir,
+            agent_id: "live-model-remember-eval",
+            session_scope: :main,
             search_fn: search_fn
           )
 
@@ -167,7 +171,7 @@ defmodule LemonEvals.Evals.LiveModel do
           agent_id: "live-model-remember-eval"
         ]
 
-        memory_tool = Remember.tool(project_dir, workspace_dir: home_dir)
+        memory_tool = Remember.tool(project_dir, workspace_dir: home_dir, session_scope: :main)
         skill_tool = SkillManage.tool(project_dir, tool_opts)
 
         context =
@@ -279,10 +283,12 @@ defmodule LemonEvals.Evals.LiveModel do
         search_tool =
           Recall.tool(project_dir,
             workspace_dir: home_dir,
+            agent_id: "eval",
+            session_scope: :main,
             search_fn: search_fn
           )
 
-        memory_tool = Remember.tool(project_dir, workspace_dir: project_dir)
+        memory_tool = Remember.tool(project_dir, workspace_dir: project_dir, session_scope: :main)
 
         context =
           AgentContext.new(
@@ -643,12 +649,14 @@ defmodule LemonEvals.Evals.LiveModel do
         search_fn = fn query, opts ->
           Agent.update(search_calls, &[{query, opts} | &1])
 
-          [eval_memory_doc("cron-rollup-prior-run", Keyword.fetch!(opts, :scope_key))]
+          [eval_memory_doc("cron-rollup-prior-run", project_dir, home_dir)]
         end
 
         search_tool =
           Recall.tool(project_dir,
             workspace_dir: home_dir,
+            agent_id: "eval",
+            session_scope: :main,
             search_fn: search_fn
           )
 

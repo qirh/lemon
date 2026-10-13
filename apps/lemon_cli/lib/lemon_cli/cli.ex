@@ -89,6 +89,8 @@ defmodule LemonCli.CLI do
   process exit code. Reusable from Mix tasks and tests.
   """
   @spec run([String.t()]) :: 0 | 1 | 2
+  def run(["--version"]), do: run_command("version", ["--verbose"])
+
   def run(argv) when is_list(argv) do
     argv
     |> List.wrap()
@@ -204,6 +206,11 @@ defmodule LemonCli.CLI do
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
   defp run_command("migrate", args), do: LemonCli.MigrateCommand.run(args)
   defp run_command("node", args), do: run_node(args)
+
+  defp run_command("version", ["--verbose"]) do
+    IO.puts(LemonCore.Update.Version.describe())
+    @exit_ok
+  end
 
   defp run_command("version", _args) do
     IO.puts(LemonCore.Update.Version.current())

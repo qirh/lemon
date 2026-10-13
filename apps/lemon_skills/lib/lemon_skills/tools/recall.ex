@@ -2,18 +2,20 @@ defmodule LemonSkills.Tools.Recall do
   @moduledoc """
   The `recall` tool: search what earlier conversations and memory notes say.
 
-  It searches two places with the same query:
+  It searches scoped sources with the same query:
 
     * **Past conversations** — the durable memory documents written after each
       finished run (`LemonMemory.SessionSearch.search/2`: the local SQLite FTS5
       store plus any registered provider, gated by `[features] session_search`).
       Scope `"agent"` (the default) covers every earlier session of the current
-      agent; `"project"` only the runs whose working directory was this project
-      root. Matching is lexical: any query term may match, ranked by BM25 (see
-      `LemonMemory.Query`).
+      agent and assistant profile; `"project"` only the current repository.
+      Unscoped legacy documents are excluded. Matching is lexical: any query
+      term may match, ranked by BM25 (see `LemonMemory.Query`).
     * **Memory notes** — markdown files under the assistant home's `memory/`
       directory (daily notes, topic notes), matched line by line on the same
       terms. At most 200 files of up to 64 KiB each are read.
+    * **Project facts** — exact facts stored by `remember(target: "project")`,
+      searched only for project scope, bound to repository, profile, and agent.
 
   `USER.md` and `MEMORY.md` are not searched: main sessions already have both in
   the system prompt. Its write-side counterpart is `LemonSkills.Tools.Remember`;
@@ -23,7 +25,7 @@ defmodule LemonSkills.Tools.Recall do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonMemory.{Query, SessionSearch}
+  alias LemonMemory.{Project, Query, SessionSearch}
 
   @default_limit 5
   @max_limit 10
@@ -41,15 +43,20 @@ defmodule LemonSkills.Tools.Recall do
     agent segment of `:session_key`, `"agent:<id>:..."`)
   - `:session_key` - current session key
   - `:workspace_dir` - assistant home whose `memory/` notes are searched
+  - `:session_scope` - must be `:main`; missing scope and subagents fail closed
+  - `:store` - named store for project memory
   - `:search_fn` - test override for `LemonMemory.SessionSearch.search/2`
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
     context = %{
       agent_id: present(Keyword.get(opts, :agent_id)) || agent_from_session_key(opts),
-      project_key: present(cwd),
+      cwd: present(cwd),
       workspace_dir: present(Keyword.get(opts, :workspace_dir)),
-      search_fn: Keyword.get(opts, :search_fn, &SessionSearch.search/2)
+      session_key: present(Keyword.get(opts, :session_key)),
+      session_scope: Keyword.get(opts, :session_scope),
+      search_fn: Keyword.get(opts, :search_fn, &SessionSearch.search/2),
+      store_opts: Keyword.take(opts, [:store])
     }
 
     %AgentTool{
@@ -58,7 +65,8 @@ defmodule LemonSkills.Tools.Recall do
         "Search your memory of earlier conversations with this user, and your memory notes, " <>
           "by keywords. Use it before answering anything that depends on prior work, earlier " <>
           "decisions, or something the user told you before. Scope \"agent\" (default) " <>
-          "searches all your earlier sessions; \"project\" only this project root.",
+          "searches your earlier sessions in this profile; \"project\" searches this " <>
+          "repository's conversations and saved project facts.",
       label: "Recall",
       parameters: %{
         "type" => "object",
@@ -113,17 +121,31 @@ defmodule LemonSkills.Tools.Recall do
 
     with :ok <- validate_query(query),
          {:ok, scope} <- parse_scope(Map.get(params, "scope", "agent")),
+         :ok <- validate_context(context),
          {:ok, search_opts} <- search_opts(scope, context, limit) do
-      docs = context.search_fn.(query, search_opts)
-      notes = search_notes(context.workspace_dir, Query.terms(query), limit)
+      docs =
+        context.search_fn.(query, search_opts)
+        |> Enum.filter(&Project.history_document?(&1, context, history_scope(scope)))
+        |> Enum.take(limit)
+
+      notes =
+        if scope == "agent",
+          do: search_notes(context.workspace_dir, Query.terms(query), limit),
+          else: []
+
+      facts =
+        if scope == "project",
+          do: Project.search(context, query, Keyword.put(context.store_opts, :limit, limit)),
+          else: []
 
       %AgentToolResult{
-        content: [%TextContent{text: render(query, scope, docs, notes)}],
+        content: [%TextContent{text: render(query, scope, docs, notes, facts)}],
         details: %{
           query: query,
           scope: scope,
           conversations: length(docs),
-          notes: length(notes)
+          notes: length(notes),
+          project_facts: length(facts)
         }
       }
     end
@@ -138,21 +160,30 @@ defmodule LemonSkills.Tools.Recall do
   defp parse_limit(limit) when is_integer(limit) and limit in 1..@max_limit, do: limit
   defp parse_limit(_limit), do: @default_limit
 
+  defp validate_context(%{session_scope: :main, workspace_dir: home})
+       when is_binary(home) and home != "",
+       do: :ok
+
+  defp validate_context(_), do: {:error, "recall requires a main session and assistant workspace"}
+
+  defp history_scope("agent"), do: :agent
+  defp history_scope("project"), do: :workspace
+
   defp search_opts("agent", %{agent_id: agent_id}, limit) when is_binary(agent_id),
     do: {:ok, [scope: :agent, scope_key: agent_id, limit: limit]}
 
   defp search_opts("agent", _context, _limit),
     do: {:error, "recall scope agent needs a current agent; try scope project"}
 
-  defp search_opts("project", %{project_key: project_key}, limit) when is_binary(project_key),
-    do: {:ok, [scope: :workspace, scope_key: project_key, limit: limit]}
-
-  defp search_opts("project", _context, _limit),
-    do: {:error, "recall scope project needs a current project root"}
+  defp search_opts("project", context, limit) do
+    case Project.scope(context) do
+      {:ok, scope} -> {:ok, [scope: :agent, scope_key: scope.agent_id, limit: limit]}
+      {:error, _} -> {:error, "recall scope project needs a scoped current project"}
+    end
+  end
 
   # ── Memory notes ────────────────────────────────────────────────────────────
 
-  defp search_notes(nil, _terms, _limit), do: []
   defp search_notes(_workspace_dir, [], _limit), do: []
 
   defp search_notes(workspace_dir, terms, limit) do
@@ -197,11 +228,11 @@ defmodule LemonSkills.Tools.Recall do
 
   # ── Rendering ───────────────────────────────────────────────────────────────
 
-  defp render(query, _scope, [], []),
-    do: "Nothing in past conversations or memory notes matches: #{query}"
+  defp render(query, _scope, [], [], []),
+    do: "Nothing in past conversations, memory notes, or project facts matches: #{query}"
 
-  defp render(_query, scope, docs, notes) do
-    [conversations_section(scope, docs), notes_section(notes)]
+  defp render(_query, scope, docs, notes, facts) do
+    [conversations_section(scope, docs), notes_section(notes), project_section(facts)]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end
@@ -223,6 +254,9 @@ defmodule LemonSkills.Tools.Recall do
 
     "Memory notes:\n" <> lines
   end
+
+  defp project_section([]), do: nil
+  defp project_section(facts), do: "Project facts:\n" <> Enum.map_join(facts, "\n", &("- " <> &1))
 
   # ── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -17,16 +17,19 @@ defmodule LemonWeb.SessionLive do
   }
 
   alias LemonCore.Setup.Readiness
+  alias LemonWeb.SubagentTree
 
   alias LemonWeb.Live.Components.{
     ApprovalComponent,
     FileUploadComponent,
-    MessageComponent
+    MessageComponent,
+    SubagentTreeComponent
   }
 
   @max_messages 250
   @max_history_runs 100
   @active_control_modes [:followup, :steer, :redirect]
+  @subagent_refresh_ms 2_000
 
   @impl true
   def mount(params, _session, socket) do
@@ -56,6 +59,9 @@ defmodule LemonWeb.SessionLive do
       |> assign(:approval_notice, nil)
       |> assign(:last_run_id, last_run_id)
       |> assign(:run_status, run_status)
+      |> assign(:tree_run_id, last_run_id)
+      |> assign(:subagent_tree, SubagentTree.snapshot(session_key, last_run_id))
+      |> assign(:subagent_timer, nil)
       |> assign(:control_mode, :followup)
       |> assign(:control_notice, nil)
       |> assign(:setup_state, setup_state)
@@ -68,6 +74,7 @@ defmodule LemonWeb.SessionLive do
         auto_upload: true
       )
       |> stream(:messages, messages, limit: -@max_messages)
+      |> schedule_subagent_refresh()
 
     {:ok, socket}
   end
@@ -362,6 +369,8 @@ defmodule LemonWeb.SessionLive do
       |> assign(:last_run_id, run_id || socket.assigns.last_run_id)
       |> assign(:run_status, :running)
       |> assign(:control_notice, nil)
+      |> assign(:tree_run_id, run_id || socket.assigns.tree_run_id)
+      |> refresh_subagents()
       |> maybe_append_system("Run started#{if is_binary(engine), do: " (#{engine})", else: ""}.")
 
     {:noreply, socket}
@@ -382,7 +391,7 @@ defmodule LemonWeb.SessionLive do
   end
 
   def handle_info(%LemonCore.Event{type: :engine_action, payload: payload, meta: meta}, socket) do
-    run_id = read(meta, :run_id) || socket.assigns.last_run_id
+    run_id = read(meta, :run_id) || read(payload, :run_id) || socket.assigns.last_run_id
 
     socket =
       socket
@@ -395,6 +404,10 @@ defmodule LemonWeb.SessionLive do
       })
 
     {:noreply, socket}
+  end
+
+  def handle_info(:refresh_subagents, socket) do
+    {:noreply, socket |> refresh_subagents() |> schedule_subagent_refresh()}
   end
 
   def handle_info(%LemonCore.Event{type: :run_completed, payload: payload, meta: meta}, socket) do
@@ -411,6 +424,7 @@ defmodule LemonWeb.SessionLive do
       |> assign(:last_run_id, nil)
       |> assign(:run_status, :idle)
       |> assign(:control_notice, nil)
+      |> refresh_subagents()
 
     {:noreply, socket}
   end
@@ -492,9 +506,10 @@ defmodule LemonWeb.SessionLive do
                 <span class="h-2 w-2 rounded-full bg-current" aria-hidden="true"></span>
                 {if @setup_ready?, do: "Ready", else: "Setup needed"}
               </span>
-              <.link href={~p"/manage"} class="text-xs font-medium text-slate-600 underline">
-                Manage sessions
-              </.link>
+              <nav aria-label="Workspace" class="flex flex-wrap gap-3 text-xs font-medium text-slate-600 underline">
+                <.link href={~p"/manage"}>Sessions</.link>
+                <.link href="/manage/work">Work</.link>
+              </nav>
             </div>
           </div>
           <details class="mt-3 text-xs text-slate-500">
@@ -504,7 +519,21 @@ defmodule LemonWeb.SessionLive do
               <p>Agent: <code class="rounded bg-slate-100 px-1 py-0.5">{@agent_id}</code></p>
             </div>
           </details>
+          <div id="session-run-summary" role="status" class="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-xs text-slate-600">
+            <span class="font-semibold text-slate-800">
+              {case @run_status do
+                :running -> "Run active"
+                :stopping -> "Stopping safely"
+                :unavailable -> "Run status unavailable"
+                _ -> "Ready for a new run"
+              end}
+            </span>
+            <span :if={map_size(@streaming) > 0}>· Streaming response</span>
+            <span :if={@subagent_tree.status == :available}>· {@subagent_tree.active_count} active subagents</span>
+          </div>
         </header>
+
+        <SubagentTreeComponent.tree tree={@subagent_tree} />
 
         <%= unless @setup_ready? do %>
           <section
@@ -547,9 +576,15 @@ defmodule LemonWeb.SessionLive do
           class="mt-4 flex-1 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4"
         >
           <div :if={@transcript_empty?} id="transcript-empty" class="mx-auto max-w-md py-8 text-center">
-            <p class="font-medium text-slate-800">Start with a small task</p>
+            <p class="font-medium text-slate-800">
+              {if @run_status in [:running, :stopping], do: "Following the active run", else: "Start with a small task"}
+            </p>
             <p class="mt-1 text-sm text-slate-500">
-              Ask a question, explain what you are working on, or attach files for Lemon to inspect.
+              <%= if @run_status in [:running, :stopping] do %>
+                New tool activity and replies will appear here as they arrive.
+              <% else %>
+                Ask a question, explain what you are working on, or attach files for Lemon to inspect.
+              <% end %>
             </p>
           </div>
           <div id="transcript" phx-update="stream" class="space-y-3">
@@ -1125,6 +1160,26 @@ defmodule LemonWeb.SessionLive do
     end
   end
 
+  defp refresh_subagents(socket) do
+    run_id = socket.assigns.last_run_id || socket.assigns.tree_run_id
+
+    assign(socket, :subagent_tree, SubagentTree.snapshot(socket.assigns.session_key, run_id))
+  end
+
+  defp schedule_subagent_refresh(socket) do
+    if connected?(socket) do
+      if socket.assigns.subagent_timer, do: Process.cancel_timer(socket.assigns.subagent_timer)
+
+      assign(
+        socket,
+        :subagent_timer,
+        Process.send_after(self(), :refresh_subagents, @subagent_refresh_ms)
+      )
+    else
+      socket
+    end
+  end
+
   # The streaming reply lives server-side in `:streaming` (run_id => message);
   # each delta re-inserts only that one stream item, so the diff pushed per
   # token carries this message and nothing else from the transcript.
@@ -1373,11 +1428,14 @@ defmodule LemonWeb.SessionLive do
 
     tools =
       run.tools
+      |> Enum.reverse()
       |> Enum.with_index()
       |> Enum.map(fn {tool, index} ->
+        action_id = read(tool, :id) || read(tool, :action_id)
+
         event = %{
           action: %{
-            id: read(tool, :id),
+            id: action_id,
             title: tool.title,
             kind: tool.kind,
             detail: tool.detail
@@ -1388,7 +1446,7 @@ defmodule LemonWeb.SessionLive do
         }
 
         id =
-          if is_binary(read(tool, :id)) and read(tool, :id) != "",
+          if is_binary(action_id) and action_id != "",
             do: tool_message_id(run_id, event),
             else: history_message_id(run_id, "tool-#{index}")
 

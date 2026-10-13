@@ -5,6 +5,30 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
   alias LemonCore.{Secrets, Store}
 
   setup do
+    previous_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
+
+    on_exit(fn ->
+      if previous_secrets_config,
+        do: Application.put_env(:lemon_core, LemonCore.Secrets, previous_secrets_config),
+        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+    end)
+
+    home = Path.join(System.tmp_dir!(), "codex_import_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(home)
+    previous_env = Map.new(["HOME", "CODEX_HOME"], &{&1, System.get_env(&1)})
+    System.put_env("HOME", home)
+    System.delete_env("CODEX_HOME")
+
+    on_exit(fn ->
+      Enum.each(previous_env, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+
+      File.rm_rf!(home)
+    end)
+
     {:ok, _} = Application.ensure_all_started(:lemon_ai)
     {:ok, _} = Application.ensure_all_started(:lemon_core)
     :inets.start()
@@ -31,7 +55,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
       System.delete_env("CHATGPT_TOKEN")
     end)
 
-    :ok
+    {:ok, home: home}
   end
 
   test "parse_authorization_input handles callback URL and code#state" do
@@ -225,6 +249,211 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     assert secret["refresh_token"] == "auto-refresh-token"
     assert secret["account_id"] == "acc_auto"
   end
+
+  test "imports only the selected synthetic CLI copy without HTTP or writes", %{home: home} do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("import must not call HTTP") end)
+    path = Path.join([home, ".codex", "auth.json"])
+    login = cli_login(3_600)
+    original = write_cli_login(path, login)
+
+    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login()
+    assert secret["type"] == "openai_codex_oauth"
+    assert secret["access_token"] == login["tokens"]["access_token"]
+    assert secret["refresh_token"] == "synthetic-refresh"
+    assert secret["id_token"] == login["tokens"]["id_token"]
+    assert secret["account_id"] == "acc_import"
+    [_, payload, _] = String.split(secret["access_token"], ".")
+    claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
+    assert secret["expires_at_ms"] == claims["exp"] * 1000
+    assert File.read!(path) == original
+
+    codex_home = Path.join(home, "alternate")
+    System.put_env("CODEX_HOME", codex_home)
+    assert {:error, :enoent} = OpenAICodexOAuth.import_codex_cli_login()
+    write_cli_login(Path.join(codex_home, "auth.json"), %{"OPENAI_API_KEY" => "synthetic-key"})
+    assert {:error, :not_chatgpt_oauth} = OpenAICodexOAuth.import_codex_cli_login()
+    assert {:ok, selected} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    assert selected["access_token"] == secret["access_token"]
+  end
+
+  test "rejects malformed and non-refreshable CLI logins with safe errors", %{home: home} do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("import must not call HTTP") end)
+    path = Path.join(home, "invalid.json")
+
+    cases = [
+      {%{}, :not_chatgpt_oauth},
+      {%{"OPENAI_API_KEY" => "secret-marker"}, :not_chatgpt_oauth},
+      {Map.put(cli_login(60), "auth_mode", "apikey"), :not_chatgpt_oauth},
+      {put_in(cli_login(60), ["tokens", "refresh_token"], " "), :missing_refresh_token},
+      {put_in(cli_login(60), ["tokens", "access_token"], "secret-marker"), :invalid_access_token},
+      {put_in(cli_login(60), ["tokens", "access_token"], jwt(%{"exp" => "bad"})),
+       :invalid_expiry},
+      {%{"tokens" => %{"access_token" => jwt(%{"exp" => 1}), "refresh_token" => "secret-marker"}},
+       :missing_account_id},
+      {%{"tokens" => []}, :not_chatgpt_oauth}
+    ]
+
+    for {login, reason} <- cases do
+      original = write_cli_login(path, login)
+      assert OpenAICodexOAuth.import_codex_cli_login(path: path) == {:error, reason}
+      assert File.read!(path) == original
+    end
+
+    File.write!(path, "secret-marker invalid JSON")
+
+    assert {:error, :invalid_codex_cli_login} =
+             OpenAICodexOAuth.import_codex_cli_login(path: path)
+
+    assert {:error, :invalid_codex_auth_path} = OpenAICodexOAuth.import_codex_cli_login(path: 42)
+  end
+
+  test "imported expired login refreshes and persists only the Lemon secret", %{home: home} do
+    path = Path.join(home, "auth.json")
+    original = write_cli_login(path, cli_login(-60))
+    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    name = "llm_openai_codex_api_key"
+    assert {:ok, _} = Secrets.set(name, OpenAICodexOAuth.encode_secret(secret))
+    fresh_token = make_jwt("acc_import", 900)
+    now = System.system_time(:millisecond)
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert URI.decode_query(body)["refresh_token"] == "synthetic-refresh"
+      send(test_pid, :refreshed)
+
+      Req.Test.json(conn, %{
+        "access_token" => fresh_token,
+        "refresh_token" => "rotated-synthetic-refresh",
+        "expires_in" => 900
+      })
+    end)
+
+    assert {:ok, ^fresh_token} =
+             OpenAICodexOAuth.resolve_api_key_from_secret(
+               name,
+               OpenAICodexOAuth.encode_secret(secret),
+               persist_secret: &Secrets.set/2
+             )
+
+    assert_receive :refreshed
+    assert {:ok, stored} = Secrets.get(name, prefer_env: false, env_fallback: false)
+    assert {:ok, updated} = OpenAICodexOAuth.decode_secret(stored)
+    assert updated["refresh_token"] == "rotated-synthetic-refresh"
+    assert updated["expires_at_ms"] >= now + 900_000
+    assert {:ok, ^fresh_token} = OpenAICodexOAuth.resolve_api_key_from_secret(name, stored)
+    refute_received :refreshed
+    assert File.read!(path) == original
+  end
+
+  test "refresh does not claim success when rotating credentials cannot be persisted", %{
+    home: home
+  } do
+    path = Path.join(home, "auth.json")
+    original = write_cli_login(path, cli_login(-60))
+    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    fresh_token = make_jwt("acc_import", 900)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Req.Test.json(conn, %{
+        "access_token" => fresh_token,
+        "refresh_token" => "rotated-synthetic-refresh",
+        "expires_in" => 900
+      })
+    end)
+
+    for callback <- [
+          fn _, _ -> {:error, :store_unavailable} end,
+          fn _, _ -> raise "sensitive storage error must not escape" end
+        ] do
+      assert {:error, :oauth_secret_persistence_failed} =
+               OpenAICodexOAuth.resolve_api_key_from_secret(
+                 "llm_openai_codex_api_key",
+                 OpenAICodexOAuth.encode_secret(secret),
+                 persist_secret: callback
+               )
+    end
+
+    assert File.read!(path) == original
+  end
+
+  test "refresh failure falls back only to an unexpired token", %{home: home} do
+    Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 400, "{}") end)
+    path = Path.join(home, "auth.json")
+
+    for {seconds, expected} <- [{-60, :error}, {60, :ok}] do
+      write_cli_login(path, cli_login(seconds))
+      assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+
+      result =
+        OpenAICodexOAuth.resolve_api_key_from_secret(
+          "synthetic",
+          OpenAICodexOAuth.encode_secret(secret),
+          persist_secret: fn _, _ -> flunk("failed refresh must not persist") end
+        )
+
+      assert elem(result, 0) == expected
+    end
+  end
+
+  test "JWT expiry bounds fallback even with a later stored expiry" do
+    Req.Test.stub(__MODULE__, fn conn -> Plug.Conn.send_resp(conn, 400, "{}") end)
+
+    secret = %{
+      "type" => "openai_codex_oauth",
+      "access_token" => make_jwt("expired-account", -60),
+      "refresh_token" => "synthetic-refresh",
+      "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+    }
+
+    assert {:error, _} =
+             OpenAICodexOAuth.resolve_api_key_from_secret(
+               "synthetic",
+               OpenAICodexOAuth.encode_secret(secret)
+             )
+
+    assert {:error, :expired_access_token} =
+             OpenAICodexOAuth.resolve_api_key_from_secret(
+               "synthetic",
+               secret |> Map.delete("refresh_token") |> OpenAICodexOAuth.encode_secret()
+             )
+  end
+
+  test "imports legacy CLI shape with account claim in id_token", %{home: home} do
+    login =
+      cli_login(3_600)
+      |> Map.delete("auth_mode")
+      |> update_in(["tokens"], &Map.delete(&1, "account_id"))
+      |> put_in(["tokens", "access_token"], jwt(%{"exp" => System.system_time(:second) + 3_600}))
+
+    path = Path.join(home, "legacy.json")
+    write_cli_login(path, login)
+    assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
+    assert secret["account_id"] == "acc_import"
+  end
+
+  defp cli_login(seconds) do
+    %{
+      "auth_mode" => "chatgpt",
+      "OPENAI_API_KEY" => nil,
+      "tokens" => %{
+        "access_token" => make_jwt("acc_import", seconds),
+        "refresh_token" => "synthetic-refresh",
+        "account_id" => "acc_import",
+        "id_token" => make_jwt("acc_import", seconds)
+      }
+    }
+  end
+
+  defp write_cli_login(path, login) do
+    contents = Jason.encode!(login)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, contents)
+    contents
+  end
+
+  defp jwt(claims),
+    do: "header." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".signature"
 
   defp make_jwt(account_id, expires_in_seconds) do
     exp = DateTime.utc_now() |> DateTime.add(expires_in_seconds, :second) |> DateTime.to_unix()

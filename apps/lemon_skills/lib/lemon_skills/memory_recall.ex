@@ -5,9 +5,11 @@ defmodule LemonSkills.MemoryRecall do
 
   Registered by `LemonSkills.Application` under `:memory_recall`, through the
   same seam `LemonHoncho.ContextContributor` uses. For each turn it asks
-  `LemonMemory.Recall.block/2` for the agent's earlier conversations that share
-  keywords with the new message and USER.md facts from the session workspace,
-  contributing them as one `:user_message` section. The block changes every
+  `LemonMemory.Recall.block/2` for profile-scoped earlier conversations that share
+  keywords with the new message, USER.md facts from the session workspace, and
+  bounded project learnings from `LemonMemory.Project.read/2`. Project defaults
+  need not match the opening query. They contribute as one `:user_message` section.
+  The block changes every
   turn, so it rides after the last prompt-cache breakpoint (attached to the
   outgoing message by `CodingAgent.Session.attach_recalled_context/2`) instead
   of invalidating the cached system prompt.
@@ -29,7 +31,7 @@ defmodule LemonSkills.MemoryRecall do
 
   @behaviour LemonAgent.ContextRegistry
 
-  alias LemonMemory.Recall
+  alias LemonMemory.{Project, Query, Recall}
 
   @impl true
   def contribute(request), do: contribute(request, [])
@@ -45,18 +47,30 @@ defmodule LemonSkills.MemoryRecall do
   """
   @spec contribute(term(), keyword()) :: {:ok, LemonAgent.ContextRegistry.section_spec()} | :skip
   def contribute(%{} = request, opts) when is_list(opts) do
-    with false <- Map.get(request, :session_scope) == :subagent,
+    with :main <- Map.get(request, :session_scope),
          true <- auto_recall?(request, opts),
          agent_id when is_binary(agent_id) <- agent_id(request),
-         {:ok, body} <-
-           Recall.block(
+         true <- length(Query.terms(Map.get(request, :query))) >= 2 do
+      context = Map.put(request, :agent_id, agent_id)
+
+      facts =
+        case Project.read(context, Keyword.take(opts, [:store])) do
+          {:ok, facts} -> facts
+          {:error, _} -> []
+        end
+
+      case Recall.block(
              Map.get(request, :query),
              opts
              |> Keyword.delete(:auto_recall)
              |> Keyword.put(:agent_id, agent_id)
              |> Keyword.put(:workspace_dir, Map.get(request, :workspace_dir))
+             |> Keyword.put(:context, context)
+             |> Keyword.put(:project_facts, facts)
            ) do
-      {:ok, %{title: Recall.title(), body: body, placement: :user_message}}
+        {:ok, body} -> {:ok, %{title: Recall.title(), body: body, placement: :user_message}}
+        :skip -> :skip
+      end
     else
       _ -> :skip
     end
@@ -64,20 +78,14 @@ defmodule LemonSkills.MemoryRecall do
 
   def contribute(_request, _opts), do: :skip
 
-  defp auto_recall?(request, opts) do
-    case Keyword.fetch(opts, :auto_recall) do
-      {:ok, value} -> value == true
-      :error -> configured_auto_recall?(Map.get(request, :cwd))
-    end
-  end
-
   # An unreadable config turns recall off for the turn rather than failing it.
-  defp configured_auto_recall?(cwd) do
-    cwd = if is_binary(cwd) and cwd != "", do: cwd, else: nil
+  defp auto_recall?(request, opts) do
+    case LemonCore.Config.cached(Map.get(request, :cwd)) do
+      %LemonCore.Config{memory: %{auto_recall: configured}} ->
+        configured and Keyword.get(opts, :auto_recall, true) == true
 
-    case LemonCore.Config.cached(cwd) do
-      %LemonCore.Config{memory: %{auto_recall: auto_recall}} -> auto_recall == true
-      _ -> false
+      _ ->
+        false
     end
   rescue
     _ -> false

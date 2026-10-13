@@ -99,6 +99,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "profile.chat" => %{
       required: %{"id" => :string, "prompt" => :string},
       optional: %{
+        "images" => :list,
         "model" => :string,
         "queueMode" => :string
       }
@@ -227,6 +228,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "pinned" => :boolean,
         "archived" => :boolean
       }
+    },
+    "sessions.get" => %{required: %{"sessionKey" => :string}, optional: %{}},
+    "sessions.history" => %{
+      required: %{"sessionKey" => :string},
+      optional: %{"limit" => :integer}
     },
     "sessions.tree" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},
@@ -496,6 +502,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "agentId" => :string,
         "cwd" => :string,
+        "images" => :list,
         "queueMode" => :string
       }
     },

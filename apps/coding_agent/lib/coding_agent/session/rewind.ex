@@ -143,19 +143,21 @@ defmodule CodingAgent.Session.Rewind do
   defp restore_and_rewind(session, target, plan) do
     with {:ok, backup} <- backup_current_files(session, plan) do
       try do
-        with :ok <- restore_plan(plan) do
-          session = SessionManager.set_leaf_id(session, target.parent_id)
+        case restore_plan(plan) do
+          :ok ->
+            session = SessionManager.set_leaf_id(session, target.parent_id)
 
-          {:ok,
-           %{
-             "sessionId" => session.header.id,
-             "entryId" => target.id,
-             "prompt" => message_text(target.message),
-             "leafId" => session.leaf_id,
-             "restoredPaths" => Enum.map(plan, & &1.path)
-           }, session}
-        else
-          {:error, _} -> rollback_files(backup)
+            {:ok,
+             %{
+               "sessionId" => session.header.id,
+               "entryId" => target.id,
+               "prompt" => message_text(target.message),
+               "leafId" => session.leaf_id,
+               "restoredPaths" => Enum.map(plan, & &1.path)
+             }, session}
+
+          {:error, _} ->
+            rollback_files(backup)
         end
       rescue
         _ -> rollback_files(backup)
