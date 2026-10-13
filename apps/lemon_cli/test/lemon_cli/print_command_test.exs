@@ -2,6 +2,16 @@ defmodule LemonCli.PrintCommandTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureIO
 
+  test "cancelling after socket death returns a bounded error instead of exiting" do
+    {pid, monitor} = spawn_monitor(fn -> :ok end)
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+
+    assert {:error, :disconnected} =
+             LemonCli.ControlPlaneClient.call({pid, make_ref()}, "chat.abort", %{
+               "runId" => "run-dead"
+             })
+  end
+
   test "piped empty input returns a usage error without starting a run" do
     capture_io([input: "\n"], fn ->
       error =

@@ -131,7 +131,19 @@ defmodule LemonCli.ControlPlaneClient do
     send_frame(pid, %{"type" => "req", "id" => id, "method" => method, "params" => params})
   end
 
-  defp send_frame(pid, frame), do: WebSockex.send_frame(pid, {:text, Jason.encode!(frame)})
+  defp send_frame(pid, frame) do
+    case WebSockex.send_frame(pid, {:text, Jason.encode!(frame)}) do
+      {:error, %WebSockex.NotConnectedError{}} -> {:error, :disconnected}
+      {:error, %WebSockex.ConnError{}} -> {:error, :disconnected}
+      result -> result
+    end
+  rescue
+    WebSockex.NotConnectedError -> {:error, :disconnected}
+  catch
+    :exit, {:noproc, _} -> {:error, :disconnected}
+    :exit, {:normal, _} -> {:error, :disconnected}
+    :exit, {:timeout, _} -> {:error, :control_plane_timeout}
+  end
 
   defp receive_frame(ref, timeout_ms) do
     receive do
