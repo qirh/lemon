@@ -30,9 +30,89 @@ defmodule CodingAgent.ControlPlaneProvider do
   def feature_progress(cwd), do: CodingAgent.Tools.FeatureRequirements.get_progress(cwd)
 
   def compact_session(session_key, opts) do
-    case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
-      [{pid, _}] -> CodingAgent.Session.compact(pid, opts)
-      [] -> {:error, :session_not_found}
+    case live_session(session_key) do
+      nil ->
+        with cwd when is_binary(cwd) <- Keyword.get(opts, :cwd),
+             {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, pid} <- CodingAgent.Session.start_link(cwd: cwd, session_file: path) do
+          try do
+            CodingAgent.Session.compact(pid, opts)
+          after
+            GenServer.stop(pid, :normal)
+          end
+        else
+          nil -> {:error, :session_not_found}
+          {:error, _} = error -> error
+        end
+
+      pid ->
+        CodingAgent.Session.compact(pid, opts)
+    end
+  end
+
+  @doc "Return durable native branch entries for history replay through the runtime seam."
+  def session_history(session_key, cwd) do
+    with {:ok, path} <- native_session_path(session_key, cwd),
+         {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
+      {:ok, CodingAgent.SessionManager.get_branch(session)}
+    end
+  end
+
+  @doc "Fork native history and bind the independent resume token to a new logical session."
+  def session_fork(source_key, cwd, destination_key) do
+    with nil <- LemonCore.ChatStateStore.get(destination_key),
+         {:ok, source_path} <- native_session_path(source_key, cwd) do
+      id = LemonCore.Id.uuid()
+      destination_path = CodingAgent.Session.Presentation.session_file_path(id, cwd)
+
+      with {:ok, _session} <-
+             CodingAgent.SessionManager.fork_file(source_path, destination_path, id: id) do
+        LemonCore.ChatStateStore.put(destination_key, %LemonCore.ChatState{
+          last_engine: "lemon",
+          last_resume_token: id,
+          updated_at: System.system_time(:millisecond)
+        })
+      end
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :destination_exists}
+    end
+  end
+
+  def tool_policy(profile), do: CodingAgent.ToolPolicy.from_profile(profile)
+
+  defp native_session_path(session_key, cwd) do
+    case LemonCore.ChatStateStore.get(session_key) do
+      state when is_map(state) ->
+        engine = Map.get(state, :last_engine) || Map.get(state, "last_engine")
+        token = Map.get(state, :last_resume_token) || Map.get(state, "last_resume_token")
+
+        if engine == "lemon" and is_binary(token) and token != "" and
+             Path.basename(token) == token do
+          {:ok, CodingAgent.Session.Presentation.session_file_path(token, cwd)}
+        else
+          {:error, :unsupported_session}
+        end
+
+      nil ->
+        {:error, :session_not_found}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp live_session(session_key) do
+    if Process.whereis(CodingAgent.SessionRegistry) do
+      case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
+        [{pid, _}] ->
+          pid
+
+        [] ->
+          CodingAgent.SessionRegistry
+          |> Registry.select([{{:_, :"$1", %{session_key: session_key}}, [], [:"$1"]}])
+          |> List.first()
+      end
     end
   end
 

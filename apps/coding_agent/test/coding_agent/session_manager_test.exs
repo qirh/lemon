@@ -4,6 +4,100 @@ defmodule CodingAgent.SessionManagerTest do
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
 
+  describe "durable live history" do
+    setup do
+      dir = Path.join(System.tmp_dir!(), "session-durable-#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      on_exit(fn -> File.rm_rf!(dir) end)
+      %{dir: dir, path: Path.join(dir, "session.jsonl")}
+    end
+
+    test "appends survive writer death and a torn final line", %{path: path} do
+      owner = self()
+
+      pid =
+        spawn(fn ->
+          session =
+            SessionManager.new("/workspace")
+            |> SessionManager.persist(path)
+            |> SessionManager.append_entry(
+              SessionEntry.model_change("anthropic", "claude-sonnet-4-5")
+            )
+            |> SessionManager.append_message(%{"role" => "user", "content" => "keep this"})
+            |> SessionManager.append_message(%{
+              "role" => "assistant",
+              "content" => [
+                %{
+                  "type" => "tool_call",
+                  "id" => "call-1",
+                  "name" => "read",
+                  "arguments" => %{"path" => "a.ex"}
+                }
+              ]
+            })
+            |> SessionManager.append_message(%{
+              "role" => "tool_result",
+              "tool_call_id" => "call-1",
+              "content" => [%{"type" => "text", "text" => "exact bytes"}]
+            })
+
+          send(owner, {:saved, session.leaf_id})
+          Process.sleep(:infinity)
+        end)
+
+      monitor = Process.monitor(pid)
+      assert_receive {:saved, leaf_id}
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
+      File.write!(path, ~s({"type":"message"), [:append])
+      assert {:ok, restored} = SessionManager.load_from_file(path)
+      assert restored.leaf_id == leaf_id
+      assert restored.header.cwd == "/workspace"
+      context = SessionManager.build_session_context(restored)
+      assert context.model.model_id == "claude-sonnet-4-5"
+      assert length(context.messages) == 3
+      assert List.last(context.messages)["tool_call_id"] == "call-1"
+
+      restored
+      |> SessionManager.persist(path)
+      |> SessionManager.append_message(%{"role" => "user", "content" => "continue"})
+
+      assert {:ok, continued} = SessionManager.load_from_file(path)
+      assert length(SessionManager.build_session_context(continued).messages) == 4
+    end
+
+    test "navigation and independent forks survive reload", %{path: path, dir: dir} do
+      first =
+        SessionManager.new("/workspace")
+        |> SessionManager.persist(path)
+        |> SessionManager.append_message(%{"role" => "user", "content" => "first"})
+
+      full =
+        first |> SessionManager.append_message(%{"role" => "assistant", "content" => "second"})
+
+      selected = SessionManager.set_leaf_id(full, first.leaf_id)
+      assert {:ok, restored} = SessionManager.load_from_file(path)
+      assert restored.leaf_id == first.leaf_id
+      fork_path = Path.join(dir, "fork.jsonl")
+      assert {:ok, fork} = SessionManager.fork_file(path, fork_path, id: "child")
+      assert fork.header.parent_session == full.header.id
+      assert fork.header.id == "child"
+      assert SessionManager.entry_count(fork) == 1
+      selected |> SessionManager.append_message(%{"role" => "user", "content" => "new branch"})
+      assert {:ok, source} = SessionManager.load_from_file(path)
+      assert source.leaf_id != first.leaf_id
+      assert {:ok, untouched} = SessionManager.load_from_file(fork_path)
+      assert untouched.leaf_id == fork.leaf_id
+      assert {:error, :eexist} = SessionManager.fork_file(path, fork_path)
+    end
+
+    test "completed corrupt lines are not silently discarded", %{path: path} do
+      SessionManager.new("/workspace") |> SessionManager.persist(path)
+      File.write!(path, "not json\n", [:append])
+      assert {:error, {:json_parse_error, _, _}} = SessionManager.load_from_file(path)
+    end
+  end
+
   # ============================================================================
   # new/2
   # ============================================================================

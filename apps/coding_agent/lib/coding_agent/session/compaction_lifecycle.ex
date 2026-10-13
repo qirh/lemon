@@ -26,14 +26,16 @@ defmodule CodingAgent.Session.CompactionLifecycle do
             signature: CodingAgent.Session.CompactionManager.session_signature() | nil,
             task_pid: pid() | nil,
             task_monitor_ref: reference() | nil,
-            task_timeout_ref: reference() | nil
+            task_timeout_ref: reference() | nil,
+            pending_prompt: tuple() | nil
           }
 
     defstruct in_progress: false,
               signature: nil,
               task_pid: nil,
               task_monitor_ref: nil,
-              task_timeout_ref: nil
+              task_timeout_ref: nil,
+              pending_prompt: nil
   end
 
   @type callbacks(state) :: %{
@@ -57,6 +59,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   def cancel_for_new_prompt(%{auto_compaction: %State{in_progress: false}} = state), do: state
 
   def cancel_for_new_prompt(state) do
+    state = if state.pending_prompt_timer_ref, do: resume_pending_prompt(state), else: state
+
     state
     |> CompactionManager.maybe_kill_background_task(
       state.auto_compaction.task_pid,
@@ -65,19 +69,59 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     |> CompactionManager.clear_auto_compaction_state()
   end
 
-  @spec maybe_trigger(map(), pid()) :: map()
-  def maybe_trigger(%{auto_compaction: %State{in_progress: true}} = state, _session_pid),
-    do: state
+  @doc false
+  def before_prompt(state, message, system_prompt) do
+    state = maybe_trigger(state, self(), {message, system_prompt})
 
-  def maybe_trigger(state, session_pid) do
+    if not state.auto_compaction.in_progress do
+      send(self(), {:dispatch_prompt, message, system_prompt})
+    end
+
+    state
+  end
+
+  @doc false
+  def resume_pending_prompt(state) do
+    case state.auto_compaction.pending_prompt do
+      {message, system_prompt} -> send(self(), {:dispatch_prompt, message, system_prompt})
+      nil -> :ok
+    end
+
+    state
+  end
+
+  @spec maybe_trigger(map(), pid()) :: map()
+  def maybe_trigger(state, session_pid), do: maybe_trigger(state, session_pid, nil)
+
+  defp maybe_trigger(
+         %{auto_compaction: %State{in_progress: true}} = state,
+         _session_pid,
+         _prompt
+       ),
+       do: state
+
+  defp maybe_trigger(state, session_pid, pending_prompt) do
     agent_state = LemonAgent.Agent.get_state(state.agent)
-    context_messages = agent_state.messages || []
+
+    context_messages =
+      (agent_state.messages || []) ++
+        case pending_prompt do
+          {message, _system_prompt} -> [message]
+          nil -> []
+        end
+
+    latest_compaction =
+      state.session_manager
+      |> CodingAgent.SessionManager.get_branch()
+      |> Enum.reverse()
+      |> Enum.find(&(&1.type == :compaction))
 
     context_tokens =
       CodingAgent.Compaction.estimate_request_context_tokens(
         context_messages,
         Map.get(agent_state, :system_prompt),
-        Map.get(agent_state, :tools, [])
+        Map.get(agent_state, :tools, []),
+        latest_compaction && latest_compaction.timestamp
       )
 
     context_message_count = length(context_messages)
@@ -99,7 +143,12 @@ defmodule CodingAgent.Session.CompactionLifecycle do
       signature = CompactionManager.session_signature(state)
       session_manager = state.session_manager
       model = state.model
-      compaction_opts = CompactionManager.normalize_compaction_opts(state, [])
+      compaction_opts = CompactionManager.normalize_compaction_opts(state, force: true)
+
+      CodingAgent.Session.Notifier.broadcast_event(
+        state,
+        {:compaction_start, %{reason: :threshold}}
+      )
 
       case CompactionManager.start_tracked_background_task(
              fn ->
@@ -123,7 +172,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
                 signature: signature,
                 task_pid: task_meta.pid,
                 task_monitor_ref: task_meta.monitor_ref,
-                task_timeout_ref: task_meta.timeout_ref
+                task_timeout_ref: task_meta.timeout_ref,
+                pending_prompt: pending_prompt
               }
           }
       end
@@ -142,10 +192,11 @@ defmodule CodingAgent.Session.CompactionLifecycle do
         state
 
       signature != CompactionManager.session_signature(state) ->
-        CompactionManager.clear_auto_compaction_state(state)
+        state |> resume_pending_prompt() |> CompactionManager.clear_auto_compaction_state()
 
       true ->
-        state = CompactionManager.clear_auto_compaction_state(state)
+        state =
+          state |> resume_pending_prompt() |> CompactionManager.clear_auto_compaction_state()
 
         case apply_result(state, result, nil, callbacks) do
           {:ok, new_state} -> new_state
@@ -163,6 +214,7 @@ defmodule CodingAgent.Session.CompactionLifecycle do
           state.auto_compaction.task_pid,
           :auto_compaction_timeout
         )
+        |> resume_pending_prompt()
         |> CompactionManager.clear_auto_compaction_state()
 
       {:handled, state}

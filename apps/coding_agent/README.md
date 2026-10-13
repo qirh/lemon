@@ -464,6 +464,25 @@ Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
 logical runtime session key used by clients.
 
+Live sessions synchronously append completed messages, tool calls/results, model
+changes and compaction entries to their JSONL file. They do not depend on a
+graceful shutdown or an explicit `Session.save/1`. Resuming with `:session_file`
+restores the recorded working directory, selected branch, model and thinking
+level; explicit model/thinking options override the recorded selection. An
+unreadable session is an error, never a silently empty conversation. A torn
+last append is recovered; completed corrupt lines remain errors. Interrupted
+tool calls receive an explicit interrupted-result marker, not a fabricated
+successful result.
+
+`SessionManager.list_sessions/1` lists most recently modified sessions first.
+`Session.navigate_tree/3` persists branch selection even before another message
+is sent. `SessionManager.fork_file/3` creates an independent branch file with
+parent-session provenance; it refuses to overwrite an existing destination.
+The control-plane provider exposes history replay and fork through its runtime
+seam, binding forked files to independent native resume tokens. Its manual
+compaction adapter accepts `cwd:` and also works for an idle saved session after
+the previous run's process has exited.
+
 ### Tool Execution
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
@@ -489,11 +508,21 @@ When conversations grow large, auto-compaction kicks in:
 4. A compaction entry is appended to the session tree
 5. Overflow recovery handles cases where the context window is exhausted mid-run
 
-Auto-compaction runs in a tracked background worker after a completed turn. If
-a new prompt arrives before that worker finishes, Session cancels and demonitors
-the stale snapshot immediately, clears its timeout, and starts the prompt
-without waiting. Any already-sent late result is ignored by signature/state
-checks and cannot append a compaction entry to the new turn.
+Auto-compaction runs in a tracked background worker after a completed turn and
+before dispatching a new prompt that would exceed the reserve threshold. A new
+prompt cancels a stale background snapshot, then checks its own full request
+budget (including the incoming message) before dispatch. Cancellation remains
+available while this preflight compaction runs. Late results are ignored by
+signature/state checks. Repeated compaction summarizes the previous summary
+plus newly retired messages, preserving decisions, outstanding work and file
+operations without repeatedly replaying the entire original transcript.
+
+`Session.compact/2` forces manual compaction by default and waits for the summary
+instead of timing out after five seconds. It accepts `:custom_instructions` or
+an explicit `:summary`; compacting or switching branches while a turn is
+streaming returns `{:error, :busy}`. Summaries use the session's configured
+provider credentials. Compaction start/completion events are forwarded to
+terminal and ACP clients.
 
 Settings: `compaction_enabled` (default: true), `reserve_tokens` (default: 16,384), `keep_recent_tokens` (default: 20,000).
 
