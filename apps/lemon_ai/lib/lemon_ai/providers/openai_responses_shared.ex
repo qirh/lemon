@@ -759,7 +759,10 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         _final_state -> {:error, "Connection closed before the provider completed the response"}
       end
     rescue
-      e -> {:error, Exception.message(e)}
+      e ->
+        if LemonAi.Error.classify(e) == :transient,
+          do: {:error, e},
+          else: {:error, Exception.message(e)}
     catch
       :throw, {:stream_error, reason} -> {:error, reason}
       :throw, reason -> {:error, reason}

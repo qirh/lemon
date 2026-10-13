@@ -140,23 +140,18 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
               EventStream.complete(stream, final_output)
 
             {:error, reason} ->
-              output = %{output | stop_reason: :error, error_message: reason}
+              output = error_assistant_message(output, reason)
               EventStream.error(stream, output)
           end
 
         {:error, reason, retry_after_ms} ->
-          output = %{
-            output
-            | stop_reason: :error,
-              error_message: reason,
-              retry_after_ms: retry_after_ms
-          }
+          output = error_assistant_message(output, reason, retry_after_ms)
 
           EventStream.error(stream, output)
       end
     rescue
       e ->
-        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        output = error_assistant_message(output, e)
         EventStream.error(stream, output)
     end
   end
@@ -384,15 +379,13 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
         end
 
       {:error, reason} ->
-        error_msg = inspect(reason)
-
         cond do
           retry_allowed? and RetryHelper.retryable_transport_error?(reason) ->
             RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
             stream_with_retries(url, body, headers, policy, attempt + 1)
 
           true ->
-            {:error, "Request failed: #{error_msg}", nil}
+            {:error, reason, nil}
         end
     end
   end

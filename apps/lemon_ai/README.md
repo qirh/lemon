@@ -298,6 +298,13 @@ or subscription quotas are not retried in place. Quota exhaustion remains
 HTTP tuples, parsed error maps, transport failures and terminal assistant messages.
 Responses streams that disconnect or time out before a terminal event are errors,
 not successful empty/truncated replies. Both CRLF and multiline SSE data are parsed.
+Terminal `AssistantMessage.error_details` carries the canonical classification,
+retry eligibility, HTTP status and server retry hints; `error_message` is only
+display text. Call `Error.retryable?(message)` on the whole terminal message.
+Req, Finch and Mint closed/reset/timeout failures retain typed reasons through
+Responses parsing and are transient even when their display text is opaque.
+Structured metadata survives JSON session persistence without creating atoms
+from external category names.
 
 
 ### Token estimation
