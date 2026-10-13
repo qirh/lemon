@@ -449,8 +449,8 @@ defmodule LemonAgent.LoopAbortTest do
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Abortable",
         execute: fn id, _params, _signal, _on_update ->
-          send(parent, {:abortable_tool_started, id})
-          Process.sleep(300)
+          send(parent, {:abortable_tool_started, id, self()})
+          Process.sleep(5_000)
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Complete"}],
@@ -471,7 +471,8 @@ defmodule LemonAgent.LoopAbortTest do
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
-      assert_receive {:abortable_tool_started, "call_abort"}, 5_000
+      assert_receive {:abortable_tool_started, "call_abort", worker}, 5_000
+      worker_monitor = Process.monitor(worker)
       :ok = AbortSignal.abort(signal)
 
       events = EventStream.events(stream) |> Enum.to_list()
@@ -481,10 +482,15 @@ defmodule LemonAgent.LoopAbortTest do
 
       {:tool_execution_end, _id, _name, result, is_error} = tool_end
 
-      # Should be marked as error with aborted message
+      # A worker that cannot finish within the cleanup grace is terminated,
+      # not reported as a successful result or an implicitly rolled-back mutation.
       assert is_error == true
-      assert %AgentToolResult{content: content} = result
-      assert Enum.any?(content, fn c -> String.contains?(c.text || "", "abort") end)
+      assert %AgentToolResult{} = result
+      assert result.details.cancelled == true
+      assert result.details.started == true
+      assert result.details.outcome == :unknown
+      refute Enum.any?(result.content, &(&1.text == "Complete"))
+      assert_receive {:DOWN, ^worker_monitor, :process, ^worker, _}, 1_000
     end
   end
 
