@@ -102,6 +102,12 @@ defmodule CodingAgent.ProcessStoreServer do
     state = ensure_tables(state)
 
     if state.ets_initialized do
+      :ets.foldl(
+        fn {_id, record, _logs}, :ok -> CodingAgent.ProcessStore.remove_output(record) end,
+        :ok,
+        @table
+      )
+
       :ets.delete_all_objects(@table)
     end
 
@@ -268,11 +274,7 @@ defmodule CodingAgent.ProcessStoreServer do
       )
 
     Enum.each(expired_ids, fn process_id ->
-      :ets.delete(@table, process_id)
-
-      if dets_open?() do
-        :dets.delete(@dets_table, process_id)
-      end
+      CodingAgent.ProcessStore.delete(process_id)
     end)
 
     if dets_open?() and expired_ids != [] do

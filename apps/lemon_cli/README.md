@@ -42,6 +42,8 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Start TUI (interactive no-argument launch) | `lemon` | `./bin/lemon` |
 | Foreground runtime | `lemon start` | `./bin/lemon start` |
 | Non-interactive coding | `lemon -p "prompt"` or `lemon run` | `./bin/lemon -p "prompt"` or `./bin/lemon run` |
+| ACP over stdio | `lemon acp` | `./bin/lemon acp` |
+| Register native Tern integration | `lemon tern install` | `./bin/lemon tern install` |
 | Background runtime | `lemon daemon` | `./bin/lemon daemon` |
 | First-time setup | `lemon setup` | `./bin/lemon setup` |
 | Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |

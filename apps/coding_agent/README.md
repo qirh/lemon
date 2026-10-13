@@ -142,6 +142,26 @@ CodingAgent.Supervisor (one_for_one)
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
 
+**Read-only internal references.** The `read` tool accepts these in its `path`:
+
+- `skill://<skill-key>` opens the selected bundle's `SKILL.md`, using the same
+  cwd-aware registry and project-over-user precedence as `read_skill`.
+- `skill://<skill-key>/references/example.md` opens a supporting file within that
+  bundle. Traversal and symlinks beneath the bundle are rejected.
+- `artifact://<id>` retrieves full output advertised by a truncated tool result.
+  Use the exact returned handle, with `offset` (one-based line number) and `limit`
+  to retrieve just the relevant portion rather than putting the entire output
+  back into context.
+
+Foreground `bash`, `bash_output`, and context guardrails expose artifact handles
+for their spilled output. Handles are indexed on disk in the session's spill
+directory, so they remain usable when that session is resumed while the
+underlying output file remains available. They do not grant another session
+access to the file, duplicate large output, or change its untrusted status.
+They are for `read`, not mutation tools or remote ACP filesystem operations.
+When registration is unavailable, results retain the existing absolute output
+path instead of advertising a nonexistent handle.
+
 The `agent` tool accepts an optional `node` string for delegated runs. Omit it
 or pass `"local"` to use the controller host. A named value must resolve to a
 currently connected execution node. If `cwd` is omitted, the destination uses
@@ -322,14 +342,28 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 
 The task tool runs all work in a native in-process `CodingAgent.Session`.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
-When a native task omits `model`, the child session inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
-Native task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
+When a native task omits `model`, it uses its named persona's `model` or model `role` default, then the configured `task` model role when present, otherwise the live parent session model at execution time. Explicit task `model` always wins. Telegram/session-scoped model overrides therefore still apply to children without a separate task/persona model selection.
+Task workers monitor their native sessions: a crash, provider failure, abort, or configured `task_session_timeout_ms` is reported as an error, never promoted to success because partial text or a tool result exists. The default model wait is unbounded; parent cancellation and worker/session death still end it.
+
+Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32 independent children. Each child inherits common top-level options, launches in the background, and returns a `task_id`/`run_id` receipt; `async: false` launches the entire batch before joining. Native tasks share a monitored semaphore with a default cap of eight running children; excess children queue without starting model calls. Dead holders and queued callers release capacity. Individual failures are retained alongside successful sibling results.
+
+Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>`, retain the source cwd's relative subdirectory, and are **not** merged or deleted automatically. Uncommitted changes and local credentials/config are not copied. `poll`/`get`/`join` report `cwd`, `worktree_path`, and `branch`; review or cherry-pick the child's commits, then remove the worktree with `git worktree remove` when no longer needed. A non-git cwd is a task error, not a fallback to the shared checkout.
+
+Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver instructions at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. These operations and result reads are bound to the parent session/agent; another session receives not-found. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
+
+Task progress is delivered directly to parent session subscribers even after the launch tool call ends, with `details.task_id`, `run_id`, `description`, `status`, child `session_id` when allocated, and optional `current_action` (`title`, `kind`, `phase`). Receipts, progress, and result rows also carry available `parent_run_id`, `parent_session_id`, and named persona `agent`; tree consumers can index children by `run_id` and attach them to `parent_run_id` without guessing from completion order. A final progress update settles each child as `completed`, `error`, or `aborted`. Join results include structured visible `output` and `error` per child; hidden reasoning is not included.
+
+If a child's tool policy explicitly permits further delegation, descendant progress is relayed through native ancestors to the subscribed root session. Descendant task/run/session identities are preserved, including terminal updates; relay events are not relabeled or stored as the ancestor's own work.
+
+Pass `agent: "scout"`, `"reviewer"`, or `"task-executor"` to select a named persona. Persona instructions are composed into the child **system prompt**, not the user's task. The scout and reviewer are strictly read-only: only `read`, `grep`, `find`, and `ls` may be exposed, intersected with any narrower policy. Neither a project override, `read_only: false`, an explicit `tool_policy`, nor MCP/extra tools can grant those identities write, shell, or delegation capabilities. Other personas retain the leaf-worker policy unless explicitly restricted or overridden. The coordinator uses the same persona/session-option path.
+
+Set `output_schema` on a task or batch child to require a JSON-only final response. Validated data appears as `structured_output` in completion, `poll`, `get`, `join` task rows, and live final progress; JSON `null` remains an explicitly present field. Invalid JSON or a schema mismatch fails the task rather than silently accepting prose. Supported JSON Schema constraints include types/unions, objects (`properties`, `required`, `additionalProperties`), arrays (`items`, bounds, uniqueness), strings (length and Unicode regex `pattern`), numeric bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`. Boolean schemas are supported. References, formats, and unsupported keywords are rejected before launching work. Schemas are bounded to 64 KiB encoded JSON and 32 nesting levels; validation errors name the failed JSON path without echoing response values.
 
 Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
 
 For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions attempt an in-session steer first before falling back to router backlog semantics.
 
-The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. TaskStore and RunGraph retain the parent run/session, the parent's child list links to the delegated run, and request metadata carries trusted `delegated_by.run_id`; caller-supplied metadata cannot forge that lineage. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
 
 Eligible native child sessions receive `ask_parent`. Its request is delivered through `Session.deliver_parent_question/2`: idle parents start processing immediately, and a parent currently inside `task` or `agent` join yields that join with `needs_parent_answer` before processing the visible question. Parent-question creation and terminal transitions are serialized, one child scope may have only one waiting request, resolver credentials must exactly match both parent session and agent, and only the winning answer/timeout/cancel/error transition emits a terminal event.
 
@@ -392,8 +426,24 @@ details.
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.Subagents` | Subagent definition loading (built-in: `research`, `implement`, `review`, `test`; custom: `.lemon/subagents.json`) |
+| `CodingAgent.Subagents` | Named Markdown personas from `.lemon/agents/*.md`, `~/.lemon/agents/*.md`, and built-in `scout`, `reviewer`, `task-executor` |
 | `CodingAgent.Commands` | Slash command discovery from `.lemon/command/*.md` and `~/.lemon/agent/command/*.md` with YAML frontmatter |
+
+Create `.lemon/agents/architect.md` for a project persona (or use `~/.lemon/agents/architect.md` globally):
+
+```markdown
+---
+name: architect
+description: Map module boundaries and recommend focused changes
+role: coding
+tools: [read, grep, find, ls]
+read_only: true
+---
+Inspect the relevant implementation before answering. Cite paths and explain
+the existing contracts; do not change files.
+```
+
+The filename is the agent name; optional `name` must match it. `description` and a nonempty Markdown instruction body are required. Optional `model` names a concrete `provider:model` or `@role`; `role` names a configured model role without `@` (`model` wins if both are supplied). `tools` is an allow-list intersected with the effective task policy, not a grant that bypasses it. `read_only: true` further restricts tools to the four read-only built-ins. Project definitions override global definitions, which override shipped definitions; an invalid higher-priority definition is an error, never a silent fallback. Definitions are read locally without creating config files. Legacy `.lemon/subagents.json` and the task `role` parameter are replaced by Markdown definitions and `agent`; router-level `agent` delegation retains its separate `role` persona selector.
 
 ### Harness and Checkpointing
 
@@ -473,6 +523,9 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Usage checkpoints preserve response costs and cache-write durations as well as
+token counts, so reopening a session does not reset its recorded cost. Rewinding
+a live branch preserves the selected provider API, including ChatGPT/Codex models.
 
 `SessionManager.list_sessions/1` lists most recently modified sessions first.
 `Session.navigate_tree/3` persists branch selection even before another message
@@ -578,7 +631,7 @@ result.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane concurrency caps for `LaneQueue` |
-| `:task_max_concurrency` | `Parallel.default_max_concurrency()` | Max concurrent tasks for `Parallel.Semaphore` |
+| `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
 
 ### Workspace Bootstrap Files
@@ -680,8 +733,8 @@ policy = CodingAgent.ToolPolicy.custom(
 )
 
 results = CodingAgent.Coordinator.run_subagents(coordinator, [
-  %{prompt: "Analyze the code", subagent: "research"},
-  %{prompt: "Review for bugs", subagent: "review"}
+  %{prompt: "Analyze the code", subagent: "scout"},
+  %{prompt: "Review for bugs", subagent: "reviewer"}
 ], timeout: 60_000)
 ```
 

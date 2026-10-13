@@ -500,6 +500,7 @@ defmodule LemonAgent.LoopAbortTest do
         description: "Completes instantly",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Instant",
+        parallel_safe: true,
         execute: fn _id, _params, _signal, _on_update ->
           # No delay - instant completion
           %AgentToolResult{
@@ -514,6 +515,7 @@ defmodule LemonAgent.LoopAbortTest do
         description: "Takes a very long time",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Slow",
+        parallel_safe: true,
         execute: fn _id, _params, _signal, _on_update ->
           # Very long delay to ensure abort happens
           Process.sleep(2000)

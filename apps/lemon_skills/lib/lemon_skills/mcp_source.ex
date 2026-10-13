@@ -3,11 +3,11 @@ defmodule LemonSkills.McpSource do
   MCP (Model Context Protocol) tool source: connects to configured MCP servers,
   caches the tools they advertise, and invokes them on behalf of an agent.
 
-  This is a supervised `GenServer` started by `LemonSkills.Application` under the
-  fixed name `LemonSkills.McpSource`, so the client functions below are called
-  without a pid. Unlike the modules under `LemonSkills.Tools`, which are wired
-  into an agent's tool list at compile time, MCP tools are discovered at runtime:
-  a host asks `discover_tools/1` for the current list and merges it into its own.
+  The application starts a global source under `LemonSkills.McpSource`.
+  Session owners can start isolated instances with `name: nil` (or a registered
+  name) and `configs: [...]`; explicit configurations never reload global config.
+  Per-instance discovery and calls accept the source pid. Cached tool closures
+  capture that pid, so they cannot cross into a replacement session.
 
   ## Configuration
 
@@ -64,11 +64,15 @@ defmodule LemonSkills.McpSource do
   Start the MCP source GenServer.
   """
   def start_link(opts \\ []) do
-    if mcp_enabled?() do
-      GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-    else
-      GenServer.start_link(__MODULE__, [disabled: true], name: __MODULE__)
-    end
+    opts = Keyword.put(opts, :disabled, not mcp_enabled?())
+
+    registration =
+      case Keyword.get(opts, :name, __MODULE__) do
+        nil -> []
+        name -> [name: name]
+      end
+
+    GenServer.start_link(__MODULE__, opts, registration)
   end
 
   @doc """
@@ -88,9 +92,24 @@ defmodule LemonSkills.McpSource do
   return value alone; use `status/0` or `mcp_enabled?/0` for that.
   """
   @spec discover_tools(keyword()) :: [AgentTool.t()]
-  def discover_tools(opts \\ []) do
-    GenServer.call(__MODULE__, {:discover_tools, opts}, :infinity)
+  def discover_tools(opts \\ []), do: discover_tools(__MODULE__, opts)
+
+  @spec discover_tools(GenServer.server(), keyword()) :: [AgentTool.t()]
+  def discover_tools(server, opts) do
+    GenServer.call(server, {:discover_tools, opts}, :infinity)
   end
+
+  @doc "Discover all configured clients, failing closed if any connection or discovery fails."
+  def discover_ready(server), do: GenServer.call(server, :discover_ready, :infinity)
+
+  @doc """
+  Return locally configured approval modes keyed by published tool name.
+
+  `:tool_approvals` selectors are raw remote tool names, or MCP method names
+  `resources/list`, `resources/read`, `prompts/list`, and `prompts/get` for the
+  host-provided utility tools. Remote metadata never supplies approval policy.
+  """
+  def approval_policy(server \\ __MODULE__), do: GenServer.call(server, :approval_policy)
 
   @doc """
   Looks up a single discovered tool by its namespaced name.
@@ -120,8 +139,13 @@ defmodule LemonSkills.McpSource do
   """
   @spec call_tool(String.t(), map(), keyword()) ::
           {:ok, AgentToolResult.t()} | {:error, term()}
-  def call_tool(tool_name, params, opts \\ []) do
-    GenServer.call(__MODULE__, {:call_tool, tool_name, params, opts}, :infinity)
+  def call_tool(tool_name, params, opts \\ []),
+    do: call_tool(__MODULE__, tool_name, params, opts)
+
+  def call_tool(server, tool_name, params, opts) do
+    GenServer.call(server, {:call_tool, tool_name, params, opts}, :infinity)
+  catch
+    :exit, _ -> {:error, :not_connected}
   end
 
   @doc """
@@ -165,14 +189,17 @@ defmodule LemonSkills.McpSource do
 
   def validate_config({:stdio, command, args, opts})
       when is_binary(command) and is_list(args) and is_list(opts) do
-    case LemonSkills.Config.validate_mcp_servers([{:stdio, command, args, opts}]) do
-      {:ok, _} -> :ok
-      {:error, [{:invalid, _, reason}]} -> {:error, reason}
+    with :ok <- LemonSkills.Config.validate_mcp_metadata(opts) do
+      case LemonSkills.Config.validate_mcp_servers([{:stdio, command, args, opts}]) do
+        {:ok, _} -> :ok
+        {:error, [{:invalid, _, reason}]} -> {:error, reason}
+      end
     end
   end
 
   def validate_config({:http, url, opts}) when is_binary(url) and is_list(opts) do
-    with :ok <- validate_http_url(url),
+    with :ok <- LemonSkills.Config.validate_mcp_metadata(opts),
+         :ok <- validate_http_url(url),
          :ok <- validate_http_opts(opts) do
       :ok
     end
@@ -183,7 +210,8 @@ defmodule LemonSkills.McpSource do
   end
 
   def validate_config({:sse, url, opts}) when is_binary(url) and is_list(opts) do
-    with :ok <- validate_http_url(url),
+    with :ok <- LemonSkills.Config.validate_mcp_metadata(opts),
+         :ok <- validate_http_url(url),
          :ok <- validate_http_opts(opts) do
       :ok
     end
@@ -229,6 +257,10 @@ defmodule LemonSkills.McpSource do
 
     disabled = Keyword.get(opts, :disabled, false)
 
+    for key <- [:owner, :custodian], pid = Keyword.get(opts, key), is_pid(pid) do
+      Process.monitor(pid)
+    end
+
     if disabled do
       {:ok, %{disabled: true, tool_cache: %{}, servers: %{}}}
     else
@@ -242,7 +274,9 @@ defmodule LemonSkills.McpSource do
         scopes: %{},
         cache_ttl_ms: cache_ttl,
         refresh_interval_ms: refresh_interval,
-        refresh_timer: nil
+        refresh_timer: nil,
+        configs: Keyword.get(opts, :configs),
+        cwd: Keyword.get(opts, :cwd)
       }
 
       state = initialize_servers(state, opts)
@@ -250,6 +284,51 @@ defmodule LemonSkills.McpSource do
 
       {:ok, state}
     end
+  end
+
+  @impl true
+  def handle_call(:discover_ready, _from, %{disabled: true} = state) do
+    {:reply, {:error, :mcp_disabled}, state}
+  end
+
+  def handle_call(:discover_ready, _from, state) do
+    {tools, state} = refresh_tools(state)
+
+    result =
+      cond do
+        Enum.any?(state.servers, fn {_, server} -> server.last_error == "connection failed" end) ->
+          {:error, :connection_failed}
+
+        Enum.any?(state.servers, fn {_, server} -> not server.connected end) ->
+          {:error, :discovery_failed}
+
+        true ->
+          {:ok, tools}
+      end
+
+    {:reply, result, state}
+  end
+
+  def handle_call(:approval_policy, _from, state) do
+    policies =
+      Map.new(state.tool_cache, fn {name, entry} ->
+        config = state.servers[entry.server_name].config
+
+        opts =
+          case config do
+            {:stdio, _, _, opts} -> opts
+            {transport, _, opts} when transport in [:http, :sse] -> opts
+            _ -> []
+          end
+
+        default = Keyword.get(opts, :approval, :never)
+        selector = approval_selector(entry.original_name)
+        mode = Map.get(Keyword.get(opts, :tool_approvals, %{}), selector, default)
+
+        {name, if(mode in [:never, "never"], do: :never, else: :always)}
+      end)
+
+    {:reply, policies, state}
   end
 
   @impl true
@@ -269,7 +348,7 @@ defmodule LemonSkills.McpSource do
         {cached_tools(state), state}
       end
 
-    server_names = Map.fetch!(state.scopes, scope_key(opts))
+    server_names = Map.fetch!(state.scopes, source_scope(state, opts))
     tools = Enum.filter(tools, &(state.tool_cache[&1.name].server_name in server_names))
     {:reply, tools, state}
   end
@@ -386,6 +465,10 @@ defmodule LemonSkills.McpSource do
     {:noreply, state}
   end
 
+  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
+    {:stop, :normal, state}
+  end
+
   def handle_info({:EXIT, client, _reason}, state) do
     servers =
       Map.new(state.servers, fn {name, server} ->
@@ -408,6 +491,12 @@ defmodule LemonSkills.McpSource do
   # Private Functions
   # ============================================================================
 
+  defp approval_selector({:tool, raw_name}), do: raw_name
+  defp approval_selector({:utility, :list_resources, _}), do: "resources/list"
+  defp approval_selector({:utility, :read_resource, _}), do: "resources/read"
+  defp approval_selector({:utility, :list_prompts, _}), do: "prompts/list"
+  defp approval_selector({:utility, :get_prompt, _}), do: "prompts/get"
+
   defp initialize_servers(state, opts), do: maybe_reload_servers(state, opts)
 
   defp scope_key(opts) do
@@ -416,6 +505,11 @@ defmodule LemonSkills.McpSource do
       cwd -> Path.expand(cwd)
     end
   end
+
+  defp source_scope(%{configs: configs, cwd: cwd}, _opts) when is_list(configs),
+    do: scope_key(cwd: cwd)
+
+  defp source_scope(_state, opts), do: scope_key(opts)
 
   defp server_name(config) do
     :crypto.hash(:sha256, :erlang.term_to_binary(config))
@@ -443,6 +537,8 @@ defmodule LemonSkills.McpSource do
   end
 
   defp refresh_tools(state) do
+    source = self()
+
     {servers, tool_cache} =
       Enum.reduce(state.servers, {%{}, %{}}, fn {server_name, server}, {servers_acc, cache_acc} ->
         {server, tools} = refresh_server(server_name, server)
@@ -456,7 +552,7 @@ defmodule LemonSkills.McpSource do
               tool
               | name: name,
                 execute: fn _id, params, _signal, _update ->
-                  call_tool(name, params)
+                  call_tool(source, name, params, [])
                 end
             }
 
@@ -500,9 +596,18 @@ defmodule LemonSkills.McpSource do
   defp scope_config(config, _scope), do: config
 
   defp maybe_reload_servers(state, opts) do
-    scope = scope_key(opts)
-    config = LemonSkills.Config.mcp_config(scope)
-    configs = if config.enabled, do: config.servers, else: []
+    scope = source_scope(state, opts)
+
+    configs =
+      case state.configs do
+        nil ->
+          config = LemonSkills.Config.mcp_config(scope)
+          if config.enabled, do: config.servers, else: []
+
+        configs ->
+          configs
+      end
+
     configs = Enum.filter(configs, &(validate_config(&1) == :ok))
     configs = Enum.map(configs, &scope_config(&1, scope))
     names = Enum.map(configs, &server_name/1)
@@ -541,25 +646,27 @@ defmodule LemonSkills.McpSource do
 
   defp refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :stdio do
     {command, _args, opts} = stdio_parts(config)
+    command = Keyword.get(opts, :name, command)
     filters = filter_config(opts)
 
     case ensure_client(server, :stdio) do
       {:ok, client} ->
         client_mod = server_client_module(:stdio)
+        capabilities = client_capabilities(client_mod, client)
 
-        case client_call(client_mod, :list_tools, [client, @client_request_timeout_ms]) do
+        case list_advertised_tools(client_mod, client, capabilities) do
           {:ok, tools} ->
-            capabilities = client_capabilities(client_mod, client)
-
             wrapped =
               tools
               |> Enum.filter(&tool_allowed?(&1, filters))
               |> Enum.map(&wrap_mcp_tool(command, &1))
 
             {resource_tools, resources} =
-              resource_utility_tools(command, client_mod, client, filters)
+              resource_utility_tools(command, client_mod, client, filters, capabilities)
 
-            {prompt_tools, prompts} = prompt_utility_tools(command, client_mod, client, filters)
+            {prompt_tools, prompts} =
+              prompt_utility_tools(command, client_mod, client, filters, capabilities)
+
             wrapped = wrapped ++ resource_tools ++ prompt_tools
             agent_tools = Enum.map(wrapped, fn {tool, _original_name} -> tool end)
 
@@ -606,23 +713,27 @@ defmodule LemonSkills.McpSource do
 
   defp refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :http do
     {url, opts} = http_parts(config)
+    url = Keyword.get(opts, :name, url)
     filters = filter_config(opts)
 
     case ensure_client(server, :http) do
       {:ok, client} ->
         client_mod = server_client_module(:http)
+        capabilities = client_capabilities(client_mod, client)
 
-        case client_call(client_mod, :list_tools, [client, @client_request_timeout_ms]) do
+        case list_advertised_tools(client_mod, client, capabilities) do
           {:ok, tools} ->
-            capabilities = client_capabilities(client_mod, client)
-
             wrapped =
               tools
               |> Enum.filter(&tool_allowed?(&1, filters))
               |> Enum.map(&wrap_mcp_tool(url, &1))
 
-            {resource_tools, resources} = resource_utility_tools(url, client_mod, client, filters)
-            {prompt_tools, prompts} = prompt_utility_tools(url, client_mod, client, filters)
+            {resource_tools, resources} =
+              resource_utility_tools(url, client_mod, client, filters, capabilities)
+
+            {prompt_tools, prompts} =
+              prompt_utility_tools(url, client_mod, client, filters, capabilities)
+
             wrapped = wrapped ++ resource_tools ++ prompt_tools
             agent_tools = Enum.map(wrapped, fn {tool, _original_name} -> tool end)
 
@@ -669,23 +780,27 @@ defmodule LemonSkills.McpSource do
 
   defp refresh_server(_server_name, %{config: config} = server) when elem(config, 0) == :sse do
     {url, opts} = http_parts(config)
+    url = Keyword.get(opts, :name, url)
     filters = filter_config(opts)
 
     case ensure_client(server, :sse) do
       {:ok, client} ->
         client_mod = server_client_module(:sse)
+        capabilities = client_capabilities(client_mod, client)
 
-        case client_call(client_mod, :list_tools, [client, @client_request_timeout_ms]) do
+        case list_advertised_tools(client_mod, client, capabilities) do
           {:ok, tools} ->
-            capabilities = client_capabilities(client_mod, client)
-
             wrapped =
               tools
               |> Enum.filter(&tool_allowed?(&1, filters))
               |> Enum.map(&wrap_mcp_tool(url, &1))
 
-            {resource_tools, resources} = resource_utility_tools(url, client_mod, client, filters)
-            {prompt_tools, prompts} = prompt_utility_tools(url, client_mod, client, filters)
+            {resource_tools, resources} =
+              resource_utility_tools(url, client_mod, client, filters, capabilities)
+
+            {prompt_tools, prompts} =
+              prompt_utility_tools(url, client_mod, client, filters, capabilities)
+
             wrapped = wrapped ++ resource_tools ++ prompt_tools
             agent_tools = Enum.map(wrapped, fn {tool, _original_name} -> tool end)
 
@@ -819,12 +934,18 @@ defmodule LemonSkills.McpSource do
         configured_secret || Keyword.get(opts, :oauth_token_secret) ||
           oauth_token_secret_name(url)
 
-      [
-        oauth_token_cache: [
-          load: fn -> load_oauth_token_secret(secret_name) end,
-          save: fn token -> save_oauth_token_secret(secret_name, url, oauth, token) end
-        ]
-      ]
+      cache = [load: fn -> load_oauth_token_secret(secret_name) end]
+
+      cache =
+        if Keyword.get(opts, :volatile_credentials, false) do
+          cache
+        else
+          Keyword.put(cache, :save, fn token ->
+            save_oauth_token_secret(secret_name, url, oauth, token)
+          end)
+        end
+
+      [oauth_token_cache: cache]
     else
       []
     end
@@ -1246,13 +1367,19 @@ defmodule LemonSkills.McpSource do
        description: description,
        parameters: parameters,
        label: "MCP #{original_name}",
-       execute: fn _tool_call_id, params, _signal, _on_update ->
-         call_tool(tool_name, params)
-       end
+       execute: nil
      }, {:tool, original_name}}
   end
 
-  defp resource_utility_tools(command, client_mod, client, filters) do
+  defp list_advertised_tools(_client_mod, _client, %{tools: false}), do: {:ok, []}
+
+  defp list_advertised_tools(client_mod, client, _capabilities),
+    do: client_call(client_mod, :list_tools, [client, @client_request_timeout_ms])
+
+  defp resource_utility_tools(_command, _client_mod, _client, _filters, %{resources: false}),
+    do: {[], []}
+
+  defp resource_utility_tools(command, client_mod, client, filters, _capabilities) do
     case client_call(client_mod, :list_resources, [client, @client_request_timeout_ms]) do
       {:ok, resources} ->
         resources = Enum.filter(resources, &resource_allowed?(&1, filters))
@@ -1288,7 +1415,10 @@ defmodule LemonSkills.McpSource do
     end
   end
 
-  defp prompt_utility_tools(command, client_mod, client, filters) do
+  defp prompt_utility_tools(_command, _client_mod, _client, _filters, %{prompts: false}),
+    do: {[], []}
+
+  defp prompt_utility_tools(command, client_mod, client, filters, _capabilities) do
     case client_call(client_mod, :list_prompts, [client, @client_request_timeout_ms]) do
       {:ok, prompts} ->
         prompts = Enum.filter(prompts, &prompt_allowed?(&1, filters))
@@ -1333,9 +1463,7 @@ defmodule LemonSkills.McpSource do
        description: description,
        parameters: parameters,
        label: "MCP #{suffix}",
-       execute: fn _tool_call_id, params, _signal, _on_update ->
-         call_tool(tool_name, params)
-       end
+       execute: nil
      }, call_spec}
   end
 
@@ -1792,14 +1920,16 @@ defmodule LemonSkills.McpSource do
 
   defp close_client(%{client: client, client_module: client_mod})
        when is_pid(client) and is_atom(client_mod) do
-    Process.unlink(client)
-
     if Process.alive?(client) do
       client_call(client_mod, :close, [client])
-      if Process.alive?(client), do: Process.exit(client, :shutdown)
+      if Process.alive?(client), do: GenServer.stop(client, :shutdown, 5_000)
     end
 
     :ok
+  catch
+    :exit, _ ->
+      Process.exit(client, :kill)
+      :ok
   end
 
   defp close_client(_server), do: :ok

@@ -127,6 +127,12 @@ system prompt lists installed skills by key and tells the agent to call
 `read_skill` before following any clearly relevant skill, so skill instructions
 can be loaded on demand without injecting every full `SKILL.md` body up front.
 
+The coding `read` tool also accepts `skill://<skill-key>` for the raw `SKILL.md`
+and `skill://<skill-key>/references/example.md` for a supporting file. These use
+the same scoped registry and remain untrusted, read-only references. Use normal
+`offset` and `limit` parameters for a long file; use `read_skill` when you want
+the skill's status, manifest, or a selected heading.
+
 Agents can also maintain procedural memory with `skill_manage`. Use project
 scope for repository-specific workflows and global scope for reusable workflows.
 The tool can create, edit, patch, delete, and maintain supporting files under

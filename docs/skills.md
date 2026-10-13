@@ -431,6 +431,103 @@ ASCII and at most 64 characters. The suffix distinguishes server configurations,
 raw tool names that normalize identically, and remote tools from built-in MCP
 resource/prompt utilities.
 
+### Manage named MCP servers
+
+The same commands work in installed releases (`lemon`) and source checkouts
+(`./bin/lemon`). They edit `.lemon/mcp.json` in the current project by default.
+Use `--cwd PATH` to select another project, or `--global` to edit
+`~/.lemon/agent/mcp.json` (respecting `LEMON_AGENT_DIR` and configured agent-directory
+overrides).
+
+```bash
+lemon mcp add filesystem --stdio npx -- -y @modelcontextprotocol/server-filesystem .
+lemon mcp add git --stdio uvx --approval always \
+  --tool-approval git_status=never -- mcp-server-git --repository .
+lemon mcp add remote --http https://example.com/mcp \
+  --header 'Authorization=Bearer TOKEN' --global
+lemon mcp add local --stdio server --env API_KEY=value -- --server-option
+lemon mcp list --json
+lemon mcp list --global
+lemon mcp test filesystem
+lemon mcp remove filesystem
+lemon mcp add git --stdio uvx --replace -- mcp-server-git --repository .
+```
+
+Names are case-sensitive, 1–64 ASCII letters/digits/underscores/dots/hyphens,
+starting with a letter or digit. `add` refuses an existing name unless
+`--replace` is explicit; ambiguous duplicate names are always rejected.
+`remove` and `test` select an exact name in the chosen file, not another scope.
+`list` shows only that file, including unnamed legacy entries. It omits commands,
+arguments, URLs, credential values, and arbitrary extension fields; environment,
+header, and per-tool-policy entries are reported as counts.
+
+Repeat `--env KEY=VALUE`, `--header KEY=VALUE`, and
+`--tool-approval TOOL=always|never` as needed. Environment options are stdio-only,
+headers are HTTP-only. Pass all stdio subprocess arguments after `--`; they are
+an argument vector, never a shell command. Stdio subprocesses default to the
+requesting project's working directory. Shell history may retain credential
+arguments: avoid literal secrets in shared terminals and do not commit these
+configuration files.
+
+`add` writes `"approval": "always"` unless `--approval never` is explicit.
+`"tool_approvals"` maps exact **remote** tool names to `"always"` or `"never"`;
+an exact override wins over the server default. Existing hand-written entries
+without an approval field retain their previous behavior (`never`).
+`never` only disables this MCP-specific requirement: it cannot bypass a stronger
+runtime approval policy. The MCP requirement and runtime `ToolPolicy` are ORed:
+either can require approval, but only one approval is requested. For example:
+
+```json
+{
+  "name": "git",
+  "type": "stdio",
+  "command": "uvx",
+  "args": ["mcp-server-git", "--repository", "."],
+  "approval": "always",
+  "tool_approvals": {"git_status": "never"}
+}
+```
+
+For Lemon's generated resource and prompt utility tools, approval override keys
+are the MCP method names: `resources/list`, `resources/read`, `prompts/list`, and
+`prompts/get`. For example, `--tool-approval resources/read=always` requires
+approval for resource reads. Ordinary remote tools still use their exact raw
+tool names, not the published `mcp_...` names.
+
+Mutations preserve unrelated servers, top-level fields, and unknown entry
+extensions. Replacement retains omitted same-transport credentials and merges
+supplied environment/header/tool-policy keys; changing transport removes obsolete
+transport fields. Writes use a private `0600` temporary file and atomic rename.
+Cooperating commands serialize with a sibling `.lock` directory and fail rather
+than overwrite an invalid, busy, or concurrently changed file. After a killed
+writer, inspect the lock and remove it only when no command is writing.
+
+No daemon restart or separate reload command is needed: configuration is read
+again for new sessions. Existing sessions do not automatically gain new tools;
+reload their tools or open a new session to update their inventory. Removing or
+replacing a configured server retires its shared connection at the next discovery
+for that project. Calls using its previous tool name then fail rather than
+silently routing to the replacement. ACP-owned connections are independent.
+For matching names, project entries override global entries, which override
+application/environment entries; unnamed entries remain additive.
+
+ACP-provided MCP servers are session-owned and default to approval `always`.
+Their credentials remain in memory, never in global configuration or
+`RunRequest.meta`; only an opaque MCP session identifier crosses that metadata
+boundary. Closing the session or losing its connection owner closes its MCP
+clients and transports.
+
+Discovery respects the server's advertised tools, resources, and prompts
+capabilities. Tools-only servers do not incur unsupported resource/prompt
+requests; resource-only servers still expose Lemon's resource utility tools.
+
+`test` opens an isolated, session-owned connection, performs the MCP handshake
+and tool discovery, prints the discovered tool count, and closes the connection.
+It does **not** invoke remote tools. It can launch the configured program or
+contact its endpoint, so run it only for servers you trust. All commands support
+`--json`; success exits `0`, operation failures exit `1`, and invalid arguments
+exit `2`. Errors never print raw configuration or transport error terms.
+
 ### Configuration
 
 MCP servers can be configured in several ways:

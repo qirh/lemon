@@ -366,8 +366,8 @@ defmodule CodingAgent.Tools.AgentTest do
     assert {:ok, %{status: :error}} = RunGraph.get(result.details.run_id)
   end
 
-  test "run with role prepends subagent prompt to delegated request prompt" do
-    role_prompt = Subagents.get("/tmp", "research").prompt
+  test "scout role enforces read-only tools on a delegated request" do
+    role_prompt = Subagents.get("/tmp", "scout").prompt
 
     _result =
       AgentTool.execute(
@@ -375,8 +375,9 @@ defmodule CodingAgent.Tools.AgentTest do
         %{
           "agent_id" => "oracle",
           "prompt" => "find open auth issues",
-          "role" => "research",
+          "role" => "scout",
           "async" => true,
+          "tool_policy" => %{"allow" => "all"},
           "auto_followup" => false
         },
         nil,
@@ -390,7 +391,54 @@ defmodule CodingAgent.Tools.AgentTest do
 
     assert_receive {:router_submit, %RunRequest{} = req, 1}
     assert req.prompt == role_prompt <> "\n\n" <> "find open auth issues"
-    assert req.meta[:delegated][:role] == "research"
+    assert req.meta[:delegated][:role] == "scout"
+    assert CodingAgent.ToolPolicy.allowed?(req.tool_policy, "read")
+    refute CodingAgent.ToolPolicy.allowed?(req.tool_policy, "bash")
+    refute CodingAgent.ToolPolicy.allowed?(req.tool_policy, "write")
+    refute CodingAgent.ToolPolicy.allowed?(req.tool_policy, "task")
+  end
+
+  test "delegated runs retain parent lineage and reject forged lineage metadata" do
+    parent_run_id = RunGraph.new_run(%{type: :session, session_key: "agent:main:main"})
+
+    result =
+      AgentTool.execute(
+        "delegated_lineage",
+        %{
+          "agent_id" => "oracle",
+          "prompt" => "Inspect the project",
+          "async" => true,
+          "auto_followup" => false,
+          "meta" => %{"parent_run_id" => "forged", "delegated_by" => %{"run_id" => "forged"}}
+        },
+        nil,
+        nil,
+        "/tmp",
+        run_orchestrator: __MODULE__.AgentTestStubRunOrchestrator,
+        task_supervisor: :missing_agent_tool_task_supervisor,
+        run_id: parent_run_id,
+        session_key: "agent:main:main",
+        session_id: "sess_parent",
+        agent_id: "main"
+      )
+
+    assert_receive {:router_submit, %RunRequest{} = request, 1}
+    assert request.meta.parent_run_id == parent_run_id
+    assert request.meta.delegated_by.run_id == parent_run_id
+    assert request.meta.delegated_by.session_id == "sess_parent"
+    refute Map.has_key?(request.meta, "parent_run_id")
+    refute Map.has_key?(request.meta, "delegated_by")
+
+    assert {:ok, task, _events} = TaskStore.get(result.details.task_id)
+    assert task.parent_run_id == parent_run_id
+    assert task.session_key == "agent:main:main"
+    assert task.parent_session_id == "sess_parent"
+    assert {:ok, child} = RunGraph.get(result.details.run_id)
+    assert child.parent == parent_run_id
+    assert child.parent_session_id == "sess_parent"
+    assert child.session_key == "agent:main:main"
+    assert {:ok, parent} = RunGraph.get(parent_run_id)
+    assert result.details.run_id in parent.children
   end
 
   test "delegated session key is stable across runs with continue_session" do

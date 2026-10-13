@@ -125,6 +125,9 @@ result document with `ok`, `answer`, `error`, `run_id`, and `session_key`.
 `result` record. Startup diagnostics stay on stderr. Runs exit 0 only when the
 agent reports success; submission, connection, provider, and execution failures
 exit 1. Runs are bounded to ten minutes; timeout cancels the submitted run.
+Protocol keepalive pings keep long-running tools connected without adding records
+to stdout. A lost connection produces a failed result, not a successful fallback
+or an automatic re-submission of the prompt.
 
 Non-interactive mode never waits for a human approval. `--approval-policy deny`
 (default) denies requested approvals; `allow` approves each request once.

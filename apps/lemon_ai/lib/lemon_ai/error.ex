@@ -733,6 +733,9 @@ defmodule LemonAi.Error do
       status in [408, 409, 425] ->
         :transient
 
+      status == 0 and is_binary(provider_message) and transient_message?(provider_message) ->
+        :transient
+
       provider_transient_message?(provider_message) ->
         :transient
 
@@ -777,7 +780,7 @@ defmodule LemonAi.Error do
        ) or
          (not transient_interval? and
             Regex.match?(
-              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota (?:exhausted|depleted)|exceeded your current quota|quota exceeded(?! for quota metric)/i,
+              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota (?:exhausted|depleted)|exceeded your current quota/i,
               message
             )))
   end

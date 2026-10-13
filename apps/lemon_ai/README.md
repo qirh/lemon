@@ -305,6 +305,10 @@ Req, Finch and Mint closed/reset/timeout failures retain typed reasons through
 Responses parsing and are transient even when their display text is opaque.
 Structured metadata survives JSON session persistence without creating atoms
 from external category names.
+Generic resource exhaustion/throttling remains retryable under the bounded policy;
+only explicit account, credit, billing or depleted-quota evidence makes it permanent.
+Legacy provider wrappers using status `0` for closed connections classify as
+transport failures, not malformed HTTP requests.
 
 
 ### Token estimation
@@ -355,6 +359,9 @@ GPT-5.5 / GPT-5.6 Luna, Sol and Terra / GPT-6 Astra, Claude Opus 4.8 and Claude 
 families, and Gemini 3.1 Pro through Gemini 3.8 Flash. Limits and per-million-token
 prices track the local omp catalog; unsupported realtime/audio/image-generation
 protocols are not advertised through the text coding APIs.
+Existing integration exclusions remain in effect even when the reference catalog
+still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-preview`
+and `gemini-3.1-pro-preview` are not advertised by Lemon.
 
 
 You can also skip the registry entirely and hand-build a `%LemonAi.Types.Model{}` — the

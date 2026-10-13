@@ -33,6 +33,25 @@ defmodule LemonAi.Providers.TransportErrorTest do
     :ok
   end
 
+  test "status-zero network failures and generic throttling are not account exhaustion" do
+    assert %{category: :transient, retryable: true} =
+             Error.parse_http_error(0, "other side closed connection")
+
+    assert %{category: :rate_limit, retryable: true} =
+             Error.parse_http_error(400, "RESOURCE_EXHAUSTED: quota exceeded")
+
+    depleted = %{
+      "error" => %{
+        "status" => "RESOURCE_EXHAUSTED",
+        "message" => "Quota exceeded",
+        "details" => [%{"reason" => "INSUFFICIENT_G1_CREDITS_BALANCE"}]
+      }
+    }
+
+    assert %{category: :rate_limit, retryable: false} =
+             Error.parse_http_error(400, depleted)
+  end
+
   test "Finch and Mint closed/reset/timeout failures classify from typed reasons" do
     for reason <- [:closed, :econnreset, :timeout],
         exception <- [
@@ -68,7 +87,9 @@ defmodule LemonAi.Providers.TransportErrorTest do
         Base.url_encode64(
           Jason.encode!(%{
             "https://api.openai.com/auth" => %{"chatgpt_account_id" => "synthetic"}
-          }), padding: false) <> ".signature"
+          }),
+          padding: false
+        ) <> ".signature"
 
     context = Context.new(messages: [%UserMessage{content: "Hello"}])
 

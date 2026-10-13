@@ -1,7 +1,11 @@
 defmodule CodingAgent.BashExecutor do
   @moduledoc """
   Handles streaming shell command execution with output sanitization,
-  truncation, and abort signal support.
+  truncation, and abort signal support. A Port-owning guardian kills shell
+  descendants if the tool worker exits, including forced cancellation/crashes.
+  UTF-8 is decoded across stream chunks; invalid bytes do not discard later
+  output. Large output is archived privately, and only its bounded tail is
+  read back into memory when execution completes.
   """
 
   alias LemonAgent.AbortSignal
@@ -88,51 +92,116 @@ defmodule CodingAgent.BashExecutor do
     ]
 
     try do
-      port = Port.open({:spawn_executable, spawn_path}, port_opts)
-      os_pid = get_os_pid(port)
+      {port, os_pid, guardian} = start_guarded_port(spawn_path, port_opts)
 
-      # Set up timeout (optional). `Process.send_after/3` requires an integer timeout.
-      timeout_ref =
-        case timeout do
-          :infinity ->
-            nil
+      try do
+        # Set up timeout (optional). `Process.send_after/3` requires an integer timeout.
+        timeout_ref =
+          case timeout do
+            :infinity ->
+              nil
 
-          nil ->
-            nil
+            nil ->
+              nil
 
-          ms when is_integer(ms) and ms > 0 ->
-            Process.send_after(self(), {:timeout, port}, ms)
+            ms when is_integer(ms) and ms > 0 ->
+              Process.send_after(self(), {:timeout, port}, ms)
 
-          _ ->
-            nil
-        end
+            _ ->
+              nil
+          end
 
-      state = %{
-        port: port,
-        os_pid: os_pid,
-        signal: signal,
-        on_chunk: on_chunk,
-        max_bytes: max_bytes,
-        temp_file_threshold: temp_file_threshold,
-        output_buffer: [],
-        total_bytes: 0,
-        temp_file: nil,
-        temp_file_path: nil,
-        cancelled: false,
-        exit_code: nil,
-        timeout_ref: timeout_ref
-      }
+        state = %{
+          port: port,
+          os_pid: os_pid,
+          signal: signal,
+          on_chunk: on_chunk,
+          max_bytes: max_bytes,
+          temp_file_threshold: temp_file_threshold,
+          output_buffer: [],
+          utf8_tail: "",
+          total_bytes: 0,
+          temp_file: nil,
+          temp_file_path: nil,
+          cancelled: false,
+          exit_code: nil,
+          timeout_ref: timeout_ref
+        }
 
-      result = collect_output(state)
+        result = collect_output(state)
 
-      # Cancel timeout if still pending
-      if timeout_ref, do: Process.cancel_timer(timeout_ref)
+        # Cancel timeout if still pending
+        if timeout_ref, do: Process.cancel_timer(timeout_ref)
 
-      {:ok, result}
+        {:ok, result}
+      after
+        send(guardian, :finish)
+      end
     rescue
       e -> {:error, e}
     catch
       :exit, reason -> {:error, {:exit, reason}}
+    end
+  end
+
+  # The guardian, not the killable tool worker, owns the Port. If the worker
+  # disappears, the shell is still alive while we enumerate/kill descendants.
+  # Closing a worker-owned Port first would orphan them before we could find them.
+  defp start_guarded_port(path, opts) do
+    caller = self()
+    ref = make_ref()
+
+    guardian =
+      spawn(fn ->
+        Process.flag(:trap_exit, true)
+        monitor = Process.monitor(caller)
+
+        try do
+          port = Port.open({:spawn_executable, path}, opts)
+          os_pid = get_os_pid(port)
+          send(caller, {ref, :started, port, os_pid})
+          relay_port(port, os_pid, caller, monitor)
+        rescue
+          error -> send(caller, {ref, :error, error})
+        end
+      end)
+
+    receive do
+      {^ref, :started, port, os_pid} -> {port, os_pid, guardian}
+      {^ref, :error, error} -> raise error
+    end
+  end
+
+  defp relay_port(port, os_pid, caller, monitor) do
+    receive do
+      {^port, {:data, _data}} = event ->
+        send(caller, event)
+        relay_port(port, os_pid, caller, monitor)
+
+      {^port, {:exit_status, _code}} = event ->
+        send(caller, event)
+        Process.demonitor(monitor, [:flush])
+
+      {:DOWN, ^monitor, :process, ^caller, _reason} ->
+        if Port.info(port) && os_pid, do: kill_process_tree(os_pid)
+        safe_close_port(port)
+
+      :finish ->
+        Process.demonitor(monitor, [:flush])
+        if Port.info(port) && os_pid, do: kill_process_tree(os_pid)
+        safe_close_port(port)
+
+      {:EXIT, ^port, reason} ->
+        Process.demonitor(monitor, [:flush])
+        if reason != :normal, do: send(caller, {port, {:exit_status, 1}})
+    end
+  end
+
+  defp safe_close_port(port) do
+    try do
+      Port.close(port)
+    catch
+      :error, _ -> :ok
     end
   end
 
@@ -169,7 +238,9 @@ defmodule CodingAgent.BashExecutor do
   end
 
   defp buffer_chunk(state, data) do
-    sanitized = sanitize_output(data)
+    {decoded, tail} = decode_utf8(state.utf8_tail <> data, [])
+    state = %{state | utf8_tail: tail}
+    sanitized = sanitize_output(decoded)
 
     # Call chunk callback if provided
     if state.on_chunk, do: state.on_chunk.(sanitized)
@@ -180,7 +251,8 @@ defmodule CodingAgent.BashExecutor do
       new_total > state.temp_file_threshold && is_nil(state.temp_file) ->
         # Start writing to temp file
         path = generate_temp_path()
-        {:ok, file} = File.open(path, [:write, :binary])
+        {:ok, file} = File.open(path, [:write, :binary, :exclusive])
+        File.chmod!(path, 0o600)
 
         # Write existing buffer to file
         existing_content = IO.iodata_to_binary(Enum.reverse(state.output_buffer))
@@ -282,26 +354,29 @@ defmodule CodingAgent.BashExecutor do
   end
 
   defp finalize_result(state) do
+    state = if state.utf8_tail == "", do: state, else: buffer_chunk(%{state | utf8_tail: ""}, "�")
     # Close temp file if open
     if state.temp_file do
       File.close(state.temp_file)
     end
 
-    # Get the full output
+    # A spilled command may have emitted gigabytes. Read only its tail back;
+    # the full stream stays in the retrievable artifact, not in BEAM memory.
     full_output =
       if state.temp_file_path do
-        File.read!(state.temp_file_path)
+        read_output_tail(state.temp_file_path, state.max_bytes)
       else
         IO.iodata_to_binary(Enum.reverse(state.output_buffer))
       end
 
     # Apply tail truncation
-    {truncated_output, was_truncated, _info} =
+    {truncated_output, tail_truncated?, _info} =
       truncate_tail(full_output,
         max_bytes: state.max_bytes,
         max_lines: @default_max_lines
       )
 
+    was_truncated = tail_truncated? or state.total_bytes > state.max_bytes
     # Determine full_output_path
     full_output_path =
       cond do
@@ -312,7 +387,8 @@ defmodule CodingAgent.BashExecutor do
         was_truncated ->
           # Need to create temp file for full output
           path = generate_temp_path()
-          File.write!(path, full_output)
+          File.write!(path, full_output, [:exclusive])
+          File.chmod!(path, 0o600)
           path
 
         true ->
@@ -330,19 +406,37 @@ defmodule CodingAgent.BashExecutor do
     }
   end
 
+  defp read_output_tail(path, max_bytes) do
+    {:ok, output} =
+      File.open(path, [:read, :binary], fn file ->
+        {:ok, size} = :file.position(file, :eof)
+        {:ok, _} = :file.position(file, max(size - max_bytes, 0))
+
+        case IO.binread(file, max_bytes) do
+          :eof -> ""
+          bytes -> trim_utf8_start(bytes)
+        end
+      end)
+
+    output
+  end
+
+  # A byte-based tail may begin within a UTF-8 codepoint; discard only its
+  # continuation bytes, leaving the remainder byte-faithful.
+  defp trim_utf8_start(<<byte, rest::binary>>) when byte in 0x80..0xBF,
+    do: trim_utf8_start(rest)
+
+  defp trim_utf8_start(bytes), do: bytes
+
   @doc """
   Sanitize output by removing ANSI codes and non-printable characters.
   """
   @spec sanitize_output(data :: binary()) :: String.t()
   def sanitize_output(data) when is_binary(data) do
-    data
-    # First, ensure valid UTF-8 by replacing invalid sequences
-    |> :unicode.characters_to_binary(:utf8, :utf8)
-    |> case do
-      {:error, valid, _rest} -> valid
-      {:incomplete, valid, _rest} -> valid
-      valid when is_binary(valid) -> valid
-    end
+    {decoded, tail} = decode_utf8(data, [])
+    text = if tail == "", do: decoded, else: decoded <> "�"
+
+    text
     # Strip ANSI escape codes
     |> String.replace(@ansi_regex, "")
     # Remove binary garbage (keep printable chars plus tab, newline, carriage return)
@@ -350,6 +444,19 @@ defmodule CodingAgent.BashExecutor do
     # Normalize line endings (remove \r)
     |> String.replace("\r\n", "\n")
     |> String.replace("\r", "")
+  end
+
+  defp decode_utf8(data, acc) do
+    case :unicode.characters_to_binary(data, :utf8, :utf8) do
+      text when is_binary(text) ->
+        {IO.iodata_to_binary(Enum.reverse([text | acc])), ""}
+
+      {:incomplete, valid, tail} ->
+        {IO.iodata_to_binary(Enum.reverse([valid | acc])), tail}
+
+      {:error, valid, <<_invalid, rest::binary>>} ->
+        decode_utf8(rest, ["�", valid | acc])
+    end
   end
 
   @doc """

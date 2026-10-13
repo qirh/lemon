@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.Session
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Async, Followup, Runner}
+  alias CodingAgent.Tools.Task.{Async, Control, Followup, Runner, Worktree}
 
   @spec run(
           String.t() | nil,
@@ -23,28 +23,27 @@ defmodule CodingAgent.Tools.Task.Execution do
         {:error, message}
 
       {:ok, execution} ->
-        run_fun = build_run_fun(execution, signal, on_update, opts)
+        child_signal = LemonAgent.AbortSignal.new()
+        execution = put_in(execution.lifecycle_context[:signal], child_signal)
+        execution = put_in(execution.lifecycle_context[:parent_signal], signal)
+        execution = put_in(execution.lifecycle_context[:on_update], on_update)
+        run_fun = build_run_fun(execution, child_signal, on_update, opts)
 
-        if execution.async? do
-          case Async.run_async(
-                 execution.task_id,
-                 execution.run_id,
-                 run_fun,
-                 execution.followup_context,
-                 execution.lifecycle_context
-               ) do
-            :ok ->
-              CodingAgent.Tools.Task.Result.build_async_result(
-                execution.task_id,
-                execution.description,
-                execution.run_id
-              )
+        case Async.run_async(
+               execution.task_id,
+               execution.run_id,
+               run_fun,
+               execution.followup_context,
+               execution.lifecycle_context
+             ) do
+          :ok when execution.async? ->
+            CodingAgent.Tools.Task.Result.build_async_result(execution.lifecycle_context)
 
-            {:error, reason} ->
-              {:error, async_launch_error_message(reason)}
-          end
-        else
-          Async.run_sync(run_fun)
+          :ok ->
+            await_sync_result(execution, signal)
+
+          {:error, reason} ->
+            {:error, async_launch_error_message(reason)}
         end
     end
   end
@@ -57,37 +56,42 @@ defmodule CodingAgent.Tools.Task.Execution do
     effective_cwd = validated.cwd || cwd
     parent_session_key = validated.session_key || Keyword.get(opts, :session_key)
     parent_agent_id = validated.agent_id || Keyword.get(opts, :agent_id)
-    coordinator = Keyword.get(opts, :coordinator)
-    parent_run_id = Keyword.get(opts, :parent_run_id)
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
+    parent_session_id = Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session)
     root_action_id = Keyword.get(opts, :root_action_id) || tool_call_id
     surface = Keyword.get(opts, :surface) || default_surface(root_action_id)
 
     run_id =
-      if async? do
-        RunGraph.new_run(%{type: :task, description: description, parent: parent_run_id})
-      end
+      RunGraph.new_run(%{
+        type: :task,
+        description: description,
+        parent: parent_run_id,
+        parent_session_id: parent_session_id,
+        session_key: parent_session_key
+      })
 
-    child_scope_id = run_id || "child_scope:" <> generate_child_scope_id()
+    child_scope_id = run_id
 
     task_id =
-      if async? do
-        TaskStore.new_task(%{
-          description: description,
-          prompt: prompt,
-          run_id: run_id,
-          parent_run_id: parent_run_id,
-          session_key: parent_session_key,
-          agent_id: parent_agent_id,
-          role: role_id,
-          queue_mode: validated.queue_mode,
-          meta: validated.meta
-        })
-      end
+      TaskStore.new_task(%{
+        description: description,
+        prompt: prompt,
+        run_id: run_id,
+        parent_run_id: parent_run_id,
+        parent_session_id: parent_session_id,
+        session_key: parent_session_key,
+        agent_id: parent_agent_id,
+        owner: Control.owner(opts),
+        role: role_id,
+        queue_mode: validated.queue_mode,
+        meta: validated.meta
+      })
 
     lifecycle_context = %{
       task_id: task_id,
       run_id: run_id,
       parent_run_id: parent_run_id,
+      parent_session_id: parent_session_id,
       session_key: parent_session_key,
       agent_id: parent_agent_id,
       root_action_id: root_action_id,
@@ -96,6 +100,8 @@ defmodule CodingAgent.Tools.Task.Execution do
       role: role_id,
       queue_mode: validated.resolved_queue_mode,
       meta: validated.meta,
+      parent_session_pid: Keyword.get(opts, :session_pid),
+      direct_progress: Keyword.get(opts, :session_module, Session) == Session,
       task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
     }
 
@@ -104,7 +110,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     end
 
     followup_context = %{
-      auto_followup: validated.auto_followup,
+      auto_followup: validated.async and validated.auto_followup,
       description: description,
       cwd: cwd,
       parent_session_key: parent_session_key,
@@ -124,7 +130,6 @@ defmodule CodingAgent.Tools.Task.Execution do
       role_id: role_id,
       async?: async?,
       effective_cwd: effective_cwd,
-      coordinator: coordinator,
       run_id: run_id,
       task_id: task_id,
       child_scope_id: child_scope_id,
@@ -176,64 +181,108 @@ defmodule CodingAgent.Tools.Task.Execution do
 
       run_override = Keyword.get(opts, :run_override)
 
-      cond do
-        is_function(run_override, 2) ->
+      result =
+        if is_function(run_override, 2) do
           run_override.(on_update_safe, signal)
+        else
+          with {:ok, workspace} <- prepare_workspace(execution) do
+            CodingAgent.TaskStoreServer.update_record(execution.task_id, fn record ->
+              Map.put(record, :workspace, workspace)
+            end)
 
-        coordinator_alive?(execution.coordinator) and execution.role_id and
-            is_nil(execution.validated.model) ->
-          Runner.execute_via_coordinator(
-            execution.coordinator,
-            execution.prompt,
-            execution.description,
-            execution.role_id
-          )
+            if workspace[:worktree_path] do
+              on_update_safe.(%LemonAgent.Types.AgentToolResult{
+                content: [
+                  %LemonAi.Types.TextContent{
+                    text: "Working in isolated branch #{workspace.branch}"
+                  }
+                ],
+                details: Map.put(workspace, :status, "running")
+              })
+            end
 
-        true ->
-          case Runner.maybe_apply_role_prompt(
-                 execution.prompt,
-                 execution.role_id,
-                 execution.effective_cwd
-               ) do
-            {:error, _} = error ->
-              error
-
-            resolved_prompt ->
+            result =
               Runner.start_session_with_prompt(
                 CodingAgent.Tools.Task.Params.build_session_opts(
-                  execution.effective_cwd,
+                  workspace.cwd,
                   build_child_session_opts(opts, execution),
                   execution.validated
                 ),
-                resolved_prompt,
+                execution.prompt,
                 execution.description,
                 signal,
                 on_update_safe,
                 execution.role_id,
-                Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
+                [task_id: execution.task_id] ++
+                  Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
               )
+
+            case result do
+              %LemonAgent.Types.AgentToolResult{} = result ->
+                %{
+                  result
+                  | details:
+                      Map.merge(
+                        result.details,
+                        workspace
+                        |> Map.merge(
+                          CodingAgent.Tools.Task.Result.lineage_details(
+                            execution.lifecycle_context
+                          )
+                        )
+                        |> Map.merge(%{
+                          task_id: execution.task_id,
+                          run_id: execution.run_id
+                        })
+                      )
+                }
+
+              error ->
+                error
+            end
           end
-      end
+        end
+
+      validate_output(result, execution.validated[:output_schema])
     end
   end
 
-  defp coordinator_alive?(coordinator) when is_pid(coordinator), do: Process.alive?(coordinator)
+  defp validate_output(%LemonAgent.Types.AgentToolResult{} = result, nil), do: result
 
-  defp coordinator_alive?(coordinator) when is_atom(coordinator) do
-    case Process.whereis(coordinator) do
-      nil -> false
-      pid -> Process.alive?(pid)
+  defp validate_output(%LemonAgent.Types.AgentToolResult{} = result, schema) do
+    with {:ok, output} <-
+           CodingAgent.Tools.Task.StructuredOutput.decode(
+             CodingAgent.Tools.Task.Result.visible_output_text(result),
+             schema
+           ) do
+      %{result | details: Map.put(result.details || %{}, :structured_output, output)}
     end
   end
 
-  defp coordinator_alive?({:via, _, _} = name) do
-    case GenServer.whereis(name) do
-      nil -> false
-      pid -> Process.alive?(pid)
-    end
+  defp validate_output(error, _schema), do: error
+
+  defp prepare_workspace(%{validated: %{worktree: true}} = execution) do
+    Worktree.prepare(execution.effective_cwd, execution.task_id)
   end
 
-  defp coordinator_alive?(_), do: false
+  defp prepare_workspace(execution), do: {:ok, %{cwd: execution.effective_cwd}}
+
+  defp await_sync_result(execution, signal) do
+    case CodingAgent.Tools.Task.Result.do_join(%{"task_ids" => [execution.task_id]}, signal) do
+      %LemonAgent.Types.AgentToolResult{details: %{status: "needs_parent_answer"}} = result ->
+        result
+
+      %LemonAgent.Types.AgentToolResult{} ->
+        case TaskStore.get(execution.task_id) do
+          {:ok, %{status: :completed, result: result}, _} -> result
+          {:ok, %{error: reason}, _} -> {:error, reason}
+          _ -> {:error, "Task did not complete"}
+        end
+
+      error ->
+        error
+    end
+  end
 
   defp build_child_session_opts(opts, execution) do
     opts
@@ -241,10 +290,6 @@ defmodule CodingAgent.Tools.Task.Execution do
     |> Keyword.put(:child_scope_id, execution.child_scope_id)
     |> Keyword.put(:task_id, execution.task_id)
     |> Keyword.put(:task_description, execution.description)
-  end
-
-  defp generate_child_scope_id do
-    :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 
   defp maybe_create_progress_binding(task_id, run_id, lifecycle_context) do

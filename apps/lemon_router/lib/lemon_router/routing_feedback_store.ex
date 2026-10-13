@@ -515,7 +515,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
         |> Keyword.get(:backend_opts, [])
         |> Keyword.get(:path, "~/.lemon/store")
 
-    dir = Path.expand(raw)
+    dir = LemonCore.Paths.store_dir(raw)
     Path.join(dir, @filename)
   end
 

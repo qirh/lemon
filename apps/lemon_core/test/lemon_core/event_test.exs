@@ -104,4 +104,32 @@ defmodule LemonCore.EventTest do
       end
     end
   end
+
+  test "approval and compaction semantics survive typed engine action JSON projection" do
+    for {kind, detail} <- [
+          {:approval, %{"approval_id" => "approval-1", "decision" => "pending"}},
+          {:compaction, %{"compaction" => %{"tokens_before" => 10_000, "tokens_after" => 2_000}}}
+        ],
+        wire_kind <- [kind, Atom.to_string(kind)] do
+      payload =
+        LemonCore.Events.EngineAction.from_map(%{
+          "engine" => "lemon",
+          "phase" => "updated",
+          "action" => %{
+            "id" => "semantic-action",
+            "kind" => wire_kind,
+            "title" => "Session activity",
+            "detail" => detail
+          }
+        })
+
+      assert payload.action.kind == kind
+      assert payload.action.detail == detail
+      assert LemonCore.Events.Action.valid_kind?(wire_kind)
+
+      projected = payload |> Jason.encode!() |> Jason.decode!()
+      assert projected["action"]["kind"] == Atom.to_string(kind)
+      assert projected["action"]["detail"] == detail
+    end
+  end
 end

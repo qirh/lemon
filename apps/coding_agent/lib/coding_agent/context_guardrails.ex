@@ -178,6 +178,7 @@ defmodule CodingAgent.ContextGuardrails do
         "bytes" => meta.original_bytes,
         "sha256" => meta.sha256,
         "spill_path" => meta.spill_path,
+        "artifact_uri" => meta.artifact_uri,
         "head_tail_excerpt" => tr
       }
     end
@@ -232,7 +233,7 @@ defmodule CodingAgent.ContextGuardrails do
         else
           truncate_with_meta(text, opts.max_tool_result_bytes,
             spill_label: "tool_result:#{tool_name(msg)}",
-            opts: opts
+            opts: Map.put(opts, :existing_artifact, existing_artifact(msg, opts))
           )
         end
       end
@@ -242,13 +243,15 @@ defmodule CodingAgent.ContextGuardrails do
         # Important: deterministic header (no timestamps).
         sha = if(meta, do: meta.sha256, else: sha256_hex(text))
         spill_path = if(meta, do: meta.spill_path, else: nil)
+        artifact_uri = if(meta, do: meta.artifact_uri, else: nil)
 
         [
           "[tool_result truncated]",
           "tool=#{tool_name(msg)}",
           "original_bytes=#{byte_size(text)}",
-          "sha256=#{sha}",
-          if(spill_path, do: "spill_path=#{spill_path}", else: nil)
+          if(meta && meta.existing_artifact, do: "preview_sha256=#{sha}", else: "sha256=#{sha}"),
+          if(artifact_uri, do: "artifact_uri=#{artifact_uri}", else: nil),
+          if(spill_path && is_nil(artifact_uri), do: "spill_path=#{spill_path}", else: nil)
         ]
         |> Enum.reject(&is_nil/1)
         |> Enum.join(" ")
@@ -301,13 +304,17 @@ defmodule CodingAgent.ContextGuardrails do
               ext = mime_to_ext(mime)
               path = stable_spill_path(opts[:spill_dir], "tool_image", sha, ext)
 
-              _ = maybe_write_spill(path, raw_bytes)
+              {path, artifact_uri} = spill_reference(path, raw_bytes, opts)
 
               %TextContent{
                 type: :text,
                 text:
                   "[tool_result image spilled] tool=#{tname} mime=#{mime} sha256=#{sha}" <>
-                    if(path, do: " spill_path=#{path}", else: "")
+                    cond do
+                      artifact_uri -> " artifact_uri=#{artifact_uri}"
+                      path -> " spill_path=#{path}"
+                      true -> " (full image unavailable)"
+                    end
               }
 
             :error ->
@@ -332,9 +339,11 @@ defmodule CodingAgent.ContextGuardrails do
 
   defp truncate_with_meta(text, max_bytes, spill_label: label, opts: opts) do
     sha = sha256_hex(text)
-    path = stable_spill_path(opts[:spill_dir], label, sha, "txt")
+    existing = opts[:existing_artifact]
 
-    _ = maybe_write_spill(path, text)
+    {path, artifact_uri} =
+      existing ||
+        spill_reference(stable_spill_path(opts[:spill_dir], label, sha, "txt"), text, opts)
 
     truncated =
       LemonAi.Text.truncate_middle_utf8(text, max_bytes,
@@ -346,11 +355,23 @@ defmodule CodingAgent.ContextGuardrails do
       truncated_bytes: byte_size(truncated),
       sha256: sha,
       spill_path: path,
+      artifact_uri: artifact_uri,
+      existing_artifact: not is_nil(existing),
       label: label
     }
 
     {truncated, meta}
   end
+
+  defp existing_artifact(%ToolResultMessage{details: %{artifact_uri: uri}}, opts)
+       when is_binary(uri) do
+    case CodingAgent.Artifacts.resolve_in_dir(uri, opts[:spill_dir]) do
+      {:ok, path} -> {path, uri}
+      {:error, _} -> nil
+    end
+  end
+
+  defp existing_artifact(_message, _opts), do: nil
 
   defp stable_spill_path(nil, _label, _sha, _ext), do: nil
 
@@ -371,25 +392,29 @@ defmodule CodingAgent.ContextGuardrails do
     end
   end
 
-  defp maybe_write_spill(nil, _data), do: :ok
+  defp spill_reference(path, data, opts) do
+    case maybe_write_spill(path, data) do
+      :ok ->
+        case CodingAgent.Artifacts.register_in_dir(path, opts[:spill_dir]) do
+          {:ok, uri} -> {path, uri}
+          {:error, _} -> {path, nil}
+        end
+
+      {:error, _} ->
+        {nil, nil}
+    end
+  end
+
+  defp maybe_write_spill(nil, _data), do: {:error, :disabled}
 
   defp maybe_write_spill(path, data) when is_binary(path) do
-    try do
-      File.mkdir_p!(Path.dirname(path))
-
+    with :ok <- File.mkdir_p(Path.dirname(path)) do
       case File.stat(path) do
-        {:ok, _} ->
-          :ok
-
-        {:error, :enoent} ->
-          File.write!(path, data)
-          :ok
-
-        {:error, _} ->
-          :ok
+        {:ok, %File.Stat{type: :regular}} -> :ok
+        {:ok, _} -> {:error, :not_a_regular_file}
+        {:error, :enoent} -> File.write(path, data)
+        {:error, reason} -> {:error, reason}
       end
-    rescue
-      _ -> :ok
     end
   end
 

@@ -896,28 +896,31 @@ defmodule LemonAgent.AgentQueueTest do
       assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
     end
 
-    test "abort clears abort_ref but preserves queued messages" do
-      response = Mocks.assistant_message("Response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 300))
+    test "abort interrupts an idle model and preserves queued messages" do
+      parent = self()
 
-      :ok = CoreAgent.steer(agent, Mocks.user_message("Queued steer"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Queued follow"))
+      stream_fn = fn _model, _context, _options ->
+        {:ok, stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+        LemonAi.EventStream.push(stream, {:start, Mocks.assistant_message("partial")})
+        send(parent, :stream_started)
+        {:ok, stream}
+      end
 
+      {:ok, agent} = start_agent(stream_fn: stream_fn)
       :ok = CoreAgent.prompt(agent, "Will abort")
-
-      # Abort mid-stream
-      Process.sleep(50)
+      assert_receive :stream_started
+      steering = Mocks.user_message("Queued steer")
+      follow_up = Mocks.user_message("Queued follow")
+      :ok = CoreAgent.steer(agent, steering)
+      :ok = CoreAgent.follow_up(agent, follow_up)
       :ok = CoreAgent.abort(agent)
-
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 1_000)
 
       internal_state = :sys.get_state(agent)
-      # Abort ref should be cleared
       assert internal_state.abort_ref == nil
-      # Queued messages should still be there (abort doesn't clear queues)
-      # Note: depending on implementation, queues may or may not be preserved
-      assert is_list(internal_state.steering_queue)
-      assert is_list(internal_state.follow_up_queue)
+      assert internal_state.steering_queue == [steering]
+      assert internal_state.follow_up_queue == [follow_up]
+      assert internal_state.agent_state.pending_tool_calls == MapSet.new()
     end
   end
 

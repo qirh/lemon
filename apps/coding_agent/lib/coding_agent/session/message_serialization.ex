@@ -150,11 +150,21 @@ defmodule CodingAgent.Session.MessageSerialization do
       "output" => usage.output,
       "cache_read" => usage.cache_read,
       "cache_write" => usage.cache_write,
-      "total_tokens" => usage.total_tokens
+      "cache_write_long" => usage.cache_write_long,
+      "total_tokens" => usage.total_tokens,
+      "cost" => serialize_cost(usage.cost)
     }
   end
 
   def serialize_usage(usage) when is_map(usage), do: usage
+
+  defp serialize_cost(nil), do: nil
+
+  defp serialize_cost(cost) do
+    Map.new([:input, :output, :cache_read, :cache_write, :total], fn key ->
+      {Atom.to_string(key), usage_value(cost, key, 0.0)}
+    end)
+  end
 
   # ============================================================================
   # Trust Serialization
@@ -283,14 +293,28 @@ defmodule CodingAgent.Session.MessageSerialization do
 
   def deserialize_usage(usage) when is_map(usage) do
     %LemonAi.Types.Usage{
-      input: usage["input"] || 0,
-      output: usage["output"] || 0,
-      cache_read: usage["cache_read"] || 0,
-      cache_write: usage["cache_write"] || 0,
-      total_tokens: usage["total_tokens"] || 0,
-      cost: %LemonAi.Types.Cost{}
+      input: usage_value(usage, :input, 0),
+      output: usage_value(usage, :output, 0),
+      cache_read: usage_value(usage, :cache_read, 0),
+      cache_write: usage_value(usage, :cache_write, 0),
+      cache_write_long: usage_value(usage, :cache_write_long, 0),
+      total_tokens: usage_value(usage, :total_tokens, 0),
+      cost: deserialize_cost(usage_value(usage, :cost, %{}))
     }
   end
+
+  defp deserialize_cost(cost) do
+    %LemonAi.Types.Cost{
+      input: usage_value(cost, :input, 0.0),
+      output: usage_value(cost, :output, 0.0),
+      cache_read: usage_value(cost, :cache_read, 0.0),
+      cache_write: usage_value(cost, :cache_write, 0.0),
+      total: usage_value(cost, :total, 0.0)
+    }
+  end
+
+  defp usage_value(map, key, default),
+    do: Map.get(map, key) || Map.get(map, Atom.to_string(key)) || default
 
   @spec deserialize_stop_reason(String.t() | nil) :: atom() | nil
   def deserialize_stop_reason(nil), do: nil

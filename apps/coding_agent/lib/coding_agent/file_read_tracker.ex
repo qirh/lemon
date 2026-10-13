@@ -29,9 +29,15 @@ defmodule CodingAgent.FileReadTracker do
   """
   @spec record(keyword(), String.t(), binary()) :: :ok
   def record(opts, path, content) when is_binary(path) and is_binary(content) do
+    record_digest(opts, path, digest(content))
+  end
+
+  @doc false
+  @spec record_digest(keyword(), String.t(), binary()) :: :ok
+  def record_digest(opts, path, digest) when is_binary(path) and is_binary(digest) do
     with {:ok, scope} <- scope(opts),
          true <- table_ready?() do
-      :ets.insert(@table, {{scope, Path.expand(path)}, digest(content)})
+      :ets.insert(@table, {{scope, Path.expand(path)}, digest})
       watch(scope, Keyword.get(opts, :session_pid))
     end
 

@@ -760,16 +760,17 @@ defmodule CodingAgent.Tools.WriteTest do
   # ============================================================================
 
   describe "execute/6 - binary content" do
-    test "writes binary content correctly", %{tmp_dir: tmp_dir} do
+    test "refuses binary content without overwriting the destination", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "binary.bin")
+      File.write!(path, "original")
       # Binary content with null bytes and high bytes
       content = <<0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD>>
 
       result =
         Write.execute("call_1", %{"path" => path, "content" => content}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{} = result
-      assert File.read!(path) == content
+      assert {:error, _} = result
+      assert File.read!(path) == "original"
     end
   end
 

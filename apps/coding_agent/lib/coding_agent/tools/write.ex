@@ -4,6 +4,13 @@ defmodule CodingAgent.Tools.Write do
 
   Writes content to a file, creating parent directories as needed.
   Creates the file if it doesn't exist, overwrites if it does.
+
+  Content must be valid UTF-8 without NUL bytes; use a binary-aware tool for
+  binary data. Local targets reject symlinks and special files by default.
+
+  Successful results include complete `oldText`/`newText` snapshots only when
+  both are at most 16 KiB and the prior contents are known (`nil` for a new local
+  file). Larger or unavailable snapshots are omitted, never truncated.
   """
 
   alias LemonAgent.AbortSignal
@@ -122,7 +129,10 @@ defmodule CodingAgent.Tools.Write do
   defp get_path(_), do: {:error, "missing required parameter: path"}
 
   defp get_content(%{"content" => content}) when is_binary(content) do
-    {:ok, content}
+    case FileValidation.check_text_content(content, "content") do
+      :ok -> {:ok, content}
+      error -> error
+    end
   end
 
   defp get_content(%{"content" => _}), do: {:error, "content must be a string"}
@@ -158,6 +168,16 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp write_file_with_acp(path, content, opts) do
+    old_text =
+      if ACPFileBridge.read_enabled?(opts) do
+        case ACPFileBridge.read_text_file(path, nil, nil, opts) do
+          {:ok, text} -> text
+          _ -> :unavailable
+        end
+      else
+        :unavailable
+      end
+
     case ACPFileBridge.write_text_file(path, content, opts) do
       :ok ->
         byte_count = byte_size(content)
@@ -169,7 +189,9 @@ defmodule CodingAgent.Tools.Write do
               text: success_message(path, byte_count, false)
             }
           ],
-          details: %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
+          details:
+            %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
+            |> FileValidation.put_text_snapshots(path, old_text, content)
         }
 
       {:error, reason} ->
@@ -196,6 +218,7 @@ defmodule CodingAgent.Tools.Write do
                path: path
              }) do
         baseline = LspDiagnostics.baseline(path, cwd, diagnostics?, opts)
+        old_text = read_bounded_snapshot(path)
 
         do_write_file(
           path,
@@ -206,7 +229,8 @@ defmodule CodingAgent.Tools.Write do
           baseline,
           cwd,
           opts,
-          checkpoint
+          checkpoint,
+          old_text
         )
       end
     rescue
@@ -227,7 +251,8 @@ defmodule CodingAgent.Tools.Write do
          baseline,
          cwd,
          opts,
-         checkpoint
+         checkpoint,
+         old_text
        ) do
     if AbortSignal.aborted?(signal) do
       {:error, :aborted}
@@ -265,9 +290,30 @@ defmodule CodingAgent.Tools.Write do
             formatted: formatted
           }
           |> CheckpointGuard.put_details(checkpoint)
+          |> FileValidation.put_text_snapshots(
+            path,
+            old_text,
+            if(formatted, do: read_bounded_snapshot(path), else: content)
+          )
           |> maybe_put_format_error(format_error)
           |> maybe_put_diagnostics(diagnostics)
       }
+    end
+  end
+
+  defp read_bounded_snapshot(path) do
+    case File.stat(path) do
+      {:error, :enoent} ->
+        nil
+
+      {:ok, %File.Stat{type: :regular, size: size}} when size <= 16_384 ->
+        case File.read(path) do
+          {:ok, text} -> text
+          _ -> :unavailable
+        end
+
+      _ ->
+        :unavailable
     end
   end
 

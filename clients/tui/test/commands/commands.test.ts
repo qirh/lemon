@@ -42,8 +42,8 @@ describe("routing commands", () => {
 	test("/model <id> patches the session and mirrors it locally", async () => {
 		await harness.run("/model claude-sonnet-4");
 		const frame = harness.server.requestsFor("sessions.patch")[0];
-		expect(frame.params).toEqual({ sessionKey: "tui-session", model: "claude-sonnet-4" });
-		expect(harness.store.focused.model).toBe("claude-sonnet-4");
+		expect(frame.params).toEqual({ sessionKey: "tui-session", model: "anthropic:claude-sonnet-4" });
+		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
 		expect(harness.host.text).toContain("claude-sonnet-4");
 	});
 
