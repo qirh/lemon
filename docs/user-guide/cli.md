@@ -60,6 +60,8 @@ The `runtime.build` doctor check reports the same build identity. Source builds
 use the umbrella CalVer and current checkout commit. Packaged releases use
 metadata stamped at assembly; an older artifact without metadata reports
 `unknown` rather than guessing a commit or channel from the updater settings.
+Packaged version commands work before setup: they read build identity without
+running the runtime configuration providers or creating HOME state.
 
 Clients reusing an external daemon use its existing credential, not a newly
 generated token. Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` or use the HOME that

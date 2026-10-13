@@ -375,7 +375,12 @@ if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
 fi
 
 case "$COMMAND" in
-  --version|version) run_cli "$@" ;;
+  --version|version)
+    # Build identity must work before setup, even when runtime configuration
+    # requires secrets or endpoint settings that do not exist yet.
+    export ELIXIR_ERL_OPTIONS="${ELIXIR_ERL_OPTIONS:-} -elixir config_provider_init nil"
+    run_cli "$@"
+    ;;
   __update-daemon)
     if [ -z "${RELEASE_COOKIE:-}" ] && [ -f "$LEMON_HOME_DIR/cookie" ]; then
       IFS= read -r RELEASE_COOKIE < "$LEMON_HOME_DIR/cookie"
