@@ -23,6 +23,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defstruct [
     :session_id,
     :cwd,
+    :context_window,
     tools: %{},
     thoughts: %{},
     message_id: nil,
@@ -35,6 +36,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     %__MODULE__{
       session_id: session_id,
       cwd: Keyword.get(opts, :cwd),
+      context_window: Keyword.get(opts, :context_window),
       message_id: "message_#{System.unique_integer([:positive, :monotonic])}"
     }
   end
@@ -203,7 +205,10 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     do: compaction(state, event, "completed")
 
   defp map_named_event(state, "compaction_failed", event), do: compaction(state, event, "failed")
-  defp map_named_event(state, "usage", event), do: emit_many(state, usage_updates(event))
+
+  defp map_named_event(state, "usage", event),
+    do: emit_many(state, usage_updates(event, state.context_window))
+
   defp map_named_event(state, "subagent_progress", event), do: subagent_update(state, event)
   defp map_named_event(state, _type, _event), do: {[], state}
 
@@ -361,6 +366,13 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     updates =
       if status == "completed" and is_list(todos), do: updates ++ [plan(todos)], else: updates
 
+    updates =
+      if name in ["task", "agent"] do
+        updates ++ subagent_lifecycle(result, status)
+      else
+        updates
+      end
+
     state =
       if status in ["completed", "failed"],
         do: %{state | tools: Map.delete(state.tools, id)},
@@ -436,7 +448,19 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
           end
       end
 
-    Enum.uniq(diffs ++ rich ++ terminal ++ fallback) |> Enum.take(@items_limit)
+    Enum.uniq(diffs ++ rich ++ terminal ++ fallback) |> bounded_content()
+  end
+
+  defp bounded_content(content) do
+    {items, _remaining} =
+      content
+      |> Enum.take(@items_limit)
+      |> Enum.reduce({[], 65_536}, fn item, {items, remaining} ->
+        size = byte_size(Jason.encode!(item))
+        if size <= remaining, do: {[item | items], remaining - size}, else: {items, remaining}
+      end)
+
+    Enum.reverse(items)
   end
 
   defp content_block(block) do
@@ -467,7 +491,8 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     new = get(entry, :newText) || get(entry, :new_text)
 
     if path && get(entry, :isError) != true && is_binary(new) && byte_size(new) <= @diff_limit &&
-         (is_nil(old) || (is_binary(old) && byte_size(old) <= @diff_limit)) do
+         String.valid?(new) &&
+         (is_nil(old) || (is_binary(old) && byte_size(old) <= @diff_limit && String.valid?(old))) do
       [%{"type" => "diff", "path" => path, "oldText" => old, "newText" => new}]
     else
       []
@@ -520,7 +545,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp location_path(state, raw, _name), do: local_path(state, raw)
 
   defp local_path(state, raw) when is_binary(raw) and raw != "" do
-    if internal_path?(raw) or byte_size(raw) > @text_limit,
+    if not String.valid?(raw) or internal_path?(raw) or byte_size(raw) > @text_limit,
       do: nil,
       else: Path.expand(raw, state.cwd || File.cwd!())
   end
@@ -573,12 +598,14 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     attempt = get(details, :attempt) || 1
     delay = get(details, :delay_ms) || 0
 
-    chunks(
-      state,
-      "agent_message_chunk",
-      "Provider request failed; retrying in #{delay}ms (attempt #{attempt}/#{get(details, :max_retries) || attempt}).\n",
-      %{"_meta" => %{"lemon" => %{"retry" => bounded(details)}}}
-    )
+    emit(state, %{
+      "sessionUpdate" => "notice",
+      "severity" => "warning",
+      "title" => "Retrying provider request",
+      "description" =>
+        "Retrying in #{delay}ms (attempt #{attempt}/#{get(details, :max_retries) || attempt}).",
+      "_meta" => %{"lemon" => %{"retry" => bounded(details)}}
+    })
   end
 
   defp compaction(state, info, status) do
@@ -594,14 +621,51 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   end
 
   defp subagent_update(state, event) do
-    chunks(
-      state,
-      "agent_message_chunk",
-      get(event, :text) || get(event, :message),
-      %{}
-      |> maybe_put("senderSessionId", get(event, :senderSessionId) || get(event, :session_id))
-      |> maybe_put("recipientSessionId", get(event, :recipientSessionId) || state.session_id)
-    )
+    {updates, _child_state} =
+      chunks(
+        state,
+        "agent_message_chunk",
+        optional_preview(get(event, :text) || get(event, :message)),
+        %{}
+        |> maybe_put("senderSessionId", get(event, :senderSessionId) || get(event, :session_id))
+        |> maybe_put("recipientSessionId", get(event, :recipientSessionId) || state.session_id)
+      )
+
+    {updates, state}
+  end
+
+  defp subagent_lifecycle(result, tool_status) do
+    details = get(result, :details) || %{}
+    entries = get(details, :tasks) || [details]
+
+    entries
+    |> list()
+    |> Enum.take(@items_limit)
+    |> Enum.flat_map(fn child ->
+      id = get(child, :session_id) || get(child, :task_id)
+      status = to_string(get(child, :status) || tool_status)
+
+      if is_binary(id) do
+        running = status in ["queued", "running", "pending", "in_progress"]
+
+        [
+          %{
+            "sessionUpdate" => "subagent_update",
+            "sessionId" => preview(id),
+            "state" => if(running, do: "running", else: "idle")
+          }
+          |> maybe_put(
+            "stopReason",
+            if(running,
+              do: nil,
+              else: if(status in ["aborted", "cancelled"], do: "cancelled", else: "end_turn")
+            )
+          )
+        ]
+      else
+        []
+      end
+    end)
   end
 
   defp completion(%{completed: true} = state, _payload), do: {[], state}
@@ -617,18 +681,20 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         do: chunks(state, "agent_message_chunk", readable(get(payload, :error))),
         else: {[], state}
 
-    {usage, state} = emit_many(state, usage_updates(get(payload, :usage) || %{}))
+    {usage, state} =
+      emit_many(state, usage_updates(get(payload, :usage) || %{}, state.context_window))
+
     {answer ++ errors ++ usage, %{state | completed: true}}
   end
 
-  defp usage_updates(usage) do
+  defp usage_updates(usage, context_window) do
     if is_map(usage) and map_size(usage) > 0 do
       total =
         get(usage, :totalTokens) || get(usage, :total_tokens) ||
           number(get(usage, :input)) + number(get(usage, :output)) +
             number(get(usage, :cache_read)) + number(get(usage, :cache_write))
 
-      size = get(usage, :contextWindow) || get(usage, :context_window)
+      size = get(usage, :contextWindow) || get(usage, :context_window) || context_window
       meta = %{"_meta" => %{"lemon" => %{"usage" => bounded(usage)}}}
 
       if is_number(size) and size > 0 do
@@ -656,7 +722,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     Enum.reduce(messages, %{}, fn message, acc ->
       case get(message, :usage) do
         usage when is_map(usage) ->
-          Map.merge(acc, Map.new(usage), fn _key, a, b -> number(a) + number(b) end)
+          Map.merge(acc, Map.delete(usage, :__struct__), fn _key, a, b ->
+            number(a) + number(b)
+          end)
 
         _ ->
           acc
@@ -752,7 +820,11 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp get(_map, _key), do: nil
 
   defp preview(text) when is_binary(text) do
-    if byte_size(text) <= @text_limit, do: text, else: utf8_prefix(text, @text_limit - 3) <> "…"
+    cond do
+      not String.valid?(text) -> "[non-UTF8 output]"
+      byte_size(text) <= @text_limit -> text
+      true -> utf8_prefix(text, @text_limit - 3) <> "…"
+    end
   end
 
   defp utf8_prefix(text, bytes) do
