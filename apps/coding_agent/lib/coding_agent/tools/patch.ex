@@ -13,6 +13,9 @@ defmodule CodingAgent.Tools.Patch do
   - File size limits for safe operation
   - Text updates reject invalid UTF-8 and NUL bytes before normalization
   - Hunk context must identify one location; repeated context is rejected
+  - ACP diff consumers receive bounded complete `perFileResults` snapshots:
+    at most 16 KiB per before/after file and 32 KiB across the patch. Oversized
+    snapshots are omitted, never misrepresented as complete.
 
   ## Supported Operations
 
@@ -159,6 +162,7 @@ defmodule CodingAgent.Tools.Patch do
         content: [%TextContent{text: summary.output <> diagnostics_text}],
         details:
           summary.details
+          |> Map.put(:perFileResults, prepared_file_results(prepared_operations))
           |> CheckpointGuard.put_details(checkpoint)
           |> maybe_put_diagnostics(diagnostics)
       }
@@ -613,7 +617,11 @@ defmodule CodingAgent.Tools.Patch do
     catch
       {:invalid_patch_line, index, line} ->
         {:error,
-         "Invalid patch syntax at line #{index + 1}: #{inspect(line)}. Prefix hunk lines with a space (context), + (add), or - (remove); start each hunk with @@. No files changed."}
+         "Invalid patch syntax at line #{index + 1}: #{inspect(String.slice(line, 0, 120))}. Prefix hunk lines with a space (context), + (add), or - (remove); start each hunk with @@. No files changed."}
+
+      {:invalid_add_line, index, line} ->
+        {:error,
+         "Invalid Add File content at line #{index + 1}: #{inspect(String.slice(line, 0, 120))}. Prefix every file-content line with +, including blank lines. No files changed."}
     end
   end
 
@@ -763,7 +771,9 @@ defmodule CodingAgent.Tools.Patch do
           content = String.slice(line, 1..-1//1)
           parse_add_lines(lines, idx + 1, [content | acc])
         else
-          parse_add_lines(lines, idx + 1, acc)
+          if line == "",
+            do: parse_add_lines(lines, idx + 1, acc),
+            else: throw({:invalid_add_line, idx, line})
         end
       end
     end
@@ -1035,40 +1045,86 @@ defmodule CodingAgent.Tools.Patch do
     end
   end
 
-  defp apply_operations_acp(operations, cwd, signal, opts) do
-    result =
-      Enum.reduce_while(operations, %{changed: [], additions: 0, removals: 0}, fn op, acc ->
-        if aborted?(signal) do
-          {:halt, {:error, "Operation aborted"}}
+  defp prepared_file_results(prepared) do
+    prepared
+    |> Enum.flat_map(fn
+      %{type: :move} = entry ->
+        [
+          FileValidation.put_text_snapshots(%{}, entry.source, entry.original_content, nil),
+          FileValidation.put_text_snapshots(%{}, entry.target, nil, entry.new_content)
+        ]
+
+      entry ->
+        [
+          FileValidation.put_text_snapshots(
+            %{},
+            entry.target,
+            entry.original_content,
+            entry.new_content
+          )
+        ]
+    end)
+    |> bound_file_results()
+  end
+
+  defp bound_file_results(results) do
+    {results, _remaining} =
+      Enum.map_reduce(results, 32 * 1024, fn result, remaining ->
+        bytes =
+          snapshot_bytes(Map.get(result, :oldText)) + snapshot_bytes(Map.get(result, :newText))
+
+        if bytes <= remaining do
+          {result, remaining - bytes}
         else
-          case apply_operation_acp(op, cwd, signal, opts) do
-            {:ok, info} ->
-              updated = %{
-                changed: acc.changed ++ info.changed,
-                additions: acc.additions + info.additions,
-                removals: acc.removals + info.removals
-              }
-
-              {:cont, updated}
-
-            {:error, reason} ->
-              {:halt, {:error, reason}}
-          end
+          {Map.drop(result, [:oldText, :newText]), remaining}
         end
       end)
+
+    results
+  end
+
+  defp snapshot_bytes(text) when is_binary(text), do: byte_size(text)
+  defp snapshot_bytes(_text), do: 0
+
+  defp apply_operations_acp(operations, cwd, signal, opts) do
+    result =
+      Enum.reduce_while(
+        operations,
+        %{changed: [], additions: 0, removals: 0, perFileResults: []},
+        fn op, acc ->
+          if aborted?(signal) do
+            {:halt, {:error, "Operation aborted"}}
+          else
+            case apply_operation_acp(op, cwd, signal, opts) do
+              {:ok, info} ->
+                updated = %{
+                  changed: acc.changed ++ info.changed,
+                  additions: acc.additions + info.additions,
+                  removals: acc.removals + info.removals,
+                  perFileResults: bound_file_results(acc.perFileResults ++ info.file_results)
+                }
+
+                {:cont, updated}
+
+              {:error, reason} ->
+                {:halt, {:error, reason}}
+            end
+          end
+        end
+      )
 
     case result do
       {:error, reason} ->
         {:error, reason}
 
-      %{changed: changed, additions: adds, removals: removes} ->
+      %{changed: changed, additions: adds, removals: removes, perFileResults: files} ->
         output =
           "Patch applied successfully. #{length(changed)} files changed, #{adds} additions, #{removes} removals"
 
         {:ok,
          %{
            output: output,
-           details: %{changed: changed, additions: adds, removals: removes}
+           details: %{changed: changed, additions: adds, removals: removes, perFileResults: files}
          }}
     end
   end
@@ -1079,7 +1135,14 @@ defmodule CodingAgent.Tools.Patch do
     with :ok <- check_abort(signal),
          :ok <- ACPFileBridge.write_text_file(resolved, content, opts) do
       additions = count_lines(content)
-      {:ok, %{changed: [resolved], additions: additions, removals: 0}}
+
+      {:ok,
+       %{
+         changed: [resolved],
+         additions: additions,
+         removals: 0,
+         file_results: [FileValidation.put_text_snapshots(%{}, resolved, nil, content)]
+       }}
     end
   end
 
@@ -1091,7 +1154,14 @@ defmodule CodingAgent.Tools.Patch do
          :ok <- check_abort(signal),
          :ok <- ACPFileBridge.delete_file(resolved, opts) do
       removals = count_lines(content)
-      {:ok, %{changed: [resolved], additions: 0, removals: removals}}
+
+      {:ok,
+       %{
+         changed: [resolved],
+         additions: 0,
+         removals: removals,
+         file_results: [FileValidation.put_text_snapshots(%{}, resolved, content, nil)]
+       }}
     end
   end
 
@@ -1107,7 +1177,13 @@ defmodule CodingAgent.Tools.Patch do
 
     with :ok <- check_abort(signal),
          :ok <- ACPFileBridge.rename_file(resolved, target, opts) do
-      {:ok, %{changed: [target], additions: 0, removals: 0}}
+      {:ok,
+       %{
+         changed: [target],
+         additions: 0,
+         removals: 0,
+         file_results: [%{path: resolved}, %{path: target}]
+       }}
     end
   end
 
@@ -1127,7 +1203,17 @@ defmodule CodingAgent.Tools.Patch do
          :ok <- check_abort(signal),
          :ok <- ACPFileBridge.write_text_file(target, new_content, opts),
          :ok <- maybe_delete_moved_acp_source(resolved, target, opts) do
-      {:ok, %{changed: [target], additions: adds, removals: removes}}
+      files =
+        if target == resolved do
+          [FileValidation.put_text_snapshots(%{}, target, content, new_content)]
+        else
+          [
+            FileValidation.put_text_snapshots(%{}, resolved, content, nil),
+            FileValidation.put_text_snapshots(%{}, target, nil, new_content)
+          ]
+        end
+
+      {:ok, %{changed: [target], additions: adds, removals: removes, file_results: files}}
     else
       {:error, reason} -> {:error, reason}
     end

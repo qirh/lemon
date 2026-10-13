@@ -2,8 +2,8 @@ defmodule CodingAgent.Tools.Find do
   @moduledoc """
   Find files tool for the coding agent.
 
-  Finds files by name/pattern. Uses `fd` if available for performance,
-  falling back to Elixir's Path.wildcard for compatibility.
+  Finds files by glob pattern. Uses `fd` in case-sensitive glob mode if
+  available, falling back to Elixir's Path.wildcard with the same semantics.
 
   `.gitignore`/`.ignore` rules are respected by default (so `_build/`,
   `deps/`, and `node_modules/` do not crowd out real results); pass
@@ -38,14 +38,14 @@ defmodule CodingAgent.Tools.Find do
         "Find files by name or pattern. Searches recursively from the given path. " <>
           "Returns matching file paths relative to the working directory.",
       label: "Find Files",
+      parallel_safe: true,
       parameters: %{
         "type" => "object",
         "properties" => %{
           "pattern" => %{
             "type" => "string",
             "description" =>
-              "File name pattern to search for. Supports glob patterns (e.g., '*.ex', 'test_*.exs') " <>
-                "and regex patterns when using fd."
+              "Case-sensitive file name glob (e.g., '*.ex', 'test_*.exs'). Plain names match exactly."
           },
           "path" => %{
             "type" => "string",
@@ -243,7 +243,6 @@ defmodule CodingAgent.Tools.Find do
         results =
           output
           |> String.split("\n", trim: true)
-          |> Enum.take(max_results)
 
         format_results(results, cwd, max_results)
 
@@ -269,15 +268,10 @@ defmodule CodingAgent.Tools.Find do
   defp build_fd_args(pattern, search_path, entry_type, max_depth, max_results, flags) do
     # Follow symlinked directories (matches the Elixir fallback). fd respects
     # .gitignore/.ignore rules unless the caller opts out.
-    args = if flags.no_ignore, do: ["--follow", "--no-ignore"], else: ["--follow"]
-
-    # Use glob mode if pattern contains glob characters
     args =
-      if glob_pattern?(pattern) do
-        args ++ ["--glob"]
-      else
-        args
-      end
+      if flags.no_ignore,
+        do: ["--follow", "--no-ignore", "--glob", "--case-sensitive"],
+        else: ["--follow", "--glob", "--case-sensitive"]
 
     # Entry type
     args =
@@ -296,7 +290,7 @@ defmodule CodingAgent.Tools.Find do
       end
 
     # Max results (fd uses --max-results)
-    args = args ++ ["--max-results", to_string(max_results)]
+    args = args ++ ["--max-results", to_string(max_results + 1)]
 
     # Hidden files
     args =
@@ -309,11 +303,6 @@ defmodule CodingAgent.Tools.Find do
     # Pattern and path; `--` keeps a pattern starting with `-` from being
     # parsed as a flag.
     args ++ ["--", pattern, search_path]
-  end
-
-  # Detect if a pattern contains glob characters
-  defp glob_pattern?(pattern) do
-    String.contains?(pattern, ["*", "?", "[", "]", "{", "}"])
   end
 
   defp run_fd(args, cwd, signal) do
@@ -391,7 +380,7 @@ defmodule CodingAgent.Tools.Find do
         |> Enum.uniq()
         |> filter_by_type(entry_type)
         |> reject_ignored(search_path, flags.no_ignore)
-        |> Enum.take(max_results)
+        |> Enum.sort()
 
       format_results(results, cwd, max_results)
     end
@@ -520,8 +509,9 @@ defmodule CodingAgent.Tools.Find do
       |> Enum.map(&make_relative(&1, cwd))
       |> Enum.sort()
 
+    truncated = length(relative_results) > max_results
+    relative_results = Enum.take(relative_results, max_results)
     count = length(relative_results)
-    truncated = count >= max_results
 
     text =
       if count == 0 do
@@ -529,7 +519,7 @@ defmodule CodingAgent.Tools.Find do
       else
         header =
           if truncated do
-            "Found #{count} matches (limited to #{max_results}):\n\n"
+            "Found #{count} matches (limited to #{max_results}); increase max_results or narrow path/pattern for more:\n\n"
           else
             "Found #{count} match#{if count == 1, do: "", else: "es"}:\n\n"
           end
@@ -549,18 +539,5 @@ defmodule CodingAgent.Tools.Find do
     }
   end
 
-  defp make_relative(path, cwd) do
-    case Path.relative_to(path, cwd) do
-      ^path ->
-        # Path is not under cwd, try to make it relative anyway
-        if String.starts_with?(path, cwd) do
-          String.trim_leading(path, cwd) |> String.trim_leading("/")
-        else
-          path
-        end
-
-      relative ->
-        relative
-    end
-  end
+  defp make_relative(path, cwd), do: Path.relative_to(path, cwd)
 end
