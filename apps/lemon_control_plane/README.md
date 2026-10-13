@@ -69,6 +69,19 @@ presence, health and cron data. They are not durable event replay cursors.
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+Tool action details use a bounded, credential-redacted wire projection of
+visible text/images and selected public result metadata. Hidden thinking,
+signatures, callbacks and runtime state are excluded; complete diff snapshots
+are omitted rather than truncated into misleading edits. Unexpected JSON
+encoding failures drop only the offending event frame and leave the socket
+connected for later output and completion.
+
+Ordinary `chat.send` requests may supply `cwd`: a nonempty absolute existing
+directory forwarded to the native coding session and its tools. Relative,
+missing and non-directory paths are rejected before submission. Canonical
+profile sessions reject caller workspace overrides; use `profile.chat`, whose
+workspace remains server-owned.
+
 A lost mutation acknowledgement does not prove failure. In particular,
 `profile.chat` may return `UNAVAILABLE` with its fixed run ID and
 `retrySafe: false`; reconcile instead of blindly submitting again. Session delete,

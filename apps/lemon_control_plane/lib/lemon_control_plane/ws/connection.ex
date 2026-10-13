@@ -112,9 +112,7 @@ defmodule LemonControlPlane.WS.Connection do
 
   @impl WebSock
   def handle_info({:node_event, event_name, payload}, state) do
-    state = increment_event_seq(state)
-    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
-    {:push, {:text, frame}, state}
+    push_event(event_name, payload, increment_event_seq(state))
   end
 
   def handle_info({:lemon_node_result, invoke_id, result}, state) do
@@ -123,17 +121,14 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   def handle_info({:event, event_name, payload}, state) do
-    state = increment_event_seq(state)
-    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
-    {:push, {:text, frame}, state}
+    push_event(event_name, payload, increment_event_seq(state))
   end
 
   def handle_info({:event, event_name, payload, new_state_version}, state)
       when is_map(new_state_version) do
     state = increment_event_seq(state)
     state = %{state | state_version: Map.merge(state.state_version, new_state_version)}
-    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
-    {:push, {:text, frame}, state}
+    push_event(event_name, payload, state)
   end
 
   def handle_info({:push_frame, frame}, state) when is_binary(frame) do
@@ -168,6 +163,33 @@ defmodule LemonControlPlane.WS.Connection do
     end
 
     :ok
+  end
+
+  # Encoding is a wire boundary: a malformed publisher must not disconnect the
+  # socket or prevent later completion events. Do not log payloads, event names,
+  # exception messages or arbitrary failure terms here.
+  defp push_event(event_name, payload, state) do
+    frame = Frames.encode_event(event_name, payload, state.event_seq, state.state_version)
+    {:push, {:text, frame}, state}
+  rescue
+    error ->
+      classification =
+        case error do
+          %Protocol.UndefinedError{} -> "unsupported_json_type"
+          %Jason.EncodeError{} -> "invalid_json_value"
+          %ArgumentError{} -> "invalid_encoding_argument"
+          _ -> "encoding_exception"
+        end
+
+      drop_event(classification, state)
+  catch
+    :throw, _ -> drop_event("encoding_throw", state)
+    :exit, _ -> drop_event("encoding_exit", state)
+  end
+
+  defp drop_event(classification, state) do
+    Logger.warning("Dropping WS event frame: " <> classification)
+    {:ok, state}
   end
 
   ## Frame Handling

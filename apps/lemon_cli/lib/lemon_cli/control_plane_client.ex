@@ -94,6 +94,17 @@ defmodule LemonCli.ControlPlaneClient do
   end
 
   @impl true
+  def handle_connect(_connection, state) do
+    {:ok, Map.put(state, :keepalive_timer, Process.send_after(self(), :keepalive, 30_000))}
+  end
+
+  @impl true
+  def handle_info(:keepalive, state) do
+    state = Map.put(state, :keepalive_timer, Process.send_after(self(), :keepalive, 30_000))
+    {:reply, :ping, state}
+  end
+
+  @impl true
   def handle_frame({:text, encoded}, state) do
     frame =
       case Jason.decode(encoded) do
@@ -107,6 +118,7 @@ defmodule LemonCli.ControlPlaneClient do
 
   @impl true
   def handle_disconnect(disconnect, state) do
+    if timer = Map.get(state, :keepalive_timer), do: Process.cancel_timer(timer)
     send(state.owner, {:lemon_cli_control_plane, state.ref, {:disconnected, disconnect}})
     {:ok, state}
   end
@@ -131,7 +143,21 @@ defmodule LemonCli.ControlPlaneClient do
     send_frame(pid, %{"type" => "req", "id" => id, "method" => method, "params" => params})
   end
 
-  defp send_frame(pid, frame), do: WebSockex.send_frame(pid, {:text, Jason.encode!(frame)})
+  defp send_frame(pid, frame) do
+    case WebSockex.send_frame(pid, {:text, Jason.encode!(frame)}) do
+      {:error, %WebSockex.NotConnectedError{}} -> {:error, :disconnected}
+      {:error, %WebSockex.ConnError{}} -> {:error, :disconnected}
+      result -> result
+    end
+  rescue
+    WebSockex.NotConnectedError -> {:error, :disconnected}
+  catch
+    :exit, {:noproc, _} -> {:error, :disconnected}
+    :exit, {:normal, _} -> {:error, :disconnected}
+    :exit, {:timeout, _} -> {:error, :control_plane_timeout}
+    :exit, {_reason, {WebSockex, :call, _args}} -> {:error, :disconnected}
+    :exit, {:remote, _code, _message} -> {:error, :disconnected}
+  end
 
   defp receive_frame(ref, timeout_ms) do
     receive do

@@ -131,6 +131,61 @@ defmodule LemonSkills.McpSourceContractTest do
     end)
   end
 
+  test "rejects malformed locally configured tool approval policy" do
+    for transport <- [:stdio, :http, :sse] do
+      assert_validation_parity(
+        config_for(transport, approval: "sometimes"),
+        {:error, "approval must be always or never"}
+      )
+
+      assert_validation_parity(
+        config_for(transport, tool_approvals: %{"echo" => nil}),
+        {:error, "tool_approvals must map tool names to always or never"}
+      )
+    end
+  end
+
+  test "utility selectors are distinct from similarly named remote tools" do
+    opts = [
+      approval: :always,
+      tool_approvals: %{
+        "resources_list" => :always,
+        "resources/list" => :never,
+        "resources/read" => "never",
+        "prompts/list" => :never,
+        "prompts/get" => :never
+      }
+    ]
+
+    entries = [
+      {"remote", {:tool, "resources_list"}},
+      {"resources", {:utility, :list_resources, %{}}},
+      {"read", {:utility, :read_resource, %{}}},
+      {"prompts", {:utility, :list_prompts, %{}}},
+      {"get", {:utility, :get_prompt, %{}}},
+      {"default", {:tool, "other"}}
+    ]
+
+    state = %{
+      tool_cache:
+        Map.new(entries, fn {name, original} ->
+          {name, %{server_name: "server", original_name: original}}
+        end),
+      servers: %{"server" => %{config: {:stdio, "server", [], opts}}}
+    }
+
+    assert {:reply, policies, ^state} = McpSource.handle_call(:approval_policy, nil, state)
+
+    assert policies == %{
+             "remote" => :always,
+             "resources" => :never,
+             "read" => :never,
+             "prompts" => :never,
+             "get" => :never,
+             "default" => :always
+           }
+  end
+
   test "explicit application and environment settings disable MCP" do
     Application.put_env(:lemon_skills, :mcp_disabled, true)
     System.delete_env("LEMON_MCP_DISABLED")
