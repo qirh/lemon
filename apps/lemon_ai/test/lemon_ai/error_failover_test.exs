@@ -134,6 +134,214 @@ defmodule LemonAi.ErrorFailoverTest do
     end
   end
 
+  describe "classification and same-credential retry contract" do
+    test "HTTP errors keep the same decision through the public terminal boundary" do
+      cases = [
+        {429, %{"error" => %{"message" => "Too many requests"}}, :rate_limit, true},
+        {400, %{"error" => %{"type" => "overloaded_error", "message" => "Overloaded"}},
+         :transient, true},
+        {400, %{"error" => %{"type" => "rate_limit_error", "message" => "Slow down"}},
+         :rate_limit, true},
+        {408, "Request Timeout", :transient, true},
+        {409, "Request conflict", :transient, true},
+        {425, "Too early", :transient, true},
+        {500, "Internal Server Error", :server, true},
+        {503, "Service Unavailable", :transient, true},
+        {401, "Unauthorized. Please try again later.", :auth, false},
+        {500, %{"error" => %{"code" => "invalid_api_key", "message" => "Try again later"}}, :auth,
+         false},
+        {400, "Invalid request: timeout must be positive", :client, false},
+        {429, %{"error" => %{"type" => "invalid_request_error", "message" => "Bad request"}},
+         :client, false},
+        {503,
+         %{
+           "error" => %{
+             "type" => "invalid_request_error",
+             "code" => "context_length_exceeded",
+             "message" => "Too much input. Please try again later"
+           }
+         }, :context_length, false},
+        {429,
+         %{
+           "error" => %{
+             "type" => "rate_limit_error",
+             "code" => "insufficient_quota",
+             "message" => "Please try again later"
+           }
+         }, :rate_limit, false}
+      ]
+
+      for {status, body, category, retryable} <- cases do
+        parsed = Error.parse_http_error(status, body, [{"retry-after", "2.5"}])
+        event = stream_error_event(parsed.message)
+        {:error, :error, message} = event
+
+        assert parsed.category == category
+        assert parsed.retryable == retryable
+        assert parsed.rate_limit_info.retry_after == 2_500
+
+        for error <- [
+              parsed,
+              {:http_error, status, body},
+              {:http_error, status, Jason.encode!(body)},
+              {:http_error, status, body, %{"retry-after" => ["2.5"]}},
+              message,
+              event,
+              parsed.message
+            ] do
+          assert Error.classify(error) == category
+          assert Error.retryable?(error) == retryable
+          assert Error.failover_action(error) == Error.failover_action(parsed)
+        end
+      end
+    end
+
+    test "parsed categories cannot enable permanent retries or lose an explicit stop decision" do
+      for category <- [:rate_limit, :transient, :server] do
+        assert Error.retryable?(%{category: category})
+        refute Error.retryable?(%{category: category, retryable: false})
+      end
+
+      for category <- [:auth, :client, :context_length, :unknown] do
+        refute Error.retryable?(%{category: category, retryable: true})
+      end
+    end
+
+    test "account quota, credit and spend exhaustion never spin despite transient wording" do
+      for text <- [
+            "usage_limit_reached",
+            "usage_not_included",
+            "You have hit your ChatGPT usage limit. Please try again later.",
+            "This request would exceed your account's monthly spend limit. Please try again later.",
+            "This request would exceed your account's rate limit. Please try again later.",
+            "You exceeded your current quota, please check your plan and billing details.",
+            "Insufficient credits. Please try again later.",
+            "This request would exceed your available credits given your current in-flight requests.",
+            "You have exhausted your capacity on this model. Your quota will reset after 2h.",
+            "配额已耗尽"
+          ] do
+        parsed = Error.parse_http_error(429, %{"error" => %{"message" => text}})
+
+        for error <- [text, parsed, stream_error_event(text), {:error, text}] do
+          assert Error.classify(error) == :rate_limit
+          refute Error.retryable?(error)
+          assert Error.failover_action(error) == :next_credential
+        end
+      end
+    end
+
+    test "structured Google account-quota reasons survive generic resource-exhausted text" do
+      body = %{
+        "error" => %{
+          "status" => "RESOURCE_EXHAUSTED",
+          "message" => "Resource exhausted. Please try again later.",
+          "details" => [
+            %{
+              "@type" => "type.googleapis.com/google.rpc.ErrorInfo",
+              "reason" => "QUOTA_EXHAUSTED"
+            }
+          ]
+        }
+      }
+
+      parsed = Error.parse_http_error(429, body)
+      assert parsed.provider_message =~ "QUOTA_EXHAUSTED"
+
+      for error <- [parsed, stream_error_event(parsed.message), {:http_error, 429, body}] do
+        assert Error.classify(error) == :rate_limit
+        refute Error.retryable?(error)
+        assert Error.failover_action(error) == :next_credential
+      end
+    end
+
+    test "per-minute caps and documented DashScope token throttles remain retryable" do
+      for text <- [
+            "This request would exceed your account's rate limit per minute.",
+            "Quota exceeded for quota metric requests per minute",
+            "You exceeded your current quota, please check your plan and billing details. " <>
+              "https://help.aliyun.com/error-code#token-limit (type=insufficient_quota)"
+          ] do
+        parsed = Error.parse_http_error(429, %{"error" => %{"message" => text}})
+        assert Error.classify(parsed) == :rate_limit
+        assert Error.retryable?(parsed)
+        assert Error.retryable?(stream_error_event(parsed.message))
+      end
+    end
+
+    test "real context overflow phrases compact instead of retrying" do
+      for text <- [
+            "prompt is too long: 250000 tokens > 200000 maximum",
+            "input is too long for requested model",
+            "input token count 150000 exceeds the maximum 128000",
+            "Input exceeds the context window of this model.",
+            "maximum prompt length is 131072",
+            "reduce the length of the messages",
+            "Requested tokens exceed the available context size",
+            "model_context_window_exceeded",
+            "Too many tokens. Please try again later."
+          ] do
+        for error <- [
+              text,
+              stream_error_event(text),
+              {:http_error, 400, %{"error" => %{"message" => text}}},
+              {:http_error, 503, text}
+            ] do
+          assert Error.classify(error) == :context_length
+          refute Error.retryable?(error)
+          assert Error.failover_action(error) == :compact
+        end
+      end
+    end
+
+    test "transport terms and Req exceptions use the same network decision" do
+      reasons = [
+        :timeout,
+        :closed,
+        :econnrefused,
+        :econnreset,
+        :nxdomain,
+        :enetdown,
+        :enetunreach,
+        :enetwork_unreachable,
+        :ehostunreach,
+        :unreachable,
+        {:closed, :socket},
+        {:failed_connect,
+         [{:to_address, {~c"example.invalid", 443}}, {:inet, [:inet], :nxdomain}]},
+        {:tls_alert, {:bad_record_mac, "TLS record corruption"}},
+        {:socket_error, :timeout}
+      ]
+
+      for reason <- reasons,
+          error <- [reason, {:error, reason}, %Req.TransportError{reason: reason}] do
+        assert Error.classify(error) == :transient
+        assert Error.retryable?(error)
+        assert LemonAi.Providers.RetryHelper.retryable_transport_error?(error)
+      end
+
+      for error <- [
+            {:tls_alert, {:unknown_ca, "Failed to verify certificate"}},
+            %Req.TransportError{
+              reason: {:tls_alert, {:certificate_expired, "Expired certificate"}}
+            }
+          ] do
+        assert Error.classify(error) == :unknown
+        refute Error.retryable?(error)
+        refute LemonAi.Providers.RetryHelper.retryable_transport_error?(error)
+      end
+    end
+  end
+
+  test "malformed final tool arguments fail without retries or failover" do
+    text = "Invalid tool arguments for timeout: expected a JSON object"
+
+    for error <- [text, stream_error_event(text), %RuntimeError{message: text}] do
+      assert Error.classify(error) == :client
+      refute Error.retryable?(error)
+      assert Error.failover_action(error) == :fail
+    end
+  end
+
   describe "circuit_breaker_failure?/1 (request-level set)" do
     test "5xx statuses are failures" do
       assert Error.circuit_breaker_failure?({:http_error, 500, "boom"})
