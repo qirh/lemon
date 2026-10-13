@@ -182,6 +182,9 @@ defmodule LemonControlPlane.EventProjectionTest do
       |> Map.put(:context_tokens, 920)
       |> Map.put(:context_budget, budget)
       |> Map.put(:turns, 3)
+      |> Map.put(:tokens, 100_000)
+      |> Map.put(:cost_usd, 0.5)
+      |> Map.put(:tool_errors, 2)
 
     projected = EventProjection.action_detail(%{usage: usage})
     assert projected.usage["context_tokens"] == 920
@@ -190,6 +193,9 @@ defmodule LemonControlPlane.EventProjectionTest do
     assert projected.usage["context_budget"]["reserve_tokens"] == 32_000
     assert projected.usage["context_budget"]["headroom_tokens"] == 239_080
     assert projected.usage["turns"] == 3
+    assert projected.usage["tokens"] == 100_000
+    assert projected.usage["cost_usd"] == 0.5
+    assert projected.usage["tool_errors"] == 2
   end
 
   test "actual aborted tool snapshots preserve cancellation and unknown outcome" do

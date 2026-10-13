@@ -385,7 +385,9 @@ defmodule LemonGateway.RunTest do
     assert_receive %LemonCore.Event{
                      type: :run_completed,
                      meta: %{run_id: run_id},
-                     payload: %{completed: %{ok: false, error: :user_requested}}
+                     payload: %{
+                       completed: %{ok: false, error: :user_requested, meta: %{cancelled: true}}
+                     }
                    },
                    2_000
 
@@ -856,6 +858,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, %{ok: false, error: :interrupted}}, 2_000
       stored = LemonCore.RunStore.get(request.run_id)
       assert stored.summary.completed.error == :interrupted
+      assert stored.summary.completed.meta.cancelled == true
 
       assert Enum.any?(
                stored.events,

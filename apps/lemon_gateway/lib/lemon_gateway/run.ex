@@ -376,7 +376,12 @@ defmodule LemonGateway.Run do
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
     event =
       if state.cancelled and is_completed(event),
-        do: %{event | ok: false, error: state.cancel_reason},
+        do: %{
+          event
+          | ok: false,
+            error: state.cancel_reason,
+            meta: Map.put(event.meta || %{}, :cancelled, true)
+        },
         else: event
 
     RunStore.append_event(state.run_id, event)
@@ -571,6 +576,7 @@ defmodule LemonGateway.Run do
         engine: @engine_provenance,
         resume: state.last_resume || state.execution_request.resume,
         ok: false,
+        meta: %{cancelled: true},
         error: state.cancel_reason,
         answer: state.accumulated_text,
         run_id: state.run_id,

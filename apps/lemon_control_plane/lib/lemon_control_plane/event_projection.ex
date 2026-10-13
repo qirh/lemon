@@ -7,6 +7,8 @@ defmodule LemonControlPlane.EventProjection do
   image, usage and cost values have explicit public-field projections; hidden
   thinking, signatures, arbitrary structs, callbacks and state are never exported.
   `trust` is a tool-supplied label, not proof of a security transformation.
+  Usage preserves cumulative budget counters (`tokens`, `cost_usd`, turns and
+  tool errors) separately from the current-context token and budget snapshot.
 
   Each projection has a shared 32 KiB JSON budget, 100 entries and six levels of
   nesting. Strings are redacted before clipping to 16 KiB. Diff snapshots
@@ -196,7 +198,9 @@ defmodule LemonControlPlane.EventProjection do
           :context_tokens,
           :context_budget,
           :turns,
-          :tool_errors
+          :tool_errors,
+          :tokens,
+          :cost_usd
         ],
         depth,
         budget

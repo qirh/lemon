@@ -385,6 +385,8 @@ defmodule LemonControlPlane.EventBridge do
        "runId" => meta[:run_id],
        "sessionKey" => meta[:session_key],
        "ok" => get_field(completed, :ok),
+       "cancelled" => get_field(get_field(completed, :meta) || %{}, :cancelled) == true,
+       "error" => LemonControlPlane.EventProjection.action_detail(get_field(completed, :error)),
        "answer" => truncate(get_field(completed, :answer), 500),
        "durationMs" => payload.duration_ms,
        "usage" => LemonControlPlane.UsageTokens.normalize(get_field(completed, :usage)),
