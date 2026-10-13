@@ -287,6 +287,94 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
            )
   end
 
+  test "latest request context gauge is distinct from cumulative usage" do
+    messages = [
+      %AssistantMessage{usage: %Usage{input: 10, output: 5, total_tokens: 15}},
+      %AssistantMessage{usage: %Usage{input: 20, output: 3, cache_read: 7, total_tokens: 30}}
+    ]
+
+    usage = CodingAgent.Session.Presentation.build_usage(messages)
+    assert usage.total_tokens == 45
+    assert usage.context_tokens == 30
+
+    {updates, _state} =
+      SessionUpdates.map_event(
+        SessionUpdates.new("session", context_window: 200_000),
+        {:agent_end, messages}
+      )
+
+    assert update(hd(updates))["sessionUpdate"] == "usage_update"
+    assert update(hd(updates))["used"] == 30
+  end
+
+  test "native images and deletion diffs use valid ACP content fields" do
+    result = %AgentToolResult{
+      content: [%LemonAi.Types.ImageContent{mime_type: "image/png", data: "eA=="}],
+      details: %{path: "/workspace/deleted", oldText: "old"}
+    }
+
+    [notification] =
+      SessionUpdates.session_updates(
+        "session",
+        {:tool_execution_end, "delete", "delete", result, false}
+      )
+
+    assert %{
+             "type" => "content",
+             "content" => %{"type" => "image", "mimeType" => "image/png", "data" => "eA=="}
+           } in update(notification)["content"]
+
+    assert %{
+             "type" => "diff",
+             "path" => "/workspace/deleted",
+             "oldText" => "old",
+             "newText" => ""
+           } in update(notification)["content"]
+  end
+
+  test "thought deltas continue beyond the cumulative preview bound" do
+    presentation = CodingAgent.Session.Presentation
+
+    {:emit, _start, accumulator} =
+      presentation.reasoning_action(
+        {:thinking_start, 0, nil},
+        presentation.new_reasoning_accumulator()
+      )
+
+    piece = String.duplicate("t", 1_000)
+
+    {accumulator, mapper, emitted} =
+      Enum.reduce(1..40, {accumulator, SessionUpdates.new("session"), []}, fn _,
+                                                                              {accumulator,
+                                                                               mapper, emitted} ->
+        {:emit, action, accumulator} =
+          presentation.reasoning_action({:thinking_delta, 0, piece, nil}, accumulator)
+
+        {updates, mapper} =
+          SessionUpdates.map_event(mapper, %{
+            type: :engine_action,
+            payload: %{action: action, phase: action.phase}
+          })
+
+        {accumulator, mapper, emitted ++ updates}
+      end)
+
+    {:emit, action, _accumulator} =
+      presentation.reasoning_action(
+        {:thinking_end, 0, String.duplicate(piece, 40), nil},
+        accumulator
+      )
+
+    {updates, _mapper} =
+      SessionUpdates.map_event(mapper, %{
+        type: :engine_action,
+        payload: %{action: action, phase: action.phase}
+      })
+
+    assert updates == []
+    assert Enum.map_join(emitted, &update(&1)["content"]["text"]) == String.duplicate(piece, 40)
+  end
+
   defp update(notification), do: notification["params"]["update"]
   defp text(value), do: %{"type" => "content", "content" => %{"type" => "text", "text" => value}}
 
