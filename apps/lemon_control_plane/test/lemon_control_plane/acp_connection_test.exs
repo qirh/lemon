@@ -28,11 +28,82 @@ defmodule LemonControlPlane.ACP.ConnectionTest do
   test "session/cancel releases a pending permission callback" do
     {:ok, state} = Connection.init([])
     ref = make_ref()
-    state = %{state | clients: %{"permission" => {self(), ref, "session"}}}
+    request = %{"method" => "session/request_permission", "params" => %{}}
+
+    {:push, _, state} =
+      Connection.handle_info(
+        {:acp_client_request, self(), ref, request, "session", self()},
+        state
+      )
+
     request = ~s({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session"}})
     assert {:ok, state} = Connection.handle_in({request, [opcode: :text]}, state)
     assert state.clients == %{}
     assert_receive {:acp_client_response, ^ref, {:error, :cancelled}}
+    Connection.terminate(:normal, state)
+  end
+
+  test "late terminal allocation after cancellation is killed and released" do
+    {:ok, state} = Connection.init([])
+    ref = make_ref()
+    request = %{"method" => "terminal/create", "params" => %{}}
+
+    {:push, {:text, wire}, state} =
+      Connection.handle_info(
+        {:acp_client_request, self(), ref, request, "session", self()},
+        state
+      )
+
+    id = Jason.decode!(wire)["id"]
+    cancel = ~s({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"session"}})
+    {:ok, state} = Connection.handle_in({cancel, [opcode: :text]}, state)
+    assert_receive {:acp_client_response, ^ref, {:error, :cancelled}}
+
+    response =
+      Jason.encode!(%{"jsonrpc" => "2.0", "id" => id, "result" => %{"terminalId" => "late"}})
+
+    {:ok, state} = Connection.handle_in({response, [opcode: :text]}, state)
+    assert state.clients == %{}
+    assert state.terminals == %{}
+
+    assert_receive {:acp_output,
+                    %{"method" => "terminal/kill", "params" => %{"terminalId" => "late"}}}
+
+    assert_receive {:acp_output,
+                    %{"method" => "terminal/release", "params" => %{"terminalId" => "late"}}}
+
+    Connection.terminate(:normal, state)
+  end
+
+  test "terminal output can complete while wait_for_exit remains pending" do
+    {:ok, state} = Connection.init([])
+    wait_ref = make_ref()
+    output_ref = make_ref()
+    wait = %{"method" => "terminal/wait_for_exit", "params" => %{"terminalId" => "t"}}
+    output = %{"method" => "terminal/output", "params" => %{"terminalId" => "t"}}
+
+    {:push, _, state} =
+      Connection.handle_info(
+        {:acp_client_request, self(), wait_ref, wait, "session", self()},
+        state
+      )
+
+    {:push, {:text, wire}, state} =
+      Connection.handle_info(
+        {:acp_client_request, self(), output_ref, output, "session", self()},
+        state
+      )
+
+    response = %{
+      "jsonrpc" => "2.0",
+      "id" => Jason.decode!(wire)["id"],
+      "result" => %{"output" => "live"}
+    }
+
+    {:ok, state} = Connection.handle_in({Jason.encode!(response), [opcode: :text]}, state)
+    assert_receive {:acp_client_response, ^output_ref, {:ok, ^response}}
+    refute_receive {:acp_client_response, ^wait_ref, _}
+    assert map_size(state.clients) == 1
     Connection.terminate(:normal, state)
   end
 

@@ -12,6 +12,9 @@ defmodule LemonControlPlane.ACP do
   load the selected workspace skill. Native resume identities survive the chat
   cache TTL. Streaming subscriptions precede run submission; uncertain receipts
   retain their fixed run ID and explicitly forbid automatic retries.
+  Permission requests retain the native tool-call identity and bounded target
+  preview; approval summaries never persist raw tool arguments. Client calls
+  are concurrent so terminal exit waits cannot block output or cancellation.
   """
 
   alias LemonControlPlane.AgentRuntime
@@ -47,6 +50,7 @@ defmodule LemonControlPlane.ACP do
     fs = capabilities |> map_get_any(["fs", :fs]) |> ensure_map()
 
     %{
+      terminal: truthy?(map_get_any(capabilities, ["terminal", :terminal])),
       fs: %{
         read_text_file:
           truthy?(
@@ -233,10 +237,23 @@ defmodule LemonControlPlane.ACP do
 
   def cancel_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
-         {:ok, session} <- existing_session(session_id),
-         :ok <- cancel_last_run(session) do
+         {:ok, session} <- existing_session(session_id) do
       put_session(session_id, Map.put(session, :cancelled_run_id, session.last_run_id))
-      {:ok, %{}}
+
+      case cancel_last_run(session) do
+        :ok ->
+          {:ok, %{}}
+
+        error ->
+          current = get_session(session_id) || session
+
+          put_session(
+            session_id,
+            Map.put(current, :cancelled_run_id, Map.get(session, :cancelled_run_id))
+          )
+
+          error
+      end
     end
   end
 
@@ -250,7 +267,7 @@ defmodule LemonControlPlane.ACP do
 
       if :global.set_lock(lock, [node()], 0) do
         try do
-          with_prepared_run(opts, fn run_id, opts ->
+          with_prepared_run(session_id, opts, fn run_id, opts ->
             with {:ok, session} <- open_session(session_id),
                  {:ok, blocks} <- required_list(params, "prompt"),
                  {:ok, prompt} <- prompt_text(blocks),
@@ -305,7 +322,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp with_prepared_run(opts, callback) do
+  defp with_prepared_run(session_id, opts, callback) do
     run_id = LemonCore.Id.run_id()
 
     streaming? =
@@ -317,18 +334,36 @@ defmodule LemonControlPlane.ACP do
     if streaming? do
       :ok = LemonCore.Bus.subscribe(topic)
       :ok = LemonCore.Bus.subscribe("exec_approvals")
-      :ok = LemonCore.ACPClientBridge.register(run_id)
     end
+
+    bridge = if streaming?, do: start_client_bridge(run_id, session_id, opts)
 
     try do
       callback.(run_id, Keyword.put(opts, :prepared_run_id, run_id))
     after
       if streaming? do
-        LemonCore.ACPClientBridge.unregister(run_id)
+        stop_client_bridge(bridge)
         LemonCore.Bus.unsubscribe(topic)
         LemonCore.Bus.unsubscribe("exec_approvals")
       end
     end
+  end
+
+  defp start_client_bridge(run_id, session_id, opts) do
+    callback = Keyword.get(opts, :client_request_callback)
+
+    {:ok, bridge} =
+      LemonControlPlane.ACP.ClientRequests.start_link(run_id, self(), fn payload ->
+        client_exchange(session_id, payload, callback)
+      end)
+
+    bridge
+  end
+
+  defp stop_client_bridge(bridge) do
+    if is_pid(bridge) and Process.alive?(bridge), do: GenServer.stop(bridge, :normal)
+  catch
+    :exit, _ -> :ok
   end
 
   defp dispatch(_method, params, _opts) when not is_map(params),
@@ -782,6 +817,7 @@ defmodule LemonControlPlane.ACP do
           acp_wait_requested: not queue_only?,
           acp_resource_link_count: resource_link_count(params["prompt"]),
           acp_client_capabilities: client_capabilities_json(client_capabilities),
+          acp_client_terminal: client_capabilities.terminal,
           acp_client_fs_read_text_file: client_fs_capabilities.read_text_file,
           acp_client_fs_write_text_file: client_fs_capabilities.write_text_file,
           acp_client_fs_delete_file: client_fs_capabilities.delete_file,
@@ -860,8 +896,9 @@ defmodule LemonControlPlane.ACP do
 
     unless prepared? do
       :ok = LemonCore.Bus.subscribe(topic)
-      :ok = LemonCore.ACPClientBridge.register(run_id)
     end
+
+    bridge = unless prepared?, do: start_client_bridge(run_id, result.session_id, opts)
 
     session_update_callback = Keyword.get(opts, :session_update_callback)
     client_request_callback = Keyword.get(opts, :client_request_callback)
@@ -899,7 +936,7 @@ defmodule LemonControlPlane.ACP do
       )
     after
       unless prepared? do
-        LemonCore.ACPClientBridge.unregister(run_id)
+        stop_client_bridge(bridge)
         LemonCore.Bus.unsubscribe(topic)
       end
     end
@@ -916,8 +953,8 @@ defmodule LemonControlPlane.ACP do
             result = emit_run_updates(result, event, session_update_callback)
             {:ok, complete_streamed_result(result, payload)}
 
-          {:acp_client_request, payload} ->
-            result = perform_client_request(result, payload, client_request_callback)
+          {:acp_client_summary, summary} ->
+            result = add_client_request_result(result, summary)
 
             update_wait_loop(
               result,
@@ -1002,18 +1039,11 @@ defmodule LemonControlPlane.ACP do
 
   defp perform_approval_request(result, pending, callback) when is_function(callback, 1) do
     approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
-    tool = map_get(pending, :tool) || "tool"
 
     request =
       client_request("session/request_permission", %{
         "sessionId" => result.session_id,
-        "toolCall" => %{
-          "toolCallId" => approval_id || "approval_#{short_hash(inspect(pending))}",
-          "title" => "Approve #{tool}",
-          "kind" => LemonControlPlane.ACP.SessionUpdates.tool_kind(tool),
-          "status" => "pending",
-          "content" => approval_content(pending)
-        },
+        "toolCall" => permission_tool_call(result, pending),
         "options" => approval_options()
       })
 
@@ -1061,6 +1091,34 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp deny_if_pending(_approval_id), do: :ok
+
+  defp permission_tool_call(result, pending) do
+    tool = map_get(pending, :tool) || "tool"
+    id = map_get(pending, :tool_call_id)
+
+    args =
+      case Map.get(result.mapper_state.tools, id) do
+        {^tool, args} -> args
+        _ -> map_get(pending, :action) |> ensure_map()
+      end
+
+    if is_binary(id) and id != "" do
+      result.session_id
+      |> LemonControlPlane.ACP.SessionUpdates.tool_call(id, tool, args,
+        cwd: result.mapper_state.cwd
+      )
+      |> get_in(["params", "update"])
+      |> Map.delete("sessionUpdate")
+    else
+      %{
+        "toolCallId" => id || map_get(pending, :id),
+        "title" => "Approve #{tool}",
+        "kind" => LemonControlPlane.ACP.SessionUpdates.tool_kind(tool),
+        "status" => "pending",
+        "content" => approval_content(pending)
+      }
+    end
+  end
 
   defp approval_content(pending) do
     case map_get(pending, :rationale) do
@@ -1116,18 +1174,15 @@ defmodule LemonControlPlane.ACP do
     _, _ -> {:error, :client_request_failed}
   end
 
-  defp perform_client_request(result, _payload, callback) when not is_function(callback, 1) do
-    add_client_request_result(result, %{
-      "method" => "unknown",
-      "status" => "skipped",
-      "reason" => "client request callback unavailable"
-    })
+  defp client_exchange(_session_id, payload, callback) when not is_function(callback, 1) do
+    {%{"error" => %{"message" => "ACP client request callback unavailable"}},
+     %{"method" => map_get(payload, :method), "status" => "failed"}}
   end
 
-  defp perform_client_request(result, payload, callback) when is_map(payload) do
+  defp client_exchange(session_id, payload, callback) when is_map(payload) do
     method = map_get(payload, :method)
     params = payload |> map_get(:params) |> ensure_map()
-    request = client_request(method, Map.put_new(params, "sessionId", result.session_id))
+    request = client_request(method, Map.put(params, "sessionId", session_id))
 
     {summary, response} =
       case safe_client_request(callback, request) do
@@ -1147,19 +1202,7 @@ defmodule LemonControlPlane.ACP do
           {summarize_client_response(method, response), response}
       end
 
-    maybe_reply_client_request(payload, response)
-    add_client_request_result(result, summary)
-  end
-
-  defp perform_client_request(result, _payload, _callback), do: result
-
-  defp maybe_reply_client_request(payload, response) do
-    with reply_to when is_pid(reply_to) <- map_get(payload, :reply_to),
-         ref when is_reference(ref) <- map_get(payload, :ref) do
-      send(reply_to, {:acp_client_response, ref, response})
-    else
-      _ -> :ok
-    end
+    {response, summary}
   end
 
   defp client_request(method, params) when is_binary(method) do
@@ -1236,7 +1279,19 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp emit_run_updates(result, event, callback) do
-    {updates, state} = LemonControlPlane.ACP.SessionUpdates.map_event(result.mapper_state, event)
+    session = get_session(result.session_id) || %{}
+
+    mapper_state =
+      if Map.get(session, :cancelled_run_id) == result.run_id do
+        {_updates, state} =
+          LemonControlPlane.ACP.SessionUpdates.map_event(result.mapper_state, {:cancel_requested})
+
+        state
+      else
+        result.mapper_state
+      end
+
+    {updates, state} = LemonControlPlane.ACP.SessionUpdates.map_event(mapper_state, event)
     if is_function(callback, 1), do: Enum.each(updates, callback)
     Map.put(result, :mapper_state, state)
   end
@@ -1491,6 +1546,7 @@ defmodule LemonControlPlane.ACP do
 
   defp empty_client_capabilities do
     %{
+      terminal: false,
       fs: %{read_text_file: false, write_text_file: false, delete_file: false, rename_file: false}
     }
   end
@@ -1499,6 +1555,7 @@ defmodule LemonControlPlane.ACP do
     capabilities = normalize_client_capabilities(capabilities)
 
     %{
+      "terminal" => capabilities.terminal,
       "fs" => %{
         "readTextFile" => capabilities.fs.read_text_file,
         "writeTextFile" => capabilities.fs.write_text_file,

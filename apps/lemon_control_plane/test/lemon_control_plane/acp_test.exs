@@ -695,6 +695,7 @@ defmodule LemonControlPlane.ACPTest do
           run_id: "run_acp_approval",
           session_key: request.session_key,
           tool: "bash",
+          tool_call_id: "call_permission_identity",
           action: %{"command" => "printf secret"},
           rationale: "Tool execution: bash",
           expires_in_ms: 1_000
@@ -707,6 +708,9 @@ defmodule LemonControlPlane.ACPTest do
                       "params" => %{
                         "sessionId" => ^session_id,
                         "toolCall" => %{
+                          "toolCallId" => "call_permission_identity",
+                          "title" => "$ printf secret",
+                          "rawInput" => %{"command" => "printf secret"},
                           "kind" => "execute",
                           "status" => "pending"
                         },

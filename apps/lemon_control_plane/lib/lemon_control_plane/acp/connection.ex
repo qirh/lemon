@@ -11,7 +11,7 @@ defmodule LemonControlPlane.ACP.Connection do
 
   @impl true
   def init(_opts) do
-    {:ok, %{workers: %{}, clients: %{}, capabilities: nil}}
+    {:ok, %{workers: %{}, clients: %{}, terminals: %{}, capabilities: nil}}
   end
 
   @impl true
@@ -24,9 +24,14 @@ defmodule LemonControlPlane.ACP.Connection do
           {nil, _clients} ->
             {:ok, state}
 
-          {{pid, ref, _session}, clients} ->
-            send(pid, {:acp_client_response, ref, {:ok, response}})
-            {:ok, %{state | clients: clients}}
+          {client, clients} ->
+            Process.demonitor(client.monitor, [:flush])
+            state = record_terminal_response(%{state | clients: clients}, client, response)
+
+            unless client.cancelled,
+              do: send(client.pid, {:acp_client_response, client.ref, {:ok, response}})
+
+            {:ok, state}
         end
 
       {:ok, %{"method" => "$/cancel_request", "params" => %{"requestId" => id}}} ->
@@ -54,19 +59,33 @@ defmodule LemonControlPlane.ACP.Connection do
     {:push, {:text, Jason.encode!(message)}, state}
   end
 
-  def handle_info({:acp_client_request, pid, ref, request, session}, state) do
+  def handle_info({:acp_client_request, pid, ref, request, session, worker}, state) do
     id = "lemon_req_#{System.unique_integer([:positive])}"
-    clients = Map.put(state.clients, id, {pid, ref, session})
+
+    client = %{
+      pid: pid,
+      ref: ref,
+      session: session,
+      worker: worker,
+      monitor: Process.monitor(pid),
+      cancelled: false,
+      method: request["method"],
+      terminal_id: get_in(request, ["params", "terminalId"])
+    }
+
+    clients = Map.put(state.clients, id, client)
     {:push, {:text, Jason.encode!(Map.put(request, "id", id))}, %{state | clients: clients}}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
     case Map.pop(state.workers, ref) do
       {nil, _workers} ->
-        {:ok, state}
+        {:ok, cancel_clients(state, fn client -> client.monitor == ref end)}
 
       {worker, workers} ->
         state = %{state | workers: workers}
+        state = cleanup_terminals(state, fn terminal -> terminal.worker == worker.pid end)
+        state = cancel_clients(state, fn client -> client.worker == worker.pid end)
 
         if reason != :normal and not is_nil(worker.id) do
           {:push, {:text, Jason.encode!(error(worker.id, -32_603, "ACP request failed"))}, state}
@@ -85,8 +104,8 @@ defmodule LemonControlPlane.ACP.Connection do
     |> Enum.filter(&(&1.method == "session/prompt"))
     |> Enum.each(fn worker -> cancel_turn(worker.session) end)
 
-    Enum.each(state.clients, fn {_id, {pid, ref, _session}} ->
-      send(pid, {:acp_client_response, ref, {:error, :cancelled}})
+    Enum.each(state.clients, fn {_id, client} ->
+      send(client.pid, {:acp_client_response, client.ref, {:error, :cancelled}})
     end)
 
     Enum.each(state.workers, fn {_ref, worker} -> Process.exit(worker.pid, :shutdown) end)
@@ -104,9 +123,11 @@ defmodule LemonControlPlane.ACP.Connection do
     {pid, ref} =
       spawn_monitor(fn ->
         Process.put(:acp_bootstrap, [])
+        worker = self()
 
         opts = [
           client_capabilities: capabilities,
+          connection_pid: owner,
           session_update_callback: fn message ->
             if buffered? do
               Process.put(:acp_bootstrap, [message | Process.get(:acp_bootstrap)])
@@ -116,12 +137,21 @@ defmodule LemonControlPlane.ACP.Connection do
           end,
           client_request_callback: fn message ->
             correlation = make_ref()
-            send(owner, {:acp_client_request, self(), correlation, message, session})
+            monitor = Process.monitor(owner)
+            send(owner, {:acp_client_request, self(), correlation, message, session, worker})
 
-            receive do
-              {:acp_client_response, ^correlation, result} -> result
+            timeout =
+              if message["method"] == "terminal/wait_for_exit", do: :infinity, else: 60_000
+
+            try do
+              receive do
+                {:acp_client_response, ^correlation, result} -> result
+                {:DOWN, ^monitor, :process, ^owner, _} -> {:error, :disconnected}
+              after
+                timeout -> {:error, :timeout}
+              end
             after
-              60_000 -> {:error, :timeout}
+              Process.demonitor(monitor, [:flush])
             end
           end
         ]
@@ -180,14 +210,83 @@ defmodule LemonControlPlane.ACP.Connection do
   end
 
   defp release_clients(state, session) do
-    {cancelled, retained} =
-      Enum.split_with(state.clients, fn {_id, {_pid, _ref, sid}} -> sid == session end)
+    state
+    |> cleanup_terminals(fn terminal -> terminal.session == session end)
+    |> cancel_clients(fn client -> client.session == session end)
+  end
 
-    Enum.each(cancelled, fn {_id, {pid, ref, _sid}} ->
-      send(pid, {:acp_client_response, ref, {:error, :cancelled}})
-    end)
+  defp cancel_clients(state, matches?) do
+    clients =
+      Enum.reduce(state.clients, %{}, fn {id, client}, acc ->
+        if matches?.(client) do
+          Process.demonitor(client.monitor, [:flush])
 
-    %{state | clients: Map.new(retained)}
+          unless client.cancelled,
+            do: send(client.pid, {:acp_client_response, client.ref, {:error, :cancelled}})
+
+          # Allocation cannot be undone until the client supplies its terminal ID.
+          # Retain cancelled creates so their eventual response is killed/released.
+          if client.method == "terminal/create",
+            do: Map.put(acc, id, %{client | cancelled: true}),
+            else: acc
+        else
+          Map.put(acc, id, client)
+        end
+      end)
+
+    %{state | clients: clients}
+  end
+
+  defp record_terminal_response(state, %{method: "terminal/create"} = client, response) do
+    case get_in(response, ["result", "terminalId"]) do
+      id when is_binary(id) and id != "" ->
+        if client.cancelled do
+          release_terminal(client.session, id)
+          state
+        else
+          terminal = %{session: client.session, worker: client.worker}
+          %{state | terminals: Map.put(state.terminals, id, terminal)}
+        end
+
+      _ ->
+        state
+    end
+  end
+
+  defp record_terminal_response(state, %{method: "terminal/release", terminal_id: id}, %{
+         "result" => _
+       }),
+       do: %{state | terminals: Map.delete(state.terminals, id)}
+
+  defp record_terminal_response(state, _client, _response), do: state
+
+  defp cleanup_terminals(state, matches?) do
+    terminals =
+      Enum.reduce(state.terminals, %{}, fn {id, terminal}, acc ->
+        if matches?.(terminal) do
+          release_terminal(terminal.session, id)
+          acc
+        else
+          Map.put(acc, id, terminal)
+        end
+      end)
+
+    %{state | terminals: terminals}
+  end
+
+  defp release_terminal(session, id) do
+    for method <- ["terminal/kill", "terminal/release"] do
+      send(
+        self(),
+        {:acp_output,
+         %{
+           "jsonrpc" => "2.0",
+           "id" => "lemon_cleanup_#{System.unique_integer([:positive])}",
+           "method" => method,
+           "params" => %{"sessionId" => session, "terminalId" => id}
+         }}
+      )
+    end
   end
 
   defp error(id, code, message),
