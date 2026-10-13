@@ -12,7 +12,7 @@ defmodule LemonWeb.WorkManagementLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Process.send_after(self(), :work_tick, 3_000)
+    _ = if connected?(socket), do: Process.send_after(self(), :work_tick, 3_000)
 
     {:ok,
      assign(socket,

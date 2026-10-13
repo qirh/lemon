@@ -14,8 +14,6 @@
   {"lib/coding_agent/tools/web_guard.ex", :call_with_opaque},
   {"lib/coding_agent/workspace.ex", :call_without_opaque},
   {"lib/lemon_cli/hermes_migration.ex", :call_without_opaque},
-  {"lib/lemon_control_plane/methods/run_graph_get.ex", :call_without_opaque},
-  {"lib/lemon_control_plane/methods/transports_status.ex", :call_without_opaque},
   {"lib/lemon_core/extensions/manifest.ex", :call_without_opaque},
   {"lib/lemon_core/oauth/local_callback_listener.ex", :call_without_opaque},
   {"lib/lemon_router/tool_status_renderer.ex", :call_without_opaque},

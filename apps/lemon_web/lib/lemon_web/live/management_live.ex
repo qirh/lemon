@@ -16,8 +16,9 @@ defmodule LemonWeb.ManagementLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket),
-      do: Process.send_after(self(), :refresh_live_work, @refresh_interval_ms)
+    _ =
+      if connected?(socket),
+        do: Process.send_after(self(), :refresh_live_work, @refresh_interval_ms)
 
     {:ok,
      socket

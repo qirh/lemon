@@ -118,7 +118,7 @@ defmodule LemonCli.ControlPlaneClient do
 
   @impl true
   def handle_disconnect(disconnect, state) do
-    if timer = Map.get(state, :keepalive_timer), do: Process.cancel_timer(timer)
+    _ = if timer = Map.get(state, :keepalive_timer), do: Process.cancel_timer(timer)
     send(state.owner, {:lemon_cli_control_plane, state.ref, {:disconnected, disconnect}})
     {:ok, state}
   end

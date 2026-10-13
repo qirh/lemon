@@ -42,7 +42,7 @@ defmodule LemonWeb.SubagentTree do
       |> Enum.sort_by(fn {id, record} -> {field(record, :inserted_at) || 0, id} end, :desc)
       |> Enum.map(fn {id, record} -> {field(record, :run_id) || id, nil, 0} end)
 
-    {nodes, truncated?} = walk(roots, by_run, MapSet.new(), [], false)
+    {nodes, truncated?} = walk(roots, by_run, %{}, [], false)
 
     %{
       status: :available,
@@ -58,7 +58,7 @@ defmodule LemonWeb.SubagentTree do
     do: {Enum.reverse(nodes), true}
 
   defp walk([{run_id, parent_id, depth} | rest], tasks, seen, nodes, truncated?) do
-    if MapSet.member?(seen, run_id) or is_nil(identifier(run_id)) do
+    if Map.has_key?(seen, run_id) or is_nil(identifier(run_id)) do
       walk(rest, tasks, seen, nodes, truncated?)
     else
       graph = graph_record(run_id)
@@ -83,7 +83,7 @@ defmodule LemonWeb.SubagentTree do
       walk(
         child_queue ++ rest,
         tasks,
-        MapSet.put(seen, run_id),
+        Map.put(seen, run_id, true),
         [node | nodes],
         truncated? or (children != [] and depth + 1 >= @max_depth)
       )

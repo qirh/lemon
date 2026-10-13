@@ -1168,7 +1168,8 @@ defmodule LemonWeb.SessionLive do
 
   defp schedule_subagent_refresh(socket) do
     if connected?(socket) do
-      if socket.assigns.subagent_timer, do: Process.cancel_timer(socket.assigns.subagent_timer)
+      _ =
+        if socket.assigns.subagent_timer, do: Process.cancel_timer(socket.assigns.subagent_timer)
 
       assign(
         socket,
