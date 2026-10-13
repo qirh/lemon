@@ -14,8 +14,9 @@ defmodule CodingAgent.Compaction do
 
   Repeated compaction summarizes only the active retained history and carries the
   previous summary and file-operation details forward. Summary calls accept
-  `:stream_options` and an optional `:api_key` override; callers must supply their
-  configured provider options/credential just as for normal session requests.
+  `:model`, `:stream_options` and an optional `:api_key` override. The model
+  override applies to ordinary and branch summaries, not the active session model;
+  callers must resolve that model's provider options and credential together.
 
   ## Valid Cut Points
 
@@ -606,6 +607,8 @@ defmodule CodingAgent.Compaction do
   @spec generate_summary([Messages.message()], LemonAi.Types.Model.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def generate_summary(messages_to_compact, model, opts \\ []) do
+    model = Keyword.get(opts, :model, model)
+
     case Keyword.get(opts, :summary) do
       summary when is_binary(summary) and summary != "" ->
         {:ok, summary}
@@ -821,6 +824,8 @@ defmodule CodingAgent.Compaction do
   @spec generate_branch_summary([SessionEntry.t()], LemonAi.Types.Model.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def generate_branch_summary(branch_entries, model, opts \\ []) do
+    model = Keyword.get(opts, :model, model)
+
     case Keyword.get(opts, :summary) do
       summary when is_binary(summary) and summary != "" ->
         {:ok, summary}
