@@ -764,12 +764,8 @@ defmodule CodingAgent.IntegrationTest do
       state = Session.get_state(session)
       assert state.model.id == "new-model-id"
 
-      # Verify model change was recorded
-      model_changes =
-        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
-
-      assert length(model_changes) == 1
-      assert hd(model_changes).model_id == "new-model-id"
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.model == %{provider: new_model.provider, model_id: new_model.id}
     end
 
     @tag :tmp_dir
@@ -781,23 +777,70 @@ defmodule CodingAgent.IntegrationTest do
       state = Session.get_state(session)
       assert state.thinking_level == :high
 
-      # Verify thinking level change was recorded
-      thinking_changes =
-        Enum.filter(
-          SessionManager.entries(state.session_manager),
-          &(&1.type == :thinking_level_change)
-        )
-
-      assert length(thinking_changes) == 1
-      assert hd(thinking_changes).thinking_level == :high
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.thinking_level == :high
     end
 
     @tag :tmp_dir
     test "model and thinking level changes persist through save/load", %{tmp_dir: tmp_dir} do
       session_file = Path.join(tmp_dir, "model_thinking_test.jsonl")
 
-      # Start session with explicit file path
+      session_manager =
+        SessionManager.new(tmp_dir)
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => "Read the saved file",
+          "timestamp" => 1
+        })
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [
+            %{
+              "type" => "tool_call",
+              "id" => "persisted-call",
+              "name" => "read",
+              "arguments" => %{"path" => "saved.txt"}
+            }
+          ],
+          "stop_reason" => "tool_use",
+          "timestamp" => 2
+        })
+        |> SessionManager.append_message(%{
+          "role" => "tool_result",
+          "tool_call_id" => "persisted-call",
+          "tool_name" => "read",
+          "content" => [%{"type" => "text", "text" => "Saved file contents"}],
+          "is_error" => false,
+          "timestamp" => 3
+        })
+        |> SessionManager.append_message(%{
+          "role" => "assistant",
+          "content" => [%{"type" => "text", "text" => "The file is restored"}],
+          "stop_reason" => "stop",
+          "timestamp" => 4
+        })
+
+      :ok = SessionManager.save_to_file(session_file, session_manager)
       session = start_session(cwd: tmp_dir, session_file: session_file)
+      original_messages = Session.get_messages(session)
+
+      assert [
+               %UserMessage{content: "Read the saved file"},
+               %AssistantMessage{
+                 content: [
+                   %LemonAi.Types.ToolCall{
+                     id: "persisted-call",
+                     name: "read",
+                     arguments: %{"path" => "saved.txt"}
+                   }
+                 ]
+               },
+               %ToolResultMessage{
+                 tool_call_id: "persisted-call",
+                 content: [%TextContent{text: "Saved file contents"}]
+               },
+               %AssistantMessage{content: [%TextContent{text: "The file is restored"}]}
+             ] = original_messages
 
       # Make changes
       new_model = mock_model(id: "persisted-model")
@@ -807,18 +850,18 @@ defmodule CodingAgent.IntegrationTest do
       # Save
       :ok = Session.save(session)
 
-      # Load the file directly and verify
       {:ok, loaded} = SessionManager.load_from_file(session_file)
+      context = SessionManager.build_session_context(loaded)
+      assert context.model == %{provider: "mock_provider", model_id: "persisted-model"}
+      assert context.thinking_level == :medium
+      assert context.messages == SessionManager.build_session_context(session_manager).messages
 
-      # Find the model change entry
-      model_entry = Enum.find(SessionManager.entries(loaded), &(&1.type == :model_change))
-      assert model_entry.model_id == "persisted-model"
-
-      # Find the thinking level change entry
-      thinking_entry =
-        Enum.find(SessionManager.entries(loaded), &(&1.type == :thinking_level_change))
-
-      assert thinking_entry.thinking_level == :medium
+      GenServer.stop(session)
+      resumed = start_session(cwd: tmp_dir, session_file: session_file, model: new_model)
+      resumed_state = Session.get_state(resumed)
+      assert resumed_state.model == new_model
+      assert resumed_state.thinking_level == :medium
+      assert Session.get_messages(resumed) == original_messages
     end
   end
 

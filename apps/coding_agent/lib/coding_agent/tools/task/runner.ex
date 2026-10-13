@@ -41,46 +41,45 @@ defmodule CodingAgent.Tools.Task.Runner do
           if timeout_ms, do: System.monotonic_time(:millisecond) + timeout_ms, else: nil
 
         try do
-          case Session.prompt(session, prompt) do
-            :ok ->
-              if task_id = opts[:task_id] do
-                CodingAgent.Tools.Task.Control.attach_session(task_id, session)
-              end
-
-              case await_result(
-                     session,
-                     session_ref,
-                     session_id,
-                     signal,
-                     on_update,
-                     description,
-                     "",
-                     "",
-                     role_id,
-                     timeout_ms,
-                     deadline_ms,
-                     task_session_poll_ms(opts)
-                   ) do
-                {:ok, %{text: text, thinking: thinking}} ->
-                  details =
-                    %{
-                      session_id: session_id,
-                      description: description,
-                      status: "completed",
-                      role: role_id
-                    }
-
-                  %AgentToolResult{
-                    content: Result.build_update_content(text, thinking),
-                    details: details
+          with :ok <- attach_control_session(opts[:task_id], session, session_id),
+               :ok <- Session.prompt(session, prompt) do
+            case await_result(
+                   session,
+                   session_ref,
+                   session_id,
+                   signal,
+                   on_update,
+                   description,
+                   "",
+                   "",
+                   role_id,
+                   timeout_ms,
+                   deadline_ms,
+                   task_session_poll_ms(opts)
+                 ) do
+              {:ok, %{text: text, thinking: thinking}} ->
+                details =
+                  %{
+                    session_id: session_id,
+                    description: description,
+                    status: "completed",
+                    role: role_id
                   }
 
-                {:error, reason} ->
-                  {:error, reason}
-              end
+                %AgentToolResult{
+                  content: Result.build_update_content(text, thinking),
+                  details: details
+                }
 
+              {:error, reason} ->
+                {:error, reason}
+            end
+          else
             {:error, :already_streaming} ->
               {:error, "Task session is already running"}
+
+            {:error, reason} ->
+              {:error, reason}
           end
         after
           drain_session(session, session_ref, session_id)
@@ -97,6 +96,11 @@ defmodule CodingAgent.Tools.Task.Runner do
         {:error, "Failed to start task session: #{inspect(reason)}"}
     end
   end
+
+  defp attach_control_session(nil, _session, _session_id), do: :ok
+
+  defp attach_control_session(task_id, session, session_id),
+    do: CodingAgent.Tools.Task.Control.attach_session(task_id, session, session_id)
 
   defp await_result(
          session,

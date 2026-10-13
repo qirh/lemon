@@ -162,6 +162,11 @@ defmodule LemonAi.EventStream do
   Signal an error on the stream.
   """
   @spec error(t(), AssistantMessage.t()) :: :ok
+  def error(stream, %AssistantMessage{error_details: nil} = message) do
+    details = LemonAi.Error.to_error_details(message.error_message)
+    GenServer.cast(stream, {:error, %{message | error_details: details}})
+  end
+
   def error(stream, message) do
     GenServer.cast(stream, {:error, message})
   end

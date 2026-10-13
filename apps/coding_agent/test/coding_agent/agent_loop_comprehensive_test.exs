@@ -1176,6 +1176,8 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
       session_file =
         Path.join(tmp_dir, "test_session_#{System.unique_integer([:positive])}.jsonl")
 
+      :ok = SessionManager.save_to_file(session_file, SessionManager.new(tmp_dir))
+
       response = Mocks.assistant_message("Session to save")
 
       session1 =
@@ -1186,7 +1188,16 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         )
 
       :ok = Session.prompt(session1, "Save this")
-      _events = subscribe_and_collect(session1)
+      events = subscribe_and_collect(session1)
+      assert Enum.any?(events, &match?({:agent_end, _}, &1))
+      :ok = wait_for_idle(session1, 5000)
+
+      original_messages =
+        session1
+        |> Session.get_messages()
+        |> Enum.map(&CodingAgent.Session.MessageSerialization.serialize_message/1)
+        |> Jason.encode!()
+
       :ok = Session.save(session1)
 
       # Verify file exists
@@ -1206,7 +1217,21 @@ defmodule CodingAgent.AgentLoopComprehensiveTest do
         )
 
       messages = Session.get_messages(session2)
-      assert length(messages) >= 2
+
+      reloaded_messages =
+        messages
+        |> Enum.map(&CodingAgent.Session.MessageSerialization.serialize_message/1)
+        |> Jason.encode!()
+
+      assert Jason.decode!(reloaded_messages) == Jason.decode!(original_messages)
+      assert Enum.any?(messages, &match?(%{role: :user, content: "Save this"}, &1))
+
+      assert Enum.any?(
+               messages,
+               &match?(%AssistantMessage{content: [%TextContent{text: "Session to save"}]}, &1)
+             )
+
+      assert Session.get_state(session2).model == Mocks.mock_model()
 
       # Cleanup
       File.rm(session_file)

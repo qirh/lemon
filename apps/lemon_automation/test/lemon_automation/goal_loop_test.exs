@@ -193,7 +193,7 @@ defmodule LemonAutomation.GoalLoopTest do
 
     def wait_already_subscribed(run_id, timeout_ms, _opts) do
       send(Process.get(:goal_loop_test_pid), {:judge_wait, run_id, timeout_ms})
-      {:ok, ~s({"action":"done","reason":"finished by judge"})}
+      {:ok, ~s({"action":"done","reason":"finished by judge","run_id":"forged_model_value"})}
     end
   end
 
@@ -442,6 +442,7 @@ defmodule LemonAutomation.GoalLoopTest do
     session_key: session_key
   } do
     assert {:ok, _goal} = GoalStore.set(session_key, "Judge via router", agent_id: "agent_1")
+    assert {:ok, _goal} = GoalStore.record_continuation(session_key, "previous_continuation")
 
     assert {:ok, %{run_id: nil, goal: completed, verdict: verdict}} =
              GoalLoop.run_once(session_key,
@@ -449,6 +450,7 @@ defmodule LemonAutomation.GoalLoopTest do
                judge_router_mod: JudgeRouterOk,
                judge_waiter_mod: JudgeWaiterDone,
                judge_wait_timeout_ms: 123,
+               run_id: "not_a_judge_run",
                judge_run_id: "run_judge",
                judge_model: "judge-model"
              )
@@ -463,6 +465,9 @@ defmodule LemonAutomation.GoalLoopTest do
     assert verdict.action == :done
     assert verdict.reason == "finished by judge"
     assert verdict.source == "judge:judge-model"
+    assert verdict.run_id == "run_judge"
+    assert completed.last_run_id == "previous_continuation"
+    assert completed.meta["goalLoop"]["lastVerdict"]["runId"] == "run_judge"
   end
 
   test "router judge runner completes through LemonRouter and RunCompletionWaiter", %{
@@ -901,6 +906,14 @@ defmodule LemonAutomation.GoalLoopTest do
     goal = GoalStore.get(session_key)
     assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"
     assert get_in(goal.meta, ["goalLoop", "lastRunId"]) == run_id
+    assert get_in(goal.meta, ["goalLoop", "abortAttempted"]) == true
+    assert get_in(goal.meta, ["goalLoop", "abortResult"]) == "accepted"
+    refute Map.has_key?(goal.meta["goalLoop"], "lastError")
+
+    assert {:ok, %{goal: status_goal, running: false, loop: nil}} =
+             GenServer.call(manager, {:status, session_key})
+
+    assert status_goal.meta["goalLoop"] == goal.meta["goalLoop"]
   end
 
   test "hard-stop restart never repeats an abort dispatched after durable intent", %{

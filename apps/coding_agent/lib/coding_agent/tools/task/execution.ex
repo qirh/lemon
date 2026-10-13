@@ -75,6 +75,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     task_id =
       TaskStore.new_task(%{
         description: description,
+        name: validated[:name],
         prompt: prompt,
         run_id: run_id,
         parent_run_id: parent_run_id,
@@ -97,6 +98,7 @@ defmodule CodingAgent.Tools.Task.Execution do
       root_action_id: root_action_id,
       surface: surface,
       description: description,
+      name: validated[:name],
       role: role_id,
       queue_mode: validated.resolved_queue_mode,
       meta: validated.meta,

@@ -3,7 +3,7 @@ defmodule LemonWeb.ManagementLive do
 
   use LemonWeb, :live_view
 
-  alias LemonCore.{NodeRegistry, SessionLifecycle}
+  alias LemonCore.{NodeRegistry, SessionKey, SessionLifecycle}
   alias LemonCore.Runtime.Health
 
   @expected_apps [:lemon_core, :lemon_router, :lemon_web]
@@ -11,9 +11,14 @@ defmodule LemonWeb.ManagementLive do
   @max_history 100
   @default_prune_days 30
   @day_ms 86_400_000
+  @refresh_interval_ms 3_000
+  @max_active_runs 40
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket),
+      do: Process.send_after(self(), :refresh_live_work, @refresh_interval_ms)
+
     {:ok,
      socket
      |> assign(:page_title, "Lemon Management")
@@ -25,12 +30,16 @@ defmodule LemonWeb.ManagementLive do
      |> assign(:sessions, [])
      |> assign(:matched_count, 0)
      |> assign(:total_count, 0)
+     |> assign(:active_runs, [])
+     |> assign(:active_runs_available?, false)
+     |> assign(:sessions_available?, true)
      |> assign(:prune_days, Integer.to_string(@default_prune_days))
      |> assign(:prune_preview, nil)
      |> assign(:notice, nil)
      |> assign(:error, nil)
      |> refresh_runtime()
-     |> refresh_sessions()}
+     |> refresh_sessions()
+     |> refresh_active_runs()}
   end
 
   @impl true
@@ -97,7 +106,8 @@ defmodule LemonWeb.ManagementLive do
      |> assign(:error, nil)
      |> refresh_runtime()
      |> refresh_sessions()
-     |> refresh_selected()}
+     |> refresh_selected()
+     |> refresh_active_runs()}
   end
 
   def handle_event("preview-prune", %{"prune" => %{"days" => days}}, socket) do
@@ -164,6 +174,18 @@ defmodule LemonWeb.ManagementLive do
   end
 
   @impl true
+  def handle_info(:refresh_live_work, socket) do
+    Process.send_after(self(), :refresh_live_work, @refresh_interval_ms)
+
+    {:noreply,
+     socket
+     |> refresh_runtime()
+     |> refresh_sessions()
+     |> refresh_selected()
+     |> refresh_active_runs()}
+  end
+
+  @impl true
   def render(assigns) do
     ~H"""
     <main id="main-content" class="management-page">
@@ -171,12 +193,13 @@ defmodule LemonWeb.ManagementLive do
         <header class="management-header">
           <div>
             <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lemon</p>
-            <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Session management</h1>
+            <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Sessions &amp; live work</h1>
             <p class="mt-1 text-sm text-slate-600">
-              Search, inspect, resume, export, and safely retire durable sessions.
+              Follow active agents, resume conversations, and inspect durable work.
             </p>
           </div>
           <div class="management-header-actions">
+            <.link href={~p"/manage/work"} class="management-primary-button">Automation</.link>
             <.link href={~p"/manage/memory"} class="management-secondary-link">Memory</.link>
             <.link href={~p"/manage/blueprints"} class="management-secondary-link">Blueprints</.link>
             <.link href={~p"/manage/profiles"} class="management-secondary-link">Profiles</.link>
@@ -223,6 +246,39 @@ defmodule LemonWeb.ManagementLive do
           <% end %>
         </div>
 
+          <section id="active-work" aria-labelledby="active-work-title" class="management-panel mb-6">
+            <div class="management-panel-header">
+              <div>
+                <h2 id="active-work-title" class="font-semibold text-slate-900">Working now</h2>
+                <p class="text-xs text-slate-500">Live updates every three seconds. Open a session to follow its transcript.</p>
+              </div>
+              <span class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                {if @active_runs_available?, do: "#{length(@active_runs)} active", else: "Unavailable"}
+              </span>
+            </div>
+            <%= if not @active_runs_available? do %>
+              <p class="management-empty">Live run status is unavailable. Last known work is preserved.</p>
+            <% end %>
+            <%= if @active_runs_available? and @active_runs == [] do %>
+              <div class="management-empty">
+                <p>No agents are running right now.</p>
+                <.link href={~p"/"} class="mt-2 inline-block font-medium text-emerald-700">Start a conversation</.link>
+              </div>
+            <% end %>
+            <div class="management-session-list">
+              <article :for={run <- @active_runs} id={"active-#{dom_id(run.run_id)}"} class="management-session-row">
+                <div class="management-session-copy">
+                  <.link href={~p"/sessions/#{run.session_key}"} class="management-session-title">
+                    {run.agent_id} · Live transcript
+                  </.link>
+                  <p class="management-session-key">{run.run_id}</p>
+                  <p class="text-xs text-slate-500">Started {format_time(run.started_at_ms)}</p>
+                </div>
+                <span class="text-xs font-medium text-emerald-700">Running</span>
+              </article>
+            </div>
+          </section>
+
         <div class="management-layout">
           <section aria-labelledby="sessions-title" class="management-panel">
             <div class="management-panel-header">
@@ -266,6 +322,7 @@ defmodule LemonWeb.ManagementLive do
             </.form>
 
             <div id="session-list" class="management-session-list">
+              <p :if={not @sessions_available?} role="status" class="management-error">Session history is temporarily unavailable. Last known sessions are preserved.</p>
               <%= if @sessions == [] do %>
                 <p class="management-empty">No sessions match these filters.</p>
               <% else %>
@@ -287,6 +344,7 @@ defmodule LemonWeb.ManagementLive do
                       </p>
                     </div>
                     <div class="management-row-actions">
+                      <.link href={~p"/sessions/#{session.session_key}"} class="management-icon-button">Open</.link>
                       <button
                         type="button"
                         phx-click="patch"
@@ -493,10 +551,61 @@ defmodule LemonWeb.ManagementLive do
       )
 
     assign(socket,
-      sessions: result.sessions,
+      sessions: Enum.map(result.sessions, &project_session/1),
       matched_count: result.matched,
-      total_count: result.total
+      total_count: result.total,
+      sessions_available?: true
     )
+  rescue
+    _ -> assign(socket, :sessions_available?, false)
+  catch
+    :exit, _ -> assign(socket, :sessions_available?, false)
+  end
+
+  defp refresh_active_runs(socket) do
+    result =
+      case Application.get_env(:lemon_web, :active_runs_fun) do
+        fun when is_function(fun, 0) ->
+          fun.()
+
+        _ ->
+          if LemonRouter.available?() do
+            runs = LemonRouter.active_runs()
+            if LemonRouter.available?(), do: {:ok, runs}, else: {:error, :unavailable}
+          else
+            {:error, :unavailable}
+          end
+      end
+
+    case result do
+      {:ok, runs} when is_list(runs) ->
+        projected =
+          runs
+          |> Enum.filter(fn run ->
+            is_map(run) and is_binary(run[:run_id]) and
+              Regex.match?(~r/\Arun_[a-zA-Z0-9_-]+\z/, run.run_id) and
+              is_binary(run[:session_key]) and SessionKey.valid?(run.session_key)
+          end)
+          |> Enum.sort_by(&(&1[:started_at_ms] || 0), :desc)
+          |> Enum.take(@max_active_runs)
+          |> Enum.map(fn run ->
+            %{
+              run_id: run.run_id,
+              session_key: run.session_key,
+              agent_id: SessionKey.agent_id(run.session_key) || "default",
+              started_at_ms: if(is_integer(run[:started_at_ms]), do: run.started_at_ms, else: nil)
+            }
+          end)
+
+        assign(socket, active_runs: projected, active_runs_available?: true)
+
+      _ ->
+        assign(socket, :active_runs_available?, false)
+    end
+  rescue
+    _ -> assign(socket, :active_runs_available?, false)
+  catch
+    :exit, _ -> assign(socket, :active_runs_available?, false)
   end
 
   defp refresh_selected(%{assigns: %{selected_key: nil}} = socket) do
@@ -512,11 +621,17 @@ defmodule LemonWeb.ManagementLive do
 
       selected ->
         assign(socket,
-          selected: selected,
+          selected: project_session(selected),
           history:
-            SessionLifecycle.history(selected.session_key, limit: @max_history, redact: true)
+            selected.session_key
+            |> SessionLifecycle.history(limit: @max_history, redact: true)
+            |> LemonWeb.ManagementText.term()
         )
     end
+  end
+
+  defp project_session(session) do
+    Map.update(session, :title, nil, &LemonWeb.ManagementText.text(&1, max_bytes: 200))
   end
 
   defp clear_feedback(socket), do: assign(socket, notice: nil, error: nil)

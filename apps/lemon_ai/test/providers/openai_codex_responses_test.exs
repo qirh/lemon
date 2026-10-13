@@ -78,6 +78,83 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
     }
   end
 
+  test "cache keys and all affinity headers stay bounded and stable across turns" do
+    test_pid = self()
+    session_id = String.duplicate("long-session:", 12) <> "one"
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:cache_request, Jason.decode!(raw), conn.req_headers})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    opts = %StreamOptions{
+      api_key: make_jwt(),
+      session_id: session_id,
+      headers: %{"Session_Id" => "wrong", "Conversation_Id" => "wrong"}
+    }
+
+    keys =
+      for turn <- ["first turn", "next turn"] do
+        {:ok, stream} =
+          OpenAICodexResponses.stream(
+            make_model(),
+            Context.new(messages: [%UserMessage{content: turn}]),
+            opts
+          )
+
+        assert_receive {:cache_request, body, headers}, 1000
+        assert {:error, _} = EventStream.result(stream, 1000)
+        key = body["prompt_cache_key"]
+        assert is_binary(key) and byte_size(key) <= 64
+
+        for header <- ["session_id", "conversation_id", "x-client-request-id"] do
+          assert Enum.filter(headers, fn {name, _} -> name == header end) == [{header, key}]
+        end
+
+        key
+      end
+
+    assert [key, key] = keys
+
+    refute key ==
+             LemonAi.Providers.OpenAIResponsesShared.normalize_prompt_cache_key(
+               session_id <> "two"
+             )
+  end
+
+  test "missing or empty session IDs do not create per-turn affinity" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:cache_request, Jason.decode!(raw), conn.req_headers})
+      Plug.Conn.send_resp(conn, 400, "bad request")
+    end)
+
+    for session_id <- [nil, ""] do
+      {:ok, stream} =
+        OpenAICodexResponses.stream(
+          make_model(),
+          Context.new(messages: [%UserMessage{content: "Hi"}]),
+          %StreamOptions{
+            api_key: make_jwt(),
+            session_id: session_id,
+            headers: %{"Session_Id" => "wrong", "Conversation_Id" => "wrong"}
+          }
+        )
+
+      assert_receive {:cache_request, body, headers}, 1000
+      assert body["prompt_cache_key"] == nil
+
+      for header <- ["session_id", "conversation_id", "x-client-request-id"] do
+        refute List.keymember?(headers, header, 0)
+      end
+
+      assert {:error, _} = EventStream.result(stream, 1000)
+    end
+  end
+
   # ============================================================================
   # Provider Behaviour Tests
   # ============================================================================

@@ -87,6 +87,39 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
+test("native delegation preserves drafts and waits for submission readiness", async () => {
+	const submitted: string[] = [];
+	let ready = false;
+	const pending = Promise.withResolvers<void>();
+	const settled = Promise.withResolvers<void>();
+	const editor = new CustomEditor({
+		theme: getEditorTheme(),
+		canSubmit: () => ready,
+		onSubmit: async (text) => {
+			submitted.push(text);
+			await pending.promise;
+		},
+		requestRender: () => {
+			if (submitted.length === 1 && editor.getText() === "") settled.resolve();
+		},
+	});
+	editor.setText("human draft");
+	const prompt = { type: "send" as const, key: "", text: "delegated prompt" };
+	editor.handleNativeEvent(prompt);
+	expect(submitted).toEqual([]);
+	expect(editor.getText()).toBe("human draft");
+	ready = true;
+	editor.handleNativeEvent({ ...prompt, text: "   " });
+	expect(editor.getText()).toBe("human draft");
+	editor.handleNativeEvent(prompt);
+	expect(submitted).toEqual(["delegated prompt"]);
+	expect(editor.history).toEqual(["human draft", "delegated prompt"]);
+	editor.handleNativeEvent({ ...prompt, text: "concurrent duplicate" });
+	expect(submitted).toHaveLength(1);
+	pending.resolve();
+	await settled.promise;
+});
+
 describe("typing and submitting", () => {
 	test("plain text reaches the buffer and Enter submits it", () => {
 		const h = makeEditor();

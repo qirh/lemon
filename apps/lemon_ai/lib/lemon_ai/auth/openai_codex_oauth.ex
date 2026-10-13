@@ -4,6 +4,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
 
   Supports PKCE authorization URL generation, automatic localhost callback capture
   with manual code fallback, code/token exchange, refresh, and encrypted secret resolution.
+  `import_codex_cli_login/1` explicitly copies a ChatGPT OAuth login from the selected
+  Codex CLI auth file into a canonical secret payload. Import never contacts the
+  network or modifies the source file; callers own encrypted storage and refresh
+  persistence through `:persist_secret`.
   """
 
   require Logger
@@ -80,6 +84,100 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       end
     end
   end
+
+  @doc """
+  Import an existing Codex CLI ChatGPT login without refreshing or writing it.
+
+  Reads only `:path`, or `CODEX_HOME/auth.json`, or `HOME/.codex/auth.json`
+  (in that order). Returns the canonical refreshable OAuth secret, not an encoded
+  string. Expired access tokens are accepted when refreshable; resolution refreshes
+  them later. API-key logins and incomplete OAuth data return credential-free errors.
+  """
+  @spec import_codex_cli_login(keyword()) :: {:ok, oauth_secret()} | {:error, atom() | tuple()}
+  def import_codex_cli_login(opts \\ []) do
+    with {:ok, path} <- codex_auth_path(opts),
+         {:ok, contents} <- File.read(path),
+         {:ok, login} <- decode_codex_login(contents),
+         {:ok, secret} <- import_codex_tokens(login) do
+      {:ok, secret}
+    else
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _ -> {:error, :invalid_codex_cli_login}
+    end
+  end
+
+  defp codex_auth_path(opts) do
+    case Keyword.get(opts, :path) do
+      nil ->
+        home = non_empty_binary(System.get_env("HOME"))
+        codex_home = non_empty_binary(System.get_env("CODEX_HOME"))
+
+        cond do
+          codex_home -> {:ok, Path.join(codex_home, "auth.json")}
+          home -> {:ok, Path.join([home, ".codex", "auth.json"])}
+          true -> {:error, :missing_home}
+        end
+
+      path when is_binary(path) and path != "" ->
+        {:ok, path}
+
+      _ ->
+        {:error, :invalid_codex_auth_path}
+    end
+  end
+
+  defp decode_codex_login(contents) do
+    case Jason.decode(contents) do
+      {:ok, login} when is_map(login) -> {:ok, login}
+      _ -> {:error, :invalid_codex_cli_login}
+    end
+  end
+
+  defp import_codex_tokens(%{"tokens" => tokens} = login) when is_map(tokens) do
+    access_token = non_empty_binary(tokens["access_token"])
+    refresh_token = non_empty_binary(tokens["refresh_token"])
+    id_token = non_empty_binary(tokens["id_token"])
+    claims = token_claims(access_token)
+    expires_at = claims && claims["exp"]
+
+    account_id =
+      non_empty_binary(tokens["account_id"]) ||
+        extract_account_id(access_token) || extract_account_id(id_token)
+
+    cond do
+      login["auth_mode"] not in [nil, "chatgpt"] ->
+        {:error, :not_chatgpt_oauth}
+
+      is_nil(access_token) or is_nil(claims) ->
+        {:error, :invalid_access_token}
+
+      is_nil(refresh_token) ->
+        {:error, :missing_refresh_token}
+
+      not is_integer(expires_at) or expires_at <= 0 ->
+        {:error, :invalid_expiry}
+
+      is_nil(account_id) ->
+        {:error, :missing_account_id}
+
+      true ->
+        now = System.system_time(:millisecond)
+
+        {:ok,
+         %{
+           "type" => @secret_type,
+           "access_token" => access_token,
+           "refresh_token" => refresh_token,
+           "expires_at_ms" => expires_at * 1000,
+           "account_id" => account_id,
+           "created_at_ms" => now,
+           "updated_at_ms" => now
+         }
+         |> maybe_put("id_token", id_token)}
+    end
+  end
+
+  defp import_codex_tokens(_), do: {:error, :not_chatgpt_oauth}
 
   @doc """
   Build an OAuth authorization URL + PKCE verifier/state.
@@ -241,11 +339,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     with {:ok, secret} <- decode_secret(secret_value),
          {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
          access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]) do
-      if changed? do
-        persist_secret(secret_name, refreshed_secret, opts)
-      end
-
+           non_empty_binary(refreshed_secret["access_token"]),
+         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
       {:ok, access_token}
     else
       :not_oauth -> :ignore
@@ -272,7 +367,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   defp ensure_fresh_secret(secret) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
-    expires_at_ms = parse_integer(secret["expires_at_ms"])
+    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
 
     should_refresh? =
       cond do
@@ -298,10 +393,9 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
           {:ok, updated, true}
 
         {:error, reason} ->
-          if is_binary(access_token) and access_token != "" do
-            Logger.debug(
-              "OpenAI Codex OAuth refresh failed; using existing token: #{inspect(reason)}"
-            )
+          if is_binary(access_token) and is_integer(expires_at_ms) and
+               expires_at_ms > System.system_time(:millisecond) do
+            Logger.debug("OpenAI Codex OAuth refresh failed; using unexpired existing token")
 
             {:ok, secret, false}
           else
@@ -309,7 +403,11 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
           end
       end
     else
-      {:ok, secret, false}
+      if is_integer(expires_at_ms) and expires_at_ms <= System.system_time(:millisecond) do
+        {:error, :expired_access_token}
+      else
+        {:ok, secret, false}
+      end
     end
   end
 
@@ -351,7 +449,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
          %{
            access_token: access_token,
            refresh_token: refresh_token,
-           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000 - @near_expiry_ms
+           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000
          }}
     end
   end
@@ -370,19 +468,17 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
 
     case Keyword.get(opts, :persist_secret) do
       callback when is_function(callback, 2) ->
-        callback.(secret_name, encoded)
-        :ok
+        case callback.(secret_name, encoded) do
+          {:error, _} -> {:error, :oauth_secret_persistence_failed}
+          _ -> :ok
+        end
 
       _ ->
         :ok
     end
   rescue
-    reason ->
-      Logger.debug(
-        "Failed to persist refreshed OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
-      )
-
-      :ok
+    _ ->
+      {:error, :oauth_secret_persistence_failed}
   end
 
   defp post_form(url, body) when is_map(body) do
@@ -400,19 +496,38 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp extract_account_id(token) when is_binary(token) do
-    with [_header, payload, _signature] <- String.split(token, ".", parts: 3),
+  defp token_expiry_ms(token, stored_expiry) do
+    case token_claims(token) do
+      %{"exp" => exp} when is_integer(exp) ->
+        if is_integer(stored_expiry), do: min(stored_expiry, exp * 1000), else: exp * 1000
+
+      _ ->
+        stored_expiry
+    end
+  end
+
+  defp extract_account_id(token) do
+    case token_claims(token) do
+      %{@jwt_claim_path => %{"chatgpt_account_id" => account_id}} ->
+        non_empty_binary(account_id)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp token_claims(token) when is_binary(token) do
+    with [header, payload, signature] when header != "" and signature != "" <-
+           String.split(token, ".", parts: 3),
          {:ok, decoded} <- decode_base64url(payload),
-         {:ok, claims} <- Jason.decode(decoded),
-         account_id when is_binary(account_id) and account_id != "" <-
-           get_in(claims, [@jwt_claim_path, "chatgpt_account_id"]) do
-      account_id
+         {:ok, claims} when is_map(claims) <- Jason.decode(decoded) do
+      claims
     else
       _ -> nil
     end
   end
 
-  defp extract_account_id(_), do: nil
+  defp token_claims(_), do: nil
 
   defp decode_base64url(str) when is_binary(str) do
     str
