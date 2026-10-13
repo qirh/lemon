@@ -48,8 +48,10 @@ defmodule LemonAgent.BudgetTest do
 
       events = run(%{key => 0}, stream_fn)
 
-      assert {:budget_exceeded, %{limit: 0, used: 0, reason: :budget_exceeded}} =
+      assert {:budget_exceeded, %{limit: 0, used: used, reason: :budget_exceeded}} =
                budget_stop(events)
+
+      assert used == 0
 
       assert {:error, {:budget_exceeded, details}, %{new_messages: [prompt]}} = List.last(events)
       assert prompt.role == :user

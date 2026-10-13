@@ -7,6 +7,8 @@ defmodule LemonAgent.Budget do
   catalog-estimated dollar totals, not billing invoices. Usage is normally reported
   only at completion: an in-flight request can exceed a positive cap. Zero or
   already-spent caps prevent starting requests; exhaustion prevents tools and retries.
+  Caps cover the prompt agent loop and its reported retry attempts, not separate
+  compaction/project-memory maintenance calls or other subagent sessions.
 
   Session totals are independent of conversation history. Start a new run with
   `new/2` and the previous session totals; never derive a reset from a cleared or

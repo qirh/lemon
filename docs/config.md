@@ -219,6 +219,12 @@ refund spend. Forks inherit the source session's entire cumulative ledger,
 including spend outside the selected branch; subsequent spend is independent.
 A genuinely new, unrelated session starts a new session budget.
 
+These caps apply to the **prompt agent loop**, including its reported retry
+attempts and the decision to execute tools or request another turn. Compaction
+and project-memory maintenance model calls are **not counted** in these counters.
+Subagent sessions have their own run/session counters; this is not an aggregate
+account-wide billing limit.
+
 Tokens use the provider's reported total, or input + output + cache-read +
 cache-write when a total is unavailable. Long-lived cache writes are a subset of
 cache writes, not an additional token charge. Dollar amounts are catalog-based

@@ -161,6 +161,9 @@ report zero run usage without calling the provider.
 Costs are catalog estimates, not invoices. Final-only provider accounting means
 an in-flight response can exceed a positive cap before Lemon stops; unreported
 usage cannot be reconstructed. This is not a hard billing cap.
+Counters cover the prompt agent loop and its reported retries. Compaction and
+project-memory maintenance model calls are not counted; subagent sessions have
+their own counters rather than spending the parent's allowance.
 
 Non-interactive mode never waits for a human approval. `--approval-policy deny`
 (default) denies requested approvals; `allow` approves each request once.
