@@ -890,6 +890,50 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
   end
 
+  describe "compare_and_swap/5 and sync/1" do
+    test "compare-and-swap compares against the shared file, not one connection",
+         %{tmp_dir: tmp_dir} do
+      {:ok, first} = SqliteBackend.init(path: tmp_dir)
+      {:ok, second} = SqliteBackend.init(path: tmp_dir)
+      {:ok, first} = SqliteBackend.put(first, :secrets_v1, {"default", "A"}, %{v: 0})
+
+      assert {:ok, _} =
+               SqliteBackend.compare_and_swap(first, :secrets_v1, {"default", "A"}, %{v: 0}, %{
+                 v: 1
+               })
+
+      # The second connection (another OS process sharing the store) still
+      # holds the old snapshot; its swap must be refused, not overwrite.
+      assert {:error, :mismatch, _} =
+               SqliteBackend.compare_and_swap(second, :secrets_v1, {"default", "A"}, %{v: 0}, %{
+                 v: 2
+               })
+
+      assert {:ok, %{v: 1}, _} = SqliteBackend.get(second, :secrets_v1, {"default", "A"})
+      :ok = SqliteBackend.close(first)
+      :ok = SqliteBackend.close(second)
+    end
+
+    test "sync checkpoints committed writes out of the WAL", %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      {:ok, state} = SqliteBackend.put(state, :secrets_v1, {"default", "A"}, %{v: 1})
+      wal = Path.join(tmp_dir, "store.sqlite3-wal")
+      assert File.stat!(wal).size > 0
+
+      # A read leaves its cached statement on the row, as the store's reads do.
+      {:ok, %{v: 1}, state} = SqliteBackend.get(state, :secrets_v1, {"default", "A"})
+      {:ok, [_ | _], state} = SqliteBackend.list(state, :secrets_v1)
+
+      assert {:ok, state} = SqliteBackend.sync(state)
+      assert File.stat!(wal).size == 0
+
+      {:ok, reader} = SqliteBackend.init(path: tmp_dir)
+      assert {:ok, %{v: 1}, _} = SqliteBackend.get(reader, :secrets_v1, {"default", "A"})
+      :ok = SqliteBackend.close(reader)
+      :ok = SqliteBackend.close(state)
+    end
+  end
+
   defp insert_corrupt_row!(state, table, key, corrupt_value_blob) do
     table_name = Atom.to_string(table)
     key_blob = :erlang.term_to_binary(key) |> Base.encode16(case: :upper)

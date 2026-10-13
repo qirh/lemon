@@ -14,9 +14,10 @@ defmodule Mix.Tasks.Lemon.Secrets.RotateKey do
       mix lemon.secrets.rotate_key
       mix lemon.secrets.rotate_key --confirm <token>
 
-  The token is refused when any secret changed since the preview. Stop any
-  running Lemon runtime first: it keeps using the key it loaded at boot. See
-  `LemonCore.Secrets.KeyRotation` for the crash-safety guarantees.
+  The token is refused when any secret changed since the preview, and the
+  rotation is refused while a Lemon runtime is running (it keeps using the key
+  it loaded at boot) or another rotation or secret write holds the secrets
+  lock. See `LemonCore.Secrets.KeyRotation` for the crash-safety guarantees.
   """
 
   @impl true
@@ -48,6 +49,10 @@ defmodule Mix.Tasks.Lemon.Secrets.RotateKey do
 
         Apply with: mix lemon.secrets.rotate_key --confirm #{preview.confirmation_token}\
         """)
+
+        if preview.runtime_running do
+          Mix.shell().info("A Lemon runtime is running; stop it before rotating.")
+        end
 
       {:error, reason} ->
         Mix.raise(error_message(reason))

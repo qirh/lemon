@@ -97,7 +97,11 @@ defmodule LemonCore.Secrets.KeyProvider.File do
   # key material on disk at whatever the umask allows, and rewriting the key
   # file in place would leave a truncated key if interrupted. The temporary
   # file is exclusive, `0600` before it holds key material, and synced before
-  # the rename makes it the key.
+  # the rename makes it the key; the directory is synced after the rename so
+  # the replacement itself survives a host crash. `:ok` therefore means the new
+  # key is durable — key rotation relies on that before dropping old
+  # ciphertext. A failed directory sync is reported even though the rename
+  # already happened.
   defp write(path, value) do
     dir = Path.dirname(path)
     suffix = "#{System.pid()}.#{System.unique_integer([:positive])}"
@@ -106,7 +110,8 @@ defmodule LemonCore.Secrets.KeyProvider.File do
     with :ok <- Elixir.File.mkdir_p(dir),
          _ <- Elixir.File.chmod(dir, @dir_mode),
          :ok <- write_private(temporary, String.trim(value) <> "\n"),
-         :ok <- Elixir.File.rename(temporary, path) do
+         :ok <- Elixir.File.rename(temporary, path),
+         :ok <- LemonCore.Durable.sync_directory(dir) do
       :ok
     else
       {:error, reason} ->

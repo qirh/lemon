@@ -24,6 +24,10 @@ compliance suite runs against your module.
 
 ### Changed
 
+- `BackendCase` checks the new optional `LemonCore.Store.Backend` callbacks
+  when a backend exports them: `compare_and_swap/5` writes only over an exact
+  match (a missing key matching `nil`), and `sync/1` answers without disturbing
+  data. `LemonPlatformTest.callbacks/1` lists them as optional.
 - `lemon_channels` is not a dependency of the Hex package: it is not published.
   `PluginCase` still works inside the lemon repository; elsewhere it needs a path
   dependency on `apps/lemon_channels` in a lemon checkout, and its missing-dep

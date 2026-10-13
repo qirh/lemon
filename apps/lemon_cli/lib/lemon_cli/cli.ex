@@ -979,7 +979,7 @@ defmodule LemonCli.CLI do
         IO.puts("confirmation token: #{preview.confirmation_token}")
         IO.puts("")
 
-        if LocalRuntime.healthy?() do
+        if preview.runtime_running do
           IO.puts("A Lemon runtime is running; stop it (`lemon stop`) before rotating.")
         end
 
@@ -996,30 +996,20 @@ defmodule LemonCli.CLI do
     end
   end
 
-  # A runtime launched by bin/lemon exports the master key into its environment
-  # at boot; rotating underneath it would leave it writing under the old key.
+  # The runtime guard and the secrets lock live in KeyRotation.rotate/2, so the
+  # Mix task gets the same refusals.
   defp rotate_key_apply(token) do
-    if LocalRuntime.healthy?() do
-      IO.puts(
-        :stderr,
-        "A Lemon runtime is running and keeps the master key it loaded at boot. " <>
-          "Stop it (`lemon stop`), rotate, then start it again; nothing was changed."
-      )
+    case KeyRotation.rotate(token) do
+      {:ok, result} ->
+        IO.puts(
+          "Rotated secrets master key in #{format_key_source(result)}: " <>
+            "#{result.rotated} secrets re-encrypted, #{result.pruned} expired deleted"
+        )
 
-      @exit_error
-    else
-      case KeyRotation.rotate(token) do
-        {:ok, result} ->
-          IO.puts(
-            "Rotated secrets master key in #{format_key_source(result)}: " <>
-              "#{result.rotated} secrets re-encrypted, #{result.pruned} expired deleted"
-          )
+        @exit_ok
 
-          @exit_ok
-
-        {:error, reason} ->
-          rotate_key_error(reason)
-      end
+      {:error, reason} ->
+        rotate_key_error(reason)
     end
   end
 

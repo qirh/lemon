@@ -74,7 +74,7 @@ defmodule LemonCore.Secrets.MasterKey do
     providers = KeyProvider.order(opts)
     keychain = find_provider(providers, :keychain)
 
-    keychain_result = keychain && fetch_key(keychain, opts)
+    keychain_result = keychain && fetch_from(keychain, opts)
 
     source =
       case resolve(opts) do
@@ -107,6 +107,23 @@ defmodule LemonCore.Secrets.MasterKey do
     |> Base.encode64()
   end
 
+  @doc """
+  Reads and decodes the key held by one provider module, ignoring the rest of
+  the chain. Key rotation uses it to confirm what the provider it wrote now
+  holds, independently of which provider `resolve/1` happens to answer from.
+  """
+  @spec fetch_from(module(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def fetch_from(provider, opts) do
+    if KeyProvider.available?(provider, opts) do
+      case provider.fetch(opts) do
+        {:ok, encoded} -> decode_master_key(encoded, opts)
+        {:error, _reason} = error -> error
+      end
+    else
+      {:error, :unavailable}
+    end
+  end
+
   defp resolve_chain([], _opts, acc) do
     cond do
       acc.invalid -> {:error, acc.invalid}
@@ -116,7 +133,7 @@ defmodule LemonCore.Secrets.MasterKey do
   end
 
   defp resolve_chain([provider | rest], opts, acc) do
-    case fetch_key(provider, opts) do
+    case fetch_from(provider, opts) do
       {:ok, key} ->
         {:ok, key, KeyProvider.name(provider)}
 
@@ -131,17 +148,6 @@ defmodule LemonCore.Secrets.MasterKey do
 
       {:error, reason} ->
         resolve_chain(rest, opts, %{acc | failure: acc.failure || wrap_error(provider, reason)})
-    end
-  end
-
-  defp fetch_key(provider, opts) do
-    if KeyProvider.available?(provider, opts) do
-      case provider.fetch(opts) do
-        {:ok, encoded} -> decode_master_key(encoded, opts)
-        {:error, _reason} = error -> error
-      end
-    else
-      {:error, :unavailable}
     end
   end
 

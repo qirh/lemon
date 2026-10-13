@@ -62,11 +62,24 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   checks that every stored secret decrypts with the current key and returns a
   confirmation token bound to the key and the exact record set; `rotate/2`
   re-encrypts every secret under a generated key and writes it to the provider
-  that supplied the current one. It fails closed on any undecryptable record,
-  leaves external sources and environment fallback alone, and stages ciphertext
-  so every secret stays readable by whichever key loads next if it is
-  interrupted (`Secrets.get/2` reads the staged copy). New task:
-  `mix lemon.secrets.rotate_key [--confirm TOKEN]`.
+  that supplied the current one. It refuses while a Lemon runtime answers on
+  the control port, fails closed on any undecryptable record, leaves external
+  sources and environment fallback alone, makes staged ciphertext durable
+  before the key moves, confirms the switch against the provider it wrote, and
+  converges every record to the new key, so every secret stays readable by
+  whichever key loads next if it is interrupted (`Secrets.get/2` reads the
+  staged copy). New task: `mix lemon.secrets.rotate_key [--confirm TOKEN]`.
+- `LemonCore.Secrets.Lock`: a Store-backed lease, exclusive across OS
+  processes on a SQLite store, held by key rotation and by `Secrets.set/3`
+  around key resolution and persistence. `set/3` can now return
+  `{:error, :secrets_locked}` when a rotation holds it for longer than 30 s.
+- `LemonCore.Store.sync/1` durability barrier and optional
+  `LemonCore.Store.Backend` callbacks `compare_and_swap/5` and `sync/1`. The
+  SQLite backend implements compare-and-swap in one `BEGIN IMMEDIATE`
+  transaction (atomic across OS processes) and `sync/1` as a `TRUNCATE` WAL
+  checkpoint; JSONL fsyncs its table files and directory; ETS answers `sync/1`
+  trivially. `LemonCore.Secrets.MasterKey.fetch_from/2` reads one provider's key, and
+  `LemonCore.Durable` provides file and directory flushes.
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
   exposes the check used by router startup; optional callbacks remain optional,
@@ -115,8 +128,9 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 ### Changed
 
 - `LemonCore.Secrets.KeyProvider.File` replaces the key file through a synced,
-  `0600` temporary file and an atomic rename, so an interrupted write never
-  leaves a truncated key.
+  `0600` temporary file, an atomic rename and a directory sync, so an
+  interrupted write never leaves a truncated key and `:ok` means the new key is
+  durable.
 - **Breaking for custom key providers:** `use LemonCore.Secrets.KeyProvider` no
   longer defines a default `put/2` returning `{:error, :unavailable}`; read-only
   providers simply omit it, and `KeyProvider.supports_put?/1` now reports real

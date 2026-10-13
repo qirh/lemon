@@ -178,6 +178,22 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Durability barrier: returns `:ok` once every write acknowledged so far is on
+  stable storage.
+
+  Backends without `c:LemonCore.Store.Backend.sync/1` answer
+  `{:error, :sync_unsupported}`, so callers that need durability fail closed.
+  """
+  @spec sync(server()) :: :ok | {:error, term()}
+  def sync(server \\ __MODULE__) do
+    safe_store_call(server, :sync, {:error, :store_unavailable},
+      op: :sync,
+      table: :store,
+      key: :sync
+    )
+  end
+
+  @doc """
   Put a value into a named table.
 
   This is a generic API for use by other apps (e.g., lemon_core, lemon_automation).
@@ -208,8 +224,11 @@ defmodule LemonCore.Store do
   @doc """
   Replaces a value only when its current value exactly matches `expected`.
 
-  The read and write are serialized inside the Store process. `nil` matches a
-  missing key (and, like `get/3`, cannot distinguish a stored `nil`).
+  The read and write are serialized inside the Store process. When the backend
+  exports `c:LemonCore.Store.Backend.compare_and_swap/5` (the SQLite backend
+  does, in one `BEGIN IMMEDIATE` transaction) they are also atomic against
+  other OS processes sharing the same storage. `nil` matches a missing key
+  (and, like `get/3`, cannot distinguish a stored `nil`).
   """
   @spec compare_and_swap(server(), atom(), term(), term(), term()) ::
           :ok | {:error, :mismatch | term()}
@@ -926,37 +945,29 @@ defmodule LemonCore.Store do
   end
 
   def handle_call({:generic_compare_and_swap, table, key, expected, replacement}, _from, state) do
-    case state.backend.get(state.backend_state, table, key) do
-      {:ok, current, backend_state} when current === expected ->
-        case state.backend.put(backend_state, table, key, replacement) do
-          {:ok, backend_state} ->
-            if table in state.cached_tables do
-              ReadCache.put(state.read_cache, table, key, replacement)
-            end
+    if function_exported?(state.backend, :compare_and_swap, 5) do
+      backend_compare_and_swap(state, table, key, expected, replacement)
+    else
+      store_compare_and_swap(state, table, key, expected, replacement)
+    end
+  end
 
-            {:reply, :ok, %{state | backend_state: backend_state}}
+  def handle_call(:sync, _from, state) do
+    if function_exported?(state.backend, :sync, 1) do
+      case state.backend.sync(state.backend_state) do
+        {:ok, backend_state} ->
+          {:reply, :ok, %{state | backend_state: backend_state}}
 
-          {:error, reason} ->
-            log_backend_error(:compare_and_swap, table, key, reason)
-            {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+        {:error, reason} ->
+          log_backend_error(:sync, :store, :sync, reason)
+          {:reply, {:error, reason}, state}
 
-          other ->
-            log_backend_unexpected(:compare_and_swap, table, key, other)
-
-            {:reply, {:error, {:unexpected_backend_response, other}},
-             %{state | backend_state: backend_state}}
-        end
-
-      {:ok, _current, backend_state} ->
-        {:reply, {:error, :mismatch}, %{state | backend_state: backend_state}}
-
-      {:error, reason} ->
-        log_backend_error(:compare_and_swap, table, key, reason)
-        {:reply, {:error, reason}, state}
-
-      other ->
-        log_backend_unexpected(:compare_and_swap, table, key, other)
-        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+        other ->
+          log_backend_unexpected(:sync, :store, :sync, other)
+          {:reply, {:error, {:unexpected_backend_response, other}}, state}
+      end
+    else
+      {:reply, {:error, :sync_unsupported}, state}
     end
   end
 
@@ -1783,6 +1794,69 @@ defmodule LemonCore.Store do
         ReadCache.delete(state.read_cache, table, key)
       end
     end)
+  end
+
+  # The comparison and write share one backend call, so another OS process on
+  # the same storage cannot interleave between them.
+  defp backend_compare_and_swap(state, table, key, expected, replacement) do
+    case state.backend.compare_and_swap(state.backend_state, table, key, expected, replacement) do
+      {:ok, backend_state} ->
+        if table in state.cached_tables do
+          ReadCache.put(state.read_cache, table, key, replacement)
+        end
+
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, :mismatch, backend_state} ->
+        if table in state.cached_tables do
+          ReadCache.delete(state.read_cache, table, key)
+        end
+
+        {:reply, {:error, :mismatch}, %{state | backend_state: backend_state}}
+
+      {:error, reason, backend_state} ->
+        log_backend_error(:compare_and_swap, table, key, reason)
+        {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+      other ->
+        log_backend_unexpected(:compare_and_swap, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
+  defp store_compare_and_swap(state, table, key, expected, replacement) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, current, backend_state} when current === expected ->
+        case state.backend.put(backend_state, table, key, replacement) do
+          {:ok, backend_state} ->
+            if table in state.cached_tables do
+              ReadCache.put(state.read_cache, table, key, replacement)
+            end
+
+            {:reply, :ok, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:compare_and_swap, table, key, reason)
+            {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:compare_and_swap, table, key, other)
+
+            {:reply, {:error, {:unexpected_backend_response, other}},
+             %{state | backend_state: backend_state}}
+        end
+
+      {:ok, _current, backend_state} ->
+        {:reply, {:error, :mismatch}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:compare_and_swap, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:compare_and_swap, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
   end
 
   defp log_backend_error(op, table, key, reason) do

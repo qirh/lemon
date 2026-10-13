@@ -38,6 +38,55 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     end
   end
 
+  # A Keychain that accepts the new key and then stops answering for a while,
+  # so resolution falls back to a key file that still holds the old key.
+  defmodule FlakyKeychain do
+    use LemonCore.Secrets.KeyProvider
+
+    @impl true
+    def name, do: :keychain
+
+    @impl true
+    def on_invalid, do: :continue
+
+    @impl true
+    def fetch(_opts) do
+      Agent.get_and_update(__MODULE__, fn
+        %{failures: failures} = state when failures > 0 ->
+          {{:error, :timeout}, %{state | failures: failures - 1}}
+
+        state ->
+          {{:ok, state.key}, state}
+      end)
+    end
+
+    @impl true
+    def put(value, _opts) do
+      Agent.update(__MODULE__, &%{&1 | key: value, failures: &1.failures_after_put})
+      :ok
+    end
+  end
+
+  # Pauses inside the key switch until the test sends `:continue`.
+  defmodule BlockingFile do
+    use LemonCore.Secrets.KeyProvider
+
+    @impl true
+    def name, do: :file
+
+    @impl true
+    def fetch(opts), do: KeyProvider.File.fetch(opts)
+
+    @impl true
+    def put(value, opts) do
+      send(Keyword.fetch!(opts, :test_pid), {:put_called, self()})
+
+      receive do
+        :continue -> KeyProvider.File.put(value, opts)
+      end
+    end
+  end
+
   setup do
     case Store.start_link([]) do
       {:ok, _pid} -> :ok
@@ -57,8 +106,10 @@ defmodule LemonCore.Secrets.KeyRotationTest do
       File.rm_rf!(dir)
     end)
 
-    # Never the real Keychain or LEMON_SECRETS_MASTER_KEY: only the temp file.
-    {:ok, key_file: key_file, opts: [key_providers: [:file], key_file: key_file]}
+    # Never the real Keychain, LEMON_SECRETS_MASTER_KEY, or a runtime on the
+    # default control port: only the temp file and a port nobody listens on.
+    opts = [key_providers: [:file], key_file: key_file, control_port: closed_port()]
+    {:ok, key_file: key_file, opts: opts}
   end
 
   test "rotation re-encrypts every secret under a new key and retires the old one", ctx do
@@ -233,6 +284,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
 
     env_opts = [
       key_providers: [:env],
+      control_port: ctx.opts[:control_port],
       env_getter: fn
         "LEMON_SECRETS_MASTER_KEY" -> encoded
         _ -> nil
@@ -248,7 +300,136 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert {:ok, "alpha-value"} = Secrets.get("ALPHA", env_opts)
   end
 
+  test "a key switch the provider cannot confirm keeps every secret readable with both keys",
+       ctx do
+    old_encoded = File.read!(ctx.key_file)
+    old_key = read_key(ctx.key_file)
+    {:ok, _agent} =
+      Agent.start_link(fn -> %{key: old_encoded, failures: 0, failures_after_put: 1_000} end,
+        name: FlakyKeychain
+      )
+
+    # Keychain first, with a stale key file holding the same old key behind it.
+    opts = Keyword.put(ctx.opts, :key_providers, [FlakyKeychain, :file])
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", opts)
+    assert {:ok, _} = Secrets.set("BETA", "beta-value", opts)
+
+    assert {:ok, %{source: :keychain, confirmation_token: token}} = KeyRotation.preview(opts)
+    assert {:error, {:key_switch_unverified, :keychain}} = KeyRotation.rotate(token, opts)
+
+    # While the Keychain is unreachable the old key file is what loads.
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+    assert {:ok, "beta-value"} = Secrets.get("BETA", ctx.opts)
+
+    # The Keychain recovers holding the new key: still nothing is lost.
+    Agent.update(FlakyKeychain, &%{&1 | failures: 0, failures_after_put: 0})
+    {:ok, new_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+    refute new_key == old_key
+    assert {:ok, "alpha-value"} = Secrets.get("ALPHA", opts)
+    assert {:ok, "beta-value"} = Secrets.get("BETA", opts)
+
+    # A fresh rotation finishes from that state.
+    assert {:ok, %{resumed: 2} = preview} = KeyRotation.preview(opts)
+    assert {:ok, %{rotated: 2}} = KeyRotation.rotate(preview.confirmation_token, opts)
+    {:ok, final_key, :keychain} = LemonCore.Secrets.MasterKey.resolve(opts)
+
+    for {_ref, entry} <- Store.list(Secrets.table()) do
+      refute Map.has_key?(entry, :staged)
+      assert {:ok, _} = Crypto.decrypt(entry, final_key)
+    end
+  end
+
+  test "writes during a rotation are serialised and re-encrypted, never left under the old key",
+       ctx do
+    old_key = read_key(ctx.key_file)
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", ctx.opts)
+    assert {:ok, _} = Secrets.set("BETA", "beta-value", ctx.opts)
+
+    blocking =
+      ctx.opts
+      |> Keyword.put(:key_providers, [BlockingFile])
+      |> Keyword.put(:test_pid, self())
+
+    assert {:ok, %{confirmation_token: token}} = KeyRotation.preview(blocking)
+    rotation = Task.async(fn -> KeyRotation.rotate(token, blocking) end)
+    assert_receive {:put_called, switcher}, 5_000
+
+    # A concurrent `set` waits for the rotation instead of encrypting under
+    # the key that is being retired.
+    late = Task.async(fn -> Secrets.set("LATE", "late-value", ctx.opts) end)
+    assert Task.yield(late, 200) == nil
+
+    # Writers that bypass the lock (a stale runtime, a clobbered record) after
+    # verification are caught by convergence, not silently skipped.
+    {:ok, stale} = Crypto.encrypt("stale-value", old_key)
+    stale_record = Map.merge(stale, %{provider: "manual", created_at: 1, updated_at: 1})
+    :ok = Store.put(Secrets.table(), {"default", "STALE_WRITER"}, stale_record)
+
+    alpha = Store.get(Secrets.table(), {"default", "ALPHA"})
+    :ok = Store.put(Secrets.table(), {"default", "ALPHA"}, Map.delete(alpha, :staged))
+
+    send(switcher, :continue)
+    assert {:ok, %{rotated: 2}} = Task.await(rotation, 10_000)
+    assert {:ok, _} = Task.await(late, 10_000)
+
+    new_key = read_key(ctx.key_file)
+    refute new_key == old_key
+
+    for {_ref, entry} <- Store.list(Secrets.table()) do
+      refute Map.has_key?(entry, :staged)
+      assert {:ok, _} = Crypto.decrypt(entry, new_key)
+    end
+
+    for {name, value} <- [
+          {"ALPHA", "alpha-value"},
+          {"BETA", "beta-value"},
+          {"STALE_WRITER", "stale-value"},
+          {"LATE", "late-value"}
+        ] do
+      assert {:ok, ^value} = Secrets.get(name, ctx.opts)
+    end
+  end
+
+  test "rotation refuses while a Lemon runtime answers on the control port", ctx do
+    assert {:ok, _} = Secrets.set("ALPHA", "alpha-value", ctx.opts)
+    running = Keyword.put(ctx.opts, :control_port, fake_runtime_port())
+    key_before = File.read!(ctx.key_file)
+
+    assert {:ok, %{runtime_running: true, confirmation_token: token}} =
+             KeyRotation.preview(running)
+
+    assert {:error, :runtime_running} = KeyRotation.rotate(token, running)
+    assert KeyRotation.describe_error(:runtime_running) =~ "lemon stop"
+    assert File.read!(ctx.key_file) == key_before
+    refute Enum.any?(Store.list(Secrets.table()), fn {_ref, entry} -> Map.has_key?(entry, :staged) end)
+  end
+
   defp read_key(path), do: path |> File.read!() |> String.trim() |> Base.decode64!()
+
+  defp closed_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
+  end
+
+  # Answers /healthz like a live Lemon control plane until the test exits.
+  defp fake_runtime_port do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+    spawn_link(fn -> serve_health(listen) end)
+    port
+  end
+
+  defp serve_health(listen) do
+    with {:ok, socket} <- :gen_tcp.accept(listen) do
+      _ = :gen_tcp.recv(socket, 0, 1_000)
+      body = ~s({"ok":true})
+      :gen_tcp.send(socket, "HTTP/1.0 200 OK\r\ncontent-length: #{byte_size(body)}\r\n\r\n" <> body)
+      :gen_tcp.close(socket)
+      serve_health(listen)
+    end
+  end
 
   defp clear_secrets_table do
     Secrets.table()
