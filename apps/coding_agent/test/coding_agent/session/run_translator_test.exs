@@ -12,27 +12,28 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     def emit_started(pid, _fields), do: pid
 
     @impl true
-    def emit_action_event(pid, fields) do
+    def emit_action_event(%{sink: pid} = state, fields) do
       send(pid, {:action_event, fields})
-      pid
+      state
     end
 
     @impl true
     def emit_delta(pid, _text, _meta), do: pid
 
     @impl true
-    def emit_completed(pid, fields) do
+    def emit_completed(%{sink: pid} = state, fields) do
       send(pid, {:completed, fields})
-      pid
+      state
     end
   end
 
   defp translator do
     RunTranslator.new(
       emitter: TestEmitter,
-      emitter_state: self(),
+      emitter_state: %{sink: self()},
       engine: "lemon",
       label: "test",
+      session_id: "translator-cancel-regression",
       cwd: "/tmp"
     )
   end
@@ -58,6 +59,38 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     |> RunTranslator.handle_event({:agent_end, []})
 
     assert_receive {:completed, %{usage: %{turns: 2, tool_errors: 1}}}
+  end
+
+  test "cancel intent drains terminal tool actions before one failed completion" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "observed partial output"}],
+      details: %{cancelled: true, outcome: "unknown"}
+    }
+
+    t =
+      translator()
+      |> RunTranslator.handle_event({:agent_start})
+      |> RunTranslator.handle_event({:tool_execution_start, "cancel-tool", "bash", %{}})
+      |> RunTranslator.mark_cancelled(:interrupted)
+      |> RunTranslator.mark_cancelled(:user_requested)
+
+    assert_receive {:action_event, %{phase: :started}}
+    refute_receive {:completed, _}, 10
+    assert t.cancel_reason == :interrupted
+
+    t =
+      t
+      |> RunTranslator.handle_event({:tool_execution_end, "cancel-tool", "bash", result, true})
+      |> RunTranslator.handle_event({:message_end, nil})
+      |> RunTranslator.handle_event({:turn_end, nil, []})
+      |> RunTranslator.handle_event({:canceled, :assistant_aborted})
+
+    assert_receive {:action_event, %{phase: :completed, ok: false}}
+    assert_receive {:completed, %{ok: false, usage: %{turns: 1, tool_errors: 1}}}
+    assert t.pending_actions == %{}
+    assert t.completed_emitted
+    RunTranslator.handle_event(t, {:agent_end, []})
+    refute_receive {:completed, _}, 10
   end
 
   describe "completed tool actions" do

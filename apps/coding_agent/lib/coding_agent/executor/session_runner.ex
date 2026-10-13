@@ -102,7 +102,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def cancel(pid, reason \\ :user_requested) do
-    GenServer.cast(pid, {:cancel, reason})
+    GenServer.call(pid, {:cancel, reason})
   end
 
   def steer(pid, text) do
@@ -267,13 +267,14 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   end
 
-  @impl true
-  def handle_cast({:cancel, reason}, state) do
+  def handle_call({:cancel, reason}, _from, state) do
+    translator = RunTranslator.mark_cancelled(state.translator, reason)
+
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
 
-    {:noreply, %{state | translator: RunTranslator.handle_cancel(state.translator, reason)}}
+    {:reply, :ok, %{state | translator: translator}}
   end
 
   @impl true
