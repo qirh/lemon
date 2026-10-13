@@ -56,6 +56,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.EventHandler
   alias CodingAgent.Session.Lifecycle
+  alias CodingAgent.Session.ModelResolver
   alias CodingAgent.Session.Notifier
   alias CodingAgent.Session.OverflowRecovery
   alias CodingAgent.Session.Persistence
@@ -207,8 +208,8 @@ defmodule CodingAgent.Session do
     * `:session_key` - Optional logical session key used for introspection and tool provenance
     * `:agent_id` - Optional agent identifier used for introspection and tool provenance
     * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
-    * `:thinking_level` - Extended reasoning level. If not provided, uses
-      `default_thinking_level` from SettingsManager.
+    * `:thinking_level` - Extended reasoning level. If not provided, restores the
+      saved level or uses `default_thinking_level` for new sessions.
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
     * `:registry` - Registry module to use when registering (default: `CodingAgent.SessionRegistry`)
     * `:transform_context` - Optional custom context transform `(messages, signal) -> messages`
@@ -219,9 +220,11 @@ defmodule CodingAgent.Session do
     * `:max_tool_turns` - Cap on tool-using assistant turns per prompt. Defaults to
       `[runtime] max_tool_turns`, which is unlimited (`:infinity`) unless configured.
 
-  Transient provider failures (rate limits, overloads, 5xx, network errors) that
-  arrive before any output are retried by `CodingAgent.Session.ProviderRetry`
-  under `[runtime.retry]`; each retry is broadcast as `{:provider_retry, details}`.
+  Transient provider failures (rate limits, overloads, 5xx, network errors) are
+  retried by the agent loop under `[runtime.retry]`, including interrupted
+  streams. Failed attempts are not persisted as completed messages or replayed
+  tool calls. Retry status uses `{:provider_retry, details}` and
+  `{:provider_retry_end, details}` events.
 
   ## System Prompt Composition
 
@@ -506,7 +509,7 @@ defmodule CodingAgent.Session do
   """
   @spec compact(GenServer.server(), keyword()) :: :ok | {:error, term()}
   def compact(session, opts \\ []) do
-    GenServer.call(session, {:compact, opts})
+    GenServer.call(session, {:compact, opts}, :infinity)
   end
 
   @doc """
@@ -595,7 +598,7 @@ defmodule CodingAgent.Session do
       %{
         session_id: state.session_manager.header.id,
         cwd: state.cwd,
-        model: state.model && state.model.id,
+        model: state.model.id,
         session_scope: state.session_scope
       },
       run_id: state.run_id,
@@ -847,14 +850,18 @@ defmodule CodingAgent.Session do
     {:reply, :ok, %{state | thinking_level: level, session_manager: session_manager}}
   end
 
+  def handle_call({:compact, _opts}, _from, %{is_streaming: true} = state),
+    do: {:reply, {:error, :busy}, state}
+
   def handle_call({:compact, opts}, _from, state) do
-    state =
-      state
-      |> CompactionManager.clear_auto_compaction_state()
-      |> CompactionManager.clear_overflow_recovery_state()
+    state = CompactionManager.cancel_compaction_tasks(state, :manual_compaction)
 
     custom_summary = Keyword.get(opts, :summary)
-    compaction_opts = CompactionManager.normalize_compaction_opts(state, opts)
+
+    compaction_opts =
+      CompactionManager.normalize_compaction_opts(state, Keyword.put_new(opts, :force, true))
+
+    Notifier.broadcast_event(state, {:compaction_start, %{reason: :manual}})
 
     result = CodingAgent.Compaction.compact(state.session_manager, state.model, compaction_opts)
 
@@ -866,6 +873,9 @@ defmodule CodingAgent.Session do
         {:reply, {:error, reason}, new_state}
     end
   end
+
+  def handle_call({:navigate_tree, _entry_id, _opts}, _from, %{is_streaming: true} = state),
+    do: {:reply, {:error, :busy}, state}
 
   def handle_call({:navigate_tree, entry_id, opts}, _from, state) do
     case SessionManager.get_entry(state.session_manager, entry_id) do
@@ -893,10 +903,26 @@ defmodule CodingAgent.Session do
         session_manager = SessionManager.set_leaf_id(state.session_manager, entry_id)
 
         # Rebuild messages from the new position
+        context = SessionManager.build_session_context(session_manager)
+
+        model =
+          ModelResolver.resolve_session_model(
+            context.model || state.model,
+            state.settings_manager
+          )
+
+        :ok = LemonAgent.Agent.set_model(state.agent, model)
+        :ok = LemonAgent.Agent.set_thinking_level(state.agent, context.thinking_level)
         messages = restore_messages_from_session(session_manager)
         :ok = LemonAgent.Agent.replace_messages(state.agent, messages)
 
-        {:reply, :ok, %{state | session_manager: session_manager}}
+        {:reply, :ok,
+         %{
+           state
+           | session_manager: session_manager,
+             model: model,
+             thinking_level: context.thinking_level
+         }}
     end
   end
 
@@ -1053,6 +1079,14 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_info({:agent_event, {:message_end, _message} = raw_event}, state) do
+    event = strip_recalled_context_from_event(raw_event)
+    state = handle_agent_event(event, state)
+    # An observed completed message must already be recoverable after SIGKILL.
+    Notifier.broadcast_event(state, event)
+    {:noreply, state}
+  end
+
   def handle_info({:agent_event, event}, state) do
     # Everything downstream of here is the record of the conversation rather
     # than the request that was sent: subscribers, extension hooks, and the
@@ -1161,7 +1195,18 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
-  def handle_info({:do_prompt, %LemonAi.Types.UserMessage{} = user_message, system_prompt}, state) do
+  def handle_info({:do_prompt, message, system_prompt}, state) do
+    if state.pending_prompt_timer_ref do
+      {:noreply, CompactionLifecycle.before_prompt(state, message, system_prompt)}
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info(
+        {:dispatch_prompt, %LemonAi.Types.UserMessage{} = user_message, system_prompt},
+        state
+      ) do
     if state.pending_prompt_timer_ref do
       :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
       # Send to agent (user message will be persisted on :message_end event)
@@ -1173,7 +1218,7 @@ defmodule CodingAgent.Session do
     end
   end
 
-  def handle_info({:do_prompt, %CustomMessage{} = message, system_prompt}, state) do
+  def handle_info({:dispatch_prompt, %CustomMessage{} = message, system_prompt}, state) do
     if state.pending_prompt_timer_ref do
       :ok = LemonAgent.Agent.set_system_prompt(state.agent, system_prompt)
       _ = LemonAgent.Agent.prompt(state.agent, message)
@@ -1189,14 +1234,6 @@ defmodule CodingAgent.Session do
 
   def handle_info({:do_prompt, %CustomMessage{} = message}, state) do
     handle_info({:do_prompt, message, state.system_prompt}, state)
-  end
-
-  # Sent by `CodingAgent.Session.ProviderRetry` from the provider stream task
-  # just before it waits to retry a transient failure. Subscribers see
-  # `{:provider_retry, details}` so a UI can show "retrying in Ns".
-  def handle_info({:provider_retry, details}, state) when is_map(details) do
-    Notifier.broadcast_event(state, {:provider_retry, details})
-    {:noreply, state}
   end
 
   def handle_info(_msg, state) do

@@ -83,11 +83,17 @@ defmodule CodingAgent.Session.OverflowRecovery do
         :no_recovery
 
       true ->
+        state = discard_failed_assistant(state)
         signature = CompactionManager.session_signature(state)
         session_manager = state.session_manager
         model = state.model
         started_at_ms = System.monotonic_time(:millisecond)
         compaction_opts = CompactionManager.overflow_recovery_compaction_opts(state)
+
+        CodingAgent.Session.Notifier.broadcast_event(
+          state,
+          {:compaction_start, %{reason: :overflow}}
+        )
 
         CompactionManager.emit_overflow_recovery_telemetry(:attempt, state, %{
           reason: CompactionManager.normalize_overflow_reason(reason)
@@ -218,6 +224,26 @@ defmodule CodingAgent.Session.OverflowRecovery do
 
       {:error, :timeout} ->
         {:error, :wait_for_idle_timeout, state}
+    end
+  end
+
+  defp discard_failed_assistant(state) do
+    session = state.session_manager
+
+    case CodingAgent.SessionManager.get_entry(session, session.leaf_id) do
+      %{
+        type: :message,
+        message: %{"role" => "assistant", "stop_reason" => reason},
+        parent_id: parent_id
+      }
+      when reason in ["error", "aborted"] ->
+        session = CodingAgent.SessionManager.set_leaf_id(session, parent_id)
+        messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
+        :ok = LemonAgent.Agent.replace_messages(state.agent, messages)
+        %{state | session_manager: session}
+
+      _ ->
+        state
     end
   end
 

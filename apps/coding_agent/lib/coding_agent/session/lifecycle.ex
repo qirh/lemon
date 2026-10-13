@@ -16,7 +16,6 @@ defmodule CodingAgent.Session.Lifecycle do
     Persistence,
     PromptComposer,
     ProviderFallback,
-    ProviderRetry,
     State,
     WasmBridge
   }
@@ -46,6 +45,8 @@ defmodule CodingAgent.Session.Lifecycle do
     Workspace.ensure_workspace(workspace_dir: workspace_dir)
 
     session_manager = load_or_create_session(cwd, session_file, session_id, parent_session)
+    cwd = session_manager.header.cwd
+    restored_context = SessionManager.build_session_context(session_manager)
 
     session_scope =
       PromptComposer.resolve_session_scope(
@@ -60,8 +61,37 @@ defmodule CodingAgent.Session.Lifecycle do
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
     agent_id = Keyword.get(opts, :agent_id, "default")
 
-    model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
-    thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
+    model =
+      ModelResolver.resolve_session_model(
+        Keyword.get(opts, :model) || restored_context.model,
+        settings_manager
+      )
+
+    thinking_level =
+      Keyword.get(opts, :thinking_level) ||
+        if(
+          Enum.any?(
+            SessionManager.get_branch(session_manager),
+            &(&1.type == :thinking_level_change)
+          ),
+          do: restored_context.thinking_level,
+          else: settings_manager.default_thinking_level
+        )
+
+    session_file =
+      session_file ||
+        Path.join(SessionManager.get_session_dir(cwd), "#{session_manager.header.id}.jsonl")
+
+    session_manager =
+      session_manager
+      |> SessionManager.append_entry(
+        SessionManager.SessionEntry.model_change(model.provider, model.id)
+      )
+      |> SessionManager.append_entry(
+        SessionManager.SessionEntry.thinking_level_change(thinking_level)
+      )
+      |> SessionManager.persist(session_file)
+
     tool_policy = Keyword.get(opts, :tool_policy)
 
     approval_context =
@@ -175,12 +205,9 @@ defmodule CodingAgent.Session.Lifecycle do
       |> ProviderFallback.maybe_wrap(model, settings_manager, cwd,
         session_id: session_manager.header.id
       )
-      |> ProviderRetry.wrap(
-        SettingsManager.get_retry_settings(settings_manager),
-        notify: fn details -> send(session_pid, {:provider_retry, details}) end
-      )
 
     agent_registry_key = {session_manager.header.id, :main, 0}
+    retry_settings = SettingsManager.get_retry_settings(settings_manager)
 
     {:ok, agent} =
       LemonAgent.Agent.start_link(
@@ -201,6 +228,8 @@ defmodule CodingAgent.Session.Lifecycle do
         # (or the user interrupts); `[runtime] max_tool_turns` or an explicit
         # `:max_tool_turns` option installs a cap.
         max_tool_turns: Keyword.get(opts, :max_tool_turns, settings_manager.max_tool_turns),
+        max_retries: if(retry_settings.enabled, do: retry_settings.max_retries, else: 0),
+        retry_base_delay_ms: retry_settings.base_delay_ms,
         name: LemonAgent.AgentRegistry.via(agent_registry_key)
       )
 
@@ -364,7 +393,24 @@ defmodule CodingAgent.Session.Lifecycle do
         :ok = LemonAgent.Agent.reset(state.agent)
 
         previous_session_id = state.session_manager.header.id
-        new_session_manager = SessionManager.new(state.cwd)
+
+        new_session_manager =
+          SessionManager.new(state.cwd)
+          |> SessionManager.append_entry(
+            SessionManager.SessionEntry.model_change(state.model.provider, state.model.id)
+          )
+          |> SessionManager.append_entry(
+            SessionManager.SessionEntry.thinking_level_change(state.thinking_level)
+          )
+
+        new_session_manager =
+          SessionManager.persist(
+            new_session_manager,
+            Path.join(
+              SessionManager.get_session_dir(state.cwd),
+              "#{new_session_manager.header.id}.jsonl"
+            )
+          )
 
         Persistence.maybe_unregister_session(
           previous_session_id,
@@ -405,10 +451,13 @@ defmodule CodingAgent.Session.Lifecycle do
     SessionManager.new(cwd, id: session_id, parent_session: parent_session)
   end
 
-  defp load_or_create_session(cwd, session_file, session_id, parent_session) do
+  defp load_or_create_session(_cwd, session_file, _session_id, _parent_session) do
     case SessionManager.load_from_file(session_file) do
-      {:ok, session} -> session
-      {:error, _reason} -> SessionManager.new(cwd, id: session_id, parent_session: parent_session)
+      {:ok, session} ->
+        session
+
+      {:error, reason} ->
+        raise ArgumentError, "cannot resume session: #{inspect(reason)}"
     end
   end
 
