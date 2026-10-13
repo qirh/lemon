@@ -778,7 +778,6 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp persist_oauth_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "ai_oauth")
-    :ok
   end
 
   defp persist_openai_codex_secret(secret_name, encoded_secret) do

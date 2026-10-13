@@ -9,6 +9,29 @@ defmodule LemonAgent.Workspace.GoalStoreTest do
     {:ok, session_key: session_key}
   end
 
+  test "terminal loop status retains the judge identity rather than a previous continuation", %{
+    session_key: session_key
+  } do
+    assert {:ok, _} = GoalStore.set(session_key, "Verify the completed change")
+    assert {:ok, _} = GoalStore.record_continuation(session_key, "prior_continuation")
+
+    assert {:ok, _} =
+             GoalStore.record_loop_status(session_key, :running,
+               run_id: "terminal_judge",
+               run_kind: "judge"
+             )
+
+    assert {:ok, goal} = GoalStore.record_loop_status(session_key, :finished)
+    assert goal.last_run_id == "prior_continuation"
+    assert goal.meta["goalLoop"]["lastRunId"] == "terminal_judge"
+    assert goal.meta["goalLoop"]["lastRunKind"] == "judge"
+
+    assert {:ok, goal} =
+             GoalStore.record_loop_verdict(session_key, %{action: :done, source: "manual"})
+
+    refute Map.has_key?(goal.meta["goalLoop"]["lastVerdict"], "runId")
+  end
+
   test "sets, transitions, lists, and clears a goal", %{session_key: session_key} do
     assert {:ok, goal} =
              GoalStore.set(session_key, "Ship Hermes parity",

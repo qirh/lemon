@@ -11,16 +11,15 @@ defmodule LemonCore.Update.Version do
   """
 
   @calver_regex ~r/^(\d{4})\.(\d{1,2})\.(\d+)(-[a-zA-Z0-9._-]+)?$/
+  @source_root Path.expand("../../../../..", __DIR__)
 
   @type parsed :: {integer(), integer(), integer()}
 
   @doc """
   Returns the current Lemon version string.
 
-  In a packaged runtime this is the release version (`RELEASE_VSN`), which is
-  the umbrella CalVer the release was assembled from. The :lemon_core OTP app
-  spec is only a fallback — it carries the app's independent hex package
-  version (e.g. `0.1.0`), which must never be compared against release CalVer.
+  Packaged runtimes use `RELEASE_VSN`. Source checkouts use the umbrella
+  CalVer, not lemon_core's independent OTP application version.
   """
   @spec current() :: String.t()
   def current do
@@ -29,10 +28,77 @@ defmodule LemonCore.Update.Version do
         vsn
 
       _ ->
-        case Application.spec(:lemon_core, :vsn) do
-          nil -> "0.1.0"
-          vsn -> List.to_string(vsn)
+        source_version() || application_version()
+    end
+  end
+
+  @doc "Build identity for diagnostics; release metadata is stamped when assembled."
+  @spec info() :: map()
+  def info do
+    version = current()
+
+    if System.get_env("RELEASE_VSN") not in [nil, ""] do
+      metadata = release_metadata(version)
+
+      %{
+        version: version,
+        mode: "release",
+        commit: metadata["commit"] || "unknown",
+        channel: metadata["channel"] || "unknown"
+      }
+    else
+      %{version: version, mode: "source", commit: source_commit(), channel: "source"}
+    end
+  end
+
+  @doc "Human-readable build identity. `current/0` remains machine-readable CalVer."
+  @spec describe() :: String.t()
+  def describe do
+    build = info()
+    "Lemon #{build.version} (#{build.mode}; commit #{build.commit}; channel #{build.channel})"
+  end
+
+  defp release_metadata(version) do
+    root = System.get_env("RELEASE_ROOT") || List.to_string(:code.root_dir())
+
+    with {:ok, json} <- File.read(Path.join([root, "releases", version, "lemon-build.json"])),
+         {:ok, metadata} when is_map(metadata) <- Jason.decode(json) do
+      metadata
+    else
+      _ -> %{}
+    end
+  end
+
+  defp source_version do
+    with {:ok, source} <- File.read(Path.join(source_root(), "mix.exs")),
+         [_, version] <- Regex.run(~r/version:\s*"(\d{4}\.\d{1,2}\.\d+[^"]*)"/, source) do
+      version
+    else
+      _ -> nil
+    end
+  end
+
+  defp source_commit do
+    case System.find_executable("git") do
+      nil ->
+        "unknown"
+
+      git ->
+        case System.cmd(git, ["-C", source_root(), "rev-parse", "--short=12", "HEAD"],
+               stderr_to_stdout: true
+             ) do
+          {commit, 0} -> String.trim(commit)
+          _ -> "unknown"
         end
+    end
+  end
+
+  defp source_root, do: System.get_env("LEMON_PATH") || @source_root
+
+  defp application_version do
+    case Application.spec(:lemon_core, :vsn) do
+      nil -> "unknown"
+      vsn -> List.to_string(vsn)
     end
   end
 

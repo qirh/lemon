@@ -1,6 +1,6 @@
 defmodule LemonCli.SessionsCommand do
   @moduledoc """
-  Mix-free CLI adapter for `LemonCore.SessionLifecycle`.
+  Mix-free, authenticated daemon client for durable session management.
 
   Every read is bounded, history/export output stays redacted, destructive
   pruning is preview-token bound, and single-session deletion requires the
@@ -8,7 +8,7 @@ defmodule LemonCli.SessionsCommand do
   """
 
   alias LemonCli.CommandRegistry
-  alias LemonCore.SessionLifecycle
+  alias LemonCli.SessionClient
 
   @exit_ok 0
   @exit_error 1
@@ -18,20 +18,26 @@ defmodule LemonCli.SessionsCommand do
   @max_query_bytes 512
 
   @spec run([String.t()]) :: 0 | 1 | 2
-  def run(["list" | args]), do: list(args, nil)
-  def run(["search" | args]), do: search(args)
-  def run(["stats" | args]), do: stats(args)
-  def run(["show" | args]), do: show(args)
-  def run(["history" | args]), do: history(args)
-  def run(["title" | args]), do: title(args)
-  def run(["pin" | args]), do: patch_boolean(args, :pinned, true, "pinned")
-  def run(["unpin" | args]), do: patch_boolean(args, :pinned, false, "unpinned")
-  def run(["archive" | args]), do: patch_boolean(args, :archived, true, "archived")
-  def run(["restore" | args]), do: patch_boolean(args, :archived, false, "restored")
-  def run(["export" | args]), do: export(args)
-  def run(["prune" | args]), do: prune(args)
-  def run(["delete" | args]), do: delete(args)
-  def run(_args), do: usage_error("Missing or invalid sessions command.")
+  def run(args) do
+    dispatch(args)
+  rescue
+    error in SessionClient.Error -> failure(error.kind, error.message, json_requested?(args))
+  end
+
+  defp dispatch(["list" | args]), do: list(args, nil)
+  defp dispatch(["search" | args]), do: search(args)
+  defp dispatch(["stats" | args]), do: stats(args)
+  defp dispatch(["show" | args]), do: show(args)
+  defp dispatch(["history" | args]), do: history(args)
+  defp dispatch(["title" | args]), do: title(args)
+  defp dispatch(["pin" | args]), do: patch_boolean(args, :pinned, true, "pinned")
+  defp dispatch(["unpin" | args]), do: patch_boolean(args, :pinned, false, "unpinned")
+  defp dispatch(["archive" | args]), do: patch_boolean(args, :archived, true, "archived")
+  defp dispatch(["restore" | args]), do: patch_boolean(args, :archived, false, "restored")
+  defp dispatch(["export" | args]), do: export(args)
+  defp dispatch(["prune" | args]), do: prune(args)
+  defp dispatch(["delete" | args]), do: delete(args)
+  defp dispatch(_args), do: usage_error("Missing or invalid sessions command.")
 
   defp stats(args) do
     with {:ok, parsed} <- parse_stats_options(args),
@@ -42,7 +48,7 @@ defmodule LemonCli.SessionsCommand do
          {:ok, archived} <- paired_filter(parsed.options, :archived, :active),
          :ok <- ensure_started(),
          {:ok, report} <-
-           SessionLifecycle.stats(
+           SessionClient.stats(
              query: query,
              agent_id: parsed.options[:agent_id],
              pinned: pinned,
@@ -52,13 +58,6 @@ defmodule LemonCli.SessionsCommand do
       if parsed.options[:json], do: json_success(%{stats: report}), else: print_stats(report)
       @exit_ok
     else
-      {:error, :session_store_unavailable} ->
-        failure(
-          "session_store_unavailable",
-          "Session statistics are temporarily unavailable.",
-          json_requested?(args)
-        )
-
       {:error, message} when is_binary(message) ->
         usage_error(message)
     end
@@ -110,13 +109,13 @@ defmodule LemonCli.SessionsCommand do
   end
 
   defp list_from_parsed(parsed, query) do
-    with :ok <- ensure_started(),
-         {:ok, limit} <- bounded_option(parsed.options[:limit], 100, 1, @max_list_limit, "limit"),
+    with {:ok, limit} <- bounded_option(parsed.options[:limit], 100, 1, @max_list_limit, "limit"),
          {:ok, offset} <- bounded_option(parsed.options[:offset], 0, 0, 1_000_000, "offset"),
          {:ok, pinned} <- paired_filter(parsed.options, :pinned, :unpinned),
-         {:ok, archived} <- paired_filter(parsed.options, :archived, :active) do
+         {:ok, archived} <- paired_filter(parsed.options, :archived, :active),
+         :ok <- ensure_started() do
       result =
-        SessionLifecycle.list(
+        SessionClient.list(
           limit: limit,
           offset: offset,
           query: query,
@@ -154,7 +153,7 @@ defmodule LemonCli.SessionsCommand do
     with {:ok, parsed} <- parse(args, json: :boolean),
          [session_key] <- parsed.positionals,
          :ok <- ensure_started(),
-         %{} = session <- SessionLifecycle.get(session_key) do
+         %{} = session <- SessionClient.get(session_key) do
       if parsed.options[:json],
         do: json_success(%{session: session}),
         else: print_session(session)
@@ -173,8 +172,8 @@ defmodule LemonCli.SessionsCommand do
          {:ok, limit} <-
            bounded_option(parsed.options[:limit], 50, 1, @max_history_limit, "limit"),
          :ok <- ensure_started(),
-         %{} = session <- SessionLifecycle.get(session_key) do
-      history = SessionLifecycle.history(session_key, limit: limit, redact: true)
+         %{} = session <- SessionClient.get(session_key) do
+      history = SessionClient.history(session_key, limit: limit, redact: true)
 
       if parsed.options[:json] do
         json_success(%{session: session, history: history, redacted: true})
@@ -195,7 +194,7 @@ defmodule LemonCli.SessionsCommand do
          {:ok, session_key, value} <- title_arguments(parsed),
          :ok <- ensure_started() do
       mutation_result(
-        SessionLifecycle.patch(session_key, %{title: value}),
+        SessionClient.patch(session_key, %{title: value}),
         "title updated",
         parsed
       )
@@ -232,7 +231,7 @@ defmodule LemonCli.SessionsCommand do
     with {:ok, parsed} <- parse(args, json: :boolean),
          [session_key] <- parsed.positionals,
          :ok <- ensure_started() do
-      mutation_result(SessionLifecycle.patch(session_key, %{field => value}), action, parsed)
+      mutation_result(SessionClient.patch(session_key, %{field => value}), action, parsed)
     else
       {:error, message} -> usage_error(message)
       _ -> usage_error("This command requires exactly one session key.")
@@ -266,7 +265,7 @@ defmodule LemonCli.SessionsCommand do
          [session_key] <- parsed.positionals,
          {:ok, format} <- export_format(parsed.options[:format]),
          :ok <- ensure_started(),
-         {:ok, result} <- SessionLifecycle.export(session_key, format: format),
+         {:ok, result} <- SessionClient.export(session_key, format: format),
          :ok <-
            maybe_write_export(parsed.options[:output], result.content, parsed.options[:force]) do
       print_export(result, parsed)
@@ -387,7 +386,7 @@ defmodule LemonCli.SessionsCommand do
         confirm_token: parsed.options[:confirm]
       ]
 
-      prune_result(SessionLifecycle.prune(opts), parsed)
+      prune_result(SessionClient.prune(opts), parsed)
     else
       {:error, message} -> usage_error(message)
       [_ | _] -> usage_error("Prune does not accept positional arguments.")
@@ -440,7 +439,7 @@ defmodule LemonCli.SessionsCommand do
          [session_key] <- parsed.positionals,
          :ok <- exact_delete_confirmation(session_key, parsed.options[:confirm]),
          :ok <- ensure_started() do
-      case SessionLifecycle.delete(session_key) do
+      case SessionClient.delete(session_key) do
         {:ok, result} ->
           if parsed.options[:json] do
             json_success(%{delete: result})
@@ -576,19 +575,7 @@ defmodule LemonCli.SessionsCommand do
       else: {:error, "Older-than cutoff cannot be in the future."}
   end
 
-  defp ensure_started do
-    previous_level = Logger.level()
-    Logger.configure(level: :warning)
-
-    try do
-      case Application.ensure_all_started(:lemon_core) do
-        {:ok, _apps} -> :ok
-        {:error, _reason} -> {:error, "The Lemon session store is unavailable."}
-      end
-    after
-      Logger.configure(level: previous_level)
-    end
-  end
+  defp ensure_started, do: SessionClient.ensure_running()
 
   defp print_session_list(result) do
     IO.puts(

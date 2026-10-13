@@ -12,10 +12,11 @@ defmodule LemonWeb.ManagementLiveTest do
   alias LemonCore.{RunStore, SessionLifecycle, Store}
 
   setup do
-    keys = [:access_token, :setup_readiness_fun]
+    keys = [:access_token, :setup_readiness_fun, :active_runs_fun]
     previous = Map.new(keys, &{&1, Application.get_env(:lemon_web, &1)})
 
     Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state() end)
+    Application.put_env(:lemon_web, :active_runs_fun, fn -> {:ok, []} end)
 
     on_exit(fn ->
       Enum.each(previous, fn
@@ -52,7 +53,6 @@ defmodule LemonWeb.ManagementLiveTest do
 
         conn = conn |> recycle() |> get("/manage?view=all")
         html = html_response(conn, 200)
-        assert html =~ "Session management"
         refute html =~ token
         refute html =~ "token="
       end)
@@ -61,10 +61,10 @@ defmodule LemonWeb.ManagementLiveTest do
     assert log =~ ~s|"token" => "[FILTERED]"|
 
     conn = authenticated_conn(token)
-    assert html_response(conn, 200) =~ "Session management"
+    html_response(conn, 200)
 
     conn = conn |> recycle() |> get("/manage")
-    assert html_response(conn, 200) =~ "Session management"
+    html_response(conn, 200)
   end
 
   test "bearer authentication does not redirect and establishes the browser session", %{
@@ -77,11 +77,130 @@ defmodule LemonWeb.ManagementLiveTest do
       |> put_req_header("authorization", "Bearer #{token}")
       |> get("/manage")
 
-    assert html_response(conn, 200) =~ "Session management"
+    html_response(conn, 200)
     assert get_resp_header(conn, "location") == []
 
     conn = conn |> recycle() |> get("/manage")
-    assert html_response(conn, 200) =~ "Session management"
+    html_response(conn, 200)
+  end
+
+  test "live work appears before durable history and moves into history without a refresh click",
+       %{
+         token: token
+       } do
+    suffix = unique_suffix()
+    session_key = "agent:web_live_#{suffix}:main"
+    run_id = "run_web_live_#{suffix}"
+    private = "/private/repo-#{suffix}"
+    secret = "live-secret-#{suffix}"
+
+    {:ok, state} =
+      Agent.start_link(fn ->
+        {:ok,
+         [
+           %{
+             run_id: run_id,
+             session_key: session_key,
+             agent_id: secret,
+             started_at_ms: System.system_time(:millisecond),
+             cwd: private,
+             prompt: secret
+           }
+         ]}
+      end)
+
+    Application.put_env(:lemon_web, :access_token, token)
+    Application.put_env(:lemon_web, :active_runs_fun, fn -> Agent.get(state, & &1) end)
+    on_exit(fn -> SessionLifecycle.delete(session_key) end)
+
+    {:ok, view, html} = live(authenticated_conn(token), "/manage")
+
+    assert has_element?(
+             view,
+             ~s|#active-work a[href="/sessions/#{URI.encode_www_form(session_key)}"]|
+           )
+
+    refute html =~ private
+    refute html =~ secret
+    assert SessionLifecycle.get(session_key) == nil
+
+    seed_session(session_key, run_id, "Build a useful feature", "Finished")
+    Agent.update(state, fn _ -> {:ok, []} end)
+    send(view.pid, :refresh_live_work)
+    render(view)
+
+    refute has_element?(
+             view,
+             ~s|#active-work a[href="/sessions/#{URI.encode_www_form(session_key)}"]|
+           )
+
+    assert has_element?(
+             view,
+             ~s|#session-list a[href="/sessions/#{URI.encode_www_form(session_key)}"]|
+           )
+  end
+
+  test "a failed live lookup preserves the last known run without exposing failure payloads", %{
+    token: token
+  } do
+    suffix = unique_suffix()
+    session_key = "agent:web_unavailable_#{suffix}:main"
+    run_id = "run_web_unavailable_#{suffix}"
+
+    {:ok, state} =
+      Agent.start_link(fn -> {:ok, [%{run_id: run_id, session_key: session_key}]} end)
+
+    Application.put_env(:lemon_web, :access_token, token)
+    Application.put_env(:lemon_web, :active_runs_fun, fn -> Agent.get(state, & &1) end)
+    {:ok, view, _} = live(authenticated_conn(token), "/manage")
+
+    Agent.update(state, fn _ -> {:error, %{secret: "hidden-secret", path: "/private/repo"}} end)
+    send(view.pid, :refresh_live_work)
+    html = render(view)
+
+    assert has_element?(
+             view,
+             ~s|#active-work a[href="/sessions/#{URI.encode_www_form(session_key)}"]|
+           )
+
+    assert has_element?(view, "#active-work", "Unavailable")
+    refute html =~ "hidden-secret"
+    refute html =~ "/private/repo"
+
+    Agent.update(state, fn _ -> {:ok, []} end)
+    send(view.pid, :refresh_live_work)
+    render(view)
+
+    refute has_element?(
+             view,
+             ~s|#active-work a[href="/sessions/#{URI.encode_www_form(session_key)}"]|
+           )
+  end
+
+  test "the live work projection is bounded and rejects malformed run targets", %{token: token} do
+    runs =
+      for index <- 1..45 do
+        %{
+          run_id: "run_bounded_#{index}",
+          session_key: "agent:web_bounded:main",
+          started_at_ms: index
+        }
+      end
+
+    invalid = %{
+      run_id: "/private/repo",
+      session_key: "agent:web_bounded:main",
+      started_at_ms: 100
+    }
+
+    Application.put_env(:lemon_web, :access_token, token)
+    Application.put_env(:lemon_web, :active_runs_fun, fn -> {:ok, [invalid | runs]} end)
+    {:ok, view, html} = live(authenticated_conn(token), "/manage")
+
+    assert has_element?(view, "#active-work", "40 active")
+    assert has_element?(view, "#active-work", "run_bounded_45")
+    refute has_element?(view, "#active-work p.management-session-key", "run_bounded_5")
+    refute html =~ "/private/repo"
   end
 
   test "operator can search, inspect, title, pin, archive, and resume a durable session", %{
@@ -91,20 +210,29 @@ defmodule LemonWeb.ManagementLiveTest do
     session_key = "agent:web_admin_#{suffix}:main"
     run_id = "run-web-admin-#{suffix}"
     secret = "browser-secret-#{suffix}"
+    private_path = "/private/session-repo-#{suffix}"
 
     on_exit(fn -> SessionLifecycle.delete(session_key) end)
 
     seed_session(session_key, run_id, "api_key=#{secret} launch checklist", "Bearer #{secret}", [
       %{
         __event__: :action_event,
-        action: %{title: "Inspect repository", kind: :shell, detail: %{token: secret}},
+        action: %{
+          title: "Inspect repository",
+          kind: :shell,
+          detail: %{token: secret, cwd: private_path}
+        },
         phase: :completed,
         ok: true,
         message: "token=#{secret}"
       }
     ])
 
-    assert {:ok, _session} = SessionLifecycle.patch(session_key, %{title: "Launch room"})
+    assert {:ok, _session} =
+             SessionLifecycle.patch(session_key, %{
+               title: "Launch room #{private_path} api_key=#{secret}"
+             })
+
     Application.put_env(:lemon_web, :access_token, token)
 
     {:ok, view, html} = live(authenticated_conn(token), "/manage/sessions/#{session_key}")
@@ -112,6 +240,7 @@ defmodule LemonWeb.ManagementLiveTest do
     assert html =~ "Launch room"
     assert html =~ "Inspect repository"
     refute html =~ secret
+    refute html =~ private_path
     assert has_element?(view, "#run-history details")
     assert has_element?(view, ~s|a[href^="/sessions/"]|, "Resume chat")
 

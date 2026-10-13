@@ -320,6 +320,7 @@ defmodule LemonCli.Setup.Provider do
               "--secret-name",
               "--model",
               "--auth",
+              "--codex-auth-path",
               "--enterprise-domain",
               "--project-id"
             ] do

@@ -89,12 +89,28 @@ prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
 errors are bounded and redacted, not raw run/store dumps.
 
+## Durable session inspection
+
+`sessions.get` (`operator.read`) accepts `{sessionKey}` and returns `{session}`
+from the daemon's canonical lifecycle index, including title, pin/archive state
+and run counts. `sessions.history` accepts `{sessionKey, limit}` (1–200, default
+50) and returns `{session, history}` with redacted structured **run history**.
+Unknown keys return `not_found`; these methods do not invent an empty session or
+read a separate client-local store. Keys are non-empty and bounded to 1,024 bytes.
+
+This management history is distinct from native branch messages returned by
+`chat.history` with `cwd`. `session.detail` remains the richer routing/run
+inspection surface and includes durable title/pin/archive metadata when present,
+so reopening a named session restores its display name.
+
 ## Native session navigation
 
 Use the same `sessionKey` and native workspace `cwd` for these operations.
 Both are required, non-empty strings, bounded to 1,024 and 4,096 UTF-8 bytes
 respectively. NUL bytes are rejected. Native runtime failures expose only safe
 reason classifications, never exception terms or raw filesystem errors.
+Successful tree and rewind receipts include the validated request `sessionKey`
+so clients can reject stale or mismatched targets before applying their results.
 
 `sessions.tree` requires `operator.read`. Optional `limit` is 1–500 (default
 100); `offset` is 0–1,000,000 (default 0). The result contains `sessionId`,
@@ -129,6 +145,9 @@ durable session index with independent lifecycle metadata. The result is
 `sessions.list` immediately, with zero runs of its own; no synthetic run is
 created. If acknowledgement or registration is uncertain, error details retain
 the generated keys and `retrySafe: false`; reconcile instead of retrying.
+Existing plain keys such as `tui-*` are valid fork sources when their durable
+session index identifies the source agent. Children still use canonical keys
+for that same agent; an unknown source never falls back to a guessed default.
 
 Name a child with the existing `sessions.metadata.patch` method using
 `{sessionKey, title}` (`operator.admin`); `title: null` clears its name.
