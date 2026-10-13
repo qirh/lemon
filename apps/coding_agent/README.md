@@ -182,6 +182,11 @@ Use `action:"replace"`, explicit `paths`, `pattern`, `rewrite`, and
 `dry_run:true` to preview; apply with `dry_run:false` and `expected_matches`
 equal to the full preview count. Count mismatches, overlapping ranges, stale
 files, binary content, and symlink writes are rejected before writing.
+Multi-file replacement is not an atomic filesystem transaction. If a target
+changes or an I/O error occurs during writing, the error result preserves its
+filesystem `checkpoint_id` and exposes `partial`/`written_paths`; session rewind
+can restore the operation's original files. An interrupted call with no result
+requires the session rewind's missing-checkpoint safety check.
 `max_results` bounds display, not replacement scope; oversized output exposes a
 retrievable full JSONL path. Backend planning is capped at 16 MiB: narrow the
 scope rather than applying a truncated replacement plan. Because the same tool
