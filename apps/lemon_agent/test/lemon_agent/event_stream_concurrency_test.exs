@@ -1011,16 +1011,19 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       EventStream.attach_task(stream, task_pid)
       task_ref = Process.monitor(task_pid)
 
-      Process.sleep(20)
+      stream_ref = Process.monitor(stream)
 
       EventStream.cancel(stream, :cleanup_scenario)
 
-      # Stream should be dead
-      Process.sleep(50)
-      refute Process.alive?(stream)
+      assert EventStream.result(stream) == {:error, {:canceled, :cleanup_scenario}}
+      assert Process.alive?(stream)
 
       # Attached task should be killed
       assert_receive {:DOWN, ^task_ref, :process, ^task_pid, _}, 500
+
+      events = EventStream.events(stream) |> Enum.to_list()
+      assert events == Enum.map(1..10, &{:event, &1}) ++ [{:canceled, :cleanup_scenario}]
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
     end
 
     test "timeout cleanup shuts down attached task" do
@@ -1100,6 +1103,10 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
           end
 
           EventStream.cancel(stream, :rapid_cycle)
+
+          assert EventStream.events(stream) |> Enum.to_list() ==
+                   Enum.map(1..10, &{:event, &1}) ++ [{:canceled, :rapid_cycle}]
+
           stream
         end
 
@@ -1124,7 +1131,7 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       # Start waiters
       waiter = Task.async(fn -> EventStream.result(stream) end)
 
-      Process.sleep(20)
+      stream_ref = Process.monitor(stream)
 
       # Cancel with full queue
       EventStream.cancel(stream, :full_queue_cancel)
@@ -1132,8 +1139,10 @@ defmodule LemonAgent.EventStreamConcurrencyTest do
       result = Task.await(waiter, 1000)
       assert {:error, {:canceled, :full_queue_cancel}} = result
 
-      Process.sleep(50)
-      refute Process.alive?(stream)
+      assert Process.alive?(stream)
+      events = EventStream.events(stream) |> Enum.to_list()
+      assert events == Enum.map(91..100, &{:event, &1}) ++ [{:canceled, :full_queue_cancel}]
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
     end
 
     test "stream cleanup after task crash" do
