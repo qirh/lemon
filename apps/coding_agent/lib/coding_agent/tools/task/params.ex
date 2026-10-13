@@ -10,6 +10,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.AskParent
+  alias CodingAgent.Tools.Task.StructuredOutput
   alias LemonCore.SessionKey
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -79,7 +80,7 @@ defmodule CodingAgent.Tools.Task.Params do
   def validate_run_params(params, cwd) do
     prompt = Map.get(params, "prompt")
     description = normalize_task_description(Map.get(params, "description"), prompt)
-    role_id = normalize_optional_string(Map.get(params, "role"))
+    role_id = normalize_optional_string(Map.get(params, "agent"))
     removed_engine = Map.get(params, "engine")
     model = normalize_optional_string(Map.get(params, "model"))
     thinking_level = normalize_optional_string(Map.get(params, "thinking_level"))
@@ -87,6 +88,7 @@ defmodule CodingAgent.Tools.Task.Params do
     auto_followup = Map.get(params, "auto_followup", true)
     worktree = Map.get(params, "worktree", false)
     delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
+    output_schema = Map.get(params, "output_schema")
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
     session_key = normalize_optional_string(Map.get(params, "session_key"))
@@ -97,6 +99,9 @@ defmodule CodingAgent.Tools.Task.Params do
     cond do
       not is_binary(description) or String.trim(description) == "" ->
         {:error, "Description or prompt must be a non-empty string"}
+
+      Map.has_key?(params, "role") ->
+        {:error, "The task role parameter has been replaced by agent (named persona)."}
 
       not is_nil(removed_engine) ->
         {:error, "The 'engine' parameter has been removed; all subagent tasks run natively."}
@@ -111,7 +116,7 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, "Prompt must be a non-empty string"}
 
       not is_nil(role_id) and not is_binary(role_id) ->
-        {:error, "Role must be a string"}
+        {:error, "agent must be a string"}
 
       not is_nil(model) and not is_binary(model) ->
         {:error, "Model must be a string"}
@@ -140,9 +145,6 @@ defmodule CodingAgent.Tools.Task.Params do
       is_binary(queue_mode) and queue_mode not in @valid_queue_modes ->
         {:error, "queue_mode must be one of: #{Enum.join(@valid_queue_modes, ", ")}"}
 
-      not is_nil(role_id) and Subagents.get(role_cwd, role_id) == nil ->
-        {:error, "Unknown role: #{role_id}"}
-
       not is_boolean(async?) ->
         {:error, "Async must be a boolean"}
 
@@ -153,40 +155,66 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, "worktree must be a boolean"}
 
       true ->
-        {effective_prompt, guarded_tool_policy} =
-          apply_prompt_tool_guardrails(prompt, tool_policy)
+        with {:ok, persona} <- resolve_persona(role_cwd, role_id),
+             :ok <- StructuredOutput.validate_schema(output_schema) do
+          {effective_prompt, guarded_tool_policy} =
+            apply_prompt_tool_guardrails(prompt, tool_policy)
 
-        effective_tool_policy =
-          guarded_tool_policy || default_task_tool_policy()
+          effective_tool_policy =
+            Subagents.tool_policy(persona, guarded_tool_policy || default_task_tool_policy())
 
-        followup_queue_mode =
-          if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
+          followup_queue_mode =
+            if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
 
-        {:ok,
-         %{
-           description: description,
-           prompt: effective_prompt,
-           role_id: role_id,
-           model: model,
-           thinking_level: thinking_level,
-           async: async?,
-           auto_followup: auto_followup,
-           worktree: worktree,
-           cwd: delegated_cwd,
-           tool_policy: effective_tool_policy,
-           meta: meta || %{},
-           session_key: session_key,
-           agent_id: agent_id,
-           queue_mode: followup_queue_mode,
-           resolved_queue_mode:
-             AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
-         }}
+          {:ok,
+           %{
+             description: description,
+             prompt: effective_prompt,
+             role_id: role_id,
+             persona: persona,
+             output_schema: output_schema,
+             model: model || persona_model(persona),
+             thinking_level: thinking_level,
+             async: async?,
+             auto_followup: auto_followup,
+             worktree: worktree,
+             cwd: delegated_cwd,
+             tool_policy: effective_tool_policy,
+             meta: meta || %{},
+             session_key: session_key,
+             agent_id: agent_id,
+             queue_mode: followup_queue_mode,
+             resolved_queue_mode:
+               AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
+           }}
+        end
     end
+  end
+
+  defp resolve_persona(_cwd, nil), do: {:ok, nil}
+  defp resolve_persona(cwd, name), do: Subagents.fetch(cwd, name)
+
+  defp persona_model(%{model: model}) when is_binary(model), do: model
+
+  defp persona_model(%{role: role}) when is_binary(role),
+    do: "@" <> String.trim_leading(role, "@")
+
+  defp persona_model(_), do: nil
+
+  defp child_system_prompt(opts, validated) do
+    [
+      Keyword.get(opts, :system_prompt),
+      validated[:persona] && validated.persona.prompt,
+      StructuredOutput.instruction(validated[:output_schema])
+    ]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.join("\n\n")
+    |> normalize_optional_string()
   end
 
   @spec check_budget_and_policy(map(), keyword()) :: :ok | {:error, String.t()}
   def check_budget_and_policy(validated, opts) do
-    parent_run_id = Keyword.get(opts, :parent_run_id)
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
     effective_opts = maybe_put_kw(opts, :tool_policy, validated.tool_policy)
 
     budget_check =
@@ -237,9 +265,10 @@ defmodule CodingAgent.Tools.Task.Params do
         "- task_id: required when action=poll or action=get\n" <>
         "- task_ids: required when action=join\n" <>
         "- mode: join mode for action=join (wait_all or wait_any)\n" <>
-        "- model: Optional model override (e.g., \"gpt-5.2-codex\" for complex tasks)\n" <>
+        "- model: Optional concrete model or @role override (e.g., @smol, @slow, @default); omitted inherits the parent unless model_roles.task is configured\n" <>
         "- thinking_level: Optional thinking level override\n" <>
-        "- role: Optional specialization for the task\n" <>
+        "- agent: Named persona from .lemon/agents/*.md or ~/.lemon/agents/*.md. Built-ins: scout, reviewer, task-executor. Scout and reviewer have mandatory read-only tools; a tool_policy override cannot widen them.\n" <>
+        "- output_schema: JSON Schema for a strict final JSON response, returned as structured_output in results. Invalid output is a task error.\n" <>
         "- cwd: Optional working directory override\n" <>
         "- tool_policy: Optional tool policy override for the task session\n" <>
         "  - Task children default to leaf_worker policy, so they cannot recursively use task/agent unless this is explicitly overridden\n" <>
@@ -249,19 +278,19 @@ defmodule CodingAgent.Tools.Task.Params do
         "**Boundary with agent tool:**\n" <>
         "- task runs a focused native session with followup routing overrides\n" <>
         "- agent remains the tool for router-level delegation continuity semantics\n\n" <>
-        "The role prepends a system prompt to focus the task on a specific type of work."
+        "Agent definitions provide a system prompt, model or model-role defaults, and tool restrictions."
 
-    roles = Subagents.format_for_description(cwd)
+    agents = Subagents.format_for_description(cwd)
 
-    if roles == "" do
+    if agents == "" do
       base
     else
-      base <> "\n\nAvailable roles:\n" <> roles
+      base <> "\n\nAvailable agents:\n" <> agents
     end
   end
 
-  @spec build_role_enum(String.t()) :: [String.t()] | nil
-  def build_role_enum(cwd) do
+  @spec build_agent_enum(String.t()) :: [String.t()] | nil
+  def build_agent_enum(cwd) do
     ids = Subagents.list(cwd) |> Enum.map(& &1.id)
     if ids == [], do: nil, else: ids
   end
@@ -272,17 +301,34 @@ defmodule CodingAgent.Tools.Task.Params do
   def maybe_add_enum(%AgentTool{} = tool, enum) do
     params = tool.parameters
     props = params["properties"] || %{}
-    role = Map.get(props, "role", %{})
-    role = Map.put(role, "enum", enum)
-    props = Map.put(props, "role", role)
+    agent = Map.get(props, "agent", %{})
+    agent = Map.put(agent, "enum", enum)
+    props = Map.put(props, "agent", agent)
     %{tool | parameters: Map.put(params, "properties", props)}
+  end
+
+  @doc false
+  @spec resolve_task_model(String.t(), keyword(), map()) ::
+          {term(), CodingAgent.SettingsManager.t()}
+  def resolve_task_model(cwd, opts, validated) do
+    settings = Keyword.get(opts, :settings_manager) || CodingAgent.SettingsManager.load(cwd)
+    inherited_model = resolve_inherited_model(opts)
+
+    model =
+      CodingAgent.Session.ModelResolver.resolve_task_model(
+        validated[:model],
+        settings,
+        inherited_model
+      )
+
+    {model, settings}
   end
 
   @spec build_session_opts(String.t(), keyword(), map()) :: keyword()
   def build_session_opts(cwd, opts, validated) do
     inherited_extra_tools = normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     child_extra_tools = inherited_extra_tools ++ maybe_build_ask_parent_tools(cwd, opts)
-    inherited_model = resolve_inherited_model(opts)
+    {task_model, settings} = resolve_task_model(cwd, opts, validated)
 
     base_opts =
       opts
@@ -301,11 +347,12 @@ defmodule CodingAgent.Tools.Task.Params do
         :agent_id
       ])
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-      |> maybe_put_kw(:model, inherited_model)
+      |> Keyword.put(:settings_manager, settings)
 
     override_opts =
       []
-      |> maybe_put_kw(:model, validated[:model])
+      |> maybe_put_kw(:system_prompt, child_system_prompt(opts, validated))
+      |> maybe_put_kw(:model, task_model)
       |> maybe_put_kw(:thinking_level, validated[:thinking_level])
       |> maybe_put_kw(:tool_policy, validated[:tool_policy])
       |> maybe_put_kw(:session_key, validated[:session_key])
@@ -315,6 +362,7 @@ defmodule CodingAgent.Tools.Task.Params do
     [
       {:cwd, cwd},
       {:register, true},
+      {:run_id, Keyword.get(opts, :child_run_id)},
       {:session_scope, :subagent} | Keyword.merge(base_opts, override_opts)
     ]
   end
@@ -326,7 +374,8 @@ defmodule CodingAgent.Tools.Task.Params do
          session_module <- Keyword.get(opts, :session_module, Session),
          true <- function_exported?(session_module, :get_state, 1),
          state when is_map(state) <- safe_get_session_state(session_module, session_pid),
-         model when is_binary(model) and model != "" <- Map.get(state, :model) do
+         model when (is_binary(model) and model != "") or is_struct(model, LemonAi.Types.Model) <-
+           Map.get(state, :model) do
       model
     else
       model when is_binary(model) and model != "" -> model
@@ -466,7 +515,7 @@ defmodule CodingAgent.Tools.Task.Params do
 
   defp maybe_build_ask_parent_tools(cwd, opts) do
     parent_session_pid = Keyword.get(opts, :session_pid)
-    parent_run_id = Keyword.get(opts, :parent_run_id)
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
     child_scope_id = Keyword.get(opts, :child_scope_id)
 
     if is_pid(parent_session_pid) and Process.alive?(parent_session_pid) and

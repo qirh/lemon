@@ -6,11 +6,11 @@ defmodule LemonControlPlane.UsageTokens do
   there, cache reads split across two keys — so this collapses the variants once, at the
   boundary, instead of asking each client to guess.
 
-  `contextTokens` is the number a context gauge wants: the input side of the last turn
-  *including* cached reads, which is how large the conversation actually was going into the
-  model. It deliberately excludes output. The arithmetic matches
-  `LemonRouter.RunProcess.CompactionTrigger.usage_input_tokens/1`, which is what the router
-  itself compacts against — a gauge that disagreed with the compactor would be worse than none.
+  An explicit `context_tokens` is authoritative: native sessions calculate the
+  latest-turn context separately from cumulative usage. Otherwise `contextTokens`
+  falls back to cache-inclusive input accounting, excluding output, as used by
+  `LemonRouter.RunProcess.CompactionTrigger.usage_input_tokens/1`. Cumulative
+  `total_tokens` is never substituted for current context.
   """
 
   @input_keys [:input_tokens, :input, :prompt_tokens]
@@ -32,7 +32,9 @@ defmodule LemonControlPlane.UsageTokens do
     total = first_integer(usage, @total_keys)
     cost = cost_usd(usage)
 
-    context = context_tokens(usage, input, cache_read, cache_write)
+    context =
+      first_integer(usage, [:context_tokens, :contextTokens]) ||
+        context_tokens(usage, input, cache_read, cache_write)
 
     normalized = %{
       "inputTokens" => input,
@@ -41,7 +43,9 @@ defmodule LemonControlPlane.UsageTokens do
       "cacheWriteTokens" => cache_write,
       "totalTokens" => total || sum_or_nil([context, output]),
       "contextTokens" => context,
-      "costUsd" => cost
+      "costUsd" => cost,
+      "turns" => first_integer(usage, [:turns]),
+      "tool_errors" => first_integer(usage, [:tool_errors])
     }
 
     if Enum.all?(Map.values(normalized), &is_nil/1), do: nil, else: normalized

@@ -142,8 +142,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     if should_compact_by_tokens or should_compact_by_message_limit do
       signature = CompactionManager.session_signature(state)
       session_manager = state.session_manager
-      model = state.model
       compaction_opts = CompactionManager.normalize_compaction_opts(state, force: true)
+      model = Keyword.fetch!(compaction_opts, :model)
 
       CodingAgent.Session.Notifier.broadcast_event(
         state,

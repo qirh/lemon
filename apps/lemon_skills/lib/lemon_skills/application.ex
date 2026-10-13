@@ -19,7 +19,9 @@ defmodule LemonSkills.Application do
     children = [
       LemonSkills.Registry,
       # MCP source for external tool discovery
-      {LemonSkills.McpSource, []}
+      {LemonSkills.McpSource, []},
+      {DynamicSupervisor, strategy: :one_for_one, name: LemonSkills.McpSession.Supervisor},
+      LemonSkills.McpSession
     ]
 
     opts = [strategy: :one_for_one, name: LemonSkills.Supervisor]

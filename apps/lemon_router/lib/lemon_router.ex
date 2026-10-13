@@ -77,7 +77,7 @@ defmodule LemonRouter do
           started_at_ms: integer() | nil
         }
 
-  @metadata_timeout_ms 1_000
+  @metadata_timeout_ms 100
   @zero_counts %{active: 0, queued: 0, completed_today: 0}
 
   @doc """
@@ -96,6 +96,10 @@ defmodule LemonRouter do
   care about ordering should sort on `:started_at_ms`.
 
   Returns `[]` when the router is not running.
+
+  Metadata reads have a 100 ms bound and never terminate the run. A busy or
+  disappearing run keeps its fixed ID in the snapshot with unavailable fields
+  set to `nil`; prompts, private metadata and process identifiers are excluded.
   """
   @spec active_runs() :: [active_run()]
   def active_runs do
@@ -171,17 +175,20 @@ defmodule LemonRouter do
   defp describe_active_run({run_id, pid}) when is_pid(pid) do
     metadata =
       try do
-        GenServer.call(pid, :get_metadata, @metadata_timeout_ms)
+        case GenServer.call(pid, :get_metadata, @metadata_timeout_ms) do
+          metadata when is_map(metadata) -> metadata
+          _ -> %{}
+        end
       catch
         :exit, _ -> %{}
       end
 
     %{
       run_id: run_id,
-      session_key: metadata[:session_key],
-      agent_id: metadata[:agent_id],
-      engine: metadata[:engine],
-      started_at_ms: metadata[:started_at_ms]
+      session_key: Map.get(metadata, :session_key),
+      agent_id: Map.get(metadata, :agent_id),
+      engine: Map.get(metadata, :engine),
+      started_at_ms: Map.get(metadata, :started_at_ms)
     }
   end
 
