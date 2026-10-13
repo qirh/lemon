@@ -161,6 +161,7 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		expect(output).toContain("\x1b[<u");
 		expect(output).toContain("\x1b[?2004l");
 		expect(output).toContain("\x1b[?25h");
+		expect(output).toContain("\x1b]0;\x07");
 		expect(output).toContain("\x1b[23;0t");
 		expect(output).toContain("\x1b]1337;SetUserVar=lemon_session=\x07");
 		expect(output).toContain("\x1b]9;4;0;");

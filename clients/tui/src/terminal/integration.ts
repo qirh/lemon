@@ -72,7 +72,9 @@ export class TerminalIntegration {
 		this.#progress = false;
 		this.#setUserVar("lemon_session", "");
 		this.#setUserVar("lemon_status", "");
-		// Balance xterm's title stack instead of guessing the parent's title.
+		// Clear stale status even on terminals (including Tern) that ignore the
+		// title stack. Supporting terminals then restore the saved parent title.
+		this.#terminal.setTitle("");
 		this.#terminal.write("\x1b[23;0t");
 		this.#active = false;
 		this.#title = this.#session = this.#status = "";

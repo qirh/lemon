@@ -116,14 +116,15 @@ other terminals receive OSC 9 or OSC 777 according to their identity.
 
 pi-tui negotiates kitty keyboard support with a capability query rather than
 assuming it from environment variables, preserving the parent keyboard flags.
-Exit and external-editor handoff restore the keyboard, cursor, raw mode and
-title, clear the progress indicator and remove the session markers.
+Exit and external-editor handoff restore the keyboard, cursor and raw mode,
+clear the progress indicator and remove the session markers. The title is
+restored where the terminal supports the xterm title stack, otherwise cleared
+so an exited client never leaves a stale working/approval status.
 `LEMON_TUI_NOTIFICATIONS=0` disables desktop notifications.
 `LEMON_TUI_TERMINAL_INTEGRATION=0` disables Lemon's terminal side channels and
 transcript marks. `PI_NO_HYPERLINKS=1` disables links; pi-tui's multiplexer
 capability policy remains authoritative. Non-TTY and `TERM=dumb` output do not
 emit Lemon's side channels.
-
 
 ## Hermes-compatible commands
 
