@@ -170,8 +170,8 @@ defmodule LemonGateway.RunTransportAgnosticTest do
       # Complete the run
       send(sink_pid, :complete)
 
-      # Wait for run_ref to be set and check completion
-      Process.sleep(100)
+      # Wait for the run to finish
+      assert_receive {:run_complete, _pid, %{__event__: :completed}}, 2000
     end
 
     test "accumulates delta text into final answer when executor answer is empty" do
@@ -184,9 +184,6 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
       # Send deltas
       send(sink_pid, {:send_deltas, ["Hello", " ", "World"]})
-
-      # Wait for deltas to be processed
-      Process.sleep(100)
 
       # Complete the run
       send(sink_pid, :complete)
@@ -222,7 +219,6 @@ defmodule LemonGateway.RunTransportAgnosticTest do
 
       # Send deltas
       send(sink_pid, {:send_deltas, ["Test"]})
-      Process.sleep(100)
 
       # Complete the run
       send(sink_pid, :complete)

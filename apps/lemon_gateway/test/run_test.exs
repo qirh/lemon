@@ -1430,16 +1430,15 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists (stores run_id string, not PID)
-      assert Enum.any?(1..20, fn _attempt ->
-               case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
-                 run_id when is_binary(run_id) and run_id != "" ->
-                   true
-
-                 _ ->
-                   Process.sleep(10)
-                   false
-               end
-             end)
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn ->
+          case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
+            run_id when is_binary(run_id) and run_id != "" -> true
+            _ -> false
+          end
+        end,
+        message: "run progress mapping was never registered"
+      )
 
       # Cancel
       GenServer.cast(pid, {:cancel, :user_requested})
@@ -2154,7 +2153,9 @@ defmodule LemonGateway.RunTest do
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run(run_id) != nil end,
+        fn ->
+          match?(%{events: events} when length(events) >= 2, LemonCore.Store.get_run(run_id))
+        end,
         message: "run data was not stored"
       )
 
@@ -2355,16 +2356,15 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists (stores run_id string, not PID)
-      assert Enum.any?(1..20, fn _attempt ->
-               case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
-                 run_id when is_binary(run_id) and run_id != "" ->
-                   true
-
-                 _ ->
-                   Process.sleep(10)
-                   false
-               end
-             end)
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn ->
+          case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
+            run_id when is_binary(run_id) and run_id != "" -> true
+            _ -> false
+          end
+        end,
+        message: "run progress mapping was never registered"
+      )
 
       # Cancel
       GenServer.cast(pid, {:cancel, :user_requested})
