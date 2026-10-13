@@ -58,15 +58,19 @@ defmodule LemonAgent.LoopEdgeCasesTest do
 
   describe "abort during tool execution" do
     test "abort signal terminates long-running tool" do
+      parent = self()
+
       # Tool that takes a while
       slow_tool = %AgentTool{
         name: "slow_tool",
         description: "A slow tool",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Slow",
-        execute: fn _id, _params, signal, _on_update ->
-          # Simulate slow work with abort check
-          for _ <- 1..10 do
+        execute: fn id, _params, signal, _on_update ->
+          send(parent, {:slow_tool_started, id})
+
+          # Simulate slow work with abort check (long enough that only the abort ends it)
+          for _ <- 1..600 do
             if AbortSignal.aborted?(signal) do
               throw(:aborted)
             end
@@ -94,14 +98,14 @@ defmodule LemonAgent.LoopEdgeCasesTest do
 
       stream = Loop.agent_loop([user_message("Run slow tool")], context, config, signal, nil)
 
-      # Abort after a short delay
-      Task.start(fn ->
-        Process.sleep(100)
-        AbortSignal.abort(signal)
-      end)
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+
+      # Abort once the tool is running
+      assert_receive {:slow_tool_started, "call_slow"}, 5_000
+      AbortSignal.abort(signal)
 
       # Should terminate with canceled semantics
-      events = EventStream.events(stream) |> Enum.to_list()
+      events = Task.await(events_task, 20_000)
 
       # Aborted runs can surface via cancellation, aborted assistant message,
       # aborted turn_end, or errored tool completion.

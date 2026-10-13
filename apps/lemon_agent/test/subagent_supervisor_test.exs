@@ -18,6 +18,8 @@ defmodule LemonAgent.SubagentSupervisorTest do
   alias LemonAgent.AgentRegistry
   alias LemonAgent.Test.Mocks
 
+  import LemonCore.Testing.AsyncHelpers
+
   # ============================================================================
   # Setup
   # ============================================================================
@@ -328,12 +330,13 @@ defmodule LemonAgent.SubagentSupervisorTest do
       count_before = SubagentSupervisor.count()
 
       # Kill the process abnormally
+      ref = Process.monitor(pid)
       Process.exit(pid, :kill)
-      Process.sleep(50)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
 
       # The process should not be restarted (temporary restart strategy)
       refute Process.alive?(pid)
-      assert SubagentSupervisor.count() == count_before - 1
+      assert_eventually(fn -> SubagentSupervisor.count() == count_before - 1 end, timeout: 5_000)
     end
 
     test "supervisor remains stable after child crash" do
@@ -351,8 +354,9 @@ defmodule LemonAgent.SubagentSupervisorTest do
         )
 
       # Kill the child
+      ref = Process.monitor(pid)
       Process.exit(pid, :kill)
-      Process.sleep(20)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 5_000
 
       # Supervisor should still be alive and functional
       assert Process.alive?(supervisor_pid)
@@ -394,8 +398,9 @@ defmodule LemonAgent.SubagentSupervisorTest do
         )
 
       # Kill pid2
+      ref2 = Process.monitor(pid2)
       Process.exit(pid2, :kill)
-      Process.sleep(20)
+      assert_receive {:DOWN, ^ref2, :process, ^pid2, :killed}, 5_000
 
       # pid1 and pid3 should still be alive
       assert Process.alive?(pid1)
@@ -429,7 +434,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
       assert Process.alive?(pid)
 
       :ok = SubagentSupervisor.stop_subagent(pid)
-      Process.sleep(20)
 
       refute Process.alive?(pid)
     end
@@ -479,7 +483,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
       count_before = SubagentSupervisor.count()
 
       SubagentSupervisor.stop_subagent(pid)
-      Process.sleep(20)
 
       assert SubagentSupervisor.count() == count_before - 1
     end
@@ -500,7 +503,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
       assert pid in SubagentSupervisor.list_subagents()
 
       SubagentSupervisor.stop_subagent(pid)
-      Process.sleep(20)
 
       refute pid in SubagentSupervisor.list_subagents()
     end
@@ -526,7 +528,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
       assert Process.alive?(pid)
 
       :ok = SubagentSupervisor.stop_subagent_by_key(key)
-      Process.sleep(20)
 
       refute Process.alive?(pid)
     end
@@ -557,10 +558,10 @@ defmodule LemonAgent.SubagentSupervisorTest do
       assert {:ok, ^pid} = AgentRegistry.lookup(key)
 
       SubagentSupervisor.stop_subagent_by_key(key)
-      Process.sleep(20)
 
-      # Registry entry should be gone (process died, so via tuple unregisters)
-      assert :error = AgentRegistry.lookup(key)
+      # Registry entry should be gone (process died, so via tuple unregisters);
+      # the registry removes it asynchronously after the process exits
+      assert_eventually(fn -> AgentRegistry.lookup(key) == :error end, timeout: 5_000)
     end
   end
 
@@ -588,7 +589,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
       end
 
       :ok = SubagentSupervisor.stop_all()
-      Process.sleep(50)
 
       for pid <- pids do
         refute Process.alive?(pid)
@@ -598,7 +598,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
     test "returns :ok even when no subagents exist" do
       # First stop all to ensure clean state
       SubagentSupervisor.stop_all()
-      Process.sleep(20)
 
       # Calling stop_all on empty supervisor should still return :ok
       result = SubagentSupervisor.stop_all()
@@ -620,7 +619,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
         )
 
       SubagentSupervisor.stop_all()
-      Process.sleep(20)
 
       # Should be able to create new subagents
       {:ok, pid2} =
@@ -667,7 +665,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
 
       # Remove one
       SubagentSupervisor.stop_subagent(hd(pids))
-      Process.sleep(20)
 
       assert SubagentSupervisor.count() == initial_count + 2
 
@@ -705,7 +702,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
       assert pid2 in current_list
 
       SubagentSupervisor.stop_subagent(pid1)
-      Process.sleep(20)
 
       updated_list = SubagentSupervisor.list_subagents()
       refute pid1 in updated_list
@@ -737,11 +733,9 @@ defmodule LemonAgent.SubagentSupervisorTest do
       assert SubagentSupervisor.count() == initial + 2
 
       SubagentSupervisor.stop_subagent(pid1)
-      Process.sleep(20)
       assert SubagentSupervisor.count() == initial + 1
 
       SubagentSupervisor.stop_subagent(pid2)
-      Process.sleep(20)
       assert SubagentSupervisor.count() == initial
     end
   end
@@ -950,7 +944,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
 
       # Stop all
       SubagentSupervisor.stop_all()
-      Process.sleep(50)
 
       # Should return empty list
       assert SubagentSupervisor.list_subagents() == []
@@ -961,7 +954,6 @@ defmodule LemonAgent.SubagentSupervisorTest do
     test "count returns 0 when no children" do
       # Stop all
       SubagentSupervisor.stop_all()
-      Process.sleep(50)
 
       assert SubagentSupervisor.count() == 0
     end

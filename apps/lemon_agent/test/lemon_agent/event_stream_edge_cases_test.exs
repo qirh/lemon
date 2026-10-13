@@ -88,7 +88,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
         end)
 
       # Wait for subscriber to start
-      assert_receive :subscriber_started, 500
+      assert_receive :subscriber_started, 5_000
 
       # Verify subscriber hasn't received anything yet (it's blocking)
       refute_receive {:received_event, _}, 50
@@ -97,7 +97,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
       EventStream.push(stream, {:wake_up, :now})
 
       # Subscriber should receive it
-      assert_receive {:received_event, [{:wake_up, :now}]}, 500
+      assert_receive {:received_event, [{:wake_up, :now}]}, 5_000
 
       Task.await(subscriber)
     end
@@ -113,7 +113,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
           EventStream.result(stream)
         end)
 
-      assert_receive :waiter_started, 500
+      assert_receive :waiter_started, 5_000
 
       # Push some events (should not affect result waiter)
       EventStream.push(stream, {:event, 1})
@@ -438,9 +438,8 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
         EventStream.push_async(stream, {:event, i})
       end
 
-      # Wait for all async pushes to process
-      Process.sleep(200)
-
+      # `stats/1` is a call from the same process, so it is handled after every
+      # cast above
       stats = EventStream.stats(stream)
       assert stats.queue_size == 5000
       assert stats.dropped == 0
@@ -767,9 +766,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
       assert :ok = EventStream.push_async(stream, {:dropped, 1})
       assert :ok = EventStream.push_async(stream, {:dropped, 2})
 
-      # Wait for async pushes
-      Process.sleep(50)
-
+      # `stats/1` is a call from the same process, so it is handled after both casts
       stats = EventStream.stats(stream)
       assert stats.dropped == 2
       assert stats.queue_size == 3
@@ -934,6 +931,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
 
     test "timeout triggers cancel correctly" do
       {:ok, stream} = EventStream.start_link(timeout: 50)
+      stream_ref = Process.monitor(stream)
 
       waiter =
         Task.async(fn ->
@@ -941,11 +939,10 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
         end)
 
       # Don't complete - let timeout happen
-      result = Task.await(waiter, 1000)
+      result = Task.await(waiter, 5_000)
       assert {:error, {:canceled, :timeout}} = result
 
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, _reason}, 5_000
     end
 
     test "completion before timeout cancels timer" do
