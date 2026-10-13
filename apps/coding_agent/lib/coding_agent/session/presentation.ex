@@ -211,8 +211,7 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def session_file_path(session_id, cwd) do
-    dir = CodingAgent.Config.sessions_dir(cwd)
-    Path.join(dir, "#{session_id}.jsonl")
+    CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
   def finalize_session(state) do

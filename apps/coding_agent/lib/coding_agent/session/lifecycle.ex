@@ -80,7 +80,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
     session_file =
       session_file ||
-        Path.join(SessionManager.get_session_dir(cwd), "#{session_manager.header.id}.jsonl")
+        SessionManager.session_file_path(cwd, session_manager.header.id)
 
     session_manager =
       session_manager
@@ -408,10 +408,7 @@ defmodule CodingAgent.Session.Lifecycle do
         new_session_manager =
           SessionManager.persist(
             new_session_manager,
-            Path.join(
-              SessionManager.get_session_dir(state.cwd),
-              "#{new_session_manager.header.id}.jsonl"
-            )
+            SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
           )
 
         Persistence.maybe_unregister_session(

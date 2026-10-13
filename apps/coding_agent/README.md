@@ -525,6 +525,8 @@ unreadable session is an error, never a silently empty conversation. A torn
 last append is recovered; completed corrupt lines remain errors. Interrupted
 tool calls receive an explicit interrupted-result marker, not a fabricated
 successful result.
+Native identities remain unchanged in their headers; oversized or path-unsafe
+identities use deterministic portable journal filenames inside the session directory.
 Usage checkpoints preserve response costs and cache-write durations as well as
 token counts, so reopening a session does not reset its recorded cost. Rewinding
 a live branch preserves the selected provider API, including ChatGPT/Codex models.

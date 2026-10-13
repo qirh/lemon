@@ -645,13 +645,19 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
-    test "creates new session if file doesn't exist", %{tmp_dir: tmp_dir} do
+    test "rejects an explicit session file that does not exist", %{tmp_dir: tmp_dir} do
       non_existent_file = Path.join(tmp_dir, "non_existent.jsonl")
+      previous_trap_exit = Process.flag(:trap_exit, true)
 
-      session = start_session(session_file: non_existent_file, cwd: tmp_dir)
-      messages = Session.get_messages(session)
+      try do
+        assert {:error, {%ArgumentError{} = error, _stacktrace}} =
+                 Session.start_link(default_opts(session_file: non_existent_file, cwd: tmp_dir))
 
-      assert messages == []
+        assert Exception.message(error) == "cannot resume session: :enoent"
+        refute File.exists?(non_existent_file)
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
     end
 
     @tag :tmp_dir
@@ -689,18 +695,27 @@ defmodule CodingAgent.SessionTest do
       assert resumed_state.session_manager.header.id == session_id
       assert resumed_state.session_manager.header.cwd == cwd_b
       assert Session.get_messages(resumed_elsewhere) == []
-      refute File.exists?(Path.join(Config.sessions_dir(cwd_b), "#{session_id}.jsonl"))
+      journal_path = Path.join(Config.sessions_dir(cwd_b), "#{session_id}.jsonl")
+      assert {:ok, journal} = SessionManager.load_from_file(journal_path)
+      assert journal.header.cwd == cwd_b
+      assert SessionManager.build_session_context(journal).messages == []
     end
 
     @tag :tmp_dir
-    test "creates new session if file is invalid", %{tmp_dir: tmp_dir} do
+    test "rejects an invalid explicit session file without replacing it", %{tmp_dir: tmp_dir} do
       invalid_file = Path.join(tmp_dir, "invalid.jsonl")
       File.write!(invalid_file, "not valid json")
+      previous_trap_exit = Process.flag(:trap_exit, true)
 
-      session = start_session(session_file: invalid_file, cwd: tmp_dir)
-      messages = Session.get_messages(session)
+      try do
+        assert {:error, {%ArgumentError{} = error, _stacktrace}} =
+                 Session.start_link(default_opts(session_file: invalid_file, cwd: tmp_dir))
 
-      assert messages == []
+        assert Exception.message(error) =~ "cannot resume session: %Jason.DecodeError{"
+        assert File.read!(invalid_file) == "not valid json"
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
     end
   end
 
@@ -1224,7 +1239,7 @@ defmodule CodingAgent.SessionTest do
       tmp_dir: tmp_dir
     } do
       explicit_path = Path.join(tmp_dir, "existing_session.jsonl")
-      File.write!(explicit_path, "")
+      :ok = SessionManager.save_to_file(explicit_path, SessionManager.new(tmp_dir))
 
       session = start_session(cwd: tmp_dir, session_file: explicit_path)
 
@@ -1289,17 +1304,16 @@ defmodule CodingAgent.SessionTest do
     @tag :tmp_dir
     test "uses session_file if already set", %{tmp_dir: tmp_dir} do
       session_file = Path.join(tmp_dir, "explicit_session.jsonl")
-      # Create an empty session file first
-      File.write!(session_file, "")
+      :ok = SessionManager.save_to_file(session_file, SessionManager.new(tmp_dir))
 
       session = start_session(cwd: tmp_dir, session_file: session_file)
 
       :ok = Session.save(session)
 
       assert File.exists?(session_file)
-      # File should have content now
-      content = File.read!(session_file)
-      assert String.length(content) > 0
+      assert Session.get_state(session).session_file == session_file
+      assert {:ok, loaded} = SessionManager.load_from_file(session_file)
+      assert loaded.header.id == Session.get_state(session).session_manager.header.id
     end
   end
 
@@ -1326,11 +1340,8 @@ defmodule CodingAgent.SessionTest do
 
       state = Session.get_state(session)
 
-      # Should have a model_change entry
-      model_changes =
-        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
-
-      assert length(model_changes) == 1
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.model == %{provider: new_model.provider, model_id: new_model.id}
     end
   end
 
@@ -1351,14 +1362,8 @@ defmodule CodingAgent.SessionTest do
 
       state = Session.get_state(session)
 
-      thinking_changes =
-        Enum.filter(
-          SessionManager.entries(state.session_manager),
-          &(&1.type == :thinking_level_change)
-        )
-
-      assert length(thinking_changes) == 1
-      assert hd(thinking_changes).thinking_level == :medium
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.thinking_level == :medium
     end
   end
 
