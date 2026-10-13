@@ -8,6 +8,9 @@ defmodule CodingAgent.Tools.Write do
   Content must be valid UTF-8 without NUL bytes; use a binary-aware tool for
   binary data. Local targets reject symlinks and special files by default.
 
+  `agent://<task-id-or-name>`, `agent://parent`, and `agent://all` send scoped
+  peer messages instead of writing files. Sender identity is session-bound.
+
   Successful results include complete `oldText`/`newText` snapshots only when
   both are at most 16 KiB and the prior contents are known (`nil` for a new local
   file). Larger or unavailable snapshots are omitted, never truncated.
@@ -40,7 +43,7 @@ defmodule CodingAgent.Tools.Write do
     %AgentTool{
       name: "write",
       description:
-        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed." <>
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed. An agent://<task-id-or-name>, agent://parent, or agent://all path sends a scoped peer message instead of touching the filesystem." <>
           if(format_default,
             do: " Can optionally format supported files after writing.",
             else: ""
@@ -102,6 +105,24 @@ defmodule CodingAgent.Tools.Write do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(
+        _tool_call_id,
+        %{"path" => "agent://" <> _ = path} = params,
+        signal,
+        _on_update,
+        _cwd,
+        opts
+      ) do
+    if AbortSignal.aborted?(signal) do
+      {:error, :aborted}
+    else
+      case get_content(params) do
+        {:ok, content} -> CodingAgent.Tools.Task.Messaging.send(path, content, opts)
+        error -> error
+      end
+    end
+  end
+
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     # Check for abort at start
     if AbortSignal.aborted?(signal) do

@@ -88,6 +88,8 @@ defmodule CodingAgent.ToolRegistry do
     {:goal, LemonSkills.Tools.Goal},
     {:peer, LemonSkills.Tools.Peer},
     {:task, Tools.Task},
+    {:agent_message, Tools.Task.Messaging},
+    {:wait, Tools.Task.Wait},
     {:agent, Tools.Agent},
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
