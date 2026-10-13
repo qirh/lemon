@@ -106,6 +106,8 @@ Automatic recall is also disabled when `[features] session_search = "off"`, whic
 disables automatic project capture. `[memory] auto_recall = false` disables injection only.
 Automatic recall performs no LLM pass or network request: it uses local database reads and
 lexical search. Background fact extraction is separate from this latency-sensitive recall path.
+It uses the same resolved summary model as compaction, including a configured `@smol`
+role, with that provider's credentials; it does not switch the active session model.
 
 ---
 

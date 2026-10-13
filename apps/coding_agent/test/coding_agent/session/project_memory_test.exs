@@ -75,6 +75,40 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     assert {:ok, [^fact]} = Project.read(state, store: store)
   end
 
+  test "capture uses the configured summary model with its matching credentials", %{
+    state: state,
+    store: store
+  } do
+    owner = self()
+
+    settings = %{
+      state.settings_manager
+      | model_roles: %{"smol" => "anthropic:claude-3-5-haiku-20241022"},
+        providers: %{"anthropic" => %{api_key: "summary-only-key", auth_source: :api_key}}
+    }
+
+    state = %{state | settings_manager: settings}
+
+    complete = fn model, _, options ->
+      send(owner, {:summary_selection, model, options.api_key})
+      response([])
+    end
+
+    assert {:ok, _} =
+             ProjectMemory.after_turn(state, turn("Run checks from the root."),
+               store: store,
+               complete: complete
+             )
+
+    assert :ok = ProjectMemory.flush(state, 5_000)
+
+    assert_receive {:summary_selection,
+                    %Model{provider: :anthropic, id: "claude-3-5-haiku-20241022"},
+                    "summary-only-key"}
+
+    assert state.model.provider == :openai
+  end
+
   test "successful compaction summary is extracted rather than stored verbatim", %{
     state: state,
     store: store

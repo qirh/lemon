@@ -273,7 +273,8 @@ defmodule CodingAgent.Session.ProjectMemory do
 
     complete = Keyword.get(job.opts, :complete, &LemonAi.complete/3)
 
-    with {:ok, facts} <- decode_response(complete.(job.runtime.model, context, stream_options)) do
+    with {:ok, facts} <-
+           decode_response(complete.(Keyword.fetch!(options, :model), context, stream_options)) do
       Project.capture(job.context, facts, Keyword.take(job.opts, [:store]))
     end
   rescue
