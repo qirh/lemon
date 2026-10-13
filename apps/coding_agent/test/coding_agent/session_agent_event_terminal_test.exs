@@ -6,6 +6,8 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   alias LemonAi.Types.AssistantMessage
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.{TextContent, ToolCall, ToolResultMessage}
 
   defp start_session(opts \\ []) do
     cwd =
@@ -15,14 +17,23 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
       )
 
     File.mkdir_p!(cwd)
+    session_file = Path.join(cwd, "session.jsonl")
+    :ok = SessionManager.save_to_file(session_file, SessionManager.new(cwd))
 
     defaults = [
       cwd: cwd,
+      workspace_dir: Path.join(cwd, "workspace"),
+      session_file: session_file,
       model: Mocks.mock_model(),
       stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
     ]
 
-    {:ok, session} = Session.start_link(Keyword.merge(defaults, opts))
+    session = start_supervised!({Session, Keyword.merge(defaults, opts)})
+
+    on_exit(fn ->
+      File.rm_rf!(cwd)
+    end)
+
     session
   end
 
@@ -41,6 +52,139 @@ defmodule CodingAgent.SessionAgentEventTerminalTest do
   defp collect_stream_events(stream, timeout \\ 2_000) do
     Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
     |> Task.await(timeout)
+  end
+
+  defp wait_for_abort(signal) do
+    unless LemonAgent.AbortSignal.aborted?(signal) do
+      Process.sleep(5)
+      wait_for_abort(signal)
+    end
+  end
+
+  defp assert_native_cancel(mode) do
+    parent = self()
+    call_id = "native_cancel_#{mode}"
+    queued_id = "native_queued_#{mode}"
+
+    tool = %AgentTool{
+      name: "native_wait",
+      label: "Native wait",
+      description: "Emits observed output before cancellation",
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn _id, _args, signal, on_update ->
+        on_update.(%AgentToolResult{
+          content: [%TextContent{type: :text, text: "STARTED\n"}],
+          trust: :untrusted,
+          details: %{source: "observed stdout"}
+        })
+
+        send(parent, {:native_tool_started, mode, self()})
+
+        if mode == :cooperative do
+          wait_for_abort(signal)
+
+          %AgentToolResult{
+            content: [%TextContent{type: :text, text: "Command cancelled.\n\nSTARTED\n"}],
+            trust: :untrusted,
+            is_error: true,
+            details: %{cancelled: true, source: "actual final result"}
+          }
+        else
+          Process.sleep(5_000)
+          send(parent, :forbidden_mutation)
+          %AgentToolResult{content: [%TextContent{type: :text, text: "too late"}]}
+        end
+      end
+    }
+
+    queued = %{
+      tool
+      | name: "native_queued",
+        execute: fn _id, _args, _signal, _on_update ->
+          send(parent, :forbidden_mutation)
+          %AgentToolResult{content: []}
+        end
+    }
+
+    response = %{
+      Mocks.assistant_message("")
+      | stop_reason: :tool_use,
+        content: [
+          %ToolCall{type: :tool_call, id: call_id, name: tool.name, arguments: %{}},
+          %ToolCall{type: :tool_call, id: queued_id, name: queued.name, arguments: %{}}
+        ]
+    }
+
+    session =
+      start_session(tools: [tool, queued], stream_fn: Mocks.mock_stream_fn_single(response))
+
+    {:ok, stream} = Session.subscribe(session, mode: :stream)
+    :ok = Session.prompt(session, "start the tool and wait")
+    assert_receive {:native_tool_started, ^mode, worker}, 2_000
+    monitor = Process.monitor(worker)
+    :ok = Session.abort(session)
+
+    events = collect_stream_events(stream)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 1_000
+    refute_receive :forbidden_mutation, 10
+
+    native_events =
+      for {:session_event, _, event} <- events, do: event
+
+    assert {:tool_execution_end, ^call_id, "native_wait", result, true} =
+             Enum.find(native_events, &match?({:tool_execution_end, ^call_id, _, _, _}, &1))
+
+    assert result.trust == :untrusted
+    assert result.details.cancelled
+    assert Enum.any?(result.content, &(&1.text =~ "STARTED"))
+
+    if mode == :cooperative do
+      assert result.details.source == "actual final result"
+      assert Enum.map_join(result.content, "", & &1.text) == "Command cancelled.\n\nSTARTED\n"
+    else
+      assert result.details.outcome == :unknown
+      assert result.details.partial_details == %{source: "observed stdout"}
+      assert Enum.any?(result.content, &(&1.text =~ "Mutation outcome is unknown"))
+    end
+
+    assert {:tool_execution_end, ^queued_id, "native_queued", queued_result, true} =
+             Enum.find(native_events, &match?({:tool_execution_end, ^queued_id, _, _, _}, &1))
+
+    assert queued_result.details.outcome == :not_started
+
+    tool_end_index =
+      Enum.find_index(native_events, &match?({:tool_execution_end, ^call_id, _, _, _}, &1))
+
+    message_end_index =
+      Enum.find_index(
+        native_events,
+        &match?({:message_end, %ToolResultMessage{tool_call_id: ^call_id}}, &1)
+      )
+
+    turn_end_index = Enum.find_index(native_events, &match?({:turn_end, _, _}, &1))
+    assert tool_end_index < message_end_index
+    assert message_end_index < turn_end_index
+    assert List.last(events) == {:canceled, :assistant_aborted}
+
+    state = Session.get_state(session)
+    refute state.is_streaming
+    {:ok, reloaded} = SessionManager.load_from_file(state.session_file)
+
+    persisted =
+      SessionManager.entries(reloaded)
+      |> Enum.filter(&(&1.type == :message and &1.message["role"] == "tool_result"))
+
+    assert Enum.map(persisted, & &1.message["tool_call_id"]) == [call_id, queued_id]
+    assert hd(persisted).message["details"]["cancelled"] == true
+    assert Enum.any?(hd(persisted).message["content"], &(&1["text"] =~ "STARTED"))
+  end
+
+  test "native cancellation drains cooperative tool output and persists paired tool results" do
+    assert_native_cancel(:cooperative)
+  end
+
+  test "native cancellation preserves observed partial output when cleanup must kill the worker" do
+    assert_native_cancel(:forced)
   end
 
   test "aborted assistant message_end clears streaming and completes stream subscribers" do

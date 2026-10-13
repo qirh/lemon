@@ -141,7 +141,7 @@ defmodule LemonAgent.Loop.Streaming do
   end
 
   defp retry_delay(error, config, retries_done) do
-    if retries_done < config.max_retries and LemonAi.Error.retryable?(error_text(error)) do
+    if retries_done < config.max_retries and LemonAi.Error.retryable?(error) do
       case retry_after_ms(error) do
         delay when is_integer(delay) and delay > @max_retry_after_ms ->
           :stop
@@ -163,6 +163,9 @@ defmodule LemonAgent.Loop.Streaming do
 
   defp error_text(%AssistantMessage{error_message: message}), do: message
   defp error_text(error), do: error
+
+  defp retry_after_ms(%{error_details: %{rate_limit_info: %{retry_after: delay}}})
+       when is_integer(delay), do: delay
 
   defp retry_after_ms(%{retry_after_ms: delay}) when is_integer(delay), do: delay
   defp retry_after_ms(%{rate_limit_info: %{retry_after: delay}}) when is_integer(delay), do: delay

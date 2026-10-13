@@ -13,6 +13,7 @@ defmodule CodingAgent.Session.EventHandler do
 
   @type callbacks(state) :: %{
           required(:complete_event_streams) => (state, term() -> :ok),
+          required(:broadcast_event) => (state, term() -> :ok),
           required(:maybe_trigger_compaction) => (state -> state),
           required(:persist_message) => (state, term() -> state)
         }
@@ -65,6 +66,9 @@ defmodule CodingAgent.Session.EventHandler do
     Extensions.execute_hooks(state.hooks, :on_message_end, [message])
 
     new_state = callbacks.persist_message.(state, message)
+    # Persist before observers see completion, but deliver it before an abort
+    # terminalizes streams and clears their subscribers.
+    callbacks.broadcast_event.(new_state, {:message_end, message})
 
     # Some abort paths can terminate after :message_end without emitting
     # :turn_end/:agent_end/:canceled. Treat aborted assistant messages as terminal
@@ -116,6 +120,7 @@ defmodule CodingAgent.Session.EventHandler do
     maybe_record_missed_skills(state, messages)
     maybe_record_missed_learning(state, messages)
     _ = CodingAgent.Session.ProjectMemory.after_turn(state, messages)
+    state = CodingAgent.Session.Planning.after_turn(state, messages)
 
     # Complete all event streams with the final event
     callbacks.complete_event_streams.(state, {:agent_end, messages})

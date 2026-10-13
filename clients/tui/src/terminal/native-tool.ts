@@ -3,7 +3,7 @@ import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { ToolBlock } from "../store/transcript-model.ts";
 import { renderDiff } from "../ui/components/diff.ts";
 import { type ToolCardState, type ToolView, toolArgs } from "../ui/tool-view.ts";
-import { fileTarget } from "./links.ts";
+import { fileTarget, toolLocation } from "./links.ts";
 
 const STATUS = {
 	streaming: "pending",
@@ -21,7 +21,8 @@ export function nativeTool(
 ): NativeNode {
 	const args = toolArgs(block);
 	const command = typeof args.command === "string" ? args.command : undefined;
-	const path = typeof args.path === "string" ? args.path : undefined;
+	const location = toolLocation(block);
+	const path = location?.path;
 	const pattern = typeof args.pattern === "string" ? args.pattern : undefined;
 	const query = typeof args.query === "string" ? args.query : undefined;
 	const target = command ?? path ?? pattern ?? query;
@@ -44,7 +45,7 @@ export function nativeTool(
 			title: view.title,
 			target,
 			targetKind,
-			href: path ? fileTarget(path) : undefined,
+			href: location ? fileTarget(location.path, location.line) : undefined,
 			meta: view.summary ? [view.summary] : undefined,
 			status: STATUS[view.state],
 			...(block.phase === "completed" ? { took: elapsed } : { age: elapsed }),

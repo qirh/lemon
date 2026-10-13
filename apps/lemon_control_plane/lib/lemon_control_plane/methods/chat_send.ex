@@ -8,6 +8,8 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonControlPlane.{ImageInputs, Protocol.Errors}
+
   @impl true
   def name, do: "chat.send"
 
@@ -16,6 +18,12 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   @impl true
   def handle(params, ctx) do
+    with {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
+      submit(params, ctx, images)
+    end
+  end
+
+  defp submit(params, ctx, images) do
     session_key = params["sessionKey"]
     prompt = params["prompt"] || params["message"]
     agent_id = params["agentId"]
@@ -36,11 +44,15 @@ defmodule LemonControlPlane.Methods.ChatSend do
         {:error, {:invalid_request, "cwd cannot override a canonical profile session", nil}}
 
       true ->
+        run_id = LemonCore.Id.run_id()
+
         submit_params = %{
+          run_id: run_id,
           origin: :control_plane,
           session_key: session_key,
           agent_id: agent_id,
           prompt: prompt,
+          images: images,
           queue_mode: queue_mode,
           meta: %{
             control_plane: true
@@ -63,8 +75,17 @@ defmodule LemonControlPlane.Methods.ChatSend do
                "summary" => summary(run_id, session_key, agent_id, prompt, queue_mode)
              }}
 
-          {:error, reason} ->
-            {:error, {:internal_error, inspect(reason), nil}}
+          {:error, :outcome_unknown} ->
+            {:error,
+             Errors.error(:unavailable, "Chat submission outcome is unknown", %{
+               "code" => "SUBMISSION_OUTCOME_UNKNOWN",
+               "runId" => run_id,
+               "sessionKey" => session_key,
+               "retrySafe" => false
+             })}
+
+          {:error, _reason} ->
+            {:error, {:internal_error, "Chat submission failed", nil}}
         end
     end
   end

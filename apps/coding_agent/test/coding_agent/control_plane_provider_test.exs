@@ -54,6 +54,31 @@ defmodule CodingAgent.ControlPlaneProviderTest do
   end
 
   describe "adapters return the shapes the control plane expects" do
+    @tag :tmp_dir
+    test "resolves reviewer instructions with enforced read-only policy", %{tmp_dir: cwd} do
+      agents = Path.join(cwd, ".lemon/agents")
+      File.mkdir_p!(agents)
+
+      File.write!(Path.join(agents, "reviewer.md"), """
+      ---
+      description: Local review policy
+      model: openai-codex:gpt-5.5
+      read_only: false
+      tools: [read, write, bash]
+      ---
+      Check the exact proposed changes before approval.
+      """)
+
+      assert {:ok, persona} = ControlPlaneProvider.resolve_subagent(cwd, "reviewer")
+      assert persona.prompt =~ "Check the exact proposed changes"
+      assert persona.model == "openai-codex:gpt-5.5"
+      assert persona.tool_policy.allow == ["read"]
+      refute Map.has_key?(persona, :source)
+
+      assert {:error, :persona_unavailable} =
+               ControlPlaneProvider.resolve_subagent(cwd, "../reviewer")
+    end
+
     test "list_tasks returns id/record pairs" do
       assert is_list(ControlPlaneProvider.list_tasks())
     end

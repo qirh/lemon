@@ -68,22 +68,6 @@ defmodule LemonGateway.ThreadWorker do
 
   @impl true
   def handle_cast({:enqueue, %ExecutionRequest{} = request}, state) do
-    Logger.debug(
-      "ThreadWorker enqueue thread_key=#{inspect(state.thread_key)} run_id=#{inspect(request.run_id)} queue_len_before=#{queue_len_safe(state.requests)}"
-    )
-
-    Introspection.record(
-      :thread_message_dispatched,
-      %{
-        thread_key: inspect(state.thread_key),
-        queue_len: queue_len_safe(state.requests)
-      },
-      run_id: request.run_id,
-      session_key: request.session_key,
-      engine: "lemon",
-      provenance: :direct
-    )
-
     {:noreply, enqueue_request(state, request)}
   end
 
@@ -357,6 +341,19 @@ defmodule LemonGateway.ThreadWorker do
         terminalize_request(state, request, :execution_queue_full, :run_start)
 
       true ->
+        Logger.debug(
+          "ThreadWorker enqueue thread_key=#{inspect(state.thread_key)} run_id=#{inspect(request.run_id)} queue_len_before=#{queue_len_safe(state.requests)}"
+        )
+
+        Introspection.record(
+          :thread_message_dispatched,
+          %{thread_key: inspect(state.thread_key), queue_len: queue_len_safe(state.requests)},
+          run_id: request.run_id,
+          session_key: request.session_key,
+          engine: "lemon",
+          provenance: :direct
+        )
+
         %{state | requests: :queue.in(request, state.requests)}
         |> maybe_request_slot()
     end

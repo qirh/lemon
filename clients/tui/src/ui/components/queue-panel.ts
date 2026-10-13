@@ -139,7 +139,11 @@ export class QueuePanelComponent implements Component {
 			this.focused ? "f" : "-",
 			this.#selected,
 			this.#items.length,
-			this.#items.map((item) => `${item.id}:${item.state}:${item.text.length}`).join(","),
+			this.#items
+				.map(
+					(item) => `${item.id}:${item.state}:${item.text.length}:${item.attachments?.length ?? 0}`,
+				)
+				.join(","),
 		].join("|");
 	}
 
@@ -157,13 +161,19 @@ export class QueuePanelComponent implements Component {
 		for (let index = start; index < end; index++) {
 			const item = this.#items[index]!;
 			const marker = this.focused && index === this.#selected ? theme.cursor : " ";
-			const offline = item.state === "waiting-connection" ? "(offline) " : "";
-			const line = clamp(`${marker} ${index + 1}. ${offline}${oneLine(item.text)}`);
+			const state =
+				item.state === "waiting-connection"
+					? "(offline) "
+					: item.state === "needs-review"
+						? "(review before retry) "
+						: "";
+			const media = item.attachments?.length ? ` [${item.attachments.length} image(s)]` : "";
+			const line = clamp(`${marker} ${index + 1}. ${state}${oneLine(item.text)}${media}`);
 			const selected = this.focused && index === this.#selected;
 			rows.push(
 				selected
 					? theme.fg("accent", line)
-					: theme.fg(item.state === "waiting-connection" ? "warning" : "muted", line),
+					: theme.fg(item.state === "queued-local" ? "muted" : "warning", line),
 			);
 		}
 		const hidden = this.#items.length - (end - start);

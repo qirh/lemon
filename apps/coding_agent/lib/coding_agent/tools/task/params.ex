@@ -278,6 +278,7 @@ defmodule CodingAgent.Tools.Task.Params do
     base =
       "Run a focused subtask. **Use async=true by default** to avoid blocking the user conversation.\n\n" <>
         "Use tasks=[{description,prompt,...}, ...] to launch up to 32 independent children in one call; all are queued before waiting. Children run concurrently (default cap: 8).\n" <>
+        "Use action=swarm with tasks=[{name,prompt,depends_on:[names],...},...] for a dependency graph. Ready nodes run up to concurrency (1-32, default 8); successful dependency results enter each dependent's context as untrusted data. Failed branches block only their dependents, not independent work. Join the one returned swarm task_id for the final merged structured report. Cancel it to stop the entire graph.\n" <>
         "Use worktree=true for an isolated git branch; the worktree is retained for review/cherry-pick and its path/branch appear in the result. It starts from HEAD, not uncommitted parent changes.\n" <>
         "Give children unique name values for agent:// messaging. Use agent_message or write(path=agent://<name-or-id>, content=...) to contact live family; agent://parent addresses the parent and agent://all broadcasts except self. Read agent:// to list reachable agents.\n" <>
         "Use action=message or steer with task_id (or to=agent://<address>) and message; action=cancel remains parent-only. Parent cancellation propagates to all children.\n" <>
@@ -295,7 +296,7 @@ defmodule CodingAgent.Tools.Task.Params do
         "- If you launch subtasks and still need one final answer in this same turn, keep the task_ids and call action=join before you respond.\n" <>
         "- Do not rely on auto_followup alone for same-turn aggregation.\n\n" <>
         "**Parameters:**\n" <>
-        "- action: run (default), poll, join, wait, get, message, steer, cancel\n" <>
+        "- action: run (default), swarm, poll, join, wait, get, message, steer, cancel\n" <>
         "- async: true (default, recommended) = non-blocking, false = wait for completion\n" <>
         "- task_id: required when action=poll or action=get\n" <>
         "- task_ids: required when action=join\n" <>

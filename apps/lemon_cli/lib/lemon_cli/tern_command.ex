@@ -1,8 +1,11 @@
 defmodule LemonCli.TernCommand do
   @moduledoc """
-  Registers the invoking Lemon launcher in Tern's custom stdio ACP agents.
-  Unrelated preferences and custom agents are preserved.
+  Installs Lemon's Tern palette plugin and registers the invoking launcher as a
+  custom stdio ACP agent. Unrelated preferences, agents and plugin files are preserved.
   """
+
+  @plugin_assets ["plugin.toml", "window.luau"]
+  @plugin_receipt ".lemon-install.json"
 
   def run(["install" | args]) do
     {opts, rest, invalid} = OptionParser.parse(args, strict: [config_dir: :string])
@@ -14,7 +17,7 @@ defmodule LemonCli.TernCommand do
            {:ok, launcher} <- launcher(),
            :ok <- install(directory, launcher) do
         IO.puts(
-          "Registered Lemon in Tern. Open a new Tern shell and type `lemon`, or run `tern acp lemon`."
+          "Installed Lemon's Tern plugin and ACP agent. Run `tern plugin reload` (or restart Tern), then choose `Lemon: New session in split` in the palette. ACP remains available with `tern acp lemon`."
         )
 
         0
@@ -32,17 +35,25 @@ defmodule LemonCli.TernCommand do
   def install(directory, launcher) do
     path = Path.join(directory, "settings.json")
 
+    launcher = Path.expand(launcher)
+
     with {:ok, settings} <- settings(path),
          {:ok, settings} <- register(settings, launcher),
+         {:ok, assets} <- plugin_assets(launcher),
+         :ok <- plugin_destination(directory, assets),
          :ok <- File.mkdir_p(directory) do
       temporary = path <> ".lemon-" <> Integer.to_string(System.unique_integer([:positive]))
 
       try do
         with :ok <-
                File.write(temporary, Jason.encode!(settings, pretty: true) <> "\n", [:exclusive]),
+             :ok <- install_plugin(directory, assets),
              :ok <- File.rename(temporary, path) do
           :ok
         else
+          {:error, message} when is_binary(message) ->
+            {:error, message}
+
           _ ->
             {:error,
              "Could not write Tern settings; check the configuration directory permissions."}
@@ -57,6 +68,7 @@ defmodule LemonCli.TernCommand do
   end
 
   defp register(settings, launcher) do
+    # Keep the shell-launched TUI distinct from the separately registered ACP agent.
     agents = Map.get(settings, "agents", %{})
     custom = if is_map(agents), do: Map.get(agents, "custom", []), else: nil
 
@@ -81,6 +93,131 @@ defmodule LemonCli.TernCommand do
       {:error, "Tern agents.custom must be an array; settings were not changed."}
     end
   end
+
+  defp plugin_assets(launcher) do
+    source = Application.app_dir(:lemon_cli, "priv/tern")
+
+    Enum.reduce_while(@plugin_assets, {:ok, %{}}, fn name, {:ok, assets} ->
+      case File.read(Path.join(source, name)) do
+        {:ok, bytes} ->
+          {:cont, {:ok, Map.put(assets, name, bytes)}}
+
+        {:error, _} ->
+          {:halt, {:error, "Lemon's bundled Tern plugin is missing; reinstall Lemon."}}
+      end
+    end)
+    |> case do
+      {:ok, assets} ->
+        command = "'" <> String.replace(launcher, "'", "'\\''") <> "' tui"
+        config = Jason.encode!(%{"launcher" => launcher, "command" => command}, pretty: true)
+        {:ok, Map.put(assets, "launcher.json", config <> "\n")}
+
+      error ->
+        error
+    end
+  end
+
+  defp plugin_destination(directory, assets) do
+    plugin = Path.join([directory, "plugins", "lemon"])
+    link = Path.join([directory, "plugins", "lemon.path"])
+
+    with {:error, :enoent} <- File.lstat(link) do
+      case File.lstat(plugin) do
+        {:error, :enoent} ->
+          :ok
+
+        {:ok, %{type: :directory}} ->
+          owned_plugin(plugin, assets)
+
+        _ ->
+          plugin_conflict()
+      end
+    else
+      _ -> plugin_conflict()
+    end
+  end
+
+  defp owned_plugin(plugin, assets) do
+    with {:ok, %{type: :regular}} <- File.lstat(Path.join(plugin, @plugin_receipt)),
+         {:ok, encoded} <- File.read(Path.join(plugin, @plugin_receipt)),
+         {:ok, %{"owner" => "lemon tern install", "files" => files}} when is_map(files) <-
+           Jason.decode(encoded),
+         true <-
+           Enum.all?(assets, fn {name, bytes} ->
+             path = Path.join(plugin, name)
+
+             with {:ok, %{type: :regular}} <- File.lstat(path),
+                  {:ok, existing} <- File.read(path) do
+               digest(existing) in [files[name], digest(bytes)]
+             else
+               _ -> false
+             end
+           end) do
+      :ok
+    else
+      _ -> plugin_conflict()
+    end
+  end
+
+  defp plugin_conflict do
+    {:error,
+     "Tern plugins/lemon is unmanaged or modified, or lemon.path is linked. Move it aside before retrying; no settings or plugin files were changed."}
+  end
+
+  defp install_plugin(directory, assets) do
+    plugins = Path.join(directory, "plugins")
+    plugin = Path.join(plugins, "lemon")
+    stage = Path.join(plugins, ".lemon-" <> Integer.to_string(System.unique_integer([:positive])))
+
+    receipt = %{
+      "owner" => "lemon tern install",
+      "files" => Map.new(assets, fn {name, bytes} -> {name, digest(bytes)} end)
+    }
+
+    assets = Map.put(assets, @plugin_receipt, Jason.encode!(receipt, pretty: true) <> "\n")
+
+    try do
+      with :ok <- File.mkdir_p(plugins),
+           :ok <- File.mkdir(stage),
+           :ok <-
+             Enum.reduce_while(assets, :ok, fn {name, bytes}, :ok ->
+               case File.write(Path.join(stage, name), bytes, [:exclusive]) do
+                 :ok -> {:cont, :ok}
+                 error -> {:halt, error}
+               end
+             end) do
+        if File.exists?(plugin) do
+          # Publish each owned file by rename; never replace the directory or touch
+          # extra user files. The receipt goes last. Preflight also accepts desired
+          # bytes, so an interrupted publication can be retried safely.
+          Enum.reduce_while(
+            ["launcher.json", "window.luau", "plugin.toml", @plugin_receipt],
+            :ok,
+            fn name, :ok ->
+              case File.rename(Path.join(stage, name), Path.join(plugin, name)) do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+            end
+          )
+        else
+          File.rename(stage, plugin)
+        end
+      end
+    after
+      File.rm_rf(stage)
+    end
+    |> case do
+      :ok ->
+        :ok
+
+      _ ->
+        {:error,
+         "Could not publish Tern's Lemon plugin; check plugins directory permissions and retry."}
+    end
+  end
+
+  defp digest(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 
   defp settings(path) do
     case File.read(path) do

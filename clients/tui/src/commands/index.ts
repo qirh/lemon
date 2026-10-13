@@ -30,6 +30,7 @@ import {
 	tasksCommand,
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { planCommand } from "./plan.ts";
 import { profileCommand, profilesCommand } from "./profiles.ts";
 import { CommandRegistry } from "./registry.ts";
 import {
@@ -50,6 +51,7 @@ import {
 } from "./session.ts";
 import { rewindCommand, treeCommand } from "./session-tree.ts";
 import { skillsCommand } from "./skills.ts";
+import { diffCommand, outputCommand, paletteCommand, taskTreeCommand } from "./views.ts";
 
 export interface RegistryOptions {
 	/** Opens $EDITOR on the draft. Defaults to a notice that it is unavailable. */
@@ -63,6 +65,10 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 	return new CommandRegistry().registerAll([
 		helpCommand,
 		commandsCommand,
+		paletteCommand,
+		taskTreeCommand,
+		outputCommand,
+		diffCommand,
 		quitCommand,
 		clearCommand,
 		modeCommand,
@@ -79,6 +85,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		resumeCommand,
 		historyCommand,
 		compressCommand,
+		planCommand,
 		heartbeatCommand,
 		profilesCommand,
 		profileCommand,

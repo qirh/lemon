@@ -29,6 +29,7 @@ defmodule CodingAgent.Session.RunTranslator do
     :compaction_action_id,
     :budget_usage,
     :budget_stop,
+    :cancel_reason,
     accumulated_text: "",
     pending_actions: %{},
     task_actions: %{},
@@ -368,14 +369,27 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
-    answer = Presentation.extract_answer(messages, t.accumulated_text)
-    usage = messages |> Presentation.build_usage() |> with_budget_usage(t) |> with_metrics(t)
+    if t.cancel_reason do
+      emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason), %{
+        messages: messages
+      })
+    else
+      answer = Presentation.extract_answer(messages, t.accumulated_text)
+      usage = messages |> Presentation.build_usage() |> with_budget_usage(t) |> with_metrics(t)
+      emit_completed_ok(t, answer, usage)
+    end
+  end
 
-    emit_completed_ok(t, answer, usage)
+  def handle_event(%__MODULE__{} = t, {:canceled, reason}) do
+    t = mark_cancelled(t, reason)
+    emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason))
   end
 
   def handle_event(%__MODULE__{} = t, {:error, reason, partial_state}) do
-    error_msg = Presentation.format_error(reason, t)
+    error_msg =
+      if t.cancel_reason,
+        do: Presentation.cancel_error_message(t.cancel_reason),
+        else: Presentation.format_error(reason, t)
 
     Logger.error(
       "#{t.label} stream error " <>
@@ -391,6 +405,15 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:turn_start}), do: t
+
+  def handle_event(
+        %__MODULE__{} = t,
+        {:turn_end, %LemonAi.Types.AssistantMessage{stop_reason: :aborted}, _results}
+      ) do
+    t = mark_cancelled(%{t | turns: t.turns + 1}, :assistant_aborted)
+    emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason))
+  end
+
   def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: %{t | turns: t.turns + 1}
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:message_end, _msg}), do: t
@@ -398,17 +421,21 @@ defmodule CodingAgent.Session.RunTranslator do
   def handle_event(%__MODULE__{} = t, {:branch_summarized, _info}), do: t
   def handle_event(%__MODULE__{} = t, _event), do: t
 
-  def handle_cancel(%__MODULE__{} = t, reason) do
-    if t.started_emitted and not t.completed_emitted do
-      emit_completed_error(t, Presentation.cancel_error_message(reason))
-    else
-      t
-    end
+  @doc "Marks cancellation intent without discarding queued terminal tool events."
+  def mark_cancelled(%__MODULE__{} = t, reason) do
+    if t.completed_emitted or t.cancel_reason,
+      do: t,
+      else: %{t | cancel_reason: reason || :user_requested}
   end
 
   def handle_session_down(%__MODULE__{} = t, reason) do
     if t.started_emitted and not t.completed_emitted do
-      emit_completed_error(t, "Session terminated: #{inspect(reason)}")
+      error =
+        if t.cancel_reason,
+          do: Presentation.cancel_error_message(t.cancel_reason),
+          else: "Session terminated: #{inspect(reason)}"
+
+      emit_completed_error(t, error)
     else
       t
     end

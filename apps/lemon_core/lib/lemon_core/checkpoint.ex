@@ -1,6 +1,10 @@
 defmodule LemonCore.Checkpoint do
   @moduledoc """
   Shared checkpoint store and filesystem rollback operations.
+
+  Persisted JSON keys use existing atoms when available and remain strings
+  otherwise. Freeform state and tool metadata therefore do not require their
+  producer modules to be loaded, and reading checkpoints never creates atoms.
   """
 
   require Logger
@@ -159,7 +163,7 @@ defmodule LemonCore.Checkpoint do
 
     case File.read(path) do
       {:ok, content} ->
-        case Jason.decode(content, keys: :atoms!) do
+        case decode_checkpoint(content) do
           {:ok, checkpoint} -> {:ok, checkpoint}
           {:error, reason} -> {:error, {:json_decode, reason}}
         end
@@ -184,7 +188,7 @@ defmodule LemonCore.Checkpoint do
 
       case File.read(path) do
         {:ok, content} ->
-          case Jason.decode(content, keys: :atoms!) do
+          case decode_checkpoint(content) do
             {:ok, checkpoint} -> checkpoint
             _ -> nil
           end
@@ -299,6 +303,16 @@ defmodule LemonCore.Checkpoint do
 
     content = Jason.encode!(checkpoint, pretty: true)
     File.write(path, content)
+  end
+
+  defp decode_checkpoint(content) do
+    Jason.decode(content, keys: &checkpoint_key/1)
+  end
+
+  defp checkpoint_key(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> key
   end
 
   defp emit_checkpoint_event(event_type, checkpoint, payload, opts) do

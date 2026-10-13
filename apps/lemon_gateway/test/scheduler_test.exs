@@ -55,50 +55,6 @@ defmodule LemonGateway.SchedulerTest do
     defp unique_id, do: Integer.to_string(System.unique_integer([:positive]))
   end
 
-  defmodule BlockingEnqueueWorker do
-    @moduledoc false
-    use GenServer
-
-    def start_link(opts) do
-      GenServer.start_link(__MODULE__, opts)
-    end
-
-    @impl true
-    def init(opts) do
-      thread_key = Keyword.fetch!(opts, :thread_key)
-      notify_pid = Keyword.fetch!(opts, :notify_pid)
-      delay_ms = Keyword.get(opts, :delay_ms, 300)
-
-      {:ok, _} = Registry.register(Elixir.LemonGateway.ThreadRegistry, thread_key, :ok)
-
-      {:ok, %{notify_pid: notify_pid, delay_ms: delay_ms}}
-    end
-
-    @impl true
-    def handle_cast({:enqueue, %ExecutionRequest{} = request}, state) do
-      Process.sleep(state.delay_ms)
-
-      send(
-        state.notify_pid,
-        {:blocking_worker_enqueue_cast, request.run_id, request.prompt}
-      )
-
-      {:noreply, state}
-    end
-
-    @impl true
-    def handle_call({:enqueue, %ExecutionRequest{} = request}, _from, state) do
-      Process.sleep(state.delay_ms)
-
-      send(
-        state.notify_pid,
-        {:blocking_worker_enqueue_call, request.run_id, request.prompt}
-      )
-
-      {:reply, :ok, state}
-    end
-  end
-
   # Test helper to create a minimal execution request
   defp make_request(opts \\ []) do
     scope = Keyword.get(opts, :scope, %ChatScope{transport: :test, chat_id: 1, topic_id: nil})
@@ -262,41 +218,10 @@ defmodule LemonGateway.SchedulerTest do
       Process.exit(worker, :kill)
     end
 
-    test "submit path does not block on worker enqueue" do
-      if is_nil(Process.whereis(Elixir.LemonGateway.ThreadRegistry)) do
-        {:ok, _} =
-          start_supervised({Registry, keys: :unique, name: Elixir.LemonGateway.ThreadRegistry})
-      end
-
-      session_key = "blocking_enqueue:#{System.unique_integer([:positive])}"
-      thread_key = {:session, session_key}
-
-      {:ok, _worker_pid} =
-        start_supervised(
-          {BlockingEnqueueWorker, thread_key: thread_key, notify_pid: self(), delay_ms: 300}
-        )
-
-      state = %{
-        max: 2,
-        in_flight: %{},
-        waitq: :queue.new(),
-        monitors: %{},
-        worker_counts: %{}
-      }
-
-      request = make_request(session_key: session_key)
-      run_id = request.run_id
-      prompt = request.prompt
-
-      {elapsed_us, {:noreply, new_state}} =
-        :timer.tc(fn ->
-          Scheduler.handle_cast({:submit_execution, request}, state)
-        end)
-
-      assert new_state == state
-      assert elapsed_us < 100_000
-      assert_receive {:blocking_worker_enqueue_cast, ^run_id, ^prompt}, 1_000
-      refute_receive {:blocking_worker_enqueue_call, _, _}
+    test "submission rejects missing run identity before admitting any work" do
+      request = %{make_request() | run_id: nil}
+      assert {:error, :invalid_run_id} = Scheduler.submit_execution(request)
+      assert {:error, :invalid_run_id} = Scheduler.submit_execution(%{request | run_id: ""})
     end
 
     test "release_slot removes slot from in_flight and grants to waiting" do

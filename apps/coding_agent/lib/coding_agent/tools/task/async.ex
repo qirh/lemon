@@ -29,7 +29,8 @@ defmodule CodingAgent.Tools.Task.Async do
       lifecycle_context[:parent_session_pid],
       fn reason ->
         finalize_async(task_id, run_id, {:error, reason}, followup_context, lifecycle_context)
-      end
+      end,
+      lifecycle_context[:task_owner_pid]
     )
 
     case start_async_worker(supervisor, fn ->
@@ -125,7 +126,7 @@ defmodule CodingAgent.Tools.Task.Async do
     end
 
     try do
-      maybe_acquire_task_semaphore()
+      unless lifecycle_context[:orchestration_worker], do: maybe_acquire_task_semaphore()
 
       {:ok, wrapped.()}
     rescue
@@ -133,7 +134,7 @@ defmodule CodingAgent.Tools.Task.Async do
     catch
       kind, reason -> {:error, {kind, reason}}
     after
-      maybe_release_task_semaphore()
+      unless lifecycle_context[:orchestration_worker], do: maybe_release_task_semaphore()
     end
   end
 
@@ -307,10 +308,20 @@ defmodule CodingAgent.Tools.Task.Async do
   defp emit_terminal_update(task_id, run_id, result, context) do
     {status, text} =
       case result do
-        {:ok, {:error, reason}} -> terminal_error(reason)
-        {:error, reason} -> terminal_error(reason)
-        {:ok, value} -> {"completed", Result.visible_output_text(value)}
-        other -> terminal_error(other)
+        {:ok, {:error, reason}} ->
+          terminal_error(reason)
+
+        {:error, reason} ->
+          terminal_error(reason)
+
+        {:ok, %AgentToolResult{is_error: true} = value} ->
+          {"error", Result.visible_output_text(value)}
+
+        {:ok, value} ->
+          {"completed", Result.visible_output_text(value)}
+
+        other ->
+          terminal_error(other)
       end
 
     result_details =
@@ -326,6 +337,7 @@ defmodule CodingAgent.Tools.Task.Async do
 
     notify_progress(context, callback, %AgentToolResult{
       content: [%LemonAi.Types.TextContent{text: text}],
+      is_error: status in ["error", "aborted"],
       details:
         result_details
         |> Map.merge(CodingAgent.Tools.Task.Result.lineage_details(context))
