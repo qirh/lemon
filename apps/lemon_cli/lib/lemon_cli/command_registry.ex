@@ -98,6 +98,14 @@ defmodule LemonCli.CommandRegistry do
         option("--config-path PATH", ["--config-path"], "Config file to read or write"),
         option("--skip-verify", ["--skip-verify"], "Defer live provider verification"),
         option(
+          "--provider NAME",
+          ["--provider"],
+          "Provider to sign in to (openai-codex for ChatGPT)"
+        ),
+        option("--token TOKEN", ["--token"], "Credential for non-interactive provider setup"),
+        option("--auth oauth|api_key", ["--auth"], "Authentication mode"),
+        option("--model MODEL", ["--model"], "Model to make the default after onboarding"),
+        option(
           "--if-required",
           ["--if-required"],
           "Exit immediately unless setup is still required"
@@ -543,14 +551,18 @@ defmodule LemonCli.CommandRegistry do
       @both_launchers,
       [@runtime_options_detail]
     ),
-    lifecycle("stop", "lemon stop", "Stop the background runtime", @both_launchers),
+    lifecycle("stop", "lemon stop", "Stop the background runtime", @both_launchers, [
+      "Select the daemon with LEMON_CONTROL_PLANE_PORT; source checkouts also accept --port N and verify the recorded process start identity before signalling it."
+    ]),
     lifecycle(
       "restart",
       "lemon restart [runtime options]",
       "Restart the background runtime",
       @both_launchers
     ),
-    lifecycle("status", "lemon status", "Report runtime pid and health", @both_launchers),
+    lifecycle("status", "lemon status", "Report runtime pid and health", @both_launchers, [
+      "Select the daemon with LEMON_CONTROL_PLANE_PORT; source checkouts also accept --port N."
+    ]),
     lifecycle("remote", "lemon remote", "Attach a remote IEx shell to the runtime", [:release]),
     lifecycle("eval", "lemon eval EXPR", "Evaluate EXPR in a fresh release VM", [:release]),
     lifecycle("rpc", "lemon rpc EXPR", "Evaluate EXPR on the running runtime", [:release])

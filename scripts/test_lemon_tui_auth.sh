@@ -12,7 +12,7 @@ cleanup() {
 
   for pid_file in "$TEST_DIR/runtime.pid" "$TEST_DIR/source-runtime.pid" "$TEST_DIR/package-runtime.pid"; do
     if [[ -f "$pid_file" ]]; then
-      runtime_pid="$(<"$pid_file")"
+      IFS= read -r runtime_pid < "$pid_file" || true
       if [[ "$runtime_pid" =~ ^[0-9]+$ && "$runtime_pid" -gt 1 ]]; then
         kill -KILL "$runtime_pid" 2>/dev/null || true
       fi
@@ -51,7 +51,7 @@ printf '%s\n' "$@" > "$LEMON_TUI_TEST_RUNTIME_ARGS"
 if [[ -n "${LEMON_RUNTIME_PID_FILE:-}" ]]; then
   sleep 300 &
   runtime_pid=$!
-  printf '%s\n' "$runtime_pid" > "$LEMON_RUNTIME_PID_FILE"
+  printf '%s\n%s\n' "$runtime_pid" "$(ps -p "$runtime_pid" -o lstart=)" > "$LEMON_RUNTIME_PID_FILE"
   printf '%s\n' "$runtime_pid" > "$LEMON_TUI_TEST_RUNTIME_PID"
 fi
 
@@ -171,7 +171,7 @@ fi
 [[ ! -e "$LEMON_TUI_TEST_CLIENT_TOKEN" ]]
 chmod 600 "$managed_token_file"
 
-managed_runtime_pid="$(<"$managed_pid_file")"
+IFS= read -r managed_runtime_pid < "$managed_pid_file"
 kill -TERM "$managed_runtime_pid" 2>/dev/null || true
 unset LEMON_CONTROL_PLANE_PORT
 unset LEMON_RUNTIME_PID_FILE
