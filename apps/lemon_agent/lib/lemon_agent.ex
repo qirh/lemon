@@ -437,6 +437,7 @@ defmodule LemonAgent do
     * `:description` - (required) What the tool does
     * `:parameters` - JSON Schema for parameters (default: %{})
     * `:label` - Human-readable label for UI (default: same as name)
+    * `:parallel_safe` - Allow overlapping invocations in a safe tool group (default: false)
     * `:execute` - (required) Function to execute the tool
 
   The execute function receives:
@@ -477,6 +478,7 @@ defmodule LemonAgent do
       description: Keyword.fetch!(opts, :description),
       parameters: Keyword.get(opts, :parameters, %{}),
       label: Keyword.get(opts, :label, Keyword.fetch!(opts, :name)),
+      parallel_safe: Keyword.get(opts, :parallel_safe, false),
       execute: Keyword.fetch!(opts, :execute)
     }
   end
