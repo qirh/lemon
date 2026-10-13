@@ -258,10 +258,23 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
     refute_receive {:answer_callback, _cb_id, _opts}, 250
   end
 
-  test "handles callback queries from bound chats when guards pass" do
+  test "bound chats reach callback rejection without consuming a malformed approval" do
     chat_id = 200_003
     set_bindings([scope_binding(chat_id)])
-    AuthMockAPI.set_updates([callback_update(chat_id, "unknown|decision")])
+    id = LemonCore.Id.approval_id()
+
+    pending =
+      LemonCore.Events.ApprovalPending.new(%{
+        id: id,
+        run_id: LemonCore.Id.run_id(),
+        session_key: "agent:default:telegram:default:dm:#{chat_id}",
+        tool: "bash",
+        action: %{command: "echo guarded"}
+      })
+
+    :ok = LemonCore.ExecApprovalStore.put_pending(id, pending)
+    on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(id) end)
+    AuthMockAPI.set_updates([callback_update(chat_id, id <> "|once")])
 
     assert {:ok, _pid} =
              start_transport(%{
@@ -269,7 +282,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
                deny_unbound_chats: true
              })
 
-    assert_receive {:answer_callback, _cb_id, %{"text" => "Unknown"}}, 300
+    assert_receive {:answer_callback, _cb_id, %{"text" => reply}}, 300
+    assert is_binary(reply) and reply != ""
+    refute reply == "Recorded"
+    assert {:ok, ^pending} = LemonCore.ExecApprovalStore.fetch_pending(id)
+    refute_receive {:edit_message_text, _, _, _, _}, 100
   end
 
   defp start_transport(overrides) when is_map(overrides) do
