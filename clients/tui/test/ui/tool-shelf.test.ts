@@ -37,7 +37,7 @@ function shelfWith(entries: Array<[string, ToolCardState]>): ToolShelfComponent 
 	for (const [name, state] of entries) {
 		const fixture = fixtureByName(name);
 		if (!fixture) throw new Error(`no fixture ${name}`);
-		shelf.add(fixtureBlock(fixture, state, { at: NOW - 2400 }));
+		shelf.add(fixtureBlock(fixture, state, { at: NOW - 2400, completedAt: NOW }));
 	}
 	return shelf;
 }
@@ -98,7 +98,7 @@ describe("merging", () => {
 		expect(shelf.cards[0]?.compact).toBe(false);
 		const grep = fixtureByName("grep");
 		if (!grep) throw new Error("no grep fixture");
-		shelf.add(fixtureBlock(grep, "success", { at: NOW - 2400 }));
+		shelf.add(fixtureBlock(grep, "success", { at: NOW - 2400, completedAt: NOW }));
 		expect(shelf.cards[0]?.compact).toBe(true);
 		expect(shelf.cards[1]?.compact).toBe(true);
 	});
@@ -118,7 +118,7 @@ describe("merging", () => {
 		const read = fixtureByName("read");
 		if (!read) throw new Error("missing fixture");
 		const shelf = new ToolShelfComponent({ now: () => NOW });
-		shelf.add(fixtureBlock(read, "success", { at: NOW - 2400 }));
+		shelf.add(fixtureBlock(read, "success", { at: NOW - 2400, completedAt: NOW }));
 
 		// The live path upserts the same block through its phases, so the card is
 		// updated in place rather than replaced.

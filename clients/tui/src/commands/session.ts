@@ -547,6 +547,21 @@ async function titleSession(ctx: CommandContext, argv: string[]): Promise<void> 
 		ctx.ui.notice("do not combine title text with --clear", "error");
 		return;
 	}
+	if (
+		key === ctx.session.key &&
+		key.startsWith("agent:default:tui:local:dm:") &&
+		!ctx.session.busy &&
+		ctx.session.blocks.every((block) => block.kind === "notice")
+	) {
+		if (!requireSessionMethod(ctx, METHOD.sessionsCreate)) return;
+		const created = await ctx.methods.sessionsCreate({
+			sessionKey: key,
+			cwd: ctx.cwd ?? process.cwd(),
+		});
+		if (created.sessionKey !== key || !created.sessionId) {
+			throw new Error("session creation was not verified");
+		}
+	}
 	const result = await ctx.methods.sessionsMetadataPatch({
 		sessionKey: key,
 		title: clear ? null : title,

@@ -31,5 +31,8 @@
     "format": "biome format --write src test",
     "gallery": "bun src/dev/gallery.ts",
     "build:binary": "bun scripts/build-binary.ts"
+  },
+  "patchedDependencies": {
+    "@oh-my-pi/pi-tui@18.10.3": "patches/@oh-my-pi%2Fpi-tui@18.10.3.patch"
   }
 }

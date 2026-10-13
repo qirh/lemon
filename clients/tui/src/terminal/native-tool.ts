@@ -50,7 +50,11 @@ export function nativeTool(
 			href: location ? fileTarget(location.path, location.line) : undefined,
 			meta: view.summary ? [view.summary] : undefined,
 			status: STATUS[view.state],
-			...(elapsed === undefined ? {} : block.phase === "completed" ? { took: elapsed } : { age: elapsed }),
+			...(elapsed === undefined
+				? {}
+				: block.phase === "completed"
+					? { took: elapsed }
+					: { age: elapsed }),
 			collapsible: body.length > 0,
 			collapsed,
 			frame: "inline",

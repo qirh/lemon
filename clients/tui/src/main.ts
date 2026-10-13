@@ -11,7 +11,6 @@ import { loadConfig } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
 import { consumeForkHandoff } from "./terminal/fork.ts";
 
-
 /** Injected by `scripts/build-binary.ts` via Bun's `define`. */
 declare const LEMON_TUI_VERSION: string | undefined;
 
@@ -36,7 +35,7 @@ Usage: lemon-tui [options]
 Options:
   --ws-url, --url, -u <url>   Control-plane WebSocket URL
                               (default: $LEMON_WS_URL, else ws://127.0.0.1:<port>/ws)
-  --session, -s <key>         Session key to attach to (default: tui-<timestamp>)
+  --session, -s <key>         Session key to attach to (default: fresh local TUI session)
   --version, -V               Print the version and exit
   --help, -h                  Print this help and exit
 
