@@ -159,4 +159,32 @@ defmodule LemonControlPlane.EventProjectionTest do
            ] ==
              [%{"type" => "text", "text" => "one"}]
   end
+  test "typed completion usage retains current context and budget instead of cumulative fallback" do
+    budget = %{tokens: 920, window: 272_000, source: "usage", reserve_tokens: 32_000,
+      threshold_tokens: 240_000, headroom_tokens: 239_080, enabled: true}
+    usage = %Usage{input: 100, output: 20, cache_read: 800, total_tokens: 100_000,
+      cost: %Cost{total: 0.2}}
+      |> Map.put(:context_tokens, 920)
+      |> Map.put(:context_budget, budget)
+      |> Map.put(:turns, 3)
+    projected = EventProjection.action_detail(%{usage: usage})
+    assert projected.usage["context_tokens"] == 920
+    assert projected.usage["total_tokens"] == 100_000
+    assert projected.usage["context_budget"]["tokens"] == 920
+    assert projected.usage["context_budget"]["reserve_tokens"] == 32_000
+    assert projected.usage["context_budget"]["headroom_tokens"] == 239_080
+    assert projected.usage["turns"] == 3
+  end
+
+  test "actual aborted tool snapshots preserve cancellation and unknown outcome" do
+    result = %AgentToolResult{content: [%TextContent{text: "STARTED\n"}], is_error: true,
+      details: %{cancelled: true, outcome: "unknown", started: true, partial: true,
+        error_type: "aborted", execution_duration_ms: 21}}
+    projected = EventProjection.tool_result(result)
+    assert projected["details"]["cancelled"] == true
+    assert projected["details"]["outcome"] == "unknown"
+    assert projected["details"]["partial"] == true
+    assert projected["content"] == [%{"type" => "text", "text" => "STARTED\n"}]
+  end
+
 end

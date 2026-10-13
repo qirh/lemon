@@ -57,6 +57,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:agent_id, agent_id)
     |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
     |> maybe_add_opt(:acp_mcp_session_id, Keyword.get(opts, :acp_mcp_session_id))
+    |> maybe_add_opt(:acp_client_elicitation_form, Keyword.get(opts, :acp_client_elicitation_form))
     |> maybe_add_opt(
       :acp_client_fs_read_text_file,
       Keyword.get(opts, :acp_client_fs_read_text_file)

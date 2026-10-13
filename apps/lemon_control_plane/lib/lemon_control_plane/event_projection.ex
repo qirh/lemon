@@ -32,7 +32,8 @@ defmodule LemonControlPlane.EventProjection do
     line_count lineCount count total duration_ms durationMs usage cost diagnostics
     content results locations error_type errorType message reason retryable
     resolvedPath resolved_path perFileResults terminalId todos phases tasks plan
-    task_id taskId description)
+    task_id taskId description cancelled outcome started partial execution_duration_ms
+    context_tokens context_budget cache_write_long turns tool_errors)
   @private_fields ~w(__struct__ callback callbacks on_update onUpdate execute function
     pid ref monitor owner state runtime config context private raw raw_response
     rawResponse text_signature textSignature thinking_signature thinkingSignature
@@ -184,14 +185,15 @@ defmodule LemonControlPlane.EventProjection do
     do:
       project_selected(
         value,
-        [:input, :output, :cache_read, :cache_write, :total_tokens, :cost],
+        [:input, :output, :cache_read, :cache_write, :cache_write_long, :total_tokens, :cost,
+         :context_tokens, :context_budget, :turns, :tool_errors],
         depth,
         budget
       )
 
   defp project(%Cost{} = value, depth, budget, _string_keys),
     do:
-      project_selected(value, [:input, :output, :cache_read, :cache_write, :total], depth, budget)
+      project_selected(value, [:input, :output, :cache_read, :cache_write, :cache_write_long, :total], depth, budget)
 
   defp project(%{__struct__: _}, _depth, _budget, _string_keys), do: :drop
 
@@ -288,7 +290,9 @@ defmodule LemonControlPlane.EventProjection do
       if next_budget.bytes >= 2 do
         projected =
           cond do
-            name in ["total_tokens", "totalTokens"] ->
+            name in ["total_tokens", "totalTokens", "context_tokens", "contextTokens",
+              "tokens", "reserve_tokens", "threshold_tokens", "headroom_tokens"] and
+                (is_number(value) or is_nil(value)) ->
               project(value, depth + 1, next_budget, string_keys)
 
             Redact.sensitive_key?(name) ->

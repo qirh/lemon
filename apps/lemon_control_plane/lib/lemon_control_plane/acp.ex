@@ -53,9 +53,12 @@ defmodule LemonControlPlane.ACP do
 
   def normalize_client_capabilities(capabilities) when is_map(capabilities) do
     fs = capabilities |> map_get_any(["fs", :fs]) |> ensure_map()
+    elicitation = capabilities |> map_get_any(["elicitation", :elicitation]) |> ensure_map()
+    form = map_get_any(elicitation, ["form", :form])
 
     %{
       terminal: truthy?(map_get_any(capabilities, ["terminal", :terminal])),
+      elicitation: %{form: is_map(form) or form == true},
       fs: %{
         read_text_file:
           truthy?(
@@ -961,6 +964,7 @@ defmodule LemonControlPlane.ACP do
           acp_resource_link_count: resource_link_count(params["prompt"]),
           acp_client_capabilities: client_capabilities_json(client_capabilities),
           acp_client_terminal: client_capabilities.terminal,
+          acp_client_elicitation_form: client_capabilities.elicitation.form,
           acp_client_fs_read_text_file: client_fs_capabilities.read_text_file,
           acp_client_fs_write_text_file: client_fs_capabilities.write_text_file,
           acp_client_fs_delete_file: client_fs_capabilities.delete_file,
@@ -1342,9 +1346,17 @@ defmodule LemonControlPlane.ACP do
     method = map_get(payload, :method)
     params = payload |> map_get(:params) |> ensure_map()
     request = client_request(method, Map.put(params, "sessionId", session_id))
+    capabilities = session_id |> get_session() |> session_client_capabilities()
+    exchange =
+      if method == "elicitation/create" and not capabilities.elicitation.form,
+        do: {:error, :form_not_negotiated},
+        else: safe_client_request(callback, request)
 
     {summary, response} =
-      case safe_client_request(callback, request) do
+      case exchange do
+        {:error, :form_not_negotiated} ->
+          {%{"method" => method, "status" => "failed", "reason" => "form elicitation not negotiated"},
+           %{"error" => %{"message" => "Client did not negotiate form elicitation"}}}
         {:ok, response} ->
           {summarize_client_response(method, response), response}
 
@@ -1413,6 +1425,13 @@ defmodule LemonControlPlane.ACP do
 
   defp summarize_client_response("fs/rename_file", response) do
     %{"method" => "fs/rename_file", "status" => response_status(response)}
+  end
+
+  defp summarize_client_response("elicitation/create", response) do
+    action = response |> response_result() |> map_get(:action)
+    %{"method" => "elicitation/create", "status" => response_status(response)}
+    |> Map.put("action", if(action in ["accept", "decline", "cancel"], do: action))
+    |> reject_nil_values()
   end
 
   defp summarize_client_response(method, response) do
@@ -1706,6 +1725,7 @@ defmodule LemonControlPlane.ACP do
   defp empty_client_capabilities do
     %{
       terminal: false,
+      elicitation: %{form: false},
       fs: %{read_text_file: false, write_text_file: false, delete_file: false, rename_file: false}
     }
   end
@@ -1713,7 +1733,7 @@ defmodule LemonControlPlane.ACP do
   defp client_capabilities_json(capabilities) do
     capabilities = normalize_client_capabilities(capabilities)
 
-    %{
+    result = %{
       "terminal" => capabilities.terminal,
       "fs" => %{
         "readTextFile" => capabilities.fs.read_text_file,
@@ -1722,6 +1742,9 @@ defmodule LemonControlPlane.ACP do
         "renameFile" => capabilities.fs.rename_file
       }
     }
+    if capabilities.elicitation.form,
+      do: Map.put(result, "elicitation", %{"form" => %{}}),
+      else: result
   end
 
   defp lemon_meta_string(params, key, default) do
