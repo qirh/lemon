@@ -93,6 +93,24 @@ availability filtering and `LEMON_LAUNCHER` (their own path) so
 `LemonCli.LocalRuntime` can run `$LEMON_LAUNCHER daemon` when a command needs
 the runtime.
 
+Source startup probes the local daemon before compiling, never installs or
+updates dependencies, and compiles only once on a cold interactive launch.
+Install source dependencies explicitly with `mix deps.get` before launching.
+An already healthy daemon is reused without a Mix or distributed-node boot.
+
+Source runtime state is private and port-scoped:
+`~/.lemon/run/lemon-PORT.pid`, `lemon-PORT.log`, and `lemon-PORT.lock`.
+`LEMON_RUNTIME_PID_FILE` and `LEMON_RUNTIME_LOG_FILE` can override the first two.
+Concurrent starts serialize on the lock; abandoned locks with a dead recorded
+owner are reclaimed. An empty lock is not automatically deleted: inspect it
+and remove it only after confirming there is no startup in progress.
+An occupied non-Lemon control port fails immediately with a port-selection fix.
+An alive but unhealthy managed runtime requires inspection of its log and an
+explicit stop, rather than starting another daemon. Stop verifies the process
+start identity in the pid record before sending a signal, so stale/reused PIDs
+cannot terminate an unrelated process. Select the same
+`LEMON_CONTROL_PLANE_PORT` for start, stop, restart, and status.
+
 ## Safe managed-release updates
 
 `lemon update` is registry-driven and uses one handler for full/min packaged
