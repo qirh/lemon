@@ -24,27 +24,45 @@ control room live beside the assistant, not in a separate product repository.
 Lemon is **pre-1.0**. See [supported platforms](docs/install.md),
 [current capabilities](docs/compare.md) and [support boundaries](docs/support.md).
 
-## Get started
+## Start coding in five minutes
 
-On a supported macOS or Linux host, run the installer in an interactive terminal:
+In an interactive terminal opened in your repository (macOS or Linux):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
 export PATH="$HOME/.lemon/bin:$PATH"
-lemon doctor
-lemon
+lemon setup
+lemon tui
 ```
 
-The installer verifies the release checksum and opens setup for provider, auth
-and model selection; prebuilt releases do not require Elixir. If setup was skipped,
-run `lemon setup`. In an interactive terminal, `lemon` opens the TUI and starts a
-local daemon if needed. Use `/help` and `/sessions` inside chat. Non-interactive
-scripts must choose an explicit command; use `lemon start` for a foreground runtime.
+Setup supports **OpenAI Codex → Sign in with ChatGPT**, explicit import of an
+existing Codex CLI login, and other providers/API keys. Accept an available default
+model and skip optional automation for now. Prebuilt releases include the runtime
+and TUI; no Elixir installation is needed.
 
-The full release also provides `lemon web`. Follow the
-[quickstart](docs/getting-started/quickstart.md) for a first provider-backed answer,
-[setup](docs/user-guide/setup.md) for channels, and [CLI guide](docs/user-guide/cli.md)
-for daemon control, sessions, notifications and shell completion.
+Start `lemon` **from your repository**, then ask:
+
+> Read the repository instructions. Find how to run the tests. Add the test
+> command to README if missing, run the focused tests, and show the diff.
+
+Review the change and test output. The daemon is reused on subsequent launches.
+The [coding quickstart](docs/getting-started/quickstart.md) walks through the real
+workflow, recovery, and these next steps:
+
+| Work your way | Start here |
+| --- | --- |
+| Script a coding session | `lemon -p "Explain this repository; do not edit files." --output json` |
+| Use Tern's native chat | `lemon tern install`, then type `lemon` in a new Tern pane |
+| Delegate parallel work | Ask for `scout` and `reviewer` task children; both personas are read-only |
+| Revisit an earlier prompt | `/rewind` previews and confirms a history change; files stay untouched by default |
+| Connect MCP tools | `lemon mcp list`, then [add and test a trusted server](docs/skills.md#manage-named-mcp-servers) |
+| Track durable work | Ask for a goal or kanban board, then inspect **Automation** with `lemon web --no-open` |
+
+**Release availability:** the published `2026.08.1` release predates the current
+Tern and agent-workflow features. Until a newer release is published, use the
+source instructions below for those features. See [setup](docs/user-guide/setup.md),
+the [CLI guide](docs/user-guide/cli.md), and the [web guide](docs/user-guide/web.md)
+for the complete command and configuration reference.
 
 ## Develop from source
 

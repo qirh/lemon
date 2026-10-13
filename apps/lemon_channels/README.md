@@ -271,6 +271,36 @@ LemonChannels.list_plugins()            # Registry.list_plugins/0
 LemonChannels.enqueue(payload)          # Outbox.enqueue/1
 ```
 
+### Automation Supervision
+
+Goals, kanban workers and prompt cron jobs can be supervised from Telegram or
+Discord while their coding sessions run elsewhere. Automation binds each run to
+its exact session and target before submission. Approval requests and successful
+resolution edits go through Outbox, as do completion/failure notices.
+
+Remote buttons offer only **Approve once** and **Deny**. They carry the full
+approval ID plus a fingerprint of the authoritative pending snapshot. Callback
+authorization preserves account/chat/topic, re-fetches the request, rejects
+expiry and atomically consumes that exact snapshot. A rejected, stale, replayed,
+foreign or unavailable decision never says “Recorded” or removes the controls.
+Telegram and Discord outbound adapters reject accounts other than the configured
+account instead of silently using the default bot/client.
+
+`LemonChannels.Supervision.notify/2` persists a bounded redacted notice before
+admission. Its `:ok` means queued or previously delivered, not a new platform
+receipt. `status/1` accepts `{kind, task_id, run_id, status}` and exposes only
+delivery metadata (`pending`, `submitting`, `queued`, `delivered`, `failed`,
+`unknown`, `rejected`), never bodies or platform responses. Duplicate identities
+are not resent. Definite admission failures get at most three attempts; Outbox
+owns platform retries. Ambiguous admissions, lost receipts and interrupted
+in-flight sends become `unknown`, never blindly replayed.
+
+Pending notices admitted while the worker is down survive its restart. Use a
+persistent Core Store backend for VM-restart durability. An unavailable durable
+store is an explicit error, not a successful notification or approval.
+See [automation remote supervision](../lemon_automation/README.md#remote-supervision)
+for target selection and CLI/TUI controls.
+
 ### Script Notifications
 
 Use `mix lemon.send` or the source wrapper `./bin/lemon send` to send a text notification or up to 10 file attachments from scripts:

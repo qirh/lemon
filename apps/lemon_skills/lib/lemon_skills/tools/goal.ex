@@ -36,6 +36,11 @@ defmodule LemonSkills.Tools.Goal do
             "type" => "string",
             "description" => "Repository for set; defaults to this tool's working directory."
           },
+          "deliver_to" => %{
+            "type" => "string",
+            "description" =>
+              "Supervision destination for set: auto (origin channel or configured owner), none, telegram:chat[:thread], or discord:channel[:thread]."
+          },
           "max_ticks" => %{
             "type" => "integer",
             "minimum" => 1,
@@ -74,8 +79,17 @@ defmodule LemonSkills.Tools.Goal do
   defp dispatch("set", session_key, params, cwd, opts) do
     with {:ok, objective} <- required_string(params["objective"], "objective"),
          {:ok, target} <- target_directory(params["cwd"], cwd),
+         {:ok, delivery} <- validate_delivery(params["deliver_to"]),
          {:ok, goal} <-
-           manager(:set_goal, [session_key, objective, [cwd: target, agent_id: opts[:agent_id]]]) do
+           manager(:set_goal, [
+             session_key,
+             objective,
+             [
+               cwd: target,
+               agent_id: opts[:agent_id],
+               meta: if(delivery, do: %{"deliverTo" => delivery}, else: %{})
+             ]
+           ]) do
       {:ok, %{goal: goal}}
     end
   end
@@ -140,6 +154,16 @@ defmodule LemonSkills.Tools.Goal do
       result ->
         result
     end
+  end
+
+  defp validate_delivery(nil), do: {:ok, nil}
+
+  defp validate_delivery(value) do
+    module = :"Elixir.LemonAutomation.CronDelivery"
+
+    if Code.ensure_loaded?(module),
+      do: apply(module, :validate, [value]),
+      else: {:error, :goal_runtime_unavailable}
   end
 
   defp manager(operation, args) do

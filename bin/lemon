@@ -203,13 +203,12 @@ wait_until() {
   "$1"
 }
 
-# Compile quietly first so completion and --json output stay machine-clean,
-# then pass argv as data through the same fixed expression releases use.
+# Compile first, then isolate Mix bootstrap diagnostics from the CLI's stdio.
 run_cli() {
   cd "$LEMON_ROOT"
   # Dependencies are installed explicitly; launching must never mutate them.
   MIX_QUIET=1 compile_source >&2
-  exec env MIX_QUIET=1 mix run --no-start --no-compile --no-deps-check -e 'LemonCli.CLI.main(System.argv())' -- "$@"
+  exec env MIX_QUIET=1 elixir "$LEMON_ROOT/scripts/lemon_cli.exs" "$@"
 }
 
 parse_runtime_options() {
@@ -432,6 +431,7 @@ case "$COMMAND" in
           ;;
       esac
     fi
+    cd "$LAUNCH_CWD"
     exec bun "$TUI_DIR/src/main.ts" --ws-url "ws://127.0.0.1:$PORT/ws" "$@"
     ;;
 

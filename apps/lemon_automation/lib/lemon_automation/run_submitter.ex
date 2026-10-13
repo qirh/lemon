@@ -28,9 +28,11 @@ defmodule LemonAutomation.RunSubmitter do
         timeout_ms: timeout_ms,
         wait_opts: wait_opts,
         on_submitting: fn fixed_id ->
-          case Keyword.get(opts, :on_submitting) do
-            nil -> :ok
-            callback -> callback.(fixed_id, params.session_key)
+          with :ok <- LemonAutomation.RunNotifications.bind_cron(job, params) do
+            case Keyword.get(opts, :on_submitting) do
+              nil -> :ok
+              callback -> callback.(fixed_id, params.session_key)
+            end
           end
         end
       )
