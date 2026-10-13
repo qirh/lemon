@@ -12,7 +12,7 @@ defmodule LemonEvals.PayloadProfile do
   def install!(path, opts \\ []) do
     python = Keyword.get(opts, :python, System.find_executable("python3"))
     {:ok, pid} = GenServer.start_link(__MODULE__, {Path.expand(path), python}, name: __MODULE__)
-    Application.put_env(:lemon_gateway, :executor, LemonEvals.PayloadProfile.Executor)
+    CodingAgent.Executor.configure_stream_options(&attach_callbacks/2)
     pid
   end
 
@@ -76,36 +76,21 @@ defmodule LemonEvals.PayloadProfile do
   def format_status(status) do
     status |> Map.put(:message, :redacted) |> Map.put(:reason, :redacted) |> Map.put(:log, [])
   end
-end
 
-defmodule LemonEvals.PayloadProfile.Executor do
-  @moduledoc false
-  @behaviour LemonGateway.Executor
-  alias LemonAi.Types.StreamOptions
+  defp attach_callbacks(run_id, base) do
+    base = base || %LemonAi.Types.StreamOptions{}
+    on_payload = Map.get(base, :on_payload) || Map.get(base, "on_payload")
+    on_usage = Map.get(base, :on_usage) || Map.get(base, "on_usage")
 
-  @impl true
-  def start_run(request, opts, sink) do
-    base = Keyword.get(opts, :stream_options) || %StreamOptions{}
-
-    callbacks = %{
-      base
-      | on_payload: fn body, metadata ->
-          if is_function(base.on_payload, 2), do: base.on_payload.(body, metadata)
-          LemonEvals.PayloadProfile.record(:payload, request.run_id, body, metadata)
-        end,
-        on_usage: fn usage, metadata ->
-          if is_function(base.on_usage, 2), do: base.on_usage.(usage, metadata)
-          LemonEvals.PayloadProfile.record(:usage, request.run_id, usage, metadata)
-        end
-    }
-
-    CodingAgent.Executor.start_run(request, Keyword.put(opts, :stream_options, callbacks), sink)
+    Map.merge(Map.drop(base, ["on_payload", "on_usage"]), %{
+      on_payload: fn body, metadata ->
+        if is_function(on_payload, 2), do: on_payload.(body, metadata)
+        record(:payload, run_id, body, metadata)
+      end,
+      on_usage: fn usage, metadata ->
+        if is_function(on_usage, 2), do: on_usage.(usage, metadata)
+        record(:usage, run_id, usage, metadata)
+      end
+    })
   end
-
-  @impl true
-  defdelegate cancel(context), to: CodingAgent.Executor
-  @impl true
-  defdelegate steer(context, text), to: CodingAgent.Executor
-  @impl true
-  defdelegate redirect(context, text), to: CodingAgent.Executor
 end

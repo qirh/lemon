@@ -19,6 +19,21 @@ defmodule CodingAgent.Executor do
   @session_module CodingAgent.Session
   @engine "lemon"
 
+  @doc """
+  Configure transient stream-options instrumentation for local native runs.
+
+  The callback receives the run ID and current stream options (possibly nil).
+  It returns the options passed to the session; credentials and provider
+  settings are still resolved normally. Pass nil to remove the hook.
+  This process-wide configuration is intended for dedicated diagnostic runtimes,
+  not durable session settings.
+  """
+  def configure_stream_options(callback) when is_function(callback, 2),
+    do: Application.put_env(:coding_agent, :executor_stream_options_hook, callback)
+
+  def configure_stream_options(nil),
+    do: Application.delete_env(:coding_agent, :executor_stream_options_hook)
+
   @impl true
   def start_run(%ExecutionRequest{} = request, opts, sink_pid) when is_pid(sink_pid) do
     # An entrypoint may boot only a subset of applications, so make sure the
@@ -80,6 +95,7 @@ defmodule CodingAgent.Executor do
   end
 
   defp start_local_session_runner(request, opts, sink_pid) do
+    opts = instrument_stream_options(request.run_id, opts)
     run_ref = make_ref()
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
     resume = normalize_resume(request.resume)
@@ -159,6 +175,20 @@ defmodule CodingAgent.Executor do
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
   defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
   defp get_opt(_opts, _key), do: nil
+
+  defp instrument_stream_options(run_id, opts) do
+    case Application.get_env(:coding_agent, :executor_stream_options_hook) do
+      nil ->
+        opts
+
+      callback ->
+        stream_options = callback.(run_id, get_opt(opts, :stream_options))
+
+        if is_map(opts),
+          do: Map.put(opts, :stream_options, stream_options),
+          else: Keyword.put(opts || [], :stream_options, stream_options)
+    end
+  end
 
   defp ensure_session_available do
     case Code.ensure_loaded(@session_module) do
