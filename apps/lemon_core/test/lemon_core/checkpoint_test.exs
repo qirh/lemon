@@ -32,6 +32,46 @@ defmodule LemonCore.CheckpointTest do
     refute Checkpoint.exists?(checkpoint.id)
   end
 
+  test "loads and scans freeform JSON keys without requiring or creating atoms" do
+    session_id = unique_session("core-freeform")
+    other_session_id = unique_session("core-other-freeform")
+    key = "checkpoint_external_key_#{System.unique_integer([:positive, :monotonic])}"
+    nested = %{key => [%{key => "persisted"}]}
+
+    on_exit(fn ->
+      Checkpoint.delete_all(session_id)
+      Checkpoint.delete_all(other_session_id)
+    end)
+
+    assert_raise ArgumentError, fn -> String.to_existing_atom(key) end
+
+    assert {:ok, other} = Checkpoint.create(other_session_id, metadata: nested)
+
+    assert {:ok, checkpoint} =
+             Checkpoint.create(session_id,
+               state: nested,
+               context: nested,
+               todos: [nested],
+               requirements: nested,
+               metadata: nested
+             )
+
+    assert {:ok, loaded} = Checkpoint.load(checkpoint.id)
+    assert loaded.state == nested
+    assert loaded.context == nested
+    assert loaded.todos == [nested]
+    assert loaded.requirements == nested
+    assert loaded.metadata[key] == nested[key]
+    assert [listed] = Checkpoint.list(session_id)
+    assert listed.id == checkpoint.id
+    assert listed.metadata[key] == nested[key]
+    assert {:ok, %{id: id}} = Checkpoint.get_latest(session_id)
+    assert id == checkpoint.id
+    assert {:ok, 1} = Checkpoint.delete_all(session_id)
+    assert Checkpoint.exists?(other.id)
+    assert_raise ArgumentError, fn -> String.to_existing_atom(key) end
+  end
+
   @tag :tmp_dir
   test "diffs and restores filesystem checkpoints with events", %{tmp_dir: tmp_dir} do
     session_id = unique_session("core-filesystem")

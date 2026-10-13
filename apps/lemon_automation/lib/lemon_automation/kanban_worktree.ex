@@ -1,5 +1,11 @@
 defmodule LemonAutomation.KanbanWorktree do
-  @moduledoc false
+  @moduledoc """
+  Creates task-owned isolated Git worktrees. Reuse requires exact checkout,
+  common repository, registered path and branch identity; `.git` alone is not
+  evidence of ownership. Commands use the workflow's bounded supervised runner.
+  """
+
+  alias LemonAutomation.KanbanGitWorkflow
 
   @type context :: %{
           cwd: binary() | nil,
@@ -26,8 +32,8 @@ defmodule LemonAutomation.KanbanWorktree do
   defp maybe_prepare(task, workspace, mode, opts) do
     case git_root(workspace) do
       {:ok, repo} ->
-        path = Keyword.get(opts, :worktree_path) || default_path(repo, task)
-        branch = Keyword.get(opts, :worktree_branch) || default_branch(task)
+        path = Keyword.get(opts, :worktree_path) || path_for(repo, task)
+        branch = Keyword.get(opts, :worktree_branch) || branch_for(task)
 
         with :ok <- ensure_worktree(repo, path, branch) do
           {:ok,
@@ -52,15 +58,17 @@ defmodule LemonAutomation.KanbanWorktree do
 
   defp ensure_worktree(repo, path, branch) do
     cond do
-      worktree?(path) ->
-        :ok
-
       File.exists?(path) ->
-        {:error, {:path_exists, path}}
+        KanbanGitWorkflow.validate_context(repo, path, branch)
+
+      not safe_destination?(path) ->
+        {:error, :invalid_worktree}
 
       true ->
-        File.mkdir_p!(Path.dirname(path))
-        add_worktree(repo, path, branch)
+        with :ok <- File.mkdir_p(Path.dirname(path)),
+             :ok <- add_worktree(repo, path, branch) do
+          KanbanGitWorkflow.validate_context(repo, path, branch)
+        end
     end
   end
 
@@ -86,34 +94,44 @@ defmodule LemonAutomation.KanbanWorktree do
   end
 
   defp git_root(workspace) do
-    case System.cmd("git", ["-C", workspace, "rev-parse", "--show-toplevel"],
-           stderr_to_stdout: true
-         ) do
-      {output, 0} -> {:ok, String.trim(output)}
-      {output, code} -> {:error, %{code: code, output: String.trim(output)}}
+    with {:ok, root} <- git(workspace, ["rev-parse", "--show-toplevel"]),
+         true <- KanbanGitWorkflow.clean_path?(root) do
+      {:ok, root}
+    else
+      false -> {:error, :invalid_worktree}
+      {:error, _} = error -> error
     end
-  rescue
-    error -> {:error, Exception.message(error)}
   end
 
   defp git(repo, args) do
-    case System.cmd("git", ["-C", repo | args], stderr_to_stdout: true) do
-      {output, 0} -> {:ok, String.trim(output)}
-      {output, code} -> {:error, %{code: code, output: String.trim(output)}}
+    case KanbanGitWorkflow.git(repo, args) do
+      {:ok, output} -> {:ok, String.trim(output)}
+      {:error, reason} -> {:error, reason}
     end
-  rescue
-    error -> {:error, Exception.message(error)}
   end
 
-  defp worktree?(path) do
-    File.exists?(Path.join(path, ".git"))
+  defp safe_destination?(path) when is_binary(path) do
+    path == Path.expand(path) and safe_parent?(Path.dirname(path)) and
+      match?({:error, :enoent}, File.lstat(path))
   end
 
-  defp default_path(repo, task) do
+  defp safe_destination?(_), do: false
+
+  defp safe_parent?(path) do
+    case File.lstat(path) do
+      {:error, :enoent} -> safe_parent?(Path.dirname(path))
+      {:ok, %{type: :directory}} -> KanbanGitWorkflow.clean_path?(path)
+      _ -> false
+    end
+  end
+
+  @doc false
+  def path_for(repo, task) do
     Path.join([repo, ".worktrees", "kanban-#{slug(task_id(task))}"])
   end
 
-  defp default_branch(task) do
+  @doc false
+  def branch_for(task) do
     "lemon-kanban/#{slug(task_id(task))}"
   end
 

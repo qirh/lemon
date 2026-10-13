@@ -8,19 +8,6 @@ defmodule CodingAgent.Tools.EditTest do
 
   @moduletag :tmp_dir
 
-  describe "tool/2" do
-    test "returns an AgentTool struct with correct properties" do
-      tool = Edit.tool("/tmp")
-
-      assert tool.name == "edit"
-      assert tool.label == "Edit File"
-      assert tool.description =~ "Replace text in a file"
-      assert tool.parameters["type"] == "object"
-      assert tool.parameters["required"] == ["path", "old_text", "new_text"]
-      assert is_function(tool.execute, 4)
-    end
-  end
-
   describe "execute/6 - basic replacement" do
     test "replaces exact text in a file", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "test.txt")

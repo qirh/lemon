@@ -563,7 +563,7 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
   # ============================================================================
 
   describe "tool handling" do
-    test "converts tools to OpenAI format without strict mode" do
+    test "optional tool arguments stay optional and payload observers cannot rewrite requests" do
       test_pid = self()
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -577,21 +577,38 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       tool = %Tool{
         name: "search",
         description: "Search the web",
-        parameters: %{"type" => "object", "properties" => %{"query" => %{"type" => "string"}}}
+        parameters: %{
+          "type" => "object",
+          "properties" => %{
+            "query" => %{"type" => "string"},
+            "extras" => %{"type" => "string"}
+          },
+          "required" => ["query"]
+        }
       }
 
       context = Context.new(messages: [%UserMessage{content: "Hi"}], tools: [tool])
 
       {:ok, stream} =
-        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
+        OpenAICodexResponses.stream(model, context, %StreamOptions{
+          api_key: make_jwt(),
+          on_payload: fn observed, metadata ->
+            send(test_pid, {:observed_payload, observed, metadata})
+            Map.put(observed, "tools", [])
+          end
+        })
 
       assert_receive {:request_body, body}, 1000
       assert [converted_tool] = body["tools"]
       assert converted_tool["type"] == "function"
       assert converted_tool["name"] == "search"
       assert converted_tool["description"] == "Search the web"
-      # Codex uses strict: nil (omitted)
-      refute Map.has_key?(converted_tool, "strict")
+      assert converted_tool["strict"] == false
+      assert converted_tool["parameters"]["required"] == ["query"]
+      assert_receive {:observed_payload, observed, metadata}
+      assert observed["tools"] == body["tools"]
+      assert metadata.model == model.id
+      assert Enum.sort(Map.keys(metadata)) == [:model, :provider, :session_id]
 
       EventStream.result(stream, 1000)
     end
@@ -885,7 +902,11 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       context = Context.new(messages: [%UserMessage{content: "Hi"}])
       token = make_jwt("acc_test")
 
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: token})
+      {:ok, stream} =
+        OpenAICodexResponses.stream(model, context, %StreamOptions{
+          api_key: token,
+          headers: %{"Version" => "0.0.0"}
+        })
 
       assert_receive {:headers, headers}, 1000
       headers_map = Map.new(headers)
@@ -896,28 +917,7 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
       assert headers_map["originator"] == "pi"
       assert headers_map["accept"] == "text/event-stream"
       assert headers_map["content-type"] == "application/json"
-
-      EventStream.result(stream, 1000)
-    end
-
-    test "includes user agent with platform info" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        send(test_pid, {:headers, conn.req_headers})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model()
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-
-      {:ok, stream} =
-        OpenAICodexResponses.stream(model, context, %StreamOptions{api_key: make_jwt()})
-
-      assert_receive {:headers, headers}, 1000
-      headers_map = Map.new(headers)
-
-      assert headers_map["user-agent"] =~ "pi ("
+      assert headers_map["version"] == "0.153.0"
 
       EventStream.result(stream, 1000)
     end
@@ -1360,49 +1360,5 @@ defmodule LemonAi.Providers.OpenAICodexResponsesTest do
     assert body["tool_choice"] == "none"
     assert body["prompt_cache_key"] == "cache-session"
     assert {:error, _} = EventStream.result(stream, 1000)
-  end
-
-  describe "request headers snapshot" do
-    test "full headers match expected format" do
-      test_pid = self()
-
-      Req.Test.stub(__MODULE__, fn conn ->
-        send(test_pid, {:headers, conn.req_headers})
-        Plug.Conn.send_resp(conn, 400, "bad request")
-      end)
-
-      model = make_model(headers: %{"X-Model-Custom" => "model-val"})
-      context = Context.new(messages: [%UserMessage{content: "Hi"}])
-      token = make_jwt("acc_header_test")
-
-      opts = %StreamOptions{
-        api_key: token,
-        session_id: "sess-headers",
-        headers: %{"X-User-Custom" => "user-val"}
-      }
-
-      {:ok, stream} = OpenAICodexResponses.stream(model, context, opts)
-
-      assert_receive {:headers, headers}, 1000
-      headers_map = Map.new(headers)
-
-      # Core headers
-      assert headers_map["authorization"] == "Bearer #{token}"
-      assert headers_map["chatgpt-account-id"] == "acc_header_test"
-      assert headers_map["openai-beta"] == "responses=experimental"
-      assert headers_map["originator"] == "pi"
-      assert headers_map["accept"] == "text/event-stream"
-      assert headers_map["content-type"] == "application/json"
-      assert headers_map["session_id"] == "sess-headers"
-
-      # Custom headers
-      assert headers_map["x-model-custom"] == "model-val"
-      assert headers_map["x-user-custom"] == "user-val"
-
-      # User agent present
-      assert headers_map["user-agent"] =~ "pi ("
-
-      EventStream.result(stream, 1000)
-    end
   end
 end

@@ -3,6 +3,7 @@ defmodule LemonAgent.EventStreamTest do
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.EventStream
+  alias LemonAgent.Test.Mocks
 
   # ============================================================================
   # Starting a Stream
@@ -634,14 +635,14 @@ defmodule LemonAgent.EventStreamTest do
   # ============================================================================
 
   describe "cancel/2" do
-    test "cancels the stream with a reason" do
+    test "cancel stops the stream once its terminal is consumed" do
       {:ok, stream} = EventStream.start_link()
+      ref = Process.monitor(stream)
 
       :ok = EventStream.cancel(stream, :user_requested)
 
-      # Stream should be stopped
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert [{:canceled, :user_requested}] = EventStream.events(stream) |> Enum.to_list()
+      assert_receive {:DOWN, ^ref, :process, ^stream, :normal}, 1000
     end
 
     test "result returns canceled error after cancel" do
@@ -673,11 +674,12 @@ defmodule LemonAgent.EventStreamTest do
 
     test "cancel with default reason" do
       {:ok, stream} = EventStream.start_link()
+      ref = Process.monitor(stream)
 
       EventStream.cancel(stream)
 
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert [{:canceled, :canceled}] = EventStream.events(stream) |> Enum.to_list()
+      assert_receive {:DOWN, ^ref, :process, ^stream, :normal}, 1000
     end
 
     test "push returns error after cancel" do
@@ -705,6 +707,114 @@ defmodule LemonAgent.EventStreamTest do
       assert {:error, {:canceled, :multi_cancel}} = Task.await(task2, 1000)
       events = Task.await(task3, 1000)
       assert {:canceled, :multi_cancel} in events
+    end
+
+    for strategy <- [:error, :drop_oldest, :drop_newest] do
+      test "cancel preserves a full #{strategy} queue for a consumer starting afterward" do
+        {:ok, stream} =
+          EventStream.start_link(max_queue: 2, drop_strategy: unquote(strategy))
+
+        assistant = Mocks.assistant_message("Accepted assistant message")
+        tool_result = Mocks.tool_result_message("call_1", "read_file", "Accepted tool result")
+        queued = [{:message_end, assistant}, {:message_end, tool_result}]
+        reason = {:user_requested, make_ref()}
+        stream_ref = Process.monitor(stream)
+
+        for event <- queued, do: assert(:ok = EventStream.push(stream, event))
+
+        EventStream.cancel(stream, reason)
+        assert EventStream.result(stream) == {:error, {:canceled, reason}}
+        assert Process.alive?(stream)
+        assert EventStream.stats(stream) == %{queue_size: 3, max_queue: 2, dropped: 0}
+
+        EventStream.cancel(stream, :repeated_cancel)
+        EventStream.complete(stream, ["late completion"])
+        EventStream.error(stream, :late_error)
+        EventStream.push_async(stream, {:late_async_event})
+        assert EventStream.push(stream, {:late_event}) == {:error, :canceled}
+        assert EventStream.result(stream) == {:error, {:canceled, reason}}
+        assert EventStream.stats(stream) == %{queue_size: 3, max_queue: 2, dropped: 0}
+
+        consumer = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+        assert Task.await(consumer, 1000) == queued ++ [{:canceled, reason}]
+        assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
+        assert EventStream.push(stream, {:after_drain}) == {:error, :canceled}
+      end
+    end
+
+    test "taking the last cancellation terminal replies before stopping" do
+      {:ok, stream} = EventStream.start_link()
+      :ok = EventStream.push(stream, {:message_end, Mocks.assistant_message("Accepted")})
+      stream_ref = Process.monitor(stream)
+
+      EventStream.cancel(stream, :drain)
+      assert {:error, {:canceled, :drain}} = EventStream.result(stream)
+      assert {:event, {:message_end, _}} = GenServer.call(stream, :take)
+      assert Process.alive?(stream)
+      assert {:event, {:canceled, :drain}} = GenServer.call(stream, :take)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
+    end
+
+    test "cancel wakes blocked take and result consumers with one terminal" do
+      {:ok, stream} = EventStream.start_link()
+      stream_ref = Process.monitor(stream)
+      results = for _ <- 1..2, do: Task.async(fn -> EventStream.result(stream) end)
+
+      consumers =
+        for _ <- 1..3 do
+          Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
+        end
+
+      wait_for_stream_waiters(stream, 3, 2)
+      EventStream.cancel(stream, :waiting_cancel)
+
+      for task <- results do
+        assert Task.await(task, 1000) == {:error, {:canceled, :waiting_cancel}}
+      end
+
+      events = consumers |> Task.await_many(1000) |> List.flatten()
+      assert events == [{:canceled, :waiting_cancel}]
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
+    end
+
+    test "cancel leaves successful and error completions intact" do
+      for terminal <- [:complete, :error] do
+        {:ok, stream} = EventStream.start_link()
+        :ok = EventStream.push(stream, {:accepted_event})
+
+        {result, event} =
+          case terminal do
+            :complete ->
+              EventStream.complete(stream, ["done"])
+              {{:ok, ["done"]}, {:agent_end, ["done"]}}
+
+            :error ->
+              EventStream.error(stream, :failure, %{accepted: true})
+              {{:error, :failure, %{accepted: true}}, {:error, :failure, %{accepted: true}}}
+          end
+
+        assert EventStream.result(stream) == result
+        EventStream.cancel(stream, :too_late)
+        assert EventStream.result(stream) == result
+        assert EventStream.events(stream) |> Enum.to_list() == [{:accepted_event}, event]
+        assert Process.alive?(stream)
+      end
+    end
+
+    test "cancel disables the timeout while buffered events await consumption" do
+      {:ok, stream} = EventStream.start_link(timeout: 60_000)
+      :ok = EventStream.push(stream, {:accepted_event})
+      timeout_ref = :sys.get_state(stream).timeout_ref
+
+      EventStream.cancel(stream, :explicit)
+      assert {:error, {:canceled, :explicit}} = EventStream.result(stream)
+      assert Process.read_timer(timeout_ref) == false
+
+      send(stream, :stream_timeout)
+      assert EventStream.result(stream) == {:error, {:canceled, :explicit}}
+
+      assert EventStream.events(stream) |> Enum.to_list() ==
+               [{:accepted_event}, {:canceled, :explicit}]
     end
   end
 
@@ -769,17 +879,69 @@ defmodule LemonAgent.EventStreamTest do
       assert {:canceled, :owner_down} in events
     end
 
-    test "owner death does not affect stream when owner is self" do
-      # When owner is self() in start_link, it refers to the stream itself
-      # which doesn't make sense to monitor
-      {:ok, stream} = EventStream.start_link()
+    for start <- [:start, :start_link] do
+      test "#{start} monitors the caller to clean up an unconsumed canceled stream" do
+        parent = self()
 
-      EventStream.push(stream, {:event, 1})
-      EventStream.complete(stream, [])
+        owner =
+          spawn(fn ->
+            {:ok, stream} = apply(EventStream, unquote(start), [[timeout: :infinity]])
+            :ok = EventStream.push(stream, {:accepted_event})
+            EventStream.cancel(stream, :unconsumed)
+            {:error, {:canceled, :unconsumed}} = EventStream.result(stream)
+            send(parent, {:canceled_stream, stream})
 
-      events = EventStream.events(stream) |> Enum.to_list()
-      assert {:event, 1} in events
-      assert {:agent_end, []} in events
+            receive do
+              :die -> :ok
+            end
+          end)
+
+        assert_receive {:canceled_stream, stream}, 1000
+        stream_ref = Process.monitor(stream)
+        assert Process.alive?(stream)
+        send(owner, :die)
+        assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
+      end
+    end
+
+    for reason <- [:owner_down, :timeout] do
+      test "#{reason} stops a buffered stream and cleans up its attached task" do
+        owner =
+          spawn(fn ->
+            receive do
+              :die -> :ok
+            end
+          end)
+
+        task_pid =
+          spawn(fn ->
+            receive do
+              :done -> :ok
+            end
+          end)
+
+        on_exit(fn ->
+          Process.exit(owner, :kill)
+          Process.exit(task_pid, :kill)
+        end)
+
+        {:ok, stream} = EventStream.start_link(owner: owner, timeout: :infinity)
+        stream_ref = Process.monitor(stream)
+        task_ref = Process.monitor(task_pid)
+        EventStream.attach_task(stream, task_pid)
+        :ok = EventStream.push(stream, {:accepted_event})
+        result_waiter = Task.async(fn -> EventStream.result(stream) end)
+        wait_for_stream_waiters(stream, 0, 1)
+
+        case unquote(reason) do
+          :owner_down -> send(owner, :die)
+          :timeout -> send(stream, :stream_timeout)
+        end
+
+        assert Task.await(result_waiter, 1000) == {:error, {:canceled, unquote(reason)}}
+        assert_receive {:DOWN, ^stream_ref, :process, ^stream, :normal}, 1000
+        assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :shutdown}, 1000
+      end
     end
   end
 
@@ -989,6 +1151,7 @@ defmodule LemonAgent.EventStreamTest do
         spawn(fn ->
           Process.flag(:trap_exit, true)
           Process.put(:agent_abort_signal, abort_ref)
+          send(test_pid, :abort_task_ready)
 
           receive do
             {:EXIT, _from, :shutdown} ->
@@ -1005,13 +1168,21 @@ defmodule LemonAgent.EventStreamTest do
       task_ref = Process.monitor(task_pid)
 
       EventStream.attach_task(stream, task_pid)
-      Process.sleep(20)
+      assert_receive :abort_task_ready, 1000
+      :ok = EventStream.push(stream, {:accepted_event})
 
       EventStream.cancel(stream, :test_cancel)
+      assert EventStream.result(stream) == {:error, {:canceled, :test_cancel}}
+      EventStream.cancel(stream, :duplicate_cancel)
+      assert EventStream.result(stream) == {:error, {:canceled, :test_cancel}}
 
       assert_receive {:saw_shutdown, true}, 500
       assert_receive {:DOWN, ^task_ref, :process, ^task_pid, :killed}, 1_500
       assert AbortSignal.aborted?(abort_ref)
+      assert Process.alive?(stream)
+
+      assert EventStream.events(stream) |> Enum.to_list() ==
+               [{:accepted_event}, {:canceled, :test_cancel}]
 
       AbortSignal.clear(abort_ref)
     end
@@ -1177,6 +1348,26 @@ defmodule LemonAgent.EventStreamTest do
 
       result = Task.await(task, 1000)
       assert result == {:error, :canceled}
+    end
+  end
+
+  defp wait_for_stream_waiters(stream, take_count, result_count, attempts \\ 1000)
+
+  defp wait_for_stream_waiters(_stream, _take_count, _result_count, 0) do
+    flunk("stream consumers did not register")
+  end
+
+  defp wait_for_stream_waiters(stream, take_count, result_count, attempts) do
+    state = :sys.get_state(stream)
+
+    if :queue.len(state.take_waiters) == take_count and
+         :queue.len(state.result_waiters) == result_count do
+      :ok
+    else
+      receive do
+      after
+        1 -> wait_for_stream_waiters(stream, take_count, result_count, attempts - 1)
+      end
     end
   end
 end

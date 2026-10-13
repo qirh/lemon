@@ -378,7 +378,12 @@ if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
   if [ -n "${TERN_PANE:-}" ]; then
     tern_bin="${TERN_ACP:-}"
     [ -n "$tern_bin" ] || tern_bin="$(command -v tern || true)"
-    [ -z "$tern_bin" ] || exec "$tern_bin" acp lemon
+    if [ -n "$tern_bin" ]; then
+      status=0
+      "$tern_bin" acp lemon || status=$?
+      [ "$status" = 2 ] || exit "$status"
+      warn "Lemon ACP is not registered in Tern; opening the TUI. Run 'lemon tern install' to enable native chat."
+    fi
   fi
   COMMAND="tui"
   set -- tui

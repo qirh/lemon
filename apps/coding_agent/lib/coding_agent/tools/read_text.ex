@@ -23,12 +23,15 @@ defmodule CodingAgent.Tools.ReadText do
         {:error, "File contains invalid UTF-8; use bash for binary inspection or conversion."}
 
       true ->
-        state = consume(content, new_state(0, nil, max_lines, max_bytes)) |> finish_line()
+        state = consume(content, new_state(0, nil, max_lines, max_bytes)) |> finish_eof()
 
         {:ok,
          %{lines: Enum.reverse(state.lines), total_lines: state.line, truncation: state.truncated}}
     end
   end
+
+  defp finish_eof(%{line: line, current_bytes: 0} = state) when line > 0, do: state
+  defp finish_eof(state), do: finish_line(state)
 
   defp new_state(offset, limit, max_lines, max_bytes) do
     %{
@@ -54,7 +57,7 @@ defmodule CodingAgent.Tools.ReadText do
       case IO.binread(file, @chunk_bytes) do
         :eof ->
           if state.utf8_tail == "" do
-            state = finish_line(state)
+            state = finish_eof(state)
 
             {:ok,
              %{

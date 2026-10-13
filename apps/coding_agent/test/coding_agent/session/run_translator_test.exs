@@ -12,27 +12,28 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     def emit_started(pid, _fields), do: pid
 
     @impl true
-    def emit_action_event(pid, fields) do
+    def emit_action_event(%{sink: pid} = state, fields) do
       send(pid, {:action_event, fields})
-      pid
+      state
     end
 
     @impl true
     def emit_delta(pid, _text, _meta), do: pid
 
     @impl true
-    def emit_completed(pid, fields) do
+    def emit_completed(%{sink: pid} = state, fields) do
       send(pid, {:completed, fields})
-      pid
+      state
     end
   end
 
   defp translator do
     RunTranslator.new(
       emitter: TestEmitter,
-      emitter_state: self(),
+      emitter_state: %{sink: self()},
       engine: "lemon",
       label: "test",
+      session_id: "translator-cancel-regression",
       cwd: "/tmp"
     )
   end
@@ -58,6 +59,71 @@ defmodule CodingAgent.Session.RunTranslatorTest do
     |> RunTranslator.handle_event({:agent_end, []})
 
     assert_receive {:completed, %{usage: %{turns: 2, tool_errors: 1}}}
+  end
+
+  test "budget failures preserve structured limits and reported run spend in JSON-safe completion" do
+    details = %{
+      reason: :budget_exceeded,
+      scope: :session,
+      metric: :tokens,
+      limit: 100,
+      used: 120,
+      run_usage: %{tokens: 30, cost_usd: 0.25},
+      session_usage: %{tokens: 120, cost_usd: 1.0},
+      message: "Session token budget exhausted. Increase max_session_tokens to continue."
+    }
+
+    translator()
+    |> RunTranslator.handle_event(
+      {:usage_budget_updated, Map.take(details, [:run_usage, :session_usage])}
+    )
+    |> RunTranslator.handle_event({:budget_exceeded, details})
+    |> RunTranslator.handle_event({:error, {:budget_exceeded, details}, %{new_messages: []}})
+
+    assert_receive {:completed,
+                    %{ok: false, error: error, usage: usage, meta: %{budget: ^details}} =
+                      completed}
+
+    assert error == details.message
+    assert usage.total_tokens == 30
+    assert usage.cost.total == 0.25
+    json = completed |> Jason.encode!() |> Jason.decode!()
+    assert json["meta"]["budget"]["reason"] == "budget_exceeded"
+    assert json["meta"]["budget"]["used"] == 120
+  end
+
+  test "cancel intent drains terminal tool actions before one failed completion" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "observed partial output"}],
+      details: %{cancelled: true, outcome: "unknown"}
+    }
+
+    t =
+      translator()
+      |> RunTranslator.handle_event({:agent_start})
+      |> RunTranslator.handle_event({:tool_execution_start, "cancel-tool", "bash", %{}})
+      |> RunTranslator.mark_cancelled(:interrupted)
+      |> RunTranslator.mark_cancelled(:user_requested)
+
+    assert_receive {:action_event, %{phase: :started}}
+    refute_receive {:completed, _}, 10
+    assert t.cancel_reason == :interrupted
+
+    t =
+      t
+      |> RunTranslator.handle_event({:tool_execution_end, "cancel-tool", "bash", result, true})
+      |> RunTranslator.handle_event({:message_end, nil})
+      |> RunTranslator.handle_event(
+        {:turn_end, %LemonAi.Types.AssistantMessage{stop_reason: :aborted}, []}
+      )
+
+    assert_receive {:action_event, %{phase: :completed, ok: false}}
+    assert_receive {:completed, %{ok: false, usage: %{turns: 1, tool_errors: 1}}}
+    assert t.pending_actions == %{}
+    assert t.completed_emitted
+    RunTranslator.handle_event(t, {:canceled, :assistant_aborted})
+    RunTranslator.handle_event(t, {:agent_end, []})
+    refute_receive {:completed, _}, 10
   end
 
   describe "completed tool actions" do

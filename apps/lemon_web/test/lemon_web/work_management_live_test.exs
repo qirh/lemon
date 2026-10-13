@@ -87,6 +87,42 @@ defmodule LemonWeb.WorkManagementLiveTest do
     refute_private(inspect(:sys.get_state(view.pid), limit: :infinity))
   end
 
+  test "reviewed cards expose safe commit and PR links without private review data", %{
+    state: state
+  } do
+    workflow = %{
+      "phase" => "completed",
+      "branch" => "lemon-kanban/task_demo",
+      "commitSha" => String.duplicate("a", 40),
+      "prUrl" => "https://github.com/lemon/work/pull/12",
+      "reviewSessionKey" => "agent:default:main:sub:review_demo",
+      "review" => %{"approved" => true, "findings" => "PRIVATE_RESULT"},
+      "cwd" => "/private/work",
+      "codingOutput" => "PRIVATE_RESULT"
+    }
+
+    Agent.update(
+      state,
+      &Map.update!(&1, :card, fn card -> Map.put(card, :meta, %{"codingWorkflow" => workflow}) end)
+    )
+
+    {:ok, view, html} = live(auth_conn(), "/manage/work")
+    assert html =~ "Independent review approved"
+    assert html =~ "aaaaaaaaaaaa"
+
+    assert has_element?(
+             view,
+             "a[href='https://github.com/lemon/work/pull/12']",
+             "Open pull request"
+           )
+
+    refute_private(inspect(:sys.get_state(view.pid), limit: :infinity))
+    Agent.update(state, &put_in(&1.card.meta["codingWorkflow"]["prUrl"], "javascript:alert(1)"))
+    send(view.pid, :work_tick)
+    refute render(view) =~ "javascript:"
+    refute has_element?(view, "a", "Open pull request")
+  end
+
   test "terminal failures and retry transcript links survive the content-free projection", %{
     state: state
   } do

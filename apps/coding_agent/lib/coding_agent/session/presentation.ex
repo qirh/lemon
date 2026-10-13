@@ -990,8 +990,8 @@ defmodule CodingAgent.Session.Presentation do
 
   def merge_usage(acc, usage) do
     merged =
-      Map.merge(acc, usage, fn _key, first, second ->
-        if is_number(first) and is_number(second), do: first + second, else: second
+      Map.merge(acc, usage, fn _k, v1, v2 ->
+        if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
       end)
 
     previous_cost = Map.get(acc, :cost) || Map.get(acc, "cost")
@@ -1073,7 +1073,8 @@ defmodule CodingAgent.Session.Presentation do
     }
   end
 
-  # Bounded cumulative previews are separate from faithful incremental deltas.
+  # Cumulative previews are bounded, while each incremental delta remains available
+  # after that preview fills. This lets ACP append long thought streams faithfully.
   defp reasoning_payload(text, phase, delta) do
     preview = reasoning_payload_text(text, phase)
 
