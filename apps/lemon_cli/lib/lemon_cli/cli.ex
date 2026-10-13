@@ -73,7 +73,9 @@ defmodule LemonCli.CLI do
   @doc """
   Halting entry point. Exits `0` on success, `1` on failure, `2` on usage
   errors. User-readable errors use stderr; `--json` keeps startup logs out of
-  machine-readable stdout using the shared quiet-logging boundary.
+  machine-readable stdout using the shared quiet-logging boundary. `setup`
+  reports through its own prompts, so runtime logs (for example the config
+  reloader noticing setup's own config write) stay out of the wizard.
   """
   @spec main([String.t()]) :: no_return()
   def main(argv) do
@@ -82,7 +84,7 @@ defmodule LemonCli.CLI do
 
     exit_code =
       LemonCli.Onboarding.LogSilencer.with_quiet_logs(
-        "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp"],
+        "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp", "setup"],
         fn -> run(argv) end
       )
 

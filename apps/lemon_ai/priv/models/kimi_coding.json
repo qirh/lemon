@@ -36,5 +36,105 @@
     },
     "context_window": 262144,
     "max_tokens": 32768
+  },
+  "k3": {
+    "id": "k3",
+    "name": "Kimi K3",
+    "api": "anthropic_messages",
+    "provider": "kimi_coding",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_read": 0.3,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 131072
+  },
+  "k3-256k": {
+    "id": "k3-256k",
+    "name": "Kimi K3 256k",
+    "api": "anthropic_messages",
+    "provider": "kimi_coding",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_read": 0.3,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 131072
+  },
+  "kimi-for-coding": {
+    "id": "kimi-for-coding",
+    "name": "Kimi K2.8 Preview",
+    "api": "anthropic_messages",
+    "provider": "kimi_coding",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.95,
+      "output": 4.0,
+      "cache_read": 0.19,
+      "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 32768,
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    }
+  },
+  "kimi-for-coding-highspeed": {
+    "id": "kimi-for-coding-highspeed",
+    "name": "Kimi K2.7 Code Highspeed",
+    "api": "anthropic_messages",
+    "provider": "kimi_coding",
+    "base_url": "https://api.kimi.com/coding",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.9,
+      "output": 8.0,
+      "cache_read": 0.38,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 32768,
+    "headers": {
+      "User-Agent": "KimiCLI/1.0",
+      "X-Msh-Platform": "kimi_cli"
+    }
   }
 }

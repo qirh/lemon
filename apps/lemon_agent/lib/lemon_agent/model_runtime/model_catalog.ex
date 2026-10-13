@@ -34,7 +34,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     |> Enum.filter(&is_map/1)
     |> Enum.group_by(& &1.provider)
     |> Enum.map(fn {provider, provider_models} ->
-      %{provider: provider, models: sort_models_for_picker(provider_models)}
+      %{provider: provider, models: sort_for_picker(provider_models)}
     end)
     |> Enum.sort_by(& &1.provider)
   end
@@ -120,6 +120,15 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   def model_label(%{id: id}) when is_binary(id), do: id
   def model_label(other), do: inspect(other)
 
+  @doc """
+  Sorts model maps into picker display order: newest/most-relevant first by
+  version, `latest` aliases above pinned releases, then name and id.
+  """
+  @spec sort_for_picker([model_map()]) :: [model_map()]
+  def sort_for_picker(models) when is_list(models) do
+    Enum.sort_by(models, &model_picker_sort_key/1, :desc)
+  end
+
   @doc false
   # Test seam: the same enabled-provider decision `available_catalog/0` makes,
   # evaluated against an explicit config instead of `Config.cached()`. Counts
@@ -147,10 +156,6 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
 
   defp to_model_map(_), do: nil
 
-  defp sort_models_for_picker(models) when is_list(models) do
-    Enum.sort_by(models, &model_picker_sort_key/1, :desc)
-  end
-
   defp model_picker_sort_key(model) when is_map(model) do
     provider = String.downcase(model[:provider] || model["provider"] || "")
     name = String.downcase(model[:name] || model["name"] || "")
@@ -159,6 +164,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     {
       provider_specific_rank(provider, name, id),
       version_tuple(name, id),
+      release_date(id),
       latest_rank(name, id),
       String.contains?(name, "thinking"),
       name,
@@ -166,21 +172,23 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
     }
   end
 
-  defp model_picker_sort_key(_), do: {{0, 0, 0}, 0, false, "", ""}
+  defp model_picker_sort_key(_), do: {0, {0, 0, 0}, 0, 0, false, "", ""}
 
   defp latest_rank(name, id) do
     if String.contains?(name, "latest") or String.contains?(id, "latest"), do: 1, else: 0
   end
 
-  defp version_tuple(name, id) do
-    source =
-      cond do
-        is_binary(name) and name != "" -> name
-        is_binary(id) and id != "" -> id
-        true -> ""
-      end
+  # Leading release version, preferring the display name without an aggregator
+  # vendor prefix ("AI21: Jamba Large 1.7"): "GPT-6.1 Sol" -> {6, 1, 0},
+  # "claude-opus-4-5-20251101" -> {4, 5, 0}, "MiniMax-M3" -> {3, 0, 0}.
+  # Dates ("2505"), parameter counts ("120b") and context sizes ("256k") are
+  # not versions.
+  @version_pattern ~r/(?<![\d.])(\d{1,2})(?:[.\-](\d{1,2}))?(?:[.\-](\d{1,2}))?(?![\dbkm])/
 
-    case Regex.run(~r/\b(\d+)(?:[.\-](\d+))?(?:[.\-](\d+))?\b/, source) do
+  defp version_tuple(name, id) do
+    source = if name != "", do: name |> String.split(": ", parts: 2) |> List.last(), else: id
+
+    case Regex.run(@version_pattern, source) do
       [_, major, minor, patch] ->
         {parse_version_part(major), parse_version_part(minor), parse_version_part(patch)}
 
@@ -192,6 +200,18 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
 
       _ ->
         {0, 0, 0}
+    end
+  end
+
+  # Snapshot date as YYYYMMDD, so equal versions list newer snapshots first:
+  # "...-20251101", "...-2024-11-20", or a YYMM suffix such as "...-2505".
+  @date_pattern ~r/(?<!\d)(20\d{2})-?(\d{2})-?(\d{2})(?!\d)|(?<!\d)(2\d)(0[1-9]|1[0-2])(?!\d)/
+
+  defp release_date(id) do
+    case Regex.run(@date_pattern, id) do
+      [_, year, month, day] -> String.to_integer(year <> month <> day)
+      [_, "", "", "", year, month] -> String.to_integer("20" <> year <> month <> "00")
+      _ -> 0
     end
   end
 

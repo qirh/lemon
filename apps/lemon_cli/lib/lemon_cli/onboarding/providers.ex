@@ -20,9 +20,9 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: [
-        "claude-sonnet-4-6",
-        "claude-opus-4-6",
-        "claude-sonnet-4-5-20250929"
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-sonnet-5"
       ],
       aliases: ["claude"],
       api_key_prompt: "Enter your Anthropic API key: ",
@@ -43,7 +43,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_openai",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["gpt-5.5", "gpt-5.4", "gpt-5-mini", "gpt-5"],
+      preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
       api_key_prompt: "Enter your OpenAI API key: ",
       api_key_choice_label: "Paste API key"
     },
@@ -58,7 +58,7 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenAICodexOAuth]),
       auth_modes: [:oauth, :api_key, :codex_cli],
       default_auth_mode: :oauth,
-      preferred_models: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+      preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
       aliases: ["chatgpt", "codex", "openai_codex"],
       api_key_prompt: "Enter your OpenAI Codex token: ",
       api_key_choice_label: "Paste existing token",
@@ -84,7 +84,7 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GitHubCopilotOAuth]),
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
-      preferred_models: ["gpt-5", "claude-sonnet-4-20250514", "gemini-2.5-pro"],
+      preferred_models: ["gpt-6.1-sol", "claude-sonnet-5.5", "gpt-5"],
       aliases: ["copilot", "github-copilot"],
       switches: [enterprise_domain: :string, skip_enable_models: :boolean],
       oauth_opts_builder: &__MODULE__.copilot_oauth_opts/1,
@@ -104,7 +104,7 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GoogleAntigravityOAuth]),
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
-      preferred_models: ["gemini-3-pro-high", "gemini-3-pro-low", "gemini-3-flash"],
+      preferred_models: ["gemini-4-argon-high", "gemini-pro-agent", "gemini-3-pro-high"],
       aliases: ["antigravity", "google-antigravity"],
       api_key_prompt:
         "Paste an Antigravity credential payload (for example JSON with token/projectId): ",
@@ -121,7 +121,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_zai",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["glm-5", "glm-5-turbo", "glm-4.7"],
+      preferred_models: ["glm-5.3", "glm-5.2", "glm-5"],
       aliases: ["glm", "zhipu", "z-ai", "z.ai"],
       api_key_prompt: "Enter your Z.AI API key: ",
       api_key_choice_label: "Paste API key",
@@ -136,7 +136,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_kimi",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["k2p5", "kimi-k2-thinking", "kimi-for-coding"],
+      preferred_models: ["kimi-k3", "kimi-k2.7-code", "k2p5"],
       aliases: ["kimi-k2", "moonshot"],
       api_key_prompt: "Enter your Kimi API key: ",
       api_key_choice_label: "Paste API key",
@@ -151,7 +151,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_minimax",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["MiniMax-M2.7", "MiniMax-M2.5", "minimax-m2.5"],
+      preferred_models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
       aliases: ["mini-max", "minimax-m2"],
       api_key_prompt: "Enter your MiniMax API key: ",
       api_key_choice_label: "Paste API key",
@@ -167,9 +167,9 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
       preferred_models: [
-        "accounts/fireworks/routers/kimi-k2p5-turbo",
-        "accounts/fireworks/models/deepseek-v3p2",
-        "accounts/fireworks/models/glm-4p7"
+        "accounts/fireworks/models/kimi-k3",
+        "accounts/fireworks/models/glm-5p3",
+        "accounts/fireworks/routers/kimi-k2p5-turbo"
       ],
       aliases: ["fireworks-ai", "fireworks_ai"],
       api_key_prompt: "Enter your Fireworks API key: ",

@@ -8,7 +8,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- **Current model catalogs.** Bundled catalogs gain the latest models from
+  each provider shared with the oh-my-pi reference catalog, including
+  ChatGPT/Codex GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol, Claude Sonnet/Haiku 5.5,
+  and current Grok, Gemini (Antigravity), GLM, Kimi, MiniMax, DeepSeek,
+  Mistral, Fireworks, Copilot, OpenCode and aggregator entries. Existing model
+  ids are unchanged; earlier ChatGPT models stay selectable for existing
+  configs.
+
+### Fixed
+
+- **Setup model picker.** `lemon setup` lists models newest first and
+  defaults to each provider's current flagship instead of an alphabetical,
+  oldest-first list. Model pickers no longer treat snapshot dates, parameter
+  counts or vendor prefixes as version numbers.
+- **Quiet setup.** `lemon setup` no longer prints runtime log lines, such as
+  the config reloader noticing setup's own config write.
 
 ---
 

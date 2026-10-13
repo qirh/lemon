@@ -1153,6 +1153,148 @@
       "xhigh"
     ]
   },
+  "gpt-6-astra": {
+    "id": "gpt-6-astra",
+    "name": "GPT-6 Astra",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 10,
+      "output": 50,
+      "cache_read": 1,
+      "cache_write": 12.5,
+      "long_context": {
+        "input_threshold": 272000,
+        "input": 20,
+        "output": 75,
+        "cache_read": 2,
+        "cache_write": 25
+      }
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "gpt-6-luna": {
+    "id": "gpt-6-luna",
+    "name": "GPT-6 Luna",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "gpt-6-sol": {
+    "id": "gpt-6-sol",
+    "name": "GPT-6 Sol",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "gpt-6.1-sol": {
+    "id": "gpt-6.1-sol",
+    "name": "GPT-6.1 Sol",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "gpt-daybreak-blue-latest": {
+    "id": "gpt-daybreak-blue-latest",
+    "name": "Daybreak Blue",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "api": "openai_responses",
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "cost": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.4,
+      "cache_write": 5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
   "o1": {
     "id": "o1",
     "name": "o1",

@@ -5,8 +5,8 @@ defmodule LemonAi.Models.CurrentCatalogTest do
 
   test "only reference-supported Claude models enable summarized thinking display" do
     supported =
-      ~w(claude-fable-5 claude-fable-5-1 claude-mythos-5 claude-opus-4-7
-         claude-opus-4-8 claude-opus-5 claude-sonnet-5)
+      ~w(claude-fable-5 claude-fable-5-1 claude-haiku-5-5 claude-mythos-5 claude-mythos-5-1
+         claude-opus-4-7 claude-opus-4-8 claude-opus-5 claude-sonnet-5 claude-sonnet-5-5)
 
     for model <- Models.get_models(:anthropic) do
       assert Map.get(model.compat || %{}, :anthropic_thinking_display, false) ==
@@ -20,11 +20,14 @@ defmodule LemonAi.Models.CurrentCatalogTest do
       "gpt-5.4" => {272_000, 2},
       "gpt-5.4-mini" => {272_000, 2},
       "gpt-5.5" => {272_000, 2.5},
-      "gpt-5.6-luna" => {1_000_000, 2},
-      "gpt-5.6-sol" => {1_000_000, 2},
-      "gpt-5.6-terra" => {1_000_000, 2},
+      "gpt-5.6-luna" => {1_000_000, 2.5},
+      "gpt-5.6-sol" => {1_000_000, 2.5},
+      "gpt-5.6-terra" => {1_000_000, 2.5},
       "gpt-6-astra" => {272_000, 2.5},
-      "gpt-daybreak-blue-latest" => {272_000, 2}
+      "gpt-6-luna" => {272_000, 2.5},
+      "gpt-6-sol" => {272_000, 2.5},
+      "gpt-6.1-sol" => {500_000, 2.5},
+      "gpt-daybreak-blue-latest" => {272_000, 2.5}
     }
 
     models = Models.get_models(:"openai-codex")
@@ -41,7 +44,6 @@ defmodule LemonAi.Models.CurrentCatalogTest do
     end
 
     assert Models.get_model(:"openai-codex", "gpt-5.3-codex-spark").input == [:text]
-    assert Models.get_model(:openai, "gpt-6-astra") == nil
     assert Models.get_model(:"openai-codex", "gpt-daybreak-blue-latest").cost.long_context == nil
   end
 
