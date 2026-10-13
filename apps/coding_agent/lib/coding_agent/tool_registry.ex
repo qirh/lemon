@@ -28,7 +28,7 @@ defmodule CodingAgent.ToolRegistry do
           :builtin
           | {:wasm, source_meta()}
           | {:extension, module()}
-          | {:mcp, server_name :: atom()}
+          | {:mcp, source_meta() | atom()}
 
   @type tool_tuple :: {String.t(), AgentTool.t(), tool_source()}
 
@@ -151,7 +151,8 @@ defmodule CodingAgent.ToolRegistry do
     |> filter_policy_blocked(Keyword.get(opts, :tool_policy))
     |> maybe_wrap_approval(
       Keyword.get(opts, :tool_policy),
-      Keyword.get(opts, :approval_context)
+      Keyword.get(opts, :approval_context) ||
+        Map.new(Keyword.take(opts, [:run_id, :session_id, :session_key, :approval_request_fun]))
     )
   end
 
@@ -402,21 +403,36 @@ defmodule CodingAgent.ToolRegistry do
         end)
 
       _ ->
-        discover_configured_mcp_tools(cwd)
+        discover_configured_mcp_tools(cwd) ++ discover_session_mcp_tools(opts)
     end
   end
 
   defp discover_configured_mcp_tools(cwd) do
     try do
-      LemonSkills.McpSource.discover_tools(cwd: cwd)
-      |> Enum.map(fn %AgentTool{} = tool ->
-        {tool.name, tool, {:mcp, :configured}}
-      end)
+      tools = LemonSkills.McpSource.discover_tools(cwd: cwd)
+      mcp_tuples_with_approval(tools, LemonSkills.McpSource.approval_policy())
     rescue
       _ -> []
     catch
       :exit, _ -> []
     end
+  end
+
+  defp discover_session_mcp_tools(opts) do
+    case Keyword.get(opts, :acp_mcp_session_id) do
+      id when is_binary(id) and id != "" ->
+        tools = LemonSkills.McpSession.tools(id)
+        mcp_tuples_with_approval(tools, LemonSkills.McpSession.approvals(id))
+
+      _ ->
+        []
+    end
+  end
+
+  defp mcp_tuples_with_approval(tools, approvals) do
+    Enum.map(tools, fn %AgentTool{} = tool ->
+      {tool.name, tool, {:mcp, %{approval: Map.get(approvals, tool.name, :always)}}}
+    end)
   end
 
   defp wrap_extension_tool(%AgentTool{} = tool, ext_module) do
@@ -764,6 +780,7 @@ defmodule CodingAgent.ToolRegistry do
     do:
       "wasm #{Map.get(meta, :path) || Map.get(meta, "path") || Map.get(meta, :name) || Map.get(meta, "name") || "unknown"}"
 
+  defp source_label({:mcp, meta}) when is_map(meta), do: "mcp configured"
   defp source_label({:mcp, server_name}), do: "mcp #{server_name}"
 
   defp source_label(_), do: "unknown"
@@ -808,14 +825,12 @@ defmodule CodingAgent.ToolRegistry do
     end)
   end
 
-  defp maybe_wrap_approval(tools, nil, _approval_context), do: tools
-  defp maybe_wrap_approval(tools, _tool_policy, nil), do: tools
-
   defp maybe_wrap_approval(tools, tool_policy, approval_context) do
     Enum.map(tools, fn {name, tool, source} = tuple ->
       requires_approval =
         ToolPolicy.requires_approval?(tool_policy, name) or
-          wasm_default_requires_approval?(tool_policy, name, source)
+          wasm_default_requires_approval?(tool_policy, name, source) or
+          mcp_requires_approval?(source)
 
       if requires_approval do
         {name, force_wrap_approval(tool, name, approval_context), elem(tuple, 2)}
@@ -824,6 +839,9 @@ defmodule CodingAgent.ToolRegistry do
       end
     end)
   end
+
+  defp mcp_requires_approval?({:mcp, %{approval: :always}}), do: true
+  defp mcp_requires_approval?(_source), do: false
 
   defp wasm_default_requires_approval?(tool_policy, tool_name, {:wasm, meta}) do
     WasmPolicy.requires_approval?(tool_policy, tool_name, meta)
