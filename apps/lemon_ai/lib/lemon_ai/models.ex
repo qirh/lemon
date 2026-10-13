@@ -189,6 +189,12 @@ defmodule LemonAi.Models do
           | {:openai_api_key, String.t()}
           | {:openai_base_url, String.t()}
           | {:openai_timeout_ms, pos_integer()}
+          | {:discover_codex, boolean()}
+          | {:codex_access_token, String.t()}
+          | {:codex_base_url, String.t()}
+          | {:codex_timeout_ms, pos_integer()}
+          | {:codex_force_refresh, boolean()}
+          | {:codex_req_options, keyword()}
 
   @doc """
   List all known models with optional runtime discovery.
@@ -201,21 +207,53 @@ defmodule LemonAi.Models do
   - `:openai_api_key` - Optional API key override for discovery.
   - `:openai_base_url` - Optional OpenAI-compatible base URL override.
   - `:openai_timeout_ms` - Optional request timeout in milliseconds.
+  - `:discover_codex` - Query the account-scoped ChatGPT Codex registry. A failed
+    lookup never falls back to unverified Codex models. Successful results are
+    cached by account and endpoint for five minutes.
+  - `:codex_access_token` - Concrete ChatGPT JWT (no credential-file lookup or refresh).
+  - `:codex_base_url`, `:codex_timeout_ms`, `:codex_force_refresh` - Discovery controls.
   """
   @spec list_models([list_models_opt()]) :: [Model.t()]
   def list_models(opts) when is_list(opts) do
     static_models = list_models()
 
-    if Keyword.get(opts, :discover_openai, false) do
-      case discover_openai_model_ids(opts) do
-        {:ok, available_ids} ->
-          filter_openai_models(static_models, available_ids)
-
-        {:error, _reason} ->
-          static_models
+    models =
+      if Keyword.get(opts, :discover_openai, false) do
+        case discover_openai_model_ids(opts) do
+          {:ok, available_ids} -> filter_openai_models(static_models, available_ids)
+          {:error, _reason} -> static_models
+        end
+      else
+        static_models
       end
+
+    if Keyword.get(opts, :discover_codex, false) do
+      discovery_opts = [
+        access_token: Keyword.get(opts, :codex_access_token),
+        base_url: Keyword.get(opts, :codex_base_url),
+        timeout_ms: Keyword.get(opts, :codex_timeout_ms, 5_000),
+        force_refresh: Keyword.get(opts, :codex_force_refresh, false),
+        req_options: Keyword.get(opts, :codex_req_options, [])
+      ]
+
+      discovered =
+        case LemonAi.Models.OpenAICodexDiscovery.discover(discovery_opts) do
+          {:ok, available} -> Map.new(available, &{&1.id, &1})
+          {:error, _} -> %{}
+        end
+
+      Enum.flat_map(models, fn
+        %Model{provider: :"openai-codex", id: id} ->
+          case Map.get(discovered, id) do
+            nil -> []
+            model -> [model]
+          end
+
+        model ->
+          [model]
+      end)
     else
-      static_models
+      models
     end
   end
 
