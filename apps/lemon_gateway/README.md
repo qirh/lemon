@@ -71,7 +71,24 @@ Part of the `lemon` Elixir umbrella project.
 5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock` and starts Lemon's native executor.
 6. The native executor executes the AI request and streams lifecycle events and deltas back to the Run process.
 7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
-8. On completion, the Run stores chat state for future auto-resume, releases the engine lock and scheduler slot, and finalizes its lifecycle.
+8. On completion, the Run durably stores its terminal receipt and releases the engine lock and scheduler slot; router stores resume state before advancing the conversation.
+
+Exact-run cancellation also removes executions waiting for a slot; cancelled
+waiters cannot launch later. Worker enqueue is acknowledged synchronously, so a
+worker finishing its previous run cannot silently lose the next request.
+Only a definite missing worker permits retry; a lost acknowledgement remains
+`:outcome_unknown` and is never automatically re-enqueued.
+Normally drained workers are temporary children, not restarted empty shells;
+the next submission gets a newly acknowledged worker instead of being cast
+into a retiring mailbox.
+
+Gateway limits each worker's pending launch queue to 128 requests and the global
+slot-wait queue to 1,024 workers. Overflow terminalizes the rejected run with
+`:execution_queue_full` instead of leaving its router conversation busy.
+Native executor death publishes an immediate structured `:executor_down`
+completion and releases the slot/lock. The native session runner monitors its
+event sink and aborts/saves/stops its owned session when that sink disappears.
+Terminal receipts are durable before their bus notification is emitted.
 
 ## Singleton Executor Contract
 

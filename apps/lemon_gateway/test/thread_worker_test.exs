@@ -119,6 +119,27 @@ defmodule LemonGateway.ThreadWorkerTest do
     assert eventually(fn -> not Process.alive?(worker) end)
   end
 
+  test "scheduler loses no fixed IDs while normally drained workers retire" do
+    session_key = "retirement-race:#{System.unique_integer([:positive])}"
+
+    for n <- 1..100 do
+      request = request(session_key, "turn-#{n}", self())
+      request = %{request | meta: Map.put(request.meta, :delay_ms, 0)}
+      assert :ok = LemonGateway.Scheduler.submit_execution(request)
+      assert_completed_request(request)
+      assert %{summary: %{completed: %{ok: true}}} = LemonCore.RunStore.get(request.run_id)
+    end
+
+    assert eventually(fn ->
+             DynamicSupervisor.count_children(LemonGateway.ThreadWorkerSupervisor).active == 0
+           end)
+
+    assert eventually(fn ->
+             state = :sys.get_state(LemonGateway.Scheduler)
+             map_size(state.in_flight) == 0 and :queue.is_empty(state.waitq)
+           end)
+  end
+
   test "bounds total start attempts, terminalizes once, and advances FIFO queue" do
     session_key = "thread-worker:#{System.unique_integer([:positive])}"
     thread_key = {:session, session_key}
