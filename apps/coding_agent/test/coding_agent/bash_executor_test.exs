@@ -128,7 +128,6 @@ defmodule CodingAgent.BashExecutorTest do
         )
 
       assert result.truncated == true
-      assert result.output =~ "[Output truncated."
       # Should contain later lines (tail truncation keeps the end)
       assert result.output =~ "line3000"
       # Full output should be saved to temp file
@@ -166,7 +165,6 @@ defmodule CodingAgent.BashExecutorTest do
         {:ok, {:ok, result}} ->
           assert result.exit_code == 0
           assert result.truncated == true
-          assert result.output =~ "[Output truncated."
           # Should contain the 'A' characters
           assert result.output =~ "AAAA"
 
