@@ -15,6 +15,8 @@ defmodule LemonControlPlane.ACP do
   Permission requests retain the native tool-call identity and bounded target
   preview; approval summaries never persist raw tool arguments. Client calls
   are concurrent so terminal exit waits cannot block output or cancellation.
+  Remembered approval is scoped to the same tool and action arguments within
+  the session, not a blanket grant to that tool.
   """
 
   alias LemonControlPlane.AgentRuntime
@@ -1202,7 +1204,11 @@ defmodule LemonControlPlane.ACP do
   defp approval_options do
     [
       %{"optionId" => "allow-once", "name" => "Allow once", "kind" => "allow_once"},
-      %{"optionId" => "allow-session", "name" => "Allow for session", "kind" => "allow_always"},
+      %{
+        "optionId" => "allow-session",
+        "name" => "Allow this action for session",
+        "kind" => "allow_always"
+      },
       %{"optionId" => "reject-once", "name" => "Reject", "kind" => "reject_once"}
     ]
   end
