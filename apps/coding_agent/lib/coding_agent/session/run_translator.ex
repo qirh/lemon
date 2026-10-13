@@ -76,7 +76,7 @@ defmodule CodingAgent.Session.RunTranslator do
     action_id = "tool_#{id}"
     kind = Presentation.tool_kind(name)
     title = Presentation.tool_title(name, args)
-    detail = %{name: name, args: args}
+    detail = %{name: name, args: args, tool_call_id: id}
 
     action = %{id: action_id, kind: kind, title: title, detail: detail}
 
@@ -207,7 +207,7 @@ defmodule CodingAgent.Session.RunTranslator do
         title = Presentation.tool_title(name, %{})
 
         detail =
-          %{name: name, result: Presentation.truncate_result(result)}
+          %{name: name, tool_call_id: id, result: Presentation.truncate_result(result)}
           |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
