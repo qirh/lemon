@@ -243,6 +243,7 @@ async function compile(
 ): Promise<void> {
 	const result = await Bun.build({
 		entrypoints: [ENTRYPOINT],
+		bytecode: true,
 		define: {
 			// Both spellings: `src/main.ts` reads the bare identifier (Bun's
 			// `--define` substitutes that form), while `process.env.*` keeps the
