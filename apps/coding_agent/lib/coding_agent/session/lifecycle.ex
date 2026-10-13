@@ -137,7 +137,8 @@ defmodule CodingAgent.Session.Lifecycle do
         approval_context: approval_context
       )
 
-    tool_names = Enum.map(lifecycle.tools, & &1.name)
+    tools = CodingAgent.Session.Planning.tools(lifecycle.tools, session_manager)
+    tool_names = Enum.map(tools, & &1.name)
 
     # Captured once: the date and git snapshot stay fixed for the session so
     # every prompt refresh reproduces the same bytes (prompt-cache stable).
@@ -167,6 +168,11 @@ defmodule CodingAgent.Session.Lifecycle do
             }
           )
       end
+
+    base_system_prompt = system_prompt
+
+    system_prompt =
+      CodingAgent.Session.Planning.system_prompt(base_system_prompt, session_manager)
 
     convert_to_llm = &CodingAgent.Messages.to_llm/1
 
@@ -215,7 +221,7 @@ defmodule CodingAgent.Session.Lifecycle do
         initial_state: %{
           system_prompt: system_prompt,
           model: model,
-          tools: lifecycle.tools,
+          tools: tools,
           thinking_level: thinking_level,
           messages: []
         },
@@ -260,10 +266,12 @@ defmodule CodingAgent.Session.Lifecycle do
       agent_id: agent_id,
       settings_manager: settings_manager,
       cwd: cwd,
-      tools: lifecycle.tools,
+      tools: tools,
       model: model,
       thinking_level: thinking_level,
       system_prompt: system_prompt,
+      base_system_prompt: base_system_prompt,
+      base_tools: lifecycle.tools,
       prompt_environment: prompt_environment,
       explicit_system_prompt: explicit_system_prompt,
       prompt_template: prompt_template,
@@ -351,14 +359,16 @@ defmodule CodingAgent.Session.Lifecycle do
         previous_status_report: state.extension_status_report
       )
 
-    :ok = LemonAgent.Agent.set_tools(state.agent, lifecycle.tools)
+    tools = CodingAgent.Session.Planning.tools(lifecycle.tools, state.session_manager)
+    :ok = LemonAgent.Agent.set_tools(state.agent, tools)
     Notifier.broadcast_event(state, {:extension_status_report, lifecycle.extension_status_report})
 
     new_state = %{
       state
       | extensions: lifecycle.extensions,
         hooks: lifecycle.hooks,
-        tools: lifecycle.tools,
+        tools: tools,
+        base_tools: lifecycle.tools,
         extension_status_report: lifecycle.extension_status_report,
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,
@@ -425,12 +435,11 @@ defmodule CodingAgent.Session.Lifecycle do
           state.session_key
         )
 
-        {:ok,
-         State.reset_runtime(
-           state,
-           new_session_manager,
-           System.system_time(:millisecond)
-         )}
+        state =
+          State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
+          |> CodingAgent.Session.Planning.refresh()
+
+        {:ok, state}
 
       {:error, :timeout} ->
         Logger.warning("Timed out waiting for agent abort during reset")

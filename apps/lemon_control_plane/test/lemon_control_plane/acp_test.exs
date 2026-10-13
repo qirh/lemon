@@ -31,6 +31,56 @@ defmodule LemonControlPlane.ACPTest do
     end
   end
 
+  defmodule PlanRuntime do
+    def session_plan(key, _cwd, action, opts) do
+      plan =
+        case :ets.lookup(__MODULE__, key) do
+          [{^key, value}] ->
+            value
+
+          [] ->
+            %{
+              "mode" => "code",
+              "status" => "none",
+              "revision" => nil,
+              "path" => nil,
+              "content" => nil
+            }
+        end
+
+      case action do
+        :status ->
+          {:ok, plan}
+
+        :enter ->
+          save(key, %{plan | "mode" => "plan", "status" => "draft"})
+
+        :discard ->
+          save(key, %{plan | "mode" => "code", "status" => "none"})
+
+        :approve ->
+          cond do
+            plan["status"] != "pending" -> {:error, :plan_not_pending}
+            opts[:revision] != plan["revision"] -> {:error, :revision_mismatch}
+            true -> save(key, %{plan | "mode" => "code", "status" => "approved"})
+          end
+      end
+    end
+
+    def tool_policy(:read_only), do: %{profile: :read_only, allow: ["read"], deny: []}
+
+    def compact_session(_key, opts) do
+      [{:observer, pid}] = :ets.lookup(__MODULE__, :observer)
+      send(pid, {:compact_focus, opts[:custom_instructions]})
+      :ok
+    end
+
+    defp save(key, plan) do
+      :ets.insert(__MODULE__, {key, plan})
+      {:ok, plan}
+    end
+  end
+
   setup do
     keys = [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token, :agent_runtime_provider]
     previous = Map.new(keys, &{&1, Application.get_env(:lemon_control_plane, &1)})
@@ -822,6 +872,7 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   test "session configuration reaches the real router contract and survives resume" do
+    start_plan_runtime()
     parent = self()
 
     Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
@@ -857,6 +908,134 @@ defmodule LemonControlPlane.ACPTest do
 
     assert result["modes"]["currentModeId"] == "plan"
     assert Enum.find(result["configOptions"], &(&1["id"] == "model"))["currentValue"] == model_id
+  end
+
+  test "native plan approval requires the reviewed revision and owns mode state" do
+    start_plan_runtime()
+    id = new_session()
+    session = Store.get(:acp_sessions, id)
+    revision = String.duplicate("a", 64)
+
+    plan = %{
+      "mode" => "plan",
+      "status" => "pending",
+      "revision" => revision,
+      "path" => "/private/plans/reviewed.md",
+      "content" => "Inspect inputs, then implement the reviewed change."
+    }
+
+    :ets.insert(PlanRuntime, {session.session_key, plan})
+
+    assert {:ok, %{"error" => _}} =
+             rpc("session/set_mode", %{"sessionId" => id, "modeId" => "default"})
+
+    assert {:error, -32_602, _} =
+             ACP.prompt(%{
+               "sessionId" => id,
+               "prompt" => [%{"type" => "text", "text" => "/approve-plan stale"}]
+             })
+
+    parent = self()
+
+    assert {:ok, %{"stopReason" => "end_turn"}} =
+             ACP.prompt(
+               %{"sessionId" => id, "prompt" => [%{"type" => "text", "text" => "/plan"}]},
+               session_update_callback: &send(parent, {:plan_review, &1})
+             )
+
+    assert_receive {:plan_review,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "agent_message_chunk",
+                          "content" => %{"text" => text}
+                        }
+                      }
+                    }}
+
+    assert text =~ revision
+    assert text =~ plan["content"]
+
+    assert {:ok, %{"stopReason" => "end_turn"}} =
+             ACP.prompt(
+               %{
+                 "sessionId" => id,
+                 "prompt" => [%{"type" => "text", "text" => "/approve-plan " <> revision}]
+               },
+               session_update_callback: &send(parent, {:plan_approved, &1})
+             )
+
+    assert_receive {:plan_approved,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "current_mode_update",
+                          "currentModeId" => "default"
+                        }
+                      }
+                    }}
+
+    assert {:ok, %{"status" => "approved"}} =
+             PlanRuntime.session_plan(session.session_key, session.cwd, :status, [])
+
+    persisted = Store.get(:acp_sessions, id)
+    refute Map.has_key?(persisted, :mode)
+    refute Map.has_key?(persisted, :plan)
+    refute inspect(persisted) =~ revision
+
+    assert {:ok, %{"stopReason" => "end_turn"}} =
+             ACP.prompt(%{
+               "sessionId" => id,
+               "prompt" => [
+                 %{"type" => "text", "text" => "/compact preserve the approved constraints"}
+               ]
+             })
+
+    assert_receive {:compact_focus, "preserve the approved constraints"}
+  end
+
+  test "legacy read-only modes migrate without overwriting a native pending plan" do
+    start_plan_runtime()
+    id = new_session()
+    session = Store.get(:acp_sessions, id)
+    revision = String.duplicate("b", 64)
+
+    :ets.insert(
+      PlanRuntime,
+      {session.session_key,
+       %{
+         "mode" => "plan",
+         "status" => "pending",
+         "revision" => revision,
+         "path" => "/private/plans/existing.md",
+         "content" => "Existing reviewed plan"
+       }}
+    )
+
+    Store.put(:acp_sessions, id, Map.put(session, :mode, "plan"))
+    assert {:ok, result} = ACP.resume_session(%{"sessionId" => id, "cwd" => session.cwd})
+    assert result["modes"]["currentModeId"] == "plan"
+
+    assert {:ok, %{"revision" => ^revision, "status" => "pending"}} =
+             PlanRuntime.session_plan(session.session_key, session.cwd, :status, [])
+
+    refute Map.has_key?(Store.get(:acp_sessions, id), :mode)
+  end
+
+  test "an unavailable planning runtime cannot enable plan mode" do
+    Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+    id = new_session()
+
+    assert {:ok, %{"error" => %{"code" => -32_000}}} =
+             rpc("session/set_mode", %{"sessionId" => id, "modeId" => "plan"})
+
+    refute Map.has_key?(Store.get(:acp_sessions, id), :mode)
+  end
+
+  defp start_plan_runtime do
+    :ets.new(PlanRuntime, [:named_table, :public, :set])
+    :ets.insert(PlanRuntime, {:observer, self()})
+    :ok = LemonControlPlane.AgentRuntime.register(PlanRuntime)
   end
 
   test "unknown sessions and unsupported configuration fail closed" do
