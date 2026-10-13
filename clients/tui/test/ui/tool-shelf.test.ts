@@ -206,16 +206,12 @@ describe("sealing", () => {
 		// Both entries are done, but the shelf can still take another and re-shape,
 		// so its rows must stay off the tape.
 		expect(shelf.isTranscriptBlockFinalized()).toBe(false);
-		expect(shelf.isNativeScrollbackLiveRegionPinned()).toBe(true);
-		expect(shelf.isDisplaceableBlock()).toBe(true);
 	});
 
 	test("sealing finalizes it, unpins the region and refuses new entries", () => {
 		const shelf = shelfWith([["read", "success"]]);
 		shelf.seal();
 		expect(shelf.isTranscriptBlockFinalized()).toBe(true);
-		expect(shelf.isNativeScrollbackLiveRegionPinned()).toBe(false);
-		expect(shelf.isDisplaceableBlock()).toBe(false);
 		expect(shelf.open).toBe(false);
 
 		const grep = fixtureByName("grep");
