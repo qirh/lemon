@@ -9,7 +9,7 @@ commands are dispatched by the CLI registry.
 This behavior is identical in source checkouts and packaged installs:
 
 - In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI.
-- Without a TTY, `lemon` prints usage to stderr and exits with status 2.
+- Without a TTY, `lemon` fails immediately with status 2 and points to `lemon -p`, `lemon daemon`, and `lemon --help`. It does not compile, initialize HOME state, or start a daemon.
 - `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
 
 Use `./bin/lemon` instead of `lemon` in the examples below when running from a
@@ -53,8 +53,20 @@ packaged releases:
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |
 | `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
 | `node` | Source and release | Includes `node join`. |
-| `version` | Source and release | Print the Lemon version. |
+| `version`, `--version` | Source and release | `version` prints bare CalVer for scripts; `--version` or `version --verbose` also reports source/release, commit, and build channel. |
 | `send`, `media`, `models`, `policy`, `skill`, `usage` | Source and release | Mix-free channel notifications, diagnostics, catalog, policies, and skill management; existing Mix tasks remain thin source adapters. |
+
+The `runtime.build` doctor check reports the same build identity. Source builds
+use the umbrella CalVer and current checkout commit. Packaged releases use
+metadata stamped at assembly; an older artifact without metadata reports
+`unknown` rather than guessing a commit or channel from the updater settings.
+
+Clients reusing an external daemon use its existing credential, not a newly
+generated token. Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` or use the HOME that
+owns that daemon. An explicitly configured
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` runtime can be used
+without a credential; the launcher does not silently enable this compatibility
+mode.
 
 ## Help and exit codes
 

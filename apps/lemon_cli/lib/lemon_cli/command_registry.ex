@@ -454,10 +454,10 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "version",
-      summary: "Print the Lemon version",
-      usage: "lemon version",
+      summary: "Print the Lemon version (--version includes build identity)",
+      usage: "lemon version [--verbose]",
       subcommands: [],
-      options: []
+      options: [option("--verbose", ["--verbose"], "Show source/release, commit, and channel")]
     },
     runtime(
       "send",
