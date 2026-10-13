@@ -159,7 +159,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     }
 
     updates =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "id", "read", result, false}
       )
@@ -182,7 +182,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     }
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "id", "edit", result, false},
         cwd: "/workspace"
@@ -193,8 +193,10 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
   end
 
   test "internal resource subjects never become editor paths" do
-    notification =
-      SessionUpdates.tool_call("session", "id", "write", %{path: "xd://tool", content: "{}"},
+    [notification] =
+      updates_for(
+        "session",
+        {:tool_execution_start, "id", "write", %{path: "xd://tool", content: "{}"}},
         cwd: "/workspace"
       )
 
@@ -205,7 +207,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
   test "usage, compaction and failed tools use client supported updates" do
     [notification] =
-      SessionUpdates.session_updates("session", %{
+      updates_for("session", %{
         type: :usage,
         payload: %{contextWindow: 200_000, context_tokens: 123, total_tokens: 500}
       })
@@ -214,7 +216,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert update(notification)["used"] == 123
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:compaction_complete, %{id: "compact", summary: "short"}}
       )
@@ -227,7 +229,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
            }
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "id", "bash", "failed", true}
       )
@@ -314,7 +316,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     }
 
     [notification] =
-      SessionUpdates.session_updates(
+      updates_for(
         "session",
         {:tool_execution_end, "delete", "delete", result, false}
       )
@@ -373,6 +375,37 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
 
     assert updates == []
     assert Enum.map_join(emitted, &update(&1)["content"]["text"]) == String.duplicate(piece, 40)
+  end
+
+  test "raw tool output omits hidden thinking and malformed locations stay bounded" do
+    result = %AgentToolResult{
+      content: [
+        %TextContent{text: "visible", text_signature: "private"},
+        %LemonAi.Types.ThinkingContent{thinking: "hidden"}
+      ],
+      details: %{
+        path: "/workspace/file",
+        first_changed_line: %{text: String.duplicate("x", 100_000)}
+      }
+    }
+
+    [notification] =
+      updates_for(
+        "session",
+        {:tool_execution_end, "call", "read", result, false}
+      )
+
+    assert update(notification)["rawOutput"]["content"] == [
+             %{"type" => "text", "text" => "visible"}
+           ]
+
+    assert update(notification)["locations"] == [%{"path" => "/workspace/file"}]
+    assert byte_size(Jason.encode!(notification)) < 40_000
+  end
+
+  defp updates_for(session_id, event, opts \\ []) do
+    {updates, _state} = SessionUpdates.map_event(SessionUpdates.new(session_id, opts), event)
+    updates
   end
 
   defp update(notification), do: notification["params"]["update"]
