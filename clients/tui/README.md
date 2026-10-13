@@ -215,7 +215,8 @@ and control plane authoritative:
 | `/status`, `/usage` | Show control-plane health/runtime and usage/quota summaries. |
 | `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
-| `/compress` | Compact the current session through `sessions.compact`. |
+| `/compact [focus instructions…]`, `/compress [focus instructions…]` | Manually compact the current session through `sessions.compact`, with optional instructions about what context to preserve. |
+| `/plan [status\|show\|enter [request…]\|approve\|discard]` | Inspect the native plan artifact, enter read-only planning, explicitly review and approve one revision, or discard planning without approval. |
 | `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
 | `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |
 | `/bg list [status]` | List durable background runs, optionally filtered by lifecycle status. |
@@ -242,6 +243,51 @@ Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript
 without resetting daemon-side session history. Use `/reset` when history should
 also be forgotten.
+
+### Planning and approval
+
+`/plan` (also `/plan status` or `/plan show`) fetches the native session's mode,
+plan status, revision, Markdown artifact path and full content. It also shows
+command usage. There is no separate TUI plan store.
+
+Use `/plan enter` to enter read-only planning, then send your planning request
+normally. `/plan enter <request…>` enters planning first and sends that request
+through the ordinary prompt submission path only after the daemon confirms
+planning mode. The status is `draft` until a completed planning turn produces a
+`pending` immutable Markdown artifact. Planning does not itself approve code
+execution.
+
+Read the artifact with `/plan`, then use `/plan approve`. The command fetches
+and shows the current artifact again and opens a cancel-default confirmation
+picker identifying its exact revision. Choose “I reviewed this revision —
+approve” only after reading it; cancel to return to the full transcript if
+needed. Confirmation sends only that displayed revision. A stale or refused
+approval preserves the draft and never sends an execution prompt; use `/plan`
+and review again.
+
+Approval changes the native status to `approved`, but **does not execute the
+plan**. When ready, send an explicit prompt such as `Execute the approved plan`;
+the native session supplies the approved plan as context. `/plan discard`
+instead leaves planning without approving or executing anything. Stop an active
+run before entering, approving or discarding a plan. Plan operations require a
+daemon advertising `sessions.plan` and are never queued offline.
+
+### Manual compaction
+
+Use `/compact` or `/compress` to explicitly compact the focused session, even
+when automatic compaction has not reached its threshold. Optional text is
+forwarded intact (including inner whitespace and quotes) as focus instructions:
+
+```text
+/compact Preserve the public API decisions, test failures, and remaining tasks
+```
+
+The command sends the session key, project cwd and optional `focus` to
+`sessions.compact`; the native service uses that text as `custom_instructions`,
+not as a replacement summary. Canonical profile workspace resolution remains
+server-owned. The receipt reports success and available token counts, never
+the private summary or raw server exception. Manual compaction is not queued
+offline.
 
 ### Forking a session
 

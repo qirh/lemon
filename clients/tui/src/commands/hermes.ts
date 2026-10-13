@@ -7,6 +7,7 @@
  * the handshake so an older daemon receives no speculative RPCs.
  */
 
+import { ControlPlaneError, NotConnectedError } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import {
 	asArray,
@@ -101,18 +102,42 @@ export const tasksCommand: SlashCommand = {
 
 export const compressCommand: SlashCommand = {
 	name: "compress",
+	aliases: ["compact"],
 	summary: "compact the current session context",
+	usage: "[focus instructions…]",
 	group: "sessions",
 	methods: [METHOD.sessionsCompact],
 	async run(ctx) {
-		const result = await ctx.methods.sessionsCompact({ sessionKey: ctx.session.key });
-		const before = pickNumber(result, "tokensBefore");
-		const after = pickNumber(result, "tokensAfter");
-		const tokenChange =
-			before !== undefined || after !== undefined
-				? ` · ${before ?? "?"} → ${after ?? "?"} tokens`
-				: "";
-		ctx.ui.notice(`compressed ${ctx.session.key}${tokenChange}`);
+		try {
+			const result = await ctx.methods.sessionsCompact({
+				sessionKey: ctx.session.key,
+				cwd: ctx.cwd ?? process.cwd(),
+				...(ctx.rest.trim() ? { focus: ctx.rest.trim() } : {}),
+			});
+			if (result.success !== true) {
+				ctx.ui.notice(
+					"compaction was not confirmed; inspect session status before retrying",
+					"error",
+				);
+				return;
+			}
+			const before = pickNumber(result, "tokensBefore");
+			const after = pickNumber(result, "tokensAfter");
+			const tokenChange =
+				before !== undefined || after !== undefined
+					? ` · ${before ?? "?"} → ${after ?? "?"} tokens`
+					: "";
+			ctx.ui.notice(`compressed ${ctx.session.key}${tokenChange}`);
+		} catch (error) {
+			const code =
+				error instanceof ControlPlaneError || error instanceof NotConnectedError
+					? error.code
+					: "OUTCOME_UNKNOWN";
+			ctx.ui.notice(
+				`compaction did not complete (${code}); inspect session status before retrying`,
+				"error",
+			);
+		}
 	},
 };
 
