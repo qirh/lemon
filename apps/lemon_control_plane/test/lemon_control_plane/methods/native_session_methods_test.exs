@@ -88,6 +88,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, tree} = Registry.dispatch("sessions.tree", target(), ctx([:read]))
     assert_receive {:tree, "agent:native_methods:main", "/workspace", [limit: 100, offset: 0]}
     assert tree["entries"] == [Map.delete(entry, "raw")]
+    assert tree["sessionKey"] == target()["sessionKey"]
     refute Map.has_key?(tree, "private")
     assert tree["branches"] == [%{"leafId" => "u1", "active" => true}]
 
@@ -137,6 +138,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
     Process.put(:rewind_result, {:ok, Map.put(preview, "private", "hidden")})
 
+    preview = Map.put(preview, "sessionKey", target()["sessionKey"])
     assert {:ok, ^preview} = Registry.dispatch("sessions.rewind", rewind_target(), ctx([:write]))
 
     assert_receive {:rewind, _, _, "u1",
@@ -166,6 +168,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     }
 
     Process.put(:rewind_result, {:ok, result})
+    result = Map.put(result, "sessionKey", target()["sessionKey"])
 
     assert {:ok, ^result} =
              SessionsRewind.handle(
