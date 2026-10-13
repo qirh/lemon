@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.0]
+
 ### Added
 
 - **`mix lemon.new --hex`.** The generator can emit `~> 0.2` Hex requirements
