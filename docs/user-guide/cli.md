@@ -18,6 +18,8 @@ source checkout.
 Launch from the repository you want to work on. Source compilation runs in the
 Lemon checkout, but the TUI and project-scoped CLI commands retain the calling
 directory, including on a cold daemon start.
+Source build and bootstrap diagnostics, including waits for another compiler,
+go to stderr; concurrent JSON commands keep stdout reserved for their result.
 
 ## Commands and availability
 
