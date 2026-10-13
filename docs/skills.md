@@ -4,7 +4,7 @@ This document describes the `LemonSkills` module for managing reusable knowledge
 
 ## Overview
 
-Skills are markdown files with YAML frontmatter that contain domain-specific knowledge. The stable system prompt lists bounded, escaped metadata for available skills; agents use `read_skill` to load selected semantics. Relevance selection uses cached metadata, keywords, and bounded body excerpts without injecting turn-specific skill bodies into the system prompt.
+Skills are markdown files with YAML frontmatter that contain domain-specific knowledge. The stable system prompt lists every displayable skill as a compact key plus one-line discovery description, with a marker for unavailable skills. Agents use `read_skill` to load instructions, paths, provenance, and requirement details on demand. Relevance selection uses cached metadata, keywords, and bounded body excerpts without injecting turn-specific skill bodies into the system prompt.
 
 ## Location
 
@@ -66,7 +66,7 @@ await Bun.write("./output.txt", "Hello, World!");
 | `tags` | No | Up to 32 bounded safe strings |
 | `keywords` | No | Up to 32 bounded relevance terms |
 
-Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass and includes source/trust provenance. Community, project, and local metadata is treated as untrusted relevance data.
+Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass. All catalog metadata is treated as untrusted discovery data; source/trust provenance is disclosed when a skill is loaded.
 
 ## API Reference
 
