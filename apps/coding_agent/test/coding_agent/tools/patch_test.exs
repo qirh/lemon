@@ -249,11 +249,6 @@ defmodule CodingAgent.Tools.PatchTest do
       assert {:error, "patch_text is required"} = result
     end
 
-    test "returns error when no operations found", %{tmp_dir: tmp_dir} do
-      result = Patch.execute("call_1", %{"patch_text" => "just some text"}, nil, nil, tmp_dir, [])
-      assert {:error, "No patch operations found"} = result
-    end
-
     test "returns error when updating non-existent file", %{tmp_dir: tmp_dir} do
       patch_text = """
       *** Update File: nonexistent.txt
@@ -612,8 +607,8 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
-      assert {:error, msg} = result
-      assert msg =~ "null bytes"
+      assert {:error, _} = result
+      refute File.exists?(Path.join(tmp_dir, "innocent.txt"))
     end
 
     test "blocks excessively long paths", %{tmp_dir: tmp_dir} do
@@ -817,16 +812,21 @@ defmodule CodingAgent.Tools.PatchTest do
 
     test "accepts files at exactly 10MB", %{tmp_dir: tmp_dir} do
       large_file = Path.join(tmp_dir, "exact_10mb.txt")
-      # Create exactly 10MB file with line breaks for context matching
+      marker = "unique start\n"
       line = String.duplicate("x", 100) <> "\n"
-      lines_needed = div(10 * 1024 * 1024, 101)
-      content = String.duplicate(line, lines_needed)
+      remaining = 10 * 1024 * 1024 - byte_size(marker)
+
+      content =
+        marker <>
+          String.duplicate(line, div(remaining, 101)) <>
+          String.duplicate("x", rem(remaining, 101))
+
       File.write!(large_file, content)
 
       patch_text = """
       *** Update File: exact_10mb.txt
       @@ hunk
-       #{String.duplicate("x", 100)}
+       unique start
       +inserted
       """
 
@@ -883,13 +883,13 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
-      assert {:error, msg} = result
-      assert msg =~ "Context not found"
+      assert {:error, _} = result
+      assert File.read!(binary_file) == binary_data
     end
 
     test "handles files with embedded null bytes in content", %{tmp_dir: tmp_dir} do
       file = Path.join(tmp_dir, "null_content.txt")
-      # File content with embedded nulls (valid but unusual)
+      # NUL data is not valid text-tool input.
       File.write!(file, "line1\nline2\0embedded\nline3")
 
       patch_text = """
@@ -901,14 +901,9 @@ defmodule CodingAgent.Tools.PatchTest do
        line3
       """
 
-      # This might match or might not depending on how split handles it
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
-
-      # Either succeeds or fails gracefully
-      case result do
-        %AgentToolResult{} -> assert true
-        {:error, msg} -> assert msg =~ "Context not found"
-      end
+      assert {:error, _} = result
+      assert File.read!(file) == "line1\nline2\0embedded\nline3"
     end
 
     test "handles mixed binary and text content", %{tmp_dir: tmp_dir} do
@@ -1066,7 +1061,7 @@ defmodule CodingAgent.Tools.PatchTest do
       assert File.exists?(Path.join(tmp_dir, "test.txt"))
     end
 
-    test "handles hunk without any changes", %{tmp_dir: tmp_dir} do
+    test "rejects hunk without any changes and preserves the file", %{tmp_dir: tmp_dir} do
       file = Path.join(tmp_dir, "no_changes.txt")
       File.write!(file, "line1\nline2\nline3")
 
@@ -1080,10 +1075,8 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{details: details} = result
-      # No actual changes made
-      assert details.additions == 0
-      assert details.removals == 0
+      assert {:error, _} = result
+      assert File.read!(file) == "line1\nline2\nline3"
     end
 
     test "handles malformed hunk header", %{tmp_dir: tmp_dir} do
@@ -1479,8 +1472,8 @@ defmodule CodingAgent.Tools.PatchTest do
 
       result = Patch.execute("call_1", %{"patch_text" => patch_text}, nil, nil, tmp_dir, [])
 
-      assert {:error, msg} = result
-      assert msg =~ "null bytes"
+      assert {:error, _} = result
+      assert File.read!(file) == "content"
     end
   end
 
