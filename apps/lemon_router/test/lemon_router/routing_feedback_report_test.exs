@@ -30,7 +30,8 @@ defmodule LemonRouter.RoutingFeedbackReportTest do
 
   defp record(pid, key, outcome, duration_ms \\ nil) do
     GenServer.cast(pid, {:record, key, Atom.to_string(outcome), duration_ms})
-    Process.sleep(20)
+    # Flush the cast: a call from the same process is handled after it
+    :sys.get_state(pid)
   end
 
   # ── parse_key/1 ───────────────────────────────────────────────────────────────

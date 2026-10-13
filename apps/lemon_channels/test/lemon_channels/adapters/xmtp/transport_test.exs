@@ -110,7 +110,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
       }
     })
 
-    assert_receive {:inbound, %InboundMessage{} = inbound}, 800
+    assert_receive {:inbound, %InboundMessage{} = inbound}
 
     assert inbound.channel_id == "xmtp"
     assert inbound.peer.id == sender
@@ -136,7 +136,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     dedupe_key = Transport.inbound_dedupe_key_for_test(event)
 
     send(pid, {:xmtp_bridge_event, event})
-    assert_receive {:inbound, %InboundMessage{message: %{text: "retry me"}}}, 800
+    assert_receive {:inbound, %InboundMessage{message: %{text: "retry me"}}}
 
     assert_receive {:trace, ^port_server, :receive,
                     {:"$gen_cast", {:command, %{"op" => "send", "content" => failure_text}}}},
@@ -155,7 +155,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     send(pid, {:xmtp_bridge_event, %{"type" => "connected", "mode" => "live"}})
     send(pid, {:xmtp_bridge_event, event})
 
-    assert_receive {:inbound, %InboundMessage{message: %{text: "retry me"}}}, 800
+    assert_receive {:inbound, %InboundMessage{message: %{text: "retry me"}}}
 
     assert_receive {:trace, ^port_server, :receive,
                     {:"$gen_cast",
@@ -184,7 +184,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     event = xmtp_submission_event("msg-ambiguous", "bridge-key-ambiguous", "maybe accepted")
 
     send(pid, {:xmtp_bridge_event, event})
-    assert_receive {:inbound, %InboundMessage{message: %{text: "maybe accepted"}}}, 800
+    assert_receive {:inbound, %InboundMessage{message: %{text: "maybe accepted"}}}
 
     assert_receive {:trace, ^port_server, :receive,
                     {:"$gen_cast",

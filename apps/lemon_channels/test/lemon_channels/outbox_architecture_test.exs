@@ -88,7 +88,7 @@ defmodule LemonChannels.OutboxArchitectureTest do
     end
   end
 
-  defp eventually(assertion_fun, timeout_ms \\ 250) do
+  defp eventually(assertion_fun, timeout_ms \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(assertion_fun, deadline)
   end
@@ -138,7 +138,7 @@ defmodule LemonChannels.OutboxArchitectureTest do
       send(outbox_pid, :process_queue)
       send(outbox_pid, :process_queue)
 
-      assert_receive {:deliver_started, pid, ^chunk_index}, 500
+      assert_receive {:deliver_started, pid, ^chunk_index}
 
       # Ensure we don't start the next chunk for this delivery group until the
       # current chunk is released (prevents reordering).
@@ -148,7 +148,7 @@ defmodule LemonChannels.OutboxArchitectureTest do
       end
 
       send(pid, :release)
-      assert_receive {:delivered, ^chunk_index}, 500
+      assert_receive {:delivered, ^chunk_index}
     end
 
     eventually(fn ->
@@ -189,14 +189,14 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
     workers =
       for _ <- 1..3 do
-        assert_receive {:deliver_started, pid, _chunk_index}, 500
+        assert_receive {:deliver_started, pid, _chunk_index}
         pid
       end
 
     Enum.each(workers, fn pid -> send(pid, :release) end)
 
     for _ <- 1..3 do
-      assert_receive {:delivered, _chunk_index}, 500
+      assert_receive {:delivered, _chunk_index}
     end
 
     eventually(fn ->
@@ -240,14 +240,14 @@ defmodule LemonChannels.OutboxArchitectureTest do
 
     workers =
       for _ <- 1..2 do
-        assert_receive {:deliver_started, pid, _chunk_index}, 500
+        assert_receive {:deliver_started, pid, _chunk_index}
         pid
       end
 
     Enum.each(workers, fn pid -> send(pid, :release) end)
 
     for _ <- 1..2 do
-      assert_receive {:delivered, _chunk_index}, 500
+      assert_receive {:delivered, _chunk_index}
     end
 
     eventually(fn ->

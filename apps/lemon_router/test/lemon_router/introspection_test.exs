@@ -4,6 +4,8 @@ defmodule LemonRouter.IntrospectionTest do
   """
   use ExUnit.Case, async: false
 
+  import LemonCore.Testing.AsyncHelpers
+
   alias LemonCore.Introspection
 
   defp make_test_request(run_id, session_key, meta) do
@@ -14,6 +16,22 @@ defmodule LemonRouter.IntrospectionTest do
       conversation_key: {:session, session_key},
       meta: meta
     }
+  end
+
+  defp await_events(run_id, event_type) do
+    assert_eventually(
+      fn -> events_of_type(run_id, event_type) != [] end,
+      timeout: 5_000,
+      message: "no #{inspect(event_type)} introspection event for #{run_id}"
+    )
+
+    events_of_type(run_id, event_type)
+  end
+
+  defp events_of_type(run_id, event_type) do
+    [run_id: run_id, limit: 50]
+    |> Introspection.list()
+    |> Enum.filter(&(&1.event_type == event_type))
   end
 
   setup do
@@ -41,11 +59,7 @@ defmodule LemonRouter.IntrospectionTest do
           submit_to_gateway?: false
         )
 
-      # Give the init a moment to complete the introspection call
-      Process.sleep(50)
-
-      events = Introspection.list(run_id: run_id, limit: 10)
-      started_events = Enum.filter(events, &(&1.event_type == :run_started))
+      started_events = await_events(run_id, :run_started)
 
       assert started_events != []
       [evt | _] = started_events
@@ -84,11 +98,9 @@ defmodule LemonRouter.IntrospectionTest do
       LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
 
       # Wait for the event to be processed and process to terminate
-      Process.sleep(200)
-      refute Process.alive?(pid)
+      assert_process_dead(pid)
 
-      events = Introspection.list(run_id: run_id, limit: 20)
-      completed_events = Enum.filter(events, &(&1.event_type == :run_completed))
+      completed_events = await_events(run_id, :run_completed)
 
       assert completed_events != []
       [evt | _] = completed_events
@@ -113,15 +125,8 @@ defmodule LemonRouter.IntrospectionTest do
 
       case LemonRouter.RunOrchestrator.submit(request) do
         {:ok, run_id} ->
-          Process.sleep(100)
-
-          events = Introspection.list(run_id: run_id, limit: 20)
-
-          orch_started =
-            Enum.filter(events, &(&1.event_type == :orchestration_started))
-
-          orch_resolved =
-            Enum.filter(events, &(&1.event_type == :orchestration_resolved))
+          orch_started = await_events(run_id, :orchestration_started)
+          orch_resolved = await_events(run_id, :orchestration_resolved)
 
           assert orch_started != []
           assert orch_resolved != []

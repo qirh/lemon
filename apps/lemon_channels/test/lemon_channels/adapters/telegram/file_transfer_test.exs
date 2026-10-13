@@ -211,7 +211,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([document_update(chat_id, "/file put incoming/example.txt")])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Saved: incoming/example.txt")
 
     assert File.read!(Path.join(root, "incoming/example.txt")) == "FILE_BYTES"
@@ -241,7 +241,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([document_update(chat_id, "/file put #{rel}")])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Saved: #{rel}")
     assert File.read!(Path.join(root, rel)) == "FILE_BYTES"
   end
@@ -277,7 +277,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       }
     ])
 
-    assert_receive {:send_document, path, _opts}, 300
+    assert_receive {:send_document, path, _opts}
     assert String.ends_with?(path, "/out.txt")
   end
 
@@ -320,7 +320,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       }
     ])
 
-    assert_receive {:send_document, path, _opts}, 300
+    assert_receive {:send_document, path, _opts}
     assert String.starts_with?(path, Path.expand(root))
     assert String.ends_with?(path, Path.basename(rel))
   end
@@ -343,7 +343,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([document_update(chat_id, nil)])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded: incoming/example.txt")
     assert File.read!(Path.join(root, "incoming/example.txt")) == "FILE_BYTES"
   end
@@ -376,7 +376,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       document_update_media_group(chat_id, mg, "b.txt")
     ])
 
-    assert_receive {:sent, text}, 800
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded 2 files")
     assert File.read!(Path.join(root, "incoming/a.txt")) == "FILE_BYTES"
     assert File.read!(Path.join(root, "incoming/b.txt")) == "FILE_BYTES"
@@ -514,7 +514,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([photo_update(chat_id)])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded: incoming/photo_")
     assert String.contains?(text, ".jpg")
 
@@ -541,7 +541,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([video_update(chat_id)])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded: incoming/clip.mp4")
     assert File.read!(Path.join(root, "incoming/clip.mp4")) == "FILE_BYTES"
   end
@@ -564,7 +564,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([animation_update(chat_id)])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded: incoming/animation_")
     assert String.contains?(text, ".mp4")
 
@@ -591,7 +591,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
     FileTransferMockAPI.set_updates([video_note_update(chat_id)])
 
-    assert_receive {:sent, text}, 300
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded: incoming/videonote_")
     assert String.contains?(text, ".mp4")
 
@@ -628,7 +628,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       photo_update_media_group(chat_id, mg)
     ])
 
-    assert_receive {:sent, text}, 800
+    assert_receive {:sent, text}
     assert String.contains?(text, "Uploaded 2 files")
 
     files = Path.wildcard(Path.join(root, "incoming/photo_*.jpg"))
@@ -706,7 +706,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
       document_update_media_group(chat_id, mg, "d.txt")
     ])
 
-    assert_receive {:sent, text}, 800
+    assert_receive {:sent, text}
     assert String.contains?(text, "Saved 2 files")
     assert File.read!(Path.join(root, "incoming/c.txt")) == "FILE_BYTES"
     assert File.read!(Path.join(root, "incoming/d.txt")) == "FILE_BYTES"

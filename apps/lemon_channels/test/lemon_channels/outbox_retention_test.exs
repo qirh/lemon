@@ -45,6 +45,7 @@ defmodule LemonChannels.OutboxRetentionTest do
     case Process.whereis(RateLimiter) do
       nil ->
         {:ok, rl_pid} = RateLimiter.start_link([])
+
         on_exit(fn ->
           if Process.alive?(rl_pid), do: GenServer.stop(rl_pid)
         end)
@@ -57,9 +58,11 @@ defmodule LemonChannels.OutboxRetentionTest do
     case Process.whereis(Outbox) do
       nil ->
         {:ok, outbox_pid} = Outbox.start_link([])
+
         on_exit(fn ->
           if Process.alive?(outbox_pid), do: GenServer.stop(outbox_pid)
         end)
+
         {:ok, outbox_pid: outbox_pid}
 
       pid ->
@@ -198,8 +201,8 @@ defmodule LemonChannels.OutboxRetentionTest do
       # Manually mark a key as delivered
       LemonChannels.Outbox.Dedupe.mark(channel, idempotency_key)
 
-      # Give time for async cast to process
-      Process.sleep(10)
+      # The cast is handled before this synchronous check returns
+      assert :duplicate = LemonChannels.Outbox.Dedupe.check(channel, idempotency_key)
 
       payload = %OutboundPayload{
         channel_id: channel,

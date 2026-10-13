@@ -96,7 +96,6 @@ defmodule LemonChannels.StartupTest do
         discord: %{bot_token: nil}
       })
 
-
       Application.put_env(:lemon_channels, :adapters, [])
 
       _ = Application.ensure_all_started(:lemon_channels)
@@ -109,7 +108,7 @@ defmodule LemonChannels.StartupTest do
     assert {:ok, _apps} = Application.ensure_all_started(:lemon_channels)
 
     # Wait for channels transport to come up.
-    assert is_pid(wait_for_pid(Elixir.LemonChannels.Adapters.Telegram.Transport, 2_000))
+    assert is_pid(wait_for_pid(Elixir.LemonChannels.Adapters.Telegram.Transport, 5_000))
 
     # Ensure we did not also start the legacy gateway transport supervisor.
     assert Process.whereis(LemonGateway.TransportSupervisor) == nil

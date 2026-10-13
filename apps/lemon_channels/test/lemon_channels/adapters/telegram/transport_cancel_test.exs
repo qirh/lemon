@@ -225,7 +225,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
              })
 
     # Should set 👀 reaction on the user's message
-    assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 400
+    assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}
   end
 
   test "definite submission failure has no progress reaction and permits redelivery" do
@@ -241,18 +241,18 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, %{message: %{text: "retry this request"}}}, 500
+    assert_receive {:inbound, %{message: %{text: "retry this request"}}}
     refute_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 50
 
-    assert_receive {:send_message, ^chat_id, failure_text, _opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, failure_text, _opts, _parse_mode}
     assert failure_text =~ "couldn't queue"
     refute failure_text =~ "unavailable"
 
     :persistent_term.put({CancelTestRouter, :submit_result}, {:ok, "run-redelivered"})
     CancelMockAPI.set_updates([update])
 
-    assert_receive {:inbound, %{message: %{text: "retry this request"}}}, 500
-    assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 500
+    assert_receive {:inbound, %{message: %{text: "retry this request"}}}
+    assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}
   end
 
   test "ambiguous submission keeps dedupe and suppresses a potentially duplicate run" do
@@ -268,10 +268,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, %{message: %{text: "submit only once"}}}, 500
+    assert_receive {:inbound, %{message: %{text: "submit only once"}}}
     refute_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 50
 
-    assert_receive {:send_message, ^chat_id, failure_text, _opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, failure_text, _opts, _parse_mode}
     assert failure_text =~ "couldn't confirm"
 
     :persistent_term.put({CancelTestRouter, :submit_result}, {:ok, "would-duplicate"})
@@ -307,8 +307,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}, 400
-    assert_receive {:abort_session, ^session_key, :user_requested}, 400
+    assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}
+    assert_receive {:abort_session, ^session_key, :user_requested}
   end
 
   test "cancel callback with a run id cancels the run registered under that id" do
@@ -327,8 +327,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}, 400
-    assert_receive {:abort_run, ^run_id, :user_requested}, 400
+    assert_receive {:answer_callback, ^cb_id, %{"text" => "cancelling..."}}
+    assert_receive {:abort_run, ^run_id, :user_requested}
   end
 
   test "bare /cancel cancels the current chat session" do
@@ -352,7 +352,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:abort_session, ^session_key, :user_requested}, 400
+    assert_receive {:abort_session, ^session_key, :user_requested}
   end
 
   test "failed /cancel gives honest feedback instead of claiming cancellation" do
@@ -367,8 +367,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:abort_session, _session_key, :user_requested}, 400
-    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}, 500
+    assert_receive {:abort_session, _session_key, :user_requested}
+    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}
     assert text =~ "couldn't cancel"
     refute text =~ "Cancelling current run"
   end
@@ -389,8 +389,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:abort_session, _session_key, :new_session}, 400
-    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}, 500
+    assert_receive {:abort_session, _session_key, :new_session}
+    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}
     assert text =~ "existing session was left unchanged"
     refute text =~ "Started a new session"
     assert StateStore.get_thread_generation(key) == 7
@@ -421,8 +421,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:abort_session, _session_key, :new_session}, 400
-    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}, 500
+    assert_receive {:abort_session, _session_key, :new_session}
+    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}
     assert text =~ "existing session was left unchanged"
     assert ProjectBindingStore.get_override(scope) == "existing-project"
     assert ProjectBindingStore.get_dynamic(project_id) == nil
@@ -450,7 +450,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:keep_run_alive, ^run_id, :continue}, 400
+    assert_receive {:keep_run_alive, ^run_id, :continue}
 
     assert_receive {:answer_callback, ^callback_id,
                     %{"text" => "run control unavailable; try again"}},
@@ -481,9 +481,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:keep_run_alive, ^run_id, :continue}, 400
+    assert_receive {:keep_run_alive, ^run_id, :continue}
 
-    assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}, 500
+    assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}
     assert answer =~ "couldn't confirm run control"
     assert answer =~ "check run status before retrying"
     refute answer =~ "unavailable"
@@ -510,8 +510,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                    deny_unbound_chats: false
                  })
 
-        assert_receive {:abort_run, ^run_id, :user_requested}, 400
-        assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}, 500
+        assert_receive {:abort_run, ^run_id, :user_requested}
+        assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}
         assert answer =~ "couldn't confirm cancellation"
         assert answer =~ "check run status before retrying"
         refute answer =~ "unavailable"
@@ -534,7 +534,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}
     assert text =~ "Model picker"
     keyboard = get_in(opts, ["reply_markup", "keyboard"])
     assert is_list(keyboard)
@@ -564,7 +564,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_choice = provider_choice(opts)
 
@@ -575,7 +575,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, provider_text, model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, provider_text, model_opts, _parse_mode}
     assert provider_text =~ "Provider: #{provider_choice}"
 
     model_choice =
@@ -592,7 +592,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 2, model_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, scope_text, _scope_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, scope_text, _scope_opts, _parse_mode}
     assert scope_text =~ "Selected model:"
     assert scope_text =~ "Apply to:"
 
@@ -600,7 +600,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 3, "This session")
     ])
 
-    assert_receive {:send_message, ^chat_id, text, finish_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, finish_opts, _parse_mode}
     assert text =~ "Model set to"
     assert get_in(finish_opts, ["reply_markup", "remove_keyboard"]) == true
 
@@ -623,7 +623,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_choice = provider_choice(opts)
 
@@ -631,7 +631,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, provider_text, _model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, provider_text, _model_opts, _parse_mode}
     assert provider_text =~ "Provider: #{provider_choice}"
     refute_receive {:inbound, _msg}, 200
   end
@@ -648,7 +648,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_choice = provider_choice(opts)
 
@@ -656,7 +656,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}
 
     model_choice =
       model_opts
@@ -671,12 +671,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 2, model_id)
     ])
 
-    assert_receive {:send_message, ^chat_id, scope_text, _scope_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, scope_text, _scope_opts, _parse_mode}
     assert scope_text =~ "Selected model:"
 
     CancelMockAPI.set_updates([message_update(chat_id, user_msg_id + 3, "< Back")])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, _model_opts_again, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _provider_text, _model_opts_again, _parse_mode}
 
     provider_model_spec = provider_choice <> ":" <> model_id
 
@@ -684,7 +684,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 4, provider_model_spec)
     ])
 
-    assert_receive {:send_message, ^chat_id, scope_text_again, _scope_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, scope_text_again, _scope_opts, _parse_mode}
     assert scope_text_again =~ "Selected model:"
     refute_receive {:inbound, _msg}, 200
   end
@@ -701,13 +701,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 1, "openai-codex")
     ])
 
-    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}
     assert text =~ "Unknown provider selection"
     assert text =~ "Choose a provider:"
     assert is_list(get_in(opts, ["reply_markup", "keyboard"]))
@@ -726,13 +726,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, _opts, _parse_mode}
 
     CancelMockAPI.set_updates([
       message_update_from(chat_id, user_msg_id + 1, "openai-codex", 100)
     ])
 
-    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}
     assert text =~ "Model picker"
     assert text =~ "Choose a provider:"
     assert is_list(get_in(opts, ["reply_markup", "keyboard"]))
@@ -751,7 +751,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_choice = provider_choice(opts)
 
@@ -759,13 +759,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, _model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _provider_text, _model_opts, _parse_mode}
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 2, "not-a-real-model")
     ])
 
-    assert_receive {:send_message, ^chat_id, text, reply_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, reply_opts, _parse_mode}
     assert text =~ "Unknown model selection"
     assert text =~ "Choose a model:"
     assert is_list(get_in(reply_opts, ["reply_markup", "keyboard"]))
@@ -790,7 +790,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     minimax_choice =
       opts
@@ -806,7 +806,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 1, minimax_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}
 
     model_texts =
       model_opts
@@ -835,7 +835,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_texts =
       opts
@@ -858,7 +858,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_choice = provider_choice(opts)
 
@@ -866,7 +866,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}
 
     model_choice =
       model_opts
@@ -879,13 +879,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       message_update(chat_id, user_msg_id + 2, model_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _scope_text, _scope_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _scope_text, _scope_opts, _parse_mode}
 
     CancelMockAPI.set_updates([
       message_update(chat_id, user_msg_id + 3, "tomorrow only")
     ])
 
-    assert_receive {:send_message, ^chat_id, text, reply_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, reply_opts, _parse_mode}
     assert text =~ "Choose one of the scope buttons."
     assert text =~ "Apply to:"
     assert is_list(get_in(reply_opts, ["reply_markup", "keyboard"]))
@@ -915,7 +915,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text, opts, _parse_mode}
 
     provider_choice = provider_choice(opts)
 
@@ -923,7 +923,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       topic_message_update(chat_id, topic_id, user_msg_id + 1, provider_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _provider_text, model_opts, _parse_mode}
 
     model_choice =
       model_opts
@@ -936,13 +936,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       topic_message_update(chat_id, topic_id, user_msg_id + 2, model_choice)
     ])
 
-    assert_receive {:send_message, ^chat_id, _scope_text, _scope_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _scope_text, _scope_opts, _parse_mode}
 
     CancelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, user_msg_id + 3, "All future sessions")
     ])
 
-    assert_receive {:send_message, ^chat_id, text, finish_opts, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text, finish_opts, _parse_mode}
     assert text =~ "Default model set to"
     assert get_in(finish_opts, ["reply_markup", "remove_keyboard"]) == true
 
@@ -982,9 +982,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:edit_message_text, ^chat_id, ^message_id, picker_text, picker_opts}, 500
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, picker_text, picker_opts}
     assert picker_text =~ "Model picker"
-    assert_receive {:answer_callback, "cb-1", %{"text" => "Updated"}}, 500
+    assert_receive {:answer_callback, "cb-1", %{"text" => "Updated"}}
 
     provider_callback = provider_callback(picker_opts)
 
@@ -992,9 +992,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       model_callback_update(chat_id, topic_id, "cb-2", message_id, provider_callback)
     ])
 
-    assert_receive {:edit_message_text, ^chat_id, ^message_id, provider_text, provider_opts}, 500
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, provider_text, provider_opts}
     assert provider_text =~ "Provider:"
-    assert_receive {:answer_callback, "cb-2", %{"text" => "Updated"}}, 500
+    assert_receive {:answer_callback, "cb-2", %{"text" => "Updated"}}
 
     choose_callback =
       provider_opts
@@ -1007,9 +1007,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       model_callback_update(chat_id, topic_id, "cb-3", message_id, choose_callback)
     ])
 
-    assert_receive {:edit_message_text, ^chat_id, ^message_id, scope_text, scope_opts}, 500
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, scope_text, scope_opts}
     assert scope_text =~ "Selected model:"
-    assert_receive {:answer_callback, "cb-3", %{"text" => "Select scope"}}, 500
+    assert_receive {:answer_callback, "cb-3", %{"text" => "Select scope"}}
 
     future_callback =
       scope_opts
@@ -1026,10 +1026,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       model_callback_update(chat_id, topic_id, "cb-4", message_id, future_callback)
     ])
 
-    assert_receive {:edit_message_text, ^chat_id, ^message_id, saved_text, saved_opts}, 500
+    assert_receive {:edit_message_text, ^chat_id, ^message_id, saved_text, saved_opts}
     assert saved_text =~ "Default model set to"
     assert get_in(saved_opts, ["reply_markup", "inline_keyboard"]) == []
-    assert_receive {:answer_callback, "cb-4", %{"text" => "Saved"}}, 500
+    assert_receive {:answer_callback, "cb-4", %{"text" => "Saved"}}
 
     stored = StateStore.get_session_model(session_key)
     assert is_binary(stored)
@@ -1059,10 +1059,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:send_message, ^chat_id, _text_a, opts_a, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text_a, opts_a, _parse_mode}
     assert get_in(opts_a, ["message_thread_id"]) == topic_a
 
-    assert_receive {:send_message, ^chat_id, _text_b, opts_b, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, _text_b, opts_b, _parse_mode}
     assert get_in(opts_b, ["message_thread_id"]) == topic_b
 
     provider_a = provider_choice(opts_a)
@@ -1073,11 +1073,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       topic_message_update(chat_id, topic_b, msg_b + 1, provider_b)
     ])
 
-    assert_receive {:send_message, ^chat_id, text_a, model_opts_a, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text_a, model_opts_a, _parse_mode}
     assert text_a =~ "Provider: #{provider_a}"
     assert get_in(model_opts_a, ["message_thread_id"]) == topic_a
 
-    assert_receive {:send_message, ^chat_id, text_b, model_opts_b, _parse_mode}, 500
+    assert_receive {:send_message, ^chat_id, text_b, model_opts_b, _parse_mode}
     assert text_b =~ "Provider: #{provider_b}"
     assert get_in(model_opts_b, ["message_thread_id"]) == topic_b
 
