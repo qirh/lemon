@@ -56,6 +56,11 @@ remains a legacy client-side alias; it does not configure the daemon.
   Elapsed time freezes when completion is observed and survives session switches
   and transcript rebuilding. Historical receipts without authoritative timing
   omit duration instead of measuring their age as tool runtime.
+  Saved tool calls and results pair by native call ID, retaining arguments,
+  output and details. Cancelled receipts stay terminal (distinct from failed)
+  with captured partial output available on expansion. Saved calls without a
+  terminal result say “outcome unknown”; history never starts a spinner or
+  invents elapsed time, and only a recorded duration is shown.
 - The model's thinking is its own dimmed transcript block, collapsed to its
   first line (up to 16 KB of reasoning is available when expanded).
   Native Tern rendering uses a semantic thinking block and Markdown body, not

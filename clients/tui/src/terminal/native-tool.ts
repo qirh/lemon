@@ -10,6 +10,8 @@ const STATUS = {
 	running: "running",
 	success: "done",
 	error: "error",
+	cancelled: "error",
+	unknown: "error",
 } as const satisfies Record<ToolCardState, string>;
 
 /** Keep native calls semantic so Tern can render and Carly can read their metadata. */

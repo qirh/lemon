@@ -344,7 +344,12 @@ export class EventController {
 					ok: completed.ok,
 					answer: completed.answer,
 					interrupted: completed.cancelled === true,
-					error: completed.error,
+					error:
+						typeof completed.error === "string"
+							? completed.error
+							: completed.error == null
+								? undefined
+								: JSON.stringify(completed.error),
 				});
 				// finalizeRun may have created the block (completed outran started),
 				// so resolve its component only after the tree is in step.

@@ -105,6 +105,10 @@ export function statusIcon(
 			return theme.fg("toolSuccess", completedGlyph(kind, theme));
 		case "error":
 			return theme.fg("toolError", errorGlyph(theme));
+		case "cancelled":
+			return theme.fg("dim", "-");
+		case "unknown":
+			return theme.fg("dim", "?");
 		default: {
 			const frames = theme.spinnerFrames;
 			const glyph =
@@ -186,7 +190,10 @@ export class ToolCardComponent implements ToolBlockComponent {
 	 */
 	update(block: ToolBlock): void {
 		if (
-			(this.#view.state === "success" || this.#view.state === "error") &&
+			(this.#view.state === "success" ||
+				this.#view.state === "error" ||
+				this.#view.state === "cancelled" ||
+				this.#view.state === "unknown") &&
 			block.phase !== "completed"
 		) {
 			return;
@@ -230,7 +237,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 	// -- FinalizableBlock ----------------------------------------------------
 
 	isTranscriptBlockFinalized(): boolean {
-		return this.#block.phase === "completed";
+		return this.#block.phase === "completed" || this.#block.historical === true;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -314,7 +321,13 @@ export class ToolCardComponent implements ToolBlockComponent {
 		);
 		const badge =
 			this.#view.kind && this.#view.kind !== "tool" ? theme.fg("dim", ` (${this.#view.kind})`) : "";
-		const left = `${icon} ${title}${badge}`;
+		const outcome =
+			this.#view.state === "cancelled"
+				? " [cancelled]"
+				: this.#view.state === "unknown"
+					? " [outcome unknown]"
+					: "";
+		const left = `${icon} ${title}${badge}${theme.fg("dim", outcome)}`;
 		const elapsed = this.#elapsedLabel();
 		if (elapsed.length === 0) return truncateToWidth(left, width);
 		const right = theme.fg("dim", elapsed);
@@ -325,7 +338,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	#elapsedMs(): number | undefined {
-		if (this.#view.state === "streaming") return undefined;
+		if (this.#block.durationMs !== undefined) return this.#block.durationMs;
+		if (this.#block.historical || this.#view.state === "streaming") return undefined;
 		const end = this.#block.phase === "completed" ? this.#block.completedAt : this.#now();
 		if (end === undefined) return undefined;
 		const elapsed = end - this.#block.at;
@@ -364,7 +378,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 		const before = this.#accordion.version;
 		this.#accordion.setLines(lines);
 		this.#accordion.setSummary(summary.length > 0 ? theme.fg("toolDetail", summary) : "");
-		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#block.at}|${this.#block.completedAt ?? "-"}`;
+		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#block.at}|${this.#block.completedAt ?? "-"}|${this.#block.durationMs ?? "-"}|${this.#block.historical ?? false}`;
 		if (headerKey !== this.#headerKey || this.#accordion.version !== before) {
 			this.#headerKey = headerKey;
 			this.#version++;
@@ -373,7 +387,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	#syncAnimation(): void {
-		const live = this.#block.phase !== "completed" && !isNativeRendering();
+		const live =
+			this.#block.phase !== "completed" && !this.#block.historical && !isNativeRendering();
 		if (live && this.#requestRender && this.#spinnerTimer === undefined) {
 			this.#spinnerFrame = sharedSpinnerFrame(getTheme().spinnerFrames.length, this.#now());
 			this.#spinnerTimer = setInterval(() => {

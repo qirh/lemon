@@ -455,6 +455,17 @@ export function fixturePhases(fixture: ToolFixture, state: ToolCardState): Fixtu
 			return fixture.updated ? [started, { detail: fixture.updated, phase: "updated" }] : [started];
 		case "success":
 			return [started, { detail: fixture.completed, phase: "completed", ok: true }];
+		case "cancelled":
+			return [
+				started,
+				{
+					detail: { ...fixture.updated, details: { cancelled: true, outcome: "unknown" } },
+					phase: "completed",
+					ok: false,
+				},
+			];
+		case "unknown":
+			return [started];
 		case "error":
 			return [
 				started,
@@ -500,6 +511,7 @@ export function fixtureBlock(
 	if (block.phase === "completed" && options.completedAt !== undefined) {
 		block.completedAt = options.completedAt;
 	}
+	if (state === "unknown") block.historical = true;
 	return block;
 }
 

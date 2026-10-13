@@ -38,6 +38,8 @@ const STATE_LABELS: Record<ToolCardState, string> = {
 	running: "running",
 	success: "success",
 	error: "error",
+	cancelled: "cancelled",
+	unknown: "outcome unknown",
 };
 
 const SECTIONS = ["tools", "diff", "shelf", "accordion"] as const;

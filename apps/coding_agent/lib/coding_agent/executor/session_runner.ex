@@ -196,6 +196,8 @@ defmodule CodingAgent.Executor.SessionRunner do
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
         acp_client_terminal: get_in(meta, [:acp_client_terminal]),
+        acp_client_elicitation_form: Map.get(meta, :acp_client_elicitation_form,
+          Map.get(meta, "acp_client_elicitation_form")),
         acp_mcp_session_id:
           get_in(meta, [:acp_mcp_session_id]) || get_in(meta, ["acp_mcp_session_id"]),
         acp_client_fs_read_text_file: get_in(meta, [:acp_client_fs_read_text_file]),
