@@ -12,6 +12,20 @@ defmodule LemonCli.PrintCommandTest do
              })
   end
 
+  test "a remote close during cancellation remains a structured connection error" do
+    pid =
+      spawn(fn ->
+        receive do
+          {:"$websockex_send", _from, _frame} -> exit({:remote, 1011, ""})
+        end
+      end)
+
+    assert {:error, :disconnected} =
+             LemonCli.ControlPlaneClient.call({pid, make_ref()}, "chat.abort", %{
+               "runId" => "run-closing"
+             })
+  end
+
   test "piped empty input returns a usage error without starting a run" do
     capture_io([input: "\n"], fn ->
       error =
