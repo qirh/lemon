@@ -126,6 +126,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   def map_event(state, {:todo_reminder, todos}), do: emit(state, plan(todos))
   def map_event(state, {:todo_auto_clear}), do: emit(state, plan([]))
   def map_event(state, {:provider_retry, details}), do: retry_update(state, details)
+  def map_event(state, {:provider_retry_end, details}), do: retry_update(state, details)
   def map_event(state, {:compaction_start, info}), do: compaction(state, info, "in_progress")
   def map_event(state, {:compaction_complete, info}), do: compaction(state, info, "completed")
   def map_event(state, {:compaction_failed, info}), do: compaction(state, info, "failed")
@@ -197,6 +198,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
 
   defp map_named_event(state, "todo_auto_clear", _event), do: emit(state, plan([]))
   defp map_named_event(state, "provider_retry", event), do: retry_update(state, event)
+  defp map_named_event(state, "provider_retry_end", event), do: retry_update(state, event)
 
   defp map_named_event(state, "compaction_start", event),
     do: compaction(state, event, "in_progress")
@@ -325,9 +327,10 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     previous = Map.get(state.thoughts, id, "")
 
     delta =
-      if String.starts_with?(text, previous),
-        do: binary_part(text, byte_size(previous), byte_size(text) - byte_size(previous)),
-        else: ""
+      get(reasoning, :delta) ||
+        if String.starts_with?(text, previous),
+          do: binary_part(text, byte_size(previous), byte_size(text) - byte_size(previous)),
+          else: ""
 
     {updates, state} = chunks(state, "agent_thought_chunk", delta)
     {updates, %{state | thoughts: Map.put(state.thoughts, id, text)}}
@@ -425,7 +428,18 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       entries |> list() |> Enum.take(@items_limit) |> Enum.flat_map(&diff_content(state, &1))
 
     blocks = get(result, :content) || if(is_list(result), do: result, else: [])
-    rich = blocks |> list() |> Enum.take(@items_limit) |> Enum.flat_map(&content_block/1)
+
+    image_blocks =
+      get(details, :images)
+      |> list()
+      |> Enum.take(@items_limit)
+      |> Enum.map(fn image ->
+        if is_map(image), do: Map.put(image, :type, "image"), else: image
+      end)
+
+    rich =
+      (list(blocks) ++ image_blocks) |> Enum.take(@items_limit) |> Enum.flat_map(&content_block/1)
+
     terminal_id = get(result, :terminalId) || get(details, :terminalId)
 
     terminal =
@@ -472,9 +486,17 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         end
 
       type when type in ["image", "audio"] ->
-        if is_binary(get(block, :data)) and byte_size(get(block, :data)) <= @raw_limit and
-             is_binary(get(block, :mimeType)),
-           do: [%{"type" => "content", "content" => bounded(block)}],
+        data = get(block, :data)
+        mime_type = get(block, :mimeType) || get(block, :mime_type)
+
+        if is_binary(data) and String.valid?(data) and byte_size(data) <= @raw_limit and
+             is_binary(mime_type),
+           do: [
+             %{
+               "type" => "content",
+               "content" => %{"type" => type, "data" => data, "mimeType" => preview(mime_type)}
+             }
+           ],
            else: []
 
       type when type in ["resource_link", "resource"] ->
@@ -488,7 +510,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   defp diff_content(state, entry) do
     path = local_path(state, get(entry, :path))
     old = get(entry, :oldText) || get(entry, :old_text)
-    new = get(entry, :newText) || get(entry, :new_text)
+    new = get(entry, :newText) || get(entry, :new_text) || if(is_binary(old), do: "")
 
     if path && get(entry, :isError) != true && is_binary(new) && byte_size(new) <= @diff_limit &&
          String.valid?(new) &&
@@ -500,7 +522,11 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
   end
 
   defp locations(state, args, name) do
-    [get(args, :path) || get(args, :file_path), get(args, :oldPath), get(args, :newPath)]
+    [
+      get(args, :path) || get(args, :file_path),
+      get(args, :oldPath) || get(args, :old_path),
+      get(args, :newPath) || get(args, :new_path)
+    ]
     |> Enum.flat_map(fn raw ->
       case location_path(state, raw, name) do
         nil -> []
@@ -594,7 +620,25 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     %{"sessionUpdate" => "plan", "entries" => entries}
   end
 
-  defp retry_update(state, details) do
+  defp retry_update(state, details) when is_map(details) do
+    if not is_nil(get(details, :success)) or get(details, :canceled) == true do
+      emit(state, %{
+        "sessionUpdate" => "notice",
+        "severity" => if(get(details, :success), do: "info", else: "warning"),
+        "title" =>
+          cond do
+            get(details, :success) -> "Provider request recovered"
+            get(details, :canceled) -> "Provider retry canceled"
+            true -> "Provider retries exhausted"
+          end,
+        "_meta" => %{"lemon" => %{"retry" => bounded(details)}}
+      })
+    else
+      retry_notice(state, details)
+    end
+  end
+
+  defp retry_notice(state, details) do
     attempt = get(details, :attempt) || 1
     delay = get(details, :delay_ms) || 0
 
@@ -704,6 +748,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
             "size" => size,
             "used" => get(usage, :context_tokens) || total
           })
+          |> maybe_put("cost", usage_cost(usage))
         ]
       else
         [
@@ -718,19 +763,12 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
     end
   end
 
-  defp aggregate_usage(messages) do
-    Enum.reduce(messages, %{}, fn message, acc ->
-      case get(message, :usage) do
-        usage when is_map(usage) ->
-          Map.merge(acc, Map.delete(usage, :__struct__), fn _key, a, b ->
-            number(a) + number(b)
-          end)
-
-        _ ->
-          acc
-      end
-    end)
+  defp usage_cost(usage) do
+    amount = get(get(usage, :cost), :total)
+    if is_number(amount) and amount > 0, do: %{"amount" => amount, "currency" => "USD"}
   end
+
+  defp aggregate_usage(messages), do: CodingAgent.Session.Presentation.build_usage(messages)
 
   defp chunks(state, kind, text, extra \\ %{})
 
