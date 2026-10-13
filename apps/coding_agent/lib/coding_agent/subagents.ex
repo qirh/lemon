@@ -22,7 +22,7 @@ defmodule CodingAgent.Subagents do
   alias CodingAgent.{Config, ToolPolicy}
 
   @fields ~w(name description model role tools read_only)
-  @read_tools ~w(read grep find ls)
+  @read_only_tools ~w(read grep find ls agent_message)
   @read_only_ids ~w(scout reviewer)
   @max_file_bytes 128 * 1024
   @max_frontmatter_bytes 16 * 1024
@@ -116,7 +116,9 @@ defmodule CodingAgent.Subagents do
 
     tools =
       if persona && (persona[:read_only] == true or persona[:id] in @read_only_ids) do
-        if is_list(tools), do: Enum.filter(tools, &(&1 in @read_tools)), else: @read_tools
+        if is_list(tools),
+          do: Enum.filter(tools, &(&1 in @read_only_tools)),
+          else: @read_only_tools
       else
         tools
       end
@@ -151,22 +153,24 @@ defmodule CodingAgent.Subagents do
   end
 
   defp read_definition(path) do
-    with {:ok, %File.Stat{type: :regular}} <- File.stat(path) do
-      case File.open(path, [:read, :binary], &IO.binread(&1, @max_file_bytes + 1)) do
-        {:ok, content} when is_binary(content) and byte_size(content) <= @max_file_bytes ->
-          if String.valid?(content), do: {:ok, content}, else: {:error, "expected UTF-8 text"}
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :regular}} ->
+        case File.open(path, [:read, :binary], &IO.binread(&1, @max_file_bytes + 1)) do
+          {:ok, content} when is_binary(content) and byte_size(content) <= @max_file_bytes ->
+            if String.valid?(content), do: {:ok, content}, else: {:error, "expected UTF-8 text"}
 
-        {:ok, content} when is_binary(content) ->
-          {:error, "definition exceeds 128 KiB"}
+          {:ok, content} when is_binary(content) ->
+            {:error, "definition exceeds 128 KiB"}
 
-        {:ok, :eof} ->
-          {:error, "definition is empty"}
+          {:ok, :eof} ->
+            {:error, "definition is empty"}
 
-        _ ->
-          {:error, "definition could not be read"}
-      end
-    else
-      _ -> {:error, "definition must be a readable regular file"}
+          _ ->
+            {:error, "definition could not be read"}
+        end
+
+      _ ->
+        {:error, "definition must be a readable regular file"}
     end
   end
 

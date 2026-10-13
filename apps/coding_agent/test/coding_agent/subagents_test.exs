@@ -5,7 +5,7 @@ defmodule CodingAgent.SubagentsTest do
 
   @moduletag :tmp_dir
   @builtin_ids ~w(reviewer scout task-executor)
-  @read_tools ~w(read grep find ls)
+  @read_tools ~w(read grep find ls agent_message)
 
   setup %{tmp_dir: tmp_dir} do
     original_home = System.get_env("HOME")
