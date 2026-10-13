@@ -402,12 +402,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}
-    assert_receive {:send_message, ^chat_id, chat_msg, _reply_to_or_opts, _parse_mode}
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, chat_msg, _reply_to_or_opts, _parse_mode}, 400
     assert chat_msg == "Trigger mode set to mentions for this chat."
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}
-    assert_receive {:send_message, ^chat_id, topic_msg, _reply_to_or_opts, _parse_mode}
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, topic_msg, _reply_to_or_opts, _parse_mode}, 400
     assert topic_msg == "Trigger mode set to all for this topic."
 
     assert_eventually(fn ->
@@ -418,8 +418,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       topic_message_update(chat_id, topic_id, "/trigger clear", msg_id + 2)
     ])
 
-    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}
-    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}
+    assert_receive {:get_chat_member, ^chat_id, 99, "administrator"}, 400
+    assert_receive {:send_message, ^chat_id, clear_msg, _reply_to_or_opts, _parse_mode}, 400
     assert clear_msg == "Cleared topic trigger override."
 
     resolved =

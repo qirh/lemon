@@ -19,10 +19,6 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
   alias LemonControlPlane.Methods.CronRun, as: CronRunMethod
   alias LemonControlPlane.Methods.CronRuns, as: CronRunsMethod
 
-  defmodule AbortRouter do
-    def abort_run(_run_id, _reason), do: :ok
-  end
-
   setup do
     token = System.unique_integer([:positive, :monotonic])
 
@@ -348,17 +344,6 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
   end
 
   test "cron.abort exposes active run cancellation", %{job: job} do
-    # Without a stub the abort goes to the real router, whose orchestrator only runs when an
-    # earlier test happened to start it; an unreachable router reports :outcome_unknown.
-    previous_router = Application.get_env(:lemon_automation, :cron_router_mod)
-    Application.put_env(:lemon_automation, :cron_router_mod, __MODULE__.AbortRouter)
-
-    on_exit(fn ->
-      if previous_router,
-        do: Application.put_env(:lemon_automation, :cron_router_mod, previous_router),
-        else: Application.delete_env(:lemon_automation, :cron_router_mod)
-    end)
-
     run =
       job.id
       |> CronRun.new(:manual)
