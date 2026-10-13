@@ -41,6 +41,29 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert Enum.all?(checks, &match?(%Check{}, &1))
     end
 
+    test "a named missing secret is not a usable default credential" do
+      tmp_dir =
+        Path.join(System.tmp_dir!(), "doctor_missing_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+
+      File.write!(Path.join(tmp_dir, ".lemon/config.toml"), """
+      [defaults]
+      provider = "doctor_test_provider"
+      model = "doctor_test_provider:model"
+      [providers.doctor_test_provider]
+      api_key_secret = "doctor_missing_secret_#{System.unique_integer([:positive])}"
+      """)
+
+      on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+      check =
+        Providers.run(project_dir: tmp_dir) |> Enum.find(&(&1.name == "providers.credentials"))
+
+      assert check.status == :fail
+      refute check.message =~ "doctor_missing_secret_"
+    end
+
     test "provider routing check reports a ready fallback without leaking credentials" do
       tmp_dir =
         Path.join(
@@ -239,6 +262,33 @@ defmodule LemonCore.Doctor.ChecksTest do
       assert check.status == :warn
       assert check.message =~ "store process is not running"
       assert check.remediation =~ "LEMON_FEATURE_SESSION_SEARCH=off"
+    end
+
+    test "does not infer external runtime memory failure from an absent CLI-local process" do
+      [check] =
+        Memory.run(
+          features: %Features{session_search: :"default-on"},
+          exqlite_loaded: true,
+          store_module: StubMemoryStore,
+          external_runtime?: true
+        )
+
+      assert check.status == :skip
+      assert check.remediation == nil
+    end
+
+    test "an external runtime does not conceal missing local memory dependencies" do
+      for opts <- [
+            [exqlite_loaded: false],
+            [exqlite_loaded: true, store_module: LemonCore.Doctor.ChecksTest.NoSuchStore]
+          ] do
+        [check] =
+          Memory.run(
+            [features: %Features{session_search: :"default-on"}, external_runtime?: true] ++ opts
+          )
+
+        assert check.status == :warn
+      end
     end
 
     test "passes with document count, db size, and ingest recency when the store is up" do

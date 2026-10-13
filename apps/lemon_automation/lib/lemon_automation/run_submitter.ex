@@ -8,14 +8,14 @@ defmodule LemonAutomation.RunSubmitter do
   @cron_blocked_tools ["cron"]
 
   @spec submit(CronJob.t(), CronRun.t(), keyword()) ::
-          {:ok, binary()} | {:error, binary()} | :timeout
+          {:ok, binary()} | {:error, term()} | :timeout
   def submit(%CronJob{} = job, %CronRun{} = run, opts \\ []) do
     timeout_ms = job.timeout_ms || @default_timeout_ms
     router_mod = Keyword.get(opts, :router_mod, LemonRouter)
     waiter_mod = Keyword.get(opts, :waiter_mod, RunCompletionWaiter)
     wait_opts = Keyword.get(opts, :wait_opts, [])
 
-    run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id())
+    run_id = Keyword.get(opts, :run_id) || run.run_id || LemonCore.Id.run_id()
     params = build_params(job, run, run_id, opts)
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
 
@@ -26,28 +26,40 @@ defmodule LemonAutomation.RunSubmitter do
         waiter_mod: waiter_mod,
         bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
         timeout_ms: timeout_ms,
-        wait_opts: wait_opts
+        wait_opts: wait_opts,
+        on_submitting: fn fixed_id ->
+          case Keyword.get(opts, :on_submitting) do
+            nil -> :ok
+            callback -> callback.(fixed_id, params.session_key)
+          end
+        end
       )
-      |> normalize_submit_result()
+      |> normalize_submit_result(run_id)
 
-    _ = append_memory(memory_mod, job, run, params, result)
+    if Keyword.get(opts, :append_memory, true) do
+      _ = append_memory(memory_mod, job, run, params, result)
+    end
+
     result
   end
 
+  defp normalize_submit_result({:error, {:submit_failed, {kind, _}}}, run_id)
+       when kind in [:exception, :exit, :unexpected_submit_result],
+       do: {:error, {:outcome_unknown, run_id}}
+
+  defp normalize_submit_result(result, _run_id), do: normalize_submit_result(result)
+
   defp normalize_submit_result({:ok, _run_id, output}), do: {:ok, output}
-  defp normalize_submit_result({:error, {:timeout, _run_id}}), do: :timeout
+
+  defp normalize_submit_result({:error, {kind, run_id}})
+       when kind in [:completion_outcome_unknown, :submission_outcome_unknown, :timeout],
+       do: {:error, {:outcome_unknown, run_id}}
+
+  defp normalize_submit_result({:error, {:unexpected_run_id, run_id, _other}}),
+    do: {:error, {:outcome_unknown, run_id}}
 
   defp normalize_submit_result({:error, {:run_failed, _run_id, reason}}),
     do: {:error, inspect(reason)}
-
-  defp normalize_submit_result({:error, {:submit_failed, {:exception, error}}}),
-    do: {:error, Exception.message(error)}
-
-  defp normalize_submit_result({:error, {:submit_failed, {:exit, reason}}}),
-    do: {:error, "Exit: #{inspect(reason)}"}
-
-  defp normalize_submit_result({:error, {:submit_failed, {:unexpected_submit_result, other}}}),
-    do: {:error, "Unexpected submit result: #{inspect(other)}"}
 
   defp normalize_submit_result({:error, {:submit_failed, reason}}), do: {:error, inspect(reason)}
   defp normalize_submit_result({:error, reason}), do: {:error, inspect(reason)}
@@ -67,6 +79,7 @@ defmodule LemonAutomation.RunSubmitter do
       session_key: session_key,
       prompt: prompt,
       agent_id: job.agent_id,
+      cwd: job.cwd,
       tool_policy: cron_tool_policy(),
       meta: %{
         cron_job_id: job.id,
@@ -163,6 +176,9 @@ defmodule LemonAutomation.RunSubmitter do
       blocked_tools: @cron_blocked_tools
     }
   end
+
+  defp append_memory(_memory_mod, _job, _run, _params, {:error, {:outcome_unknown, _}}),
+    do: :ok
 
   defp append_memory(memory_mod, job, run, params, result) do
     if function_exported?(memory_mod, :append_run, 4) do

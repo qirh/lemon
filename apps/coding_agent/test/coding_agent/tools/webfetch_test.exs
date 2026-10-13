@@ -9,6 +9,30 @@ defmodule CodingAgent.Tools.WebFetchTest do
     :ok
   end
 
+  test "rejects binary responses even in raw html mode" do
+    tool =
+      build_tool(
+        http_get: fn _url, _opts ->
+          {:ok,
+           %Req.Response{
+             status: 200,
+             headers: [{"content-type", "application/pdf"}],
+             body: <<"%PDF", 0, 255>>
+           }}
+        end
+      )
+
+    assert {:error, message} =
+             tool.execute.(
+               "binary",
+               %{"url" => "https://8.8.8.8/file", "format" => "html"},
+               nil,
+               nil
+             )
+
+    assert message =~ "Unsupported binary response"
+  end
+
   test "tool schema exposes url + extractMode + compatibility format" do
     tool = build_tool()
 

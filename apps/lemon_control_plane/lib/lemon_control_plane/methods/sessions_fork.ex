@@ -15,7 +15,7 @@ defmodule LemonControlPlane.Methods.SessionsFork do
   @impl true
   def handle(params, _ctx) do
     with {:ok, source, cwd} <- NativeSessions.target(params),
-         {:ok, agent_id} <- SessionLifecycle.fork_agent_id(source) do
+         %{agent_id: agent_id} when agent_id != "" <- SessionKey.parse(source) do
       destination =
         SessionKey.channel_peer(%{
           agent_id: agent_id,
@@ -49,7 +49,7 @@ defmodule LemonControlPlane.Methods.SessionsFork do
       end
     else
       {:error, {_, _, _}} = error -> error
-      {:error, reason} -> NativeSessions.failure(reason)
+      _ -> NativeSessions.invalid("sessionKey must be a canonical session key")
     end
   end
 

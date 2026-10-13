@@ -213,6 +213,20 @@ defmodule LemonRouter.RunProcess do
   end
 
   @impl true
+  def handle_call(:get_metadata, _from, state) do
+    metadata = %{
+      session_key: state.session_key,
+      agent_id:
+        LemonCore.MapHelpers.get_key(state.execution_request.meta || %{}, :agent_id) ||
+          LemonCore.SessionKey.agent_id(state.session_key),
+      engine: "lemon",
+      started_at_ms: state.run_started_at_ms || state.start_ts_ms
+    }
+
+    {:reply, metadata, state}
+  end
+
+  @impl true
   def handle_info(:submit_to_gateway, state) do
     cond do
       state.gateway_submitted? or state.aborted or state.completed ->
@@ -516,7 +530,7 @@ defmodule LemonRouter.RunProcess do
           }
         )
 
-      Bus.broadcast(Bus.run_topic(state.run_id), event)
+      LemonRouter.RunCompletion.publish(state.execution_request, event)
       {:noreply, state}
     end
   end
@@ -555,7 +569,7 @@ defmodule LemonRouter.RunProcess do
             }
           )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        LemonRouter.RunCompletion.publish(state.execution_request, event)
         {:noreply, state}
     end
   end
@@ -623,7 +637,7 @@ defmodule LemonRouter.RunProcess do
             }
           )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        LemonRouter.RunCompletion.publish(state.execution_request, event)
         {:noreply, state}
     end
   end
@@ -1034,7 +1048,7 @@ defmodule LemonRouter.RunProcess do
         }
       )
 
-    Bus.broadcast(Bus.run_topic(state.run_id), event)
+    LemonRouter.RunCompletion.publish(state.execution_request, event)
 
     state
     |> cancel_gateway_submit_deadline()

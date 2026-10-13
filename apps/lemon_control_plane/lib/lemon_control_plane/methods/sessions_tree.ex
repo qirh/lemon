@@ -32,7 +32,6 @@ defmodule LemonControlPlane.Methods.SessionsTree do
             {:ok,
              tree
              |> Map.take(~w(sessionId leafId totalEntries offset hasMore))
-             |> Map.put("sessionKey", key)
              |> Map.put("entries", Enum.map(entries, &Map.take(&1, @entry_fields)))
              |> Map.put("branches", Enum.map(branches, &Map.take(&1, ~w(leafId active))))}
           else

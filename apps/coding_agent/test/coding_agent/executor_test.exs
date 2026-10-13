@@ -96,6 +96,55 @@ defmodule CodingAgent.ExecutorTest do
                 answer: "executor done",
                 resume: %ResumeToken{engine: "lemon", value: ^session_id}
               }} = List.last(messages)
+
+      assert File.regular?(
+               CodingAgent.Session.Presentation.session_file_path(session_id, tmp_dir)
+             )
+    end
+
+    @tag :tmp_dir
+    test "losing the sink stops the owned session while a tool is running", %{tmp_dir: tmp_dir} do
+      parent = self()
+
+      sink =
+        spawn(fn ->
+          forward = fn forward ->
+            receive do
+              message ->
+                send(parent, {:sink_event, message})
+                forward.(forward)
+            end
+          end
+
+          forward.(forward)
+        end)
+
+      response =
+        assistant_message_with_tool_calls([
+          tool_call("bash", %{"command" => "sleep 30"}, id: "call_sink_cleanup")
+        ])
+
+      request =
+        request(tmp_dir,
+          run_id: "sink-cleanup-#{System.unique_integer([:positive])}",
+          prompt: "hold a tool",
+          stream_fn: mock_stream_fn([response])
+        )
+
+      {:ok, run_ref, %{runner_pid: runner}} =
+        Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, sink)
+
+      assert_receive {:sink_event,
+                      {:engine_event, ^run_ref,
+                       %{__event__: :action_event, phase: :started, action: %{kind: "command"}}}},
+                     5_000
+
+      session = :sys.get_state(runner).session
+      runner_ref = Process.monitor(runner)
+      session_ref = Process.monitor(session)
+      Process.exit(sink, :kill)
+      assert_receive {:DOWN, ^session_ref, :process, ^session, _}, 5_000
+      assert_receive {:DOWN, ^runner_ref, :process, ^runner, :normal}, 5_000
     end
 
     @tag :tmp_dir

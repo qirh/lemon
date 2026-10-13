@@ -671,6 +671,7 @@ defmodule CodingAgent.ToolDisclosure do
 
   defp source_label(:builtin), do: "builtin"
   defp source_label(:extra), do: "extra"
+  defp source_label({:mcp, meta}) when is_map(meta), do: "mcp:configured"
   defp source_label({:mcp, server}), do: "mcp:#{server}"
   defp source_label({:extension, module}), do: "extension:#{inspect(module)}"
   defp source_label({:wasm, _meta}), do: "wasm"

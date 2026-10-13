@@ -17,6 +17,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     :session_ref,
     :session_id,
     :sink_pid,
+    :sink_ref,
     :run_ref,
     :prompt,
     :cwd,
@@ -83,9 +84,12 @@ defmodule CodingAgent.Executor.SessionRunner do
     @impl true
     def emit_completed(state, fields) do
       event = Event.completed(fields)
+      # A queued auto-resume may start as soon as the gateway sees completion.
+      # Save and stop this session first so it loads the complete prior turn.
+      state = Presentation.finalize_session(state)
 
       emit_event(state, event)
-      Presentation.finalize_session(state)
+      state
     end
 
     defp emit_event(state, event) do
@@ -162,6 +166,8 @@ defmodule CodingAgent.Executor.SessionRunner do
       translator: translator
     }
 
+    state = %{state | sink_ref: Process.monitor(sink_pid)}
+
     meta = request.meta || %{}
     workspace_dir = profile_workspace(meta)
 
@@ -174,6 +180,8 @@ defmodule CodingAgent.Executor.SessionRunner do
         tool_policy: request.tool_policy,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
+        acp_mcp_session_id:
+          get_in(meta, [:acp_mcp_session_id]) || get_in(meta, ["acp_mcp_session_id"]),
         acp_client_fs_read_text_file: get_in(meta, [:acp_client_fs_read_text_file]),
         acp_client_fs_write_text_file: get_in(meta, [:acp_client_fs_write_text_file]),
         stream_options: get_opt(run_opts, :stream_options),
@@ -272,7 +280,17 @@ defmodule CodingAgent.Executor.SessionRunner do
     {:noreply, %{state | translator: RunTranslator.handle_event(state.translator, event)}}
   end
 
-  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+  def handle_info(
+        {:DOWN, ref, :process, pid, _reason},
+        %{sink_ref: ref, sink_pid: pid} = state
+      ) do
+    {:stop, :normal, state}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %{session_ref: ref, session: pid} = state
+      ) do
     Logger.debug("Lemon SessionRunner: Session process down: #{inspect(reason)}")
 
     {:stop, :normal,
@@ -280,6 +298,16 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    if is_pid(state.session) and Process.alive?(state.session) do
+      CodingAgent.Session.abort(state.session)
+      Presentation.finalize_session(state)
+    end
+
+    :ok
+  end
 
   defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
 

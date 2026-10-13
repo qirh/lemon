@@ -46,6 +46,7 @@ test("child updates have independent identities and never reopen the launch rece
 	shelf.add(child);
 	shelf.seal();
 	expect(shelf.isTranscriptBlockFinalized()).toBe(false);
+
 	const final = taskProgressEvent(progress("one", "completed"))!;
 	expect(final.phase).toBe("completed");
 	shelf.update(session.upsertTool(final.action, "completed", { ok: final.ok }));

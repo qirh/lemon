@@ -329,7 +329,7 @@ defmodule LemonCore.RunHistoryStore do
         |> Keyword.get(:backend_opts, [])
         |> Keyword.get(:path, LemonCore.Paths.home_path("store"))
 
-    dir = Path.expand(raw)
+    dir = LemonCore.Paths.store_dir(raw)
     Path.join(dir, filename(name))
   end
 

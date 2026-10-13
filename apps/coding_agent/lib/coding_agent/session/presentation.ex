@@ -56,6 +56,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:session_key, session_key)
     |> maybe_add_opt(:agent_id, agent_id)
     |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
+    |> maybe_add_opt(:acp_mcp_session_id, Keyword.get(opts, :acp_mcp_session_id))
     |> maybe_add_opt(
       :acp_client_fs_read_text_file,
       Keyword.get(opts, :acp_client_fs_read_text_file)
@@ -686,8 +687,9 @@ defmodule CodingAgent.Session.Presentation do
   Projects a tool's structured `details` into a JSON-safe, bounded map.
 
   Structs, pids, functions and tuples are dropped, as are internal bookkeeping
-  keys. `diff` keeps up to 32 KB; other strings 2 KB. Lists keep their first 200
-  items and nesting stops at depth 4.
+  keys. `diff` keeps up to 32 KB; complete ACP file snapshots keep up to 16 KB
+  per side and are omitted as a pair if either side is oversized. Other strings
+  keep 2 KB. Lists keep their first 200 items and nesting stops at depth 4.
   """
   @spec operator_details(map()) :: map()
   def operator_details(details) when is_map(details) and not is_struct(details) do
@@ -697,6 +699,8 @@ defmodule CodingAgent.Session.Presentation do
   def operator_details(_details), do: %{}
 
   defp sanitize_detail_map(map, depth) do
+    map = bounded_file_snapshots(map)
+
     Enum.reduce(map, %{}, fn {key, value}, acc ->
       with name when is_binary(name) <- detail_key_name(key),
            false <- name in @operator_detail_dropped_keys,
@@ -708,6 +712,22 @@ defmodule CodingAgent.Session.Presentation do
     end)
   end
 
+  defp bounded_file_snapshots(map) do
+    snapshots = [:oldText, :newText, "oldText", "newText"]
+
+    if Enum.any?(snapshots, fn key ->
+         case Map.get(map, key) do
+           nil -> false
+           text when is_binary(text) -> byte_size(text) > 16_384 or not String.valid?(text)
+           _ -> true
+         end
+       end) do
+      Map.drop(map, snapshots)
+    else
+      map
+    end
+  end
+
   defp detail_key_name(key) when is_atom(key), do: Atom.to_string(key)
   defp detail_key_name(key) when is_binary(key), do: key
   defp detail_key_name(_key), do: nil
@@ -717,6 +737,10 @@ defmodule CodingAgent.Session.Presentation do
        do: {:ok, value}
 
   defp sanitize_detail_value(_name, value, _depth) when is_atom(value), do: {:ok, value}
+
+  defp sanitize_detail_value(name, value, _depth)
+       when name in ["oldText", "newText"] and is_binary(value),
+       do: {:ok, value}
 
   defp sanitize_detail_value(name, value, _depth) when is_binary(value) do
     max_bytes =
@@ -939,8 +963,24 @@ defmodule CodingAgent.Session.Presentation do
     end)
     |> case do
       empty when map_size(empty) == 0 -> nil
-      usage -> usage
+      usage -> Map.put(usage, :context_tokens, latest_context_tokens(messages))
     end
+  end
+
+  defp latest_context_tokens(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value(0, fn message ->
+      case Map.get(message, :usage) do
+        %{input: input, output: output, cache_read: cache_read, cache_write: cache_write}
+        when is_number(input) and is_number(output) and is_number(cache_read) and
+               is_number(cache_write) ->
+          input + output + cache_read + cache_write
+
+        _ ->
+          nil
+      end
+    end)
   end
 
   def merge_usage(acc, usage) do
@@ -989,8 +1029,8 @@ defmodule CodingAgent.Session.Presentation do
     }
   end
 
-  # `text` is the channel preview; `full_text` is the operator copy, bounded to
-  # 16 KB and only present when it differs from the preview.
+  # `text` is the channel preview; `full_text` is always the operator copy,
+  # bounded to 16 KB, so streaming clients can recover faithful prefix deltas.
   defp reasoning_payload(text, phase) do
     preview = reasoning_payload_text(text, phase)
 
@@ -999,8 +1039,7 @@ defmodule CodingAgent.Session.Presentation do
         marker: fn removed -> "\n… [#{removed} bytes of reasoning omitted]" end
       )
 
-    payload = %{text: preview, source: "lemon_reasoning"}
-    if full == preview, do: payload, else: Map.put(payload, :full_text, full)
+    %{text: preview, full_text: full, source: "lemon_reasoning"}
   end
 
   defp reasoning_payload_text(text, :updated) when byte_size(text) <= 500, do: text

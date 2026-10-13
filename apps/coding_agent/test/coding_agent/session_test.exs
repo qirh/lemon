@@ -363,17 +363,26 @@ defmodule CodingAgent.SessionTest do
         |> Enum.join("\n")
 
       assert rendered =~ "[tool_result truncated]"
-      assert rendered =~ "spill_path="
 
-      [spill_path] =
-        Regex.run(~r/spill_path=([^\s]+)/, rendered, capture: :all_but_first)
+      [artifact_uri] =
+        Regex.run(~r/artifact_uri=(artifact:\/\/[a-f0-9]+)/, rendered, capture: :all_but_first)
 
-      assert String.starts_with?(
-               spill_path,
-               Config.spill_dir(cwd, state.session_manager.header.id)
-             )
-
+      opts = [session_id: state.session_manager.header.id]
+      assert {:ok, spill_path} = CodingAgent.Artifacts.resolve(artifact_uri, cwd, opts)
+      assert String.starts_with?(spill_path, Config.spill_dir(cwd, opts[:session_id]))
       assert File.read!(spill_path) == original
+
+      assert %LemonAgent.Types.AgentToolResult{content: [%TextContent{text: excerpt}]} =
+               CodingAgent.Tools.Read.execute(
+                 "fetch-spill",
+                 %{"path" => artifact_uri, "offset" => 20_000, "limit" => 2},
+                 nil,
+                 nil,
+                 cwd,
+                 opts
+               )
+
+      assert excerpt =~ "line"
     end
 
     test "fails without cwd" do

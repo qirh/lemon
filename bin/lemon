@@ -323,10 +323,10 @@ stop_runtime() {
   fi
   kill -TERM "$pid"
   for ((attempt = 0; attempt < 30; attempt++)); do
-    kill -0 "$pid" 2>/dev/null || break
+    [ "$(owned_runtime_pid || true)" = "$pid" ] || break
     sleep 1
   done
-  ! kill -0 "$pid" 2>/dev/null || kill -KILL "$pid"
+  [ "$(owned_runtime_pid || true)" != "$pid" ] || kill -KILL "$pid"
   rm -f "$PIDFILE"
   info "stopped"
 }
@@ -351,6 +351,13 @@ open_browser() {
 
 COMMAND="${1:-}"
 if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
+  # Tern's --typed wrapper recognizes built-ins, not custom ACP agents.
+  # Use the registered Lemon id directly; explicit `lemon tui` stays terminal.
+  if [ -n "${TERN_PANE:-}" ]; then
+    tern_bin="${TERN_ACP:-}"
+    [ -n "$tern_bin" ] || tern_bin="$(command -v tern || true)"
+    [ -z "$tern_bin" ] || exec "$tern_bin" acp lemon
+  fi
   COMMAND="tui"
   set -- tui
 fi
@@ -426,7 +433,11 @@ case "$COMMAND" in
     start_runtime daemon
     ;;
 
-  stop) stop_runtime ;;
+  stop)
+    shift
+    parse_runtime_options "$@"
+    stop_runtime
+    ;;
 
   restart)
     shift
@@ -436,6 +447,8 @@ case "$COMMAND" in
     ;;
 
   status)
+    shift
+    parse_runtime_options "$@"
     if ! pid="$(owned_runtime_pid)"; then
       if control_plane_healthy; then
         echo "lemon: healthy on port $PORT (not managed by this HOME)"

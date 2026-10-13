@@ -272,9 +272,9 @@ defmodule CodingAgent.CoordinatorTest do
       coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 1_000)
 
       specs = [
-        %{prompt: "Research task", subagent: "research"},
+        %{prompt: "Research task", subagent: "scout"},
         %{prompt: "Invalid task", subagent: "nonexistent_subagent"},
-        %{prompt: "Review task", subagent: "review"}
+        %{prompt: "Review task", subagent: "reviewer"}
       ]
 
       results = Coordinator.run_subagents(coordinator, specs, timeout: 200)

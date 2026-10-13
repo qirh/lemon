@@ -969,8 +969,8 @@ defmodule LemonSkills.CLI do
   defp format_activation_short(:blocked), do: "✗ blocked"
   defp format_activation_short(other), do: inspect(other)
 
-  defp format_source(:global), do: "Global (~/.lemon/agent/skill)"
-  defp format_source(:project), do: "Project (.lemon/skill)"
+  defp format_source(:global), do: "Global"
+  defp format_source(:project), do: "Project"
   defp format_source(url) when is_binary(url), do: url
   defp format_source(other), do: inspect(other)
 

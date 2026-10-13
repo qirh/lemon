@@ -28,7 +28,7 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
                 ~w(confirmationToken prompt discardedMessages restorePaths unrestorableTools entryId sessionId),
               else: ~w(prompt leafId restoredPaths entryId sessionId)
 
-          {:ok, result |> Map.take(fields) |> Map.put("sessionKey", key)}
+          {:ok, Map.take(result, fields)}
 
         {:error, reason} ->
           NativeSessions.failure(reason)

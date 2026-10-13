@@ -88,7 +88,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, tree} = Registry.dispatch("sessions.tree", target(), ctx([:read]))
     assert_receive {:tree, "agent:native_methods:main", "/workspace", [limit: 100, offset: 0]}
     assert tree["entries"] == [Map.delete(entry, "raw")]
-    assert tree["sessionKey"] == target()["sessionKey"]
     refute Map.has_key?(tree, "private")
     assert tree["branches"] == [%{"leafId" => "u1", "active" => true}]
 
@@ -138,7 +137,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
     Process.put(:rewind_result, {:ok, Map.put(preview, "private", "hidden")})
 
-    preview = Map.put(preview, "sessionKey", target()["sessionKey"])
     assert {:ok, ^preview} = Registry.dispatch("sessions.rewind", rewind_target(), ctx([:write]))
 
     assert_receive {:rewind, _, _, "u1",
@@ -168,7 +166,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     }
 
     Process.put(:rewind_result, {:ok, result})
-    result = Map.put(result, "sessionKey", target()["sessionKey"])
 
     assert {:ok, ^result} =
              SessionsRewind.handle(
@@ -228,27 +225,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, _} = SessionsMetadataPatch.handle(%{"sessionKey" => child, "title" => nil}, %{})
     assert {:ok, cleared} = SessionsList.handle(%{"query" => title}, %{})
     assert cleared["sessions"] == []
-  end
-
-  test "plain TUI session keys fork with their durable source agent identity" do
-    source = "tui-#{System.unique_integer([:positive])}"
-    assert :ok = RunStore.create_session_index(source, "native_methods", :tui)
-    on_exit(fn -> SessionLifecycle.delete(source) end)
-
-    assert {:ok, %{"sessionKey" => child, "sourceSessionKey" => ^source}} =
-             SessionsFork.handle(Map.put(target(), "sessionKey", source), %{})
-
-    on_exit(fn -> SessionLifecycle.delete(child) end)
-    assert_receive {:fork, ^source, "/workspace", ^child}
-    assert SessionKey.agent_id(child) == "native_methods"
-    assert SessionLifecycle.get(child).agent_id == "native_methods"
-  end
-
-  test "unknown plain keys do not fork under a guessed default agent" do
-    assert {:error, {:not_found, _, %{"reason" => "session_not_found"}}} =
-             SessionsFork.handle(Map.put(target(), "sessionKey", "tui-unknown-source"), %{})
-
-    refute_received {:fork, _, _, _}
   end
 
   test "uncertain forks retain their generated identity and disallow automatic retries" do

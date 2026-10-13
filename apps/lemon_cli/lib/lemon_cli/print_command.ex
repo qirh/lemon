@@ -185,14 +185,14 @@ defmodule LemonCli.PrintCommand do
                   Map.merge(Map.take(payload, ["usage", "model", "durationMs"]), result)
 
                 _ ->
-                  %{
+                  Map.merge(Map.take(payload, ["usage", "model", "durationMs"]), %{
                     "ok" => false,
                     "error" =>
                       if(payload["ok"] == false,
                         do: "Agent run failed",
                         else: "Could not retrieve completed run"
                       )
-                  }
+                  })
               end
 
             true ->
