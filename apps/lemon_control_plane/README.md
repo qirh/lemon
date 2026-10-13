@@ -69,6 +69,11 @@ presence, health and cron data. They are not durable event replay cursors.
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
+Bun and other conforming clients automatically pong, keeping long-running
+outbound streams alive without application-level requests. The listener retains
+its 60-second inbound dead-peer timeout for clients that do not respond.
+
 Tool action details use a bounded, credential-redacted wire projection of
 visible text/images and selected public result metadata. Hidden thinking,
 signatures, callbacks and runtime state are excluded; complete diff snapshots
@@ -81,6 +86,20 @@ directory forwarded to the native coding session and its tools. Relative,
 missing and non-directory paths are rejected before submission. Canonical
 profile sessions reject caller workspace overrides; use `profile.chat`, whose
 workspace remains server-owned.
+
+`chat.send` and `profile.chat` accept optional `images` arrays containing
+`{"type":"image","mime_type":"image/png","data":"<standard Base64>"}`.
+PNG, JPEG, GIF and WebP are supported, with at most five images and 10 MiB
+aggregate decoded bytes. Invalid Base64, unsupported/mismatched MIME headers
+and over-limit attachments are rejected before submission; errors and summaries
+never echo encoded image data. `prompt: ""` is valid for image-only messages.
+The default WebSocket JSON frame limit is 16 MiB; an explicitly configured lower
+`:max_payload` remains authoritative.
+
+Image-bearing followups stay separate so their prompt/attachment association
+is retained. Images cannot use text-only in-flight steering: `steer`/`redirect`
+queue the intact request as a followup, and `steer_backlog` queues it as collect.
+Queued attachment data has an independent 16 MiB encoded-memory budget.
 
 A lost mutation acknowledgement does not prove failure. In particular,
 `profile.chat` may return `UNAVAILABLE` with its fixed run ID and

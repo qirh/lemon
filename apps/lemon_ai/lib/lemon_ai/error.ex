@@ -16,6 +16,16 @@ defmodule LemonAi.Error do
   Retry timing metadata is a hint, not permission to retry.
   """
 
+  @category_names %{
+    "rate_limit" => :rate_limit,
+    "auth" => :auth,
+    "client" => :client,
+    "context_length" => :context_length,
+    "server" => :server,
+    "transient" => :transient,
+    "unknown" => :unknown
+  }
+
   # ============================================================================
   # Types
   # ============================================================================
@@ -147,6 +157,14 @@ defmodule LemonAi.Error do
     "Unknown API type: #{inspect(api)}. Please check your model configuration."
   end
 
+  def format_error(%{__struct__: module, reason: reason})
+      when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],
+      do: format_error(reason)
+
+  def format_error(%{message: message}) when is_binary(message), do: message
+  def format_error(error) when is_exception(error), do: Exception.message(error)
+  def format_error(%{"message" => message}) when is_binary(message), do: message
+
   def format_error(error) when is_binary(error), do: error
 
   def format_error(error) do
@@ -168,6 +186,14 @@ defmodule LemonAi.Error do
   def retryable?({:http_error, status, body, headers}),
     do: parse_http_error(status, body, headers).retryable
 
+  def retryable?(%{error_details: details}) when is_map(details), do: retryable?(details)
+
+  def retryable?(%{"category" => _} = error) do
+    error["retryable"] != false and retryable_category?(classify(error)) and
+      not quota_exhausted_message?(error["provider_message"]) and
+      not quota_exhausted_message?(error["message"])
+  end
+
   def retryable?({:error, _stop_reason, message}), do: retryable?(message)
   def retryable?({:error, reason}), do: retryable?(reason)
   def retryable?(%{retryable: false}), do: false
@@ -183,6 +209,77 @@ defmodule LemonAi.Error do
   def retryable?(error) do
     retryable_category?(classify(error)) and not quota_exhausted_error?(error)
   end
+
+  @doc """
+  Canonical, serializable error metadata for assistant stream terminals.
+  Transport exceptions are classified from their typed reason, not their
+  display text. SDK structs and request internals are not exposed to clients.
+  """
+  @spec to_error_details(term()) :: parsed_error()
+  def to_error_details({:http_error, status, body}),
+    do: parse_http_error(status, body, [])
+
+  def to_error_details({:http_error, status, body, headers}),
+    do: parse_http_error(status, body, headers)
+
+  def to_error_details(%{error_details: details}) when is_map(details),
+    do: to_error_details(details)
+
+  def to_error_details(error) do
+    defaults = %{
+      category: classify(error),
+      status: if(is_binary(error), do: status_from_message(error)),
+      message: format_error(error),
+      provider_message: nil,
+      rate_limit_info: nil,
+      retryable: retryable?(error)
+    }
+
+    if is_map(error) and (Map.has_key?(error, :category) or Map.has_key?(error, "category")) do
+      result =
+        Enum.reduce([:status, :message, :provider_message], defaults, fn key, acc ->
+          case error_field(error, key) do
+            nil -> acc
+            value -> Map.put(acc, key, value)
+          end
+        end)
+
+      %{
+        result
+        | rate_limit_info: normalize_error_rate_limit_info(error_field(error, :rate_limit_info))
+      }
+    else
+      defaults
+    end
+  end
+
+  defp error_field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+
+  defp normalize_error_rate_limit_info(nil), do: nil
+
+  defp normalize_error_rate_limit_info(info) when is_map(info) do
+    reset_at =
+      case error_field(info, :reset_at) do
+        %DateTime{} = datetime ->
+          datetime
+
+        value when is_binary(value) ->
+          case DateTime.from_iso8601(value) do
+            {:ok, datetime, _} -> datetime
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    Enum.reduce([:limit, :remaining, :retry_after], %{reset_at: reset_at}, fn key, acc ->
+      value = error_field(info, key)
+      Map.put(acc, key, if(is_integer(value) and value >= 0, do: value))
+    end)
+  end
+
+  defp normalize_error_rate_limit_info(_), do: nil
 
   @doc """
   Suggest a retry delay based on the error.
@@ -381,6 +478,8 @@ defmodule LemonAi.Error do
            ],
       do: category
 
+  def classify(%{error_details: details}) when is_map(details), do: classify(details)
+  def classify(%{"category" => category}), do: Map.get(@category_names, category, :unknown)
   def classify({:http_error, status, body}), do: parse_http_error(status, body, []).category
 
   def classify({:http_error, status, body, headers}),
@@ -391,7 +490,11 @@ defmodule LemonAi.Error do
   def classify(:context_length_exceeded), do: :context_length
   def classify(:rate_limited), do: :rate_limit
   def classify(reason) when reason in [:circuit_open, :max_concurrency], do: :transient
-  def classify(%Req.TransportError{reason: reason}), do: classify(reason)
+
+  def classify(%{__struct__: module, reason: reason})
+      when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],
+      do: classify(reason)
+
   def classify({:closed, _}), do: :transient
 
   def classify({:tls_alert, {alert, detail}}) do
@@ -602,7 +705,7 @@ defmodule LemonAi.Error do
     downcased = String.downcase(message)
 
     Regex.match?(
-      ~r/timeout|timed out|econnrefused|econnreset|enetdown|enetunreach|enetwork_unreachable|ehostunreach|nxdomain|connection[ _]?(?:refused|reset|closed|error)|network[ _]?error|fetch failed|upstream[ _]?connect|other[ _]?side[ _]?closed|socket hang up|socket connection was closed|bad[ _]record[ _]mac|temporarily unavailable|stream error.*received from peer/i,
+      ~r/timeout|timed out|econnrefused|econnreset|enetdown|enetunreach|enetwork_unreachable|ehostunreach|nxdomain|connection[ _]?(?:refused|reset|closed|error)|(?:transporterror|connection failed).*reason:\s*:(?:closed|econnreset|timeout)\b|network[ _]?error|fetch failed|upstream[ _]?connect|other[ _]?side[ _]?closed|socket hang up|socket connection was closed|bad[ _]record[ _]mac|temporarily unavailable|stream error.*received from peer/i,
       downcased
     )
   end
@@ -628,6 +731,9 @@ defmodule LemonAi.Error do
         :rate_limit
 
       status in [408, 409, 425] ->
+        :transient
+
+      status == 0 and is_binary(provider_message) and transient_message?(provider_message) ->
         :transient
 
       provider_transient_message?(provider_message) ->
@@ -674,7 +780,7 @@ defmodule LemonAi.Error do
        ) or
          (not transient_interval? and
             Regex.match?(
-              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota (?:exhausted|depleted)|exceeded your current quota|quota exceeded(?! for quota metric)/i,
+              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota (?:exhausted|depleted)|exceeded your current quota/i,
               message
             )))
   end

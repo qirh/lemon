@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AppShell, defaultSessionKey } from "../src/app.ts";
+import { imageFromBytes } from "../src/composer/images.ts";
 import { FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
@@ -253,4 +254,85 @@ describe("AppShell", () => {
 		const key = defaultSessionKey(new Date("2026-08-16T12:34:56.000Z"));
 		expect(key).toBe("tui-20260816T123456");
 	});
+});
+
+const PNG = Buffer.from(
+	"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1iUAAAAASUVORK5CYII=",
+	"base64",
+);
+
+test("image-only composer submission sends bytes and clears attachments only after the run receipt", async () => {
+	const { app, server } = await bootApp();
+	const image = imageFromBytes(PNG, "pixel.png");
+	app.composerDrafts.add(app.sessionKey, [image]);
+	await app.editor.submitComposer();
+	expect(server.requestsFor("chat.send")[0]?.params).toMatchObject({
+		prompt: "",
+		images: [image.content],
+		sessionKey: app.sessionKey,
+	});
+	expect(app.editor.pendingAttachments).toHaveLength(0);
+	expect(chatText(app)).toContain("[image: pixel.png]");
+});
+
+test("refused image submissions retain both the image and text draft", async () => {
+	const { app, server } = await bootApp();
+	server.failWith("chat.send", "FORBIDDEN", "not allowed");
+	const image = imageFromBytes(PNG, "pixel.png");
+	app.composerDrafts.add(app.sessionKey, [image]);
+	app.editor.setText("describe this");
+	await app.editor.submitComposer();
+	expect(app.editor.getExpandedText()).toBe("describe this");
+	expect(app.editor.pendingAttachments).toEqual([image]);
+});
+
+test("queued media transfers ownership and a failed drain requires explicit review rather than auto-retry", async () => {
+	const { app, server } = await bootApp();
+	const image = imageFromBytes(PNG, "pixel.png");
+	app.composerDrafts.add(app.sessionKey, [image]);
+	app.store.focused.busy = true;
+	await app.editor.submitComposer();
+	expect(app.editor.pendingAttachments).toHaveLength(0);
+	expect(app.store.queue.items(app.sessionKey)[0].attachments).toEqual([image]);
+	app.store.focused.busy = false;
+	server.failWith("chat.send", "UNAVAILABLE", "not accepted");
+	await app.drainQueue(app.sessionKey);
+	expect(app.store.queue.items(app.sessionKey)[0].state).toBe("needs-review");
+	await app.drainQueue(app.sessionKey);
+	expect(server.requestsFor("chat.send")).toHaveLength(1);
+	app.editQueued(app.store.queue.items(app.sessionKey)[0]);
+	expect(app.editor.pendingAttachments).toEqual([image]);
+	expect(app.store.queue.items(app.sessionKey)).toHaveLength(0);
+});
+
+test("offline and external native sends cannot take ownership of pending human images", async () => {
+	const { app, server } = await bootApp();
+	const image = imageFromBytes(PNG, "pixel.png");
+	app.composerDrafts.add(app.sessionKey, [image]);
+	app.editor.setText("human question");
+	app.editor.handleNativeEvent({ type: "send", key: "", text: "external delegated question" });
+	expect(server.requestsFor("chat.send")).toHaveLength(0);
+	app.client.close();
+	await app.editor.submitComposer();
+	expect(app.editor.pendingAttachments).toEqual([image]);
+	expect(app.editor.getExpandedText()).toBe("human question");
+	expect(app.client.queued).toHaveLength(0);
+});
+
+test("profile image payloads keep their authoritative route, including method refusals", async () => {
+	const { app, server } = await bootApp("agent:proof:main");
+	server.respondWith("profiles.get", {
+		profile: { id: "proof", canonicalSessionKey: app.sessionKey },
+	});
+	server.failWith("profile.chat", "METHOD_NOT_FOUND", "unavailable");
+	const image = imageFromBytes(PNG, "pixel.png");
+	app.composerDrafts.add(app.sessionKey, [image]);
+	app.editor.setText("describe this");
+	await app.editor.submitComposer();
+	expect(server.requestsFor("profile.chat")[0]?.params).toMatchObject({
+		id: "proof",
+		images: [image.content],
+	});
+	expect(server.requestsFor("chat.send")).toHaveLength(0);
+	expect(app.editor.pendingAttachments).toEqual([image]);
 });

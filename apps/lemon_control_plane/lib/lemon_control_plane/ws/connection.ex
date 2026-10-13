@@ -27,13 +27,16 @@ defmodule LemonControlPlane.WS.Connection do
   alias LemonControlPlane.Methods.{NodeInvokeResult, Registry}
   alias LemonControlPlane.NodeStore
 
+  @heartbeat_interval_ms 25_000
+
   defstruct [
     :conn_id,
     :auth,
     :connected,
     :event_seq,
     :local?,
-    :state_version
+    :state_version,
+    :heartbeat_timer_ref
   ]
 
   @type t :: %__MODULE__{
@@ -42,7 +45,8 @@ defmodule LemonControlPlane.WS.Connection do
           connected: boolean(),
           event_seq: non_neg_integer(),
           local?: boolean(),
-          state_version: map()
+          state_version: map(),
+          heartbeat_timer_ref: reference() | nil
         }
 
   ## WebSock Callbacks
@@ -147,6 +151,13 @@ defmodule LemonControlPlane.WS.Connection do
     {:stop, :normal, state}
   end
 
+  def handle_info(:heartbeat, %{connected: true} = state) do
+    timer_ref = Process.send_after(self(), :heartbeat, @heartbeat_interval_ms)
+    {:push, {:ping, ""}, %{state | heartbeat_timer_ref: timer_ref}}
+  end
+
+  def handle_info(:heartbeat, state), do: {:ok, state}
+
   def handle_info(msg, state) do
     Logger.debug("Unhandled message in WS connection: #{inspect(msg)}")
     {:ok, state}
@@ -155,6 +166,9 @@ defmodule LemonControlPlane.WS.Connection do
   @impl WebSock
   def terminate(reason, state) do
     Logger.debug("WebSocket connection terminated: #{state.conn_id}, reason: #{inspect(reason)}")
+
+    if is_reference(state.heartbeat_timer_ref),
+      do: Process.cancel_timer(state.heartbeat_timer_ref)
 
     # Unregister from presence
     if state.connected do
@@ -232,7 +246,8 @@ defmodule LemonControlPlane.WS.Connection do
   end
 
   defp finish_connect(auth, state) do
-    state = %{state | auth: auth, connected: true}
+    timer_ref = Process.send_after(self(), :heartbeat, @heartbeat_interval_ms)
+    state = %{state | auth: auth, connected: true, heartbeat_timer_ref: timer_ref}
 
     # Register with presence
     register_presence(state)

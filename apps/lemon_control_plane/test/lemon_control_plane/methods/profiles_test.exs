@@ -17,6 +17,11 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
 
   import ExUnit.CaptureLog
 
+  alias LemonAi.Types.ImageContent
+  alias LemonControlPlane.Protocol.Schemas
+
+  @png_data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+
   alias LemonControlPlane.Methods.{
     ProfileChat,
     ProfilesClone,
@@ -86,7 +91,11 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
       capture_log(fn ->
         assert {:error, {:unavailable, "Profile chat submission outcome is unknown", details}} =
                  ProfileChat.handle(
-                   %{"id" => "uncertain", "prompt" => "do not echo #{secret}"},
+                   %{
+                     "id" => "uncertain",
+                     "prompt" => "do not echo #{secret}",
+                     "images" => [image()]
+                   },
                    %{}
                  )
 
@@ -101,12 +110,15 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
         assert is_binary(details["runId"])
         assert_receive {:profile_request, request}
         assert request.run_id == details["runId"]
+        assert request.images == [%ImageContent{data: @png_data, mime_type: "image/png"}]
+        refute inspect(details) =~ @png_data
         refute_receive {:profile_request, _request}, 50
       end)
 
     assert result =~ "failure_class=exception"
     refute result =~ secret
     refute result =~ private_path
+    refute result =~ @png_data
   end
 
   test "profile operation errors do not expose raw router reasons" do
@@ -176,6 +188,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert is_binary(request.run_id)
     assert request.meta.profile_id == "operator"
     assert request.cwd == created["paths"]["workspace"]
+    assert request.images == []
 
     destination = Path.join(root, "operator-export.json")
 
@@ -191,6 +204,134 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
              ProfilesDelete.handle(%{"id" => "operator", "confirm" => "operator"}, %{})
   end
 
+  test "canonical profile images preserve server-owned workspace node session and model" do
+    assert {:ok, %{"profile" => profile}} =
+             ProfilesCreate.handle(
+               %{"id" => "image-profile", "name" => "Image Profile", "model" => "openai:gpt-5"},
+               %{}
+             )
+
+    assert {:ok, result} =
+             ProfileChat.handle(
+               %{
+                 "id" => "image-profile",
+                 "prompt" => "describe the image",
+                 "images" => [Map.put(image(), "privateMetadata", "not forwarded")],
+                 "cwd" => "/caller/controlled",
+                 "node" => "caller-node",
+                 "sessionKey" => "agent:caller:main",
+                 "agentId" => "caller"
+               },
+               %{}
+             )
+
+    assert_receive {:profile_request, request}
+    assert request.images == [%ImageContent{data: @png_data, mime_type: "image/png"}]
+    assert request.prompt == "describe the image"
+    assert request.cwd == profile["paths"]["workspace"]
+    assert request.session_key == profile["canonicalSessionKey"]
+    assert request.agent_id == "image-profile"
+    assert request.model == "openai:gpt-5"
+    assert request.meta.profile_id == "image-profile"
+    assert request.meta.node == "local"
+    assert is_binary(request.run_id)
+    assert result["node"] == "local"
+    refute inspect(result) =~ @png_data
+    refute inspect(result) =~ "privateMetadata"
+  end
+
+  test "image-only profile chat keeps the empty prompt and canonical request" do
+    assert {:ok, %{"profile" => profile}} =
+             ProfilesCreate.handle(%{"id" => "image-only", "name" => "Image Only"}, %{})
+
+    assert {:ok, result} =
+             ProfileChat.handle(
+               %{"id" => "image-only", "prompt" => "", "images" => [image()]},
+               %{}
+             )
+
+    assert_receive {:profile_request, request}
+    assert request.prompt == ""
+    assert request.images == [%ImageContent{data: @png_data, mime_type: "image/png"}]
+    assert request.cwd == profile["paths"]["workspace"]
+    assert request.session_key == profile["canonicalSessionKey"]
+    assert result["summary"]["promptBytes"] == 0
+    refute inspect(result) =~ @png_data
+  end
+
+  test "empty profile prompt without images remains invalid" do
+    assert {:ok, _} =
+             ProfilesCreate.handle(%{"id" => "empty-image", "name" => "Empty Image"}, %{})
+
+    for params <- [
+          %{"id" => "empty-image", "prompt" => ""},
+          %{"id" => "empty-image", "prompt" => "", "images" => []}
+        ] do
+      assert {:error, {:invalid_request, "Profile field is invalid"}} =
+               ProfileChat.handle(params, %{})
+
+      refute_received {:profile_request, _}
+    end
+  end
+
+  test "invalid images are rejected before profile refresh and router submission" do
+    if Process.whereis(LemonRouter.AgentProfiles) == nil do
+      start_supervised!(LemonRouter.AgentProfiles)
+    end
+
+    assert {:ok, _} =
+             ProfilesCreate.handle(%{"id" => "invalid-image", "name" => "Invalid Image"}, %{})
+
+    _ = LemonRouter.AgentProfiles.list()
+    pid = Process.whereis(LemonRouter.AgentProfiles)
+    :erlang.trace(pid, true, [:receive])
+
+    try do
+      for images <- [
+            nil,
+            %{},
+            "PRIVATE_IMAGE_PAYLOAD",
+            [Map.put(image(), "data", "PRIVATE_IMAGE_PAYLOAD")],
+            [Map.put(image(), "mime_type", "text/plain")],
+            List.duplicate(image(), 6)
+          ] do
+        assert {:error, {:invalid_request, message, nil}} =
+                 ProfileChat.handle(
+                   %{"id" => "invalid-image", "prompt" => "valid prompt", "images" => images},
+                   %{}
+                 )
+
+        assert byte_size(message) < 256
+        refute message =~ "PRIVATE_IMAGE_PAYLOAD"
+        refute message =~ @png_data
+        refute_received {:profile_request, _}
+      end
+
+      _ = LemonRouter.AgentProfiles.list()
+      refute_receive {:trace, ^pid, :receive, {:"$gen_cast", :reload}}, 100
+    after
+      :erlang.trace(pid, false, [:receive])
+    end
+  end
+
+  test "JSON image arrays pass the canonical profile request validation boundary" do
+    assert :ok = Schemas.validate("profile.chat", %{"id" => "profile", "prompt" => "hello"})
+
+    assert :ok =
+             Schemas.validate("profile.chat", %{
+               "id" => "profile",
+               "prompt" => "",
+               "images" => [image()]
+             })
+
+    assert {:error, _} =
+             Schemas.validate("profile.chat", %{
+               "id" => "profile",
+               "prompt" => "hello",
+               "images" => %{}
+             })
+  end
+
   test "schemas exist for every profile method" do
     for method <- ~w(
           profiles.list profiles.get profiles.create profiles.clone profiles.rename
@@ -198,6 +339,10 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
         ) do
       assert is_map(LemonControlPlane.Protocol.Schemas.get(method)), method
     end
+  end
+
+  defp image do
+    %{"type" => "image", "mime_type" => "image/png", "data" => @png_data}
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

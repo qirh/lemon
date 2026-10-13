@@ -11,6 +11,7 @@ import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import type { AssistantBlock } from "../../src/store/transcript-model.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
+import { accordionSettings } from "../../src/ui/components/accordion.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
@@ -232,5 +233,15 @@ test("tool boundaries seal each assistant segment before later text reaches the 
 	expect(text.match(/BEFORE_TOOL/g)).toHaveLength(1);
 	expect(text.match(/AFTER_TOOL/g)).toHaveLength(1);
 	expect(assistantBlocks(app).filter((block) => block.runId === "run-order")).toHaveLength(2);
+});
 
+test("the first global output toggle expands default-collapsed cards", async () => {
+	const { app } = await boot();
+	accordionSettings.setOverride(undefined);
+	try {
+		expect(app.events.toggleToolOutputs()).toBe("expanded");
+		expect(app.events.toggleToolOutputs()).toBe("collapsed");
+	} finally {
+		accordionSettings.setOverride(undefined);
+	}
 });

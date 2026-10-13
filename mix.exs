@@ -95,7 +95,7 @@ defmodule Lemon.MixProject do
           lemon_control_plane: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, :tar]
+        steps: [:assemble, &stamp_build/1, :tar]
       ],
       lemon_runtime_full: [
         applications: [
@@ -120,7 +120,7 @@ defmodule Lemon.MixProject do
           lemon_sim_ui: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, :tar]
+        steps: [:assemble, &stamp_build/1, :tar]
       ],
       sim_broadcast_platform: [
         applications: [
@@ -130,8 +130,26 @@ defmodule Lemon.MixProject do
           lemon_sim_ui: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, :tar]
+        steps: [:assemble, &stamp_build/1, :tar]
       ]
     ]
+  end
+
+  defp stamp_build(release) do
+    commit =
+      System.get_env("LEMON_GIT_SHA") ||
+        case System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true) do
+          {sha, 0} -> String.trim(sha)
+          _ -> "unknown"
+        end
+
+    metadata = %{
+      version: release.version,
+      commit: commit,
+      channel: System.get_env("LEMON_CHANNEL") || "stable"
+    }
+
+    File.write!(Path.join(release.version_path, "lemon-build.json"), Jason.encode!(metadata))
+    release
   end
 end

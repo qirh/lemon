@@ -7,11 +7,10 @@
  * pipeline smoke-tests the compiled binary that way.
  */
 
-import { AppShell } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
 import { consumeForkHandoff } from "./terminal/fork.ts";
-import { initAppearanceTheme } from "./ui/theme/appearance.ts";
+
 
 /** Injected by `scripts/build-binary.ts` via Bun's `define`. */
 declare const LEMON_TUI_VERSION: string | undefined;
@@ -211,12 +210,15 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 	// by constructor argument and pi-tui ships no defaults. `auto` installs the
 	// dark palette now and swaps it if the terminal answers the OSC 11 query
 	// with a light background — the answer arrives after the first frame.
-	const configuredTheme = await loadConfig()
-		.then((config) => config.agent?.theme)
-		.catch(() => undefined);
-	const theme = initAppearanceTheme({ configured: configuredTheme });
-
-	const version = await resolveVersion();
+	// Keep CLI-only calls out of the native renderer's import graph, and overlap
+	// config/version I/O with the interactive module load.
+	const [{ AppShell }, { initAppearanceTheme }, config, version] = await Promise.all([
+		import("./app.ts"),
+		import("./ui/theme/appearance.ts"),
+		loadConfig().catch(() => undefined),
+		resolveVersion(),
+	]);
+	const theme = initAppearanceTheme({ configured: config?.agent?.theme });
 	return await new Promise<number>((resolve) => {
 		const app = new AppShell({
 			url: options.url,
@@ -243,5 +245,5 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 }
 
 if (import.meta.main) {
-	process.exit(await main());
+	void main().then((code) => process.exit(code));
 }

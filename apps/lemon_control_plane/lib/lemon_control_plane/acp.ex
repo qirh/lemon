@@ -5,13 +5,21 @@ defmodule LemonControlPlane.ACP do
   ACP sessions retain model, thinking and approval settings across reconnects.
   Loading replays redacted durable run history; closing releases the active run
   without deleting that history. Session configuration is applied to the next
-  prompt through the router boundary. Raw media and client-supplied MCP servers
-  are rejected until a session-scoped safe transport contract is available.
+  prompt through the router boundary. Raw media is rejected. Client MCP servers
+  are connection-owned, session-scoped, and never stored with durable sessions.
 
   `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
   load the selected workspace skill. Native resume identities survive the chat
   cache TTL. Streaming subscriptions precede run submission; uncertain receipts
   retain their fixed run ID and explicitly forbid automatic retries.
+  Permission requests retain the native tool-call identity and bounded target
+  preview; approval summaries never persist raw tool arguments. Client calls
+  are concurrent so terminal exit waits cannot block output or cancellation.
+  Remembered approval is scoped to the same tool and action arguments within
+  the session, not a blanket grant to that tool.
+  Historical interrupted tools are reconciled against finalized run events:
+  retained partial output is replayed, and missing completion results are
+  explicitly identified rather than leaving a finished run's card running.
   """
 
   alias LemonControlPlane.AgentRuntime
@@ -28,7 +36,7 @@ defmodule LemonControlPlane.ACP do
   def capabilities do
     %{
       "loadSession" => true,
-      "mcpCapabilities" => %{"http" => false, "sse" => false},
+      "mcpCapabilities" => %{"http" => mcp_available?(), "sse" => mcp_available?()},
       "promptCapabilities" => %{
         "audio" => false,
         "embeddedContext" => false,
@@ -47,6 +55,7 @@ defmodule LemonControlPlane.ACP do
     fs = capabilities |> map_get_any(["fs", :fs]) |> ensure_map()
 
     %{
+      terminal: truthy?(map_get_any(capabilities, ["terminal", :terminal])),
       fs: %{
         read_text_file:
           truthy?(
@@ -146,11 +155,13 @@ defmodule LemonControlPlane.ACP do
   def new_session(params, opts \\ [])
 
   def new_session(params, opts) when is_map(params) do
+    session_id = "acp_" <> LemonCore.Id.uuid()
+
     with {:ok, cwd} <- required_cwd(params),
-         :ok <- validate_mcp_servers(params) do
+         :ok <- validate_mcp_servers(params),
+         :ok <- open_session_mcp(session_id, cwd, params, opts) do
       agent_id = lemon_meta_string(params, "agentId", @default_agent_id)
       client_capabilities = client_capabilities(params, opts)
-      session_id = "acp_" <> LemonCore.Id.uuid()
       session_key = "agent:#{agent_id}:acp-#{short_hash(session_id)}"
       now = DateTime.utc_now() |> DateTime.to_iso8601()
 
@@ -184,7 +195,8 @@ defmodule LemonControlPlane.ACP do
          {:ok, existing} <- existing_session(session_id),
          {:ok, cwd} <- required_cwd(params),
          :ok <- validate_mcp_servers(params),
-         true <- cwd == existing.cwd do
+         true <- cwd == existing.cwd,
+         :ok <- open_session_mcp(session_id, cwd, params, opts) do
       session =
         existing
         |> Map.put(:closed, false)
@@ -224,6 +236,7 @@ defmodule LemonControlPlane.ACP do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- existing_session(session_id),
          :ok <- cancel_last_run(session) do
+      close_session_mcp(session_id)
       put_session(session_id, Map.put(session, :closed, true))
       {:ok, %{}}
     end
@@ -233,10 +246,23 @@ defmodule LemonControlPlane.ACP do
 
   def cancel_session(params) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
-         {:ok, session} <- existing_session(session_id),
-         :ok <- cancel_last_run(session) do
+         {:ok, session} <- existing_session(session_id) do
       put_session(session_id, Map.put(session, :cancelled_run_id, session.last_run_id))
-      {:ok, %{}}
+
+      case cancel_last_run(session) do
+        :ok ->
+          {:ok, %{}}
+
+        error ->
+          current = get_session(session_id) || session
+
+          put_session(
+            session_id,
+            Map.put(current, :cancelled_run_id, Map.get(session, :cancelled_run_id))
+          )
+
+          error
+      end
     end
   end
 
@@ -250,7 +276,7 @@ defmodule LemonControlPlane.ACP do
 
       if :global.set_lock(lock, [node()], 0) do
         try do
-          with_prepared_run(opts, fn run_id, opts ->
+          with_prepared_run(session_id, opts, fn run_id, opts ->
             with {:ok, session} <- open_session(session_id),
                  {:ok, blocks} <- required_list(params, "prompt"),
                  {:ok, prompt} <- prompt_text(blocks),
@@ -305,7 +331,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp with_prepared_run(opts, callback) do
+  defp with_prepared_run(session_id, opts, callback) do
     run_id = LemonCore.Id.run_id()
 
     streaming? =
@@ -317,18 +343,36 @@ defmodule LemonControlPlane.ACP do
     if streaming? do
       :ok = LemonCore.Bus.subscribe(topic)
       :ok = LemonCore.Bus.subscribe("exec_approvals")
-      :ok = LemonCore.ACPClientBridge.register(run_id)
     end
+
+    bridge = if streaming?, do: start_client_bridge(run_id, session_id, opts)
 
     try do
       callback.(run_id, Keyword.put(opts, :prepared_run_id, run_id))
     after
       if streaming? do
-        LemonCore.ACPClientBridge.unregister(run_id)
+        stop_client_bridge(bridge)
         LemonCore.Bus.unsubscribe(topic)
         LemonCore.Bus.unsubscribe("exec_approvals")
       end
     end
+  end
+
+  defp start_client_bridge(run_id, session_id, opts) do
+    callback = Keyword.get(opts, :client_request_callback)
+
+    {:ok, bridge} =
+      LemonControlPlane.ACP.ClientRequests.start_link(run_id, self(), fn payload ->
+        client_exchange(session_id, payload, callback)
+      end)
+
+    bridge
+  end
+
+  defp stop_client_bridge(bridge) do
+    if is_pid(bridge) and Process.alive?(bridge), do: GenServer.stop(bridge, :normal)
+  catch
+    :exit, _ -> :ok
   end
 
   defp dispatch(_method, params, _opts) when not is_map(params),
@@ -373,15 +417,55 @@ defmodule LemonControlPlane.ACP do
 
   defp validate_mcp_servers(params) do
     case Map.get(params, "mcpServers", []) do
-      [] ->
-        :ok
-
       servers when is_list(servers) ->
-        {:error, -32_602, "client MCP servers are not supported; configure MCP in Lemon"}
+        if Enum.all?(servers, &is_map/1),
+          do: :ok,
+          else: {:error, -32_602, "mcpServers entries must be objects"}
 
       _ ->
         {:error, -32_602, "mcpServers must be an array"}
     end
+  end
+
+  defp mcp_available? do
+    Code.ensure_loaded?(LemonSkills.McpSession) and
+      function_exported?(LemonSkills.McpSession, :open, 4)
+  end
+
+  defp open_session_mcp(session_id, cwd, params, opts) do
+    case Map.get(params, "mcpServers", []) do
+      [] ->
+        close_session_mcp(session_id)
+
+      servers ->
+        owner = Keyword.get(opts, :connection_pid)
+
+        cond do
+          not mcp_available?() ->
+            {:error, -32_000, "session MCP runtime is unavailable"}
+
+          not is_pid(owner) ->
+            {:error, -32_602, "client MCP servers require a persistent ACP connection"}
+
+          true ->
+            case LemonSkills.McpSession.open(session_id, cwd, servers, owner) do
+              :ok ->
+                :ok
+
+              {:error, reason}
+              when reason in [:invalid_id, :invalid_cwd, :invalid_owner, :invalid_config] ->
+                {:error, -32_602, "invalid client MCP server configuration"}
+
+              _ ->
+                {:error, -32_000, "client MCP server connection or discovery failed"}
+            end
+        end
+    end
+  end
+
+  defp close_session_mcp(session_id) do
+    if mcp_available?(), do: LemonSkills.McpSession.close(session_id)
+    :ok
   end
 
   defp parse_cursor(nil), do: {:ok, 0}
@@ -604,7 +688,10 @@ defmodule LemonControlPlane.ACP do
     case native_history(session) do
       {:ok, entries} ->
         state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
-        Enum.reduce(entries, state, &replay_native_entry(session_id, &1, opts, &2))
+
+        entries
+        |> Enum.reduce(state, &replay_native_entry(session_id, &1, opts, &2))
+        |> replay_unfinished_tools(session, opts)
 
       :unavailable ->
         LemonCore.SessionLifecycle.history(session.session_key, limit: 200)
@@ -625,6 +712,91 @@ defmodule LemonControlPlane.ACP do
             )
           end
         end)
+    end
+  end
+
+  # A killed tool worker can leave an assistant tool call without a journaled
+  # result. Only finalized runs can reconcile such cards. Preserve the last
+  # durable partial output, but never invent a tool result or cancellation cause.
+  defp replay_unfinished_tools(%{tools: tools} = state, _session, _opts)
+       when map_size(tools) == 0,
+       do: state
+
+  defp replay_unfinished_tools(state, session, opts) do
+    LemonCore.RunStore.history(session.session_key, limit: 200)
+    |> Enum.reduce(state, fn
+      {_run_id, %{summary: %{completed: completed}, events: events}}, state
+      when not is_nil(completed) ->
+        events
+        |> Enum.reduce(%{}, fn event, latest ->
+          action = map_get(event, :action) |> ensure_map()
+          detail = map_get(action, :detail) |> ensure_map()
+          action_id = map_get(action, :id)
+
+          id =
+            map_get(detail, :tool_call_id) ||
+              Enum.find_value(state.tools, fn {id, _tool} ->
+                if is_binary(id) and action_id in [id, "tool_" <> id], do: id
+              end)
+
+          if Map.has_key?(state.tools, id), do: Map.put_new(latest, id, event), else: latest
+        end)
+        |> Enum.reduce(state, fn {id, event}, state ->
+          replay_ended_tool(state, id, event, opts)
+        end)
+
+      _, state ->
+        state
+    end)
+  end
+
+  defp replay_ended_tool(state, id, event, opts) do
+    event = LemonCore.Redact.map(event)
+    action = map_get(event, :action)
+    detail = action |> map_get(:detail) |> ensure_map() |> Map.put(:tool_call_id, id)
+    event = Map.put(event, :action, Map.put(action, :detail, detail))
+
+    {updates, next} =
+      if map_get(event, :phase) in [:updated, :completed, "updated", "completed"] do
+        LemonControlPlane.ACP.SessionUpdates.map_event(state, %{
+          type: :engine_action,
+          payload: event
+        })
+      else
+        {[], state}
+      end
+
+    if Map.has_key?(next.tools, id) do
+      update =
+        Enum.find_value(updates, fn notification ->
+          update = get_in(notification, ["params", "update"])
+          if update["toolCallId"] == id, do: update
+        end) || %{"toolCallId" => id}
+
+      content = Enum.reject(Map.get(update, "content", []), &(&1["type"] == "terminal"))
+
+      notice = %{
+        "type" => "content",
+        "content" => %{
+          "type" => "text",
+          "text" => "No completion result was recorded before this run ended."
+        }
+      }
+
+      emit(
+        state.session_id,
+        Map.merge(update, %{
+          "sessionUpdate" => "tool_call_update",
+          "status" => "failed",
+          "content" => content ++ [notice]
+        }),
+        opts
+      )
+
+      %{next | tools: Map.delete(next.tools, id)}
+    else
+      Enum.each(updates, &emit(state.session_id, get_in(&1, ["params", "update"]), opts))
+      next
     end
   end
 
@@ -721,7 +893,8 @@ defmodule LemonControlPlane.ACP do
       id = "acp_" <> LemonCore.Id.uuid()
       key = "agent:#{source.agent_id}:acp-#{short_hash(id)}"
 
-      with :ok <- fork_native_session(source, key) do
+      with :ok <- open_session_mcp(id, cwd, params, opts),
+           :ok <- fork_native_session(source, key) do
         session =
           source
           |> Map.merge(%{
@@ -735,6 +908,10 @@ defmodule LemonControlPlane.ACP do
         remember_native_resume(id)
         bootstrap(id, session, opts)
         {:ok, Map.put(session_response(session), "sessionId", id)}
+      else
+        error ->
+          close_session_mcp(id)
+          error
       end
     else
       false -> {:error, -32_602, "cwd must match the stored session"}
@@ -779,9 +956,11 @@ defmodule LemonControlPlane.ACP do
           origin: :acp,
           thinking_level: Map.get(session, :thinking, "off"),
           acp_session_id: session_id,
+          acp_mcp_session_id: session_id,
           acp_wait_requested: not queue_only?,
           acp_resource_link_count: resource_link_count(params["prompt"]),
           acp_client_capabilities: client_capabilities_json(client_capabilities),
+          acp_client_terminal: client_capabilities.terminal,
           acp_client_fs_read_text_file: client_fs_capabilities.read_text_file,
           acp_client_fs_write_text_file: client_fs_capabilities.write_text_file,
           acp_client_fs_delete_file: client_fs_capabilities.delete_file,
@@ -860,8 +1039,9 @@ defmodule LemonControlPlane.ACP do
 
     unless prepared? do
       :ok = LemonCore.Bus.subscribe(topic)
-      :ok = LemonCore.ACPClientBridge.register(run_id)
     end
+
+    bridge = unless prepared?, do: start_client_bridge(run_id, result.session_id, opts)
 
     session_update_callback = Keyword.get(opts, :session_update_callback)
     client_request_callback = Keyword.get(opts, :client_request_callback)
@@ -899,7 +1079,7 @@ defmodule LemonControlPlane.ACP do
       )
     after
       unless prepared? do
-        LemonCore.ACPClientBridge.unregister(run_id)
+        stop_client_bridge(bridge)
         LemonCore.Bus.unsubscribe(topic)
       end
     end
@@ -916,11 +1096,23 @@ defmodule LemonControlPlane.ACP do
             result = emit_run_updates(result, event, session_update_callback)
             {:ok, complete_streamed_result(result, payload)}
 
-          {:acp_client_request, payload} ->
-            result = perform_client_request(result, payload, client_request_callback)
+          {:acp_client_summary, summary} ->
+            result = add_client_request_result(result, summary)
 
             update_wait_loop(
               result,
+              session_update_callback,
+              client_request_callback,
+              deadline_ms
+            )
+
+          %{type: :approval_resolved, payload: payload} ->
+            id = map_get(payload, :approval_id)
+            {pid, pending} = Map.pop(Map.get(result, :approval_requests, %{}), id)
+            if is_pid(pid), do: Process.exit(pid, :kill)
+
+            update_wait_loop(
+              Map.put(result, :approval_requests, pending),
               session_update_callback,
               client_request_callback,
               deadline_ms
@@ -993,6 +1185,7 @@ defmodule LemonControlPlane.ACP do
 
     if map_get(pending, :session_key) == result.session_key and
          map_get(pending, :run_id) == result.run_id and is_binary(approval_id) and
+         not Map.has_key?(Map.get(result, :approval_requests, %{}), approval_id) and
          not is_nil(LemonCore.ExecApprovalStore.get_pending(approval_id)) do
       perform_approval_request(result, pending, callback)
     else
@@ -1002,42 +1195,34 @@ defmodule LemonControlPlane.ACP do
 
   defp perform_approval_request(result, pending, callback) when is_function(callback, 1) do
     approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
-    tool = map_get(pending, :tool) || "tool"
 
     request =
       client_request("session/request_permission", %{
         "sessionId" => result.session_id,
-        "toolCall" => %{
-          "toolCallId" => approval_id || "approval_#{short_hash(inspect(pending))}",
-          "title" => "Approve #{tool}",
-          "kind" => LemonControlPlane.ACP.SessionUpdates.tool_kind(tool),
-          "status" => "pending",
-          "content" => approval_content(pending)
-        },
+        "toolCall" => permission_tool_call(result, pending),
         "options" => approval_options()
       })
 
-    summary =
-      case safe_client_request(callback, request) do
-        {:ok, response} ->
-          resolve_approval_from_response(approval_id, response)
-          summarize_client_response("session/request_permission", response)
-
-        {:error, _reason} ->
-          deny_if_pending(approval_id)
-
-          %{
-            "method" => "session/request_permission",
-            "status" => "failed",
-            "reason" => "client permission request failed"
-          }
-
-        response ->
-          resolve_approval_from_response(approval_id, response)
-          summarize_client_response("session/request_permission", response)
+    timeout =
+      case map_get(pending, :expires_at_ms) do
+        ms when is_integer(ms) -> max(ms - LemonCore.Clock.now_ms(), 0)
+        _ -> :infinity
       end
 
-    add_client_request_result(result, summary)
+    pid =
+      spawn(fn ->
+        case LemonCore.ACPClientBridge.request(
+               result.run_id,
+               request["method"],
+               request["params"],
+               timeout
+             ) do
+          {:ok, response} -> resolve_approval_from_response(approval_id, response)
+          _ -> deny_if_pending(approval_id)
+        end
+      end)
+
+    Map.update(result, :approval_requests, %{approval_id => pid}, &Map.put(&1, approval_id, pid))
   end
 
   defp perform_approval_request(result, pending, _callback) do
@@ -1062,6 +1247,34 @@ defmodule LemonControlPlane.ACP do
 
   defp deny_if_pending(_approval_id), do: :ok
 
+  defp permission_tool_call(result, pending) do
+    tool = map_get(pending, :tool) || "tool"
+    id = map_get(pending, :tool_call_id)
+
+    args =
+      case Map.get(result.mapper_state.tools, id) do
+        {^tool, args} -> args
+        _ -> map_get(pending, :action) |> ensure_map()
+      end
+
+    if is_binary(id) and id != "" do
+      result.session_id
+      |> LemonControlPlane.ACP.SessionUpdates.tool_call(id, tool, args,
+        cwd: result.mapper_state.cwd
+      )
+      |> get_in(["params", "update"])
+      |> Map.delete("sessionUpdate")
+    else
+      %{
+        "toolCallId" => id || map_get(pending, :id),
+        "title" => "Approve #{tool}",
+        "kind" => LemonControlPlane.ACP.SessionUpdates.tool_kind(tool),
+        "status" => "pending",
+        "content" => approval_content(pending)
+      }
+    end
+  end
+
   defp approval_content(pending) do
     case map_get(pending, :rationale) do
       rationale when is_binary(rationale) and rationale != "" ->
@@ -1083,7 +1296,11 @@ defmodule LemonControlPlane.ACP do
   defp approval_options do
     [
       %{"optionId" => "allow-once", "name" => "Allow once", "kind" => "allow_once"},
-      %{"optionId" => "allow-session", "name" => "Allow for session", "kind" => "allow_always"},
+      %{
+        "optionId" => "allow-session",
+        "name" => "Allow this action for session",
+        "kind" => "allow_always"
+      },
       %{"optionId" => "reject-once", "name" => "Reject", "kind" => "reject_once"}
     ]
   end
@@ -1116,18 +1333,15 @@ defmodule LemonControlPlane.ACP do
     _, _ -> {:error, :client_request_failed}
   end
 
-  defp perform_client_request(result, _payload, callback) when not is_function(callback, 1) do
-    add_client_request_result(result, %{
-      "method" => "unknown",
-      "status" => "skipped",
-      "reason" => "client request callback unavailable"
-    })
+  defp client_exchange(_session_id, payload, callback) when not is_function(callback, 1) do
+    {%{"error" => %{"message" => "ACP client request callback unavailable"}},
+     %{"method" => map_get(payload, :method), "status" => "failed"}}
   end
 
-  defp perform_client_request(result, payload, callback) when is_map(payload) do
+  defp client_exchange(session_id, payload, callback) when is_map(payload) do
     method = map_get(payload, :method)
     params = payload |> map_get(:params) |> ensure_map()
-    request = client_request(method, Map.put_new(params, "sessionId", result.session_id))
+    request = client_request(method, Map.put(params, "sessionId", session_id))
 
     {summary, response} =
       case safe_client_request(callback, request) do
@@ -1147,19 +1361,7 @@ defmodule LemonControlPlane.ACP do
           {summarize_client_response(method, response), response}
       end
 
-    maybe_reply_client_request(payload, response)
-    add_client_request_result(result, summary)
-  end
-
-  defp perform_client_request(result, _payload, _callback), do: result
-
-  defp maybe_reply_client_request(payload, response) do
-    with reply_to when is_pid(reply_to) <- map_get(payload, :reply_to),
-         ref when is_reference(ref) <- map_get(payload, :ref) do
-      send(reply_to, {:acp_client_response, ref, response})
-    else
-      _ -> :ok
-    end
+    {response, summary}
   end
 
   defp client_request(method, params) when is_binary(method) do
@@ -1236,7 +1438,19 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp emit_run_updates(result, event, callback) do
-    {updates, state} = LemonControlPlane.ACP.SessionUpdates.map_event(result.mapper_state, event)
+    session = get_session(result.session_id) || %{}
+
+    mapper_state =
+      if Map.get(session, :cancelled_run_id) == result.run_id do
+        {_updates, state} =
+          LemonControlPlane.ACP.SessionUpdates.map_event(result.mapper_state, {:cancel_requested})
+
+        state
+      else
+        result.mapper_state
+      end
+
+    {updates, state} = LemonControlPlane.ACP.SessionUpdates.map_event(mapper_state, event)
     if is_function(callback, 1), do: Enum.each(updates, callback)
     Map.put(result, :mapper_state, state)
   end
@@ -1491,6 +1705,7 @@ defmodule LemonControlPlane.ACP do
 
   defp empty_client_capabilities do
     %{
+      terminal: false,
       fs: %{read_text_file: false, write_text_file: false, delete_file: false, rename_file: false}
     }
   end
@@ -1499,6 +1714,7 @@ defmodule LemonControlPlane.ACP do
     capabilities = normalize_client_capabilities(capabilities)
 
     %{
+      "terminal" => capabilities.terminal,
       "fs" => %{
         "readTextFile" => capabilities.fs.read_text_file,
         "writeTextFile" => capabilities.fs.write_text_file,
