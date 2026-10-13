@@ -58,6 +58,7 @@ defmodule LemonCore.Config.Validator do
   def validate(%Modular{} = config) do
     errors = []
     errors = model_role_errors(config.model_roles) ++ errors
+    errors = budget_errors(config.budgets) ++ errors
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
@@ -78,6 +79,7 @@ defmodule LemonCore.Config.Validator do
   def validate(%LemonCore.Config{} = config) do
     errors = []
     errors = model_role_errors(config.model_roles) ++ errors
+    errors = budget_errors(config.budgets) ++ errors
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
@@ -93,6 +95,29 @@ defmodule LemonCore.Config.Validator do
   @doc "Validates the canonical string-valued model role table without provider dependencies."
   @spec validate_model_roles(term()) :: :ok | {:error, [String.t()]}
   def validate_model_roles(roles), do: errors_to_result(model_role_errors(roles))
+
+  @doc "Validates optional cumulative token and estimated dollar caps; zero blocks requests."
+  def validate_budgets(budgets), do: errors_to_result(budget_errors(budgets))
+
+  defp budget_errors(budgets) when is_map(budgets) do
+    Enum.flat_map(
+      [:max_run_tokens, :max_run_cost_usd, :max_session_tokens, :max_session_cost_usd],
+      fn key ->
+        value = Map.get(budgets, key)
+        tokens? = key in [:max_run_tokens, :max_session_tokens]
+
+        cond do
+          is_nil(value) -> []
+          tokens? and is_integer(value) and value >= 0 -> []
+          not tokens? and is_number(value) and value >= 0 -> []
+          tokens? -> ["budgets.#{key}: must be a nonnegative integer"]
+          true -> ["budgets.#{key}: must be a finite nonnegative number"]
+        end
+      end
+    )
+  end
+
+  defp budget_errors(_budgets), do: ["budgets: must be a table"]
 
   defp model_role_errors(roles) when is_map(roles) do
     Enum.flat_map(roles, fn {role, selector} ->

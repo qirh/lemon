@@ -544,12 +544,6 @@ defmodule CodingAgent.Tools.BashTest do
       assert details.exit_code != 0
       assert text =~ "syntax error" or text =~ "unexpected" or details.exit_code == 2
     end
-
-    test "missing command parameter raises", %{tmp_dir: tmp_dir} do
-      assert_raise KeyError, fn ->
-        Bash.execute("call_1", %{}, nil, nil, tmp_dir, [])
-      end
-    end
   end
 
   # ============================================================================

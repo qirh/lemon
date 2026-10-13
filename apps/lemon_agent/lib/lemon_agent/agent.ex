@@ -44,7 +44,7 @@ defmodule LemonAgent.Agent do
   use GenServer
   require Logger
 
-  alias LemonAgent.AbortSignal
+  alias LemonAgent.{AbortSignal, Budget}
   alias LemonAgent.Types
   alias LemonAgent.Types.{AgentLoopConfig, AgentState}
   alias LemonAi.Types.StreamOptions
@@ -112,6 +112,8 @@ defmodule LemonAgent.Agent do
           get_api_key: get_api_key_fn(),
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
+          budget_limits: map(),
+          budget_usage: Budget.usage(),
           max_tool_turns: pos_integer() | :infinity | nil,
           max_tool_concurrency: pos_integer() | :infinity | nil,
           max_retries: non_neg_integer(),
@@ -141,6 +143,8 @@ defmodule LemonAgent.Agent do
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
+  - `:budget_limits` - Cumulative run/session token and estimated-dollar caps (nil = unlimited)
+  - `:budget_usage` - Initial cumulative session totals, independent of message history
   - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback, or `:infinity`
     (default: 25; `CodingAgent.Session` passes `:infinity` unless `[runtime] max_tool_turns` is set)
   - `:max_tool_concurrency` - Maximum overlapping calls for tools marked `parallel_safe`
@@ -510,6 +514,12 @@ defmodule LemonAgent.Agent do
       thinking_level: Map.get(initial_state_opts, :thinking_level, :off),
       tools: Map.get(initial_state_opts, :tools, []),
       messages: Map.get(initial_state_opts, :messages, []),
+      budget_limits:
+        Keyword.get(opts, :budget_limits, Map.get(initial_state_opts, :budget_limits, %{})),
+      budget_usage:
+        Budget.normalize_usage(
+          Keyword.get(opts, :budget_usage, Map.get(initial_state_opts, :budget_usage))
+        ),
       is_streaming: false,
       stream_message: nil,
       pending_tool_calls: MapSet.new(),
@@ -909,7 +919,9 @@ defmodule LemonAgent.Agent do
       state.agent_state
       | is_streaming: true,
         stream_message: nil,
-        error: nil
+        error: nil,
+        run_usage:
+          if(is_nil(messages), do: state.agent_state.run_usage, else: %{tokens: 0, cost_usd: 0.0})
     }
 
     # Build context for the loop
@@ -920,7 +932,7 @@ defmodule LemonAgent.Agent do
     }
 
     # Build config for the loop
-    config = build_loop_config(state, abort_ref, agent_pid)
+    config = build_loop_config(%{state | agent_state: new_agent_state}, abort_ref, agent_pid)
 
     # Emit introspection event for loop start
     model_id =
@@ -966,6 +978,15 @@ defmodule LemonAgent.Agent do
       convert_to_llm: state.convert_to_llm,
       transform_context: state.transform_context,
       get_api_key: state.get_api_key,
+      budget_limits: state.agent_state.budget_limits,
+      budget_usage: state.agent_state.budget_usage,
+      budget:
+        if Budget.enabled?(state.agent_state.budget_limits) do
+          %{
+            Budget.new(state.agent_state.budget_limits, state.agent_state.budget_usage)
+            | run_usage: state.agent_state.run_usage
+          }
+        end,
       get_steering_messages: fn ->
         GenServer.call(agent_pid, {:get_steering_messages, abort_ref}, queue_call_timeout)
       end,
@@ -1192,6 +1213,16 @@ defmodule LemonAgent.Agent do
     %{state | agent_state: new_agent_state}
   end
 
+  defp handle_agent_event(
+         {:usage_budget_updated, %{run_usage: run_usage, session_usage: session_usage}},
+         state
+       ) do
+    %{
+      state
+      | agent_state: %{state.agent_state | run_usage: run_usage, budget_usage: session_usage}
+    }
+  end
+
   defp handle_agent_event({:error, reason, _partial_state}, state) do
     new_agent_state = %{state.agent_state | error: normalize_error_reason(reason)}
     %{state | agent_state: new_agent_state}
@@ -1350,6 +1381,7 @@ defmodule LemonAgent.Agent do
     {queue, []}
   end
 
+  defp normalize_error_reason({:budget_exceeded, %{message: message}}), do: message
   defp normalize_error_reason(reason) when is_binary(reason), do: reason
   defp normalize_error_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_error_reason(reason), do: inspect(reason)

@@ -12,7 +12,7 @@ defmodule CodingAgent.Tools.MutationCorrectnessTest do
     assert %AgentToolResult{trust: :untrusted, details: %{diff: diff}} =
              edit(cwd, "ordered.txt", "old value", "new value")
 
-    assert diff == " 1\talpha\n-2\told value\n+2\tnew value\n 3\tomega\n 4\t"
+    assert diff == " 1\talpha\n-2\told value\n+2\tnew value\n 3\tomega"
   end
 
   test "unprefixed Add File content cannot silently create an empty file", %{tmp_dir: cwd} do

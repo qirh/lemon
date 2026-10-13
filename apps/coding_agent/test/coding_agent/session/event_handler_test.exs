@@ -27,6 +27,10 @@ defmodule CodingAgent.Session.EventHandlerTest do
         send(test_pid, {:complete, event})
         :ok
       end,
+      broadcast_event: fn _state, event ->
+        send(test_pid, {:broadcast, event})
+        :ok
+      end,
       maybe_trigger_compaction: fn state -> state end,
       persist_message: fn state, _msg -> state end
     }
@@ -163,6 +167,7 @@ defmodule CodingAgent.Session.EventHandlerTest do
       assert :queue.is_empty(result.follow_up_queue)
       assert result.event_streams == %{}
       assert_receive {:persist, ^aborted_msg}
+      assert_receive {:broadcast, {:message_end, ^aborted_msg}}
       assert_receive {:complete, {:canceled, :assistant_aborted}}
     end
 

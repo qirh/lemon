@@ -136,11 +136,66 @@ CodingAgent.Supervisor (one_for_one)
 | Category | Tools |
 |----------|-------|
 | File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
-| Search | `grep`, `find` |
+| Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
 | Execution | `bash`, `bash_output`, `kill_process` |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
+
+**Snapshot-anchored edits.** A local text `read` returns numbered physical lines
+and `[absolute/path#SNAPSHOT]`. Prefer `edit` with that snapshot and an `edits`
+array instead of copying a large unique `old_text` block:
+
+```json
+{"path":"src/app.ts","snapshot":"0123456789ABCDEF","edits":[{"operation":"replace","start_line":73,"end_line":73,"new_text":"  const retryDelayMs = 250;"}]}
+```
+
+The snapshot covers the complete original file, even for a partial read.
+Ranges are inclusive, one-based, and all operations use the original coordinates.
+Operations are `replace`, `delete`, `insert_before`, and `insert_after`; overlapping
+or stale batches fail without writing. Successful edits return a fresh snapshot.
+Original BOM, CRLF/LF, and final-newline conventions are preserved. Exact-text
+editing remains available for a uniquely matched region; ambiguous matches report
+their line locations and never choose an occurrence silently. Read-only internal
+references and transformed formats do not advertise editing snapshots.
+
+**Rich reads.** `read` also accepts directories, ZIP/TAR/TAR.GZ/TGZ archives,
+`bundle.zip:member/path`, PDFs, notebooks, and native images. Archive members are
+read in memory, not extracted into the workspace. `offset`/`limit` select displayed
+lines; follow `next_offset` for bounded directory/member/document output.
+PDFs support `page`/`page_limit`; notebooks support `cell`/`cell_limit` and include
+source, execution counts, text outputs, and errors. PDF extraction requires
+`pdftotext`, `mutool`, or Python with `pypdf`/PyMuPDF; a project-local
+`.lemon/read-formats-venv` is discovered automatically. No backend means an
+actionable error, not fabricated text. On macOS, `sips` supplies proportional
+image previews (maximum dimension 1568 by default) with original/preview
+dimensions and an animation first-frame notice; original bytes remain untouched.
+Input, extraction, preview, and displayed-output limits bound memory use.
+
+**Structural search and replacement.** Install the genuine ast-grep CLI (for
+example `brew install ast-grep`) to enable `ast_grep`. It matches syntax trees,
+supports `$NAME` and `$$$ARGS` captures, and never substitutes text search.
+For `action:"search"`, omitted/null `paths` search the current directory;
+omitted/null `language` infers from extensions, and `rewrite` must be omitted/null.
+Replacement always requires explicit paths; a null scope never enables a write.
+Use `action:"replace"`, explicit `paths`, `pattern`, `rewrite`, and
+`dry_run:true` to preview; apply with `dry_run:false` and `expected_matches`
+equal to the full preview count. Count mismatches, overlapping ranges, stale
+files, binary content, and symlink writes are rejected before writing.
+`max_results` bounds display, not replacement scope; oversized output exposes a
+retrievable full JSONL path. Backend planning is capped at 16 MiB: narrow the
+scope rather than applying a truncated replacement plan. Because the same tool
+can mutate files, read-only tool policies do not enable it.
+
+**Native plans.** `todo` uses `action:"write"` with the complete updated list,
+including completed tasks. New entries need only `content`; omitted/null IDs
+are generated and remain stable across same-content updates. Status defaults to
+`pending` and priority to `medium`. `read`, `progress`, and `actionable` are
+read-only; omit `todos` or pass null, never a replacement list. Every successful
+action returns the complete `details.todos` and normalized `details.plan.entries`
+for TUI/ACP plan rendering, including completed tasks. Plan state survives the
+existing session checkpoint/resume path.
+
 
 **Read-only internal references.** The `read` tool accepts these in its `path`:
 
@@ -342,12 +397,37 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS async-task store with direct reads and serialized event, suppression, and monotonic lifecycle writes |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
-The task tool runs all work in a native in-process `CodingAgent.Session`.
+The task tool runs model work in native in-process `CodingAgent.Session`s; swarm coordinators schedule those sessions without an extra model call.
 When a provider omits the task `description` field but sends a valid `prompt`, Lemon derives a short description from that prompt instead of rejecting the task call outright.
 When a native task omits `model`, it uses its named persona's `model` or model `role` default, then the configured `task` model role when present, otherwise the live parent session model at execution time. Explicit task `model` always wins. Telegram/session-scoped model overrides therefore still apply to children without a separate task/persona model selection.
 Task workers monitor their native sessions: a crash, provider failure, abort, or configured `task_session_timeout_ms` is reported as an error, never promoted to success because partial text or a tool result exists. The default model wait is unbounded; parent cancellation and worker/session death still end it.
 
 Use one `task` call with `tasks: [{description, prompt, ...}, ...]` for up to 32 independent children. Each child inherits common top-level options, launches in the background, and returns a `task_id`/`run_id` receipt; `async: false` launches the entire batch before joining. Native tasks share a monitored semaphore with a default cap of eight running children; excess children queue without starting model calls. Dead holders and queued callers release capacity. Individual failures are retained alongside successful sibling results.
+
+Use `action: "swarm"` for a dependency graph of up to 32 named tasks. Each node has a unique `name`, its normal task options, and optional `depends_on: ["OtherName"]`. The entire graph, names, native task parameters, and dependency edges are validated before any work starts; cycles, self-dependencies and unknown names are errors. Ready nodes are admitted in declaration order up to `concurrency` (1–32, default 8), including children waiting for global model capacity. Busy native child-budget slots also apply backpressure rather than turning ready nodes into failures. The coordinator consumes no model slot, so a cap of one still works.
+
+```json
+{
+  "action": "swarm",
+  "description": "Inspect and improve pricing",
+  "async": true,
+  "auto_followup": false,
+  "concurrency": 3,
+  "tasks": [
+    {"name": "API", "agent": "scout", "prompt": "Inspect pricing.py and report the bug and corrected formula."},
+    {"name": "Cases", "agent": "scout", "prompt": "Read cases.json and report inputs and expected totals."},
+    {"name": "Workflow", "agent": "scout", "prompt": "Read README.md and report the verification command and constraints."},
+    {"name": "Implement", "depends_on": ["API", "Cases", "Workflow"], "prompt": "Use dependency findings to fix pricing.py, add regression tests, and run verification."},
+    {"name": "Document", "depends_on": ["API", "Cases", "Workflow"], "prompt": "Use dependency findings to document the API, examples, and verification command in USAGE.md."}
+  ]
+}
+```
+
+Async swarms return **one coordinator task ID**. Join/get that ID (or pass it explicitly to `wait`) for the merged report, rather than mistaking an individual node result for completion of the graph. `async: false` waits for the same report. A node launches only after all its direct dependencies succeed; their visible results are appended to its user prompt as bounded untrusted peer data, not system instructions. The dependency context is capped at 32 KiB and grants no access to sibling-private histories. Node `agent`, model, output schema, worktree, and tool policy options use the existing isolation rules.
+
+Failed, cancelled, lost or missing child results block their dependents transitively; independent branches keep running. The final `structured_output` contains declaration-ordered `tasks`, status/counts, and launched task/run IDs. Status is `completed` when every node succeeds or `partial_failure` otherwise; errors and blocked nodes are explicit. Output/error previews are bounded to 4 KiB/1 KiB and structured values larger than 4 KiB are explicitly omitted. The owning parent can use each node's task ID to retrieve its full stored result. This merges reports, **not git branches or worktree changes**.
+
+Progress includes graph counts and node identities alongside normal child tool updates. Cancelling the coordinator stops active children and prevents further launches; parent or scheduler death also cancels its work. The coordinator has no model session: its roster entry has `messaging: false`, direct messages fail clearly, and broadcasts skip it. Launched children keep normal scoped parent/sibling messaging and parent-only cancellation.
 
 Set `worktree: true` per child (or on the batch) to create a git branch `lemon/task-<task_id>` from the current checkout's HEAD. Worktrees live beneath the repository's common git directory in `lemon-task-worktrees/<task_id>`, retain the source cwd's relative subdirectory, and are **not** merged or deleted automatically. Uncommitted changes and local credentials/config are not copied. `poll`/`get`/`join` report `cwd`, `worktree_path`, and `branch`; review or cherry-pick the child's commits, then remove the worktree with `git worktree remove` when no longer needed. A non-git cwd is a task error, not a fallback to the shared checkout.
 
@@ -560,6 +640,39 @@ seam, binding forked files to independent native resume tokens. Its manual
 compaction adapter accepts `cwd:` and also works for an idle saved session after
 the previous run's process has exited.
 
+### Planning and context budget
+
+`Session.plan/3` and the `sessions.plan` RPC share one branch-aware lifecycle:
+`enter` makes the session read-only; a successful planning turn saves its final
+Markdown response as an immutable review artifact under native session storage.
+The journal records the full proposal, so restart, branch navigation and compaction
+do not lose it. Planning tools are restricted to `read`, `read_skill`, `recall`,
+`grep`, `find` and `ls`, further restricted by the session's existing policy.
+
+Approval is an explicit user operation with the exact reviewed revision. A stale
+revision or edited/missing artifact is rejected. Selecting code mode is not
+approval. Approval restores the original permitted tools and includes the approved
+plan in subsequent model context; it does not itself submit an execution prompt.
+`discard` exits without approval. The TUI exposes `/plan enter`, `/plan`,
+`/plan approve` and `/plan discard`; ACP uses the same native lifecycle.
+Proposals are bounded to 32 KiB. Entering before the first run durably binds the
+native journal to the logical session key, rather than creating parallel client state.
+
+Manual `/compact [focus]` (alias `/compress`) forwards focus instructions and cwd
+to native compaction, including after the previous runtime has exited. Its
+structured handoff preserves exact changed paths, decisions and rationale, open
+work, failing tests/blockers, verification commands/results and still-relevant
+previous-summary facts. Observed results remain distinct from proposed or
+unverified work; transcript/tool instructions are treated as untrusted data.
+
+`Session.context_budget/1` reports current request tokens, model window, reserve,
+automatic-compaction threshold and headroom before that threshold. It shares the
+automatic trigger's estimator, using the latest successful provider usage plus
+newer message estimates—not cumulative run spending. Sources are `usage`,
+`usage+estimate` or `estimate`. Compaction and planning-context changes invalidate
+older usage anchors. A cold read without a valid measured anchor reports
+unavailable rather than omitting unknown system/tool overhead.
+
 ### Tool Execution
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.
@@ -679,6 +792,8 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 ### Coding Session Context
 
 The default prompt treats Lemon as a coding agent: inspect relevant code before editing, use the tools actually available to the session, preserve user changes, finish the requested behavior, and report only verification that was observed. Behavioral changes call for focused checks and relevant edge cases—not an unrelated full-suite sweep. Read-only requests stay read-only. One-off coding tasks do not require creating skills or saving temporary facts merely to finalize.
+
+Use `todo` for a multi-step task when tracking is useful. Create or replace the task list, including changed statuses, with `action: "write"` and the full `todos` list. `action: "progress"` only reads completion counts; it does not update tasks.
 
 Repository instructions load from global home locations first, followed by ancestors from filesystem root to the working directory. Each directory includes its root, `.claude/`, and `.lemon/` `AGENTS.md`/`CLAUDE.md` files. Source headers state the applicable directory scope; deeper instructions override broader guidance. Duplicate symlink or hard-link aliases load once using their most specific location.
 

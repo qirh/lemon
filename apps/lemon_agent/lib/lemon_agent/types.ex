@@ -311,6 +311,9 @@ defmodule LemonAgent.Types do
     - `stream_message` - The message being streamed (if any)
     - `pending_tool_calls` - Set of tool call IDs awaiting execution
     - `error` - Error message if the agent encountered an error
+    - `budget_limits` - Canonical cumulative run/session token and dollar caps
+    - `budget_usage` - Session spending ledger, retained when history is cleared
+    - `run_usage` - Spending in the current prompt (reset only for a new prompt)
     """
     @type t :: %__MODULE__{
             system_prompt: String.t(),
@@ -318,6 +321,9 @@ defmodule LemonAgent.Types do
             thinking_level: LemonAgent.Types.thinking_level(),
             tools: [LemonAgent.Types.AgentTool.t()],
             messages: [LemonAgent.Types.agent_message()],
+            budget_limits: map(),
+            budget_usage: LemonAgent.Budget.usage(),
+            run_usage: LemonAgent.Budget.usage(),
             is_streaming: boolean(),
             stream_message: LemonAgent.Types.agent_message() | nil,
             pending_tool_calls: MapSet.t(String.t()),
@@ -328,6 +334,9 @@ defmodule LemonAgent.Types do
               thinking_level: :off,
               tools: [],
               messages: [],
+              budget_limits: %{},
+              budget_usage: %{tokens: 0, cost_usd: 0.0},
+              run_usage: %{tokens: 0, cost_usd: 0.0},
               is_streaming: false,
               stream_message: nil,
               pending_tool_calls: MapSet.new(),
@@ -364,6 +373,9 @@ defmodule LemonAgent.Types do
     - `tool_timeout_ms` - Optional per-tool task timeout in milliseconds
     - `tool_task_supervisor` - Task supervisor used to run tools (defaults to `LemonAgent.ToolTaskSupervisor`)
     - `tool_schema_snapshot` - Per-run snapshot used for provider schemas and tool execution
+    - `budget_limits` - Canonical cumulative caps; all nil/omitted disables accounting
+    - `budget_usage` - Initial cumulative session usage
+    - `budget` - Budget state, including run totals when continuing a prompt
     - `stream_options` - Options for streaming requests
     - `stream_fn` - Custom stream function (defaults to LemonAi.stream_simple/3)
     """
@@ -401,6 +413,9 @@ defmodule LemonAgent.Types do
             tool_timeout_ms: pos_integer() | :infinity | nil,
             tool_task_supervisor: Supervisor.supervisor() | nil,
             tool_schema_snapshot: LemonAgent.Types.ToolSchemaSnapshot.t() | nil,
+            budget_limits: map() | nil,
+            budget_usage: LemonAgent.Budget.usage() | nil,
+            budget: LemonAgent.Budget.t() | nil,
             stream_options: LemonAi.Types.StreamOptions.t(),
             stream_fn: stream_fn() | nil
           }
@@ -419,6 +434,9 @@ defmodule LemonAgent.Types do
               tool_timeout_ms: nil,
               tool_task_supervisor: nil,
               tool_schema_snapshot: nil,
+              budget_limits: nil,
+              budget_usage: nil,
+              budget: nil,
               stream_options: %StreamOptions{},
               stream_fn: nil
   end
@@ -446,6 +464,8 @@ defmodule LemonAgent.Types do
   - `{:loop_budget_exhausted, details}` - Tool loop budget exhausted with terminal fallback
   - `{:provider_retry, details}` - Transient provider retry scheduled, including delay and attempt
   - `{:provider_retry_end, details}` - Retry sequence succeeded, failed, or was canceled
+  - `{:usage_budget_updated, totals}` - Latest run and cumulative session spending
+  - `{:budget_exceeded, details}` - Actionable cumulative cap stop, followed by terminal error
 
   ## Message Lifecycle
   Emitted for user, assistant, and tool_result messages.
@@ -472,6 +492,9 @@ defmodule LemonAgent.Types do
           | {:loop_budget_exhausted, details :: map()}
           | {:provider_retry, details :: map()}
           | {:provider_retry_end, details :: map()}
+          | {:usage_budget_updated,
+             %{run_usage: LemonAgent.Budget.usage(), session_usage: LemonAgent.Budget.usage()}}
+          | {:budget_exceeded, details :: LemonAgent.Budget.details()}
           | {:message_start, message :: agent_message()}
           | {:message_update, message :: agent_message(), assistant_event :: term()}
           | {:message_end, message :: agent_message()}

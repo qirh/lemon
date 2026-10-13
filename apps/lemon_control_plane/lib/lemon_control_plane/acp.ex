@@ -7,6 +7,8 @@ defmodule LemonControlPlane.ACP do
   without deleting that history. Session configuration is applied to the next
   prompt through the router boundary. Raw media is rejected. Client MCP servers
   are connection-owned, session-scoped, and never stored with durable sessions.
+  Model choices use the canonical runtime availability catalog, including its
+  credential and provider-health constraints, instead of the static registry.
 
   `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
   load the selected workspace skill. Native resume identities survive the chat
@@ -15,11 +17,18 @@ defmodule LemonControlPlane.ACP do
   Permission requests retain the native tool-call identity and bounded target
   preview; approval summaries never persist raw tool arguments. Client calls
   are concurrent so terminal exit waits cannot block output or cancellation.
+  Resolution is bound atomically to the exact pending record shown to the client;
+  a changed or expired request cannot reuse an earlier approval.
   Remembered approval is scoped to the same tool and action arguments within
   the session, not a blanket grant to that tool.
   Historical interrupted tools are reconciled against finalized run events:
   retained partial output is replayed, and missing completion results are
   explicitly identified rather than leaving a finished run's card running.
+  Planning mode is owned by the native session journal, not ACP metadata.
+  Select Plan for read-only drafting, review `/plan`, and explicitly approve
+  `/approve-plan <revision>` before execution. Code mode alone never grants
+  approval; `/discard-plan` exits without it. `/compact <focus>` forwards the
+  requested summary focus while native approved-plan context remains durable.
   """
 
   alias LemonControlPlane.AgentRuntime
@@ -174,7 +183,6 @@ defmodule LemonControlPlane.ACP do
         last_run_id: nil,
         model: nil,
         thinking: "off",
-        mode: "default",
         approval_mode: "ask",
         closed: false,
         client_capabilities: client_capabilities
@@ -196,6 +204,7 @@ defmodule LemonControlPlane.ACP do
          {:ok, cwd} <- required_cwd(params),
          :ok <- validate_mcp_servers(params),
          true <- cwd == existing.cwd,
+         {:ok, existing} <- migrate_legacy_mode(session_id, existing),
          :ok <- open_session_mcp(session_id, cwd, params, opts) do
       session =
         existing
@@ -324,11 +333,73 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
+  defp execute_prompt(session_id, session, _params, "/plan" <> rest, _run_id, opts) do
+    if String.trim(rest) == "" do
+      with {:ok, plan} <- native_plan(session, :status) do
+        plan_command_response(session_id, session, plan, opts)
+      end
+    else
+      {:error, -32_602,
+       "use /plan to review the current plan; select Plan mode to begin planning"}
+    end
+  end
+
+  defp execute_prompt(session_id, session, _params, "/approve-plan " <> revision, _run_id, opts) do
+    with {:ok, plan} <- native_plan(session, :approve, revision: String.trim(revision)) do
+      plan_command_response(session_id, session, plan, opts)
+    end
+  end
+
+  defp execute_prompt(_session_id, _session, _params, "/approve-plan", _run_id, _opts),
+    do: {:error, -32_602, "review /plan, then use /approve-plan <revision>"}
+
+  defp execute_prompt(session_id, session, _params, "/discard-plan" <> rest, _run_id, opts) do
+    if String.trim(rest) == "" do
+      with {:ok, plan} <- native_plan(session, :discard) do
+        plan_command_response(session_id, session, plan, opts)
+      end
+    else
+      {:error, -32_602, "use /discard-plan without arguments"}
+    end
+  end
+
   defp execute_prompt(session_id, session, params, prompt, run_id, opts) do
     with {:ok, result} <- submit_prompt(session_id, session, params, prompt, run_id),
          {:ok, result} <- maybe_wait(result, params, opts) do
       {:ok, prompt_response(result)}
     end
+  end
+
+  defp plan_command_response(session_id, session, plan, opts) do
+    text =
+      [
+        "Plan status: #{plan["status"]}",
+        if(plan["revision"], do: "Revision: #{plan["revision"]}"),
+        if(plan["path"], do: "Artifact: #{plan["path"]}"),
+        if(plan["status"] == "pending",
+          do: "Approve explicitly with /approve-plan #{plan["revision"]}, or /discard-plan."
+        ),
+        if(plan["status"] == "approved",
+          do: "Plan approved. Your next prompt executes with this plan in context."
+        ),
+        plan["content"]
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join("\n\n")
+      |> LemonCore.Redact.text()
+
+    emit(
+      session_id,
+      %{
+        "sessionUpdate" => "agent_message_chunk",
+        "content" => %{"type" => "text", "text" => text}
+      },
+      opts
+    )
+
+    mode = plan_mode(plan)
+    emit_mode_options(session_id, session, mode, opts)
+    {:ok, %{"stopReason" => "end_turn"}}
   end
 
   defp with_prepared_run(session_id, opts, callback) do
@@ -483,14 +554,16 @@ defmodule LemonControlPlane.ACP do
     with {:ok, session} <- existing_session(session_id) do
       if Map.get(session, :closed, false),
         do: {:error, -32_602, "session is closed; load or resume it first"},
-        else: {:ok, session}
+        else: migrate_legacy_mode(session_id, session)
     end
   end
 
   defp session_response(session) do
+    mode = current_mode(session)
+
     %{
       "modes" => %{
-        "currentModeId" => Map.get(session, :mode, "default"),
+        "currentModeId" => mode,
         "availableModes" => [
           %{
             "id" => "default",
@@ -504,7 +577,7 @@ defmodule LemonControlPlane.ACP do
           }
         ]
       },
-      "configOptions" => config_options(session),
+      "configOptions" => config_options(session, mode),
       "_meta" => %{
         "lemon" => %{
           "sessionKey" => session.session_key,
@@ -516,20 +589,22 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp model_options do
-    LemonAi.Models.list_models(discover_openai: false)
-    |> Enum.map(fn model ->
+    for group <- LemonAgent.ModelRuntime.ModelCatalog.available_catalog(),
+        model <- group.models do
       %{
         "value" => "#{model.provider}:#{model.id}",
         "name" => "#{model.name || model.id} (#{model.provider})"
       }
-    end)
+    end
     |> Enum.uniq_by(& &1["value"])
     |> Enum.sort_by(& &1["value"])
   end
 
-  defp config_options(session) do
+  defp config_options(session, mode \\ nil) do
+    mode = mode || current_mode(session)
+
     [
-      select_option("mode", "Mode", "mode", Map.get(session, :mode, "default"), [
+      select_option("mode", "Mode", "mode", mode, [
         %{"value" => "default", "name" => "Code"},
         %{"value" => "plan", "name" => "Plan (read only)"}
       ]),
@@ -575,27 +650,122 @@ defmodule LemonControlPlane.ACP do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- open_session(session_id),
          {:ok, key, stored} <- config_value(id, value) do
-      session = Map.put(session, key, stored)
-      put_session(session_id, session)
+      with {:ok, session} <- apply_config(session, key, stored) do
+        put_session(session_id, session)
 
-      if id == "mode",
-        do:
-          emit(
-            session_id,
-            %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
-            opts
-          )
+        if id == "mode",
+          do:
+            emit(
+              session_id,
+              %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
+              opts
+            )
 
-      options = config_options(session)
+        options = config_options(session)
 
-      emit(
-        session_id,
-        %{"sessionUpdate" => "config_option_update", "configOptions" => options},
-        opts
-      )
+        emit(
+          session_id,
+          %{"sessionUpdate" => "config_option_update", "configOptions" => options},
+          opts
+        )
 
-      {:ok, %{"configOptions" => options}}
+        {:ok, %{"configOptions" => options}}
+      else
+        {:error, _, _} = error ->
+          if key == :mode,
+            do: emit_mode_options(session_id, session, current_mode(session), opts)
+
+          error
+      end
     end
+  end
+
+  defp apply_config(session, :mode, "plan") do
+    with {:ok, _plan} <- native_plan(session, :enter), do: {:ok, session}
+  end
+
+  defp apply_config(session, :mode, "default") do
+    with {:ok, plan} <- native_plan(session, :status) do
+      if plan_mode(plan) == "default",
+        do: {:ok, session},
+        else:
+          {:error, -32_602,
+           "review /plan, then /approve-plan <revision> or /discard-plan; Code mode does not approve a plan"}
+    end
+  end
+
+  defp apply_config(session, key, value), do: {:ok, Map.put(session, key, value)}
+
+  defp native_plan(session, action, opts \\ []) do
+    case AgentRuntime.call(
+           :session_plan,
+           [session.session_key, session.cwd, action, opts],
+           {:error, :unavailable}
+         ) do
+      {:ok, %{"mode" => mode, "status" => status} = plan}
+      when mode in ["code", "plan"] and status in ["none", "draft", "pending", "approved"] ->
+        {:ok, plan}
+
+      {:error, :busy} ->
+        {:error, -32_000, "session is busy; wait for the active turn"}
+
+      {:error, :revision_mismatch} ->
+        {:error, -32_602, "plan revision changed; review /plan before approving"}
+
+      {:error, :plan_artifact_changed} ->
+        {:error, -32_602, "plan artifact changed; generate and review a new plan"}
+
+      {:error, :plan_not_pending} ->
+        {:error, -32_602, "there is no pending plan to approve"}
+
+      {:error, :invalid_plan_action} ->
+        {:error, -32_602, "invalid plan action"}
+
+      _ ->
+        {:error, -32_000, "native session planning is unavailable"}
+    end
+  end
+
+  defp current_mode(session) do
+    case native_plan(session, :status) do
+      {:ok, plan} -> plan_mode(plan)
+      _ -> "default"
+    end
+  end
+
+  defp plan_mode(%{"mode" => "plan"}), do: "plan"
+  defp plan_mode(_plan), do: "default"
+
+  defp migrate_legacy_mode(session_id, %{mode: mode} = session) do
+    result =
+      if mode == "plan" do
+        with {:ok, plan} <- native_plan(session, :status) do
+          if plan["status"] == "none", do: native_plan(session, :enter), else: {:ok, plan}
+        end
+      else
+        {:ok, %{}}
+      end
+
+    with {:ok, _plan} <- result do
+      session = Map.delete(session, :mode)
+      put_session(session_id, session)
+      {:ok, session}
+    end
+  end
+
+  defp migrate_legacy_mode(_session_id, session), do: {:ok, session}
+
+  defp emit_mode_options(session_id, session, mode, opts) do
+    emit(session_id, %{"sessionUpdate" => "current_mode_update", "currentModeId" => mode}, opts)
+
+    emit(
+      session_id,
+      %{
+        "sessionUpdate" => "config_option_update",
+        "configOptions" => config_options(session, mode)
+      },
+      opts
+    )
   end
 
   defp config_value("mode", value) when value in ["default", "plan"], do: {:ok, :mode, value}
@@ -618,7 +788,7 @@ defmodule LemonControlPlane.ACP do
 
   defp session_tool_policy(session) do
     cond do
-      Map.get(session, :mode) == "plan" or Map.get(session, :approval_mode) == "never" ->
+      current_mode(session) == "plan" or Map.get(session, :approval_mode) == "never" ->
         AgentRuntime.call(:tool_policy, [:read_only], %{
           allow: [],
           deny: [],
@@ -657,9 +827,19 @@ defmodule LemonControlPlane.ACP do
 
     commands = [
       %{
+        "name" => "plan",
+        "description" => "Review the native plan, artifact, and approval revision"
+      },
+      %{
+        "name" => "approve-plan",
+        "description" => "Approve the exact reviewed plan for execution",
+        "input" => %{"hint" => "Exact revision shown by /plan"}
+      },
+      %{"name" => "discard-plan", "description" => "Leave planning without approving execution"},
+      %{
         "name" => "compact",
         "description" => "Compact this session's context",
-        "input" => %{"hint" => "Optional summary instructions"}
+        "input" => %{"hint" => "Optional focus: context the summary must preserve"}
       }
       | commands
     ]
@@ -889,7 +1069,8 @@ defmodule LemonControlPlane.ACP do
          {:ok, source} <- existing_session(source_id),
          {:ok, cwd} <- required_cwd(params),
          :ok <- validate_mcp_servers(params),
-         true <- cwd == source.cwd do
+         true <- cwd == source.cwd,
+         {:ok, source} <- migrate_legacy_mode(source_id, source) do
       id = "acp_" <> LemonCore.Id.uuid()
       key = "agent:#{source.agent_id}:acp-#{short_hash(id)}"
 
@@ -1217,8 +1398,8 @@ defmodule LemonControlPlane.ACP do
                request["params"],
                timeout
              ) do
-          {:ok, response} -> resolve_approval_from_response(approval_id, response)
-          _ -> deny_if_pending(approval_id)
+          {:ok, response} -> resolve_approval_from_response(approval_id, pending, response)
+          _ -> deny_if_pending(approval_id, pending)
         end
       end)
 
@@ -1227,7 +1408,7 @@ defmodule LemonControlPlane.ACP do
 
   defp perform_approval_request(result, pending, _callback) do
     approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
-    deny_if_pending(approval_id)
+    deny_if_pending(approval_id, pending)
 
     add_client_request_result(result, %{
       "method" => "session/request_permission",
@@ -1240,12 +1421,12 @@ defmodule LemonControlPlane.ACP do
   # gated call cannot run. `{:error, :not_pending}` (already resolved,
   # cancelled, or timed out) leaves nothing to deny, so the outcome is
   # deliberately dropped.
-  defp deny_if_pending(approval_id) when is_binary(approval_id) do
-    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+  defp deny_if_pending(approval_id, pending) when is_binary(approval_id) do
+    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny, expected_pending: pending)
     :ok
   end
 
-  defp deny_if_pending(_approval_id), do: :ok
+  defp deny_if_pending(_approval_id, _pending), do: :ok
 
   defp permission_tool_call(result, pending) do
     tool = map_get(pending, :tool) || "tool"
@@ -1305,7 +1486,8 @@ defmodule LemonControlPlane.ACP do
     ]
   end
 
-  defp resolve_approval_from_response(approval_id, response) when is_binary(approval_id) do
+  defp resolve_approval_from_response(approval_id, pending, response)
+       when is_binary(approval_id) do
     outcome = response |> response_result() |> map_get(:outcome) |> ensure_map()
 
     decision =
@@ -1315,15 +1497,14 @@ defmodule LemonControlPlane.ACP do
         _ -> :deny
       end
 
-    # `:not_pending` means the prompt was cancelled or timed out before the
-    # client's answer arrived — the record is gone and there is nothing
-    # left to resolve, so the outcome is deliberately dropped.
-    _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
+    # Gone, expired, or changed snapshots cannot grant approval. Core owns the
+    # atomic comparison and leaves a replacement request untouched.
+    _ = LemonCore.ExecApprovals.resolve(approval_id, decision, expected_pending: pending)
 
     :ok
   end
 
-  defp resolve_approval_from_response(_approval_id, _response), do: :ok
+  defp resolve_approval_from_response(_approval_id, _pending, _response), do: :ok
 
   defp safe_client_request(callback, request) do
     callback.(request)
@@ -1584,9 +1765,14 @@ defmodule LemonControlPlane.ACP do
   defp session_context_window(session) do
     model_id = Map.get(session, :model) || LemonCore.Config.cached().agent.default_model
 
-    Enum.find_value(LemonAi.Models.list_models(discover_openai: false), fn model ->
-      if "#{model.provider}:#{model.id}" == model_id, do: model.context_window
-    end)
+    with [provider, id] <- String.split(model_id || "", ":", parts: 2),
+         provider_atom when not is_nil(provider_atom) <-
+           Enum.find(LemonAi.Models.get_providers(), &(Atom.to_string(&1) == provider)),
+         %{context_window: window} <- LemonAi.Models.get_model(provider_atom, id) do
+      window
+    else
+      _ -> nil
+    end
   end
 
   defp prompt_usage(usage) when is_map(usage) do

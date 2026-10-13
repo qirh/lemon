@@ -19,6 +19,7 @@ defmodule LemonCore.Config do
 
   defstruct providers: %{},
             model_roles: %{},
+            budgets: %{},
             agent: %{},
             tui: %{},
             logging: %{},
@@ -40,6 +41,7 @@ defmodule LemonCore.Config do
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => provider_config()},
           model_roles: %{optional(String.t()) => String.t()},
+          budgets: map(),
           agent: map(),
           tui: map(),
           logging: map(),
@@ -161,6 +163,7 @@ defmodule LemonCore.Config do
     %{
       providers: config.providers,
       model_roles: config.model_roles,
+      budgets: config.budgets,
       agent: config.agent,
       tui: config.tui,
       logging: config.logging,
@@ -181,6 +184,7 @@ defmodule LemonCore.Config do
     %__MODULE__{
       providers: convert_providers(modular.providers),
       model_roles: modular.model_roles,
+      budgets: modular.budgets,
       agent: convert_agent(modular.agent, modular.tools),
       tui: convert_tui(modular.tui),
       logging: convert_logging(modular.logging),
@@ -440,9 +444,23 @@ defmodule LemonCore.Config do
   defp apply_overrides(%__MODULE__{} = config, overrides) when is_map(overrides) do
     overrides = stringify_keys(overrides)
 
+    budgets =
+      config.budgets
+      |> deep_merge_values(overrides["budgets"])
+      |> LemonCore.Config.Modular.resolve_budgets()
+
+    case LemonCore.Config.Validator.validate_budgets(budgets) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        raise LemonCore.Config.ValidationError, message: "Invalid budgets", errors: errors
+    end
+
     %__MODULE__{
       providers: deep_merge_values(config.providers, overrides["providers"]),
       model_roles: merge_model_roles(config.model_roles, overrides["model_roles"]),
+      budgets: budgets,
       agent: deep_merge_values(config.agent, overrides["agent"]),
       tui: deep_merge_values(config.tui, overrides["tui"]),
       logging: deep_merge_values(config.logging, overrides["logging"]),

@@ -42,6 +42,59 @@ defmodule LemonCore.Config.ModularIntegrationTest do
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
   end
 
+  test "real TOML budget caps merge globally and project overrides retain zero", %{
+    mock_home: home,
+    tmp_dir: project
+  } do
+    File.mkdir_p!(Path.join(home, ".lemon"))
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(Path.join(home, ".lemon/config.toml"), """
+    [budgets]
+    max_run_tokens = 500
+    max_run_cost_usd = 1.5
+    max_session_tokens = 2000
+    """)
+
+    File.write!(Path.join(project, ".lemon/config.toml"), """
+    [budgets]
+    max_run_tokens = 0
+    max_session_cost_usd = 4
+    """)
+
+    config = LemonCore.Config.load_base_from_disk(project)
+
+    assert config.budgets == %{
+             max_run_tokens: 0,
+             max_run_cost_usd: 1.5,
+             max_session_tokens: 2000,
+             max_session_cost_usd: 4
+           }
+
+    assert LemonCore.Config.to_map(config).budgets == config.budgets
+  end
+
+  test "omitted caps are unlimited and invalid caps fail validation and runtime loading", %{
+    tmp_dir: project
+  } do
+    assert {:ok, config} = Modular.validate_settings(%{})
+    assert Enum.all?(config.budgets, fn {_key, value} -> is_nil(value) end)
+
+    for {key, invalid} <- [
+          {"max_run_tokens", -1},
+          {"max_session_tokens", 0.5},
+          {"max_run_cost_usd", -0.01},
+          {"max_session_cost_usd", "unlimited"}
+        ] do
+      assert {:error, errors} = Modular.validate_settings(%{"budgets" => %{key => invalid}})
+      assert Enum.any?(errors, &String.contains?(&1, "budgets.#{key}"))
+    end
+
+    File.mkdir_p!(Path.join(project, ".lemon"))
+    File.write!(Path.join(project, ".lemon/config.toml"), "[budgets]\nmax_run_tokens = -1\n")
+    assert_raise ValidationError, fn -> Modular.load(project_dir: project) end
+  end
+
   describe "load/1 with validation" do
     test "loads config without validation by default", %{mock_home: mock_home} do
       # Create a minimal valid config using canonical sections

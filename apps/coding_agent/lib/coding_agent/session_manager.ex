@@ -420,6 +420,14 @@ defmodule CodingAgent.SessionManager do
             leaf_id: leaf_id
         }
 
+        # Forks inherit all source spend, including off-branch and interrupted
+        # requests; copying only the selected branch could otherwise evade caps.
+        child =
+          CodingAgent.Session.BudgetLedger.append(
+            child,
+            CodingAgent.Session.BudgetLedger.restore(source)
+          )
+
         case save_to_file(destination_path, child) do
           :ok -> {:ok, child}
           {:error, _} = error -> error

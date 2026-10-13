@@ -160,6 +160,31 @@ defmodule LemonSkills.Tools.RememberTest do
     assert {:ok, []} = Project.read(context, store: store)
   end
 
+  test "explicit null adds and deletes project facts without guessing replacement targets", %{
+    tool: tool,
+    context: context,
+    store: store
+  } do
+    fact = "Run the focused counter tests with `bun test counter.test.js`."
+
+    for replaces <- ["", "placeholder"] do
+      assert {:error, _} =
+               run(tool, %{"target" => "project", "text" => fact, "replaces" => replaces})
+
+      assert {:ok, []} = Project.read(context, store: store)
+    end
+
+    assert %{details: %{changed: true, action: "add"}} =
+             run(tool, %{"target" => "project", "text" => fact, "replaces" => nil})
+
+    assert {:ok, [^fact]} = Project.read(context, store: store)
+
+    assert %{details: %{changed: true, action: "remove"}} =
+             run(tool, %{"target" => "project", "text" => nil, "replaces" => fact})
+
+    assert {:ok, []} = Project.read(context, store: store)
+  end
+
   test "project writes share repository subdirectories but isolate profile and agent", %{
     context: context,
     store: store,

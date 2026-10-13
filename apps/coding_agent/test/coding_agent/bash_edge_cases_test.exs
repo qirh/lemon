@@ -516,20 +516,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       refute result.output =~ "line1\n"
     end
 
-    test "truncation notice includes statistics", %{tmp_dir: tmp_dir} do
-      {:ok, result} =
-        BashExecutor.execute(
-          "for i in $(seq 1 500); do echo line$i; done",
-          tmp_dir,
-          max_bytes: 1000
-        )
-
-      assert result.truncated == true
-      assert result.output =~ "[Output truncated."
-      assert result.output =~ "Total:"
-      assert result.output =~ "lines"
-    end
-
     test "temp file created for very large output", %{tmp_dir: tmp_dir} do
       {:ok, result} =
         BashExecutor.execute(

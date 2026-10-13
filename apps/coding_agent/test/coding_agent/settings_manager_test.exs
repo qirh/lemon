@@ -28,6 +28,25 @@ defmodule CodingAgent.SettingsManagerTest do
     %{test_dir: test_dir}
   end
 
+  test "loads canonical budget limits from project config.toml", %{test_dir: project} do
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(Path.join(project, ".lemon/config.toml"), """
+    [budgets]
+    max_run_tokens = 0
+    max_run_cost_usd = 0.25
+    max_session_tokens = 500
+    max_session_cost_usd = 2
+    """)
+
+    assert SettingsManager.load(project).budgets == %{
+             max_run_tokens: 0,
+             max_run_cost_usd: 0.25,
+             max_session_tokens: 500,
+             max_session_cost_usd: 2
+           }
+  end
+
   # ============================================================================
   # from_config/1 Tests
   # ============================================================================

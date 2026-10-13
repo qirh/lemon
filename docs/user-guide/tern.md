@@ -21,6 +21,11 @@ is enabled; explicitly disabled plugins stay disabled. Installation does not
 change Lemon credentials or start a daemon. Re-run after moving the checkout or
 switching installations. Modified or linked Lemon plugin files are not overwritten.
 
+Before registration, an interactive `lemon` launch in Tern falls back to Lemon's
+own TUI with an installation hint, so first use still opens a working coding
+session. Registered ACP startup or runtime errors are not hidden by that
+fallback. Use `lemon tui` to select the terminal interface explicitly.
+
 Open a **new Tern shell** and type:
 
 ```bash
@@ -115,6 +120,33 @@ Use Tern's model/mode/config controls according to the capabilities Lemon
 negotiates. Tool permissions are displayed as native ACP permission requests.
 Tern's `/sessions`, `/new` and `/fork` controls operate on the advertised session
 capabilities; neither a new chat pane nor the stdio process is another router.
+
+## Delegate from Carly or a plugin
+
+Tern's agent API can target the registered ACP command directly. For example,
+in Carly's Lua tool:
+
+```lua
+local pane = cx.agents:start({
+  command = "tern acp lemon",
+  cwd = "/absolute/path/to/project",
+  prompt = "Review the latest diff and summarize the risks.",
+  how = "split",
+})
+return await(cx.agents:wait(pane, {timeout = 120000}))
+```
+
+`cx.agents:ask(pane, text)` sends a follow-up; `list`, `transcript`, `interrupt`
+and `stop` also work with Tern-hosted Lemon ACP. The host projects custom ACP
+chat into its native conversation surface; Lemon does not need to identify
+itself as omp.
+
+Keep the target pane visible when waiting. In Tern 0.7.2, hidden-pane waits can
+return a partial rendered reply or time out even after a complete ACP turn.
+This also affects the omp reference. Transcript and last-message reads may
+include Tern's turn footer; they are rendered chat projections, not raw ACP
+responses. For authoritative automation outside the UI, use `lemon acp` or
+Lemon's non-interactive CLI.
 
 ## Troubleshoot
 

@@ -38,8 +38,11 @@ defmodule CodingAgent.Tools.Task.Control do
     end
   end
 
-  def register(task_id, signal, parent_signal, parent, on_failure) do
-    GenServer.call(__MODULE__, {:register, task_id, signal, parent_signal, parent, on_failure})
+  def register(task_id, signal, parent_signal, parent, on_failure, owner_pid \\ nil) do
+    GenServer.call(
+      __MODULE__,
+      {:register, task_id, signal, parent_signal, parent, on_failure, owner_pid}
+    )
   end
 
   def attach_worker(task_id), do: GenServer.call(__MODULE__, {:worker, task_id, self()})
@@ -60,6 +63,10 @@ defmodule CodingAgent.Tools.Task.Control do
   def complete(task_id), do: GenServer.call(__MODULE__, {:complete, task_id})
   def cancel_parent(parent), do: GenServer.cast(__MODULE__, {:cancel_parent, parent})
 
+  @doc false
+  def cancel_owned(task_id \\ :all),
+    do: GenServer.call(__MODULE__, {:cancel_owned, task_id})
+
   def command(task_id, action, text, opts) do
     with :ok <- authorize(task_id, opts) do
       GenServer.call(__MODULE__, {:command, task_id, action, text})
@@ -73,11 +80,22 @@ defmodule CodingAgent.Tools.Task.Control do
   end
 
   @impl true
-  def handle_call({:register, id, signal, parent_signal, parent, on_failure}, _from, state) do
+  def handle_call(
+        {:register, id, signal, parent_signal, parent, on_failure, owner_pid},
+        _from,
+        state
+      ) do
     metadata =
       case TaskStore.get_record(id) do
         {:ok, record} ->
-          Map.take(record, [:owner, :name, :run_id, :parent_run_id, :parent_session_id])
+          Map.take(record, [
+            :owner,
+            :name,
+            :run_id,
+            :parent_run_id,
+            :parent_session_id,
+            :orchestration_worker
+          ])
 
         _ ->
           %{}
@@ -88,6 +106,8 @@ defmodule CodingAgent.Tools.Task.Control do
       parent_signal: parent_signal,
       parent: parent,
       parent_ref: if(is_pid(parent) and Process.alive?(parent), do: Process.monitor(parent)),
+      owner_ref: if(is_pid(owner_pid), do: Process.monitor(owner_pid)),
+      owner_pid: owner_pid,
       worker: nil,
       worker_ref: nil,
       session: nil,
@@ -143,6 +163,16 @@ defmodule CodingAgent.Tools.Task.Control do
 
   def handle_call({:complete, id}, _from, state) do
     {:reply, :ok, remove(state, id)}
+  end
+
+  def handle_call({:cancel_owned, target}, {owner, _}, state) do
+    state =
+      Map.new(state, fn {id, entry} ->
+        owned? = entry.owner_pid == owner and (target == :all or target == id)
+        {id, if(owned?, do: cancel(id, entry), else: entry)}
+      end)
+
+    {:reply, :ok, state}
   end
 
   def handle_call({:command, id, action, text}, _from, state) do
@@ -220,7 +250,7 @@ defmodule CodingAgent.Tools.Task.Control do
     state =
       Enum.reduce(state, state, fn {id, entry}, acc ->
         cond do
-          entry.parent_ref == ref ->
+          entry.parent_ref == ref or entry.owner_ref == ref ->
             Map.put(acc, id, cancel(id, entry))
 
           entry.worker_ref == ref ->
@@ -350,6 +380,7 @@ defmodule CodingAgent.Tools.Task.Control do
     |> Map.merge(%{task_id: member.id, session_id: member.entry.session_id})
     |> Map.filter(fn {_key, value} -> is_binary(value) and String.valid?(value) end)
     |> Map.merge(%{relation: member.relation, status: member.status})
+    |> Map.put(:messaging, member.entry.metadata[:orchestration_worker] != true)
   end
 
   defp address(%{id: nil}), do: "agent://parent"
@@ -367,7 +398,11 @@ defmodule CodingAgent.Tools.Task.Control do
     matches =
       cond do
         target == "all" ->
-          Enum.filter(family, &(&1.relation != :self and &1.status in [:queued, :running]))
+          Enum.filter(
+            family,
+            &(&1.relation != :self and &1.status in [:queued, :running] and
+                &1.entry.metadata[:orchestration_worker] != true)
+          )
 
         target == "parent" ->
           Enum.filter(family, &(&1.relation == :parent))
@@ -432,6 +467,9 @@ defmodule CodingAgent.Tools.Task.Control do
       reason -> {:error, "Task is #{reason}"}
     end
   end
+
+  defp queue_capacity(%{metadata: %{orchestration_worker: true}}, _text),
+    do: {:error, "Swarm coordinator has no model session; message a launched child instead"}
 
   defp queue_capacity(%{session: session}, _text) when is_pid(session), do: :ok
 
@@ -524,7 +562,7 @@ defmodule CodingAgent.Tools.Task.Control do
         state
 
       {entry, state} ->
-        for ref <- [entry.parent_ref, entry.worker_ref],
+        for ref <- [entry.parent_ref, entry.worker_ref, entry.owner_ref],
             is_reference(ref),
             do: Process.demonitor(ref, [:flush])
 

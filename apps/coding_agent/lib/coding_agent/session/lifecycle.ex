@@ -56,6 +56,8 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
+    budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
+    {session_manager, budget_usage} = CodingAgent.Session.BudgetLedger.initialize(session_manager)
 
     run_id = Keyword.get(opts, :run_id)
     session_key = Keyword.get(opts, :session_key, session_manager.header.id)
@@ -137,7 +139,8 @@ defmodule CodingAgent.Session.Lifecycle do
         approval_context: approval_context
       )
 
-    tool_names = Enum.map(lifecycle.tools, & &1.name)
+    tools = CodingAgent.Session.Planning.tools(lifecycle.tools, session_manager)
+    tool_names = Enum.map(tools, & &1.name)
 
     # Captured once: the date and git snapshot stay fixed for the session so
     # every prompt refresh reproduces the same bytes (prompt-cache stable).
@@ -167,6 +170,11 @@ defmodule CodingAgent.Session.Lifecycle do
             }
           )
       end
+
+    base_system_prompt = system_prompt
+
+    system_prompt =
+      CodingAgent.Session.Planning.system_prompt(base_system_prompt, session_manager)
 
     convert_to_llm = &CodingAgent.Messages.to_llm/1
 
@@ -215,7 +223,7 @@ defmodule CodingAgent.Session.Lifecycle do
         initial_state: %{
           system_prompt: system_prompt,
           model: model,
-          tools: lifecycle.tools,
+          tools: tools,
           thinking_level: thinking_level,
           messages: []
         },
@@ -225,6 +233,8 @@ defmodule CodingAgent.Session.Lifecycle do
         transform_context: transform_context,
         get_api_key: get_api_key,
         session_id: session_manager.header.id,
+        budget_limits: budget_limits,
+        budget_usage: budget_usage,
         # Coding and assistant turns run until the model stops calling tools
         # (or the user interrupts); `[runtime] max_tool_turns` or an explicit
         # `:max_tool_turns` option installs a cap.
@@ -259,11 +269,15 @@ defmodule CodingAgent.Session.Lifecycle do
       session_key: session_key,
       agent_id: agent_id,
       settings_manager: settings_manager,
+      budget_limits: budget_limits,
+      budget_usage: budget_usage,
       cwd: cwd,
-      tools: lifecycle.tools,
+      tools: tools,
       model: model,
       thinking_level: thinking_level,
       system_prompt: system_prompt,
+      base_system_prompt: base_system_prompt,
+      base_tools: lifecycle.tools,
       prompt_environment: prompt_environment,
       explicit_system_prompt: explicit_system_prompt,
       prompt_template: prompt_template,
@@ -351,14 +365,16 @@ defmodule CodingAgent.Session.Lifecycle do
         previous_status_report: state.extension_status_report
       )
 
-    :ok = LemonAgent.Agent.set_tools(state.agent, lifecycle.tools)
+    tools = CodingAgent.Session.Planning.tools(lifecycle.tools, state.session_manager)
+    :ok = LemonAgent.Agent.set_tools(state.agent, tools)
     Notifier.broadcast_event(state, {:extension_status_report, lifecycle.extension_status_report})
 
     new_state = %{
       state
       | extensions: lifecycle.extensions,
         hooks: lifecycle.hooks,
-        tools: lifecycle.tools,
+        tools: tools,
+        base_tools: lifecycle.tools,
         extension_status_report: lifecycle.extension_status_report,
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,
@@ -377,6 +393,11 @@ defmodule CodingAgent.Session.Lifecycle do
 
     case wait_for_reset_abort(state, was_streaming, had_pending_prompt, reset_abort_wait_ms) do
       :ok ->
+        # Reset may discard queued events after abort. Capture already reported
+        # spend from the agent first, and persist it in both old and new files.
+        usage = LemonAgent.Agent.get_state(state.agent).budget_usage
+        state = CodingAgent.Session.BudgetLedger.update(state, %{session_usage: usage})
+
         state =
           if was_streaming do
             Notifier.broadcast_event(state, {:canceled, :reset})
@@ -404,6 +425,7 @@ defmodule CodingAgent.Session.Lifecycle do
           |> SessionManager.append_entry(
             SessionManager.SessionEntry.thinking_level_change(state.thinking_level)
           )
+          |> CodingAgent.Session.BudgetLedger.append(state.budget_usage)
 
         new_session_manager =
           SessionManager.persist(
@@ -425,12 +447,11 @@ defmodule CodingAgent.Session.Lifecycle do
           state.session_key
         )
 
-        {:ok,
-         State.reset_runtime(
-           state,
-           new_session_manager,
-           System.system_time(:millisecond)
-         )}
+        state =
+          State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
+          |> CodingAgent.Session.Planning.refresh()
+
+        {:ok, state}
 
       {:error, :timeout} ->
         Logger.warning("Timed out waiting for agent abort during reset")

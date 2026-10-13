@@ -50,6 +50,40 @@ defmodule LemonCore.SessionLifecycleTest do
                {"same-action", "updated"},
                {"same-action", "started"}
              ]
+
+    assert Enum.map(history.tools, & &1.id) == List.duplicate("same-action", 3)
+  end
+
+  test "history preserves native tool-call identity independently of event action identity" do
+    suffix = unique_suffix()
+    key = "agent:lifecycle_native_tool_#{suffix}:main"
+    run_id = "run-native-tool-#{suffix}"
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    events =
+      for phase <- [:started, :updated, :completed] do
+        %{
+          __event__: :action_event,
+          action: %{
+            id: "logical-#{phase}",
+            title: "Run consumer",
+            kind: :tool,
+            detail: %{"name" => "bash", "tool_call_id" => "native-tool"}
+          },
+          phase: phase,
+          ok: phase == :completed
+        }
+      end
+
+    seed_session(key, run_id, "Run consumer", "Finished", events)
+    assert [history] = SessionLifecycle.history(key)
+
+    assert Enum.map(history.tools, &{&1.id, &1.action_id, &1.phase}) ==
+             [
+               {"native-tool", "logical-completed", "completed"},
+               {"native-tool", "logical-updated", "updated"},
+               {"native-tool", "logical-started", "started"}
+             ]
   end
 
   test "lists, filters, pins, archives, and searches metadata plus redacted history" do
