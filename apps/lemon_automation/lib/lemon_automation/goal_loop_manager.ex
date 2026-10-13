@@ -32,6 +32,8 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   def run_once(session_key, opts \\ []) do
+    opts = Keyword.put(opts, :await_completion, true)
+
     GenServer.call(
       Keyword.get(opts, :name, __MODULE__),
       {:run_once, session_key, opts},
@@ -40,7 +42,7 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   def start_loop(session_key, opts \\ []) do
-    GenServer.call(__MODULE__, {:start_loop, session_key, opts})
+    GenServer.call(Keyword.get(opts, :name, __MODULE__), {:start_loop, session_key, opts})
   end
 
   def stop_loop(session_key, opts \\ []) do
@@ -52,6 +54,10 @@ defmodule LemonAutomation.GoalLoopManager do
 
   def status(session_key) do
     GenServer.call(__MODULE__, {:status, session_key})
+  end
+
+  def set_goal(session_key, objective, opts \\ []) do
+    GenServer.call(__MODULE__, {:set_goal, session_key, objective, opts})
   end
 
   @doc false
@@ -70,7 +76,7 @@ defmodule LemonAutomation.GoalLoopManager do
           0
         end
 
-      internal_timeout = max(judge_timeout, continuation_timeout)
+      internal_timeout = judge_timeout + continuation_timeout
 
       internal_timeout + 5_000
     end
@@ -101,16 +107,38 @@ defmodule LemonAutomation.GoalLoopManager do
 
   @impl true
   def handle_call({:run_once, session_key, opts}, from, state) do
-    loop_mod = state.loop_mod
+    state = restore_persisted_reconciliation(state, session_key)
+    state = reconcile_ambiguous_loop(session_key, state)
 
-    task =
-      Task.Supervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
-        loop_mod.run_once(session_key, opts)
-      end)
+    if Map.has_key?(state.loops, session_key) do
+      {:reply, {:error, :already_running}, state}
+    else
+      opts = opts |> Keyword.put(:await_completion, true) |> Keyword.put(:max_ticks, 1)
 
-    {:noreply, put_in(state.calls[task.ref], from)}
+      case start_loop_task(session_key, opts, state, :run_once) do
+        {:ok, loop, state} -> {:noreply, put_in(state.calls[loop.ref], from)}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
+    end
   rescue
-    error -> {:reply, {:error, error}, state}
+    _error -> {:reply, {:error, :goal_loop_unavailable}, state}
+  end
+
+  def handle_call({:set_goal, session_key, objective, opts}, _from, state) do
+    state = restore_persisted_reconciliation(state, session_key)
+    state = reconcile_ambiguous_loop(session_key, state)
+
+    if Map.has_key?(state.loops, session_key) do
+      {:reply, {:error, :already_running}, state}
+    else
+      case GoalStore.set(session_key, objective, opts) do
+        {:ok, _goal} ->
+          {:reply, GoalStore.configure_loop_auto(session_key, false), state}
+
+        error ->
+          {:reply, error, state}
+      end
+    end
   end
 
   def handle_call({:start_loop, session_key, opts}, _from, state) do
@@ -174,6 +202,7 @@ defmodule LemonAutomation.GoalLoopManager do
               {:ok, _goal} ->
                 router_abort = abort_active_run(loop)
                 stop_loop_task(loop)
+                state = reply_stopped_call(loop, state)
 
                 {loop, goal, state} = finish_hard_stop(session_key, loop, router_abort, state)
 
@@ -227,7 +256,10 @@ defmodule LemonAutomation.GoalLoopManager do
           aborted: false
         }
 
-        case safe_record_loop_status(state.goal_store, session_key, :running, run_id: run_id) do
+        case safe_record_loop_status(state.goal_store, session_key, :running,
+               run_id: run_id,
+               run_kind: kind
+             ) do
           {:ok, _goal} ->
             {:reply, :ok, put_in(state.loops[session_key], %{loop | active_run: active_run})}
 
@@ -326,7 +358,7 @@ defmodule LemonAutomation.GoalLoopManager do
 
       {from, state} ->
         GenServer.reply(from, result)
-        {:noreply, state}
+        {:noreply, finish_loop(ref, result, state)}
     end
   end
 
@@ -337,7 +369,7 @@ defmodule LemonAutomation.GoalLoopManager do
 
       {from, state} ->
         GenServer.reply(from, {:error, :loop_task_down})
-        {:noreply, state}
+        {:noreply, finish_loop(ref, {:error, :loop_task_down}, state)}
     end
   end
 
@@ -361,7 +393,8 @@ defmodule LemonAutomation.GoalLoopManager do
 
         nil ->
           status = loop_result_status(result)
-          opts = if status == :error, do: [error: inspect(result, limit: 120)], else: []
+          opts = if status == :error, do: [error: "goal loop failed"], else: []
+          if status == :error, do: GoalStore.configure_loop_auto(session_key, false)
           GoalStore.record_loop_status(session_key, status, opts)
 
           state
@@ -528,6 +561,14 @@ defmodule LemonAutomation.GoalLoopManager do
         case RunStore.get(run_id) do
           %{summary: summary} when not is_nil(summary) ->
             _ = GoalStore.configure_loop_auto(session_key, false)
+            goal = GoalStore.get(session_key)
+
+            if get_in(goal, [:meta, "goalLoop", "lastRunKind"]) == "continuation" do
+              completion =
+                LemonAutomation.RunCompletionWaiter.extract_output_from_completion(summary)
+
+              GoalStore.record_continuation(session_key, run_id, completion: completion)
+            end
 
             _ =
               GoalStore.record_loop_status(session_key, :error,
@@ -565,14 +606,20 @@ defmodule LemonAutomation.GoalLoopManager do
 
   defp ambiguous_submission_run_id(_result), do: nil
 
+  defp loop_result_status({:ok, %{completion: {:error, _reason}}}), do: :error
   defp loop_result_status({:ok, %{status: :limit_reached}}), do: :limit_reached
   defp loop_result_status({:ok, _result}), do: :finished
   defp loop_result_status({:error, _reason}), do: :error
   defp loop_result_status(_), do: :error
 
-  defp start_loop_task(session_key, opts, state) do
+  defp start_loop_task(session_key, opts, state, operation \\ :run_autonomous) do
     with {:ok, _goal} <- ensure_active_goal(session_key),
-         {:ok, _goal} <- GoalStore.record_loop_status(session_key, :running, opts) do
+         {:ok, _goal} <-
+           GoalStore.record_loop_status(
+             session_key,
+             :running,
+             Keyword.put(opts, :reset_run, true)
+           ) do
       loop_mod = state.loop_mod
       manager = self()
       continuation_router = Keyword.get(opts, :router_mod, LemonRouter)
@@ -615,7 +662,7 @@ defmodule LemonAutomation.GoalLoopManager do
 
       task =
         Task.Supervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
-          loop_mod.run_autonomous(session_key, opts)
+          apply(loop_mod, operation, [session_key, opts])
         end)
 
       loop = %{
@@ -635,6 +682,20 @@ defmodule LemonAutomation.GoalLoopManager do
 
       {:ok, loop, state}
     end
+  rescue
+    _error -> fail_loop_admission(session_key, state)
+  catch
+    :exit, _reason -> fail_loop_admission(session_key, state)
+  end
+
+  defp fail_loop_admission(session_key, state) do
+    safe_configure_loop_auto(state.goal_store, session_key, false)
+
+    safe_record_loop_status(state.goal_store, session_key, :error,
+      error: "goal worker unavailable"
+    )
+
+    {:error, :goal_loop_unavailable}
   end
 
   defp maybe_configure_auto(_session_key, false, _opts), do: {:ok, nil}
@@ -779,6 +840,17 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   defp abort_active_run(_loop), do: :not_needed
+
+  defp reply_stopped_call(loop, state) do
+    case Map.pop(state.calls, loop.ref) do
+      {nil, _calls} ->
+        state
+
+      {from, calls} ->
+        GenServer.reply(from, {:error, :goal_loop_stopped})
+        %{state | calls: calls}
+    end
+  end
 
   defp stop_loop_task(loop) do
     if is_reference(loop.ref), do: Process.demonitor(loop.ref, [:flush])

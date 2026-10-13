@@ -24,13 +24,21 @@ defmodule LemonControlPlane.Methods.GoalSet do
         {:error, {:invalid_request, "objective is required", nil}}
 
       true ->
-        case LemonAgent.Workspace.GoalStore.set(session_key, objective,
+        case LemonAutomation.GoalLoopManager.set_goal(session_key, objective,
                agent_id: param(params, "agentId"),
+               cwd: param(params, "cwd"),
                run_id: param(params, "runId"),
                budget: budget(params)
              ) do
-          {:ok, goal} -> {:ok, format_goal(goal)}
-          {:error, reason} -> {:error, {:invalid_request, inspect(reason), nil}}
+          {:ok, goal} ->
+            {:ok, format_goal(goal)}
+
+          {:error, :already_running} ->
+            {:error,
+             {:conflict, "Goal has active or unresolved work; stop it before replacing", nil}}
+
+          {:error, _reason} ->
+            {:error, {:invalid_request, "Goal could not be set", nil}}
         end
     end
   end
