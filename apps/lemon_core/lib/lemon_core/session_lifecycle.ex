@@ -10,6 +10,10 @@ defmodule LemonCore.SessionLifecycle do
   Session discovery ignores malformed legacy index rows so one damaged record
   cannot hide otherwise valid sessions from operator surfaces.
 
+  Historical tool phases expose `id` as the native tool-call identifier when
+  supplied and `action_id` as the logical event action identifier. All phases
+  remain available so operator surfaces can reconcile a single tool card.
+
   Pruning is intentionally guarded: previews are dry-run by default, archived
   sessions are the default (and safest) candidate set, pinned sessions are
   excluded unless explicitly requested, and execution requires the token from
@@ -563,14 +567,16 @@ defmodule LemonCore.SessionLifecycle do
     |> Enum.take(200)
     |> Enum.map(fn event ->
       action = read(event, :action) || %{}
+      detail = read(action, :detail)
 
       %{
+        id: maybe_redact(read(detail, :tool_call_id) || read(action, :id), redact?),
         action_id: maybe_redact(read(action, :id), redact?),
         title: maybe_redact(read(action, :title), redact?),
         kind: stringify(read(action, :kind)),
         phase: stringify(read(event, :phase)),
         ok: read(event, :ok),
-        detail: sanitize_term(read(action, :detail), redact?),
+        detail: sanitize_term(detail, redact?),
         message: maybe_redact(read(event, :message), redact?)
       }
     end)

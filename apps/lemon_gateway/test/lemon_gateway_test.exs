@@ -26,7 +26,7 @@ defmodule LemonGatewayTest do
 
   defp request(session_key, prompt, scenario, meta) do
     %ExecutionRequest{
-      run_id: nil,
+      run_id: LemonCore.Id.run_id(),
       session_key: session_key,
       prompt: prompt,
       resume: nil,

@@ -71,6 +71,11 @@ defmodule LemonGateway.RunTest do
     end
 
     @impl true
+    def cancel(%{scenario: "drain_cancel", runner_pid: pid, controller_pid: observer}) do
+      send(observer, {:cancel_dispatched, pid})
+      :ok
+    end
+
     def cancel(%{task_pid: pid}) when is_pid(pid) do
       Process.exit(pid, :kill)
       :ok
@@ -196,10 +201,15 @@ defmodule LemonGateway.RunTest do
       ctx = %{
         task_pid: task_pid,
         scenario: scenario,
-        steer_notify_pid: Map.get(meta, :steer_notify_pid)
+        steer_notify_pid: Map.get(meta, :steer_notify_pid),
+        controller_pid: Map.get(meta, :controller_pid)
       }
 
-      ctx = if scenario == "linked_controlled", do: Map.put(ctx, :runner_pid, task_pid), else: ctx
+      ctx =
+        if scenario in ["linked_controlled", "drain_cancel"],
+          do: Map.put(ctx, :runner_pid, task_pid),
+          else: ctx
+
       {:ok, run_ref, ctx}
     end
 
@@ -821,6 +831,40 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "cancellation handling" do
+    test "native cancellation keeps the run until terminal tool events drain" do
+      request =
+        make_request(make_scope(),
+          scenario: "drain_cancel",
+          meta: %{controller_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(request)
+      assert_receive {:engine_started, _}, 2_000
+      state = :sys.get_state(pid)
+      GenServer.cast(pid, {:cancel, :interrupted})
+      assert_receive {:cancel_dispatched, runner}, 2_000
+      GenServer.cast(pid, {:cancel, :user_requested})
+      refute_receive {:run_complete, ^pid, _}, 20
+      assert Process.alive?(pid)
+
+      action = Event.action(%{id: "tool_cancel", kind: :command, title: "Cancelled bash"})
+      event = Event.action_event(%{engine: "lemon", action: action, phase: :completed, ok: false})
+      send(pid, {:engine_event, state.run_ref, event})
+      assert :sys.get_state(pid).cancel_reason == :interrupted
+      send(runner, {:complete, "observed partial answer"})
+
+      assert_receive {:run_complete, ^pid, %{ok: false, error: :interrupted}}, 2_000
+      stored = LemonCore.RunStore.get(request.run_id)
+      assert stored.summary.completed.error == :interrupted
+
+      assert Enum.any?(
+               stored.events,
+               &(&1[:__event__] == :action_event && &1[:phase] == :completed)
+             )
+
+      refute_receive {:run_complete, ^pid, _}, 20
+    end
+
     test "cancels run when cancel cast is received" do
       scope = make_scope()
 

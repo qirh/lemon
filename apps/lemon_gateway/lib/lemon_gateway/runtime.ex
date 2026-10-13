@@ -13,7 +13,7 @@ defmodule LemonGateway.Runtime do
 
   @doc "Submits a core execution command to the scheduler."
   @impl true
-  @spec submit_execution(ExecutionCommand.t()) :: :ok
+  @spec submit_execution(ExecutionCommand.t()) :: :ok | {:error, :invalid_run_id}
   def submit_execution(%ExecutionCommand{} = command) do
     command
     |> ExecutionCommand.ensure_conversation_key()

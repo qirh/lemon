@@ -42,9 +42,7 @@ test("transcript marks preserve width, cached rows, and completion marks", () =>
 });
 
 test("file links encode special characters, line anchors and reject control injection", () => {
-	expect(fileTarget("src/a b#c.ts:42", undefined, "/repo")).toBe(
-		"file:///repo/src/a%20b%23c.ts#L42",
-	);
+	expect(fileTarget("src/a b#c.ts", 42, "/repo")).toBe("file:///repo/src/a%20b%23c.ts#L42");
 	expect(fileTarget("src/a.ts\x1b]9;injected\x07")).toBeUndefined();
 	const previous = TERMINAL.hyperlinks;
 	try {
@@ -209,7 +207,8 @@ test("real TUI PTY emits turn/approval signals and restores keyboard, title and 
 		expect(output).toContain("/src/main.ts#L12\x07");
 		expect(output).toContain("\x1b]8;;https://example.com\x07");
 		expect(output).toContain("\x1b]0;Lemon · terminal-smoke · ready\x07");
-		terminal.write("/quit\r");
+		// Slash opens the palette; use direct exit to test terminal restoration.
+		terminal.write("\x04");
 		expect(await proc.exited).toBe(0);
 		expect(output).toContain("\x1b[<u");
 		expect(output).toContain("\x1b[?2004l");

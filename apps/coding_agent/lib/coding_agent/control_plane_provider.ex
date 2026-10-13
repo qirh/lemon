@@ -113,6 +113,20 @@ defmodule CodingAgent.ControlPlaneProvider do
 
   def tool_policy(profile), do: CodingAgent.ToolPolicy.from_profile(profile)
 
+  @doc "Resolve canonical persona instructions and policy without exposing product dependencies."
+  def resolve_subagent(cwd, id) do
+    case CodingAgent.Subagents.fetch(cwd, id) do
+      {:ok, persona} ->
+        {:ok,
+         persona
+         |> Map.take([:prompt, :model, :role])
+         |> Map.put(:tool_policy, CodingAgent.Subagents.tool_policy(persona, nil))}
+
+      {:error, _reason} ->
+        {:error, :persona_unavailable}
+    end
+  end
+
   defp ensure_idle(session_key) do
     case live_session(session_key) do
       nil ->

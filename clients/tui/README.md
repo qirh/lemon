@@ -40,9 +40,8 @@ remains a legacy client-side alias; it does not configure the daemon.
 - Streaming markdown using pi-tui's native Tern surface or bounded terminal
   frame provider with semantic scrollback retirement and grapheme-safe reveal.
   Separate chronological text segments around thinking and tools keep later
-  answers from repainting above already-committed tool history.
-  Ordinary chats run in the directory where the TUI was launched; canonical
-  profile chats retain their daemon-owned workspace.
+  answers below tool history. Ordinary chats run in the directory where the
+  TUI was launched; canonical profile chats retain their daemon-owned workspace.
 - Tool cards with per-tool formatters for Lemon's native tools (read, write,
   edit, patch, bash incl. background runs / `bash_output` / `kill_process`,
   grep, find, ls, todo, task/agent, `browser_*`, webfetch/websearch; anything
@@ -59,6 +58,15 @@ remains a legacy client-side alias; it does not configure the daemon.
 - Ctrl+R expands/collapses the latest tool card or thinking block (a merged
   shelf line opens into a full card); Ctrl+T cycles detail for the whole
   transcript: collapsed → expanded → per-kind default.
+  Alt+O toggles all tool output between collapsed and expanded without changing
+  Ctrl+O's model-picker binding. `/output` opens a scrollable complete tool receipt;
+  Alt+D or `/diff` opens the latest edit diff. Use arrows, Page Up/Down, or Home/End
+  (`g`/`G`) to navigate and `d` to switch between diff and raw output. The viewer
+  preserves the daemon's bounded receipt rather than silently stopping at card height.
+- Alt+A or `/tasktree` opens session-scoped child progress with real parent/child
+  lineage, role, current activity, elapsed time, and independent terminal states.
+  Arrow keys scroll the bounded panel; Escape returns to the draft. Completed
+  launch receipts never imply that their children have finished.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown).
 - Four submission modes while the agent is busy: `queue` (client-side,
@@ -69,6 +77,14 @@ remains a legacy client-side alias; it does not configure the daemon.
   without discarding a correction in the editor (autocomplete gets Escape first).
   Shift+Enter inserts a newline. Up/Down recall prompts, and discarded large
   pastes remain recoverable after later submissions.
+  Ctrl+V accepts clipboard images where the platform provides them, and pasted
+  or dragged local image paths attach actual PNG, JPEG, GIF, or WebP bytes.
+  Up to five images totaling 10 MiB may accompany a prompt, including an image-only
+  prompt. Attachment chips stay with their session; Ctrl+Shift+Backspace removes
+  the last one. Refusal or a disconnected connection retains both draft and images.
+  Queued images remain editable; an uncertain failed send requires explicit review
+  rather than automatic replay. Non-image dropped files become quoted `@` references,
+  and `@` completion navigates files without reading their contents into the prompt.
 - Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
@@ -93,6 +109,13 @@ remains a legacy client-side alias; it does not configure the daemon.
   Ctrl+G `$EDITOR` handoff. Captured shell escapes have a bounded deadline and
   terminate their complete POSIX process group on timeout so descendants cannot
   outlive the command or hold the TUI's capture pipes open.
+  Ctrl+P, `/palette`, or `/` in an empty editor opens one fuzzy command palette
+  for command names, aliases, descriptions, local skills, and prompt templates.
+  Actions that need arguments insert into the editor without sending. Templates
+  are discovered from `.lemon/prompts`, `.claude/prompts`, and
+  `$LEMON_AGENT_DIR/prompts` (default `~/.lemon/agent/prompts`), with project names
+  taking precedence. Local skills insert an explicit `read_skill` request; the
+  palette does not claim that a remote daemon or selected profile installed them.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow. A blocked bundle opens a
@@ -139,6 +162,13 @@ Tern's native **Run** button on shell fences in replies executes in the pane's
 working directory and displays the output below the fence; **Stop** interrupts
 that command. Execution belongs to Tern and always requires the user's Run
 gesture. The client reports its working directory using OSC 7.
+Native file-tool targets open Tern's editor block with **⌘-click** (**Ctrl-click**
+on PC), at the reported changed line or read offset. They share their location
+with row-renderer OSC 8 links; a normal click folds the card and tools never
+open editor panes automatically. Patch cards target the first surviving changed
+file. `lemon tern install` also provides palette actions to open a native TUI
+split in the focused pane's cwd or focus an existing Lemon pane; see the
+[Tern guide](../../docs/user-guide/tern.md).
 
 Other terminals, or `PI_TUI_NATIVE=0`, use the row renderer. OSC 133 marks stay
 attached to prompt/reply rows as they enter scrollback. Markdown URLs,

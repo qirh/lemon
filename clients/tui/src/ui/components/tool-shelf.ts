@@ -186,7 +186,6 @@ export class ToolShelfComponent implements Component {
 	}
 
 
-
 	getTranscriptBlockVersion(): number {
 		return this.#version + this.#entryVersions();
 	}

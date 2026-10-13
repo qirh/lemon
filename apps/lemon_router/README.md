@@ -123,9 +123,10 @@ same queued fallback. Redirect also queues the correction as a follow-up and
 notifies the channel that it could not redirect the in-flight run. Unexpected
 runtime lookup or notification-dispatch exceptions still propagate.
 
-Conversation backlogs are bounded to 128 queued/pending submissions and 1 MiB
-of pending prompt text. A new submission exceeding either bound returns
-`:session_queue_full` without mutating the queue or interrupting the active run;
+Conversation backlogs are bounded to 128 queued/pending submissions, 1 MiB
+of pending prompt text and 16 MiB of encoded pending image data. A new submission
+exceeding a bound returns `:session_queue_full` without mutating the queue or
+interrupting the active run;
 replaying an already retained fixed run ID remains an acknowledgement lookup.
 Gateway admission additionally bounds launch queues and global slot waiters.
 

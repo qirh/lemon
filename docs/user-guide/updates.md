@@ -151,9 +151,20 @@ published-version visibility and receipt history surfaces:
 ```
 
 `plan`, `apply`, and `rollback` fail closed with source-update guidance. Use
-your reviewed Git workflow to update a checkout. The contributor-only
-`mix lemon.update` maintenance task does not download or replace release
-artifacts; it is not exposed through `./bin/lemon update`.
+your reviewed Git workflow to update a checkout, then synchronize the source
+TUI's declared dependencies before launching it:
+
+```bash
+(cd clients/tui && bun install --frozen-lockfile)
+```
+
+An existing `node_modules` directory can still contain an older TUI package
+after a source update. Missing Bun module/export errors are a reason to run
+the dependency synchronization above, not to change the imports or install a
+different package version.
+
+The contributor-only `mix lemon.update` maintenance task does not download or
+replace release artifacts; it is not exposed through `./bin/lemon update`.
 
 Manual tarball directories and container images also fail the managed-layout
 guard. Replace or roll those deployments back through their service/container

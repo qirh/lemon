@@ -112,7 +112,9 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert tool_result_message.role == :tool_result
     assert tool_result_message.tool_call_id == "call_abort_test"
     assert tool_result_message.is_error == true
-    assert tool_result_message.details == %{error_type: :aborted}
+
+    assert %{error_type: :aborted, cancelled: true, started: false, outcome: :not_started} =
+             tool_result_message.details
 
     assert Enum.any?(tool_result_message.content, fn
              %TextContent{text: text} when is_binary(text) -> String.contains?(text, "aborted")
@@ -207,7 +209,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
            ]
 
     assert Enum.all?(results, &(&1.is_error == true))
-    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
+    assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
 
     assert Enum.map(updated_context.messages, & &1.tool_call_id) == [
              "call_abort_pending",
@@ -655,7 +657,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     assert length(results) == 3
     assert Enum.all?(results, &(&1.is_error == true))
-    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
+    assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
   end
 
   test "finds tool with whitespace-padded name via normalization" do
@@ -1260,7 +1262,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     AbortSignal.abort(signal)
 
     assert_receive {:aborted_batch_finished, {results, [], _, _}}, 1_000
-    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
+    assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
     assert_receive {:DOWN, ^first_monitor, :process, ^first, _}, 1_000
     assert_receive {:DOWN, ^second_monitor, :process, ^second, _}, 1_000
     assert Task.await(runner, 5_000) == :timers_canceled
@@ -1386,7 +1388,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     AbortSignal.abort(signal)
     assert_receive {:resource_cleanup_finished, true}, 1_000
 
-    assert {[%{is_error: true, details: %{error_type: :aborted}}], [], _, _} =
+    assert {[%{is_error: true, details: %{error_type: :tool_error, cancelled: true}}], [], _, _} =
              Task.await(runner, 1_000)
 
     assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 1_000
