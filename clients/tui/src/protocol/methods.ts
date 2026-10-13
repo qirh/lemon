@@ -50,6 +50,7 @@ import type {
 	SessionDetailResult,
 	SessionExportFormat,
 	SessionSummary,
+	SessionsCompactParams,
 	SessionsDeleteResult,
 	SessionsExportResult,
 	SessionsForkParams,
@@ -59,6 +60,8 @@ import type {
 	SessionsMetadataPatchParams,
 	SessionsMetadataPatchResult,
 	SessionsPatchParams,
+	SessionsPlanParams,
+	SessionsPlanResult,
 	SessionsPreviewResult,
 	SessionsPruneParams,
 	SessionsPruneResult,
@@ -90,6 +93,7 @@ export const METHOD = {
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
+	sessionsPlan: "sessions.plan",
 	sessionsTree: "sessions.tree",
 	sessionsRewind: "sessions.rewind",
 	sessionDetail: "session.detail",
@@ -342,12 +346,20 @@ export class ControlPlaneMethods {
 		});
 	}
 
+	sessionsPlan(params: SessionsPlanParams, options?: RequestOptions): Promise<SessionsPlanResult> {
+		return this.#call<SessionsPlanResult>(METHOD.sessionsPlan, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
 	sessionsCompact(
-		params: { sessionKey: string },
+		params: SessionsCompactParams,
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
 		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, {
 			...options,
+			queueIfOffline: false,
 			timeoutMs: options?.timeoutMs ?? 360_000,
 		});
 	}

@@ -246,6 +246,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"sessionKey" => :string, "cwd" => :string, "entryId" => :string},
       optional: %{
         "restoreFiles" => :boolean,
+        "allowPartialRestore" => :boolean,
         "dryRun" => :boolean,
         "confirmationToken" => :string
       }

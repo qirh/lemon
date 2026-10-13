@@ -10,6 +10,8 @@ defmodule CodingAgent.Session.Persistence do
 
   @spec persist_message(map(), term()) :: map()
   def persist_message(state, message) do
+    state = record_uncapped_usage(state, message)
+
     new_session_manager =
       case message do
         %LemonAi.Types.UserMessage{} ->
@@ -38,6 +40,25 @@ defmodule CodingAgent.Session.Persistence do
       end
 
     %{state | session_manager: new_session_manager}
+  end
+
+  defp record_uncapped_usage(state, message) do
+    # Persist spend before the assistant entry, matching the capped loop's
+    # usage-before-message ordering even if the process is interrupted.
+    if match?(%LemonAi.Types.AssistantMessage{}, message) and
+         not Enum.any?(Map.get(state, :budget_limits) || %{}, fn {_key, limit} ->
+           not is_nil(limit)
+         end) do
+      usage =
+        LemonAgent.Budget.add_usage(
+          Map.get(state, :budget_usage),
+          LemonAgent.Budget.usage_from_message(message)
+        )
+
+      CodingAgent.Session.BudgetLedger.update(state, %{session_usage: usage})
+    else
+      state
+    end
   end
 
   @spec restore_messages_from_session(Session.t()) :: [map()]

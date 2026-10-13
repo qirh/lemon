@@ -110,8 +110,16 @@ defmodule LemonControlPlane.Methods.AgentWait do
       "error" => format_error(completed_value(completed, :error, "error"))
     }
 
-    Map.put(result, "summary", summary(result))
+    meta = completed_value(completed, :meta, "meta") || %{}
+
+    result
+    |> maybe_put("usage", completed_value(completed, :usage, "usage"))
+    |> maybe_put("budget", completed_value(meta, :budget, "budget"))
+    |> Map.put("summary", summary(result))
   end
+
+  defp maybe_put(result, _key, nil), do: result
+  defp maybe_put(result, key, value), do: Map.put(result, key, value)
 
   defp completed_value(completed, atom_key, string_key) do
     if Map.has_key?(completed, atom_key) do

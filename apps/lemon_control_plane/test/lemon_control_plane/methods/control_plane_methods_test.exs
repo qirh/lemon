@@ -112,6 +112,48 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       refute inspect(result["summary"]) =~ "private prompt body"
     end
 
+    test "budget failure results retain machine-readable caps and actual usage for print JSON" do
+      run_id = "run_wait_budget_#{System.unique_integer([:positive, :monotonic])}"
+      session_key = "agent:wait:budget:#{System.unique_integer([:positive])}"
+
+      details = %{
+        reason: :budget_exceeded,
+        scope: :session,
+        metric: :cost_usd,
+        limit: 1.0,
+        used: 1.25,
+        run_usage: %{tokens: 30, cost_usd: 0.5},
+        session_usage: %{tokens: 80, cost_usd: 1.25},
+        message: "Session cost budget exceeded. Increase max_session_cost_usd to continue."
+      }
+
+      LemonCore.RunStore.finalize(run_id, %{
+        completed: %{
+          run_id: run_id,
+          ok: false,
+          error: details.message,
+          answer: "",
+          usage: %{total_tokens: 30, cost: %{total: 0.5}},
+          meta: %{budget: details}
+        },
+        session_key: session_key
+      })
+
+      on_exit(fn -> LemonCore.RunStore.delete_session(session_key) end)
+
+      assert {:ok, result} = AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+      json = result |> Jason.encode!() |> Jason.decode!()
+      assert json["ok"] == false
+      assert json["error"] == details.message
+      assert json["budget"]["reason"] == "budget_exceeded"
+      assert json["budget"]["scope"] == "session"
+      assert json["budget"]["metric"] == "cost_usd"
+      assert json["budget"]["limit"] == 1.0
+      assert json["budget"]["used"] == 1.25
+      assert json["usage"]["total_tokens"] == 30
+      assert json["usage"]["cost"]["total"] == 0.5
+    end
+
     test "handle/2 redacts sensitive answer and error values" do
       run_id = "run_wait_redaction_#{System.unique_integer([:positive, :monotonic])}"
       session_key = "agent:wait:redaction:#{System.unique_integer([:positive])}"
