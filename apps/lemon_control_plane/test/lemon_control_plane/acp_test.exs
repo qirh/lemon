@@ -939,17 +939,34 @@ defmodule LemonControlPlane.ACPTest do
     }
 
     :ets.insert(PlanRuntime, {session.session_key, plan})
+    parent = self()
 
     assert {:ok, %{"error" => _}} =
-             rpc("session/set_mode", %{"sessionId" => id, "modeId" => "default"})
+             ACP.handle_jsonrpc(
+               %{
+                 "jsonrpc" => "2.0",
+                 "id" => 1,
+                 "method" => "session/set_mode",
+                 "params" => %{"sessionId" => id, "modeId" => "default"}
+               },
+               session_update_callback: &send(parent, {:mode_rejected, &1})
+             )
+
+    assert_receive {:mode_rejected,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "current_mode_update",
+                          "currentModeId" => "plan"
+                        }
+                      }
+                    }}
 
     assert {:error, -32_602, _} =
              ACP.prompt(%{
                "sessionId" => id,
                "prompt" => [%{"type" => "text", "text" => "/approve-plan stale"}]
              })
-
-    parent = self()
 
     assert {:ok, %{"stopReason" => "end_turn"}} =
              ACP.prompt(

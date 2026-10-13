@@ -647,27 +647,34 @@ defmodule LemonControlPlane.ACP do
   defp set_config(params, id, value, opts) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- open_session(session_id),
-         {:ok, key, stored} <- config_value(id, value),
-         {:ok, session} <- apply_config(session, key, stored) do
-      put_session(session_id, session)
+         {:ok, key, stored} <- config_value(id, value) do
+      with {:ok, session} <- apply_config(session, key, stored) do
+        put_session(session_id, session)
 
-      if id == "mode",
-        do:
-          emit(
-            session_id,
-            %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
-            opts
-          )
+        if id == "mode",
+          do:
+            emit(
+              session_id,
+              %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
+              opts
+            )
 
-      options = config_options(session)
+        options = config_options(session)
 
-      emit(
-        session_id,
-        %{"sessionUpdate" => "config_option_update", "configOptions" => options},
-        opts
-      )
+        emit(
+          session_id,
+          %{"sessionUpdate" => "config_option_update", "configOptions" => options},
+          opts
+        )
 
-      {:ok, %{"configOptions" => options}}
+        {:ok, %{"configOptions" => options}}
+      else
+        {:error, _, _} = error ->
+          if key == :mode,
+            do: emit_mode_options(session_id, session, current_mode(session), opts)
+
+          error
+      end
     end
   end
 
