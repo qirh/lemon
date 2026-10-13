@@ -99,6 +99,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "profile.chat" => %{
       required: %{"id" => :string, "prompt" => :string},
       optional: %{
+        "images" => :list,
         "model" => :string,
         "queueMode" => :string
       }
@@ -480,6 +481,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "agentId" => :string,
         "cwd" => :string,
+        "images" => :list,
         "queueMode" => :string
       }
     },

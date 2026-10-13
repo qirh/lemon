@@ -343,6 +343,7 @@ end
 defmodule LemonControlPlane.Methods.ProfileChat do
   @moduledoc false
   @behaviour LemonControlPlane.Method
+  alias LemonControlPlane.ImageInputs
   alias LemonControlPlane.Methods.ProfilesSupport
 
   @impl true
@@ -355,15 +356,17 @@ defmodule LemonControlPlane.Methods.ProfileChat do
   def handle(params, _ctx) do
     id = params["id"]
 
-    with {:ok, profile} <- LemonCore.ProfileStore.get(id),
+    with {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])),
+         {:ok, profile} <- LemonCore.ProfileStore.get(id),
          :ok <- ProfilesSupport.refresh(id),
          {:ok, base_request} <-
            LemonCore.ProfileStore.chat_request(profile, params["prompt"],
              model: params["model"],
+             images: images,
              queue_mode: ProfilesSupport.queue_mode(params["queueMode"]),
              meta: %{control_plane: true}
            ) do
-      request = %{base_request | run_id: LemonCore.Id.run_id()}
+      request = %{base_request | images: images, run_id: LemonCore.Id.run_id()}
 
       case LemonCore.RouterBridge.submit_run(request) do
         {:ok, run_id} ->
@@ -396,6 +399,7 @@ defmodule LemonControlPlane.Methods.ProfileChat do
           ProfilesSupport.error(reason)
       end
     else
+      {:error, {:invalid_request, _message, nil}} = error -> error
       {:error, reason} -> ProfilesSupport.error(reason)
     end
   end
