@@ -1,0 +1,303 @@
+defmodule LemonControlPlane.ACP.SessionUpdatesTest do
+  use ExUnit.Case, async: true
+
+  alias LemonControlPlane.ACP.SessionUpdates
+  alias LemonAi.Types.{AssistantMessage, TextContent, Usage}
+  alias LemonAgent.Types.AgentToolResult
+
+  test "native bus starts, streams, completes tools and publishes todo plan" do
+    state = SessionUpdates.new("session", cwd: "/workspace")
+
+    {updates, state} =
+      SessionUpdates.map_event(
+        state,
+        action("tool_1", "read", %{"path" => "README.md"}, :started)
+      )
+
+    assert [start] = Enum.map(updates, &update/1)
+    assert start["sessionUpdate"] == "tool_call"
+    assert start["kind"] == "read"
+    assert start["status"] == "pending"
+
+    {updates, state} =
+      SessionUpdates.map_event(state, action("tool_1", "read", %{}, :completed, "file content"))
+
+    assert [finish] = Enum.map(updates, &update/1)
+    assert finish["status"] == "completed"
+    assert finish["content"] == [text("file content")]
+
+    {updates, state} =
+      SessionUpdates.map_event(
+        state,
+        {:tool_execution_start, "edit", "edit", %{"path" => "README.md"}}
+      )
+
+    assert hd(updates) |> update() |> Map.get("locations") == [
+             %{"path" => "/workspace/README.md"}
+           ]
+
+    result = %AgentToolResult{
+      content: [%TextContent{text: "Edited"}],
+      details: %{path: "README.md", oldText: "before", newText: "after", first_changed_line: 1}
+    }
+
+    {updates, state} =
+      SessionUpdates.map_event(state, {:tool_execution_end, "edit", "edit", result, false})
+
+    assert %{
+             "type" => "diff",
+             "path" => "/workspace/README.md",
+             "oldText" => "before",
+             "newText" => "after"
+           } in update(hd(updates))["content"]
+
+    assert update(hd(updates))["locations"] == [%{"path" => "/workspace/README.md", "line" => 1}]
+
+    {updates, state} =
+      SessionUpdates.map_event(
+        state,
+        {:tool_execution_start, "bash", "bash", %{"command" => "printf hello"}}
+      )
+
+    assert update(hd(updates))["title"] == "$ printf hello"
+    assert update(hd(updates))["kind"] == "execute"
+
+    {updates, state} =
+      SessionUpdates.map_event(
+        state,
+        {:tool_execution_update, "bash", "bash", %{"command" => "printf hello"}, "hel"}
+      )
+
+    assert update(hd(updates))["status"] == "in_progress"
+    assert update(hd(updates))["content"] == [text("$ printf hello"), text("hel")]
+
+    {updates, state} =
+      SessionUpdates.map_event(
+        state,
+        {:tool_execution_end, "bash", "bash", %{details: %{terminalId: "term"}}, false}
+      )
+
+    assert %{"type" => "terminal", "terminalId" => "term"} in update(hd(updates))["content"]
+
+    todos = [
+      %{content: "Ship", status: "in_progress"},
+      %{content: "Removed", status: "abandoned"}
+    ]
+
+    {_, state} =
+      SessionUpdates.map_event(
+        state,
+        {:tool_execution_start, "todo", "todo", %{action: "write", todos: todos}}
+      )
+
+    {updates, _state} =
+      SessionUpdates.map_event(
+        state,
+        {:tool_execution_end, "todo", "todo", %{content: [], details: %{todos: todos}}, false}
+      )
+
+    assert [tool, plan] = Enum.map(updates, &update/1)
+    assert tool["status"] == "completed"
+
+    assert plan == %{
+             "sessionUpdate" => "plan",
+             "entries" => [
+               %{"content" => "Ship", "priority" => "medium", "status" => "in_progress"},
+               %{"content" => "Removed", "priority" => "medium", "status" => "completed"}
+             ]
+           }
+  end
+
+  test "streamed text and thought chunks keep message identity and final text does not duplicate" do
+    state = SessionUpdates.new("session")
+
+    message = %AssistantMessage{
+      content: [%TextContent{text: "hello"}],
+      usage: %Usage{input: 10, output: 2, total_tokens: 12}
+    }
+
+    {_, state} = SessionUpdates.map_event(state, {:message_start, message})
+
+    {text_updates, state} =
+      SessionUpdates.map_event(
+        state,
+        {:message_update, message, {:text_delta, 0, "hello", message}}
+      )
+
+    {thought_updates, state} =
+      SessionUpdates.map_event(
+        state,
+        {:message_update, message, {:thinking_delta, 0, "thinking", message}}
+      )
+
+    assert update(hd(text_updates))["messageId"] == update(hd(thought_updates))["messageId"]
+    assert update(hd(thought_updates))["sessionUpdate"] == "agent_thought_chunk"
+    assert {[], ^state} = SessionUpdates.map_event(state, {:message_end, message})
+
+    {updates, state} =
+      SessionUpdates.map_event(state, %{
+        type: :engine_completed,
+        payload: %{ok: true, answer: "hello", usage: %{total_tokens: 12}}
+      })
+
+    assert [%{"sessionUpdate" => "session_info_update", "token_count" => %{"totalTokens" => 12}}] =
+             Enum.map(updates, &Map.take(update(&1), ["sessionUpdate", "token_count"]))
+
+    assert {[], _} =
+             SessionUpdates.map_event(state, %{
+               type: :run_completed,
+               payload: %{completed: %{answer: "hello"}}
+             })
+  end
+
+  test "untrusted large raw outputs and rich collections remain bounded and UTF8" do
+    output = String.duplicate("🙂", 100_000)
+
+    result = %{
+      content: [%{type: "text", text: output}],
+      details: %{nested: Enum.map(1..1000, fn _ -> %{text: output} end)}
+    }
+
+    updates =
+      SessionUpdates.session_updates(
+        "session",
+        {:tool_execution_end, "id", "read", result, false}
+      )
+
+    assert [notification] = updates
+    encoded = Jason.encode!(notification)
+    assert byte_size(encoded) < 40_000
+    assert String.valid?(encoded)
+    assert byte_size(hd(update(notification)["content"])["content"]["text"]) <= 4_000
+  end
+
+  test "large file snapshots are not emitted as truncated typed diffs" do
+    result = %{
+      details: %{
+        path: "file",
+        oldText: String.duplicate("a", 17_000),
+        newText: "new",
+        diff: "-old\n+new"
+      }
+    }
+
+    [notification] =
+      SessionUpdates.session_updates(
+        "session",
+        {:tool_execution_end, "id", "edit", result, false},
+        cwd: "/workspace"
+      )
+
+    assert Enum.all?(update(notification)["content"], &(&1["type"] != "diff"))
+    assert text("-old\n+new") in update(notification)["content"]
+  end
+
+  test "internal resource subjects never become editor paths" do
+    notification =
+      SessionUpdates.tool_call("session", "id", "write", %{path: "xd://tool", content: "{}"},
+        cwd: "/workspace"
+      )
+
+    assert update(notification)["kind"] == "execute"
+    refute Map.has_key?(update(notification), "locations")
+    assert update(notification)["title"] == "xd://tool"
+  end
+
+  test "usage, compaction and failed tools use client supported updates" do
+    [notification] =
+      SessionUpdates.session_updates("session", %{
+        type: :usage,
+        payload: %{contextWindow: 200_000, context_tokens: 123, total_tokens: 500}
+      })
+
+    assert update(notification)["sessionUpdate"] == "usage_update"
+    assert update(notification)["used"] == 123
+
+    [notification] =
+      SessionUpdates.session_updates(
+        "session",
+        {:compaction_complete, %{id: "compact", summary: "short"}}
+      )
+
+    assert update(notification) == %{
+             "sessionUpdate" => "compaction_update",
+             "compactionId" => "compact",
+             "status" => "completed",
+             "summary" => "short"
+           }
+
+    [notification] =
+      SessionUpdates.session_updates(
+        "session",
+        {:tool_execution_end, "id", "bash", "failed", true}
+      )
+
+    assert update(notification)["status"] == "failed"
+  end
+
+  test "operator projection preserves complete diffs beyond preview size" do
+    original = String.duplicate("x", 8_000)
+    details = %{path: "/workspace/file", oldText: original, newText: original <> "y"}
+    projected = CodingAgent.Session.Presentation.operator_details(details)
+    assert projected.oldText == original
+    assert projected.newText == original <> "y"
+
+    oversized =
+      CodingAgent.Session.Presentation.operator_details(%{
+        details
+        | oldText: String.duplicate("x", 17_000)
+      })
+
+    refute Map.has_key?(oversized, :oldText)
+    refute Map.has_key?(oversized, :newText)
+  end
+
+  test "retry notices do not suppress a final non-streamed answer" do
+    state = SessionUpdates.new("session")
+
+    {notices, state} =
+      SessionUpdates.map_event(state, {:provider_retry, %{attempt: 1, delay_ms: 100}})
+
+    assert update(hd(notices))["sessionUpdate"] == "notice"
+
+    {updates, _state} =
+      SessionUpdates.map_event(state, %{
+        type: :run_completed,
+        payload: %{completed: %{ok: true, answer: "done"}}
+      })
+
+    assert update(hd(updates))["content"]["text"] == "done"
+  end
+
+  test "subagent progress retains child identity and valid lifecycle state" do
+    result = %AgentToolResult{
+      content: [%TextContent{text: "Reading"}],
+      details: %{session_id: "child", task_id: "task", status: "running"}
+    }
+
+    {updates, _state} =
+      SessionUpdates.map_event(
+        SessionUpdates.new("parent"),
+        {:tool_execution_update, "call", "task", %{}, result}
+      )
+
+    assert %{"sessionUpdate" => "subagent_update", "sessionId" => "child", "state" => "running"} in Enum.map(
+             updates,
+             &update/1
+           )
+  end
+
+  defp update(notification), do: notification["params"]["update"]
+  defp text(value), do: %{"type" => "content", "content" => %{"type" => "text", "text" => value}}
+
+  defp action(id, name, args, phase, result \\ nil) do
+    %{
+      type: :engine_action,
+      payload: %{
+        phase: phase,
+        ok: true,
+        action: %{id: id, kind: "tool", detail: %{name: name, args: args, result: result}}
+      }
+    }
+  end
+end
