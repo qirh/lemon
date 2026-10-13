@@ -412,24 +412,8 @@ defmodule LemonChannels.PortableCommand do
   end
 
   defp runtime_call(function, args, fallback) do
-    provider = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    module_call(provider, function, args, fallback)
+    LemonCore.AgentRuntime.call(function, args, fallback)
   end
-
-  defp module_call(module, function, args, fallback)
-       when is_atom(module) and is_atom(function) and is_list(args) do
-    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      fallback
-    end
-  rescue
-    _ -> fallback
-  catch
-    _kind, _reason -> fallback
-  end
-
-  defp module_call(_, _, _, fallback), do: fallback
 
   defp get(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, to_string(key))
   defp get(_, _), do: nil

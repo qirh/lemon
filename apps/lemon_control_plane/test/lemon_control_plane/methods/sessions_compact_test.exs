@@ -11,14 +11,14 @@ defmodule LemonControlPlane.Methods.SessionsCompactTest do
   end
 
   setup do
-    original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, RecordingProvider)
+    original = Application.get_env(:lemon_core, :agent_runtime_provider)
+    Application.put_env(:lemon_core, :agent_runtime_provider, RecordingProvider)
 
     on_exit(fn ->
       if is_nil(original) do
-        Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        Application.delete_env(:lemon_core, :agent_runtime_provider)
       else
-        Application.put_env(:lemon_control_plane, :agent_runtime_provider, original)
+        Application.put_env(:lemon_core, :agent_runtime_provider, original)
       end
     end)
 
@@ -141,7 +141,7 @@ defmodule LemonControlPlane.Methods.SessionsCompactTest do
     alias CodingAgent.SessionManager
 
     Application.put_env(
-      :lemon_control_plane,
+      :lemon_core,
       :agent_runtime_provider,
       CodingAgent.ControlPlaneProvider
     )

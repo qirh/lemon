@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
   @moduledoc "Previews and confirms native session rewinds."
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
 
   @impl true

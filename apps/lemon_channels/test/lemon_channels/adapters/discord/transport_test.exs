@@ -1428,16 +1428,16 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   defp with_portable_runtime(fun) do
-    previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+    previous = Application.get_env(:lemon_core, :agent_runtime_provider)
     :persistent_term.put({FakePortableRuntime, :test_pid}, self())
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, FakePortableRuntime)
+    Application.put_env(:lemon_core, :agent_runtime_provider, FakePortableRuntime)
 
     try do
       fun.()
     after
       :persistent_term.erase({FakePortableRuntime, :test_pid})
       :persistent_term.erase({FakePortableRuntime, :owner_session})
-      restore_env(:lemon_control_plane, :agent_runtime_provider, previous)
+      restore_env(:lemon_core, :agent_runtime_provider, previous)
     end
   end
 

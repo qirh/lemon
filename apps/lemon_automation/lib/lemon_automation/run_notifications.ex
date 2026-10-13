@@ -6,6 +6,7 @@ defmodule LemonAutomation.RunNotifications do
   """
   alias LemonAutomation.CronDelivery
   alias LemonAgent.Workspace.{GoalStore, KanbanStore}
+  alias LemonCore.ChannelSupervision
   require Logger
 
   def bind_cron(job, params), do: bind(CronDelivery.target(job, job.session_key), params)
@@ -126,12 +127,12 @@ defmodule LemonAutomation.RunNotifications do
   defp bind(:none, _params), do: :ok
 
   defp bind({:ok, target}, params),
-    do: service(:bind_run, [params.run_id, params.session_key, target])
+    do: ChannelSupervision.bind_run(params.run_id, params.session_key, target)
 
   defp bound_target(nil, _session, fallback), do: fallback
 
   defp bound_target(run_id, session, fallback) do
-    case service(:target_for_run, [run_id, session]) do
+    case ChannelSupervision.target_for_run(run_id, session) do
       :none -> fallback
       result -> result
     end
@@ -140,7 +141,7 @@ defmodule LemonAutomation.RunNotifications do
   defp deliver(:none, _notice), do: :ok
 
   defp deliver({:ok, target}, notice) do
-    result = service(:notify, [target, notice])
+    result = ChannelSupervision.notify(target, notice)
 
     if result != :ok,
       do:
@@ -152,18 +153,6 @@ defmodule LemonAutomation.RunNotifications do
   end
 
   defp deliver({:error, _} = error, _notice), do: error
-
-  defp service(function, args) do
-    module = Module.concat([LemonChannels, Supervision])
-
-    if Code.ensure_loaded?(module) and function_exported?(module, function, length(args)),
-      do: apply(module, function, args),
-      else: {:error, :channels_unavailable}
-  rescue
-    _ -> {:error, :channels_unavailable}
-  catch
-    :exit, _ -> {:error, :outcome_unknown}
-  end
 
   defp terminal_status(:completed), do: :completed
   defp terminal_status(status) when status in [:aborted, :cancelled], do: :cancelled

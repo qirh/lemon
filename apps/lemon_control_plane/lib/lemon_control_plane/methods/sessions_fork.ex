@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.SessionsFork do
   @moduledoc "Forks a native session and registers its independent durable child."
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
   alias LemonCore.{SessionKey, SessionLifecycle}
 

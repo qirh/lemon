@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
 
   @default_limit 100
   @max_limit 200

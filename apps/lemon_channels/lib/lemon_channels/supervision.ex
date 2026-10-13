@@ -23,9 +23,15 @@ defmodule LemonChannels.Supervision do
   `:store`, `:enqueue`, `:retry_ms` and `:receipt_timeout_ms` support isolated
   runtime instances without changing application configuration. Production uses
   the supervised singleton, Core Store and `LemonChannels.Outbox.enqueue/1`.
+  Starting the default singleton registers this module with
+  `LemonCore.ChannelSupervision`; registration survives worker downtime so its
+  Store-backed operations remain available. Named or unnamed isolated workers
+  never replace the runtime provider.
   """
 
   use GenServer
+
+  @behaviour LemonCore.ChannelSupervision
 
   alias LemonChannels.{OutboundPayload, SupervisionNotice, SupervisionStore}
   alias LemonCore.SessionKey
@@ -37,9 +43,18 @@ defmodule LemonChannels.Supervision do
 
   def start_link(opts \\ []) do
     {name, opts} = Keyword.pop(opts, :name, __MODULE__)
-    GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: []))
+
+    case GenServer.start_link(__MODULE__, opts, if(name, do: [name: name], else: [])) do
+      {:ok, _pid} = result ->
+        if name == __MODULE__, do: :ok = LemonCore.ChannelSupervision.register(__MODULE__)
+        result
+
+      error ->
+        error
+    end
   end
 
+  @impl true
   @spec bind_run(binary(), binary(), target()) :: :ok | {:error, atom()}
   def bind_run(run_id, session_key, target) do
     with :ok <- valid_scope(run_id, session_key),
@@ -56,6 +71,7 @@ defmodule LemonChannels.Supervision do
     end
   end
 
+  @impl true
   @spec target_for_run(binary(), binary()) :: {:ok, target()} | :none | {:error, atom()}
   def target_for_run(run_id, session_key) do
     with :ok <- valid_scope(run_id, session_key) do
@@ -71,6 +87,7 @@ defmodule LemonChannels.Supervision do
     end
   end
 
+  @impl true
   @spec notify(target(), map()) :: :ok | {:error, atom()}
   def notify(target, notice) do
     with {:ok, target} <- SupervisionNotice.target(target),

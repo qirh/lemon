@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.SessionsTree do
   @moduledoc "Reads a bounded page of the native session tree."
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
 
   @entry_fields ~w(id parentId type role text timestamp isActive isLeaf rewindable)

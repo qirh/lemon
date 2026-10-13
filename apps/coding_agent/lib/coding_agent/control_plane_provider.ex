@@ -1,21 +1,19 @@
 defmodule CodingAgent.ControlPlaneProvider do
   @moduledoc """
-  Exposes this agent's internals to the control plane's ops methods.
+  Exposes this agent's internals through the shared core runtime contract.
 
-  The control plane reports on tasks, sessions, extensions, the run graph and
-  progress, but must not depend on this app; it calls whatever provider is
-  registered (see `LemonControlPlane.AgentRuntime`). `CodingAgent.Application`
-  registers this module at boot.
+  Runtime consumers report on tasks, sessions, extensions, the run graph and
+  progress without depending on this app; they call the provider registered with
+  `LemonCore.AgentRuntime`. `CodingAgent.Application` registers this module at boot.
 
   Each function is a thin adapter over the agent's own modules. Shapes match
   what the control plane used to read directly, so method payloads are
   unchanged.
 
-  The `LemonControlPlane.AgentRuntime.Provider` behaviour is deliberately *not*
-  declared here: this app must stay extractable without the reference runtime,
-  so it carries no compile-time reference to it. `control_plane_provider_test`
-  checks this module against the behaviour's callback list at runtime instead.
+  Implements `LemonCore.AgentRuntime.Provider` through the app's core dependency.
   """
+
+  @behaviour LemonCore.AgentRuntime.Provider
 
   def list_tasks, do: CodingAgent.TaskStore.list(:all)
 

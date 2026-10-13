@@ -1,7 +1,7 @@
 defmodule LemonControlPlane.Methods.BackgroundCommandSupport do
   @moduledoc false
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonRouter.ThinkingLevel
 
   @statuses ~w(queued running completed error lost killed cancelled tracking_lost)

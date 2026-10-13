@@ -15,7 +15,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   alias LemonCore.{RunStore, SessionKey, SessionLifecycle, SessionMetadataStore}
 
   defmodule Provider do
-    @behaviour LemonControlPlane.AgentRuntime.Provider
+    @behaviour LemonCore.AgentRuntime.Provider
 
     @impl true
     def session_create(key, cwd) do
@@ -49,13 +49,13 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
   end
 
   setup do
-    original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, Provider)
+    original = Application.get_env(:lemon_core, :agent_runtime_provider)
+    Application.put_env(:lemon_core, :agent_runtime_provider, Provider)
 
     on_exit(fn ->
       if original,
-        do: Application.put_env(:lemon_control_plane, :agent_runtime_provider, original),
-        else: Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, original),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
     end)
 
     if Process.whereis(Registry) == nil, do: start_supervised!(Registry)

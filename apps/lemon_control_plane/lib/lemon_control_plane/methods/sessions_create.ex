@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.SessionsCreate do
   @moduledoc "Explicit, idempotent native session allocation before the first prompt."
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
 
   @impl true

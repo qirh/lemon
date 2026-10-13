@@ -13,7 +13,7 @@ defmodule LemonWeb.SessionSubagentLiveTest do
       {:lemon_web, :access_token},
       {:lemon_web, :setup_readiness_fun},
       {:lemon_web, :active_run_fun},
-      {:lemon_control_plane, :agent_runtime_provider}
+      {:lemon_core, :agent_runtime_provider}
     ]
 
     previous =
@@ -23,7 +23,7 @@ defmodule LemonWeb.SessionSubagentLiveTest do
     Application.put_env(:lemon_web, :active_run_fun, fn _ -> :none end)
 
     Application.put_env(
-      :lemon_control_plane,
+      :lemon_core,
       :agent_runtime_provider,
       CodingAgent.ControlPlaneProvider
     )
@@ -160,13 +160,13 @@ defmodule LemonWeb.SessionSubagentLiveTest do
   end
 
   test "unavailable runtime stays distinct from empty and recovers on connected refresh" do
-    Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+    Application.delete_env(:lemon_core, :agent_runtime_provider)
     {:ok, view, _} = live(build_conn(), "/sessions/#{session_key("unavailable")}")
     assert has_element?(view, "#subagent-tree-unavailable")
     refute has_element?(view, "#subagent-tree-empty")
 
     Application.put_env(
-      :lemon_control_plane,
+      :lemon_core,
       :agent_runtime_provider,
       CodingAgent.ControlPlaneProvider
     )

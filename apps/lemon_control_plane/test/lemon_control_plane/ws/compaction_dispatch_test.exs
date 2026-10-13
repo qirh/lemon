@@ -20,13 +20,13 @@ defmodule LemonControlPlane.WS.CompactionDispatchTest do
     if Process.whereis(LemonControlPlane.Methods.Registry) == nil,
       do: start_supervised!(LemonControlPlane.Methods.Registry)
 
-    old = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, SlowProvider)
+    old = Application.get_env(:lemon_core, :agent_runtime_provider)
+    Application.put_env(:lemon_core, :agent_runtime_provider, SlowProvider)
 
     on_exit(fn ->
       if old,
-        do: Application.put_env(:lemon_control_plane, :agent_runtime_provider, old),
-        else: Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, old),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
     end)
 
     state = %Connection{

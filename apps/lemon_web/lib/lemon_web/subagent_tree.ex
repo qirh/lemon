@@ -161,11 +161,7 @@ defmodule LemonWeb.SubagentTree do
 
   # Optional runtime seam: the web app does not depend on the coding product.
   defp runtime(function, args) do
-    module = Module.concat([LemonControlPlane, AgentRuntime])
-
-    if Code.ensure_loaded?(module) and function_exported?(module, :call, 3),
-      do: apply(module, :call, [function, args, :unavailable]),
-      else: :unavailable
+    LemonCore.AgentRuntime.call(function, args, :unavailable)
   end
 
   defp unavailable, do: %{status: :unavailable, nodes: [], truncated?: false, active_count: 0}

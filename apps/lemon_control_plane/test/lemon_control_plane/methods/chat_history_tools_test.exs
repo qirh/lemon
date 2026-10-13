@@ -1,6 +1,7 @@
 defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
   use ExUnit.Case, async: false
-  alias LemonControlPlane.{AgentRuntime, Methods.ChatHistory}
+  alias LemonControlPlane.Methods.ChatHistory
+  alias LemonCore.AgentRuntime
   alias LemonAi.Types.{AssistantMessage, ToolCall, ToolResultMessage, TextContent}
 
   defmodule Provider do
@@ -8,13 +9,13 @@ defmodule LemonControlPlane.Methods.ChatHistoryToolsTest do
   end
 
   setup do
-    previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+    previous = Application.get_env(:lemon_core, :agent_runtime_provider)
     :ok = AgentRuntime.register(Provider)
 
     on_exit(fn ->
       if previous,
-        do: Application.put_env(:lemon_control_plane, :agent_runtime_provider, previous),
-        else: Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, previous),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
     end)
 
     :ok

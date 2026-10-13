@@ -203,14 +203,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       foreign_chat_id = 310_011
       gateway_config_key = :"Elixir.LemonGateway.Config"
       previous_gateway_config = Application.get_env(:lemon_gateway, gateway_config_key)
-      previous_runtime = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+      previous_runtime = Application.get_env(:lemon_core, :agent_runtime_provider)
 
       Application.put_env(:lemon_gateway, gateway_config_key, %{
         telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
       })
 
       Application.put_env(
-        :lemon_control_plane,
+        :lemon_core,
         :agent_runtime_provider,
         FakeBackgroundRuntime
       )
@@ -225,9 +225,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
         end
 
         if previous_runtime do
-          Application.put_env(:lemon_control_plane, :agent_runtime_provider, previous_runtime)
+          Application.put_env(:lemon_core, :agent_runtime_provider, previous_runtime)
         else
-          Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+          Application.delete_env(:lemon_core, :agent_runtime_provider)
         end
       end)
 

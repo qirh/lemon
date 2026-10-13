@@ -2,13 +2,77 @@ defmodule LemonChannels.SupervisionTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.{Supervision, SupervisionNotice, SupervisionStore}
-  alias LemonCore.Store
+  alias LemonCore.{ChannelSupervision, Store}
 
   @store __MODULE__.Store
 
   setup do
+    original_provider = Application.fetch_env(:lemon_core, :channel_supervision_provider)
+
+    on_exit(fn ->
+      case original_provider do
+        {:ok, provider} ->
+          Application.put_env(:lemon_core, :channel_supervision_provider, provider)
+
+        :error ->
+          Application.delete_env(:lemon_core, :channel_supervision_provider)
+      end
+    end)
+
     start_supervised!({Store, name: @store, backend: Store.EtsBackend, cached_tables: []})
     :ok
+  end
+
+  test "isolated workers never register a global provider" do
+    Application.delete_env(:lemon_core, :channel_supervision_provider)
+    worker()
+    assert ChannelSupervision.provider() == nil
+    stop_supervised!(Supervision)
+    worker(name: __MODULE__.IsolatedWorker)
+    assert ChannelSupervision.provider() == nil
+  end
+
+  test "default startup registers the provider and worker downtime preserves store operations" do
+    supervisor = Process.whereis(LemonChannels.Supervisor)
+
+    if supervisor && Process.whereis(Supervision) do
+      :ok = Supervisor.terminate_child(supervisor, Supervision)
+      on_exit(fn -> Supervisor.restart_child(supervisor, Supervision) end)
+    end
+
+    Application.delete_env(:lemon_core, :channel_supervision_provider)
+    worker(name: Supervision)
+    assert ChannelSupervision.provider() == Supervision
+    stop_supervised!(Supervision)
+    assert Process.whereis(Supervision) == nil
+    assert ChannelSupervision.provider() == Supervision
+
+    run_id = "bridge-#{System.unique_integer([:positive, :monotonic])}"
+    session = "agent:operator:main"
+    target = target()
+    notice = %{notice() | run_id: run_id}
+    {:ok, identity} = SupervisionNotice.identity(notice)
+
+    on_exit(fn ->
+      binding_key = :crypto.hash(:sha256, :erlang.term_to_binary(run_id)) |> Base.encode16()
+      notice_key = :crypto.hash(:sha256, :erlang.term_to_binary(identity)) |> Base.encode16()
+      Store.delete(:channels_supervision_bindings, binding_key)
+      Store.delete(:channels_supervision_notices, notice_key)
+    end)
+
+    assert :ok = ChannelSupervision.bind_run(run_id, session, target)
+    assert {:ok, ^target} = ChannelSupervision.target_for_run(run_id, session)
+
+    assert {:error, :session_mismatch} =
+             ChannelSupervision.target_for_run(run_id, session <> ":sub:other")
+
+    assert {:error, :supervision_unavailable} = ChannelSupervision.notify(target, notice)
+
+    assert {:ok, %{delivery_state: :pending, attempts: 0}} =
+             SupervisionStore.notice(Store, identity)
+
+    assert {:ok, %{delivery_state: :pending}} = Supervision.status(notice)
+    refute_receive {:enqueue, _}
   end
 
   test "bindings are immutable and require the exact bound session, including threads" do

@@ -31,7 +31,7 @@ defmodule LemonControlPlane.ACP do
   requested summary focus while native approved-plan context remains durable.
   """
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
 
   alias LemonControlPlane.Methods.AgentWait
   alias LemonCore.Store

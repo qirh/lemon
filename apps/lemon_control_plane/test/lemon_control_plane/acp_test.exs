@@ -82,18 +82,23 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   setup do
-    keys = [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token, :agent_runtime_provider]
-    previous = Map.new(keys, &{&1, Application.get_env(:lemon_control_plane, &1)})
+    keys =
+      Enum.map(
+        [:acp_submitter, :acp_waiter, :acp_canceller, :acp_api_token],
+        &{:lemon_control_plane, &1}
+      ) ++ [{:lemon_core, :agent_runtime_provider}]
+
+    previous = Map.new(keys, fn {app, key} -> {{app, key}, Application.get_env(app, key)} end)
 
     clear_acp_session_store()
     clear_exec_approvals()
 
     on_exit(fn ->
-      for {key, value} <- previous do
+      for {{app, key}, value} <- previous do
         if is_nil(value) do
-          Application.delete_env(:lemon_control_plane, key)
+          Application.delete_env(app, key)
         else
-          Application.put_env(:lemon_control_plane, key, value)
+          Application.put_env(app, key, value)
         end
       end
 
@@ -1054,7 +1059,7 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   test "an unavailable planning runtime cannot enable plan mode" do
-    Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+    Application.delete_env(:lemon_core, :agent_runtime_provider)
     id = new_session()
 
     assert {:ok, %{"error" => %{"code" => -32_000}}} =
@@ -1066,7 +1071,7 @@ defmodule LemonControlPlane.ACPTest do
   defp start_plan_runtime do
     :ets.new(PlanRuntime, [:named_table, :public, :set])
     :ets.insert(PlanRuntime, {:observer, self()})
-    :ok = LemonControlPlane.AgentRuntime.register(PlanRuntime)
+    :ok = LemonCore.AgentRuntime.register(PlanRuntime)
   end
 
   test "unknown sessions and unsupported configuration fail closed" do
@@ -1169,7 +1174,7 @@ defmodule LemonControlPlane.ACPTest do
   end
 
   test "replay reconciles interrupted tools only from finalized durable runs" do
-    :ok = LemonControlPlane.AgentRuntime.register(InterruptedHistory)
+    :ok = LemonCore.AgentRuntime.register(InterruptedHistory)
     id = new_session()
     session = Store.get(:acp_sessions, id)
     run_id = LemonCore.Id.run_id()

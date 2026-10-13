@@ -10,7 +10,7 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
 
   @impl true

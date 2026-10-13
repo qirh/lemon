@@ -10,13 +10,13 @@ defmodule LemonControlPlane.Methods.SessionsPlanTest do
   end
 
   setup do
-    original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-    Application.put_env(:lemon_control_plane, :agent_runtime_provider, Provider)
+    original = Application.get_env(:lemon_core, :agent_runtime_provider)
+    Application.put_env(:lemon_core, :agent_runtime_provider, Provider)
 
     on_exit(fn ->
       if original,
-        do: Application.put_env(:lemon_control_plane, :agent_runtime_provider, original),
-        else: Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, original),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
     end)
 
     :ok

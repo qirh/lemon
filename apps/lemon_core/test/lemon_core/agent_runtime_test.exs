@@ -1,8 +1,8 @@
-defmodule LemonControlPlane.AgentRuntimeTest do
+defmodule LemonCore.AgentRuntimeTest do
   # Mutates the provider registration, so it must not run alongside other tests.
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
 
   defmodule FullProvider do
     def list_tasks, do: [{"task-1", %{status: :running}}]
@@ -21,13 +21,13 @@ defmodule LemonControlPlane.AgentRuntimeTest do
   end
 
   setup do
-    original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+    original = Application.get_env(:lemon_core, :agent_runtime_provider)
 
     on_exit(fn ->
       if is_nil(original) do
-        Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        Application.delete_env(:lemon_core, :agent_runtime_provider)
       else
-        Application.put_env(:lemon_control_plane, :agent_runtime_provider, original)
+        Application.put_env(:lemon_core, :agent_runtime_provider, original)
       end
     end)
 
@@ -35,9 +35,9 @@ defmodule LemonControlPlane.AgentRuntimeTest do
   end
 
   defp use_provider(module),
-    do: Application.put_env(:lemon_control_plane, :agent_runtime_provider, module)
+    do: Application.put_env(:lemon_core, :agent_runtime_provider, module)
 
-  defp no_provider, do: Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+  defp no_provider, do: Application.delete_env(:lemon_core, :agent_runtime_provider)
 
   describe "registration" do
     test "register/1 makes a provider available" do
@@ -99,33 +99,6 @@ defmodule LemonControlPlane.AgentRuntimeTest do
       use_provider(RaisingProvider)
 
       assert AgentRuntime.call(:wasm_sidecar_running?, [], false) == false
-    end
-  end
-
-  describe "methods without an agent runtime" do
-    setup do
-      no_provider()
-      :ok
-    end
-
-    test "tasks.active.list answers with an empty list, not an error" do
-      assert {:ok, payload} = LemonControlPlane.Methods.TasksActiveList.handle(%{}, %{})
-      assert payload["tasks"] == []
-    end
-
-    test "tasks.recent.list answers with an empty list" do
-      assert {:ok, payload} = LemonControlPlane.Methods.TasksRecentList.handle(%{}, %{})
-      assert payload["tasks"] == []
-    end
-
-    test "sessions.compact reports the runtime as unavailable, in the pre-existing shape" do
-      assert {:error, {:internal_error, "Failed to compact session", reason}} =
-               LemonControlPlane.Methods.SessionsCompact.handle(
-                 %{"sessionKey" => "agent:main:x"},
-                 %{}
-               )
-
-      assert reason == :session_registry_not_available
     end
   end
 end

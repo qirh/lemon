@@ -1,18 +1,15 @@
-defmodule LemonControlPlane.AgentRuntime.Provider do
+defmodule LemonCore.AgentRuntime.Provider do
   @moduledoc """
-  What the control plane needs from an agent runtime in order to introspect it.
+  Shared contract for inspecting and operating on an agent runtime.
 
-  The control plane's ops methods (tasks, sessions, extensions, run graph,
-  progress) report on a running agent, but the control plane must not depend on
-  a particular agent product. An agent implements the callbacks it can support
-  and registers itself — see `LemonControlPlane.AgentRuntime`.
+  Runtime consumers use core's registry without depending on a particular agent
+  product. An agent implements the callbacks it can support and registers itself
+  through `LemonCore.AgentRuntime`.
 
   Every callback is optional. A provider that implements none is equivalent to
-  no provider at all: each method falls back to its documented empty or
-  unavailable response rather than failing.
+  no provider at all: each consumer falls back to its documented response.
 
-  Return shapes mirror what the coding agent already returned, so the wire
-  format of the methods is unchanged.
+  Return shapes preserve existing runtime and control-plane payloads.
 
   Implementations may retain detailed failures internally, but callbacks used
   by background-command and side-query methods should prefer stable reason

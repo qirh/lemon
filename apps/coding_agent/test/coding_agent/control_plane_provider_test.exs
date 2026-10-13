@@ -1,56 +1,31 @@
 defmodule CodingAgent.ControlPlaneProviderTest do
   @moduledoc """
-  The provider deliberately carries no `@behaviour` attribute, so that this app
-  keeps no compile-time reference to the reference runtime. These tests are what
-  replaces that compile-time check.
-
-  `lemon_control_plane` is not a dependency of this app, so the contract and
-  boot-registration checks below only run where the control plane happens to be
-  on the code path (a release or a full-umbrella boot). In an app-dir run
-  (`cd apps/coding_agent && mix test`) they are compiled out; the adapter-shape
-  tests always run.
+  Checks the coding provider against the shared core runtime contract and
+  verifies boot registration and adapter return shapes.
   """
 
   use ExUnit.Case, async: false
 
   alias CodingAgent.ControlPlaneProvider
 
-  @behaviour_module LemonControlPlane.AgentRuntime.Provider
-  @control_plane_loaded Code.ensure_loaded?(@behaviour_module)
+  @behaviour_module LemonCore.AgentRuntime.Provider
 
-  if @control_plane_loaded do
-    test "implements every callback the control plane declares" do
-      expected = @behaviour_module.behaviour_info(:callbacks) |> Enum.sort()
+  test "implements every callback the core runtime declares" do
+    expected = @behaviour_module.behaviour_info(:callbacks) |> Enum.sort()
+    assert Code.ensure_loaded?(ControlPlaneProvider)
 
-      missing =
-        Enum.reject(expected, fn {fun, arity} ->
-          function_exported?(ControlPlaneProvider, fun, arity)
-        end)
+    missing =
+      Enum.reject(expected, fn {fun, arity} ->
+        function_exported?(ControlPlaneProvider, fun, arity)
+      end)
 
-      assert missing == [],
-             "provider is missing: #{inspect(missing)} — a typo here degrades the method to its fallback silently"
-    end
+    assert missing == [],
+           "provider is missing: #{inspect(missing)} — a typo here degrades the method to its fallback silently"
+  end
 
-    describe "boot registration" do
-      setup do
-        original = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
-
-        on_exit(fn ->
-          if is_nil(original) do
-            Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
-          else
-            Application.put_env(:lemon_control_plane, :agent_runtime_provider, original)
-          end
-        end)
-
-        :ok
-      end
-
-      test "the running application has registered this provider" do
-        assert LemonControlPlane.AgentRuntime.provider() == ControlPlaneProvider
-        assert LemonControlPlane.AgentRuntime.available?()
-      end
-    end
+  test "the running application has registered this provider" do
+    assert LemonCore.AgentRuntime.provider() == ControlPlaneProvider
+    assert LemonCore.AgentRuntime.available?()
   end
 
   describe "adapters return the shapes the control plane expects" do

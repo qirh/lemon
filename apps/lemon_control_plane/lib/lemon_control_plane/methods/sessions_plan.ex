@@ -5,7 +5,7 @@ defmodule LemonControlPlane.Methods.SessionsPlan do
   """
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
 
   @actions %{"status" => :status, "enter" => :enter, "approve" => :approve, "discard" => :discard}

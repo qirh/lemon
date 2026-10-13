@@ -62,23 +62,15 @@ defmodule CodingAgent.Application do
     end
   end
 
-  # The control plane introspects this agent through a registered provider. The
-  # call is indirect (module in a variable) so this app keeps no compile-time
-  # reference to the reference runtime and stays extractable without it.
+  # Runtime consumers reach this agent through the shared core registry.
   defp register_control_plane_provider do
-    runtime = Module.concat(["LemonControlPlane", "AgentRuntime"])
+    case LemonCore.AgentRuntime.register(CodingAgent.ControlPlaneProvider) do
+      :ok ->
+        :ok
 
-    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :register, 1) do
-      case apply(runtime, :register, [CodingAgent.ControlPlaneProvider]) do
-        :ok ->
-          :ok
-
-        other ->
-          Logger.debug("control plane provider not registered: #{inspect(other)}")
-          :ok
-      end
-    else
-      :ok
+      other ->
+        Logger.debug("agent runtime provider not registered: #{inspect(other)}")
+        :ok
     end
   end
 

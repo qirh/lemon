@@ -1,38 +1,36 @@
-defmodule LemonControlPlane.AgentRuntime do
+defmodule LemonCore.AgentRuntime do
   @moduledoc """
-  Resolves the registered agent runtime for the control plane's ops methods.
+  Resolves the registered agent runtime for shared runtime consumers.
 
-  The control plane reports on a running agent — its tasks, sessions,
-  extensions, run graph and progress — without depending on a particular agent
-  product. An agent registers a module implementing
-  `LemonControlPlane.AgentRuntime.Provider`:
+  Consumers inspect and operate on tasks, sessions, extensions, run graphs and
+  progress without depending on a particular agent product. An agent registers
+  a module implementing `LemonCore.AgentRuntime.Provider`:
 
-      config :lemon_control_plane, :agent_runtime_provider, MyAgent.ControlPlaneProvider
+      config :lemon_core, :agent_runtime_provider, MyAgent.ControlPlaneProvider
 
   or, more usefully, at boot:
 
-      LemonControlPlane.AgentRuntime.register(MyAgent.ControlPlaneProvider)
+      LemonCore.AgentRuntime.register(MyAgent.ControlPlaneProvider)
 
   Runtime registration writes through to the same app-env key, so it survives
   anything that re-reads configuration.
 
   ## Degradation
 
-  `call/3` is the only way methods reach the provider, and it never raises: a
-  missing provider, an unimplemented callback, an exception, an exit and a
-  throw all produce the caller's fallback value. That is what keeps every ops
-  method answering with an empty or "unavailable" payload — the shape ACP
-  clients already expect — in a runtime with no agent installed.
+  `call/3` never raises: a missing provider, an unimplemented callback, an
+  exception, an exit and a throw all produce the caller's fallback value.
+  Consumers choose an explicit fallback appropriate to their operation, including
+  an unavailable or unknown-outcome error for mutations.
   """
 
-  alias LemonControlPlane.AgentRuntime.Provider
+  alias LemonCore.AgentRuntime.Provider
 
   @setting :agent_runtime_provider
 
   @doc "The registered provider module, or `nil`."
   @spec provider() :: module() | nil
   def provider do
-    case Application.get_env(:lemon_control_plane, @setting) do
+    case Application.get_env(:lemon_core, @setting) do
       module when is_atom(module) and not is_nil(module) -> module
       _ -> nil
     end
@@ -56,7 +54,7 @@ defmodule LemonControlPlane.AgentRuntime do
   @spec register(module()) :: :ok | {:error, :not_a_provider}
   def register(module) when is_atom(module) do
     if Code.ensure_loaded?(module) do
-      Application.put_env(:lemon_control_plane, @setting, module)
+      Application.put_env(:lemon_core, @setting, module)
       :ok
     else
       {:error, :not_a_provider}
@@ -70,7 +68,7 @@ defmodule LemonControlPlane.AgentRuntime do
   the provider not implementing that optional callback, the call raising, the
   call exiting (a dead process behind it), and the call throwing — which is
   rare, but a provider is third-party code and a `throw` that escaped would
-  crash the ops method this exists to keep answering.
+  crash the consumer this exists to keep answering.
   """
   @spec call(atom(), [term()], term()) :: term()
   def call(function, args, fallback) when is_atom(function) and is_list(args) do
