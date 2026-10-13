@@ -19,14 +19,14 @@ defmodule CodingAgent.Coordinator do
 
       # Run multiple subagents concurrently
       results = CodingAgent.Coordinator.run_subagents(coordinator, [
-        %{prompt: "Analyze the code structure", subagent: "research"},
-        %{prompt: "Analyze the code structure", subagent: "review"}
+        %{prompt: "Analyze the code structure", subagent: "scout"},
+        %{prompt: "Analyze the code structure", subagent: "reviewer"}
       ])
 
       # Run a single subagent
       {:ok, result} = CodingAgent.Coordinator.run_subagent(coordinator,
         prompt: "Implement the feature",
-        subagent: "implement"
+        subagent: "task-executor"
       )
 
   ## Architecture
@@ -43,7 +43,7 @@ defmodule CodingAgent.Coordinator do
   require Logger
 
   alias CodingAgent.Session
-  alias CodingAgent.Subagents
+  alias CodingAgent.Tools.Task.Params
 
   # ============================================================================
   # Types
@@ -144,8 +144,8 @@ defmodule CodingAgent.Coordinator do
   ## Examples
 
       results = CodingAgent.Coordinator.run_subagents(coordinator, [
-        %{prompt: "Research the codebase", subagent: "research"},
-        %{prompt: "Review for bugs", subagent: "review"}
+        %{prompt: "Research the codebase", subagent: "scout"},
+        %{prompt: "Review for bugs", subagent: "reviewer"}
       ], timeout: 60_000)
   """
   @spec run_subagents(GenServer.server(), [subagent_spec()], keyword()) :: [subagent_result()]
@@ -170,7 +170,7 @@ defmodule CodingAgent.Coordinator do
 
       {:ok, result} = CodingAgent.Coordinator.run_subagent(coordinator,
         prompt: "Implement the login feature",
-        subagent: "implement",
+        subagent: "task-executor",
         timeout: 120_000
       )
   """
@@ -358,19 +358,14 @@ defmodule CodingAgent.Coordinator do
     subagent_id = spec[:subagent]
     description = spec[:description] || "Subagent #{id}"
 
-    # Apply subagent prompt if specified
-    final_prompt =
-      case maybe_apply_subagent_prompt(prompt, subagent_id, state.cwd) do
-        {:error, _} = err -> err
-        p -> p
-      end
+    params = %{"prompt" => prompt, "agent" => subagent_id, "description" => description}
 
-    case final_prompt do
+    case Params.validate_run_params(params, state.cwd) do
       {:error, reason} ->
         {:error, reason}
 
-      prompt_text ->
-        session_opts = build_session_opts(state, description)
+      {:ok, validated} ->
+        session_opts = build_session_opts(state, validated)
 
         case CodingAgent.start_session(session_opts) do
           {:ok, pid} ->
@@ -396,7 +391,7 @@ defmodule CodingAgent.Coordinator do
             }
 
             # Start the prompt
-            case Session.prompt(pid, prompt_text) do
+            case Session.prompt(pid, validated.prompt) do
               :ok ->
                 {:ok, subagent_state, new_state}
 
@@ -412,37 +407,17 @@ defmodule CodingAgent.Coordinator do
     end
   end
 
-  @spec build_session_opts(t(), String.t()) :: keyword()
-  defp build_session_opts(state, _description) do
-    base_opts = [
-      cwd: state.cwd,
-      model: state.model,
-      thinking_level: state.thinking_level,
-      register: true
-    ]
-
-    base_opts
-    |> maybe_add_opt(:settings_manager, state.settings_manager)
-    |> maybe_add_opt(:parent_session, state.parent_session)
-  end
-
-  @spec maybe_add_opt(keyword(), atom(), term()) :: keyword()
-  defp maybe_add_opt(opts, _key, nil), do: opts
-  defp maybe_add_opt(opts, key, value), do: Keyword.put(opts, key, value)
-
-  @spec maybe_apply_subagent_prompt(String.t(), String.t() | nil, String.t()) ::
-          String.t() | {:error, term()}
-  defp maybe_apply_subagent_prompt(prompt, nil, _cwd), do: prompt
-  defp maybe_apply_subagent_prompt(prompt, "", _cwd), do: prompt
-
-  defp maybe_apply_subagent_prompt(prompt, subagent_id, cwd) do
-    case Subagents.get(cwd, subagent_id) do
-      nil ->
-        {:error, "Unknown subagent: #{subagent_id}"}
-
-      agent ->
-        agent.prompt <> "\n\n" <> prompt
-    end
+  defp build_session_opts(state, validated) do
+    Params.build_session_opts(
+      state.cwd,
+      [
+        model: state.model,
+        thinking_level: state.thinking_level,
+        settings_manager: state.settings_manager,
+        parent_session: state.parent_session
+      ],
+      validated
+    )
   end
 
   @spec collect_results(

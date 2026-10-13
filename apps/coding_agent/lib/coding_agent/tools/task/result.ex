@@ -85,17 +85,27 @@ defmodule CodingAgent.Tools.Task.Result do
     :exit, _reason -> :ok
   end
 
-  @spec build_async_result(String.t(), String.t(), String.t() | nil) :: AgentToolResult.t()
-  def build_async_result(task_id, description, run_id) do
+  @spec build_async_result(map()) :: AgentToolResult.t()
+  def build_async_result(context) do
     %AgentToolResult{
-      content: [%TextContent{text: "Task queued: #{task_id}"}],
-      details: %{
-        task_id: task_id,
-        status: "queued",
-        description: description,
-        run_id: run_id
-      }
+      content: [%TextContent{text: "Task queued: #{context.task_id}"}],
+      details:
+        context
+        |> Map.take([:task_id, :description, :run_id])
+        |> Map.put(:status, "queued")
+        |> Map.merge(lineage_details(context))
     }
+  end
+
+  @doc false
+  def lineage_details(context) do
+    %{
+      parent_run_id: context[:parent_run_id],
+      parent_session_id: context[:parent_session_id],
+      agent: context[:role]
+    }
+    |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+    |> Map.new()
   end
 
   @spec build_update_content(String.t() | nil, String.t() | nil) :: [TextContent.t()]
@@ -448,6 +458,8 @@ defmodule CodingAgent.Tools.Task.Result do
       error: join_error_for_status(status, run)
     }
     |> Map.merge(Map.get(record, :workspace, %{}))
+    |> Map.merge(lineage_details(record))
+    |> Map.merge(public_result_details(record[:result] || run[:result]))
   end
 
   defp join_output_for_status(:completed, run), do: visible_output_text(run[:result])
@@ -504,15 +516,22 @@ defmodule CodingAgent.Tools.Task.Result do
       |> Map.take([
         :task_id,
         :run_id,
+        :parent_run_id,
+        :parent_session_id,
+        :session_id,
+        :agent,
         :description,
         :status,
         :output,
         :error,
         :cwd,
         :worktree_path,
-        :branch
+        :branch,
+        :structured_output
       ])
-      |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
+      |> Enum.reject(fn {key, value} ->
+        key != :structured_output and (is_nil(value) or value == "")
+      end)
       |> Map.new()
     end)
   end
@@ -559,7 +578,14 @@ defmodule CodingAgent.Tools.Task.Result do
     |> Enum.reject(fn {_key, value} -> is_nil(value) or value == "" end)
     |> Map.new()
     |> Map.merge(Map.get(record, :workspace, %{}))
+    |> Map.merge(lineage_details(record))
+    |> Map.merge(public_result_details(record[:result]))
   end
+
+  defp public_result_details(%AgentToolResult{details: details}) when is_map(details),
+    do: Map.take(details, [:structured_output, :session_id])
+
+  defp public_result_details(_), do: %{}
 
   defp maybe_put_preview(details, nil), do: details
   defp maybe_put_preview(details, ""), do: details
