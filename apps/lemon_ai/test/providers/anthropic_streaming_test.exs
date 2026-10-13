@@ -267,7 +267,7 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     assert {"x-api-key", "opencode-fallback-key"} in headers
   end
 
-  test "kimi request limits oversized message history before sending" do
+  test "kimi preserves oversized history for caller-owned compaction" do
     with_env(
       %{
         "LEMON_KIMI_MAX_REQUEST_MESSAGES" => nil
@@ -293,9 +293,9 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
 
         assert_receive {:kimi_limited_request_body, body}, 1_000
 
-        assert length(body["messages"]) == 200
-        assert hd(body["messages"])["content"] == "message 31"
-        assert List.last(body["messages"])["content"] == "message 230"
+        assert length(body["messages"]) == 230
+        assert hd(body["messages"])["content"] == "message 1"
+        assert [%{"text" => "message 230"}] = List.last(body["messages"])["content"]
         assert {:error, _} = EventStream.result(stream, 1_000)
       end
     )
@@ -573,6 +573,7 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
         model()
         | reasoning: true,
           adaptive_thinking: true,
+          max_tokens: 8192,
           reasoning_efforts: [:low, :medium, :high, :xhigh]
       }
 
@@ -598,6 +599,406 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
       assert body["thinking"]["type"] == "enabled"
       refute Map.has_key?(body, "output_config")
       assert {:error, _} = EventStream.result(stream, 1_000)
+    end
+  end
+
+  describe "request parity regressions" do
+    setup do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request, Jason.decode!(raw), Map.new(conn.req_headers)})
+        Plug.Conn.send_resp(conn, 200, sse_event("message_stop", %{}))
+      end)
+
+      :ok
+    end
+
+    test "manual budgets and max_tokens stay within the model ceiling" do
+      manual = %{model() | reasoning: true, max_tokens: 8192}
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      for {budget, expected} <- [{32_000, 4096}, {2048, 2048}] do
+        {:ok, stream} =
+          Anthropic.stream(manual, context, %StreamOptions{
+            api_key: "test-key",
+            max_tokens: 100_000,
+            reasoning: :high,
+            thinking_budgets: %{high: budget},
+            temperature: 0.2
+          })
+
+        assert {:ok, _} = EventStream.result(stream, 1_000)
+        assert_receive {:request, body, _headers}
+        assert body["max_tokens"] == 8192
+        assert body["thinking"] == %{"type" => "enabled", "budget_tokens" => expected}
+        assert body["temperature"] == 1
+      end
+    end
+
+    test "adaptive thinking omits temperature and merges required betas without a 1M beta" do
+      adaptive = %{
+        model()
+        | reasoning: true,
+          adaptive_thinking: true,
+          reasoning_efforts: [:low, :medium, :high],
+          context_window: 1_000_000
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      for api_key <- ["test-key", "sk-ant-oat01-test-token"] do
+        {:ok, stream} =
+          Anthropic.stream(adaptive, context, %StreamOptions{
+            api_key: api_key,
+            reasoning: :xhigh,
+            temperature: 0.2,
+            headers: %{"Anthropic-Beta" => "custom-beta,effort-2025-11-24"}
+          })
+
+        assert {:ok, _} = EventStream.result(stream, 1_000)
+        assert_receive {:request, body, headers}
+        assert body["thinking"] == %{"type" => "adaptive"}
+        assert body["output_config"] == %{"effort" => "high"}
+        refute Map.has_key?(body, "temperature")
+        betas = String.split(headers["anthropic-beta"], ",")
+        assert "custom-beta" in betas
+        assert Enum.count(betas, &(&1 == "effort-2025-11-24")) == 1
+        refute Enum.any?(betas, &String.starts_with?(&1, "context-1m"))
+      end
+    end
+
+    test "forced tool choice does not send incompatible thinking" do
+      context =
+        Context.new(
+          messages: [%UserMessage{content: "Lookup"}],
+          tools: [%Tool{name: "lookup", parameters: %{}}]
+        )
+
+      for adaptive? <- [false, true], choice <- [:any, "lookup"] do
+        thinking_model = %{model() | reasoning: true, adaptive_thinking: adaptive?}
+
+        {:ok, stream} =
+          Anthropic.stream(thinking_model, context, %StreamOptions{
+            api_key: "test-key",
+            reasoning: :high,
+            tool_choice: choice
+          })
+
+        assert {:ok, _} = EventStream.result(stream, 1_000)
+        assert_receive {:request, body, _headers}
+        refute Map.has_key?(body, "thinking")
+
+        if adaptive? do
+          assert body["output_config"] == %{"effort" => "low"}
+        else
+          refute Map.has_key?(body, "output_config")
+        end
+      end
+    end
+
+    test "caches the last string user message even when assistant history follows" do
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "First"},
+            %UserMessage{content: "Cache me"},
+            %LemonAi.Types.AssistantMessage{content: [%TextContent{text: "Prefill"}]}
+          ]
+        )
+
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, _} = EventStream.result(stream, 1_000)
+      assert_receive {:request, body, _headers}
+      assert [first, cached, assistant] = body["messages"]
+      assert first["content"] == "First"
+
+      assert cached["content"] == [
+               %{
+                 "type" => "text",
+                 "text" => "Cache me",
+                 "cache_control" => %{"type" => "ephemeral"}
+               }
+             ]
+
+      assert assistant["content"] == [%{"type" => "text", "text" => "Prefill"}]
+    end
+
+    test "cache retention applies consistently to system and user blocks" do
+      context = Context.new(system_prompt: "System", messages: [%UserMessage{content: "Hi"}])
+
+      for {retention, expected} <- [
+            none: nil,
+            short: %{"type" => "ephemeral"},
+            long: %{"type" => "ephemeral", "ttl" => "1h"}
+          ] do
+        {:ok, stream} =
+          Anthropic.stream(model(), context, %StreamOptions{
+            api_key: "test-key",
+            provider_options: %{anthropic: %{cache_retention: retention}}
+          })
+
+        assert {:ok, _} = EventStream.result(stream, 1_000)
+        assert_receive {:request, body, headers}
+        assert hd(body["system"])["cache_control"] == expected
+
+        if expected do
+          assert hd(hd(body["messages"])["content"])["cache_control"] == expected
+        else
+          assert hd(body["messages"])["content"] == "Hi"
+        end
+
+        assert String.contains?(headers["anthropic-beta"], "extended-cache-ttl") ==
+                 (retention == :long)
+      end
+    end
+
+    test "summarized adaptive display follows compat capability without model id inference" do
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+
+      for display? <- [false, true] do
+        adaptive = %{
+          model()
+          | reasoning: true,
+            adaptive_thinking: true,
+            compat: %{anthropic_thinking_display: display?}
+        }
+
+        {:ok, stream} =
+          Anthropic.stream(adaptive, context, %StreamOptions{
+            api_key: "test-key",
+            reasoning: :medium
+          })
+
+        assert {:ok, _} = EventStream.result(stream, 1_000)
+        assert_receive {:request, body, _headers}
+        assert body["thinking"]["type"] == "adaptive"
+        assert body["thinking"]["display"] == if(display?, do: "summarized", else: nil)
+      end
+    end
+
+    test "replays signed empty thinking blocks without dropping their signatures" do
+      context =
+        Context.new(
+          messages: [
+            %UserMessage{content: "Hi"},
+            %LemonAi.Types.AssistantMessage{
+              content: [
+                %LemonAi.Types.ThinkingContent{thinking: "", thinking_signature: "opaque"},
+                %TextContent{text: "Answer"}
+              ]
+            },
+            %UserMessage{content: "Continue"}
+          ]
+        )
+
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, _} = EventStream.result(stream, 1_000)
+      assert_receive {:request, body, _headers}
+
+      assert Enum.at(body["messages"], 1)["content"] == [
+               %{"type" => "thinking", "thinking" => "", "signature" => "opaque"},
+               %{"type" => "text", "text" => "Answer"}
+             ]
+    end
+  end
+
+  describe "SSE parity regressions" do
+    test "parses data-only event types, multiline data and CRLF across chunks" do
+      body =
+        ": keepalive\r\n\r\n" <>
+          "data: {\"type\":\"content_block_start\",\r\n" <>
+          "data: \"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"Hello\"}}\r\n\r\n" <>
+          "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" world\"}}\r\n\r\n" <>
+          "data: {\"type\":\"content_block_stop\",\"index\":0}\r\n\r\n" <>
+          "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\r\n\r\n"
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn = Plug.Conn.send_chunked(conn, 200)
+
+        Enum.reduce(:binary.bin_to_list(body), conn, fn byte, conn ->
+          {:ok, conn} = Plug.Conn.chunk(conn, <<byte>>)
+          conn
+        end)
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, result} = EventStream.result(stream, 1_000)
+      assert result.stop_reason == :length
+      assert [%TextContent{text: "Hello world"}] = result.content
+    end
+
+    test "preserves initial thinking signatures and complete tool inputs" do
+      body =
+        sse_event("content_block_start", %{
+          "index" => 2,
+          "content_block" => %{"type" => "thinking", "thinking" => "Plan", "signature" => "sig"}
+        }) <>
+          sse_event("content_block_delta", %{
+            "index" => 2,
+            "delta" => %{"type" => "signature_delta", "signature" => "-end"}
+          }) <>
+          sse_event("content_block_stop", %{"index" => 2}) <>
+          sse_event("content_block_start", %{
+            "index" => 4,
+            "content_block" => %{
+              "type" => "tool_use",
+              "id" => "tool_1",
+              "name" => "lookup",
+              "input" => %{"q" => "answer"}
+            }
+          }) <>
+          sse_event("content_block_stop", %{"index" => 4}) <>
+          sse_event("message_delta", %{"delta" => %{"stop_reason" => "tool_use"}})
+
+      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, result} = EventStream.result(stream, 1_000)
+      assert result.stop_reason == :tool_use
+
+      assert [
+               %LemonAi.Types.ThinkingContent{thinking: "Plan", thinking_signature: "sig-end"},
+               %LemonAi.Types.ToolCall{arguments: %{"q" => "answer"}}
+             ] = result.content
+    end
+
+    test "truncated responses fail while retaining streamed content and usage" do
+      for body <- [
+            "",
+            sse_event("message_start", %{"message" => %{"usage" => %{"input_tokens" => 12}}}) <>
+              sse_event("content_block_start", %{
+                "index" => 0,
+                "content_block" => %{"type" => "text", "text" => "Partial"}
+              })
+          ] do
+        Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+        context = Context.new(messages: [%UserMessage{content: "Hi"}])
+        {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+        assert {:error, result} = EventStream.result(stream, 1_000)
+        assert result.error_message =~ "stream ended before"
+
+        if body != "" do
+          assert result.usage.input == 12
+          assert [%TextContent{text: "Partial"}] = result.content
+        end
+      end
+    end
+
+    test "a streamed error cannot be overwritten by a trailing success envelope" do
+      body =
+        sse_event("error", %{"error" => %{"message" => "Overloaded"}}) <>
+          sse_event("message_delta", %{"delta" => %{"stop_reason" => "end_turn"}}) <>
+          sse_event("message_stop", %{})
+
+      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:error, %{error_message: "Overloaded"}} = EventStream.result(stream, 1_000)
+    end
+
+    test "usage snapshots preserve TTL subsets, replace counters and accept explicit zeros" do
+      start_usage = %{
+        "input_tokens" => 100,
+        "output_tokens" => 2,
+        "cache_read_input_tokens" => 20,
+        "cache_creation_input_tokens" => 10,
+        "cache_creation" => %{
+          "ephemeral_5m_input_tokens" => 6,
+          "ephemeral_1h_input_tokens" => 4
+        }
+      }
+
+      for clear? <- [false, true] do
+        delta_usage =
+          if clear? do
+            %{
+              "input_tokens" => 0,
+              "output_tokens" => 7,
+              "cache_read_input_tokens" => 0,
+              "cache_creation_input_tokens" => 0,
+              "cache_creation" => %{}
+            }
+          else
+            %{"output_tokens" => 7}
+          end
+
+        body =
+          sse_event("message_start", %{"message" => %{"usage" => start_usage}}) <>
+            sse_event("message_delta", %{
+              "delta" => %{"stop_reason" => "end_turn"},
+              "usage" => delta_usage
+            })
+
+        Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+        context = Context.new(messages: [%UserMessage{content: "Hi"}])
+        {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+        assert {:ok, result} = EventStream.result(stream, 1_000)
+        assert result.usage.output == 7
+        assert result.usage.cost == LemonAi.calculate_cost(model(), result.usage)
+
+        if clear? do
+          assert result.usage.total_tokens == 7
+          assert result.usage.cache_write_long == 0
+          assert result.usage.cost.cache_write == 0
+        else
+          assert result.usage.total_tokens == 137
+          assert result.usage.cache_write == 10
+          assert result.usage.cache_write_long == 4
+          assert_in_delta result.usage.cost.cache_write, 0.0000248, 0.00000001
+        end
+      end
+    end
+
+    test "TTL-only usage reports contribute cache writes exactly once" do
+      body =
+        sse_event("message_start", %{
+          "message" => %{
+            "usage" => %{
+              "cache_creation" => %{
+                "ephemeral_5m_input_tokens" => 6,
+                "ephemeral_1h_input_tokens" => 4
+              }
+            }
+          }
+        }) <>
+          sse_event("message_delta", %{
+            "delta" => %{"stop_reason" => "end_turn"},
+            "usage" => %{"output_tokens" => 1}
+          })
+
+      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body))
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:ok, result} = EventStream.result(stream, 1_000)
+      assert result.usage.cache_write == 10
+      assert result.usage.cache_write_long == 4
+      assert result.usage.total_tokens == 11
+    end
+
+    test "HTTP context errors retain the body and are not retried despite a 5xx status" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, :http_attempt)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(
+          500,
+          Jason.encode!(%{
+            "error" => %{"type" => "invalid_request_error", "message" => "prompt is too long"}
+          })
+        )
+      end)
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model(), context, %StreamOptions{api_key: "test-key"})
+      assert {:error, %{error_message: "prompt is too long"}} = EventStream.result(stream, 1_000)
+      assert_received :http_attempt
+      refute_received :http_attempt
     end
   end
 

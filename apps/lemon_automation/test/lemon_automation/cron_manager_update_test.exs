@@ -3,7 +3,18 @@ defmodule LemonAutomation.CronManagerUpdateTest do
 
   alias LemonAutomation.{CronManager, CronRun, CronStore}
 
+  defmodule AbortRouter do
+    def abort_run(id, _reason) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:router_abort, id})
+      :persistent_term.get({__MODULE__, :result}, :ok)
+    end
+  end
+
   setup do
+    previous_router = Application.get_env(:lemon_automation, :cron_router_mod)
+    Application.put_env(:lemon_automation, :cron_router_mod, AbortRouter)
+    :persistent_term.put({AbortRouter, :test_pid}, self())
+    :persistent_term.put({AbortRouter, :result}, :ok)
     token = System.unique_integer([:positive, :monotonic])
 
     {:ok, job} =
@@ -18,6 +29,13 @@ defmodule LemonAutomation.CronManagerUpdateTest do
       })
 
     on_exit(fn ->
+      if previous_router,
+        do: Application.put_env(:lemon_automation, :cron_router_mod, previous_router),
+        else: Application.delete_env(:lemon_automation, :cron_router_mod)
+
+      :persistent_term.erase({AbortRouter, :test_pid})
+      :persistent_term.erase({AbortRouter, :result})
+      for run <- CronStore.list_runs(job.id), do: CronStore.delete_run(run.id)
       _ = CronManager.remove(job.id)
     end)
 
@@ -206,6 +224,33 @@ defmodule LemonAutomation.CronManagerUpdateTest do
     CronStore.put_run(run)
 
     assert {:error, :not_active} = CronManager.abort_run(run.id)
+  end
+
+  test "prompt cwd updates preserve prompt mode and normalize the target", %{job: job} do
+    assert {:ok, updated} = CronManager.update(job.id, %{"cwd" => "."})
+    assert updated.cwd == File.cwd!()
+    assert updated.prompt == job.prompt
+    assert {:error, {:invalid_target, _}} = CronManager.update(job.id, %{cwd: 42})
+  end
+
+  test "unknown abort remains owned, is sent once, and blocks submission claims", %{job: job} do
+    :persistent_term.put({AbortRouter, :result}, {:error, :outcome_unknown})
+    run = job.id |> CronRun.new(:schedule) |> CronRun.start("router_abort_unknown")
+    CronStore.put_run(run)
+
+    assert {:error, :outcome_unknown} = CronManager.abort_run(run.id)
+    assert_receive {:router_abort, "router_abort_unknown"}
+    assert {:error, :outcome_unknown} = CronManager.abort_run(run.id)
+    refute_receive {:router_abort, _}, 50
+
+    assert %CronRun{status: :running, meta: %{outcome_unknown: true, abort_requested: true}} =
+             CronStore.get_run(run.id)
+
+    assert {:error, :aborted} =
+             GenServer.call(
+               CronManager,
+               {:claim_submission, run.id, run.run_id, "agent:default:main"}
+             )
   end
 
   defp await(fun, attempts \\ 50)

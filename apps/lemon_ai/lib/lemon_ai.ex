@@ -159,11 +159,22 @@ defmodule LemonAi do
   """
   @spec calculate_cost(Model.t(), LemonAi.Types.Usage.t()) :: LemonAi.Types.Cost.t()
   def calculate_cost(%Model{cost: model_cost}, %LemonAi.Types.Usage{} = usage) do
+    input_tokens = usage.input + usage.cache_read + usage.cache_write
+
+    model_cost =
+      case Map.get(model_cost, :long_context) do
+        %{input_threshold: threshold} = long_context when input_tokens > threshold -> long_context
+        _ -> model_cost
+      end
+
     # Cost is per million tokens
     input_cost = usage.input * model_cost.input / 1_000_000
     output_cost = usage.output * model_cost.output / 1_000_000
     cache_read_cost = usage.cache_read * model_cost.cache_read / 1_000_000
-    cache_write_cost = usage.cache_write * model_cost.cache_write / 1_000_000
+
+    cache_write_cost =
+      (usage.cache_write + min(usage.cache_write_long, usage.cache_write) * 0.6) *
+        model_cost.cache_write / 1_000_000
 
     %LemonAi.Types.Cost{
       input: input_cost,

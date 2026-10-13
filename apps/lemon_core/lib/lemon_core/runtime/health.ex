@@ -26,7 +26,7 @@ defmodule LemonCore.Runtime.Health do
   @poll_interval_ms 500
 
   @doc """
-  Returns `true` if a Lemon control-plane process is already healthy on `port`.
+  Returns `true` only for HTTP 200 with Lemon's `{"ok": true}` health body.
 
   Uses a plain TCP-level HTTP request to avoid depending on an HTTP client
   library at startup.  Times out after `timeout_ms` (default: 2 000 ms).
@@ -48,8 +48,8 @@ defmodule LemonCore.Runtime.Health do
   end
 
   @doc """
-  Polls `port` until the health endpoint returns HTTP 200 or `timeout_ms`
-  elapses.
+  Polls `port` until the health endpoint returns HTTP 200 with Lemon's healthy
+  JSON body or `timeout_ms` elapses.
 
   Returns `{:ok, :healthy}` on success or `{:error, :timeout}` on failure.
   """
@@ -128,7 +128,7 @@ defmodule LemonCore.Runtime.Health do
           try do
             with :ok <- :gen_tcp.send(socket, request),
                  {:ok, response} <- recv_response(socket, timeout_ms) do
-              parse_status(response)
+              parse_response(response)
             else
               _ -> {:error, :unreachable}
             end
@@ -145,25 +145,31 @@ defmodule LemonCore.Runtime.Health do
   end
 
   defp recv_response(socket, timeout) do
-    recv_response(socket, timeout, "")
+    recv_response(socket, System.monotonic_time(:millisecond) + timeout, "")
   end
 
-  defp recv_response(socket, timeout, acc) do
-    case :gen_tcp.recv(socket, 0, timeout) do
-      {:ok, data} -> recv_response(socket, timeout, acc <> data)
-      {:error, :closed} -> {:ok, acc}
-      {:error, reason} -> {:error, reason}
+  defp recv_response(socket, deadline, acc) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+
+    if remaining <= 0 or byte_size(acc) > 65_536 do
+      {:error, :invalid_response}
+    else
+      case :gen_tcp.recv(socket, 0, remaining) do
+        {:ok, data} -> recv_response(socket, deadline, acc <> data)
+        {:error, :closed} -> {:ok, acc}
+        {:error, reason} -> {:error, reason}
+      end
     end
   end
 
-  defp parse_status(
-         <<"HTTP/", _version::binary-size(3), " ", code::binary-size(3), _rest::binary>>
-       ) do
-    case Integer.parse(code) do
-      {status, ""} -> {:ok, status}
+  defp parse_response(response) do
+    with ["HTTP/" <> _ = headers, body] <- String.split(response, "\r\n\r\n", parts: 2),
+         [status | _] <- String.split(headers, "\r\n", parts: 2),
+         true <- Regex.match?(~r/^HTTP\/1\.[01] 200(?: |$)/, status),
+         {:ok, %{"ok" => true}} <- Jason.decode(body) do
+      {:ok, 200}
+    else
       _ -> {:error, :bad_response}
     end
   end
-
-  defp parse_status(_), do: {:error, :bad_response}
 end

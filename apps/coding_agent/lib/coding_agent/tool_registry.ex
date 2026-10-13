@@ -85,6 +85,7 @@ defmodule CodingAgent.ToolRegistry do
     {:media_generate_video, LemonSkills.Tools.MediaGenerateVideo},
     {:todo, Tools.Todo},
     {:kanban, LemonSkills.Tools.Kanban},
+    {:goal, LemonSkills.Tools.Goal},
     {:peer, LemonSkills.Tools.Peer},
     {:task, Tools.Task},
     {:agent, Tools.Agent},

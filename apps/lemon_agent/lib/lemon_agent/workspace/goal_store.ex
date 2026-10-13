@@ -35,6 +35,7 @@ defmodule LemonAgent.Workspace.GoalStore do
             id: existing[:id] || existing["id"] || goal_id(),
             session_key: session_key,
             agent_id: string_opt(opts[:agent_id]) || existing[:agent_id] || existing["agent_id"],
+            cwd: normalize_cwd(opts[:cwd]) || existing[:cwd],
             objective: objective,
             status: "active",
             created_at_ms: existing[:created_at_ms] || existing["created_at_ms"] || now,
@@ -108,11 +109,13 @@ defmodule LemonAgent.Workspace.GoalStore do
 
             updated =
               goal
-              |> Map.put(:status, "active")
               |> Map.put(:updated_at_ms, now)
-              |> Map.put(:paused_at_ms, nil)
               |> Map.put(:last_run_id, run_id)
-              |> Map.put(:continuation_count, goal.continuation_count + 1)
+              |> Map.put(
+                :continuation_count,
+                goal.continuation_count + if(goal.last_run_id == run_id, do: 0, else: 1)
+              )
+              |> put_completion(run_id, opts[:completion], now)
 
             with :ok <- Store.put(@table, session_key, updated) do
               emit(:goal_continuation_submitted, updated, Keyword.put(opts, :run_id, run_id))
@@ -182,10 +185,15 @@ defmodule LemonAgent.Workspace.GoalStore do
             loop =
               goal.meta
               |> current_loop()
+              |> reset_loop_run(opts)
               |> Map.put("status", status)
               |> Map.put("updatedAtMs", now)
               |> maybe_put("lastError", string_opt(opts[:error]))
-              |> maybe_put("lastRunId", string_opt(opts[:run_id]) || goal.last_run_id)
+              |> maybe_put(
+                "lastRunId",
+                if(opts[:reset_run], do: nil, else: string_opt(opts[:run_id]) || goal.last_run_id)
+              )
+              |> maybe_put("lastRunKind", string_opt(opts[:run_kind]))
               |> maybe_put("abortAttempted", opts[:abort_attempted])
               |> maybe_put("abortResult", string_opt(opts[:abort_result]))
               |> maybe_started_at(status, now)
@@ -324,6 +332,7 @@ defmodule LemonAgent.Workspace.GoalStore do
       id: field(goal, :id),
       session_key: field(goal, :session_key),
       agent_id: field(goal, :agent_id),
+      cwd: field(goal, :cwd),
       objective: field(goal, :objective),
       status: field(goal, :status) || "active",
       created_at_ms: field(goal, :created_at_ms),
@@ -338,6 +347,55 @@ defmodule LemonAgent.Workspace.GoalStore do
   end
 
   defp normalize_goal(_), do: %{}
+
+  defp normalize_cwd(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      path -> Path.expand(path)
+    end
+  end
+
+  defp normalize_cwd(_), do: nil
+
+  defp put_completion(goal, run_id, completion, now) do
+    result =
+      case completion do
+        {:ok, output} when is_binary(output) ->
+          %{"status" => "completed", "output" => String.slice(output, 0, 8_000)}
+
+        {:error, _reason} ->
+          %{"status" => "failed", "error" => "run failed"}
+
+        :timeout ->
+          %{"status" => "outcome_unknown"}
+
+        _ ->
+          nil
+      end
+
+    if result do
+      result = Map.merge(result, %{"runId" => run_id, "atMs" => now})
+      %{goal | meta: Map.put(goal.meta, "lastResult", result)}
+    else
+      goal
+    end
+  end
+
+  defp reset_loop_run(loop, opts) do
+    if opts[:reset_run] ||
+         (is_binary(opts[:run_id]) and opts[:run_id] != loop["lastRunId"]) do
+      Map.drop(loop, [
+        "lastRunId",
+        "lastRunKind",
+        "abortAttempted",
+        "abortResult",
+        "lastError",
+        "stoppedAtMs"
+      ])
+    else
+      loop
+    end
+  end
 
   defp normalize_budget(value) when is_map(value), do: value
   defp normalize_budget(_), do: %{}
@@ -536,6 +594,7 @@ defmodule LemonAgent.Workspace.GoalStore do
 
   defp field(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
 
+  defp string_opt(nil), do: nil
   defp string_opt(value) when is_binary(value) and value != "", do: value
   defp string_opt(value) when is_atom(value), do: Atom.to_string(value)
   defp string_opt(value) when is_integer(value), do: Integer.to_string(value)

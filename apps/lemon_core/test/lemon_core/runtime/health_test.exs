@@ -10,6 +10,35 @@ defmodule LemonCore.Runtime.HealthTest do
       refute Health.running?(19_999, timeout_ms: 200)
     end
 
+    test "requires Lemon's health body, not an unrelated HTTP 200" do
+      for {body, expected} <- [
+            {~s({"ok":true}), true},
+            {~s({"ok":false}), false},
+            {"unrelated server", false}
+          ] do
+        {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+        {:ok, port} = :inet.port(listener)
+
+        server =
+          Task.async(fn ->
+            {:ok, socket} = :gen_tcp.accept(listener)
+            {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+
+            :ok =
+              :gen_tcp.send(
+                socket,
+                "HTTP/1.0 200 OK\r\nContent-Length: #{byte_size(body)}\r\n\r\n#{body}"
+              )
+
+            :gen_tcp.close(socket)
+          end)
+
+        assert Health.running?(port, timeout_ms: 1_000) == expected
+        Task.await(server)
+        :gen_tcp.close(listener)
+      end
+    end
+
     test "repeated failures on closed port do not leak file descriptors" do
       # Probe a closed port many times and confirm we don't run out of fds.
       # If sockets leak, this would eventually fail with {:error, :emfile} or similar.

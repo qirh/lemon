@@ -26,10 +26,23 @@ defmodule LemonCore.Doctor.Checks.Runtime do
         "Control-plane is listening on port #{port}."
       )
     else
-      Check.skip(
-        "runtime.control_port",
-        "Control-plane not running on port #{port} (expected when not started)."
-      )
+      case :gen_tcp.connect(~c"127.0.0.1", port, [:binary, active: false], 500) do
+        {:ok, socket} ->
+          :gen_tcp.close(socket)
+
+          Check.fail(
+            "runtime.control_port",
+            "Port #{port} is occupied, but no healthy Lemon control-plane answered.",
+            "Inspect the process using this port. Stop the unhealthy runtime with `lemon stop` " <>
+              "or select a free LEMON_CONTROL_PLANE_PORT; do not start another daemon on this port."
+          )
+
+        {:error, _} ->
+          Check.skip(
+            "runtime.control_port",
+            "Control-plane not running on port #{port}. Run `lemon` to start a coding session."
+          )
+      end
     end
   end
 

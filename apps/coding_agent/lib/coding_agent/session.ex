@@ -1045,6 +1045,8 @@ defmodule CodingAgent.Session do
       |> CompactionManager.clear_overflow_recovery_state()
       |> Map.put(:follow_up_queue, :queue.new())
 
+    CodingAgent.Tools.Task.Control.cancel_parent(self())
+
     LemonAgent.Agent.abort(state.agent)
 
     if had_pending_prompt do
@@ -1069,6 +1071,11 @@ defmodule CodingAgent.Session do
 
   @spec handle_info(term(), t()) :: {:noreply, t()}
   @impl true
+  def handle_info({:task_progress, tool_call_id, result}, state) do
+    Notifier.broadcast_event(state, {:tool_execution_update, tool_call_id, "task", %{}, result})
+    {:noreply, state}
+  end
+
   def handle_info({:agent_event, {:error, _reason, _partial_state} = raw_event}, state) do
     # Stripped here, before the recovery branch, for the same reason the clause
     # below strips: everything this event reaches is a record of the

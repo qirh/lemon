@@ -58,6 +58,7 @@ defmodule LemonCli.Setup.Provider do
     Runner.ensure_required_apps!()
 
     {skip_verify?, rest} = extract_skip_verify(args)
+    skip_verify? = skip_verify? or Keyword.get(opts, :skip_verify, false)
     live_verify? = Keyword.get(opts, :live_verify, false)
 
     with :ok <- ensure_secrets_ready(io),

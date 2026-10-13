@@ -92,11 +92,20 @@ defmodule CodingAgent.Session.RunTranslator do
 
   def handle_event(
         %__MODULE__{} = t,
-        {:tool_execution_update, id, _name, _args, partial_result}
+        {:tool_execution_update, id, name, args, partial_result}
       ) do
     action_id = "tool_#{id}"
 
     case Map.get(t.pending_actions, action_id) do
+      nil when name == "task" ->
+        emit_action_event(t, %{
+          id: action_id,
+          kind: Presentation.tool_kind(name),
+          title: Presentation.tool_title(name, args),
+          phase: :updated,
+          detail: %{name: name, args: args, partial_result: partial_result}
+        })
+
       nil ->
         t
 
