@@ -312,6 +312,9 @@ defmodule CodingAgent.ToolRegistry do
 
   @doc """
   Get a report of tool name conflicts and extension load errors.
+
+  Counts describe the resolved, capability-available inventory. `builtin_count`
+  excludes unavailable optional tools, unlike the static `builtin_tool_names/0` list.
   """
   @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
   def tool_conflict_report(cwd, opts \\ []) do

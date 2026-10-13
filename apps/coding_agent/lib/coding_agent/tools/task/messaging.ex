@@ -25,7 +25,11 @@ defmodule CodingAgent.Tools.Task.Messaging do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "action" => %{"type" => "string", "enum" => ["send", "list"]},
+          "action" => %{
+            "type" => "string",
+            "enum" => ["send", "list"],
+            "description" => "Default send; list returns the scoped roster"
+          },
           "to" => %{
             "type" => "string",
             "description" => "Agent address, task ID, or unique live task name"

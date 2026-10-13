@@ -77,7 +77,11 @@ defmodule CodingAgent.Tools.AstGrep do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "action" => %{"type" => "string", "enum" => ["search", "replace"]},
+          "action" => %{
+            "type" => "string",
+            "enum" => ["search", "replace"],
+            "description" => "Search syntax or preview/apply replacement"
+          },
           "pattern" => %{
             "type" => "string",
             "description" => "AST pattern, e.g. console.log($$$ARGS) or $X && $X.foo"
