@@ -333,6 +333,8 @@ Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` 
 
 Task progress is delivered directly to parent session subscribers even after the launch tool call ends, with `details.task_id`, `run_id`, `description`, `status`, child `session_id` when allocated, and optional `current_action` (`title`, `kind`, `phase`). Receipts, progress, and result rows also carry available `parent_run_id`, `parent_session_id`, and named persona `agent`; tree consumers can index children by `run_id` and attach them to `parent_run_id` without guessing from completion order. A final progress update settles each child as `completed`, `error`, or `aborted`. Join results include structured visible `output` and `error` per child; hidden reasoning is not included.
 
+If a child's tool policy explicitly permits further delegation, descendant progress is relayed through native ancestors to the subscribed root session. Descendant task/run/session identities are preserved, including terminal updates; relay events are not relabeled or stored as the ancestor's own work.
+
 Pass `agent: "scout"`, `"reviewer"`, or `"task-executor"` to select a named persona. Persona instructions are composed into the child **system prompt**, not the user's task. The scout and reviewer are strictly read-only: only `read`, `grep`, `find`, and `ls` may be exposed, intersected with any narrower policy. Neither a project override, `read_only: false`, an explicit `tool_policy`, nor MCP/extra tools can grant those identities write, shell, or delegation capabilities. Other personas retain the leaf-worker policy unless explicitly restricted or overridden. The coordinator uses the same persona/session-option path.
 
 Set `output_schema` on a task or batch child to require a JSON-only final response. Validated data appears as `structured_output` in completion, `poll`, `get`, `join` task rows, and live final progress; JSON `null` remains an explicitly present field. Invalid JSON or a schema mismatch fails the task rather than silently accepting prose. Supported JSON Schema constraints include types/unions, objects (`properties`, `required`, `additionalProperties`), arrays (`items`, bounds, uniqueness), strings (length and Unicode regex `pattern`), numeric bounds/`multipleOf`, `enum`, `const`, and `allOf`/`anyOf`/`oneOf`/`not`. Boolean schemas are supported. References, formats, and unsupported keywords are rejected before launching work. Schemas are bounded to 64 KiB encoded JSON and 32 nesting levels; validation errors name the failed JSON path without echoing response values.
@@ -708,8 +710,8 @@ policy = CodingAgent.ToolPolicy.custom(
 )
 
 results = CodingAgent.Coordinator.run_subagents(coordinator, [
-  %{prompt: "Analyze the code", subagent: "research"},
-  %{prompt: "Review for bugs", subagent: "review"}
+  %{prompt: "Analyze the code", subagent: "scout"},
+  %{prompt: "Review for bugs", subagent: "reviewer"}
 ], timeout: 60_000)
 ```
 

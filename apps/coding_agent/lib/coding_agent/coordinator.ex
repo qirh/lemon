@@ -405,6 +405,9 @@ defmodule CodingAgent.Coordinator do
             {:error, reason}
         end
     end
+  rescue
+    error in [ArgumentError, LemonCore.Config.ValidationError] ->
+      {:error, Exception.message(error)}
   end
 
   defp build_session_opts(state, validated) do

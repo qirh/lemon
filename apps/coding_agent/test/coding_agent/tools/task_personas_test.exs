@@ -85,6 +85,20 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
 
     assert explicit.model == "@review"
 
+    settings = %CodingAgent.SettingsManager{
+      model_roles: %{
+        "task" => "openai:gpt-4",
+        "coding" => "openai:gpt-4o-mini",
+        "review" => "openai:gpt-4o"
+      }
+    }
+
+    assert Params.build_session_opts(cwd, [settings_manager: settings], persona)[:model].id ==
+             "gpt-4o-mini"
+
+    assert Params.build_session_opts(cwd, [settings_manager: settings], explicit)[:model].id ==
+             "gpt-4o"
+
     assert {:error, _} =
              Params.validate_run_params(%{"prompt" => "Inspect", "role" => "architect"}, cwd)
   end
