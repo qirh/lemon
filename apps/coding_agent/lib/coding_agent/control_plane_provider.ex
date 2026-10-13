@@ -34,7 +34,8 @@ defmodule CodingAgent.ControlPlaneProvider do
       nil ->
         with cwd when is_binary(cwd) <- Keyword.get(opts, :cwd),
              {:ok, path} <- native_session_path(session_key, cwd),
-             {:ok, pid} <- CodingAgent.Session.start_link(cwd: cwd, session_file: path) do
+             {:ok, pid} <-
+               CodingAgent.Session.start_link(native_session_opts(session_key, cwd, path)) do
           try do
             CodingAgent.Session.compact(pid, opts)
           after
@@ -108,6 +109,102 @@ defmodule CodingAgent.ControlPlaneProvider do
     else
       {:error, _} = error -> error
       _ -> {:error, :destination_exists}
+    end
+  end
+
+  def session_context_budget(session_key, cwd) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
+          settings = CodingAgent.SettingsManager.load(session.header.cwd)
+          context = CodingAgent.SessionManager.build_session_context(session)
+          model = CodingAgent.Session.ModelResolver.resolve_session_model(context.model, settings)
+          messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
+
+          budget =
+            CodingAgent.Session.ContextBudget.measure(
+              %{session_manager: session, model: model, settings_manager: settings},
+              %{messages: messages, system_prompt: nil, tools: []}
+            )
+
+          # Without a live prompt/tool snapshot, a post-compaction heuristic
+          # would omit overhead. Report unknown rather than a misleading count.
+          if budget.source == "estimate", do: {:error, :unavailable}, else: {:ok, budget}
+        end
+
+      pid ->
+        CodingAgent.Session.context_budget(pid)
+    end
+  end
+
+  @doc "Inspect or explicitly transition branch-aware native planning state."
+  def session_plan(session_key, cwd, action, opts) do
+    case live_session(session_key) do
+      nil ->
+        :global.trans({{__MODULE__, :plan, session_key}, self()}, fn ->
+          case native_session_path(session_key, cwd) do
+            {:ok, path} ->
+              :global.trans({{__MODULE__, path}, self()}, fn ->
+                with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                     {:ok, plan, _} <-
+                       CodingAgent.Session.Planning.transition(
+                         %{session | file_path: path},
+                         action,
+                         opts
+                       ) do
+                  {:ok, plan}
+                end
+              end)
+
+            {:error, :session_not_found} when action == :status ->
+              {:ok, CodingAgent.Session.Planning.empty()}
+
+            {:error, :session_not_found} when action == :enter ->
+              create_planning_session(session_key, cwd)
+
+            {:error, _} = error ->
+              error
+          end
+        end)
+
+      pid ->
+        CodingAgent.Session.plan(pid, action, opts)
+    end
+  end
+
+  defp create_planning_session(session_key, cwd) do
+    session = CodingAgent.SessionManager.new(cwd)
+    path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
+    session = CodingAgent.SessionManager.persist(session, path)
+
+    with {:ok, plan, _session} <- CodingAgent.Session.Planning.transition(session, :enter, []),
+         :ok <-
+           LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
+             last_engine: "lemon",
+             last_resume_token: session.header.id,
+             updated_at: System.system_time(:millisecond)
+           }),
+         :ok <-
+           LemonCore.RunStore.create_session_index(
+             session_key,
+             LemonCore.SessionKey.agent_id(session_key) || "default",
+             :control_plane
+           ) do
+      {:ok, plan}
+    end
+  end
+
+  defp native_session_opts(session_key, cwd, path) do
+    agent_id = LemonCore.SessionKey.agent_id(session_key) || "default"
+    opts = [cwd: cwd, session_file: path, session_key: session_key, agent_id: agent_id]
+
+    case LemonCore.ProfileStore.get(agent_id) do
+      {:ok, %{"canonicalSessionKey" => ^session_key, "paths" => %{"workspace" => workspace}}} ->
+        Keyword.put(opts, :workspace_dir, workspace)
+
+      _ ->
+        opts
     end
   end
 

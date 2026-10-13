@@ -60,6 +60,13 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
   @callback session_rewind(session_key(), Path.t(), String.t(), keyword()) ::
               {:ok, map()} | {:error, term()}
 
+  @doc "Inspect or explicitly enter, approve, or discard the native planning phase."
+  @callback session_plan(session_key(), Path.t(), atom(), keyword()) ::
+              {:ok, map()} | {:error, term()}
+
+  @doc "Current native context usage, model window, reserve and compaction headroom."
+  @callback session_context_budget(session_key(), Path.t()) :: {:ok, map()} | {:error, term()}
+
   @doc "Returns the tool policy for a named runtime mode."
   @callback tool_policy(atom()) :: map()
 
@@ -128,6 +135,8 @@ defmodule LemonControlPlane.AgentRuntime.Provider do
                       session_fork: 3,
                       session_tree: 3,
                       session_rewind: 4,
+                      session_plan: 4,
+                      session_context_budget: 2,
                       tool_policy: 1,
                       background_start: 2,
                       background_list: 1,
