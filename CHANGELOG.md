@@ -8,11 +8,81 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- **Tern integration.** `lemon acp` is a runtime-attached ACP stdio agent and
+  `lemon tern install` registers Lemon as a native Tern chat agent plus a
+  managed plugin ("New session in split", "Focus existing session"). In a Tern
+  pane, `lemon` opens the native chat (`lemon tui` keeps the terminal UI).
+  ACP sessions are durable and forkable, stream rich tool cards, diffs, plans,
+  thoughts, usage and subagent updates, run bash in native client terminals,
+  bind client MCP servers to the session, support plan mode with reviewed
+  revision approval, `ask` forms via `elicitation/create`, and exact-preview
+  permissions. The TUI emits Tern-native surfaces (prompt/reply marks, Run
+  controls, working/approval states, Carly delegation, `/fork` in a split) and
+  file links that open at the exact line.
+- **Non-interactive coding.** `lemon -p`/`lemon run` take stdin prompts, emit
+  text/JSON/stream-JSON, continue sessions, select model/cwd, control tool
+  approvals, report usage and budgets, and use automation-friendly exit codes.
+- **Subagents.** Parallel fan-out with live progress, optional git-worktree
+  isolation, named personas (`.lemon/agents/*.md`; built-in scout, reviewer,
+  task-executor), configurable model roles, schema-validated results, scoped
+  `agent_message` messaging, first-result waits, and dependency-aware
+  `task(action="swarm")` DAGs.
+- **Sessions.** Checkpoint-backed `/rewind` (preview-bound, with explicit
+  consent for partial restore across shell effects), `/tree`, `/name`, search,
+  independent forks, plan mode (`/plan`, `/approve-plan <revision>`),
+  `/compact <focus>`, context-budget snapshots, and bounded per-repository
+  project memory recalled as labelled background context.
+- **Coding tools.** Snapshot-anchored edits, bounded directory/archive/PDF/
+  notebook/image reads, optional ast-grep structural search/replace, native
+  plans, `skill://` and session-scoped `artifact://` URLs with ranged recovery
+  of complete shell output.
+- **TUI.** Image drafts and `@` file mentions, fuzzy command/skill/prompt
+  palette, live subagent tree, full tool/diff inspector, faster bytecode
+  startup (first frame ~48 ms), and fixed shutdown/editor handoff hangs.
+- **Providers.** Opt-in import of an existing Codex CLI login, per-account
+  Codex model discovery, refreshed GPT/Claude/Gemini catalogs and pricing,
+  Codex prompt-cache affinity, and per-run/per-session token and cost budgets.
+- **MCP.** `lemon mcp add|list|remove|test`, session-owned connections,
+  capability-aware discovery and per-tool approvals; omp/Claude-compatible
+  skill layouts are discovered.
+- **Automation.** Goals, cron and kanban dispatch repository-targeted coding
+  runs with persisted results; opt-in reviewed kanban workflows (isolated
+  worktree, independent read-only review, exact-tree commit, explicitly
+  configured publication; never pushes by default); channel notifications and
+  exact-preview Telegram/Discord approvals; `/manage/work` web dashboard with
+  live sessions, tool output and subagent trees.
+- **Operations.** `lemon update` with verified daemon restart and rollback,
+  build identity in `--version` and doctor, image input on
+  `chat.send`/`profile.chat`, and an opt-in 12-task live coding benchmark
+  (`mix lemon.eval.coding`) with omp comparison and token profiling.
+
+### Fixed
+
+- Accepted runs always receive durable, ordered terminal receipts across
+  admission, queue retirement, cancellation and crash recovery; cancelling
+  drains in-flight events so tool output and partial prose persist with honest
+  unknown/not-started outcomes; uncertain admissions keep their fixed run ID.
+- WebSocket clients no longer disconnect on streamed tool results, encoding
+  failures, or after 60 s of inbound idle time (server keepalive pings).
+- Transient transport errors (closed/reset/timeout) retry inside the agent
+  loop using structured error metadata; permanent failures and exhausted quotas
+  do not.
+- Coding tools reject ambiguous edits, bound reads, refuse binary content,
+  keep long shell output retrievable, and kill shell process trees on forced
+  cancellation.
+- Source startup is faster, reuses healthy daemons, preserves the caller's
+  directory and keeps CLI JSON stdout clean; setup selects usable defaults and
+  doctor diagnoses unreadable credentials and port conflicts.
+- Wire usage counts native cache read/write tokens; session restores preserve
+  provider identity and costs; cold checkpoint reads no longer create atoms.
+
 ### Changed
 
 - Source and packaged launchers now share command dispatch, help, completion,
   and lifecycle semantics. Running `lemon` in a terminal opens the TUI;
-  `lemon start`/`lemon run` start the foreground runtime. Non-interactive
+  `lemon start` starts the foreground runtime. Non-interactive
   no-argument calls return usage with exit code 2. `send`, `media`, `models`,
   `policy`, `skill`, `usage`, and `migrate hermes` also work without Mix in
   runtime releases.
