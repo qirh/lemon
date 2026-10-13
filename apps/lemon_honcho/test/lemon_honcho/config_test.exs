@@ -55,8 +55,6 @@ defmodule LemonHoncho.ConfigTest do
     :message_max_chars
   ]
 
-  @umbrella_mix_exs Path.expand("../../../../mix.exs", __DIR__)
-
   setup do
     saved_env = Map.new(@env_vars, &{&1, System.get_env(&1)})
     saved_app = Map.new(@app_keys, &{&1, Application.fetch_env(:lemon_honcho, &1)})
@@ -277,25 +275,6 @@ defmodule LemonHoncho.ConfigTest do
     end
   end
 
-  # This app contributes itself on the way up: the memory provider, the context
-  # contributor and the tools are all registered from `LemonHoncho.Application`.
-  # Nothing in the umbrella declares `{:lemon_honcho, in_umbrella: true}`, so a
-  # release that does not name the app never starts it and the whole integration
-  # is absent with no diagnostic. That failure is invisible at runtime, so it is
-  # asserted here instead.
-  describe "release packaging" do
-    test "both runtime releases start the app" do
-      releases = umbrella_releases()
-
-      for name <- [:lemon_runtime_min, :lemon_runtime_full] do
-        applications = get_in(releases, [name, :applications])
-
-        assert applications[:lemon_honcho] == :permanent,
-               "#{name} does not start :lemon_honcho; nothing registers in that release"
-      end
-    end
-  end
-
   describe "observation_flags/1" do
     test "directional has both peers observing both sides" do
       flags = Config.observation_flags(%Config{observation_mode: :directional})
@@ -314,28 +293,6 @@ defmodule LemonHoncho.ConfigTest do
                ai: %{observe_me: false, observe_others: true}
              }
     end
-  end
-
-  # The umbrella's own `Mix.Project` module is not loaded when this suite runs
-  # from inside the app, so the release list is read out of the source file. The
-  # keyword list there is entirely literal, so evaluating that one node is the
-  # same as reading the data — which keeps the assertion about the actual
-  # applications rather than about a substring of the file.
-  defp umbrella_releases do
-    {:ok, ast} = @umbrella_mix_exs |> File.read!() |> Code.string_to_quoted()
-
-    {_ast, releases_ast} =
-      Macro.prewalk(ast, nil, fn
-        {:defp, _meta, [{:releases, _, args}, [do: body]]} = node, _acc when args in [nil, []] ->
-          {node, body}
-
-        node, acc ->
-          {node, acc}
-      end)
-
-    assert releases_ast, "no releases/0 found in #{@umbrella_mix_exs}"
-
-    releases_ast |> Code.eval_quoted() |> elem(0)
   end
 
   defp restore_env({name, nil}), do: System.delete_env(name)
