@@ -154,6 +154,12 @@ which defaults to verify-only). It splits the tag into package and version, runs
 `scripts/release_package --verify`, then `--publish-tagged`. Without the
 `HEX_API_KEY` secret the publish step exits with a notice instead of failing.
 
+Create that key on the hex.pm dashboard (Settings → Keys → Generate New Key);
+Hex 2.5 removed `mix hex.user key`. Scope it to the `lemon_*` packages rather
+than API write, give it an expiry, and store it with `gh secret set HEX_API_KEY`.
+The key is shown once; rotate it by generating a new one and re-setting the
+secret.
+
 ## Changelogs
 
 Each of the five keeps `apps/<pkg>/CHANGELOG.md` in Keep a Changelog format;
