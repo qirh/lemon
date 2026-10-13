@@ -680,6 +680,8 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 
 The default prompt treats Lemon as a coding agent: inspect relevant code before editing, use the tools actually available to the session, preserve user changes, finish the requested behavior, and report only verification that was observed. Behavioral changes call for focused checks and relevant edge cases—not an unrelated full-suite sweep. Read-only requests stay read-only. One-off coding tasks do not require creating skills or saving temporary facts merely to finalize.
 
+Use `todo` for a multi-step task when tracking is useful. Create or replace the task list, including changed statuses, with `action: "write"` and the full `todos` list. `action: "progress"` only reads completion counts; it does not update tasks.
+
 Repository instructions load from global home locations first, followed by ancestors from filesystem root to the working directory. Each directory includes its root, `.claude/`, and `.lemon/` `AGENTS.md`/`CLAUDE.md` files. Source headers state the applicable directory scope; deeper instructions override broader guidance. Duplicate symlink or hard-link aliases load once using their most specific location.
 
 At session start, Lemon captures the actual Git worktree root, branch/status, a bounded top-level layout, and descendant instruction-file paths. The index lists paths, not file contents: read applicable guides not already injected before editing their directories. Git-backed discovery respects ignored untracked files and excludes generated trees; non-Git discovery uses a bounded traversal without following symlinks. Truncated or unavailable discovery is explicitly labelled, so an omitted path is not proof that a guide does not exist.
