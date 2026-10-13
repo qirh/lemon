@@ -10,7 +10,7 @@ This behavior is identical in source checkouts and packaged installs:
 
 - In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI.
 - Without a TTY, `lemon` prints usage to stderr and exits with status 2.
-- `lemon start` and `lemon run` start the runtime in the foreground.
+- `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
 
 Use `./bin/lemon` instead of `lemon` in the examples below when running from a
 source checkout.
@@ -25,12 +25,12 @@ The registry defines their help and completion; the launcher executes them:
 | --- | --- | --- | --- |
 | `tui [args]` | Yes | Yes | Reuse a healthy runtime; otherwise run `setup --if-required` in an interactive terminal, start the daemon, and open the TUI. |
 | `web [--no-open]` | Yes | Full profile only | Start the daemon if needed, wait for Web UI health, and print its URL; open a browser unless `--no-open` is set. |
-| `start`, `run` | Yes | Yes | Run the runtime in the foreground. |
+| `start` | Yes | Yes | Run the runtime in the foreground. |
 | `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
 | `stop`, `restart`, `status` | Yes | Yes | Manage or inspect the daemon using its pidfile. |
 | `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
 
-Source runtime options go after `start`, `run`, `daemon`, or `restart`:
+Source runtime options go after `start`, `daemon`, or `restart`:
 `--debug`, `--port N`, `--web-port N`, `--sim-port N`, `--name name@host`,
 `--sname name`, `--cookie C`, and `--no-distribution`. For example,
 `./bin/lemon start --no-distribution`. Runtime options are accepted after the
@@ -43,6 +43,7 @@ packaged releases:
 
 | Command | Availability | Notes |
 | --- | --- | --- |
+| `run`, `-p`, `--print` | Source and release | Run a coding prompt non-interactively, reusing or starting the local daemon. |
 | `setup` | Source and release | `setup --if-required` exits 0 if setup is complete; otherwise runs the wizard and exits 1 if setup remains incomplete. |
 | `model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers` | Source and release | Configure or inspect Lemon and its integrations. |
 | `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
@@ -66,6 +67,40 @@ Commands that document `--json` emit JSON on success. Redacted operational
 error JSON is supported by the profile, session, blueprint, provider, learning,
 and secret-source command families; other commands report errors as text on
 stderr. Invalid arguments remain human-readable usage errors.
+
+## Non-interactive coding
+
+```bash
+lemon -p "Explain this repository"
+echo 'list files' | lemon -p --output stream-json
+lemon run "Fix the failing parser" --cwd ./project --model openai-codex:gpt-5.5 \
+  --approval-policy allow --output json | jq .
+lemon run "Continue the fix" --continue
+lemon run "Review the changes" --session agent:default:cli-SESSION
+```
+
+With no prompt argument, `run` reads stdin to EOF. A prompt argument is used
+as-is (stdin is not read). Empty prompts and invalid options exit 2. A fresh
+run creates a durable, isolated session. `--continue` resumes the most recently
+updated CLI session for the current `--cwd`; `--session` selects an explicit
+session key. The two flags are mutually exclusive.
+
+`--output text` (default) prints only the final answer. `json` prints one
+result document with `ok`, `answer`, `error`, `run_id`, and `session_key`.
+`stream-json` prints newline-delimited JSON: an `init` record, run-scoped
+`event` records containing control-plane event names and payloads, and a final
+`result` record. Startup diagnostics stay on stderr. Runs exit 0 only when the
+agent reports success; submission, connection, provider, and execution failures
+exit 1. Runs are bounded to ten minutes; timeout cancels the submitted run.
+
+Non-interactive mode never waits for a human approval. `--approval-policy deny`
+(default) denies requested approvals; `allow` approves each request once.
+Existing tool policy still applies. Use `--allowed-tools read,grep,find` and/or
+`--denied-tools bash,write,edit` to narrow the run's tool policy. These flags
+do not provide OS-level sandboxing. The daemon is reused when healthy and is
+started through the normal launcher when absent; the client does not boot a
+second router or scheduler.
+
 
 ## Update lifecycle
 

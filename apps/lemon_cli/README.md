@@ -40,7 +40,8 @@ only readiness, stable provenance, counts, byte counts, and error kinds.
 | Purpose | Installed release | Source checkout |
 | --- | --- | --- |
 | Start TUI (interactive no-argument launch) | `lemon` | `./bin/lemon` |
-| Foreground runtime | `lemon start` or `lemon run` | `./bin/lemon start` or `./bin/lemon run` |
+| Foreground runtime | `lemon start` | `./bin/lemon start` |
+| Non-interactive coding | `lemon -p "prompt"` or `lemon run` | `./bin/lemon -p "prompt"` or `./bin/lemon run` |
 | Background runtime | `lemon daemon` | `./bin/lemon daemon` |
 | First-time setup | `lemon setup` | `./bin/lemon setup` |
 | Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |
@@ -84,7 +85,7 @@ in source and packaged runtimes, including `send`, `media`, `models`, `policy`,
 their existing Mix tasks are thin source-development adapters.
 
 Lifecycle commands are registry entries too (for help and completion), but the
-launcher shell executes them: `tui`, `web`, `start`, `run`, `daemon`, `stop`,
+launcher shell executes them: `tui`, `web`, `start`, `daemon`, `stop`,
 `restart`, and `status` work in both launchers; `remote`, `eval`, and `rpc` are
 release-only. Reaching a lifecycle command inside `LemonCli.CLI` is a usage
 error. Both launchers export `LEMON_CLI_LAUNCHER` (`source` or `release`) for
