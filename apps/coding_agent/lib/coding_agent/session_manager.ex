@@ -397,7 +397,9 @@ defmodule CodingAgent.SessionManager do
 
   @doc """
   Fork the selected branch into an independent session file, preserving model,
-  thinking level and compaction history. The source file is never modified.
+  thinking level and compaction history. A separate cumulative-spend snapshot
+  includes off-branch usage so forking cannot reset budget caps; it does not add
+  model-visible conversation messages. The source file is never modified.
   """
   @spec fork_file(String.t(), String.t(), keyword()) :: {:ok, Session.t()} | {:error, term()}
   def fork_file(source_path, destination_path, opts \\ []) do
