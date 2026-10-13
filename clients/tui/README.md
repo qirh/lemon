@@ -92,6 +92,38 @@ remains a legacy client-side alias; it does not configure the daemon.
   branch, connection state, session counters.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
   support in overlays.
+- Native terminal integration: Tern pane detection, prompt/reply navigation
+  marks (OSC 133), clickable URL and file references (OSC 8, including `#L42`
+  line anchors), a session/status title, turn-completion and approval desktop
+  notifications, and an indeterminate progress indicator while working.
+
+### Tern and modern terminals
+
+Run `lemon` in a Tern pane as in any terminal. The TUI detects `TERN_PANE` or
+`TERM_PROGRAM=Tern`; its transcript marks stay attached to prompt/reply rows
+as they enter native scrollback, enabling Tern's command/reply navigation.
+Markdown URLs, inline-code file references such as `src/app.ts:42`, and file
+tool-card titles are clickable. File targets are absolute `file://` URLs with
+an optional `#L42` fragment; paths with spaces and special characters are
+URL-encoded.
+
+The title shows the focused session key and current status. `lemon_session`
+and `lemon_status` are exported as base64 OSC 1337 SetUserVar markers; this
+terminal client intentionally does **not** claim `tern_acp_session`, which is
+reserved for native ACP chats. Notifications contain only generic status,
+never prompts, answers, commands, or tool arguments. Tern receives OSC 9;
+other terminals receive OSC 9 or OSC 777 according to their identity.
+
+pi-tui negotiates kitty keyboard support with a capability query rather than
+assuming it from environment variables, preserving the parent keyboard flags.
+Exit and external-editor handoff restore the keyboard, cursor, raw mode and
+title, clear the progress indicator and remove the session markers.
+`LEMON_TUI_NOTIFICATIONS=0` disables desktop notifications.
+`LEMON_TUI_TERMINAL_INTEGRATION=0` disables Lemon's terminal side channels and
+transcript marks. `PI_NO_HYPERLINKS=1` disables links; pi-tui's multiplexer
+capability policy remains authoritative. Non-TTY and `TERM=dumb` output do not
+emit Lemon's side channels.
+
 
 ## Hermes-compatible commands
 
