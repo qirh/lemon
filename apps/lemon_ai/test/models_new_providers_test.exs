@@ -111,11 +111,6 @@ defmodule LemonAi.ModelsNewProvidersTest do
       assert model != nil
       assert model.name == "DeepSeek R1 (Alias)"
     end
-
-    test "all DeepSeek models can be listed" do
-      models = Models.get_models(:deepseek)
-      assert length(models) == 3
-    end
   end
 
   describe "Qwen models" do

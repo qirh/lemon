@@ -148,4 +148,39 @@ defmodule LemonAgent.ModelRuntime.ModelCatalogTest do
       assert ModelCatalog.available_catalog() == ModelCatalog.available_catalog()
     end
   end
+
+  describe "sort_for_picker/1" do
+    defp ids(models), do: models |> ModelCatalog.sort_for_picker() |> Enum.map(& &1.id)
+
+    test "lists newer versions first instead of lexical order" do
+      models =
+        for {id, name} <- [
+              {"gpt-5.4", "GPT-5.4"},
+              {"gpt-6.1-sol", "GPT-6.1 Sol"},
+              {"gpt-5.10", "GPT-5.10"},
+              {"gpt-6-sol", "GPT-6 Sol"}
+            ],
+            do: %{provider: "openai-codex", id: id, name: name}
+
+      assert ids(models) == ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.10", "gpt-5.4"]
+    end
+
+    test "snapshot dates, parameter counts and vendor prefixes are not versions" do
+      models = [
+        %{provider: "openai", id: "gpt-4o-2024-11-20", name: "GPT-4o (2024-11-20)"},
+        %{provider: "openai", id: "gpt-4o-2024-05-13", name: "GPT-4o (2024-05-13)"},
+        %{provider: "openai", id: "gpt-oss-120b", name: "gpt-oss-120b"},
+        %{provider: "openrouter", id: "ai21/jamba-large-1.7", name: "AI21: Jamba Large 1.7"},
+        %{provider: "minimax", id: "MiniMax-M3", name: "MiniMax-M3"}
+      ]
+
+      assert ids(models) == [
+               "gpt-4o-2024-11-20",
+               "gpt-4o-2024-05-13",
+               "MiniMax-M3",
+               "ai21/jamba-large-1.7",
+               "gpt-oss-120b"
+             ]
+    end
+  end
 end

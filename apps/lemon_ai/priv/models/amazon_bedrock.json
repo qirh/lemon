@@ -296,6 +296,33 @@
     "context_window": 200000,
     "max_tokens": 64000
   },
+  "anthropic.claude-haiku-5-5": {
+    "id": "anthropic.claude-haiku-5-5",
+    "name": "Claude Haiku 5.5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 100000,
+        "input": 0.5,
+        "output": 2.5,
+        "cache_read": 0.05,
+        "cache_write": 0.625
+      }
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "anthropic.claude-opus-4-1-20250805-v1:0": {
     "id": "anthropic.claude-opus-4-1-20250805-v1:0",
     "name": "Claude Opus 4.1 (Bedrock)",
@@ -376,6 +403,46 @@
     "context_window": 200000,
     "max_tokens": 128000
   },
+  "anthropic.claude-opus-5": {
+    "id": "anthropic.claude-opus-5",
+    "name": "Claude Opus 5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5.0,
+      "output": 25.0,
+      "cache_read": 0.5,
+      "cache_write": 6.25
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "anthropic.claude-opus-5-5": {
+    "id": "anthropic.claude-opus-5-5",
+    "name": "Claude Opus 5.5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_read": 0.2,
+      "cache_write": 5.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "anthropic.claude-sonnet-4-20250514-v1:0": {
     "id": "anthropic.claude-sonnet-4-20250514-v1:0",
     "name": "Claude Sonnet 4 (Bedrock)",
@@ -435,6 +502,46 @@
     },
     "context_window": 200000,
     "max_tokens": 64000
+  },
+  "anthropic.claude-sonnet-5": {
+    "id": "anthropic.claude-sonnet-5",
+    "name": "Claude Sonnet 5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "anthropic.claude-sonnet-5-5": {
+    "id": "anthropic.claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
   },
   "cohere.command-r-plus-v1:0": {
     "id": "cohere.command-r-plus-v1:0",
@@ -531,6 +638,66 @@
     "context_window": 163840,
     "max_tokens": 81920
   },
+  "eu.amazon.nova-2-lite-v1:0": {
+    "id": "eu.amazon.nova-2-lite-v1:0",
+    "name": "Nova 2 Lite (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.374,
+      "output": 3.157,
+      "cache_read": 0.0935,
+      "cache_write": 0.374
+    },
+    "context_window": 1000000,
+    "max_tokens": 65535
+  },
+  "eu.anthropic.claude-fable-5": {
+    "id": "eu.anthropic.claude-fable-5",
+    "name": "Claude Fable 5 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 1.0,
+      "cache_write": 12.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "eu.anthropic.claude-fable-5-1": {
+    "id": "eu.anthropic.claude-fable-5-1",
+    "name": "Claude Fable 5.1 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 0.25,
+      "cache_write": 12.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
     "id": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
     "name": "Claude Haiku 4.5 (EU)",
@@ -550,6 +717,33 @@
     },
     "context_window": 200000,
     "max_tokens": 64000
+  },
+  "eu.anthropic.claude-haiku-5-5": {
+    "id": "eu.anthropic.claude-haiku-5-5",
+    "name": "Claude Haiku 5.5 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 100000,
+        "input": 0.5,
+        "output": 2.5,
+        "cache_read": 0.05,
+        "cache_write": 0.625
+      }
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
   },
   "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
     "id": "eu.anthropic.claude-opus-4-5-20251101-v1:0",
@@ -589,6 +783,46 @@
       "cache_write": 6.25
     },
     "context_window": 200000,
+    "max_tokens": 128000
+  },
+  "eu.anthropic.claude-opus-5": {
+    "id": "eu.anthropic.claude-opus-5",
+    "name": "Claude Opus 5 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5.0,
+      "output": 25.0,
+      "cache_read": 0.5,
+      "cache_write": 6.25
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "eu.anthropic.claude-opus-5-5": {
+    "id": "eu.anthropic.claude-opus-5-5",
+    "name": "Claude Opus 5.5 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_read": 0.2,
+      "cache_write": 5.0
+    },
+    "context_window": 1000000,
     "max_tokens": 128000
   },
   "eu.anthropic.claude-sonnet-4-20250514-v1:0": {
@@ -651,6 +885,106 @@
     "context_window": 200000,
     "max_tokens": 64000
   },
+  "eu.anthropic.claude-sonnet-5": {
+    "id": "eu.anthropic.claude-sonnet-5",
+    "name": "Claude Sonnet 5 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "eu.anthropic.claude-sonnet-5-5": {
+    "id": "eu.anthropic.claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5 (EU)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "global.amazon.nova-2-lite-v1:0": {
+    "id": "global.amazon.nova-2-lite-v1:0",
+    "name": "Nova 2 Lite (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.33,
+      "output": 2.75,
+      "cache_read": 0.0825,
+      "cache_write": 0.33
+    },
+    "context_window": 1000000,
+    "max_tokens": 65535
+  },
+  "global.anthropic.claude-fable-5": {
+    "id": "global.anthropic.claude-fable-5",
+    "name": "Claude Fable 5 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 1.0,
+      "cache_write": 12.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "global.anthropic.claude-fable-5-1": {
+    "id": "global.anthropic.claude-fable-5-1",
+    "name": "Claude Fable 5.1 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 0.25,
+      "cache_write": 12.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
     "id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
     "name": "Claude Haiku 4.5 (Global)",
@@ -670,6 +1004,33 @@
     },
     "context_window": 200000,
     "max_tokens": 64000
+  },
+  "global.anthropic.claude-haiku-5-5": {
+    "id": "global.anthropic.claude-haiku-5-5",
+    "name": "Claude Haiku 5.5 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125,
+      "long_context": {
+        "input_threshold": 100000,
+        "input": 0.5,
+        "output": 2.5,
+        "cache_read": 0.05,
+        "cache_write": 0.625
+      }
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
   },
   "global.anthropic.claude-opus-4-5-20251101-v1:0": {
     "id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
@@ -709,6 +1070,46 @@
       "cache_write": 6.25
     },
     "context_window": 200000,
+    "max_tokens": 128000
+  },
+  "global.anthropic.claude-opus-5": {
+    "id": "global.anthropic.claude-opus-5",
+    "name": "Claude Opus 5 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5.0,
+      "output": 25.0,
+      "cache_read": 0.5,
+      "cache_write": 6.25
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "global.anthropic.claude-opus-5-5": {
+    "id": "global.anthropic.claude-opus-5-5",
+    "name": "Claude Opus 5.5 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_read": 0.2,
+      "cache_write": 5.0
+    },
+    "context_window": 1000000,
     "max_tokens": 128000
   },
   "global.anthropic.claude-sonnet-4-20250514-v1:0": {
@@ -771,6 +1172,145 @@
     "context_window": 200000,
     "max_tokens": 64000
   },
+  "global.anthropic.claude-sonnet-5": {
+    "id": "global.anthropic.claude-sonnet-5",
+    "name": "Claude Sonnet 5 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "global.anthropic.claude-sonnet-5-5": {
+    "id": "global.anthropic.claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "global.moonshotai.kimi-k3": {
+    "id": "global.moonshotai.kimi-k3",
+    "name": "Kimi K3 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_read": 0.3,
+      "cache_write": 3.75
+    },
+    "context_window": 1048576,
+    "max_tokens": 128000
+  },
+  "global.openai.gpt-6-astra": {
+    "id": "global.openai.gpt-6-astra",
+    "name": "GPT-6 Astra (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 1.0,
+      "cache_write": 12.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "global.openai.gpt-6-luna": {
+    "id": "global.openai.gpt-6-luna",
+    "name": "GPT-6 Luna (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "global.openai.gpt-6.1-sol": {
+    "id": "global.openai.gpt-6.1-sol",
+    "name": "GPT-6.1 Sol (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "global.zai.glm-5.3": {
+    "id": "global.zai.glm-5.3",
+    "name": "GLM-5.3 (Global)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 1.68,
+      "output": 5.28,
+      "cache_read": 0.312,
+      "cache_write": 2.1
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "google.gemma-3-27b-it": {
     "id": "google.gemma-3-27b-it",
     "name": "Google Gemma 3 27B Instruct (Bedrock)",
@@ -810,6 +1350,66 @@
     },
     "context_window": 128000,
     "max_tokens": 4096
+  },
+  "google.gemma-4-26b-a4b": {
+    "id": "google.gemma-4-26b-a4b",
+    "name": "Gemma 4 26B A4B IT (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.13,
+      "output": 0.4,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 32768
+  },
+  "google.gemma-4-31b": {
+    "id": "google.gemma-4-31b",
+    "name": "Gemma 4 31B IT (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.14,
+      "output": 0.4,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 32768
+  },
+  "google.gemma-4-e2b": {
+    "id": "google.gemma-4-e2b",
+    "name": "Gemma 4 E2B IT (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.04,
+      "output": 0.08,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 131072,
+    "max_tokens": 8192
   },
   "meta.llama3-1-70b-instruct-v1:0": {
     "id": "meta.llama3-1-70b-instruct-v1:0",
@@ -1024,6 +1624,44 @@
     "context_window": 204800,
     "max_tokens": 131072
   },
+  "minimax.minimax-m2.5": {
+    "id": "minimax.minimax-m2.5",
+    "name": "MiniMax-M2.5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 196608,
+    "max_tokens": 98304
+  },
+  "mistral.devstral-2-123b": {
+    "id": "mistral.devstral-2-123b",
+    "name": "Devstral 2 123B (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.4,
+      "output": 2.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 8192
+  },
   "mistral.ministral-3-14b-instruct": {
     "id": "mistral.ministral-3-14b-instruct",
     "name": "Ministral 14B 3.0 (Bedrock)",
@@ -1042,6 +1680,26 @@
     },
     "context_window": 128000,
     "max_tokens": 4096
+  },
+  "mistral.ministral-3-3b-instruct": {
+    "id": "mistral.ministral-3-3b-instruct",
+    "name": "Ministral 3 3B (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.1,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 256000,
+    "max_tokens": 8192
   },
   "mistral.ministral-3-8b-instruct": {
     "id": "mistral.ministral-3-8b-instruct",
@@ -1080,6 +1738,26 @@
     },
     "context_window": 128000,
     "max_tokens": 4096
+  },
+  "mistral.mistral-large-3-675b-instruct": {
+    "id": "mistral.mistral-large-3-675b-instruct",
+    "name": "Mistral Large 3 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": false,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.5,
+      "output": 1.5,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 8192
   },
   "mistral.voxtral-mini-3b-2507": {
     "id": "mistral.voxtral-mini-3b-2507",
@@ -1178,6 +1856,25 @@
     "context_window": 128000,
     "max_tokens": 4096
   },
+  "nvidia.nemotron-nano-3-30b": {
+    "id": "nvidia.nemotron-nano-3-30b",
+    "name": "NVIDIA Nemotron Nano 3 30B (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.06,
+      "output": 0.24,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 8192
+  },
   "nvidia.nemotron-nano-9b-v2": {
     "id": "nvidia.nemotron-nano-9b-v2",
     "name": "NVIDIA Nemotron Nano 9B v2 (Bedrock)",
@@ -1196,6 +1893,85 @@
     },
     "context_window": 128000,
     "max_tokens": 4096
+  },
+  "nvidia.nemotron-super-3-120b": {
+    "id": "nvidia.nemotron-super-3-120b",
+    "name": "NVIDIA Nemotron 3 Super 120B A12B (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.15,
+      "output": 0.65,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 131072
+  },
+  "openai.gpt-6-astra": {
+    "id": "openai.gpt-6-astra",
+    "name": "GPT-6 Astra (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 11.0,
+      "output": 55.0,
+      "cache_read": 1.1,
+      "cache_write": 13.75
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "openai.gpt-6-luna": {
+    "id": "openai.gpt-6-luna",
+    "name": "GPT-6 Luna (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.11,
+      "output": 0.55,
+      "cache_read": 0.011,
+      "cache_write": 0.1375
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "openai.gpt-6.1-sol": {
+    "id": "openai.gpt-6.1-sol",
+    "name": "GPT-6.1 Sol (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.2,
+      "output": 11.0,
+      "cache_read": 0.11,
+      "cache_write": 2.75
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
   },
   "openai.gpt-oss-120b-1:0": {
     "id": "openai.gpt-oss-120b-1:0",
@@ -1349,6 +2125,25 @@
     "context_window": 131072,
     "max_tokens": 65536
   },
+  "qwen.qwen3-coder-next": {
+    "id": "qwen.qwen3-coder-next",
+    "name": "Qwen3 Coder Next (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": false,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.5,
+      "output": 1.2,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 262144,
+    "max_tokens": 16000
+  },
   "qwen.qwen3-next-80b-a3b": {
     "id": "qwen.qwen3-next-80b-a3b",
     "name": "Qwen3 Next 80B A3B Instruct (Bedrock)",
@@ -1388,6 +2183,66 @@
     "context_window": 262000,
     "max_tokens": 262000
   },
+  "us.amazon.nova-2-lite-v1:0": {
+    "id": "us.amazon.nova-2-lite-v1:0",
+    "name": "Nova 2 Lite (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.33,
+      "output": 2.75,
+      "cache_read": 0.0825,
+      "cache_write": 0.33
+    },
+    "context_window": 1000000,
+    "max_tokens": 65535
+  },
+  "us.anthropic.claude-fable-5": {
+    "id": "us.anthropic.claude-fable-5",
+    "name": "Claude Fable 5 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 11.0,
+      "output": 55.0,
+      "cache_read": 1.1,
+      "cache_write": 13.75
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "us.anthropic.claude-fable-5-1": {
+    "id": "us.anthropic.claude-fable-5-1",
+    "name": "Claude Fable 5.1 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 11.0,
+      "output": 55.0,
+      "cache_read": 0.275,
+      "cache_write": 13.75
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
     "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "name": "Claude Haiku 4.5 (US)",
@@ -1407,6 +2262,33 @@
     },
     "context_window": 200000,
     "max_tokens": 64000
+  },
+  "us.anthropic.claude-haiku-5-5": {
+    "id": "us.anthropic.claude-haiku-5-5",
+    "name": "Claude Haiku 5.5 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.11,
+      "output": 0.55,
+      "cache_read": 0.011,
+      "cache_write": 0.1375,
+      "long_context": {
+        "input_threshold": 100000,
+        "input": 0.55,
+        "output": 2.75,
+        "cache_read": 0.05499999999999999,
+        "cache_write": 0.6875
+      }
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
   },
   "us.anthropic.claude-opus-4-1-20250805-v1:0": {
     "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
@@ -1488,6 +2370,46 @@
     "context_window": 200000,
     "max_tokens": 128000
   },
+  "us.anthropic.claude-opus-5": {
+    "id": "us.anthropic.claude-opus-5",
+    "name": "Claude Opus 5 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5.5,
+      "output": 27.5,
+      "cache_read": 0.55,
+      "cache_write": 6.875
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "us.anthropic.claude-opus-5-5": {
+    "id": "us.anthropic.claude-opus-5-5",
+    "name": "Claude Opus 5.5 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.4,
+      "output": 22.0,
+      "cache_read": 0.22,
+      "cache_write": 5.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "us.anthropic.claude-sonnet-4-20250514-v1:0": {
     "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
     "name": "Claude Sonnet 4 (US)",
@@ -1547,6 +2469,145 @@
     },
     "context_window": 200000,
     "max_tokens": 64000
+  },
+  "us.anthropic.claude-sonnet-5": {
+    "id": "us.anthropic.claude-sonnet-5",
+    "name": "Claude Sonnet 5 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.2,
+      "output": 11.0,
+      "cache_read": 0.22,
+      "cache_write": 2.75
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "us.anthropic.claude-sonnet-5-5": {
+    "id": "us.anthropic.claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.2,
+      "output": 11.0,
+      "cache_read": 0.11,
+      "cache_write": 2.75
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "us.moonshotai.kimi-k3": {
+    "id": "us.moonshotai.kimi-k3",
+    "name": "Kimi K3 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 3.3,
+      "output": 16.5,
+      "cache_read": 0.33,
+      "cache_write": 4.125
+    },
+    "context_window": 1048576,
+    "max_tokens": 128000
+  },
+  "us.openai.gpt-6-astra": {
+    "id": "us.openai.gpt-6-astra",
+    "name": "GPT-6 Astra (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 11.0,
+      "output": 55.0,
+      "cache_read": 1.1,
+      "cache_write": 13.75
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "us.openai.gpt-6-luna": {
+    "id": "us.openai.gpt-6-luna",
+    "name": "GPT-6 Luna (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.11,
+      "output": 0.55,
+      "cache_read": 0.011,
+      "cache_write": 0.1375
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "us.openai.gpt-6.1-sol": {
+    "id": "us.openai.gpt-6.1-sol",
+    "name": "GPT-6.1 Sol (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.2,
+      "output": 11.0,
+      "cache_read": 0.11,
+      "cache_write": 2.75
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "us.zai.glm-5.3": {
+    "id": "us.zai.glm-5.3",
+    "name": "GLM-5.3 (US)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 1.848,
+      "output": 5.808,
+      "cache_read": 0.3432,
+      "cache_write": 2.31
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
   },
   "writer.palmyra-x4-v1:0": {
     "id": "writer.palmyra-x4-v1:0",
@@ -1622,6 +2683,25 @@
       "cache_write": 0.0
     },
     "context_window": 200000,
+    "max_tokens": 131072
+  },
+  "zai.glm-5": {
+    "id": "zai.glm-5",
+    "name": "GLM-5 (Bedrock)",
+    "api": "bedrock_converse_stream",
+    "provider": "amazon_bedrock",
+    "base_url": "https://bedrock-runtime.us-east-1.amazonaws.com",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 1.0,
+      "output": 3.2,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 202752,
     "max_tokens": 131072
   }
 }

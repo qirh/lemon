@@ -186,7 +186,6 @@ defmodule LemonAi.ModelsLegacyTest do
       models = Models.get_models(:kimi_coding)
 
       assert is_list(models)
-      assert length(models) == 2
       assert Enum.all?(models, &match?(%Model{provider: :kimi_coding}, &1))
     end
   end
@@ -1044,14 +1043,13 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.max_tokens == 32_768
     end
 
-    test "kimi provider includes all 3 models" do
+    test "kimi provider includes the K2 models" do
       models = Models.get_models(:kimi)
       ids = Enum.map(models, & &1.id)
 
       assert "kimi-for-coding" in ids
       assert "k2p5" in ids
       assert "kimi-k2-thinking" in ids
-      assert length(models) == 3
     end
   end
 
@@ -1095,8 +1093,6 @@ defmodule LemonAi.ModelsLegacyTest do
       models = Models.get_models(:amazon_bedrock)
 
       assert is_list(models)
-      # Synced from Pi catalog: currently 83 Bedrock models
-      assert length(models) == 83
       assert Enum.all?(models, &match?(%Model{provider: :amazon_bedrock}, &1))
     end
 

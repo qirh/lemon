@@ -37,6 +37,58 @@
     "context_window": 8192,
     "max_tokens": 8192
   },
+  "groq/compound": {
+    "id": "groq/compound",
+    "name": "Compound",
+    "api": "openai_completions",
+    "provider": "groq",
+    "base_url": "https://api.groq.com/openai/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 131072,
+    "max_tokens": 8192,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
+  "groq/compound-mini": {
+    "id": "groq/compound-mini",
+    "name": "Compound Mini",
+    "api": "openai_completions",
+    "provider": "groq",
+    "base_url": "https://api.groq.com/openai/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 131072,
+    "max_tokens": 8192,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ]
+  },
   "llama-3.1-8b-instant": {
     "id": "llama-3.1-8b-instant",
     "name": "Llama 3.1 8B Instant",
@@ -285,5 +337,30 @@
     },
     "context_window": 131072,
     "max_tokens": 16384
+  },
+  "qwen/qwen3.8-27b": {
+    "id": "qwen/qwen3.8-27b",
+    "name": "Qwen3.8 27B",
+    "api": "openai_completions",
+    "provider": "groq",
+    "base_url": "https://api.groq.com/openai/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.8,
+      "output": 4.0,
+      "cache_read": 0.0,
+      "cache_write": 0.0
+    },
+    "context_window": 131042,
+    "max_tokens": 16384,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ]
   }
 }

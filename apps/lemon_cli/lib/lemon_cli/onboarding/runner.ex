@@ -1,6 +1,7 @@
 defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
+  alias LemonAgent.ModelRuntime.ModelCatalog
   alias LemonCli.CLI
   alias LemonCli.Onboarding.LogSilencer
   alias LemonCore.OAuth.LocalCallbackListener
@@ -554,9 +555,10 @@ defmodule LemonCli.Onboarding.Runner do
            provider_atom_for_models(models_module, spec.id) do
       models_module
       |> apply(:get_models, [provider])
+      |> Enum.map(&%{provider: to_string(&1.provider), id: &1.id, name: &1.name})
+      |> ModelCatalog.sort_for_picker()
       |> Enum.map(& &1.id)
       |> Enum.uniq()
-      |> Enum.sort()
     else
       _ ->
         []

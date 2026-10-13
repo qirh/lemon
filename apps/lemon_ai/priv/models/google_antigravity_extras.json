@@ -39,6 +39,66 @@
     "context_window": 200000,
     "max_tokens": 128000
   },
+  "claude-opus-5-5-high": {
+    "id": "claude-opus-5-5-high",
+    "name": "Claude Opus 5.5 High (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "claude-opus-5-5-low": {
+    "id": "claude-opus-5-5-low",
+    "name": "Claude Opus 5.5 Low (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "claude-opus-5-5-medium": {
+    "id": "claude-opus-5-5-medium",
+    "name": "Claude Opus 5.5 Medium (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4,
+      "output": 20,
+      "cache_read": 0.2,
+      "cache_write": 5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "claude-sonnet-4-5": {
     "id": "claude-sonnet-4-5",
     "name": "Claude Sonnet 4.5 (Antigravity)",
@@ -99,6 +159,66 @@
     "context_window": 200000,
     "max_tokens": 64000
   },
+  "claude-sonnet-5-5-high": {
+    "id": "claude-sonnet-5-5-high",
+    "name": "Claude Sonnet 5.5 High (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "claude-sonnet-5-5-low": {
+    "id": "claude-sonnet-5-5-low",
+    "name": "Claude Sonnet 5.5 Low (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
+  "claude-sonnet-5-5-medium": {
+    "id": "claude-sonnet-5-5-medium",
+    "name": "Claude Sonnet 5.5 Medium (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1000000,
+    "max_tokens": 128000
+  },
   "gemini-3-flash": {
     "id": "gemini-3-flash",
     "name": "Gemini 3 Flash (Antigravity)",
@@ -115,6 +235,193 @@
       "output": 3.0,
       "cache_read": 0.5,
       "cache_write": 0.0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65535
+  },
+  "gemini-3.1-pro-low": {
+    "id": "gemini-3.1-pro-low",
+    "name": "Gemini 3.1 Pro Low (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 12,
+      "cache_read": 0.2,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65535
+  },
+  "gemini-3.5-flash-lite": {
+    "id": "gemini-3.5-flash-lite",
+    "name": "Gemini 3.5 Flash Lite (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 2.5,
+      "cache_read": 0.03,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65535,
+    "adaptive_thinking": false,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "gemini-3.8-flash-high": {
+    "id": "gemini-3.8-flash-high",
+    "name": "Gemini 3.8 Flash High (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536
+  },
+  "gemini-3.8-flash-low": {
+    "id": "gemini-3.8-flash-low",
+    "name": "Gemini 3.8 Flash Low (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536
+  },
+  "gemini-3.8-flash-medium": {
+    "id": "gemini-3.8-flash-medium",
+    "name": "Gemini 3.8 Flash Medium (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.75,
+      "output": 3.75,
+      "cache_read": 0.075,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536
+  },
+  "gemini-4-argon-high": {
+    "id": "gemini-4-argon-high",
+    "name": "Gemini 4 Argon High (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536
+  },
+  "gemini-4-argon-low": {
+    "id": "gemini-4-argon-low",
+    "name": "Gemini 4 Argon Low (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536
+  },
+  "gemini-4-argon-medium": {
+    "id": "gemini-4-argon-medium",
+    "name": "Gemini 4 Argon Medium (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 10,
+      "cache_read": 0.1,
+      "cache_write": 0
+    },
+    "context_window": 1048576,
+    "max_tokens": 65536
+  },
+  "gemini-pro-agent": {
+    "id": "gemini-pro-agent",
+    "name": "Gemini 3.1 Pro High (Antigravity)",
+    "api": "google_gemini_cli",
+    "provider": "google_antigravity",
+    "base_url": "https://daily-cloudcode-pa.sandbox.googleapis.com",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2,
+      "output": 12,
+      "cache_read": 0.2,
+      "cache_write": 0
     },
     "context_window": 1048576,
     "max_tokens": 65535

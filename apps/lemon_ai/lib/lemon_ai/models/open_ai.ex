@@ -7,9 +7,10 @@ defmodule LemonAi.Models.OpenAI do
   per-million-token pricing. Edit the JSON to add a model or change a price;
   `mix lemon.models` lists what is currently defined.
 
-  `codex_models/0` exposes only the ChatGPT OAuth models declared by the
-  reference catalog, with their own limits and service-tier pricing. OAuth
-  subscription access does not imply zero token cost in usage estimates.
+  `codex_models/0` exposes the ChatGPT OAuth models declared by the reference
+  catalog, with their own limits and service-tier pricing, plus earlier ChatGPT
+  models kept for existing configs. OAuth subscription access does not imply
+  zero token cost in usage estimates.
   """
 
   alias LemonAi.Models.Catalog
@@ -18,60 +19,97 @@ defmodule LemonAi.Models.OpenAI do
   @external_resource Catalog.path("open_ai.json")
   @models Catalog.load!("open_ai.json")
 
-  # Source: oh-my-pi/packages/catalog/src/models.json, openai-codex.
-  # Most entries share direct-API metadata, but not their context limits.
+  # Source: oh-my-pi/packages/catalog/src/models.json, openai-codex (chat
+  # models only). The ChatGPT surface has its own context windows and prices,
+  # so entries are declared whole instead of inheriting direct-API metadata.
+  # Specs: {id, name, context_window, {input, output, cache_read, cache_write},
+  # long_context | nil}. Long-context rates apply above 272k input tokens.
+  @codex_priority_cost 2.5
+
   @codex_specs [
+    {"gpt-5.6-luna", "GPT-5.6 Luna", 1_000_000, {0.2, 1.2, 0.02, 0.25}, {0.4, 1.8, 0.04, 0.5}},
+    {"gpt-5.6-sol", "GPT-5.6 Sol", 1_000_000, {4, 20, 0.4, 5}, {10, 45, 1, 12.5}},
+    {"gpt-5.6-terra", "GPT-5.6 Terra", 1_000_000, {2, 12, 0.2, 2.5}, {4, 18, 0.4, 5}},
+    {"gpt-6-astra", "GPT-6 Astra", 272_000, {10, 50, 1, 0}, nil},
+    {"gpt-6-luna", "GPT-6 Luna", 272_000, {0.1, 0.5, 0.01, 0}, nil},
+    {"gpt-6-sol", "GPT-6 Sol", 272_000, {2, 10, 0.2, 0}, nil},
+    {"gpt-6.1-sol", "GPT-6.1 Sol", 500_000, {2, 10, 0.1, 0}, nil},
+    {"gpt-daybreak-blue-latest", "Daybreak Blue", 272_000, {5, 30, 0.5, 6.25}, nil}
+  ]
+
+  @codex_models Map.new(@codex_specs, fn {id, name, context_window, costs, long_context} ->
+                  {input, output, cache_read, cache_write} = costs
+
+                  long_context =
+                    case long_context do
+                      nil ->
+                        nil
+
+                      {lc_input, lc_output, lc_cache_read, lc_cache_write} ->
+                        %{
+                          input_threshold: 272_000,
+                          input: lc_input,
+                          output: lc_output,
+                          cache_read: lc_cache_read,
+                          cache_write: lc_cache_write
+                        }
+                    end
+
+                  {id,
+                   %Model{
+                     id: id,
+                     name: name,
+                     api: :openai_codex_responses,
+                     provider: :"openai-codex",
+                     base_url: "https://chatgpt.com",
+                     reasoning: true,
+                     adaptive_thinking: false,
+                     reasoning_efforts: [:low, :medium, :high, :xhigh],
+                     input: [:text, :image],
+                     cost: %LemonAi.Types.ModelCost{
+                       input: input,
+                       output: output,
+                       cache_read: cache_read,
+                       cache_write: cache_write,
+                       long_context: long_context
+                     },
+                     context_window: context_window,
+                     max_tokens: 128_000,
+                     service_tier_cost: %{"flex" => 0.5, "priority" => @codex_priority_cost}
+                   }}
+                end)
+
+  # Earlier ChatGPT models that omp no longer lists. Kept so existing configs,
+  # sessions and defaults still resolve; live Codex discovery decides what a
+  # given account can use. They inherit direct-API metadata from open_ai.json.
+  @legacy_codex_specs [
     {"gpt-5.3-codex-spark", "gpt-5.3-codex", 128_000, 2},
     {"gpt-5.4", "gpt-5.4", 272_000, 2},
     {"gpt-5.4-mini", "gpt-5.4-mini", 272_000, 2},
-    {"gpt-5.5", "gpt-5.5", 272_000, 2.5},
-    {"gpt-5.6-luna", "gpt-5.6-luna", 1_000_000, 2},
-    {"gpt-5.6-sol", "gpt-5.6-sol", 1_000_000, 2},
-    {"gpt-5.6-terra", "gpt-5.6-terra", 1_000_000, 2},
-    {"gpt-6-astra", "gpt-5.6-sol", 272_000, 2.5},
-    {"gpt-daybreak-blue-latest", "daybreak-blue-latest", 272_000, 2}
+    {"gpt-5.5", "gpt-5.5", 272_000, 2.5}
   ]
 
-  @codex_models Map.new(@codex_specs, fn {id, source, context_window, priority} ->
-                  model = Map.fetch!(@models, source)
+  @legacy_codex_models Map.new(@legacy_codex_specs, fn {id, source, context_window, priority} ->
+                         model = %Model{
+                           Map.fetch!(@models, source)
+                           | id: id,
+                             api: :openai_codex_responses,
+                             provider: :"openai-codex",
+                             base_url: "https://chatgpt.com",
+                             context_window: context_window,
+                             max_tokens: 128_000,
+                             service_tier_cost: %{"flex" => 0.5, "priority" => priority}
+                         }
 
-                  model = %Model{
-                    model
-                    | id: id,
-                      api: :openai_codex_responses,
-                      provider: :"openai-codex",
-                      base_url: "https://chatgpt.com",
-                      context_window: context_window,
-                      max_tokens: 128_000,
-                      service_tier_cost: %{"flex" => 0.5, "priority" => priority}
-                  }
+                         model =
+                           if id == "gpt-5.3-codex-spark",
+                             do: %Model{model | name: "GPT-5.3 Codex Spark", input: [:text]},
+                             else: model
 
-                  model =
-                    case id do
-                      "gpt-5.3-codex-spark" ->
-                        %Model{model | name: "GPT-5.3 Codex Spark", input: [:text]}
+                         {id, model}
+                       end)
 
-                      "gpt-6-astra" ->
-                        %Model{
-                          model
-                          | name: "GPT-6-Astra",
-                            cost: %LemonAi.Types.ModelCost{
-                              input: 10,
-                              output: 50,
-                              cache_read: 1,
-                              cache_write: 0
-                            }
-                        }
-
-                      "gpt-daybreak-blue-latest" ->
-                        %Model{model | cost: %{model.cost | long_context: nil}}
-
-                      _ ->
-                        model
-                    end
-
-                  {id, model}
-                end)
+  @all_codex_models Map.merge(@legacy_codex_models, @codex_models)
 
   @doc "Returns all OpenAI model definitions as a map."
   @spec models() :: %{String.t() => Model.t()}
@@ -79,5 +117,5 @@ defmodule LemonAi.Models.OpenAI do
 
   @doc "Returns the supported ChatGPT OAuth model catalog."
   @spec codex_models() :: %{String.t() => Model.t()}
-  def codex_models, do: @codex_models
+  def codex_models, do: @all_codex_models
 end
