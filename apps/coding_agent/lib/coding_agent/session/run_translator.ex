@@ -25,6 +25,8 @@ defmodule CodingAgent.Session.RunTranslator do
     :run_id,
     :resume_token,
     :delta_callback,
+    :retry_action_id,
+    :compaction_action_id,
     accumulated_text: "",
     pending_actions: %{},
     reasoning_accumulator: nil,
@@ -208,15 +210,66 @@ defmodule CodingAgent.Session.RunTranslator do
       "Provider request failed (#{Map.get(details, :category, :transient)}); " <>
         "retrying in #{seconds}s (attempt #{attempt}/#{max_retries})"
 
-    emit_action_event(t, %{
-      id: "provider_retry_#{attempt}_#{System.unique_integer([:positive])}",
-      kind: :note,
-      title: text,
-      phase: :completed,
-      level: :warning,
-      message: Map.get(details, :reason),
-      detail: %{text: text, retry: details}
-    })
+    id = t.retry_action_id || "provider_retry_#{System.unique_integer([:positive])}"
+
+    t =
+      emit_action_event(t, %{
+        id: id,
+        kind: :note,
+        title: text,
+        phase: if(t.retry_action_id, do: :updated, else: :started),
+        level: :warning,
+        detail: %{text: text, retry: details}
+      })
+
+    %{t | retry_action_id: id}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:provider_retry_end, details}) do
+    if t.retry_action_id do
+      t =
+        emit_action_event(t, %{
+          id: t.retry_action_id,
+          kind: :note,
+          title: "Provider retry finished",
+          phase: :completed,
+          detail: %{retry: details}
+        })
+
+      %{t | retry_action_id: nil}
+    else
+      t
+    end
+  end
+
+  def handle_event(%__MODULE__{} = t, {:compaction_start, info}) do
+    id = "compaction_#{System.unique_integer([:positive])}"
+
+    t =
+      emit_action_event(t, %{
+        id: id,
+        kind: :compaction,
+        title: "Compacting context",
+        phase: :started,
+        detail: %{compaction: Map.merge(info, %{id: id, status: "in_progress"})}
+      })
+
+    %{t | compaction_action_id: id}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:compaction_complete, info}) do
+    id = t.compaction_action_id || "compaction_#{System.unique_integer([:positive])}"
+
+    t =
+      emit_action_event(t, %{
+        id: id,
+        kind: :compaction,
+        title: "Context compacted",
+        phase: :completed,
+        detail: %{compaction: Map.merge(info, %{id: id, status: "completed"})}
+      })
+
+    %{t | compaction_action_id: nil}
   end
 
   def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
@@ -247,7 +300,6 @@ defmodule CodingAgent.Session.RunTranslator do
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:message_end, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:extension_status_report, _report}), do: t
-  def handle_event(%__MODULE__{} = t, {:compaction_complete, _info}), do: t
   def handle_event(%__MODULE__{} = t, {:branch_summarized, _info}), do: t
   def handle_event(%__MODULE__{} = t, _event), do: t
 
