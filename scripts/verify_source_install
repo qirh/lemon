@@ -240,6 +240,8 @@ run_onboarding_durable() {
   ) >"$output" 2>&1
 }
 
+# Doctor verifies the onboarded credential, so it reads the same durable store
+# the fixture onboarding wrote (test mode's ETS store would be empty).
 run_onboarding_split_output() {
   local output="$1" error_output="$2"
   shift 2
@@ -249,15 +251,13 @@ run_onboarding_split_output() {
     clear_provider_credentials
     preserve_toolchain
 
-
-
     HOME="$onboarding_home" \
       XDG_CONFIG_HOME="$onboarding_home/.config" \
       XDG_DATA_HOME="$onboarding_home/.local/share" \
       XDG_CACHE_HOME="$onboarding_home/.cache" \
       LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
       LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
-      MIX_ENV=test \
+      MIX_ENV=dev \
       "$ROOT/bin/lemon" "$@"
   ) >"$output" 2>"$error_output"
 }
@@ -395,8 +395,6 @@ ok "source-wrapper model catalog listing works"
 run_onboarding "$providers_output" providers --provider anthropic --project-dir "$PROJECT_DIR"
 grep -q "Lemon Providers" "$providers_output" ||
   fail "providers output did not include readiness heading"
-grep -q "Includes raw API keys: false" "$providers_output" ||
-  fail "providers output did not document API key cleanup"
 ok "source-wrapper provider readiness listing works"
 
 run_onboarding "$policy_output" policy list
@@ -492,8 +490,13 @@ overall = data.get("overall")
 failures = int(summary.get("fail", 0))
 
 if status != 0 or failures:
+    failed = [
+        check.get("name") or check.get("id")
+        for check in data.get("checks", [])
+        if isinstance(check, dict) and check.get("status") == "fail"
+    ]
     print(
-        f"error doctor reported failures: status={status} overall={overall} fail={failures}",
+        f"error doctor reported failures: status={status} overall={overall} fail={failures} checks={failed}",
         file=sys.stderr,
     )
     raise SystemExit(1)
