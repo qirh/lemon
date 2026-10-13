@@ -322,8 +322,8 @@ jobs:
 
           test -f "$HOME/.lemon/cookie"
           test -f "$HOME/.lemon/env"
-          test -f "$HOME/.lemon/run/lemon.pid"
-          test -f "$HOME/.lemon/run/lemon.root"
+          test -f "$HOME/.lemon/run/lemon-${LEMON_CONTROL_PLANE_PORT}.pid"
+          test -f "$HOME/.lemon/run/lemon-${LEMON_CONTROL_PLANE_PORT}.root"
           grep -q LEMON_WEB_SECRET_KEY_BASE "$HOME/.lemon/env"
 
           # macOS `stat` has no GNU -c; fall back to BSD -f.
@@ -334,7 +334,7 @@ jobs:
 
           "$SHIM" stop
 
-          test ! -f "$HOME/.lemon/run/lemon.pid"
+          test ! -f "$HOME/.lemon/run/lemon-${LEMON_CONTROL_PLANE_PORT}.pid"
 
           echo "overlay shim smoke passed"
 

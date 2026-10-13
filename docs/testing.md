@@ -52,18 +52,25 @@ For packaged CLI coverage, run `scripts/verify_release_runtime_boot` in
 
 | Workflow | Trigger | What it runs |
 | --- | --- | --- |
-| `ci.yml` | every PR and push to `main` | `check` → `scripts/test quality`; `test` → `scripts/test fast`; `clients` → `scripts/test clients`; `wasm-runtime` (cargo tests + WASM integration test, when WASM paths change and always on `main`); `history` (PRs only: rejects branches with no common ancestor) |
+| `ci.yml` | every PR and push to `main` | `check` → `scripts/test quality` + `eval-fast`; `test (1..4)` → `scripts/test fast --partitions 4`; `dialyzer` (advisory full run plus the `scripts/dialyzer_gate.sh` allowlist gate); `sim-bench` (`scripts/ci_sim_bench.sh`); `install` → `scripts/verify_source_install` + `scripts/verify_install_script`; `clients` → `scripts/test clients`; `wasm-runtime`; `history` (PRs only); `CI result` (the one status to require) |
 | `nightly.yml` | daily + dispatch | `scripts/test coverage`; the prompt/skill/overflow regression files with `--repeat-until-failure 5`; `scripts/test eval-fast` with 20 iterations |
-| `sim-bench.yml` | every PR and push to `main` | Offline sim suites and byte-determinism gates (`scripts/ci_sim_bench.sh`) |
-| `dialyzer.yml` | every PR and push to `main` | Advisory full Dialyzer run plus the allowlist gate (`scripts/dialyzer_gate.sh`) |
 | `product-smoke.yml` | PRs touching `apps/**`, weekly, dispatch | Boots a `lemon_runtime_full` release against a local deterministic provider |
 | `release-smoke.yml` | release paths, weekly, dispatch | Release assembly and boot matrix |
 | `osv-scanner.yml` | lockfile changes, weekly | The only dependency-vulnerability scan (Mix, npm, Bun lockfiles) |
 | `docs-site.yml` | `docs/**` changes | VitePress build and link check |
-| `release.yml` | tag / dispatch | Runs `scripts/test fast`, `quality`, `eval-fast`, and `clients` before building artifacts |
+| `release.yml` | tag / dispatch | Skips the BEAM and client gates when `scripts/ci_verified_commit` finds a green `ci.yml` push run on the release commit or on an ancestor it differs from only by version fields and changelogs; otherwise runs `fast`, `quality`, `eval-fast`, the install checks and `clients`. Then builds and publishes artifacts. |
 | `live-eval.yml` | dispatch | `scripts/test live-eval` with repository secrets |
 | `packaging.yml` | PRs touching the five Hex packages, `lemon_channels`, `installer/` or the packaging scripts; nightly; dispatch | `scripts/verify_packages` (consumer project and generated projects built from the unpacked Hex tarballs; advisory Elixir 1.15 leg) and `scripts/verify_generator` (both generator shapes against the checkout) |
 | `publish.yml` | `<package>-v<version>` tag / dispatch | `scripts/release_package --verify`, then `--publish-tagged` when `HEX_API_KEY` is set |
+
+In `ci.yml`, pull requests skip what their paths cannot affect: prose-only
+changes (`docs/**`, `*.md`) run only `check`; `clients` runs for `clients/**`;
+`wasm-runtime` runs for `native/**` and the WASM bridge. Pushes to `main` run
+every job, which is what lets a release reuse a main commit's green run. One
+`deps`/`_build` cache entry per `MIX_ENV` family (`test`, `dev`, `install`) is
+saved per main commit by `.github/actions/beam-setup` callers; pull requests
+restore main's newest entry and compile incrementally. To reproduce one test
+shard locally: `MIX_TEST_PARTITION=2 scripts/test fast --partitions 4`.
 
 ## Hermetic test environment
 
