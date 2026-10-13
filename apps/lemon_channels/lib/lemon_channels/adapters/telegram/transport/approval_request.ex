@@ -1,111 +1,100 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.ApprovalRequest do
-  @moduledoc """
-  Telegram-local approval request message construction and submission.
+  @moduledoc "Telegram approval requests and callbacks use the shared exact-snapshot boundary."
 
-  Used by the transport to keep approval side-effects out of the pipeline and
-  callback orchestration branches.
-  """
+  alias LemonChannels.RemoteApproval
+  alias LemonChannels.Adapters.Telegram.Transport.UpdateProcessor
 
-  alias LemonCore.{Events, SessionKey}
-  require Logger
-
-  # `:approval_requested` payloads are `Events.ApprovalRequested` structs carrying an
-  # `Events.ApprovalPending`; a legacy map is coerced into that pair so the whole record is
-  # read by field. A payload that will not coerce is reported by the `else` branch below.
-  def send(state, payload) when is_map(state) and is_map(payload) do
-    with %Events.ApprovalRequested{approval_id: approval_id, pending: pending} <-
-           Events.coerce(:approval_requested, payload),
-         %Events.ApprovalPending{session_key: session_key, tool: tool, action: action} <-
-           pending,
-         true <- is_binary(approval_id) and is_binary(session_key),
-         %{
-           kind: :channel_peer,
-           channel_id: "telegram",
-           account_id: account_id,
-           peer_id: peer_id,
-           thread_id: thread_id
-         } <-
-           SessionKey.parse(session_key),
-         true <- is_nil(account_id) or account_id == state.account_id,
-         chat_id when is_integer(chat_id) <- parse_int(peer_id) do
-      text =
-        "Approval requested: #{tool}\n\n" <>
-          "Action: #{format_action(action)}\n\n" <>
-          "Choose:"
-
-      reply_markup = %{
+  def send(state, payload, opts \\ []) do
+    with {:ok, pending, target} <-
+           RemoteApproval.request(
+             payload,
+             "telegram",
+             state.account_id,
+             &authorized?(state, &1),
+             opts
+           ) do
+      markup = %{
         "inline_keyboard" => [
           [
-            %{"text" => "Approve once", "callback_data" => "#{approval_id}|once"},
-            %{"text" => "Deny", "callback_data" => "#{approval_id}|deny"}
-          ],
-          [
-            %{"text" => "Session", "callback_data" => "#{approval_id}|session"},
-            %{"text" => "Agent", "callback_data" => "#{approval_id}|agent"},
-            %{"text" => "Global", "callback_data" => "#{approval_id}|global"}
+            %{
+              "text" => "Approve once",
+              "callback_data" => RemoteApproval.callback(pending, :approve_once)
+            },
+            %{"text" => "Deny", "callback_data" => RemoteApproval.callback(pending, :deny)}
           ]
         ]
       }
 
-      topic_id = parse_int(thread_id)
+      RemoteApproval.enqueue(
+        target,
+        "Approval requested: #{pending.tool}\n\nAction: #{RemoteApproval.action_text(pending.action)}\n\nChoose:",
+        %{reply_markup: markup},
+        Keyword.put(
+          opts,
+          :idempotency_key,
+          "approval:telegram:#{RemoteApproval.callback(pending, :approve_once)}"
+        )
+      )
+    end
+  end
 
-      opts =
-        %{"reply_markup" => reply_markup}
-        |> maybe_put("message_thread_id", topic_id)
+  def handle_callback(state, cb, opts \\ []) do
+    result =
+      RemoteApproval.resolve(
+        cb["data"],
+        "telegram",
+        state.account_id,
+        fn target ->
+          authorized?(state, target) and callback_matches?(cb, target)
+        end,
+        opts
+      )
 
-      case state.api_mod.send_message(state.token, chat_id, text, opts, nil) do
-        {:ok, _} ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("Telegram approval request send failed: #{inspect(reason)}")
-          :ok
-
-        other ->
-          Logger.warning(
-            "Telegram approval request returned unexpected result: #{inspect(other)}"
+    case result do
+      {:ok, target, decision} ->
+        _ =
+          RemoteApproval.edit(
+            target,
+            cb["message"]["message_id"],
+            decision,
+            %{reply_markup: %{"inline_keyboard" => []}},
+            opts
           )
 
-          :ok
+        state.api_mod.answer_callback_query(state.token, cb["id"], %{"text" => "Recorded"})
+
+      _ ->
+        state.api_mod.answer_callback_query(state.token, cb["id"], %{
+          "text" => "Approval rejected or unavailable; request unchanged"
+        })
+    end
+  end
+
+  defp authorized?(state, target) do
+    UpdateProcessor.authorized_callback_query?(state, %{
+      "message" => %{
+        "chat" => %{"id" => RemoteApproval.integer(target.peer.id)},
+        "message_thread_id" => RemoteApproval.integer(target.peer.thread_id)
+      }
+    })
+  end
+
+  defp callback_matches?(cb, target) do
+    msg = cb["message"] || %{}
+    chat = msg["chat"] || %{}
+
+    kind =
+      case chat["type"] do
+        "private" -> :dm
+        "group" -> :group
+        "supergroup" -> :group
+        "channel" -> :channel
+        _ -> :unknown
       end
-    else
-      reason ->
-        Logger.warning("Telegram approval request skipped: #{inspect(reason)}")
 
-        :ok
-    end
-  rescue
-    error ->
-      Logger.warning("Telegram approval request crashed: #{Exception.message(error)}")
-      :ok
+    is_integer(msg["message_id"]) and msg["message_id"] > 0 and
+      is_integer(chat["id"]) and chat["id"] == RemoteApproval.integer(target.peer.id) and
+      kind == target.peer.kind and
+      msg["message_thread_id"] == RemoteApproval.integer(target.peer.thread_id)
   end
-
-  def send(_state, _payload), do: :ok
-
-  defp format_action(action) when is_map(action) do
-    cond do
-      is_binary(action["command"]) -> action["command"]
-      is_binary(action[:command]) -> action[:command]
-      is_binary(action["cmd"]) -> action["cmd"]
-      is_binary(action[:cmd]) -> action[:cmd]
-      true -> inspect(action)
-    end
-  end
-
-  defp format_action(other), do: inspect(other)
-
-  defp parse_int(nil), do: nil
-  defp parse_int(i) when is_integer(i), do: i
-
-  defp parse_int(s) when is_binary(s) do
-    case Integer.parse(s) do
-      {i, _} -> i
-      :error -> nil
-    end
-  end
-
-  defp parse_int(_), do: nil
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

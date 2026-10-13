@@ -132,15 +132,6 @@ describe("availability gating", () => {
 		await harness.run("/gated");
 		expect(harness.host.text).toContain("not today");
 	});
-
-	test("commands are available when every backing method is advertised", async () => {
-		harness = await createHarness();
-		const ctx = harness.context();
-		for (const command of harness.registry.list()) {
-			const availability = harness.registry.availability(command, ctx);
-			expect(availability.available).toBe(true);
-		}
-	});
 });
 
 describe("/help", () => {

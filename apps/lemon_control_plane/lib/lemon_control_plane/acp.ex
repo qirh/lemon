@@ -7,6 +7,8 @@ defmodule LemonControlPlane.ACP do
   without deleting that history. Session configuration is applied to the next
   prompt through the router boundary. Raw media is rejected. Client MCP servers
   are connection-owned, session-scoped, and never stored with durable sessions.
+  Model choices use the canonical runtime availability catalog, including its
+  credential and provider-health constraints, instead of the static registry.
 
   `/compact` invokes native compaction, and `/skill:<key>` asks the agent to
   load the selected workspace skill. Native resume identities survive the chat
@@ -15,6 +17,8 @@ defmodule LemonControlPlane.ACP do
   Permission requests retain the native tool-call identity and bounded target
   preview; approval summaries never persist raw tool arguments. Client calls
   are concurrent so terminal exit waits cannot block output or cancellation.
+  Resolution is bound atomically to the exact pending record shown to the client;
+  a changed or expired request cannot reuse an earlier approval.
   Remembered approval is scoped to the same tool and action arguments within
   the session, not a blanket grant to that tool.
   Historical interrupted tools are reconciled against finalized run events:
@@ -58,9 +62,12 @@ defmodule LemonControlPlane.ACP do
 
   def normalize_client_capabilities(capabilities) when is_map(capabilities) do
     fs = capabilities |> map_get_any(["fs", :fs]) |> ensure_map()
+    elicitation = capabilities |> map_get_any(["elicitation", :elicitation]) |> ensure_map()
+    form = map_get_any(elicitation, ["form", :form])
 
     %{
       terminal: truthy?(map_get_any(capabilities, ["terminal", :terminal])),
+      elicitation: %{form: is_map(form) or form == true},
       fs: %{
         read_text_file:
           truthy?(
@@ -585,13 +592,13 @@ defmodule LemonControlPlane.ACP do
   end
 
   defp model_options do
-    LemonAi.Models.list_models(discover_openai: false)
-    |> Enum.map(fn model ->
+    for group <- LemonAgent.ModelRuntime.ModelCatalog.available_catalog(),
+        model <- group.models do
       %{
         "value" => "#{model.provider}:#{model.id}",
         "name" => "#{model.name || model.id} (#{model.provider})"
       }
-    end)
+    end
     |> Enum.uniq_by(& &1["value"])
     |> Enum.sort_by(& &1["value"])
   end
@@ -645,27 +652,34 @@ defmodule LemonControlPlane.ACP do
   defp set_config(params, id, value, opts) when is_map(params) do
     with {:ok, session_id} <- required_string(params, "sessionId"),
          {:ok, session} <- open_session(session_id),
-         {:ok, key, stored} <- config_value(id, value),
-         {:ok, session} <- apply_config(session, key, stored) do
-      put_session(session_id, session)
+         {:ok, key, stored} <- config_value(id, value) do
+      with {:ok, session} <- apply_config(session, key, stored) do
+        put_session(session_id, session)
 
-      if id == "mode",
-        do:
-          emit(
-            session_id,
-            %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
-            opts
-          )
+        if id == "mode",
+          do:
+            emit(
+              session_id,
+              %{"sessionUpdate" => "current_mode_update", "currentModeId" => value},
+              opts
+            )
 
-      options = config_options(session)
+        options = config_options(session)
 
-      emit(
-        session_id,
-        %{"sessionUpdate" => "config_option_update", "configOptions" => options},
-        opts
-      )
+        emit(
+          session_id,
+          %{"sessionUpdate" => "config_option_update", "configOptions" => options},
+          opts
+        )
 
-      {:ok, %{"configOptions" => options}}
+        {:ok, %{"configOptions" => options}}
+      else
+        {:error, _, _} = error ->
+          if key == :mode,
+            do: emit_mode_options(session_id, session, current_mode(session), opts)
+
+          error
+      end
     end
   end
 
@@ -859,6 +873,9 @@ defmodule LemonControlPlane.ACP do
         state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
 
         entries
+        |> LemonControlPlane.ACP.History.reconcile_answers(
+          LemonCore.RunStore.history(session.session_key, limit: 200)
+        )
         |> Enum.reduce(state, &replay_native_entry(session_id, &1, opts, &2))
         |> replay_unfinished_tools(session, opts)
 
@@ -1131,6 +1148,7 @@ defmodule LemonControlPlane.ACP do
           acp_resource_link_count: resource_link_count(params["prompt"]),
           acp_client_capabilities: client_capabilities_json(client_capabilities),
           acp_client_terminal: client_capabilities.terminal,
+          acp_client_elicitation_form: client_capabilities.elicitation.form,
           acp_client_fs_read_text_file: client_fs_capabilities.read_text_file,
           acp_client_fs_write_text_file: client_fs_capabilities.write_text_file,
           acp_client_fs_delete_file: client_fs_capabilities.delete_file,
@@ -1387,8 +1405,8 @@ defmodule LemonControlPlane.ACP do
                request["params"],
                timeout
              ) do
-          {:ok, response} -> resolve_approval_from_response(approval_id, response)
-          _ -> deny_if_pending(approval_id)
+          {:ok, response} -> resolve_approval_from_response(approval_id, pending, response)
+          _ -> deny_if_pending(approval_id, pending)
         end
       end)
 
@@ -1397,7 +1415,7 @@ defmodule LemonControlPlane.ACP do
 
   defp perform_approval_request(result, pending, _callback) do
     approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
-    deny_if_pending(approval_id)
+    deny_if_pending(approval_id, pending)
 
     add_client_request_result(result, %{
       "method" => "session/request_permission",
@@ -1410,12 +1428,12 @@ defmodule LemonControlPlane.ACP do
   # gated call cannot run. `{:error, :not_pending}` (already resolved,
   # cancelled, or timed out) leaves nothing to deny, so the outcome is
   # deliberately dropped.
-  defp deny_if_pending(approval_id) when is_binary(approval_id) do
-    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+  defp deny_if_pending(approval_id, pending) when is_binary(approval_id) do
+    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny, expected_pending: pending)
     :ok
   end
 
-  defp deny_if_pending(_approval_id), do: :ok
+  defp deny_if_pending(_approval_id, _pending), do: :ok
 
   defp permission_tool_call(result, pending) do
     tool = map_get(pending, :tool) || "tool"
@@ -1475,7 +1493,8 @@ defmodule LemonControlPlane.ACP do
     ]
   end
 
-  defp resolve_approval_from_response(approval_id, response) when is_binary(approval_id) do
+  defp resolve_approval_from_response(approval_id, pending, response)
+       when is_binary(approval_id) do
     outcome = response |> response_result() |> map_get(:outcome) |> ensure_map()
 
     decision =
@@ -1485,15 +1504,14 @@ defmodule LemonControlPlane.ACP do
         _ -> :deny
       end
 
-    # `:not_pending` means the prompt was cancelled or timed out before the
-    # client's answer arrived — the record is gone and there is nothing
-    # left to resolve, so the outcome is deliberately dropped.
-    _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
+    # Gone, expired, or changed snapshots cannot grant approval. Core owns the
+    # atomic comparison and leaves a replacement request untouched.
+    _ = LemonCore.ExecApprovals.resolve(approval_id, decision, expected_pending: pending)
 
     :ok
   end
 
-  defp resolve_approval_from_response(_approval_id, _response), do: :ok
+  defp resolve_approval_from_response(_approval_id, _pending, _response), do: :ok
 
   defp safe_client_request(callback, request) do
     callback.(request)
@@ -1512,9 +1530,22 @@ defmodule LemonControlPlane.ACP do
     method = map_get(payload, :method)
     params = payload |> map_get(:params) |> ensure_map()
     request = client_request(method, Map.put(params, "sessionId", session_id))
+    capabilities = session_id |> get_session() |> session_client_capabilities()
+
+    exchange =
+      if method == "elicitation/create" and not capabilities.elicitation.form,
+        do: {:error, :form_not_negotiated},
+        else: safe_client_request(callback, request)
 
     {summary, response} =
-      case safe_client_request(callback, request) do
+      case exchange do
+        {:error, :form_not_negotiated} ->
+          {%{
+             "method" => method,
+             "status" => "failed",
+             "reason" => "form elicitation not negotiated"
+           }, %{"error" => %{"message" => "Client did not negotiate form elicitation"}}}
+
         {:ok, response} ->
           {summarize_client_response(method, response), response}
 
@@ -1583,6 +1614,14 @@ defmodule LemonControlPlane.ACP do
 
   defp summarize_client_response("fs/rename_file", response) do
     %{"method" => "fs/rename_file", "status" => response_status(response)}
+  end
+
+  defp summarize_client_response("elicitation/create", response) do
+    action = response |> response_result() |> map_get(:action)
+
+    %{"method" => "elicitation/create", "status" => response_status(response)}
+    |> Map.put("action", if(action in ["accept", "decline", "cancel"], do: action))
+    |> reject_nil_values()
   end
 
   defp summarize_client_response(method, response) do
@@ -1754,9 +1793,14 @@ defmodule LemonControlPlane.ACP do
   defp session_context_window(session) do
     model_id = Map.get(session, :model) || LemonCore.Config.cached().agent.default_model
 
-    Enum.find_value(LemonAi.Models.list_models(discover_openai: false), fn model ->
-      if "#{model.provider}:#{model.id}" == model_id, do: model.context_window
-    end)
+    with [provider, id] <- String.split(model_id || "", ":", parts: 2),
+         provider_atom when not is_nil(provider_atom) <-
+           Enum.find(LemonAi.Models.get_providers(), &(Atom.to_string(&1) == provider)),
+         %{context_window: window} <- LemonAi.Models.get_model(provider_atom, id) do
+      window
+    else
+      _ -> nil
+    end
   end
 
   defp prompt_usage(usage) when is_map(usage) do
@@ -1876,6 +1920,7 @@ defmodule LemonControlPlane.ACP do
   defp empty_client_capabilities do
     %{
       terminal: false,
+      elicitation: %{form: false},
       fs: %{read_text_file: false, write_text_file: false, delete_file: false, rename_file: false}
     }
   end
@@ -1883,7 +1928,7 @@ defmodule LemonControlPlane.ACP do
   defp client_capabilities_json(capabilities) do
     capabilities = normalize_client_capabilities(capabilities)
 
-    %{
+    result = %{
       "terminal" => capabilities.terminal,
       "fs" => %{
         "readTextFile" => capabilities.fs.read_text_file,
@@ -1892,6 +1937,10 @@ defmodule LemonControlPlane.ACP do
         "renameFile" => capabilities.fs.rename_file
       }
     }
+
+    if capabilities.elicitation.form,
+      do: Map.put(result, "elicitation", %{"form" => %{}}),
+      else: result
   end
 
   defp lemon_meta_string(params, key, default) do

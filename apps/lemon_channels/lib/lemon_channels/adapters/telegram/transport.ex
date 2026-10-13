@@ -1353,7 +1353,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             author: agent_id,
             worker_id: agent_id,
             workspace: workspace,
-            meta: %{transport: "telegram"}
+            meta: %{
+              "notificationSessionKey" => build_session_key(state, inbound, scope),
+              transport: "telegram"
+            }
           )
         )
     end

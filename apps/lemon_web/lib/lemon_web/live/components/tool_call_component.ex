@@ -23,7 +23,7 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
     action = fetch(assigns.event, :action) || %{}
     detail = fetch(action, :detail)
     detail = if is_map(detail), do: detail, else: %{}
-    status = status(fetch(assigns.event, :phase), fetch(assigns.event, :ok))
+    status = status(fetch(assigns.event, :phase), fetch(assigns.event, :ok), detail)
 
     progress =
       if status == :running, do: format_progress(fetch(detail, :partial_result)), else: nil
@@ -36,7 +36,8 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
       |> assign(:summary, summary(fetch(action, :title), name))
       |> assign(:status, status)
       |> assign(:args, format_detail(fetch(detail, :args)))
-      |> assign(:result, format_detail(fetch(detail, :result)))
+      |> assign(:result, result(detail, status))
+      |> assign(:cancellation_notice, cancellation_notice(detail, status))
       |> assign(:progress, progress)
       |> assign(:message, format_detail(fetch(assigns.event, :message)))
 
@@ -73,7 +74,13 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
           <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2 font-mono text-xs text-slate-800">{@result}</pre>
         </div>
         <p :if={@message} class="whitespace-pre-wrap break-words text-xs text-slate-600">{@message}</p>
-        <p :if={!@args and !@result and !@progress and !@message} class="text-xs text-slate-500">
+        <p :if={@cancellation_notice} class="whitespace-pre-wrap break-words text-xs text-slate-600">
+          {@cancellation_notice}
+        </p>
+        <p
+          :if={!@args and !@result and !@progress and !@message and !@cancellation_notice}
+          class="text-xs text-slate-500"
+        >
           No details reported yet.
         </p>
       </div>
@@ -81,21 +88,7 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
     """
   end
 
-  defp format_progress(value) do
-    case fetch(value, :content) do
-      content when is_list(content) ->
-        text =
-          content
-          |> Enum.map(&fetch(&1, :text))
-          |> Enum.filter(&is_binary/1)
-          |> Enum.join("\n")
-
-        if text == "", do: format_detail(value), else: format_detail(text)
-
-      _ ->
-        format_detail(value)
-    end
-  end
+  defp format_progress(value), do: value |> visible_text() |> format_detail()
 
   defp format_detail(value) do
     case value |> LemonCore.Redact.map() |> Payload.format() do
@@ -130,21 +123,104 @@ defmodule LemonWeb.Live.Components.ToolCallComponent do
 
   defp summary(_title, _name), do: nil
 
-  defp status(phase, ok) when phase in [:completed, "completed"] do
-    if ok == false, do: :failed, else: :done
+  defp result(detail, status) do
+    full = detail |> fetch(:result_full) |> visible_text() |> format_detail()
+    preview = detail |> fetch(:result) |> format_result()
+    partial = format_progress(fetch(detail, :partial_result))
+
+    case status do
+      :cancelled -> full || partial || preview
+      :running -> full || preview
+      _ -> full || preview || partial
+    end
   end
 
-  defp status(_phase, _ok), do: :running
+  defp format_result(value) when is_map(value) do
+    if fetch(value, :type) != nil or fetch(value, :content) != nil,
+      do: format_progress(value),
+      else: format_detail(value)
+  end
+
+  defp format_result(value) when is_list(value), do: format_progress(value)
+  defp format_result(value), do: format_detail(value)
+
+  # Partial results may be AgentToolResult structs or JSON maps. Only visible
+  # text content belongs in the receipt, never thinking or arbitrary metadata.
+  defp visible_text(text) when is_binary(text), do: Payload.format(text)
+
+  defp visible_text(blocks) when is_list(blocks) do
+    blocks
+    |> Enum.map(&visible_text/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n")
+    |> Payload.format()
+  end
+
+  defp visible_text(value) when is_map(value) do
+    case fetch(value, :type) do
+      type when type in [:text, "text"] -> visible_text(fetch(value, :text))
+      nil -> visible_text(fetch(value, :content)) || visible_text(fetch(value, :output))
+      _ -> nil
+    end
+  end
+
+  defp visible_text(_value), do: nil
+
+  defp terminal_detail?(detail, key, expected) do
+    fetch(detail, key) == expected or fetch(fetch(detail, :details), key) == expected
+  end
+
+  defp status(phase, ok, detail) when phase in [:completed, "completed"] do
+    cond do
+      terminal_detail?(detail, :cancelled, true) or
+        terminal_detail?(detail, :error_type, "aborted") or
+          terminal_detail?(detail, :error_type, :aborted) ->
+        :cancelled
+
+      ok == false ->
+        :failed
+
+      ok == true ->
+        :done
+
+      true ->
+        :completed
+    end
+  end
+
+  defp status(_phase, _ok, _detail), do: :running
+
+  defp cancellation_notice(detail, :cancelled) do
+    cond do
+      terminal_detail?(detail, :outcome, "not_started") or
+          terminal_detail?(detail, :not_started, true) ->
+        "Cancelled before the tool started."
+
+      terminal_detail?(detail, :outcome, "unknown") or
+          terminal_detail?(detail, :outcome_unknown, true) ->
+        "Cancelled. The tool may have made changes; its final outcome is unknown."
+
+      true ->
+        nil
+    end
+  end
+
+  defp cancellation_notice(_detail, _status), do: nil
 
   defp status_label(:running), do: "running"
   defp status_label(:done), do: "done"
   defp status_label(:failed), do: "failed"
+  defp status_label(:cancelled), do: "cancelled"
+  defp status_label(:completed), do: "completed"
 
   defp status_dot_class(:running), do: "h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500"
   defp status_dot_class(:done), do: "h-2 w-2 shrink-0 rounded-full bg-emerald-500"
   defp status_dot_class(:failed), do: "h-2 w-2 shrink-0 rounded-full bg-rose-500"
 
-  defp status_badge_class(:running),
+  defp status_dot_class(status) when status in [:cancelled, :completed],
+    do: "h-2 w-2 shrink-0 rounded-full bg-amber-500"
+
+  defp status_badge_class(status) when status in [:running, :cancelled, :completed],
     do:
       "ml-auto shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800"
 

@@ -74,6 +74,38 @@ use the `agent` authentication method. Image/audio/embedded resources and
 client-provided MCP transports are rejected unless actually supported by the
 negotiated capabilities.
 
+### Review and approve a native plan
+
+Select **Plan** to draft using read-only project tools. The native session owns
+the plan artifact and its revision; ACP does not maintain a second plan state.
+Use `/plan` to review the artifact and exact revision, then
+`/approve-plan <revision>` to approve that version. Your next ordinary prompt
+executes with the approved plan in context. Switching to Code while a plan is
+pending is rejected—it never silently grants approval. `/discard-plan` exits
+planning without approving execution. Changed artifacts or stale revisions
+must be reviewed again.
+
+### Connection-owned tools
+
+When the client advertises terminal support, foreground non-PTY bash can use
+its `terminal/create`, `output`, `wait_for_exit`, `kill`, and `release` methods
+with an explicit shell argument vector. PTY and background processes remain
+in Lemon's local process manager. Client terminal snapshots are bounded to
+1 MiB; a truncated tail is identified as such, not presented as a complete
+artifact. Fully retained output can use Lemon's existing artifact spill path.
+
+Supported client-provided stdio/HTTP/SSE MCP servers are bound to the ACP
+connection's session. Their command arguments, environment values and headers
+are not persisted with durable session metadata. Close or disconnect cleans
+up the connection-owned clients; load/resume/fork can supply fresh server
+configuration.
+
+Human permission requests use the approval's lifetime, rather than a generic
+60-second machine-RPC deadline. Turn timeout, requester cancellation or
+disconnect withdraws pending client requests with `$/cancel_request` so native
+dialogs cannot remain stranded. Permission cards share the native tool id and
+bounded preview data with their corresponding tool call.
+
 `session/cancel` cancels the session's active turn. `$/cancel_request` maps the
 original prompt request id to its session and cancels that turn, waking any
 pending client callbacks. Stdin EOF closes the connection and cancels active
@@ -106,6 +138,20 @@ Plans preserve task priorities and completion state. Retry, compaction and
 subagent lifecycle events use native notices, compaction and subagent updates.
 The runtime preserves message and tool ids so a client can append streams and
 update cards rather than duplicating them.
+
+Cancelled tools retain their actual terminal receipt and any real partial output
+in ACP, terminal and web history. Unknown mutation outcomes stay explicitly
+unknown; a missing receipt is not replayed as a successful operation or as a
+new live tool. Retained finalized answers can fill a missing native transcript
+suffix only when the exact prompt and recorded turn interval match uniquely.
+Recovery stays within that turn and never rewrites the native journal.
+
+Clients advertising `clientCapabilities.elicitation.form` receive an `ask` tool
+while their run's client bridge is connected. It issues the native
+`elicitation/create` form request with `requestedSchema`, choices and an optional
+custom answer. Accepted answers are the user's actual selections; decline,
+cancel, disconnection and timeout never select a recommendation automatically.
+Clients without form support do not advertise `ask`.
 
 Negotiated client filesystem support lets model-facing coding tools read and
 write editor-managed text buffers through the existing ACP client bridge. Raw

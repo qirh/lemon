@@ -75,6 +75,9 @@ defmodule LemonCli.CLI do
   """
   @spec main([String.t()]) :: no_return()
   def main(argv) do
+    :ok = :io.setopts(:standard_io, encoding: :unicode)
+    :ok = :io.setopts(:standard_error, encoding: :unicode)
+
     exit_code =
       LemonCli.Onboarding.LogSilencer.with_quiet_logs(
         "--json" in argv or List.first(argv) in ["run", "-p", "--print", "acp"],

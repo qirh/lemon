@@ -16,17 +16,25 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
     with {:ok, key, cwd} <- NativeSessions.target(params),
          {:ok, entry_id} <- NativeSessions.string(params, "entryId", 256),
          {:ok, restore_files} <- NativeSessions.boolean(params, "restoreFiles", false),
+         {:ok, allow_partial} <- NativeSessions.boolean(params, "allowPartialRestore", false),
+         :ok <- validate_restore_intent(restore_files, allow_partial),
          {:ok, dry_run} <- NativeSessions.boolean(params, "dryRun", true),
          {:ok, token} <- confirmation(params, dry_run) do
-      opts = [restore_files: restore_files, dry_run: dry_run, confirmation_token: token]
+      opts = [
+        restore_files: restore_files,
+        allow_partial_restore: allow_partial,
+        dry_run: dry_run,
+        confirmation_token: token
+      ]
 
       case AgentRuntime.call(:session_rewind, [key, cwd, entry_id, opts], {:error, :unavailable}) do
         {:ok, result} when is_map(result) ->
           fields =
             if dry_run,
               do:
-                ~w(confirmationToken prompt discardedMessages restorePaths unrestorableTools entryId sessionId),
-              else: ~w(prompt leafId restoredPaths entryId sessionId)
+                ~w(confirmationToken prompt discardedMessages restorePaths unrestorableTools unrestorableCommands unrestorableCommandCount canAllowPartialRestore restoreFiles allowPartialRestore entryId sessionId),
+              else:
+                ~w(confirmationToken prompt leafId restoredPaths unrestorableTools unrestorableCommands unrestorableCommandCount canAllowPartialRestore restoreFiles allowPartialRestore partialRestore entryId sessionId)
 
           {:ok, result |> Map.take(fields) |> Map.put("sessionKey", key)}
 
@@ -38,6 +46,11 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
       end
     end
   end
+
+  defp validate_restore_intent(false, true),
+    do: NativeSessions.invalid("allowPartialRestore requires restoreFiles")
+
+  defp validate_restore_intent(_restore_files, _allow_partial), do: :ok
 
   defp confirmation(params, dry_run) do
     if Map.has_key?(params, "confirmationToken") do

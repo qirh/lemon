@@ -58,6 +58,36 @@ defmodule LemonSkills.Tools.KanbanTest do
     assert Enum.any?(boards, &(&1.id == board.id))
   end
 
+  test "board supervision preserves origin and validates explicit destination before mutation" do
+    tool =
+      Kanban.tool(System.tmp_dir!(),
+        session_key: "agent:operator:telegram:work:group:-100:thread:77"
+      )
+
+    assert %AgentToolResult{details: %{board: board}} =
+             tool.execute.(
+               "call",
+               %{"action" => "board_create", "name" => "Remote", "deliver_to" => " NONE "},
+               nil,
+               nil
+             )
+
+    assert board.meta["deliverTo"] == "none"
+
+    assert board.meta["notificationSessionKey"] ==
+             "agent:operator:telegram:work:group:-100:thread:77"
+
+    assert {:error, _} =
+             tool.execute.(
+               "call",
+               %{"action" => "board_create", "name" => "Rejected", "deliver_to" => "wrong"},
+               nil,
+               nil
+             )
+
+    refute Enum.any?(KanbanStore.list_boards(), &(&1.name == "Rejected"))
+  end
+
   test "creates reviewed local boards without inventing publishing settings" do
     for settings <- [%{}, %{"reviewModel" => "test:reviewer", "publish" => false}] do
       assert %AgentToolResult{details: %{board: board}} =

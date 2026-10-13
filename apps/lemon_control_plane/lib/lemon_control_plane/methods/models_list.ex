@@ -29,18 +29,18 @@ defmodule LemonControlPlane.Methods.ModelsList do
   defp get_available_models(params) when is_map(params) do
     discover_openai = Map.get(params, "discoverOpenAI", true)
 
-    # Try to get models from LemonAi.Models if available
-    if Code.ensure_loaded?(LemonAi.Models) do
+    if Code.ensure_loaded?(LemonAgent.ModelRuntime.ModelCatalog) do
       models =
-        LemonAi.Models.list_models(discover_openai: discover_openai)
+        LemonAgent.ModelRuntime.ModelCatalog.available_models(
+          discover_openai: discover_openai,
+          force_refresh: Map.get(params, "forceRefresh", false)
+        )
         |> Enum.map(&format_model/1)
 
       {models, "ai_models"}
     else
-      {default_models(), "fallback"}
+      {[], "unavailable"}
     end
-  rescue
-    _ -> {default_models(), "fallback"}
   end
 
   defp format_model(model) when is_struct(model) do
@@ -85,41 +85,6 @@ defmodule LemonControlPlane.Methods.ModelsList do
 
   defp image_input?(input) when is_list(input), do: Enum.any?(input, &(&1 in [:image, "image"]))
   defp image_input?(_input), do: false
-
-  defp default_models do
-    [
-      %{
-        "id" => "claude-sonnet-4-20250514",
-        "provider" => "anthropic",
-        "name" => "Claude Sonnet 4",
-        "contextWindow" => 200_000,
-        "maxOutput" => 16_384,
-        "supportsThinking" => true,
-        "supportsVision" => false,
-        "supportsStreaming" => true
-      },
-      %{
-        "id" => "claude-opus-4-20250514",
-        "provider" => "anthropic",
-        "name" => "Claude Opus 4",
-        "contextWindow" => 200_000,
-        "maxOutput" => 32_768,
-        "supportsThinking" => true,
-        "supportsVision" => false,
-        "supportsStreaming" => true
-      },
-      %{
-        "id" => "gpt-4o",
-        "provider" => "openai",
-        "name" => "GPT-4o",
-        "contextWindow" => 128_000,
-        "maxOutput" => 16_384,
-        "supportsThinking" => false,
-        "supportsVision" => true,
-        "supportsStreaming" => true
-      }
-    ]
-  end
 
   defp summarize_models(models, source) do
     providers =

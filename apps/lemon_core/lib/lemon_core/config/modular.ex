@@ -67,6 +67,7 @@ defmodule LemonCore.Config.Modular do
     :features,
     :memory,
     :automation,
+    budgets: %{},
     model_roles: %{}
   ]
 
@@ -78,6 +79,7 @@ defmodule LemonCore.Config.Modular do
           tui: TUI.t(),
           providers: Providers.t(),
           model_roles: %{optional(String.t()) => String.t()},
+          budgets: map(),
           secrets: Secrets.t(),
           features: Features.t(),
           memory: Memory.t(),
@@ -110,6 +112,11 @@ defmodule LemonCore.Config.Modular do
     check_deprecated_sections!(settings)
     config = resolve_settings(settings)
     check_model_roles!(config.model_roles)
+
+    case Validator.validate_budgets(config.budgets) do
+      :ok -> :ok
+      {:error, errors} -> raise ValidationError, message: "Invalid budgets", errors: errors
+    end
 
     # Validate if requested
     if validate? do
@@ -266,12 +273,23 @@ defmodule LemonCore.Config.Modular do
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings),
       model_roles: Map.get(settings, "model_roles", %{}),
+      budgets: resolve_budgets(Map.get(settings, "budgets", %{})),
       secrets: Secrets.resolve(settings),
       features: Features.resolve(settings),
       memory: Memory.resolve(settings),
       automation: Automation.resolve(settings)
     }
   end
+
+  @doc false
+  def resolve_budgets(budgets) when is_map(budgets) do
+    Map.new(
+      [:max_run_tokens, :max_run_cost_usd, :max_session_tokens, :max_session_cost_usd],
+      fn key -> {key, Map.get(budgets, Atom.to_string(key), Map.get(budgets, key))} end
+    )
+  end
+
+  def resolve_budgets(budgets), do: budgets
 
   # Normalizes canonical `runtime.tools` into the internal top-level `tools`
   # shape consumed by the modular Tools resolver.

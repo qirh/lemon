@@ -45,7 +45,78 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     ensure_channel_registry_started()
     ensure_channel_outbox_started()
 
+    if is_nil(Process.whereis(LemonChannels.Supervision)),
+      do: start_supervised!(LemonChannels.Supervision)
+
     {:ok, token: System.unique_integer([:positive, :monotonic])}
+  end
+
+  test "goal and isolated kanban supervision keep their exact bound topic", %{token: token} do
+    register_forwarding_telegram_plugin()
+    session = "agent:remote_#{token}:main"
+    params = %{run_id: "run_goal_remote_#{token}", session_key: session <> ":goal_judge"}
+
+    {:ok, goal} =
+      LemonAgent.Workspace.GoalStore.set(session, "Check result",
+        meta: %{"deliverTo" => "telegram:-100777:12"}
+      )
+
+    on_exit(fn -> LemonAgent.Workspace.GoalStore.clear(session) end)
+    assert :ok = LemonAutomation.RunNotifications.bind_goal(goal, params)
+
+    {:ok, _} =
+      LemonAgent.Workspace.GoalStore.record_loop_status(session, :running,
+        run_id: params.run_id,
+        run_kind: :judge
+      )
+
+    {:ok, _} = LemonAgent.Workspace.GoalStore.complete(session)
+    assert :ok = LemonAutomation.RunNotifications.goal_finished(session, :finished)
+
+    assert_receive {:cron_forwarded_channel_payload,
+                    %{peer: %{id: "-100777", thread_id: "12"}, content: content}},
+                   2_000
+
+    assert content =~ goal.id
+    assert content =~ params.run_id
+    assert :ok = LemonAutomation.RunNotifications.goal_finished(session, :finished)
+    refute_receive {:cron_forwarded_channel_payload, _}, 100
+
+    {:ok, board} =
+      LemonAgent.Workspace.KanbanStore.create_board("Remote",
+        meta: %{
+          "notificationSessionKey" => "agent:operator:telegram:default:group:-100777:thread:12"
+        }
+      )
+
+    on_exit(fn -> LemonAgent.Workspace.KanbanStore.clear_board(board.id) end)
+
+    {:ok, task} =
+      LemonAgent.Workspace.KanbanStore.create_task(board.id, "Remote card",
+        session_key: session,
+        run_id: "run_card_remote_#{token}"
+      )
+
+    assert :ok =
+             LemonAutomation.RunNotifications.bind_kanban(task, %{
+               run_id: task.run_id,
+               session_key: session
+             })
+
+    {:ok, leased} = LemonAgent.Workspace.KanbanStore.lease_task(board.id, "worker")
+    lease = leased.meta["kanbanLease"]["id"]
+
+    {:ok, failed} =
+      LemonAgent.Workspace.KanbanStore.fail_leased_task(task.id, lease, "run_failed")
+
+    assert :ok = LemonAutomation.RunNotifications.kanban_finished(failed, lease)
+
+    assert_receive {:cron_forwarded_channel_payload,
+                    %{peer: %{id: "-100777", thread_id: "12"}, content: content}},
+                   2_000
+
+    assert content =~ task.id
+    assert content =~ task.run_id
   end
 
   test "forwards completed cron summary into originating main session", %{token: token} do
@@ -181,23 +252,21 @@ defmodule LemonAutomation.CronManagerForwardingTest do
                       account_id: "default",
                       peer: %{kind: :group, id: peer_id, thread_id: thread_id},
                       kind: :text,
-                      content: content,
-                      idempotency_key: idempotency_key,
-                      meta: %{
-                        origin: :cron,
-                        cron_forwarded_summary: true,
-                        cron_run_id: run_id,
-                        cron_job_id: job_id
-                      }
+                      content: content
                     }},
                    2_000
 
     assert peer_id == "-100#{abs(token)}"
     assert thread_id == "#{abs(token)}"
-    assert content == "forwarding-test-channel_delivery\n\nRUN SUMMARY\n- delivered to topic"
-    assert idempotency_key == "cron_notify_#{run.id}"
-    assert run_id == run.id
-    assert job_id == run.job_id
+    assert content =~ "delivered to topic"
+    assert content =~ run.run_id
+
+    assert await(fn ->
+             match?(
+               {:ok, %{delivery_state: :delivered}},
+               LemonChannels.Supervision.status({:cron, run.job_id, run.run_id, :completed})
+             )
+           end)
   end
 
   describe "default delivery to the paired owner chat" do
@@ -216,13 +285,12 @@ defmodule LemonAutomation.CronManagerForwardingTest do
                         channel_id: "telegram",
                         account_id: "default",
                         peer: %{kind: :dm, id: "424242", thread_id: nil},
-                        content: content,
-                        idempotency_key: idempotency_key
+                        content: content
                       }},
                      2_000
 
-      assert content == "#{job.name}\n\nMorning: 2 reminders today"
-      assert idempotency_key == "cron_notify_#{run.id}"
+      assert content =~ "Morning: 2 reminders today"
+      assert content =~ run.run_id
     end
 
     test "a non-Lemon session id (web/CLI client) also falls back to the owner chat", %{

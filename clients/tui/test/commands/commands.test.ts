@@ -674,8 +674,44 @@ describe("sessions and history", () => {
 		await harness.run("/compress");
 		expect(harness.server.requestsFor("sessions.compact")[0].params).toEqual({
 			sessionKey: "tui-session",
+			cwd: "/workspace/project",
 		});
 		expect(harness.host.text).toContain("12000 → 4000 tokens");
+	});
+
+	test("/compact preserves the full focus instructions and forwards cwd", async () => {
+		harness.server.respondWith("sessions.compact", { success: true });
+		await harness.run('/compact Keep  the "API contract"\n  and pending tasks');
+		expect(harness.server.requestsFor("sessions.compact")[0].params).toEqual({
+			sessionKey: "tui-session",
+			cwd: "/workspace/project",
+			focus: 'Keep  the "API contract"\n  and pending tasks',
+		});
+	});
+
+	test("compaction refusal exposes neither server exception nor summary", async () => {
+		harness.server.failWith("sessions.compact", "FORBIDDEN", "private exception /secret/path");
+		await harness.run("/compact preserve tests");
+		expect(harness.host.last?.level).toBe("error");
+		expect(harness.host.text).not.toContain("private exception");
+		expect(harness.host.text).not.toContain("/secret/path");
+		harness.server.respondWith("sessions.compact", { success: false, summary: "private summary" });
+		await harness.run("/compress");
+		expect(harness.host.last?.level).toBe("error");
+		expect(harness.host.text).not.toContain("private summary");
+	});
+
+	test("typed compaction retains supported supplied-summary and force inputs", async () => {
+		harness.server.respondWith("sessions.compact", { success: true });
+		const params = {
+			sessionKey: "tui-session",
+			cwd: "/workspace/project",
+			focus: "preserve API decisions",
+			summary: "Caller-supplied summary",
+			force: false,
+		};
+		await harness.methods.sessionsCompact(params);
+		expect(harness.server.requestsFor("sessions.compact")[0].params).toEqual(params);
 	});
 
 	test("/session delete previews and requires the exact key before it deletes", async () => {

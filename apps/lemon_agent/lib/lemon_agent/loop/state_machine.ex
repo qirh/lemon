@@ -16,7 +16,7 @@ defmodule LemonAgent.Loop.StateMachine do
   @transitions %{
     nil => [:initializing],
     initializing: [:await_model],
-    await_model: [:normalizing_response, :aborted, :recovering_provider_error],
+    await_model: [:normalizing_response, :aborted, :recovering_provider_error, :finalizing],
     normalizing_response: [
       :await_model,
       :executing_tools,

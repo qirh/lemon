@@ -29,6 +29,7 @@ defmodule CodingAgent.Session.ModelResolver do
     selector
     |> expand_role!(settings, default_selector(settings))
     |> resolve_role_model(settings)
+    |> check_role_availability!(settings, selector)
   end
 
   def resolve_session_model(model_spec, %CodingAgent.SettingsManager{} = settings) do
@@ -126,6 +127,7 @@ defmodule CodingAgent.Session.ModelResolver do
         selector
         |> expand_role!(settings, parent_model || default_selector(settings))
         |> resolve_role_model(settings)
+        |> check_role_availability!(settings, selector)
 
       true ->
         selector
@@ -147,6 +149,7 @@ defmodule CodingAgent.Session.ModelResolver do
     selector
     |> expand_role!(settings, active_model)
     |> resolve_role_model(settings)
+    |> check_role_availability!(settings, selector)
   end
 
   defp expand_role!(selector, settings, fallback) do
@@ -168,6 +171,35 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp resolve_role_model(spec, settings), do: resolve_session_model(spec, settings)
 
+  defp check_role_availability!(
+         %LemonAi.Types.Model{provider: :"openai-codex"} = model,
+         settings,
+         selector
+       ) do
+    token = build_get_api_key(settings).(:"openai-codex")
+
+    # Declarative model resolution also runs without credentials (for previews
+    # and custom stream functions). Verify account support when a concrete
+    # ChatGPT identity is available; missing/invalid auth remains the request
+    # credential resolver's responsibility.
+    case LemonAi.Models.OpenAICodexDiscovery.account_id(token) do
+      {:ok, _} ->
+        case LemonAi.Models.OpenAICodexDiscovery.ensure_available(model, access_token: token) do
+          :ok ->
+            model
+
+          {:error, reason} ->
+            label = if is_binary(selector), do: selector, else: "configured compaction model"
+            raise ArgumentError, "Model role #{label}: #{reason}"
+        end
+
+      {:error, _} ->
+        model
+    end
+  end
+
+  defp check_role_availability!(model, _settings, _selector), do: model
+
   @spec resolve_default_model(CodingAgent.SettingsManager.t()) :: LemonAi.Types.Model.t()
   def resolve_default_model(%CodingAgent.SettingsManager{default_model: nil}) do
     # No default model configured, raise an error
@@ -179,6 +211,7 @@ defmodule CodingAgent.Session.ModelResolver do
     selector
     |> expand_role!(settings, nil)
     |> resolve_role_model(settings)
+    |> check_role_availability!(settings, selector)
   end
 
   def resolve_default_model(
@@ -187,6 +220,7 @@ defmodule CodingAgent.Session.ModelResolver do
     selector
     |> expand_role!(settings, nil)
     |> resolve_role_model(settings)
+    |> check_role_availability!(settings, selector)
   end
 
   def resolve_default_model(%CodingAgent.SettingsManager{default_model: config} = settings)

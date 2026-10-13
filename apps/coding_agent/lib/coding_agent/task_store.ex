@@ -182,6 +182,17 @@ defmodule CodingAgent.TaskStore do
     end
   end
 
+  @doc "Read only lifecycle status, without copying prompts, results or event history."
+  @spec get_status(task_id()) :: {:ok, atom()} | {:error, :not_found}
+  def get_status(task_id) when is_binary(task_id) do
+    ensure_table()
+
+    case :ets.select(@table, [{{task_id, %{status: :"$1"}, :_}, [], [:"$1"]}]) do
+      [status] -> {:ok, status}
+      [] -> {:error, :not_found}
+    end
+  end
+
   @doc """
   List all tasks with optional status filter.
   """

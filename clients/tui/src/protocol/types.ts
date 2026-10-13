@@ -500,6 +500,17 @@ export interface ChatHistoryMessage {
 	content: string;
 	timestampMs: Nullable<number>;
 	truncated?: boolean;
+	/** Native tool identity, shared by its call and result rows. */
+	toolCallId?: string;
+	toolName?: string;
+	title?: string;
+	arguments?: Record<string, unknown>;
+	details?: Record<string, unknown>;
+	phase?: "started" | "completed";
+	ok?: Nullable<boolean>;
+	cancelled?: boolean;
+	/** Persisted duration only; absence is not a zero-length execution. */
+	durationMs?: Nullable<number>;
 	[key: string]: unknown;
 }
 
@@ -573,6 +584,32 @@ export interface SessionsForkParams {
 export interface SessionsForkResult {
 	sessionKey: string;
 	sourceSessionKey: string;
+}
+
+export interface SessionsPlanParams {
+	sessionKey: string;
+	cwd: string;
+	action: "status" | "enter" | "approve" | "discard";
+	revision?: string;
+}
+
+export interface SessionsPlanResult {
+	sessionKey: string;
+	plan: {
+		mode: "code" | "plan";
+		status: "none" | "draft" | "pending" | "approved";
+		revision: string | null;
+		path: string | null;
+		content: string | null;
+	};
+}
+
+export interface SessionsCompactParams {
+	sessionKey: string;
+	cwd?: string;
+	focus?: string;
+	summary?: string;
+	force?: boolean;
 }
 
 export interface SessionsListParams {

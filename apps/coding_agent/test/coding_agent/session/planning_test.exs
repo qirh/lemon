@@ -165,6 +165,63 @@ defmodule CodingAgent.Session.PlanningTest do
     assert LemonCore.SessionLifecycle.get(key).run_count == 0
   end
 
+  test "explicit creation is idempotent, nameable and contains no fabricated plan or messages", %{
+    root: root
+  } do
+    key = "agent:create-test-#{System.unique_integer([:positive])}:main"
+    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+
+    assert {:error, :not_found} =
+             LemonCore.SessionLifecycle.patch(key, %{title: "Before first turn"})
+
+    results =
+      1..4
+      |> Task.async_stream(fn _ -> CodingAgent.ControlPlaneProvider.session_create(key, root) end)
+      |> Enum.map(fn {:ok, {:ok, receipt}} -> receipt end)
+
+    assert Enum.count(results, & &1["created"]) == 1
+    assert [id] = results |> Enum.map(& &1["sessionId"]) |> Enum.uniq()
+    assert LemonCore.ChatStateStore.get(key).last_resume_token == id
+
+    assert {:ok, native} =
+             SessionManager.load_from_file(SessionManager.session_file_path(root, id))
+
+    assert SessionManager.entries(native) == []
+    assert Planning.status(native)["status"] == "none"
+    assert {:ok, named} = LemonCore.SessionLifecycle.patch(key, %{title: "Before first turn"})
+    assert named.title == "Before first turn"
+    assert named.run_count == 0
+
+    assert {:ok, %{"created" => false, "sessionId" => ^id}} =
+             CodingAgent.ControlPlaneProvider.session_create(key, root)
+
+    assert LemonCore.SessionLifecycle.get(key).title == "Before first turn"
+    assert {:error, _} = CodingAgent.ControlPlaneProvider.session_create(key, root <> "-wrong")
+    assert LemonCore.ChatStateStore.get(key).last_resume_token == id
+  end
+
+  test "explicit creation refuses legacy identities and existing non-native indexes", %{
+    root: root
+  } do
+    assert {:error, :invalid_session_key} =
+             CodingAgent.ControlPlaneProvider.session_create("unknown-legacy", root)
+
+    key = "agent:existing-test-#{System.unique_integer([:positive])}:main"
+    on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
+
+    :ok =
+      LemonCore.RunStore.create_session_index(
+        key,
+        LemonCore.SessionKey.agent_id(key),
+        :control_plane
+      )
+
+    assert {:error, :unsupported_session} =
+             CodingAgent.ControlPlaneProvider.session_create(key, root)
+
+    assert LemonCore.ChatStateStore.get(key) == nil
+  end
+
   defp settings(root), do: %{SettingsManager.load(root) | compaction_enabled: false}
 
   defp model,

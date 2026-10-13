@@ -50,6 +50,7 @@ defmodule CodingAgent.SettingsManager do
 
           # Agent loop settings
           max_tool_turns: pos_integer() | :infinity,
+          budgets: map(),
 
           # Shell settings
           shell_path: String.t() | nil,
@@ -89,6 +90,7 @@ defmodule CodingAgent.SettingsManager do
 
     # Agent loop settings: unlimited tool turns unless configured
     max_tool_turns: :infinity,
+    budgets: %{},
 
     # Shell settings
     shell_path: nil,
@@ -156,6 +158,7 @@ defmodule CodingAgent.SettingsManager do
       max_retries: Map.get(retry, :max_retries, 3),
       base_delay_ms: Map.get(retry, :base_delay_ms, 1000),
       max_tool_turns: Map.get(agent, :max_tool_turns) || :infinity,
+      budgets: config.budgets,
       shell_path: Map.get(shell, :path),
       command_prefix: Map.get(shell, :command_prefix),
       auto_resize_images: Map.get(tools, :auto_resize_images, true),

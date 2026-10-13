@@ -85,6 +85,7 @@ defmodule CodingAgent.ToolRegistry do
     {:media_analyze_image, LemonSkills.Tools.MediaAnalyzeImage},
     {:media_generate_video, LemonSkills.Tools.MediaGenerateVideo},
     {:todo, Tools.Todo},
+    {:ask, Tools.Ask},
     {:kanban, LemonSkills.Tools.Kanban},
     {:goal, LemonSkills.Tools.Goal},
     {:peer, LemonSkills.Tools.Peer},
@@ -366,6 +367,7 @@ defmodule CodingAgent.ToolRegistry do
   defp builtin_tool_tuples(cwd, opts) do
     builtin_tools()
     |> Enum.filter(fn
+      {:ask, _module} -> Tools.Ask.available?(opts)
       {:ast_grep, _module} -> match?({:ok, _}, Tools.AstGrep.availability(opts))
       _tool -> true
     end)
