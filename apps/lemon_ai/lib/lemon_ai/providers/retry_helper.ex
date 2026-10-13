@@ -106,29 +106,25 @@ defmodule LemonAi.Providers.RetryHelper do
   Reads, in order: `retry-after` (delta-seconds or HTTP-date),
   `retry-after-ms`, `x-ms-retry-after-ms`, `x-ratelimit-reset-after`, then the
   latest `anthropic-ratelimit-<kind>-reset` (RFC 3339) among limits whose
-  `-remaining` header is `0`. Non-positive delays yield nil.
+  `-remaining` header is `0`. Invalid or non-positive hints fall through to
+  the next header; if none is valid, returns nil.
   """
   @spec retry_after_ms(map() | list(), DateTime.t()) :: pos_integer() | nil
   def retry_after_ms(headers, now \\ DateTime.utc_now()) do
     headers = normalize_headers(headers)
 
-    cond do
-      retry_after = Map.get(headers, "retry-after") ->
-        parse_seconds_delay(retry_after) || parse_http_date_delay(retry_after, now)
-
-      retry_after_ms = Map.get(headers, "retry-after-ms") ->
-        parse_milliseconds_delay(retry_after_ms)
-
-      retry_after_ms = Map.get(headers, "x-ms-retry-after-ms") ->
-        parse_milliseconds_delay(retry_after_ms)
-
-      reset_after = Map.get(headers, "x-ratelimit-reset-after") ->
-        parse_seconds_delay(reset_after)
-
-      true ->
-        anthropic_rate_limit_reset_ms(headers, now)
-    end
+    parse_retry_after(Map.get(headers, "retry-after"), now) ||
+      parse_milliseconds_delay(Map.get(headers, "retry-after-ms")) ||
+      parse_milliseconds_delay(Map.get(headers, "x-ms-retry-after-ms")) ||
+      parse_seconds_delay(Map.get(headers, "x-ratelimit-reset-after")) ||
+      anthropic_rate_limit_reset_ms(headers, now)
   end
+
+  defp parse_retry_after(value, now) when is_binary(value) do
+    parse_seconds_delay(value) || parse_http_date_delay(value, now)
+  end
+
+  defp parse_retry_after(_, _), do: nil
 
   defp anthropic_rate_limit_reset_ms(headers, now) do
     @anthropic_rate_limit_kinds
@@ -184,10 +180,8 @@ defmodule LemonAi.Providers.RetryHelper do
   provider (immediate retry with backoff).
 
   The status set is sourced from `LemonAi.Error.transport_retry_statuses/0`.
-  It is deliberately broader than the failover set encoded by
-  `LemonAi.Error.failover_action/1`: 408/409/425/500 are cheap to retry in
-  place because they are often one-off hiccups, but on their own they never
-  justify failing over to the next provider candidate.
+  This status-only predicate cannot inspect permanent provider-body evidence.
+  When the error body is available, use `retryable_http_error?/2` instead.
 
   Pass an explicit list of statuses as second argument to override.
   """
@@ -204,62 +198,39 @@ defmodule LemonAi.Providers.RetryHelper do
   end
 
   @doc """
+  Whether an HTTP failure is retryable against the same credential.
+
+  Delegates status and provider-body classification to `LemonAi.Error`, so
+  authentication, client, context overflow and account quota exhaustion never
+  retry even when the HTTP status alone is retryable.
+  """
+  @spec retryable_http_error?(integer(), term()) :: boolean()
+  def retryable_http_error?(status, body),
+    do: LemonAi.Error.retryable?({:http_error, status, body})
+
+  @doc """
   Check whether a transport error is retryable.
 
   Accepts a `Req.TransportError` struct or a raw reason term.
   """
   @spec retryable_transport_error?(term()) :: boolean()
-  def retryable_transport_error?(%Req.TransportError{reason: reason}) do
-    retryable_transport_reason?(reason)
-  end
-
-  def retryable_transport_error?(reason), do: retryable_transport_reason?(reason)
+  def retryable_transport_error?(reason), do: LemonAi.Error.retryable?(reason)
 
   @doc """
   Check whether a transport reason term is retryable.
   """
   @spec retryable_transport_reason?(term()) :: boolean()
-  def retryable_transport_reason?(reason)
-      when reason in [
-             :timeout,
-             :closed,
-             :econnrefused,
-             :econnreset,
-             :enetdown,
-             :enetwork_unreachable,
-             :nxdomain,
-             :ehostunreach,
-             :unreachable
-           ],
-      do: true
-
-  def retryable_transport_reason?({:tls_alert, {_alert, _detail}}), do: true
-  def retryable_transport_reason?({:failed_connect, _}), do: true
-  def retryable_transport_reason?({:closed, _}), do: true
-
-  def retryable_transport_reason?(reason) when is_tuple(reason) do
-    reason_text = reason |> inspect() |> String.downcase()
-
-    String.contains?(reason_text, "timeout") or
-      String.contains?(reason_text, "temporarily unavailable") or
-      String.contains?(reason_text, "bad_record_mac")
-  end
-
-  def retryable_transport_reason?(_), do: false
+  def retryable_transport_reason?(reason), do: LemonAi.Error.retryable?(reason)
 
   @doc """
-  Check whether an error text matches known retryable patterns via regex.
+  Check whether error text is retryable using the common public classifier.
 
-  Matches: rate limit, overloaded, service unavailable, upstream connect,
-  connection refused, resource exhausted, other side closed.
+  Persistent quota limits and permanent auth/client/context errors take
+  precedence over transient phrases such as "try again later".
   """
   @spec retryable_error_text?(String.t()) :: boolean()
-  def retryable_error_text?(error_text) when is_binary(error_text) do
-    Regex.match?(
-      ~r/rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused|resource.?exhausted|other.?side.?closed/i,
-      error_text
-    )
-  end
+  def retryable_error_text?(error_text) when is_binary(error_text),
+    do: LemonAi.Error.retryable?(error_text)
 
   def retryable_error_text?(_), do: false
 
@@ -297,19 +268,23 @@ defmodule LemonAi.Providers.RetryHelper do
   defp normalize_header_value([value | _]), do: normalize_header_value(value)
   defp normalize_header_value(value), do: value |> to_string() |> String.trim()
 
-  defp parse_seconds_delay(value) do
+  defp parse_seconds_delay(value) when is_binary(value) do
     case Float.parse(value) do
       {seconds, ""} -> positive_delay(seconds * 1000)
       _ -> nil
     end
   end
 
-  defp parse_milliseconds_delay(value) do
+  defp parse_seconds_delay(_), do: nil
+
+  defp parse_milliseconds_delay(value) when is_binary(value) do
     case Float.parse(value) do
       {milliseconds, ""} -> positive_delay(milliseconds)
       _ -> nil
     end
   end
+
+  defp parse_milliseconds_delay(_), do: nil
 
   defp extract_retry_delay_from_text(text) when is_binary(text) do
     duration_pattern = ~r/reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s/i
