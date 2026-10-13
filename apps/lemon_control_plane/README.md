@@ -147,14 +147,28 @@ thoughts or tool-result bodies. Branch summaries contain `leafId` and `active`.
 ```
 
 A preview returns `confirmationToken`, `prompt`, `discardedMessages`,
-`restorePaths`, `unrestorableTools`, `entryId`, and `sessionId`. Show the
-preview before executing: send the same target and restoration choice with
-`dryRun: false` and the returned `confirmationToken` (at most 256 bytes).
-Missing confirmation is rejected before runtime delegation; stale or mismatched
-previews are rejected by the native runtime. Execution returns `prompt`,
-`leafId`, `restoredPaths`, `entryId`, and `sessionId`. The prompt can be placed
-back in the composer. A failed restoration/rollback must not be treated as
-proof that no files changed.
+`restorePaths`, `unrestorableTools`, `entryId`, and `sessionId`, plus the
+`restoreFiles` and `allowPartialRestore` choices. Show the preview before
+executing: send the same target and both choices with `dryRun: false` and the
+returned `confirmationToken` (at most 256 bytes). Missing confirmation is
+rejected before runtime delegation; stale or mismatched previews are rejected
+by the native runtime. Execution echoes that token and both choices, and returns
+`prompt`, `leafId`, `restoredPaths`, `entryId`, and `sessionId`. The prompt can be
+placed back in the composer. A failed restoration/rollback must not be treated
+as proof that no files changed.
+
+File restoration fails closed when the discarded history contains shell
+commands. A user may explicitly consent to restoring only checkpointed files
+by requesting a **new preview** with `restoreFiles: true` and
+`allowPartialRestore: true` (default `false`). Changing this flag at confirmation
+invalidates the previous token. Previews and receipts include redacted
+`unrestorableCommands`, their total `unrestorableCommandCount`, and
+`canAllowPartialRestore`. The client must explain “restore N checkpointed files;
+effects of M shell commands are not reverted” and list those commands before
+confirmation. A successful partial restoration returns `partialRestore: true`.
+Missing non-shell checkpoints, unavailable/truncated command text, or more than
+100 shell invocations cannot be bypassed with partial consent. Other shell
+effects are never undone or represented as restored.
 
 `sessions.fork` requires `operator.write` and accepts only the source
 `sessionKey` and `cwd`. The server generates an independent canonical child key,

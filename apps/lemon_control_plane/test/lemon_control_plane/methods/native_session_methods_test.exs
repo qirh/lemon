@@ -113,6 +113,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     for {field, value} <- [
           {"entryId", String.duplicate("x", 257)},
           {"restoreFiles", "false"},
+          {"allowPartialRestore", "yes"},
           {"dryRun", nil},
           {"confirmationToken", ""},
           {"confirmationToken", String.duplicate("x", 257)}
@@ -142,7 +143,12 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:ok, ^preview} = Registry.dispatch("sessions.rewind", rewind_target(), ctx([:write]))
 
     assert_receive {:rewind, _, _, "u1",
-                    [restore_files: false, dry_run: true, confirmation_token: nil]}
+                    [
+                      restore_files: false,
+                      allow_partial_restore: false,
+                      dry_run: true,
+                      confirmation_token: nil
+                    ]}
 
     execute = Map.put(rewind_target(), "dryRun", false)
 
@@ -157,7 +163,12 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              SessionsRewind.handle(Map.put(execute, "confirmationToken", "stale"), %{})
 
     assert_receive {:rewind, _, _, "u1",
-                    [restore_files: false, dry_run: false, confirmation_token: "stale"]}
+                    [
+                      restore_files: false,
+                      allow_partial_restore: false,
+                      dry_run: false,
+                      confirmation_token: "stale"
+                    ]}
 
     result = %{
       "prompt" => "edit this",
@@ -180,7 +191,49 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              )
 
     assert_receive {:rewind, _, _, _,
-                    [restore_files: true, dry_run: false, confirmation_token: "preview-token"]}
+                    [
+                      restore_files: true,
+                      allow_partial_restore: false,
+                      dry_run: false,
+                      confirmation_token: "preview-token"
+                    ]}
+  end
+
+  test "partial file restore requires explicit valid intent and preserves the bound receipt" do
+    assert {:error, {:invalid_params, _, _}} =
+             SessionsRewind.handle(Map.put(rewind_target(), "allowPartialRestore", true), %{})
+
+    receipt = %{
+      "confirmationToken" => "partial-token",
+      "sessionId" => "native",
+      "entryId" => "u1",
+      "prompt" => "edit this",
+      "restoredPaths" => ["/workspace/file.ex"],
+      "restoreFiles" => true,
+      "allowPartialRestore" => true,
+      "partialRestore" => true,
+      "unrestorableTools" => ["bash"],
+      "unrestorableCommands" => ["mix test test/file_test.exs"],
+      "unrestorableCommandCount" => 1,
+      "canAllowPartialRestore" => true
+    }
+
+    Process.put(:rewind_result, {:ok, receipt})
+
+    params =
+      Map.merge(rewind_target(), %{
+        "dryRun" => false,
+        "restoreFiles" => true,
+        "allowPartialRestore" => true,
+        "confirmationToken" => "partial-token"
+      })
+
+    assert {:ok, result} = SessionsRewind.handle(params, %{})
+    assert Map.delete(result, "sessionKey") == receipt
+    assert_receive {:rewind, _, _, _, opts}
+    assert opts[:allow_partial_restore] == true
+    assert opts[:restore_files] == true
+    assert opts[:confirmation_token] == "partial-token"
   end
 
   test "read scope cannot mutate native sessions and errors never echo arbitrary reasons" do

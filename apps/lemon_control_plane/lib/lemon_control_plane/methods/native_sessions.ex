@@ -6,11 +6,15 @@ defmodule LemonControlPlane.Methods.NativeSessions do
     :busy,
     :confirmation_required,
     :stale_confirmation,
-    :checkpoint_missing,
     :checkpoint_scope_mismatch,
     :entry_not_on_active_branch
   ]
-  @invalid [:not_user_message, :unsupported_session, :unsupported_file_type]
+  @invalid [
+    :not_user_message,
+    :unsupported_session,
+    :unsupported_file_type,
+    :invalid_partial_restore
+  ]
 
   def target(params) when is_map(params) do
     with {:ok, key} <- string(params, "sessionKey", 1024),
@@ -55,6 +59,26 @@ defmodule LemonControlPlane.Methods.NativeSessions do
   def failure(reason) when reason in @not_found do
     {:error,
      {:not_found, "Native session entry not found", %{"reason" => Atom.to_string(reason)}}}
+  end
+
+  def failure(:checkpoint_missing) do
+    {:error,
+     {:conflict, "Some file mutations lack recoverable checkpoints; use history-only rewind",
+      %{"reason" => "checkpoint_missing"}}}
+  end
+
+  def failure(:unrestorable_effects) do
+    {:error,
+     {:conflict,
+      "Shell effects cannot be reverted; review and explicitly allow partial file restoration",
+      %{"reason" => "unrestorable_effects"}}}
+  end
+
+  def failure(:partial_restore_unreviewable) do
+    {:error,
+     {:conflict,
+      "Select a more recent turn with fully reviewable shell commands before partial restoration",
+      %{"reason" => "partial_restore_unreviewable"}}}
   end
 
   def failure(reason) when reason in @conflict do
