@@ -48,7 +48,8 @@ defmodule CodingAgent.Tools.TaskPersonasTest do
     assert context.system_prompt =~ "ONLY valid JSON"
     names = Enum.map(context.tools, & &1.name)
     assert "read" in names
-    assert Enum.all?(names, &(&1 in ~w(read grep find ls)))
+    assert "agent_message" in names
+    assert Enum.all?(names, &(&1 in ~w(read grep find ls agent_message)))
 
     assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
     assert record.result.details.structured_output == %{"answer" => 42}

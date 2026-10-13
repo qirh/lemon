@@ -29,6 +29,9 @@ defmodule CodingAgent.Session.MessageSerialization do
       "api" => msg.api,
       "usage" => serialize_usage(msg.usage),
       "stop_reason" => msg.stop_reason && Atom.to_string(msg.stop_reason),
+      "error_message" => msg.error_message,
+      "error_details" => msg.error_details,
+      "retry_after_ms" => msg.retry_after_ms,
       "timestamp" => msg.timestamp
     }
   end
@@ -196,6 +199,10 @@ defmodule CodingAgent.Session.MessageSerialization do
       api: msg["api"] || "",
       usage: deserialize_usage(msg["usage"]),
       stop_reason: deserialize_stop_reason(msg["stop_reason"]),
+      error_message: msg["error_message"],
+      error_details:
+        if(is_map(msg["error_details"]), do: LemonAi.Error.to_error_details(msg["error_details"])),
+      retry_after_ms: msg["retry_after_ms"],
       timestamp: msg["timestamp"] || 0
     }
   end

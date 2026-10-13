@@ -353,6 +353,9 @@ jobs:
       # Remove only this profile's generated output so --overwrite cannot
       # package stale app/dependency versions beside the current release.
       - name: Build release
+        env:
+          LEMON_GIT_SHA: ${{ needs.validate.outputs.release_sha }}
+          LEMON_CHANNEL: ${{ needs.validate.outputs.channel }}
         run: |
           rm -rf "_build/prod/rel/${{ matrix.profile }}"
           mix release ${{ matrix.profile }}
