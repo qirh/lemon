@@ -20,6 +20,9 @@ defmodule LemonControlPlane.Methods.SessionsCompact do
   def scopes, do: [:admin]
 
   @impl true
+  def dispatch_mode, do: :async
+
+  @impl true
   def handle(params, _ctx) when is_map(params) do
     with {:ok, session_key} <- NativeSessions.string(params, "sessionKey", 1024),
          {:ok, force} <- NativeSessions.boolean(params, "force", true),
