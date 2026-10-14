@@ -233,7 +233,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   @spec decode_secret(String.t()) :: {:ok, oauth_secret()} | :not_oauth
   def decode_secret(secret_value) when is_binary(secret_value) do
     case Jason.decode(secret_value) do
-      {:ok, %{"type" => type} = decoded} when type == @secret_type or type in @legacy_secret_types ->
+      {:ok, %{"type" => type} = decoded}
+      when type == @secret_type or type in @legacy_secret_types ->
         {:ok, decoded}
 
       _ ->
@@ -416,7 +417,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
     case Keyword.get(opts, :on_prompt) do
       prompt when is_function(prompt, 1) ->
-        case prompt.(%{message: message, placeholder: "code#state"}) |> normalize_prompt_input() do
+        case prompt.(%{message: message, placeholder: "code#state"})
+             |> normalize_prompt_input() do
           "" -> {:error, :login_cancelled}
           value -> {:ok, value}
         end
@@ -862,7 +864,10 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   defp non_empty_binary(_), do: nil
 
   defp normalize_prompt_input(value) when is_binary(value), do: String.trim(value)
-  defp normalize_prompt_input(value) when is_list(value), do: value |> to_string() |> String.trim()
+
+  defp normalize_prompt_input(value) when is_list(value),
+    do: value |> to_string() |> String.trim()
+
   defp normalize_prompt_input(_), do: ""
 
   defp parse_integer(value) when is_integer(value), do: value

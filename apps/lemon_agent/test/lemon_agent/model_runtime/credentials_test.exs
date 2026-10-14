@@ -289,7 +289,10 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
         |> Plug.Conn.send_resp(400, ~s({"error":"invalid_grant"}))
       end)
 
-      for cfg <- [%{auth_source: "oauth"}, %{auth_source: "oauth", oauth_secret: "llm_anthropic_api_key"}] do
+      for cfg <- [
+            %{auth_source: "oauth"},
+            %{auth_source: "oauth", oauth_secret: "llm_anthropic_api_key"}
+          ] do
         assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, %{
                  "anthropic" => cfg
                }) == ""

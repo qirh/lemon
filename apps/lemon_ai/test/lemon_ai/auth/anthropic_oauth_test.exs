@@ -26,7 +26,9 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
     home_dir = Path.join(tmp_dir, "home")
     File.mkdir_p!(home_dir)
 
-    previous_env = Map.new(~w(HOME PATH ANTHROPIC_TOKEN CLAUDE_CODE_OAUTH_TOKEN), &{&1, System.get_env(&1)})
+    previous_env =
+      Map.new(~w(HOME PATH ANTHROPIC_TOKEN CLAUDE_CODE_OAUTH_TOKEN), &{&1, System.get_env(&1)})
+
     System.put_env("HOME", home_dir)
     System.delete_env("ANTHROPIC_TOKEN")
     System.delete_env("CLAUDE_CODE_OAUTH_TOKEN")
@@ -359,7 +361,10 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 503, "unavailable"))
 
       assert {:ok, "sk-ant-oat01-old"} =
-               AnthropicOAuth.resolve_api_key_from_secret("s", encoded_secret(expires_in_ms: 60_000))
+               AnthropicOAuth.resolve_api_key_from_secret(
+                 "s",
+                 encoded_secret(expires_in_ms: 60_000)
+               )
 
       assert {:error, {:http_error, 503}} =
                AnthropicOAuth.resolve_api_key_from_secret("s", encoded_secret(expires_in_ms: -1))
