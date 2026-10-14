@@ -32,7 +32,7 @@ silent permissions.
 | `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
+| `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_control_plane`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 <!-- architecture_policy:end -->
 
 ## Enforcement

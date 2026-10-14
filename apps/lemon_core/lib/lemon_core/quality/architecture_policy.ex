@@ -86,11 +86,19 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
     lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
-    # The management UI consumes agent-owned provider configuration,
-    # automation-owned blueprint catalog, and memory-owned lifecycle
-    # boundaries; mutation, confirmation, and redaction semantics stay
-    # centralized in their domain services.
-    lemon_web: [:lemon_agent, :lemon_automation, :lemon_core, :lemon_memory, :lemon_router]
+    # The web UI is an in-process client of the control-plane method registry
+    # and event projection (the same contract as the TUI), and consumes
+    # agent-owned provider configuration, automation-owned blueprint catalog,
+    # and memory-owned lifecycle boundaries; mutation, confirmation, and
+    # redaction semantics stay centralized in their domain services.
+    lemon_web: [
+      :lemon_agent,
+      :lemon_automation,
+      :lemon_control_plane,
+      :lemon_core,
+      :lemon_memory,
+      :lemon_router
+    ]
   }
 
   # Gateway tools still use LemonAi content structs without making it a direct

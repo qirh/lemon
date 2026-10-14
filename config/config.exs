@@ -162,7 +162,6 @@ config :lemon_web, LemonWeb.Endpoint,
   pubsub_server: LemonCore.PubSub,
   live_view: [signing_salt: "lemonwebsigningsalt"]
 
-config :lemon_web, :access_token, nil
 config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
 # Phoenix endpoints whose HTTP port LemonCore.Runtime.Env.apply_ports/1 rewrites

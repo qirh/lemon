@@ -350,11 +350,14 @@ stop_runtime() {
 
 open_browser() {
   local url="$1" opener
-  if [ -n "${LEMON_WEB_ACCESS_TOKEN:-}" ]; then
-    if [[ "$LEMON_WEB_ACCESS_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
-      url="${url}?token=$LEMON_WEB_ACCESS_TOKEN"
+  # Sign in with the operator token in the URL fragment: browsers never send
+  # fragments to the server, so it stays out of request logs, history after
+  # the login page removes it, and Referer headers.
+  if [ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]; then
+    if [[ "$LEMON_CONTROL_PLANE_OPERATOR_TOKEN" =~ ^[A-Za-z0-9._~-]+$ ]]; then
+      url="${url}login#token=$LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
     else
-      warn "The access token contains URL-reserved characters; open the URL and provide a URL-encoded ?token= value."
+      warn "The operator token contains URL-reserved characters; sign in by pasting it on the login page."
     fi
   fi
   for opener in open xdg-open wslview; do
@@ -428,6 +431,9 @@ case "$COMMAND" in
       1:|2:--no-open) ;;
       *) error "usage: ./bin/lemon web [--no-open]"; exit 2 ;;
     esac
+    status=0
+    load_managed_token || status=$?
+    [ "$status" -le 1 ] || exit 1
     if ! web_healthy; then
       info "Web UI is not running; starting Lemon"
       start_runtime daemon

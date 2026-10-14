@@ -1,5 +1,11 @@
 defmodule LemonWeb.Router do
-  @moduledoc "Phoenix router for LemonWeb."
+  @moduledoc """
+  Phoenix router for LemonWeb.
+
+  Every page requires operator access (`LemonWeb.Plugs.RequireOperator` for
+  HTTP, `LemonWeb.LiveAuth` for each LiveView mount). Only `/login` and
+  `/healthz` are reachable without it.
+  """
 
   use LemonWeb, :router
 
@@ -9,38 +15,37 @@ defmodule LemonWeb.Router do
     plug(:fetch_live_flash)
     plug(:put_root_layout, html: {LemonWeb.Layouts, :root})
     plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
-    plug(LemonWeb.Plugs.RequireAccessToken)
+    plug(:put_secure_browser_headers, %{"referrer-policy" => "no-referrer"})
   end
 
-  pipeline :management_browser do
-    plug(:accepts, ["html"])
-    plug(:fetch_session)
-    plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {LemonWeb.Layouts, :root})
-    plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
-    plug(LemonWeb.Plugs.RequireAccessToken, required: true)
+  pipeline :operator do
+    plug(LemonWeb.Plugs.RequireOperator)
   end
 
   scope "/", LemonWeb do
     pipe_through(:browser)
 
-    live("/", SessionLive, :index)
-    live("/sessions/:session_key", SessionLive, :show)
+    get("/login", LoginController, :new)
+    post("/login", LoginController, :create)
+    delete("/logout", LoginController, :delete)
   end
 
-  scope "/manage", LemonWeb do
-    pipe_through(:management_browser)
+  scope "/", LemonWeb do
+    pipe_through([:browser, :operator])
 
-    live("/", ManagementLive, :index)
-    live("/work", WorkManagementLive, :index)
-    live("/blueprints", BlueprintManagementLive, :index)
-    live("/memory", MemoryManagementLive, :index)
-    live("/profiles", ProfileManagementLive, :index)
-    live("/providers", ProviderManagementLive, :index)
-    live("/sessions/:session_key", ManagementLive, :show)
     get("/sessions/:session_key/export/:format", SessionExportController, :show)
+
+    live_session :operator, on_mount: [{LemonWeb.LiveAuth, :require_operator}] do
+      live("/", SessionLive, :index)
+      live("/chat/:session_key", SessionLive, :show)
+      live("/sessions", ManagementLive, :index)
+      live("/sessions/:session_key", ManagementLive, :show)
+      live("/automation", WorkManagementLive, :index)
+      live("/blueprints", BlueprintManagementLive, :index)
+      live("/memory", MemoryManagementLive, :index)
+      live("/profiles", ProfileManagementLive, :index)
+      live("/models", ProviderManagementLive, :index)
+    end
   end
 
   # Health check endpoint for load balancers

@@ -174,7 +174,7 @@ defmodule LemonWeb.WorkManagementLive do
             <article :for={board <- @work.boards.items} id={"work-board-#{board.id}"} class="management-panel p-4 sm:p-5">
               <div class="flex flex-wrap items-start justify-between gap-3">
                 <div><h2 class="font-semibold text-slate-900">{board.label}</h2><p class="mt-1 break-all text-xs text-slate-500">{board.id}</p></div>
-                <div class="flex flex-wrap items-center gap-2"><.badge status={board.runtime} /><span class="text-xs text-slate-500">{board.running_count} workers</span><.controls row={board} uncertain={@uncertain} /></div>
+                <div class="flex flex-wrap items-center gap-2"><.status_badge status={board.runtime} /><span class="text-xs text-slate-500">{board.running_count} workers</span><.controls row={board} uncertain={@uncertain} /></div>
               </div>
               <p :if={Map.get(board, :last_runtime)} class="mt-2 text-xs text-amber-700">Last known dispatcher: {board.last_runtime}. Showing retained state; controls disabled.</p>
               <p class="my-3 text-xs text-slate-500">Up to 30 most recently updated cards · {board.status}</p>
@@ -184,7 +184,7 @@ defmodule LemonWeb.WorkManagementLive do
                   <div class="space-y-2">
                     <article :for={card <- Enum.filter(board.cards, &(&1.status == column))} id={"work-card-#{card.id}"} class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                       <p class="break-words text-sm font-medium text-slate-800">{card.label}</p><p class="mt-2 break-all text-xs text-slate-500">{card.id}</p>
-                      <p :if={card.result} class="mt-2 text-xs text-slate-600">Last run: <.badge status={card.result} /></p>
+                      <p :if={card.result} class="mt-2 text-xs text-slate-600">Last run: <.status_badge status={card.result} /></p>
                       <.session_link session={card.session} />
                       <div :if={card.workflow} class="mt-3 space-y-2 border-t border-slate-100 pt-2 text-xs text-slate-600">
                         <p>Workflow: {String.replace(card.workflow.phase, "_", " ")}</p>
@@ -204,9 +204,9 @@ defmodule LemonWeb.WorkManagementLive do
 
           <div :if={@tab == :goals} class="grid gap-4 md:grid-cols-2">
             <article :for={goal <- @work.goals.items} id={"work-goal-#{goal.id}"} class="management-panel p-5">
-              <div class="flex flex-wrap justify-between gap-2"><h2 class="break-all font-semibold text-slate-900">{goal.id}</h2><.badge status={goal.status} /></div>
-              <div class="my-4 flex flex-wrap items-center gap-3"><.badge status={goal.runtime} /><span class="text-sm text-slate-600">{goal.continuation_count} continuations</span></div>
-              <p :if={goal.result} class="mb-3 text-xs text-slate-600">Last run: <.badge status={goal.result} /></p>
+              <div class="flex flex-wrap justify-between gap-2"><h2 class="break-all font-semibold text-slate-900">{goal.id}</h2><.status_badge status={goal.status} /></div>
+              <div class="my-4 flex flex-wrap items-center gap-3"><.status_badge status={goal.runtime} /><span class="text-sm text-slate-600">{goal.continuation_count} continuations</span></div>
+              <p :if={goal.result} class="mb-3 text-xs text-slate-600">Last run: <.status_badge status={goal.result} /></p>
               <p :if={Map.get(goal, :last_runtime)} class="mb-3 text-xs text-amber-700">Last known loop: {goal.last_runtime}. Showing retained state; controls disabled.</p>
               <p class="mb-4 text-xs text-slate-500">Objective stays private. Start runs at most 3 loop ticks, without enabling automatic restart.</p>
               <.controls row={goal} uncertain={@uncertain} /><.session_link session={goal.session} />
@@ -215,7 +215,7 @@ defmodule LemonWeb.WorkManagementLive do
 
           <div :if={@tab == :cron} class="grid gap-4 lg:grid-cols-2">
             <article :for={job <- @work.cron.items} id={"work-cron-#{job.id}"} class="management-panel p-5">
-              <div class="flex flex-wrap justify-between gap-2"><div><h2 class="font-semibold text-slate-900">{job.label}</h2><p class="mt-1 break-all text-xs text-slate-500">{job.id}</p></div><.badge status={job.status} /></div>
+              <div class="flex flex-wrap justify-between gap-2"><div><h2 class="font-semibold text-slate-900">{job.label}</h2><p class="mt-1 break-all text-xs text-slate-500">{job.id}</p></div><.status_badge status={job.status} /></div>
               <p class="mt-3 text-sm text-slate-700"><code>{job.schedule}</code></p><p class="mb-4 mt-1 text-xs text-slate-500">Next: {job.next_run}</p>
               <p :if={job.model} class="mb-3 text-xs text-slate-500">Model: {job.model}</p>
               <.controls row={job} uncertain={@uncertain} />
@@ -227,7 +227,7 @@ defmodule LemonWeb.WorkManagementLive do
                     <span class="text-xs text-slate-500">{run.duration_ms} ms · Retry {run.retry_attempt}</span>
                     <.session_link session={run.session} />
                   </div>
-                  <div class="flex items-center gap-2"><.badge status={run.status} />
+                  <div class="flex items-center gap-2"><.status_badge status={run.status} />
                     <button :if={run.abortable} id={"work-abort-#{run.id}"} type="button" phx-click="preview" phx-value-kind="cron" phx-value-id={job.id} phx-value-action="abort" phx-value-run={run.id} disabled={MapSet.member?(@uncertain, {:cron, job.id})} class="management-secondary-button">Abort run…</button>
                   </div>
                 </li>
@@ -253,7 +253,7 @@ defmodule LemonWeb.WorkManagementLive do
     """
   end
 
-  defp badge(assigns) do
+  defp status_badge(assigns) do
     ~H"""
     <span class={"inline-flex rounded-full px-2 py-1 text-xs font-medium #{badge_class(@status)}"}>{@status}</span>
     """

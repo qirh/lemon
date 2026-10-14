@@ -7,6 +7,7 @@ defmodule LemonWeb.Application do
   def start(_type, _args) do
     children = [
       LemonWeb.Telemetry,
+      LemonWeb.LoginThrottle,
       LemonWeb.Endpoint
     ]
 

@@ -149,11 +149,43 @@ defmodule LemonControlPlane.Auth.Authorize do
     {:error, {:unauthorized, "Unsupported token identity"}}
   end
 
-  defp operator_token do
+  defp operator_token, do: configured_operator_token()
+
+  @doc """
+  The configured operator token (trimmed), or `nil` when none is configured.
+
+  In-process operator surfaces (the web UI) authenticate against this same
+  credential instead of keeping a second one.
+  """
+  @spec configured_operator_token() :: String.t() | nil
+  def configured_operator_token do
     (Application.get_env(:lemon_control_plane, :operator_token) ||
        System.get_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN"))
     |> normalize_token()
   end
+
+  @doc """
+  Whether explicit tokenless compatibility admits `peer`: the operator enabled
+  `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` and `peer` is the actual
+  direct-loopback socket address. A missing peer is never loopback.
+  """
+  @spec tokenless_loopback_allowed?(:inet.ip_address() | nil) :: boolean()
+  def tokenless_loopback_allowed?(peer) do
+    loopback_address?(peer) and
+      Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false) ==
+        true
+  end
+
+  @doc "Whether `peer` is an IPv4, IPv6 or IPv4-mapped IPv6 loopback address."
+  @spec loopback_address?(term()) :: boolean()
+  def loopback_address?({127, _b, _c, _d}), do: true
+  def loopback_address?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+
+  def loopback_address?({0, 0, 0, 0, 0, 65_535, mapped_prefix, _last})
+      when mapped_prefix in 0x7F00..0x7FFF,
+      do: true
+
+  def loopback_address?(_peer), do: false
 
   # Hashing first keeps the secure comparison input length fixed and avoids
   # leaking the configured token length through an early size check.

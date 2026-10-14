@@ -1,7 +1,25 @@
 defmodule LemonWeb.Layouts do
-  @moduledoc false
+  @moduledoc """
+  Root document and the authenticated app shell (navigation rail, mobile top
+  bar, reconnect banner, toasts).
+  """
 
   use LemonWeb, :html
 
-  embed_templates "layouts/*"
+  embed_templates("layouts/*")
+
+  @doc false
+  def open_rail(js \\ %JS{}) do
+    js
+    |> JS.set_attribute({"data-open", "true"}, to: "#rail")
+    |> JS.show(to: "#rail-backdrop")
+    |> JS.focus_first(to: "#rail")
+  end
+
+  @doc false
+  def close_rail(js \\ %JS{}) do
+    js
+    |> JS.set_attribute({"data-open", "false"}, to: "#rail")
+    |> JS.hide(to: "#rail-backdrop")
+  end
 end

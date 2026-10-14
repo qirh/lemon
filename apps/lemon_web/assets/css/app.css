@@ -2,80 +2,486 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Assistant replies rendered by LemonWeb.Markdown. The HTML is generated at
-   runtime from an allow-listed tag set, so it carries no utility classes of its
-   own; style it by descendant here. */
-@layer components {
-  .lemon-markdown {
-    @apply break-words text-sm leading-relaxed text-slate-900;
+/* ── Theme tokens ──────────────────────────────────────────────────────────
+   RGB triplets consumed by tailwind.config.js. `data-theme` on <html> is set
+   before first paint by the inline script in root.html.heex from the stored
+   preference (light | dark | system). Text tokens keep >= 4.5:1 contrast on
+   bg/surface in both themes; accent (lemon) is a fill with accent-fg text,
+   accent-text is the readable accent for text on surfaces. */
+@layer base {
+  :root,
+  [data-theme="light"] {
+    color-scheme: light;
+    --bg: 248 248 246;
+    --surface: 255 255 255;
+    --surface-2: 243 243 240;
+    --elevated: 255 255 255;
+    --line: 226 226 222;
+    --line-strong: 204 204 199;
+    --fg: 23 23 26;
+    --muted: 82 82 91;
+    --subtle: 108 108 118;
+    --accent: 250 204 21;
+    --accent-fg: 26 26 20;
+    --accent-text: 146 90 6;
+    --ring: 202 138 4;
+    --success: 21 128 61;
+    --warning: 180 83 9;
+    --danger: 185 28 28;
+    --info: 29 78 216;
+    --plan: 109 40 217;
+    --code-bg: 246 246 243;
+    --code-fg: 36 36 40;
+    --hl-keyword: 167 29 93;
+    --hl-string: 21 109 54;
+    --hl-number: 154 52 18;
+    --hl-comment: 113 113 122;
+    --hl-title: 29 78 216;
+    --hl-type: 126 34 206;
+    --hl-attr: 146 64 14;
+    --hl-meta: 71 85 105;
+    --hl-add-bg: 220 252 231;
+    --hl-del-bg: 254 226 226;
   }
 
-  .lemon-markdown > * + * {
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --bg: 11 11 13;
+    --surface: 19 19 22;
+    --surface-2: 27 27 31;
+    --elevated: 33 33 38;
+    --line: 44 44 50;
+    --line-strong: 63 63 70;
+    --fg: 236 236 239;
+    --muted: 170 170 180;
+    --subtle: 138 138 150;
+    --accent: 250 204 21;
+    --accent-fg: 26 26 20;
+    --accent-text: 253 224 71;
+    --ring: 250 204 21;
+    --success: 74 222 128;
+    --warning: 251 191 36;
+    --danger: 248 113 113;
+    --info: 96 165 250;
+    --plan: 196 181 253;
+    --code-bg: 15 15 18;
+    --code-fg: 228 228 231;
+    --hl-keyword: 244 114 182;
+    --hl-string: 134 239 172;
+    --hl-number: 253 186 116;
+    --hl-comment: 128 128 140;
+    --hl-title: 147 197 253;
+    --hl-type: 216 180 254;
+    --hl-attr: 252 211 77;
+    --hl-meta: 148 163 184;
+    --hl-add-bg: 20 60 35;
+    --hl-del-bg: 75 22 22;
+  }
+
+  html {
+    @apply bg-bg text-fg antialiased;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply min-h-screen bg-bg text-[13.5px] leading-relaxed text-fg;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.35);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--ring));
+    outline-offset: 2px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--line-strong)) transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 1ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ── Components ───────────────────────────────────────────────────────────
+   Small, composable classes used by LemonWeb.UI. Prefer the function
+   components; use the classes directly only for markup the components do not
+   cover. */
+@layer components {
+  .btn {
+    @apply inline-flex h-8 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-[13px] font-medium leading-none transition-colors duration-100 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply border-transparent bg-accent text-accent-fg hover:brightness-95 active:brightness-90;
+  }
+
+  .btn-secondary {
+    @apply border-line bg-surface text-fg shadow-sm hover:bg-surface-2;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-muted hover:bg-surface-2 hover:text-fg;
+  }
+
+  .btn-danger {
+    @apply border-transparent bg-danger text-white hover:brightness-110;
+  }
+
+  .btn-danger-soft {
+    @apply border-danger/30 bg-danger/10 text-danger hover:bg-danger/15;
+  }
+
+  .btn-sm {
+    @apply h-7 gap-1 px-2 text-xs;
+  }
+
+  .btn-lg {
+    @apply h-10 px-4 text-sm;
+  }
+
+  .btn-icon {
+    @apply h-8 w-8 px-0;
+  }
+
+  .btn-icon.btn-sm {
+    @apply h-7 w-7;
+  }
+
+  .field-label {
+    @apply mb-1 block text-xs font-medium text-muted;
+  }
+
+  .field-hint {
+    @apply mt-1 text-xs text-subtle;
+  }
+
+  .field-error {
+    @apply mt-1 text-xs text-danger;
+  }
+
+  .input {
+    @apply block h-8 w-full rounded-md border border-line bg-surface px-2.5 text-[13px] text-fg shadow-sm transition-colors placeholder:text-subtle hover:border-line-strong focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  textarea.input {
+    @apply h-auto py-2 leading-relaxed;
+  }
+
+  select.input {
+    @apply appearance-none bg-no-repeat pr-8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23888'%3E%3Cpath d='M5.5 7.5 10 12l4.5-4.5'/%3E%3C/svg%3E");
+    background-position: right 0.5rem center;
+    background-size: 1rem;
+  }
+
+  .card {
+    @apply rounded-lg border border-line bg-surface shadow-sm;
+  }
+
+  .card-header {
+    @apply flex items-center justify-between gap-3 border-b border-line px-4 py-3;
+  }
+
+  .card-body {
+    @apply p-4;
+  }
+
+  .badge {
+    @apply inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-2xs font-medium;
+  }
+
+  .badge-neutral {
+    @apply border-line bg-surface-2 text-muted;
+  }
+
+  .badge-accent {
+    @apply border-accent/40 bg-accent/15 text-accent-text;
+  }
+
+  .badge-success {
+    @apply border-success/30 bg-success/10 text-success;
+  }
+
+
+  .kbd-mac {
+    display: none;
+  }
+
+  [data-platform="mac"] .kbd-mac {
+    display: inline;
+  }
+
+  [data-platform="mac"] .kbd-other {
+    display: none;
+  }
+  .badge-warning {
+    @apply border-warning/30 bg-warning/10 text-warning;
+  }
+
+  .badge-danger {
+    @apply border-danger/30 bg-danger/10 text-danger;
+  }
+
+  .badge-info {
+    @apply border-info/30 bg-info/10 text-info;
+  }
+
+  .badge-plan {
+    @apply border-plan/30 bg-plan/10 text-plan;
+  }
+
+  .kbd {
+    @apply inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded border border-line border-b-line-strong bg-surface-2 px-1 font-sans text-2xs font-medium text-muted;
+  }
+
+  .nav-item {
+    @apply flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-fg;
+  }
+
+  .nav-item[aria-current="page"] {
+    @apply bg-surface-2 text-fg;
+  }
+
+  .tab {
+    @apply -mb-px inline-flex h-9 items-center gap-1.5 border-b-2 border-transparent px-1 text-[13px] font-medium text-muted transition-colors hover:text-fg;
+  }
+
+  .tab[aria-selected="true"] {
+    @apply border-accent text-fg;
+  }
+
+  .segmented {
+    @apply inline-flex rounded-md border border-line bg-surface-2 p-0.5;
+  }
+
+  .segmented > button,
+  .segmented > a {
+    @apply inline-flex h-7 items-center gap-1 rounded px-2.5 text-xs font-medium text-muted transition-colors hover:text-fg;
+  }
+
+  .segmented > [aria-pressed="true"],
+  .segmented > [aria-selected="true"] {
+    @apply bg-surface text-fg shadow-sm;
+  }
+
+  .menu {
+    @apply z-50 min-w-[12rem] overflow-hidden rounded-lg border border-line bg-elevated p-1 shadow-pop animate-scale-in;
+  }
+
+  .menu-item {
+    @apply flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] text-fg hover:bg-surface-2 focus:bg-surface-2 focus:outline-none;
+  }
+
+  .table {
+    @apply w-full border-collapse text-left text-[13px];
+  }
+
+  .table th {
+    @apply border-b border-line px-3 py-2 text-2xs font-semibold uppercase tracking-wide text-subtle;
+  }
+
+  .table td {
+    @apply border-b border-line px-3 py-2 align-middle;
+  }
+
+  .table tbody tr:hover {
+    @apply bg-surface-2/60;
+  }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgb(var(--line-strong));
+    border-radius: 999px;
+  }
+
+  /* LiveView connection states: disable mutations while disconnected so no
+     destructive click is ever queued offline. */
+  .phx-disconnected [data-requires-connection],
+  [data-requires-connection].phx-disconnected {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+}
+
+/* ── Markdown (LemonWeb.Markdown output, allow-listed tags, no classes) ─── */
+@layer components {
+  .md {
+    @apply break-words text-[13.5px] leading-[1.65] text-fg;
+  }
+
+  .md > * + * {
     @apply mt-3;
   }
 
-  .lemon-markdown h1 {
-    @apply text-lg font-semibold;
+  .md h1 {
+    @apply mt-5 text-lg font-semibold tracking-tight;
   }
 
-  .lemon-markdown h2 {
-    @apply text-base font-semibold;
+  .md h2 {
+    @apply mt-5 text-base font-semibold tracking-tight;
   }
 
-  .lemon-markdown h3,
-  .lemon-markdown h4,
-  .lemon-markdown h5,
-  .lemon-markdown h6 {
-    @apply text-sm font-semibold;
+  .md h3,
+  .md h4,
+  .md h5,
+  .md h6 {
+    @apply mt-4 text-[13.5px] font-semibold;
   }
 
-  .lemon-markdown a {
-    @apply font-medium text-sky-700 underline underline-offset-2 hover:text-sky-900;
+  .md a {
+    @apply font-medium text-info underline decoration-info/40 underline-offset-2 hover:decoration-info;
   }
 
-  .lemon-markdown ul {
-    @apply list-disc space-y-1 pl-5;
+  .md ul {
+    @apply list-disc space-y-1 pl-5 marker:text-subtle;
   }
 
-  .lemon-markdown ol {
-    @apply list-decimal space-y-1 pl-5;
+  .md ol {
+    @apply list-decimal space-y-1 pl-5 marker:text-subtle;
   }
 
-  .lemon-markdown li > ul,
-  .lemon-markdown li > ol {
+  .md li > ul,
+  .md li > ol {
     @apply mt-1;
   }
 
-  .lemon-markdown blockquote {
-    @apply border-l-4 border-slate-200 pl-3 text-slate-600;
+  .md blockquote {
+    @apply border-l-2 border-line-strong pl-3 text-muted;
   }
 
-  .lemon-markdown hr {
-    @apply border-slate-200;
+  .md hr {
+    @apply border-line;
   }
 
-  .lemon-markdown :not(pre) > code {
-    @apply rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.8125rem] text-slate-800;
+  .md :not(pre) > code {
+    @apply rounded border border-line bg-surface-2 px-1 py-px font-mono text-[0.84em];
   }
 
-  .lemon-markdown pre {
-    @apply overflow-x-auto rounded-lg bg-slate-900 p-3 text-xs leading-relaxed text-slate-100;
+  .md pre {
+    @apply relative overflow-x-auto rounded-lg border border-line p-3 font-mono text-xs leading-relaxed;
+    background: rgb(var(--code-bg));
+    color: rgb(var(--code-fg));
   }
 
-  .lemon-markdown pre code {
-    @apply font-mono;
-  }
-
-  .lemon-markdown table {
+  .md table {
     @apply block w-full overflow-x-auto border-collapse text-left text-xs;
   }
 
-  .lemon-markdown th,
-  .lemon-markdown td {
-    @apply border border-slate-200 px-2 py-1 align-top;
+  .md th,
+  .md td {
+    @apply border border-line px-2 py-1 align-top;
   }
 
-  .lemon-markdown th {
-    @apply bg-slate-50 font-semibold;
+  .md th {
+    @apply bg-surface-2 font-semibold;
+  }
+
+  .md img {
+    @apply max-h-96 rounded-md border border-line;
+  }
+}
+
+/* ── Code (highlight.js classes, themed by tokens) ──────────────────────── */
+@layer components {
+  .code-surface {
+    background: rgb(var(--code-bg));
+    color: rgb(var(--code-fg));
+  }
+
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-built_in,
+  .hljs-literal {
+    color: rgb(var(--hl-keyword));
+  }
+
+  .hljs-string,
+  .hljs-regexp,
+  .hljs-symbol,
+  .hljs-template-variable {
+    color: rgb(var(--hl-string));
+  }
+
+  .hljs-number,
+  .hljs-variable.constant_ {
+    color: rgb(var(--hl-number));
+  }
+
+  .hljs-comment,
+  .hljs-quote {
+    color: rgb(var(--hl-comment));
+    font-style: italic;
+  }
+
+  .hljs-title,
+  .hljs-title.function_,
+  .hljs-section {
+    color: rgb(var(--hl-title));
+  }
+
+  .hljs-type,
+  .hljs-title.class_,
+  .hljs-class {
+    color: rgb(var(--hl-type));
+  }
+
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-property,
+  .hljs-params {
+    color: rgb(var(--hl-attr));
+  }
+
+  .hljs-meta,
+  .hljs-tag,
+  .hljs-name {
+    color: rgb(var(--hl-meta));
+  }
+
+  .hljs-addition {
+    background: rgb(var(--hl-add-bg));
+  }
+
+  .hljs-deletion {
+    background: rgb(var(--hl-del-bg));
+  }
+
+  .diff-line-add {
+    background: rgb(var(--hl-add-bg));
+  }
+
+  .diff-line-del {
+    background: rgb(var(--hl-del-bg));
+  }
+
+  .diff-line-hunk {
+    @apply text-info;
+    background: rgb(var(--info) / 0.08);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }

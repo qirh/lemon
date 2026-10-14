@@ -453,14 +453,7 @@ defmodule LemonControlPlane.WS.Connection do
   # default. Direct callers of Authorize.from_params/1 retain their separate
   # in-process compatibility behavior.
   defp local_peer?(nil), do: true
-  defp local_peer?({127, _b, _c, _d}), do: true
-  defp local_peer?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
-
-  defp local_peer?({0, 0, 0, 0, 0, 65_535, mapped_prefix, _last})
-       when mapped_prefix in 0x7F00..0x7FFF,
-       do: true
-
-  defp local_peer?(_peer), do: false
+  defp local_peer?(peer), do: LemonControlPlane.Auth.Authorize.loopback_address?(peer)
 
   defp get_field(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

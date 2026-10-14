@@ -203,7 +203,7 @@ defmodule LemonControlPlane.EventBridge do
 
   # Broadcast an event to all connected clients
   defp broadcast_event(event, state_version) do
-    case map_event(event) do
+    case project(event) do
       nil ->
         :ok
 
@@ -329,8 +329,15 @@ defmodule LemonControlPlane.EventBridge do
     _ -> []
   end
 
-  # Map bus events to WebSocket event names and payloads.
-  #
+  @doc """
+  Projects one Bus event to its operator wire event, `{event_name, payload}`,
+  or `nil` when the event has no operator projection.
+
+  This is the single projection used for WebSocket fanout; in-process operator
+  clients (the web UI) subscribe to the Bus themselves and call it so they see
+  exactly the bounded payloads a WebSocket client would.
+  """
+  @spec project(term()) :: {String.t(), map()} | nil
   # Registered platform payloads are coerced to their struct once, here, so that every clause
   # below can pattern-match one: a struct passes through untouched and a legacy map — such
   # as a hand-built test payload — becomes its struct. A payload too malformed to coerce
@@ -339,15 +346,15 @@ defmodule LemonControlPlane.EventBridge do
   #
   # `meta` is deliberately still a free map (see docs/platform/bus-events.md §4.1), so it is
   # read with `Access`; the payload never is.
-  defp map_event(%LemonCore.Event{type: type, payload: payload, meta: meta}) do
+  def project(%LemonCore.Event{type: type, payload: payload, meta: meta}) do
     map_event_type(type, Events.coerce(type, payload), meta || %{})
   end
 
-  defp map_event(%{type: type, payload: payload} = event) do
+  def project(%{type: type, payload: payload} = event) do
     map_event_type(type, Events.coerce(type, payload), Map.get(event, :meta) || %{})
   end
 
-  defp map_event(_), do: nil
+  def project(_), do: nil
 
   # Run events
   defp map_event_type(:run_started, %Events.RunStarted{} = payload, meta) do

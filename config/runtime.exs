@@ -92,12 +92,6 @@ normalized_env = fn name ->
   end
 end
 
-access_token = normalized_env.("LEMON_WEB_ACCESS_TOKEN")
-
-if is_binary(access_token) and access_token != "" do
-  config :lemon_web, :access_token, access_token
-end
-
 # ── lemon-sim product block (1 of 3) — sim wiring outside apps/lemon_sim*
 # (docs/platform-split.md). `sim_ui_endpoint_enabled?` defined here is read again by
 # block 3, so the two must stay together and keep this order. ──
