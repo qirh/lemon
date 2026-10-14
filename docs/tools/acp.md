@@ -89,7 +89,7 @@ on the Lemon host rather than through client filesystem methods—and calls
 `propose_plan` when the plan is decision-complete.
 
 The proposal arrives as a `session/request_permission` card titled
-**Approve plan: …** (kind `switch_mode`) showing the plan Markdown, with two
+**Approve plan: …** showing the plan Markdown (Tern shows it as a dialog), with two
 options: **Approve and execute** turns plan mode off, restores full tool access
 and lets the agent implement the plan in the same turn; **Refine plan** keeps
 plan mode on so you can reply with feedback. Approval is never remembered for

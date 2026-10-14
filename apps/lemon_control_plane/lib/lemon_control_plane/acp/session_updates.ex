@@ -72,7 +72,6 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       n when n in ["bash", "bash_output", "kill_process", "shell", "exec", "eval"] -> "execute"
       n when n in ["grep", "glob", "find", "ast_grep"] -> "search"
       n when n in ["web_search", "websearch", "webfetch", "fetch"] -> "fetch"
-      "propose_plan" -> "switch_mode"
       "todo" -> "think"
       _ -> "other"
     end

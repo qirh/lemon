@@ -1078,7 +1078,7 @@ defmodule LemonControlPlane.ACPTest do
                         "toolCall" => %{
                           "toolCallId" => "call_propose",
                           "title" => "Approve plan: Fetcher retries",
-                          "kind" => "switch_mode",
+                          "kind" => "other",
                           "content" => [%{"content" => %{"text" => "# Fetcher retries" <> _}}]
                         },
                         "options" => options

@@ -1377,7 +1377,7 @@ defmodule LemonControlPlane.ACP do
     %{
       "toolCallId" => map_get(pending, :tool_call_id) || approval_id,
       "title" => "Approve plan: #{if is_binary(title), do: truncate(title, 120), else: "plan"}",
-      "kind" => "switch_mode",
+      "kind" => "other",
       "status" => "pending",
       "content" =>
         case map_get(action, :plan) do
