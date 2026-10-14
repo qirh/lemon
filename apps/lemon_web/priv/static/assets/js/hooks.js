@@ -8,6 +8,7 @@ import * as ShellHooks from "/assets/js/shell.js"
 import {SessionsHooks} from "/assets/js/sessions.js"
 import {ChatHooks} from "/assets/js/chat.js"
 import * as Knowledge from "/assets/js/knowledge.js"
+import * as Omp from "/assets/js/omp.js"
 
 let hljsPromise = null
 
@@ -199,5 +200,6 @@ export const Hooks = {
   ...ShellHooks,
   ...SessionsHooks,
   ...ChatHooks,
-  ...Knowledge.Hooks
+  ...Knowledge.Hooks,
+  ...Omp.Hooks
 }
