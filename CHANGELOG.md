@@ -62,8 +62,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   discard). Sessions saved with the previous reviewed-plan lifecycle keep their
   plan mode or approved plan when loaded.
 
-### Changed
-
 - **`lemon` opens the TUI in Tern.** Plain `lemon` in a Tern pane now opens the
   Lemon TUI on Tern's native surfaces, as `lemon tui` does, instead of
   redirecting to `tern acp lemon`. The native ACP chat stays available with
