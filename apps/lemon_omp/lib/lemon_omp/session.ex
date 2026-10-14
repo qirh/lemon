@@ -132,7 +132,8 @@ defmodule LemonOmp.Session do
       publish_timer: nil,
       last_publish: 0,
       close_reason: nil,
-      malformed: 0
+      malformed: 0,
+      agent_starts: 0
     }
 
     case open_port(opts, stderr_path) do
@@ -348,6 +349,10 @@ defmodule LemonOmp.Session do
 
   defp handle_frame(state, {:event, type, frame}) do
     before = state.projection
+
+    state =
+      if type == "agent_start", do: %{state | agent_starts: state.agent_starts + 1}, else: state
+
     state = update_projection(state, &Projection.apply_event(&1, type, frame))
     after_status = state.projection.status
 
@@ -380,12 +385,12 @@ defmodule LemonOmp.Session do
 
   defp handle_frame(state, {:malformed, _reason}), do: %{state | malformed: state.malformed + 1}
 
-  defp handle_response(state, %{kind: :initial_prompt}, {:ok, data}) do
+  defp handle_response(state, %{kind: :initial_prompt} = entry, {:ok, data}) do
     state =
       if is_map(data) and data["agentInvoked"] == false do
         state |> update_projection(&Projection.settle/1) |> schedule_idle()
       else
-        update_projection(state, &mark_running/1)
+        mark_running_after_ack(state, entry)
       end
 
     publish_now(started(state, {:ok, nil}), "updated")
@@ -399,11 +404,11 @@ defmodule LemonOmp.Session do
     |> schedule_idle()
   end
 
-  defp handle_response(state, %{kind: {:send, from, delivery}}, {:ok, _data}) do
+  defp handle_response(state, %{kind: {:send, from, delivery}} = entry, {:ok, _data}) do
     GenServer.reply(from, {:ok, %{"delivery" => delivery}})
 
     if delivery == "prompt" do
-      state |> cancel_idle() |> update_projection(&mark_running/1) |> publish_now("updated")
+      state |> cancel_idle() |> mark_running_after_ack(entry) |> publish_now("updated")
     else
       state
     end
@@ -437,6 +442,14 @@ defmodule LemonOmp.Session do
 
   defp mark_running(projection), do: projection
 
+  # omp may stream (and even finish) the turn before acknowledging the prompt.
+  # If a turn started after the request went out, the events already tell the
+  # truth; marking the session running again would leave nothing to settle it.
+  defp mark_running_after_ack(state, %{agent_starts: seen}) when state.agent_starts > seen,
+    do: state
+
+  defp mark_running_after_ack(state, _entry), do: update_projection(state, &mark_running/1)
+
   # A resumed session carries todos and identity omp already knows; ask once.
   defp maybe_request_state(%{resume: resume} = state) when is_binary(resume),
     do: request(state, "get_state", %{}, :state)
@@ -454,7 +467,8 @@ defmodule LemonOmp.Session do
         _ -> Process.send_after(self(), {:command_timeout, id}, Config.command_timeout_ms())
       end
 
-    %{state | seq: seq, pending: Map.put(state.pending, id, %{kind: kind, timer: timer})}
+    entry = %{kind: kind, timer: timer, agent_starts: state.agent_starts}
+    %{state | seq: seq, pending: Map.put(state.pending, id, entry)}
   end
 
   defp write(%{port: nil}, _frame), do: :ok

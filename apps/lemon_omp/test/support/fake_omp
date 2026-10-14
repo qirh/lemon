@@ -29,6 +29,7 @@
 #   UI_REQUEST  start the turn, send blocking/non-blocking UI and host requests;
 #               the turn completes once the confirm reply arrives
 #   BIGTEXT     complete the turn with a ~100 KB assistant text
+#   LATE_ACK    finish the whole turn before acknowledging the prompt
 #   anything else completes the turn at once.
 
 all_args="$*"
@@ -168,6 +169,15 @@ while IFS= read -r line; do
   case "$type" in
     prompt)
       msg=$(field message)
+      case "$msg" in
+        *LATE_ACK*)
+          # omp may stream and finish a turn before acknowledging its prompt.
+          start_turn
+          complete_turn "$id" "Done early"
+          respond "$id" prompt '{"agentInvoked":true}'
+          continue
+          ;;
+      esac
       respond "$id" prompt '{"agentInvoked":true}'
       start_turn
 

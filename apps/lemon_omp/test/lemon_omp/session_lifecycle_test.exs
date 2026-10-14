@@ -193,6 +193,18 @@ defmodule LemonOmp.SessionLifecycleTest do
       assert Enum.any?(sent, &match?(%{"type" => "prompt", "message" => "next task"}, &1))
     end
 
+    test "a prompt acknowledged after its turn finished leaves the session idle", ctx do
+      ws = workspace!()
+      id = start!(ws, "first", ctx)["id"]
+      await_wire(id, &(&1["status"] == "idle"))
+
+      assert {:ok, %{"delivery" => "prompt"}} =
+               LemonOmp.send_message(id, "LATE_ACK please", :steer, ctx.scope)
+
+      Process.sleep(300)
+      assert {:ok, %{"status" => "idle", "result" => "Done early"}} = LemonOmp.get(id, ctx.scope)
+    end
+
     test "cancel aborts the running turn and leaves the session open", ctx do
       ws = workspace!()
       id = start!(ws, "HOLD this turn", ctx)["id"]
