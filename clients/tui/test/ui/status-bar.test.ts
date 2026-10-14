@@ -8,7 +8,7 @@ import {
 	type StatusBarData,
 	shortModel,
 } from "../../src/ui/components/status-bar.ts";
-import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
+import { getTheme, initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { stripAnsi } from "../helpers/memory-terminal.ts";
 import { waitFor } from "../helpers/wait.ts";
@@ -190,6 +190,51 @@ describe("sessions off screen", () => {
 
 	test("a single session never grows the segment", () => {
 		expect(line({ sessionCount: 1, busySessions: 1 })).not.toContain("sessions");
+	});
+});
+
+describe("plan mode", () => {
+	test("an active plan mode leads the row in the accent colour", () => {
+		const line = renderStatusLine(data({ planMode: "plan" }), 120);
+		expect(stripAnsi(line).startsWith("plan · claude-sonnet-4")).toBe(true);
+		expect(line).toContain(getTheme().fg("accent", "plan"));
+	});
+
+	test("code mode and an unknown mode show nothing", () => {
+		for (const planMode of ["code", undefined] as const) {
+			const plain = stripAnsi(renderStatusLine(data({ planMode }), 200));
+			expect(plain.startsWith("claude-sonnet-4")).toBe(true);
+			expect(plain.split(" · ")).not.toContain("plan");
+		}
+	});
+
+	test("the indicator outlasts the optional segments on a tight row", () => {
+		const plain = stripAnsi(renderStatusLine(data({ planMode: "plan", approvals: 2 }), 60));
+		expect(plain).toContain("plan · claude-sonnet-4");
+		expect(visibleWidth(plain)).toBeLessThanOrEqual(60);
+	});
+
+	test("the TSP composer chrome leads its facts with plan and drops it on exit", () => {
+		let planMode: StatusBarData["planMode"] = "plan";
+		const bar = new StatusBar({ data: () => data({ planMode }) });
+		const before = bar.describeComposerFacts();
+		const fact = before.extras.c?.[0];
+		expect(fact).toMatchObject({
+			k: "seg",
+			key: "plan",
+			p: {
+				role: "omp.composer.fact",
+				priority: 95,
+				title: "Plan mode: read-only until you approve a proposed plan",
+			},
+		});
+		expect(JSON.stringify(fact)).toContain('"t":"plan"');
+		planMode = "code";
+		const after = bar.describeComposerFacts();
+		expect(after).not.toBe(before);
+		expect((after.extras.c ?? []).map((seg) => ("k" in seg ? seg.key : undefined))).not.toContain(
+			"plan",
+		);
 	});
 });
 

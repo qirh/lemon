@@ -47,6 +47,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Code's credentials; a pasted setup token is still accepted.
   `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
 
+### Changed
+
+- **Plan mode works like omp's `/plan`.** `/plan` toggles plan mode in the TUI
+  and in ACP chat (`/plan <request>` enters it and sends the request). While on,
+  only read-only tools run; the agent drafts `<slug>-plan.md` in a
+  session-private plan directory and calls `propose_plan`, which asks
+  **Approve and execute** / **Refine plan**. Approving turns plan mode off and
+  the agent implements the plan in the same turn; `/plan` again exits without
+  approving. The TUI status line shows `plan` while active. ACP no longer
+  advertises Code/Plan session modes or a `mode` config option, so Tern shows no
+  plan-mode selector; `session/set_mode`, `/approve-plan`, `/discard-plan` and
+  the `sessions.plan` `approve`/`discard` actions are removed (`exit` replaces
+  discard). Sessions saved with the previous reviewed-plan lifecycle keep their
+  plan mode or approved plan when loaded.
+
 ### Fixed
 
 - Document reads (PDF and other converted formats) no longer report

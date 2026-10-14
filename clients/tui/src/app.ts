@@ -34,6 +34,7 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
+import { parsePlanReceipt } from "./commands/plan.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
 import {
 	ComposerDrafts,
@@ -45,12 +46,13 @@ import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient } from "./protocol/client.ts";
 import { ControlPlaneError } from "./protocol/errors.ts";
 import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
-import type {
-	AgentCompletedEvent,
-	AgentEvent,
-	ChatHistoryMessage,
-	ImageContent,
-	QueueMode,
+import {
+	type AgentCompletedEvent,
+	type AgentEvent,
+	type ChatHistoryMessage,
+	type ImageContent,
+	PROPOSE_PLAN_TOOL,
+	type QueueMode,
 } from "./protocol/types.ts";
 import { newSessionKey } from "./session-key.ts";
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
@@ -59,6 +61,7 @@ import type { SessionStore } from "./store/session-store.ts";
 import type { CompactionDetails, NoticeLevel } from "./store/transcript-model.ts";
 import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
+import { isApprovedDecision } from "./ui/components/approval-panel.ts";
 import { Banner } from "./ui/components/banner.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
@@ -422,6 +425,8 @@ export class AppShell {
 			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
 			this.client.events.on("state", () => this.#renderConnection()),
 			this.client.events.on("hello-ok", () => {
+				// Every handshake, resumed or not: plan mode may have moved while away.
+				void this.refreshPlanMode();
 				if (this.#sessionReady || this.#initialSessionLoad) return;
 				this.#initialSessionLoad = this.sessions
 					.initialize()
@@ -451,9 +456,12 @@ export class AppShell {
 				this.#taskTree.ingest(event);
 				this.#toolInspector.refresh();
 				if (event?.type !== "completed") return;
+				const completedKey = (event as AgentCompletedEvent).sessionKey ?? this.store.focusedKey;
 				void this.#statusBar.refreshBranch();
 				void this.refreshUsage();
-				void this.drainQueue((event as AgentCompletedEvent).sessionKey ?? this.store.focusedKey);
+				// The authoritative resync after an approved plan flipped the mode mid-run.
+				if (completedKey === this.store.focusedKey) void this.refreshPlanMode(completedKey);
+				void this.drainQueue(completedKey);
 			}),
 			// A re-handshake means the client's picture of the daemon is stale: which
 			// sessions are live, what landed while the socket was down, and which
@@ -465,6 +473,20 @@ export class AppShell {
 				this.#palette.close();
 				this.#toolInspector.close();
 				this.#taskTree.setSession(this.store.focusedKey);
+				void this.refreshPlanMode();
+			}),
+			// Approving a plan proposal turns plan mode off server-side; refining it
+			// keeps plan mode on with a (possibly new) plan file.
+			this.store.events.on("approval-resolved", ({ approval, decision }) => {
+				const { event } = approval;
+				if (event.tool !== PROPOSE_PLAN_TOOL) return;
+				const sessionKey = event.sessionKey ?? this.store.focusedKey;
+				const approved = isApprovedDecision(decision);
+				if (approved) {
+					this.store.session(sessionKey).setPlan("code");
+					this.#renderStatus();
+				}
+				void this.refreshPlanMode(sessionKey, { afterApproval: approved });
 			}),
 			this.store.queue.events.on("changed", ({ sessionKey }) => {
 				if (sessionKey === this.store.focusedKey) this.syncQueuePanel();
@@ -608,6 +630,7 @@ export class AppShell {
 			thinking: session.thinkingLevel,
 			engine: session.engine,
 			queued: this.client.queued.length,
+			planMode: session.planMode,
 		};
 	}
 
@@ -619,6 +642,38 @@ export class AppShell {
 			this.#renderStatus();
 		} catch {
 			// The gauge keeps its last known numbers; this is not worth a notice.
+		}
+	}
+
+	/**
+	 * Re-read a session's plan mode for the status line. Never throws: a failed or
+	 * malformed read keeps what was known, and a read overtaken by a newer local
+	 * write (a `/plan` receipt, an approved proposal) is dropped.
+	 *
+	 * `afterApproval`: the daemon turns plan mode off a moment *after* the approval
+	 * resolve returns, so a `plan` read here is that race rather than the truth;
+	 * only a `code` confirmation is applied, and run completion resyncs.
+	 */
+	async refreshPlanMode(
+		sessionKey: string = this.store.focusedKey,
+		options: { afterApproval?: boolean } = {},
+	): Promise<void> {
+		if (!this.client.online || !this.methods.supports(METHOD.sessionsPlan)) return;
+		const session = this.store.session(sessionKey);
+		const writes = session.planWrites;
+		try {
+			const result = await this.methods.sessionsPlan({
+				sessionKey,
+				cwd: this.#cwd,
+				action: "status",
+			});
+			const plan = parsePlanReceipt(result, sessionKey);
+			if (session.planWrites !== writes) return;
+			if (options.afterApproval && plan.mode !== "code") return;
+			session.setPlan(plan.mode, plan.path);
+			this.#renderStatus();
+		} catch {
+			// The indicator keeps its last known state; not worth a notice.
 		}
 	}
 

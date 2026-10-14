@@ -5,7 +5,7 @@ defmodule LemonControlPlane.Methods.SessionsPlanTest do
   defmodule Provider do
     def session_plan(key, cwd, action, opts) do
       send(self(), {:plan, key, cwd, action, opts})
-      Process.get(:plan_result, {:ok, %{"mode" => "plan", "status" => "draft"}})
+      Process.get(:plan_result, {:ok, %{"mode" => "plan", "path" => nil, "content" => nil}})
     end
   end
 
@@ -22,53 +22,41 @@ defmodule LemonControlPlane.Methods.SessionsPlanTest do
     :ok
   end
 
-  test "explicit approval forwards exactly the reviewed revision and requires write scope" do
-    revision = String.duplicate("a", 64)
+  test "status, enter and exit forward to the native runtime and require write scope" do
+    params = %{"sessionKey" => "agent:plan:main", "cwd" => "/repo"}
 
-    params = %{
-      "sessionKey" => "agent:plan:main",
-      "cwd" => "/repo",
-      "action" => "approve",
-      "revision" => revision
-    }
+    for {action, atom} <- [{"status", :status}, {"enter", :enter}, {"exit", :exit}] do
+      assert {:ok, %{"sessionKey" => "agent:plan:main", "plan" => %{"mode" => "plan"}}} =
+               Registry.dispatch("sessions.plan", Map.put(params, "action", action), %{
+                 auth: %{role: :operator, scopes: [:write]}
+               })
 
-    Process.put(
-      :plan_result,
-      {:ok, %{"mode" => "code", "status" => "approved", "revision" => revision}}
-    )
-
-    assert {:ok, %{"sessionKey" => "agent:plan:main", "plan" => plan}} =
-             Registry.dispatch("sessions.plan", params, %{
-               auth: %{role: :operator, scopes: [:write]}
-             })
-
-    assert plan["revision"] == revision
-    assert_receive {:plan, "agent:plan:main", "/repo", :approve, [revision: ^revision]}
+      assert_receive {:plan, "agent:plan:main", "/repo", ^atom, []}
+    end
 
     assert {:error, _} =
-             Registry.dispatch("sessions.plan", params, %{
+             Registry.dispatch("sessions.plan", Map.put(params, "action", "enter"), %{
                auth: %{role: :operator, scopes: [:read]}
              })
 
     assert {:error, _} =
-             Registry.dispatch("sessions.plan", params, %{auth: %{role: :node, scopes: [:node]}})
+             Registry.dispatch("sessions.plan", Map.put(params, "action", "enter"), %{
+               auth: %{role: :node, scopes: [:node]}
+             })
   end
 
-  test "invalid approval and stale revisions cannot be silently treated as code mode" do
-    params = %{"sessionKey" => "agent:plan:main", "cwd" => "/repo", "action" => "approve"}
-    assert {:error, {:invalid_params, _, _}} = SessionsPlan.handle(params, %{})
-    refute_receive {:plan, _, _, _, _}
+  test "removed approval actions are invalid and a busy session is a conflict" do
+    params = %{"sessionKey" => "agent:plan:main", "cwd" => "/repo"}
 
-    for reason <- [:revision_mismatch, :plan_artifact_changed, :plan_not_pending] do
-      Process.put(:plan_result, {:error, reason})
-
-      assert {:error, {:conflict, _, %{"reason" => actual}}} =
-               SessionsPlan.handle(Map.put(params, "revision", String.duplicate("f", 64)), %{})
-
-      assert actual == Atom.to_string(reason)
+    for action <- ["approve", "discard", "code", nil] do
+      assert {:error, {:invalid_params, _, _}} =
+               SessionsPlan.handle(Map.put(params, "action", action), %{})
     end
 
-    assert {:error, {:invalid_params, _, _}} =
-             SessionsPlan.handle(Map.put(params, "action", "code"), %{})
+    refute_receive {:plan, _, _, _, _}
+    Process.put(:plan_result, {:error, :busy})
+
+    assert {:error, {:conflict, _, %{"reason" => "busy"}}} =
+             SessionsPlan.handle(Map.put(params, "action", "exit"), %{})
   end
 end

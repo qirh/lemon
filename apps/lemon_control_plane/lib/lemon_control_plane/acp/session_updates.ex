@@ -412,6 +412,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
         name in ["bash", "shell", "exec"] and is_binary(command) ->
           "$ " <> command
 
+        name == "propose_plan" and is_binary(get(args, :title)) ->
+          "Propose plan: " <> get(args, :title)
+
         name == "eval" and is_binary(get(args, :code)) ->
           "[#{get(args, :language) || "?"}] #{get(args, :title) || ""}\n#{get(args, :code)}"
 

@@ -149,6 +149,13 @@ export interface ApprovalRequestedEvent {
 	expiresAtMs: Nullable<number>;
 }
 
+/**
+ * The tool a plan-mode agent calls when its plan is decision-complete. Its
+ * `action` is `{ title, path, plan }` (plan = Markdown); `approve_once` executes
+ * the plan, `deny` sends it back for refinement, and no scope applies.
+ */
+export const PROPOSE_PLAN_TOOL = "propose_plan";
+
 export type ApprovalDecision = "once" | "session" | "global" | "deny" | string;
 
 export interface ApprovalResolvedEvent {
@@ -593,17 +600,17 @@ export interface SessionsForkResult {
 export interface SessionsPlanParams {
 	sessionKey: string;
 	cwd: string;
-	action: "status" | "enter" | "approve" | "discard";
-	revision?: string;
+	/** `status` reads; `enter`/`exit` toggle and refuse while a run is active. */
+	action: "status" | "enter" | "exit";
 }
 
 export interface SessionsPlanResult {
 	sessionKey: string;
 	plan: {
 		mode: "code" | "plan";
-		status: "none" | "draft" | "pending" | "approved";
-		revision: string | null;
+		/** The session-private plan file, once one exists. */
 		path: string | null;
+		/** Its current Markdown; null when missing or unreadable. */
 		content: string | null;
 	};
 }

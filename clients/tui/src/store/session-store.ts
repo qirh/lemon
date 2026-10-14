@@ -109,6 +109,15 @@ export class SessionStore {
 	thinkingLevel: string | undefined;
 	/** Tool-policy profile, as last set through `/toolpolicy`. */
 	toolPolicy: string | undefined;
+	/**
+	 * Daemon plan mode as last confirmed through `sessions.plan` (or optimistically
+	 * after a plan proposal was approved); undefined until it has been read.
+	 */
+	planMode: "plan" | "code" | undefined;
+	/** The session's plan file, when the daemon has reported one. */
+	planPath: string | undefined;
+	/** Bumped by every {@link setPlan}, so a slower status read cannot undo a newer write. */
+	planWrites = 0;
 
 	/** runId -> accumulated delta text. */
 	readonly #buffers = new Map<string, string>();
@@ -192,6 +201,13 @@ export class SessionStore {
 	applyUsage(usage: RunUsage | null | undefined): void {
 		if (!usage) return;
 		this.usage = usage;
+	}
+
+	/** Record plan mode; `path` undefined keeps the known plan file, null forgets it. */
+	setPlan(mode: "plan" | "code", path?: string | null): void {
+		this.planMode = mode;
+		if (path !== undefined) this.planPath = path ?? undefined;
+		this.planWrites += 1;
 	}
 
 	/**
