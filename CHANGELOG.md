@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.3]
+
 ### Added
 
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
