@@ -489,10 +489,9 @@ defmodule LemonOmp.Projection do
   @doc "Strip unsafe characters and clip an untrusted string; `nil` max means no clip."
   @spec clean(term(), pos_integer() | nil) :: String.t()
   def clean(value, max) when is_binary(value) do
-    value =
-      if String.valid?(value),
-        do: value,
-        else: :unicode.characters_to_binary(value, :utf8, :utf8) |> ensure_binary()
+    # Invalid byte sequences (e.g. a stderr tail cut mid-character) become
+    # U+FFFD instead of discarding the whole string.
+    value = if String.valid?(value), do: value, else: String.replace_invalid(value)
 
     value =
       value
@@ -504,9 +503,6 @@ defmodule LemonOmp.Projection do
   end
 
   def clean(_value, _max), do: ""
-
-  defp ensure_binary(value) when is_binary(value), do: value
-  defp ensure_binary(_value), do: ""
 
   @doc false
   def title_from_prompt(prompt) when is_binary(prompt) do

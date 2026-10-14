@@ -35,7 +35,9 @@ defmodule LemonOmp.Session do
   @line_bytes 65_536
   @max_frame_bytes 4 * 1_048_576
   @publish_interval_ms 400
-  @stderr_tail_bytes 2_048
+  # Fits, with its prefix, in the projection's 1000-char error, which keeps
+  # the head of a string: a longer tail would lose its most recent lines.
+  @stderr_tail_bytes 900
   @settle_fallback_ms 2_000
   @exit_grace_ms 1_500
 
@@ -186,9 +188,9 @@ defmodule LemonOmp.Session do
     status = if reason in [:closed, :idle_timeout, :exited], do: :closed, else: :failed
     error = if status == :failed, do: exit_error(state, code)
     state = %{state | port: nil, os_pid: nil}
-    state = fail_waiters(state, error || "omp exited before it was ready")
-    state = fail_pending(state)
 
+    # Publish the terminal snapshot before answering waiters, so a caller that
+    # sees the error never reads a snapshot (or live count) still "starting".
     state =
       update_projection(
         state,
@@ -196,15 +198,18 @@ defmodule LemonOmp.Session do
       )
 
     publish(state, "exited")
+    state = fail_waiters(state, error || "omp exited before it was ready")
+    state = fail_pending(state)
     {:stop, :normal, state}
   end
 
   def handle_info({:EXIT, port, _reason}, %{port: port} = state), do: {:noreply, state}
 
   def handle_info(:ready_timeout, %{ready?: false} = state) do
-    state = %{state | close_reason: :startup_timeout}
-    state = fail_waiters(state, "omp did not become ready in time")
-    {:stop, :normal, mark_failed(state, "omp did not become ready in time")}
+    state =
+      mark_failed(%{state | close_reason: :startup_timeout}, "omp did not become ready in time")
+
+    {:stop, :normal, fail_waiters(state, "omp did not become ready in time")}
   end
 
   def handle_info(:ready_timeout, state), do: {:noreply, state}

@@ -121,6 +121,27 @@ config :lemon_automation, :synthesis_runner, enabled: false
 # `LemonAutomation.HeartbeatTest` exercises the sync explicitly instead.
 config :lemon_automation, daily_brief_sync: false
 
+# The omp delegate must never launch a developer's real `omp` or read their
+# `~/.omp`. `:executable` falls back to PATH when unset, so pin it to a path
+# that cannot exist; suites that need a binary point it at
+# `apps/lemon_omp/test/support/fake_omp` and restore it. `LEMON_OMP_*` exported
+# in the shell outranks app env, so drop it for this VM. Short timeouts keep
+# the failure paths fast.
+config :lemon_omp,
+  executable: Path.join(System.tmp_dir!(), "lemon_omp_test_no_such_dir/omp"),
+  agent_dir:
+    Path.join(
+      System.tmp_dir!(),
+      "lemon_omp_agent_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+    ),
+  ready_timeout_ms: 5_000,
+  command_timeout_ms: 2_000
+
+Enum.each(
+  ~w(LEMON_OMP_BIN LEMON_OMP_MAX_SESSIONS LEMON_OMP_IDLE_TIMEOUT_MS),
+  &System.delete_env/1
+)
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.
