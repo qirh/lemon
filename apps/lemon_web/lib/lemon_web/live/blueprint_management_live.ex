@@ -10,6 +10,7 @@ defmodule LemonWeb.BlueprintManagementLive do
   use LemonWeb, :live_view
 
   alias LemonAutomation.Blueprint.Catalog
+  alias Phoenix.LiveView.JS
 
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
   @digest_regex ~r/^[a-f0-9]{64}$/
@@ -25,13 +26,16 @@ defmodule LemonWeb.BlueprintManagementLive do
   def mount(_params, _session, socket) do
     {:ok,
      socket
-     |> assign(:page_title, "Automation blueprints · Lemon Management")
+     |> assign(:nav, :blueprints)
+     |> assign(:page_title, "Blueprints · Lemon")
      |> assign(:bundles, [])
      |> assign(:catalog_summary, @empty_summary)
      |> assign(:catalog_available?, false)
      |> assign(:selected, nil)
      |> assign(:validation, nil)
      |> assign(:profile_draft, "")
+     |> assign(:profile_ids, if(connected?(socket), do: profile_ids(), else: []))
+     |> assign(:filter, "")
      |> assign(:pending_preview, nil)
      |> assign(:activation, nil)
      |> assign(:notice, nil)
@@ -209,250 +213,304 @@ defmodule LemonWeb.BlueprintManagementLive do
     end
   end
 
+  def handle_event("filter", %{"filter" => value}, socket),
+    do: {:noreply, assign(socket, :filter, value |> to_string() |> String.slice(0, 64))}
+
+  def handle_event("dismiss", _params, socket),
+    do: {:noreply, assign(socket, notice: nil, error: nil)}
+
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :visible, filter_bundles(assigns.bundles, assigns.filter))
+
     ~H"""
-    <main id="main-content" class="management-page">
-      <div class="management-container">
-        <header class="management-header">
-          <div>
-            <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lemon</p>
-            <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">
-              Automation blueprints
-            </h1>
-            <p class="mt-1 text-sm text-slate-600">
-              Inspect audited local bundles, preview their exact profile plan, then confirm by digest.
-            </p>
-          </div>
-          <nav aria-label="Management sections" class="management-header-actions">
-            <.link href={~p"/manage"} class="management-secondary-link">Sessions</.link>
-            <.link href={~p"/manage/providers"} class="management-secondary-link">Providers</.link>
-            <.link href={~p"/manage/profiles"} class="management-secondary-link">Profiles</.link>
-            <.link href={~p"/"} class="management-secondary-link">Open chat</.link>
-            <button type="button" phx-click="refresh" class="management-primary-button">
-              Refresh catalog
-            </button>
-          </nav>
-        </header>
+    <.page wide>
+      <div id="blueprints-page" phx-hook="PageKeys" data-search="blueprint-filter" data-group="Blueprints">
+        <.page_header
+          title="Blueprints"
+          icon="layers"
+          subtitle="Audited bundles of skills and a schedule. Inspect, validate and preview the exact plan, then activate it by digest."
+        >
+          <:meta>
+            <.badge tone={if @catalog_available?, do: "success", else: "warning"}>
+              <.status_dot tone={if @catalog_available?, do: "success", else: "warning"} />
+              {if @catalog_available?, do: "Catalog available", else: "Catalog unavailable"}
+            </.badge>
+            <span class="text-xs text-muted">
+              {@catalog_summary["bundleCount"]} valid · {@catalog_summary["invalidBundleCount"]} invalid hidden{if @catalog_summary["truncated"], do: " · truncated"}
+            </span>
+          </:meta>
+          <:actions>
+            <.button icon="refresh" phx-click="refresh">Refresh catalog</.button>
+          </:actions>
+        </.page_header>
 
-        <section aria-labelledby="blueprint-status-title" class="management-status-grid">
-          <h2 id="blueprint-status-title" class="sr-only">Blueprint catalog status</h2>
-          <div class="management-status-card">
-            <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Catalog</p>
-            <div class="management-status-line">
-              <span class={status_dot_class(@catalog_available?)} aria-hidden="true"></span>
-              <strong>{if @catalog_available?, do: "Available", else: "Unavailable"}</strong>
-            </div>
-            <p class="text-xs text-slate-500">Bounded local entries only</p>
-          </div>
-          <div class="management-status-card">
-            <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Bundles</p>
-            <p class="management-status-value">{@catalog_summary["bundleCount"]} valid</p>
-            <p class="text-xs text-slate-500">
-              {@catalog_summary["invalidBundleCount"]} invalid hidden from selection
-            </p>
-          </div>
-          <div class="management-status-card">
-            <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Activation</p>
-            <p class="management-status-value">Preview first</p>
-            <p class="text-xs text-slate-500">Fresh 64-character digest required</p>
-          </div>
-        </section>
-
-        <div id="blueprint-feedback" aria-live="polite" class="management-feedback">
-          <%= if @notice do %>
-            <p class="management-notice">{@notice}</p>
-          <% end %>
-          <%= if @error do %>
-            <p role="alert" class="management-error">{@error}</p>
-          <% end %>
+        <div id="blueprint-feedback" aria-live="polite" class="empty:hidden">
+          <.callout :if={@notice} tone="success" class="mb-4">
+            {@notice}
+            <:actions>
+              <.button size="sm" variant="ghost" icon="x" icon_only aria-label="Dismiss" phx-click="dismiss" />
+            </:actions>
+          </.callout>
+          <.callout :if={@error} tone="danger" class="mb-4">
+            {@error}
+            <:actions>
+              <.button size="sm" variant="ghost" icon="x" icon_only aria-label="Dismiss" phx-click="dismiss" />
+            </:actions>
+          </.callout>
         </div>
 
-        <%= if @pending_preview do %>
-          <section id="blueprint-activation-preview" aria-labelledby="blueprint-preview-title" class="blueprint-preview">
-            <div class="blueprint-preview-summary">
-              <p class="text-xs font-medium uppercase tracking-wide text-amber-700">Exact preview</p>
-              <h2 id="blueprint-preview-title" class="font-semibold text-slate-950">
-                {@pending_preview.bundle_id} → {@pending_preview.profile_id}
-              </h2>
-              <p class="mt-1 text-sm text-slate-700">
-                {preview_sentence(@pending_preview)}
-              </p>
-              <dl class="blueprint-plan-facts">
-                <div><dt>Skills</dt><dd>{length(@pending_preview.skills)}</dd></div>
-                <div><dt>Schedule action</dt><dd>{@pending_preview.automation.action}</dd></div>
-                <div><dt>Can activate</dt><dd>{yes_no(@pending_preview.can_activate)}</dd></div>
-              </dl>
-            </div>
-            <%= if @pending_preview.can_activate do %>
-              <.form
-                for={to_form(%{"confirmation_digest" => ""}, as: :activation)}
-                id="blueprint-activation-form"
-                phx-submit="activate"
-                class="blueprint-confirmation-form"
-              >
-                <label for="activation_confirmation_digest" class="provider-label">
-                  Type this exact digest to activate
-                </label>
-                <code id="blueprint-confirmation-digest" class="blueprint-digest">
-                  {@pending_preview.confirmation_digest}
-                </code>
+        <.callout
+          :if={@activation}
+          id="blueprint-activation-result"
+          tone="success"
+          icon="check-circle"
+          title={"#{@activation.bundle_id} → #{@activation.profile_id}"}
+          class="mb-4"
+        >
+          Schedule status: <.badge tone={if @activation.automation_status == "created", do: "success", else: "neutral"}>{@activation.automation_status}</.badge>
+          · {@activation.skill_count} skill action(s) completed. A replay of identical content remains duplicate-safe.
+        </.callout>
+
+        <div class="grid gap-4 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+          <.card body_class="p-0">
+            <:header>Catalog</:header>
+            <:actions><span class="text-xs font-normal text-muted">{length(@visible)} of {length(@bundles)}</span></:actions>
+            <form id="blueprint-filter-form" phx-change="filter" phx-submit="filter" class="border-b border-line p-2" role="search">
+              <label for="blueprint-filter" class="sr-only">Filter blueprints</label>
+              <div class="relative">
+                <.icon name="search" class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-subtle" />
                 <input
-                  id="activation_confirmation_digest"
-                  name="activation[confirmation_digest]"
+                  id="blueprint-filter"
+                  name="filter"
+                  type="search"
+                  value={@filter}
+                  placeholder="Filter bundles…"
+                  autocomplete="off"
+                  phx-debounce="100"
+                  class="input h-8 pl-8 pr-8"
+                />
+                <.kbd keys="/" class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" />
+              </div>
+            </form>
+            <ul id="blueprint-catalog-list" class="max-h-[60vh] divide-y divide-line overflow-y-auto scroll-thin" aria-label="Blueprint bundles">
+              <li :if={@bundles == []} class="p-4">
+                <.empty_state
+                  icon="layers"
+                  title={if @catalog_available?, do: "No blueprints yet", else: "Catalog unavailable"}
+                  description={
+                    if @catalog_available?,
+                      do: "No valid portable blueprints are available. Add bundles with the supported catalog workflow.",
+                      else: "The catalog could not be read. This is not an empty catalog."
+                  }
+                />
+              </li>
+              <li :if={@bundles != [] && @visible == []} class="px-4 py-8 text-center text-[13px] text-muted">
+                Nothing matches “{@filter}”.
+              </li>
+              <li :for={bundle <- @visible} id={"blueprint-#{bundle.id}"}>
+                <button
+                  type="button"
+                  phx-click="inspect"
+                  phx-value-bundle={bundle.id}
+                  aria-current={selected?(@selected, bundle.id) && "true"}
+                  class={[
+                    "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-surface-2",
+                    selected?(@selected, bundle.id) && "bg-accent/10 hover:bg-accent/10"
+                  ]}
+                >
+                  <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-2 text-muted">
+                    <.icon name="layers" class="h-4 w-4" />
+                  </span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate font-mono text-[13px] text-fg">{bundle.id}</span>
+                    <span class="block text-xs text-muted">
+                      {bundle.skill_count} skill(s) · {bundle.automation_count} schedule
+                    </span>
+                  </span>
+                  <.icon name="chevron-right" class="h-4 w-4 text-subtle" />
+                </button>
+              </li>
+            </ul>
+          </.card>
+
+          <.card :if={@selected} id="blueprint-detail" body_class="card-body space-y-5">
+            <:header>
+              <span id="bundle-detail-title" class="font-mono">{@selected.id}</span>
+            </:header>
+            <:actions>
+              <.button size="sm" icon="shield-check" phx-click="validate">
+                {if @validation, do: "Validate again", else: "Validate"}
+              </.button>
+            </:actions>
+
+            <div :if={@validation} id="blueprint-validation" role="status" class="flex flex-wrap items-center gap-2">
+              <.badge tone="success" icon="check">Audit {@validation.audit_status}</.badge>
+              <.badge tone="neutral">Trust: {@validation.trust_level}</.badge>
+              <.badge tone="neutral" icon="lock">Commands: blocked</.badge>
+              <.badge tone="neutral" icon="key">Secrets: blocked</.badge>
+            </div>
+            <p :if={!@validation} class="text-xs text-muted">
+              Metadata only; source content is never loaded here. Validate to run manifest, policy, lint and audit checks.
+            </p>
+
+            <section aria-labelledby="bundle-skills-title">
+              <h3 id="bundle-skills-title" class="mb-2 text-xs font-semibold uppercase tracking-wider text-subtle">
+                Skills · {length(@selected.skills)}
+              </h3>
+              <ul class="flex flex-wrap gap-1.5">
+                <li :for={skill <- @selected.skills} class="badge badge-neutral font-mono">
+                  <.icon name="sparkles" class="h-3 w-3" />{skill.key}
+                </li>
+                <li :if={@selected.skills == []} class="text-xs text-muted">No skills</li>
+              </ul>
+            </section>
+
+            <section aria-labelledby="bundle-automation-title">
+              <h3 id="bundle-automation-title" class="mb-2 text-xs font-semibold uppercase tracking-wider text-subtle">
+                Schedule
+              </h3>
+              <p :if={@selected.automations == []} class="text-xs text-muted">No schedule</p>
+              <.key_value :for={automation <- @selected.automations}>
+                <:item label="ID"><code class="font-mono text-xs">{automation.id}</code></:item>
+                <:item label="Schedule">
+                  {LemonWeb.CronText.describe(automation.schedule)}
+                  <code class="ml-1 font-mono text-xs text-muted">{automation.schedule}</code>
+                </:item>
+                <:item label="Timezone">{automation.timezone}</:item>
+                <:item label="Initially enabled">{yes_no(automation.enabled)}</:item>
+              </.key_value>
+            </section>
+
+            <.form
+              for={to_form(%{"profile_id" => @profile_draft}, as: :preview)}
+              id="blueprint-preview-form"
+              phx-change="change-profile"
+              phx-submit="preview"
+              class="rounded-lg border border-line bg-surface-2/50 p-3"
+            >
+              <label for="preview_profile_id" class="field-label">Target profile ID</label>
+              <div class="flex flex-col gap-2 sm:flex-row">
+                <input
+                  id="preview_profile_id"
+                  name="preview[profile_id]"
                   type="text"
+                  value={@profile_draft}
+                  maxlength="64"
+                  pattern="[a-z0-9][a-z0-9_-]{0,63}"
+                  list="blueprint-profile-options"
                   autocomplete="off"
                   autocapitalize="none"
                   spellcheck="false"
-                  minlength="64"
-                  maxlength="64"
-                  pattern="[a-f0-9]{64}"
-                  aria-describedby="blueprint-confirmation-digest"
-                  class="management-input blueprint-digest-input"
+                  placeholder="operator"
+                  class="input font-mono sm:flex-1"
                 />
-                <div class="provider-form-actions">
-                  <button type="submit" class="management-primary-button">Activate exact plan</button>
-                  <button type="button" phx-click="cancel-preview" class="management-secondary-button">
-                    Keep profile, cancel preview
-                  </button>
-                </div>
-              </.form>
-            <% else %>
-              <div class="blueprint-collision" role="status">
-                Resolve the existing destination or schedule collision, then preview again.
-                <button type="button" phx-click="cancel-preview" class="management-secondary-button">
-                  Dismiss preview
-                </button>
+                <datalist id="blueprint-profile-options">
+                  <option :for={id <- @profile_ids} value={id} />
+                </datalist>
+                <.button type="submit" variant="primary" icon="eye">Preview activation</.button>
               </div>
-            <% end %>
-          </section>
-        <% end %>
+              <p class="field-hint">
+                Preview reads destination state but does not copy skills or create a schedule.
+              </p>
+            </.form>
+          </.card>
 
-        <%= if @activation do %>
-          <section id="blueprint-activation-result" aria-labelledby="activation-result-title" class="management-panel blueprint-result">
-            <div class="management-panel-header">
-              <div>
-                <p class="text-xs font-medium uppercase tracking-wide text-emerald-700">Activation result</p>
-                <h2 id="activation-result-title" class="font-semibold text-slate-900">
-                  {@activation.bundle_id} for {@activation.profile_id}
-                </h2>
-              </div>
-              <span class="blueprint-result-badge">{@activation.automation_status}</span>
-            </div>
-            <p class="blueprint-result-copy">
-              {activation_sentence(@activation)} A replay of identical content remains duplicate-safe.
-            </p>
-          </section>
-        <% end %>
-
-        <div class="blueprint-management-grid">
-          <section aria-labelledby="catalog-title" class="management-panel blueprint-catalog-panel">
-            <div class="management-panel-header">
-              <div>
-                <h2 id="catalog-title" class="font-semibold text-slate-900">Local catalog</h2>
-                <p class="text-xs text-slate-500">Invalid and symlinked entries are never selectable.</p>
-              </div>
-            </div>
-            <ul id="blueprint-catalog-list" class="blueprint-catalog-list">
-              <%= if @bundles == [] do %>
-                <li class="management-empty">No valid portable blueprints are available.</li>
-              <% else %>
-                <%= for bundle <- @bundles do %>
-                  <li id={"blueprint-#{bundle.id}"} class={blueprint_row_class(@selected, bundle.id)}>
-                    <div class="blueprint-row-copy">
-                      <strong>{bundle.id}</strong>
-                      <span>{bundle.skill_count} skill(s) · {bundle.automation_count} automation</span>
-                    </div>
-                    <button
-                      type="button"
-                      phx-click="inspect"
-                      phx-value-bundle={bundle.id}
-                      class="management-secondary-button"
-                    >
-                      Inspect
-                    </button>
-                  </li>
-                <% end %>
-              <% end %>
-            </ul>
-          </section>
-
-          <section aria-labelledby="bundle-detail-title" class="management-panel blueprint-detail-panel">
-            <%= if @selected do %>
-              <div class="management-panel-header">
-                <div>
-                  <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Selected bundle</p>
-                  <h2 id="bundle-detail-title" class="font-semibold text-slate-900">{@selected.id}</h2>
-                </div>
-                <button type="button" phx-click="validate" class="management-secondary-button">
-                  Validate again
-                </button>
-              </div>
-              <div class="blueprint-detail-body">
-                <%= if @validation do %>
-                  <div id="blueprint-validation" class="blueprint-validation" role="status">
-                    <strong>Audit {@validation.audit_status}</strong>
-                    <span>Trust: {@validation.trust_level}</span>
-                    <span>Commands: blocked</span>
-                    <span>Secrets: blocked</span>
-                  </div>
-                <% end %>
-                <section aria-labelledby="bundle-skills-title">
-                  <h3 id="bundle-skills-title" class="blueprint-subheading">Skills</h3>
-                  <ul class="blueprint-chip-list">
-                    <%= for skill <- @selected.skills do %>
-                      <li>{skill.key}</li>
-                    <% end %>
-                  </ul>
-                </section>
-                <section aria-labelledby="bundle-automation-title">
-                  <h3 id="bundle-automation-title" class="blueprint-subheading">Schedule</h3>
-                  <%= for automation <- @selected.automations do %>
-                    <dl class="blueprint-automation-facts">
-                      <div><dt>ID</dt><dd>{automation.id}</dd></div>
-                      <div><dt>Schedule</dt><dd>{automation.schedule}</dd></div>
-                      <div><dt>Timezone</dt><dd>{automation.timezone}</dd></div>
-                      <div><dt>Initially enabled</dt><dd>{yes_no(automation.enabled)}</dd></div>
-                    </dl>
-                  <% end %>
-                </section>
-                <.form
-                  for={to_form(%{"profile_id" => @profile_draft}, as: :preview)}
-                  id="blueprint-preview-form"
-                  phx-change="change-profile"
-                  phx-submit="preview"
-                  class="blueprint-profile-form"
-                >
-                  <label for="preview_profile_id" class="provider-label">Target profile ID</label>
-                  <input
-                    id="preview_profile_id"
-                    name="preview[profile_id]"
-                    type="text"
-                    value={@profile_draft}
-                    maxlength="64"
-                    pattern="[a-z0-9][a-z0-9_-]{0,63}"
-                    autocomplete="off"
-                    autocapitalize="none"
-                    spellcheck="false"
-                    placeholder="operator"
-                    class="management-input"
-                  />
-                  <p class="text-xs text-slate-500">
-                    Preview reads destination state but does not copy skills or create a schedule.
-                  </p>
-                  <button type="submit" class="management-primary-button">Preview exact activation</button>
-                </.form>
-              </div>
-            <% else %>
-              <div class="management-empty management-empty-inspector">
-                <h2 id="bundle-detail-title" class="font-semibold text-slate-800">Choose a blueprint</h2>
-                <p class="mt-2 text-sm">Inspect its content-free metadata before targeting a profile.</p>
-              </div>
-            <% end %>
-          </section>
+          <.card :if={!@selected} body_class="p-4">
+            <.empty_state
+              icon="layers"
+              title="Choose a blueprint"
+              description="Inspect its content-free metadata before targeting a profile."
+            />
+          </.card>
         </div>
       </div>
-    </main>
+
+      <.modal
+        :if={@pending_preview}
+        id="blueprint-activation-modal"
+        show
+        size="lg"
+        title="Activate blueprint"
+        description={"#{@pending_preview.bundle_id} → #{@pending_preview.profile_id}"}
+        on_cancel={JS.push("cancel-preview")}
+      >
+        <section id="blueprint-activation-preview" aria-label="Exact activation plan" class="space-y-4 text-[13px]">
+          <p class="text-fg">{preview_sentence(@pending_preview)}</p>
+          <div class="overflow-hidden rounded-lg border border-line">
+            <table class="table">
+              <thead>
+                <tr><th>Item</th><th>Action</th><th class="text-right">Files</th></tr>
+              </thead>
+              <tbody>
+                <tr :for={skill <- @pending_preview.skills}>
+                  <td><span class="font-mono text-xs">{skill.key}</span> <span class="text-xs text-muted">skill</span></td>
+                  <td><.badge tone={plan_tone(skill.action)}>{skill.action}</.badge></td>
+                  <td class="text-right tabular-nums text-muted">{skill.file_count}</td>
+                </tr>
+                <tr>
+                  <td>
+                    <span class="font-mono text-xs">{@pending_preview.automation.id}</span>
+                    <span class="text-xs text-muted">{LemonWeb.CronText.describe(@pending_preview.automation.schedule)}</span>
+                  </td>
+                  <td><.badge tone={plan_tone(@pending_preview.automation.action)}>{@pending_preview.automation.action}</.badge></td>
+                  <td class="text-right text-muted">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <.form
+            :if={@pending_preview.can_activate}
+            for={to_form(%{"confirmation_digest" => ""}, as: :activation)}
+            id="blueprint-activation-form"
+            phx-submit="activate"
+            class="space-y-3"
+          >
+            <div>
+              <p class="field-label">Exact plan digest</p>
+              <code
+                id="blueprint-confirmation-digest"
+                class="block select-all break-all rounded-md border border-line bg-surface-2 px-2.5 py-2 font-mono text-xs text-fg"
+              >{@pending_preview.confirmation_digest}</code>
+            </div>
+            <div>
+              <label for="activation_confirmation_digest" class="field-label">Type the digest to activate</label>
+              <input
+                id="activation_confirmation_digest"
+                name="activation[confirmation_digest]"
+                type="text"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                minlength="64"
+                maxlength="64"
+                pattern="[a-f0-9]{64}"
+                required
+                aria-describedby="blueprint-confirmation-digest"
+                class="input font-mono text-xs"
+              />
+              <p class="field-hint">Any change to the bundle or destination after this preview refuses activation.</p>
+            </div>
+            <div class="flex justify-end gap-2">
+              <.button phx-click="cancel-preview">Keep profile, cancel</.button>
+              <.button type="submit" variant="primary" icon="check" mutation phx-disable-with="Activating…">
+                Activate exact plan
+              </.button>
+            </div>
+          </.form>
+
+          <div :if={!@pending_preview.can_activate} class="space-y-3">
+            <.callout tone="warning" title="Collision">
+              Resolve the existing destination or schedule collision, then preview again. Nothing changed.
+            </.callout>
+            <div class="flex justify-end">
+              <.button phx-click="cancel-preview">Dismiss preview</.button>
+            </div>
+          </div>
+        </section>
+      </.modal>
+    </.page>
     """
   end
 
@@ -812,18 +870,34 @@ defmodule LemonWeb.BlueprintManagementLive do
     "#{length(preview.skills)} profile skill action(s) and one #{preview.automation.action} schedule action."
   end
 
-  defp activation_sentence(activation) do
-    "Schedule status: #{activation.automation_status}; #{activation.skill_count} skill action(s) completed."
-  end
-
   defp yes_no(true), do: "Yes"
   defp yes_no(false), do: "No"
 
-  defp status_dot_class(true), do: "management-status-dot management-status-dot-ok"
-  defp status_dot_class(false), do: "management-status-dot management-status-dot-warning"
+  defp selected?(%{id: id}, id), do: true
+  defp selected?(_, _), do: false
 
-  defp blueprint_row_class(%{id: id}, id),
-    do: "blueprint-catalog-row blueprint-catalog-row-selected"
+  defp plan_tone(action) when action in ["create", "replace"], do: "info"
+  defp plan_tone("collision"), do: "danger"
+  defp plan_tone(_), do: "neutral"
 
-  defp blueprint_row_class(_, _), do: "blueprint-catalog-row"
+  defp filter_bundles(bundles, filter) do
+    case filter |> String.trim() |> String.downcase() do
+      "" -> bundles
+      needle -> Enum.filter(bundles, &String.contains?(&1.id, needle))
+    end
+  end
+
+  # Profile IDs for the target-profile suggestions; nothing else is kept.
+  defp profile_ids do
+    case LemonWeb.Rpc.call("profiles.list", %{}) do
+      {:ok, %{"profiles" => profiles}} when is_list(profiles) ->
+        profiles
+        |> Enum.map(&(is_map(&1) && &1["id"]))
+        |> Enum.filter(&(is_binary(&1) and Regex.match?(@id_regex, &1)))
+        |> Enum.take(50)
+
+      _ ->
+        []
+    end
+  end
 end
