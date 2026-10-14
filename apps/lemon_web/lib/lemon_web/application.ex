@@ -5,6 +5,9 @@ defmodule LemonWeb.Application do
 
   @impl true
   def start(_type, _args) do
+    # Global run start/stop feed for shell notifications (idempotent).
+    LemonWeb.ShellLive.RunEvents.attach()
+
     children = [
       LemonWeb.Telemetry,
       LemonWeb.LoginThrottle,
