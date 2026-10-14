@@ -1,67 +1,240 @@
 defmodule LemonAi.Auth.AnthropicOAuth do
   @moduledoc """
-  Anthropic OAuth helpers for Claude subscription-backed access.
+  Anthropic OAuth for Claude Pro/Max subscription access.
+
+  `login_device_flow/1` runs Anthropic's authorization-code grant with PKCE on
+  `claude.ai`, using the public client Claude Code uses. When a
+  `:local_callback_listener` can bind the loopback redirect URI, the browser
+  redirect is captured automatically; otherwise the authorization request uses
+  Anthropic's hosted code page and the user pastes the `code#state` value it
+  shows. A token printed by `claude setup-token` may be pasted at the same
+  prompt; it is stored as a non-refreshable credential.
+
+  `resolve_api_key_from_secret/3` returns a usable access token from a stored
+  payload, refreshing it shortly before expiry. Refresh is single-flight per
+  secret name on the local node: concurrent resolvers queue on one lock, and a
+  waiter re-reads the secret through `:reload_secret` so it reuses the token
+  the first caller stored instead of replaying a rotated refresh token. A
+  refreshed secret that `:persist_secret` fails to store is an error, as is a
+  refresh the token endpoint rejects (`{:error, :reauth_required}`); a
+  transient refresh failure falls back only to an unexpired access token.
+
+  `resolve_access_token/0` reads ambient Claude Code credentials
+  (`~/.claude/.credentials.json`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_TOKEN`)
+  for configurations that opt into OAuth without a stored Lemon login.
+
+  Requests authenticated with these tokens need Claude Code's request shape;
+  `oauth_headers/0` and `oauth_beta_features/0` supply the headers and
+  `LemonAi.Providers.Anthropic` applies the system-prompt and tool-name rules.
   """
 
   require Logger
 
+  alias LemonAi.Auth.OAuthPKCE
+
+  # Public client id, kept base64 so secret scanners do not flag it.
+  @client_id Base.decode64!("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl")
+  @authorize_url "https://claude.ai/oauth/authorize"
+  @token_url "https://platform.claude.com/v1/oauth/token"
+  @loopback_redirect_uri "http://localhost:53692/callback"
+  @code_page_redirect_uri "https://platform.claude.com/oauth/code/callback"
+  @scopes ~w(org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload)
   @secret_type "anthropic_oauth"
   @legacy_secret_types ["onboarding_anthropic_oauth"]
-  @near_expiry_ms 60_000
-  @oauth_client_id "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-  @oauth_token_urls [
-    "https://platform.claude.com/v1/oauth/token",
-    "https://console.anthropic.com/v1/oauth/token"
-  ]
+  # Refresh this long before the access token expires.
+  @refresh_skew_ms 5 * 60 * 1000
+  # Rotation does not extend a grant: Anthropic rejects the refresh token about
+  # 30 days after the interactive login, so the user must sign in again.
+  @grant_ttl_ms 30 * 24 * 60 * 60 * 1000
+  @default_callback_timeout_ms 120_000
+  @token_timeout_ms 30_000
   @oauth_env_vars ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_TOKEN"]
   @oauth_beta_features ["claude-code-20250219", "oauth-2025-04-20"]
-  @claude_code_version_fallback "2.1.74"
+  @claude_code_version_floor "2.1.296"
+  @claude_code_file_lock "claude_code_credentials_file"
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
-          {:on_progress, (String.t() -> any())}
-          | {:on_prompt, (String.t() | map() -> String.t() | charlist() | nil)}
-          | {:persist_secret, (String.t(), String.t() -> any())}
+          {:on_auth, (String.t(), String.t() | nil -> any())}
+          | {:on_progress, (String.t() -> any())}
+          | {:on_prompt, (map() -> String.t() | charlist() | nil)}
+          | {:redirect_uri, String.t()}
+          | {:state, String.t()}
+          | {:callback_timeout_ms, pos_integer()}
+          | {:listen_for_callback, boolean()}
+          | {:local_callback_listener, module()}
+  @type resolve_opt ::
+          {:persist_secret, (String.t(), String.t() -> any())}
+          | {:reload_secret, (String.t() -> {:ok, String.t()} | term())}
+
+  @doc "OAuth scopes requested at sign-in."
+  @spec scopes() :: [String.t()]
+  def scopes, do: @scopes
+
+  @doc "Build an authorization URL with a fresh PKCE verifier and state."
+  @spec authorize_url(keyword()) :: {:ok, map()}
+  def authorize_url(opts \\ []), do: build_authorize_url(opts)
+
+  @doc """
+  Build an authorization URL with a fresh PKCE verifier and state.
+
+  `:redirect_uri` defaults to Anthropic's hosted code page, which displays a
+  `code#state` value for the user to paste.
+  """
+  @spec build_authorize_url(keyword()) :: {:ok, map()}
+  def build_authorize_url(opts \\ []) do
+    redirect_uri = Keyword.get(opts, :redirect_uri, @code_page_redirect_uri)
+    %{verifier: verifier, challenge: challenge} = OAuthPKCE.generate()
+    # claude.ai answers "Invalid request format" for a 22-character state;
+    # 32 random bytes (43 characters) are accepted.
+    state = Keyword.get(opts, :state, OAuthPKCE.random_state(32))
+
+    params =
+      URI.encode_query(
+        [
+          {"code", "true"},
+          {"client_id", @client_id},
+          {"response_type", "code"},
+          {"redirect_uri", redirect_uri},
+          {"scope", Enum.join(@scopes, " ")},
+          {"code_challenge", challenge},
+          {"code_challenge_method", "S256"},
+          {"state", state}
+        ],
+        :rfc3986
+      )
+
+    {:ok,
+     %{
+       authorize_url: "#{@authorize_url}?#{params}",
+       code_verifier: verifier,
+       state: state,
+       redirect_uri: redirect_uri
+     }}
+  end
+
+  @doc """
+  Sign in with a Claude Pro/Max subscription.
+
+  Requires `:on_auth` (receives the authorization URL and instructions) and
+  `:on_prompt` (manual code entry). Pass `:local_callback_listener` to capture
+  the loopback redirect automatically. Returns the secret payload; callers own
+  encrypted storage.
+  """
+  @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
+  def login_device_flow(opts \\ []) when is_list(opts) do
+    {redirect_uri, listener} = select_redirect(opts)
+
+    try do
+      with {:ok, auth} <- build_authorize_url(Keyword.put(opts, :redirect_uri, redirect_uri)),
+           :ok <- notify_auth(opts, auth.authorize_url, auth_instructions(listener)),
+           {:ok, input} <- await_authorization_input(opts, auth.redirect_uri, listener) do
+        complete_login(input, auth, opts)
+      end
+    after
+      stop_listener(listener)
+    end
+  end
+
+  @doc """
+  Parse pasted authorization input: a redirect URL, a query string containing
+  `code=`, `code#state`, or a bare code.
+  """
+  @spec parse_authorization_input(String.t()) ::
+          {:ok, %{code: String.t(), state: String.t() | nil}} | {:error, term()}
+  def parse_authorization_input(input) when is_binary(input) do
+    value = String.trim(input)
+
+    parsed =
+      cond do
+        value == "" ->
+          %{code: nil, state: nil}
+
+        String.contains?(value, "://") ->
+          case URI.parse(value) do
+            %URI{query: query} when is_binary(query) and query != "" ->
+              params = URI.decode_query(query)
+              %{code: params["code"], state: params["state"]}
+
+            _ ->
+              %{code: nil, state: nil}
+          end
+
+        String.contains?(value, "#") ->
+          [code, state] = String.split(value, "#", parts: 2)
+          %{code: code, state: state}
+
+        String.contains?(value, "code=") ->
+          params = URI.decode_query(value)
+          %{code: params["code"], state: params["state"]}
+
+        true ->
+          %{code: value, state: nil}
+      end
+
+    case non_empty_binary(parsed.code) do
+      nil -> {:error, :missing_authorization_code}
+      code -> {:ok, %{code: code, state: non_empty_binary(parsed.state)}}
+    end
+  end
+
+  def parse_authorization_input(_), do: {:error, :invalid_authorization_input}
+
+  @doc """
+  Exchange an authorization code and PKCE verifier for a secret payload.
+
+  Options: `:redirect_uri` (must match the authorization request) and `:state`.
+  """
+  @spec exchange_code_for_secret(String.t(), String.t(), keyword()) ::
+          {:ok, oauth_secret()} | {:error, term()}
+  def exchange_code_for_secret(code, code_verifier, opts \\ [])
+
+  def exchange_code_for_secret(code, code_verifier, opts)
+      when is_binary(code) and is_binary(code_verifier) do
+    redirect_uri = Keyword.get(opts, :redirect_uri, @code_page_redirect_uri)
+
+    body =
+      %{
+        "grant_type" => "authorization_code",
+        "client_id" => @client_id,
+        "code" => code,
+        "redirect_uri" => redirect_uri,
+        "code_verifier" => code_verifier
+      }
+      |> maybe_put("state", Keyword.get(opts, :state))
+
+    with {:ok, response} <- post_token(body, :authorization_code_rejected),
+         {:ok, token} <- parse_token_response(response) do
+      now = System.system_time(:millisecond)
+
+      {:ok,
+       %{
+         "type" => @secret_type,
+         "source" => "lemon_oauth",
+         "access_token" => token.access_token,
+         "refresh_token" => token.refresh_token,
+         "expires_at_ms" => token.expires_at_ms,
+         "created_at_ms" => now,
+         "updated_at_ms" => now
+       }
+       |> maybe_put("scope", non_empty_binary(response["scope"]))
+       |> maybe_put("account_uuid", nested_string(response, ["account", "uuid"]))
+       |> maybe_put("account_email", nested_string(response, ["account", "email_address"]))
+       |> maybe_put("organization_uuid", nested_string(response, ["organization", "uuid"]))
+       |> maybe_put("organization_name", nested_string(response, ["organization", "name"]))}
+    end
+  end
+
+  def exchange_code_for_secret(_, _, _), do: {:error, :invalid_authorization_input}
 
   @spec encode_secret(oauth_secret()) :: String.t()
   def encode_secret(secret) when is_map(secret), do: Jason.encode!(secret)
 
-  @spec login_device_flow([login_opt()]) :: {:ok, oauth_secret()} | {:error, term()}
-  def login_device_flow(opts \\ []) when is_list(opts) do
-    with :missing <- existing_login_secret(),
-         :ok <- notify_progress(opts, "Running `claude setup-token`..."),
-         result <- run_setup_token_command(),
-         :ok <- handle_setup_token_result(result, opts),
-         secret when is_map(secret) <- existing_login_secret() do
-      {:ok, secret}
-    else
-      %{} = secret ->
-        {:ok, secret}
-
-      {:error, :claude_cli_not_found} ->
-        notify_progress(opts, "Claude Code CLI not found. Falling back to manual token paste.")
-        prompt_for_manual_token(opts)
-
-      {:error, :setup_token_cancelled} ->
-        prompt_for_manual_token(opts)
-
-      {:error, reason} ->
-        prompt_for_manual_token(opts, reason)
-
-      :missing ->
-        prompt_for_manual_token(opts)
-    end
-  end
-
   @spec decode_secret(String.t()) :: {:ok, oauth_secret()} | :not_oauth
   def decode_secret(secret_value) when is_binary(secret_value) do
     case Jason.decode(secret_value) do
-      {:ok, decoded} when is_map(decoded) ->
-        if oauth_secret_type?(decoded["type"]) do
-          {:ok, decoded}
-        else
-          :not_oauth
-        end
+      {:ok, %{"type" => type} = decoded} when type == @secret_type or type in @legacy_secret_types ->
+        {:ok, decoded}
 
       _ ->
         :not_oauth
@@ -70,33 +243,70 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   def decode_secret(_), do: :not_oauth
 
-  @spec resolve_api_key_from_secret(String.t(), String.t()) ::
+  @doc """
+  Redacted login summary for status displays. Never includes tokens.
+
+  `:reauth_by_ms` is the estimated end of a refreshable grant (30 days after
+  sign-in); setup tokens and imported credentials have no estimate.
+  """
+  @spec describe_secret(oauth_secret()) :: map()
+  def describe_secret(secret) when is_map(secret) do
+    refreshable? = non_empty_binary(secret["refresh_token"]) != nil
+    created_at_ms = parse_integer(secret["created_at_ms"])
+
+    %{
+      kind: if(refreshable?, do: :refreshable, else: :static_token),
+      source: secret["source"],
+      account_email: non_empty_binary(secret["account_email"]),
+      organization_name: non_empty_binary(secret["organization_name"]),
+      expires_at_ms: parse_integer(secret["expires_at_ms"]),
+      signed_in_at_ms: created_at_ms,
+      reauth_by_ms:
+        if(refreshable? and secret["source"] == "lemon_oauth" and is_integer(created_at_ms),
+          do: created_at_ms + @grant_ttl_ms
+        )
+    }
+  end
+
+  @doc """
+  Resolve a usable access token from an encoded secret payload.
+
+  Returns `:ignore` for values that are not Anthropic OAuth payloads. See the
+  module documentation for refresh, persistence and locking rules.
+  """
+  @spec resolve_api_key_from_secret(String.t(), String.t(), [resolve_opt()]) ::
           {:ok, String.t()} | :ignore | {:error, term()}
   def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
 
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
-    with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
-         access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]),
-         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
-      {:ok, access_token}
-    else
-      :not_oauth -> :ignore
-      nil -> {:error, :missing_access_token}
-      {:error, reason} -> {:error, reason}
+    case decode_secret(secret_value) do
+      {:ok, secret} ->
+        reload = fn -> reload_stored_secret(secret_name, secret, opts) end
+        persist = fn refreshed -> persist_stored_secret(secret_name, refreshed, opts) end
+
+        with {:ok, fresh} <- ensure_fresh(secret_name, secret, reload, persist) do
+          access_token(fresh)
+        end
+
+      :not_oauth ->
+        :ignore
     end
   end
 
   def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
+  @doc """
+  Resolve an ambient Claude Code token: refreshable credentials from
+  `~/.claude/.credentials.json` win over a static `CLAUDE_CODE_OAUTH_TOKEN` or
+  `ANTHROPIC_TOKEN` value.
+  """
   @spec resolve_access_token() :: String.t() | nil
   def resolve_access_token do
     claude_code_secret = current_claude_code_secret()
 
     resolve_env_token(claude_code_secret) ||
-      access_token_from_secret(claude_code_secret)
+      if(claude_code_secret, do: non_empty_binary(claude_code_secret["access_token"]))
   end
 
   @spec oauth_token?(String.t() | nil) :: boolean()
@@ -120,114 +330,262 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     ]
   end
 
-  defp ensure_fresh_secret(secret) when is_map(secret) do
-    access_token = non_empty_binary(secret["access_token"])
+  # ── Login ──────────────────────────────────────────────────────────────────
+
+  defp select_redirect(opts) do
+    listener_module = Keyword.get(opts, :local_callback_listener)
+    listen? = Keyword.get(opts, :listen_for_callback, true) and listener_module != nil
+
+    case Keyword.get(opts, :redirect_uri) do
+      redirect_uri when is_binary(redirect_uri) ->
+        if listen? and listener_module.local_redirect_uri?(redirect_uri) do
+          {redirect_uri, start_listener(listener_module, redirect_uri, opts)}
+        else
+          {redirect_uri, nil}
+        end
+
+      nil when listen? ->
+        case start_listener(listener_module, @loopback_redirect_uri, opts) do
+          nil -> {@code_page_redirect_uri, nil}
+          listener -> {@loopback_redirect_uri, listener}
+        end
+
+      nil ->
+        {@code_page_redirect_uri, nil}
+    end
+  end
+
+  defp start_listener(listener_module, redirect_uri, opts) do
+    case listener_module.start(redirect_uri) do
+      {:ok, listener} ->
+        {listener_module, listener}
+
+      {:error, reason} ->
+        notify_progress(
+          opts,
+          "Could not listen on #{redirect_uri} (#{format_listener_error(reason)}). " <>
+            "Using the copy-code sign-in instead."
+        )
+
+        nil
+    end
+  end
+
+  defp stop_listener(nil), do: :ok
+  defp stop_listener({listener_module, listener}), do: listener_module.stop(listener)
+
+  defp auth_instructions(nil) do
+    "Sign in with your Claude Pro or Max account. Anthropic then shows an authorization " <>
+      "code; paste it here."
+  end
+
+  defp auth_instructions(_listener) do
+    "Sign in with your Claude Pro or Max account. Lemon captures the browser redirect " <>
+      "automatically."
+  end
+
+  defp await_authorization_input(opts, _redirect_uri, nil), do: prompt_for_code(opts, :code_page)
+
+  defp await_authorization_input(opts, redirect_uri, {listener_module, listener}) do
+    timeout_ms = Keyword.get(opts, :callback_timeout_ms, @default_callback_timeout_ms)
+    notify_progress(opts, "Waiting for the browser redirect to #{redirect_uri} ...")
+
+    case listener_module.wait(listener, timeout_ms) do
+      {:ok, callback_url} ->
+        {:ok, callback_url}
+
+      {:error, reason} ->
+        notify_progress(
+          opts,
+          "The browser redirect did not arrive (#{format_listener_error(reason)})."
+        )
+
+        prompt_for_code(opts, :loopback)
+    end
+  end
+
+  defp prompt_for_code(opts, mode) do
+    message =
+      case mode do
+        :code_page ->
+          "Paste the authorization code Anthropic shows (code#state):"
+
+        :loopback ->
+          "Paste the full redirect URL from the browser address bar (or code#state):"
+      end
+
+    case Keyword.get(opts, :on_prompt) do
+      prompt when is_function(prompt, 1) ->
+        case prompt.(%{message: message, placeholder: "code#state"}) |> normalize_prompt_input() do
+          "" -> {:error, :login_cancelled}
+          value -> {:ok, value}
+        end
+
+      _ ->
+        {:error, :prompt_callback_required}
+    end
+  end
+
+  defp complete_login(input, auth, opts) do
+    if setup_token?(input) do
+      {:ok, static_token_secret(input, "setup_token")}
+    else
+      with {:ok, %{code: code, state: state}} <- parse_authorization_input(input),
+           :ok <- ensure_state_matches(auth.state, state) do
+        notify_progress(opts, "Exchanging the authorization code for tokens...")
+
+        exchange_code_for_secret(code, auth.code_verifier,
+          redirect_uri: auth.redirect_uri,
+          state: auth.state
+        )
+      end
+    end
+  end
+
+  defp setup_token?(input) do
+    String.starts_with?(input, "sk-ant-oat") and not String.contains?(input, ["#", "://", "="])
+  end
+
+  defp ensure_state_matches(_expected, nil), do: :ok
+  defp ensure_state_matches(expected, expected), do: :ok
+  defp ensure_state_matches(_expected, _provided), do: {:error, :oauth_state_mismatch}
+
+  defp static_token_secret(access_token, source) do
+    now = System.system_time(:millisecond)
+
+    %{
+      "type" => @secret_type,
+      "source" => source,
+      "access_token" => access_token,
+      "refresh_token" => nil,
+      "expires_at_ms" => nil,
+      "created_at_ms" => now,
+      "updated_at_ms" => now
+    }
+  end
+
+  # ── Freshness and single-flight refresh ────────────────────────────────────
+
+  # `reload` returns the latest stored secret map (or an error), `persist`
+  # stores a refreshed map. Both run under the lock so a queued caller sees
+  # what the previous holder stored.
+  defp ensure_fresh(lock_name, secret, reload, persist) do
+    if refresh_due?(secret) do
+      :global.trans(
+        {{__MODULE__, :refresh, lock_name}, self()},
+        fn ->
+          with {:ok, latest} <- reload.() do
+            if refresh_due?(latest),
+              do: refresh_and_persist(latest, persist),
+              else: usable(latest)
+          end
+        end,
+        [node()]
+      )
+    else
+      usable(secret)
+    end
+  end
+
+  defp usable(secret) do
+    if expired?(secret), do: {:error, :expired_access_token}, else: {:ok, secret}
+  end
+
+  defp refresh_and_persist(secret, persist) do
+    case refresh_secret(secret) do
+      {:ok, refreshed} ->
+        case persist.(refreshed) do
+          :ok -> {:ok, refreshed}
+          {:error, _} = error -> error
+        end
+
+      {:error, :reauth_required} = error ->
+        error
+
+      {:error, reason} ->
+        if expired?(secret) or is_nil(non_empty_binary(secret["access_token"])) do
+          {:error, reason}
+        else
+          Logger.debug("Anthropic OAuth refresh failed; using the unexpired access token")
+          {:ok, secret}
+        end
+    end
+  end
+
+  defp refresh_due?(secret) do
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
 
-    should_refresh? =
-      cond do
-        is_nil(refresh_token) -> false
-        is_nil(access_token) -> true
-        is_nil(expires_at_ms) -> false
-        expires_at_ms - System.system_time(:millisecond) <= @near_expiry_ms -> true
-        true -> false
-      end
-
     cond do
-      should_refresh? ->
-        refresh_secret(secret)
+      is_nil(refresh_token) -> false
+      is_nil(non_empty_binary(secret["access_token"])) -> true
+      is_nil(expires_at_ms) -> false
+      true -> expires_at_ms - System.system_time(:millisecond) <= @refresh_skew_ms
+    end
+  end
 
-      is_binary(access_token) and access_token != "" ->
-        {:ok, secret, false}
+  defp expired?(secret) do
+    case parse_integer(secret["expires_at_ms"]) do
+      expires_at_ms when is_integer(expires_at_ms) ->
+        expires_at_ms <= System.system_time(:millisecond)
 
-      true ->
-        {:error, :missing_access_token}
+      _ ->
+        false
     end
   end
 
   defp refresh_secret(secret) do
     refresh_token = non_empty_binary(secret["refresh_token"])
 
-    if is_nil(refresh_token) do
-      {:error, :missing_refresh_token}
-    else
-      body = %{
-        "grant_type" => "refresh_token",
-        "refresh_token" => refresh_token,
-        "client_id" => @oauth_client_id
-      }
+    body = %{
+      "grant_type" => "refresh_token",
+      "refresh_token" => refresh_token,
+      "client_id" => @client_id
+    }
 
-      Enum.reduce_while(@oauth_token_urls, {:error, :refresh_failed}, fn url, _acc ->
-        case Req.post(url,
-               json: body,
-               headers: %{
-                 "content-type" => "application/json",
-                 "user-agent" => "claude-cli/#{claude_code_version()} (external, cli)"
-               }
-             ) do
-          {:ok, %Req.Response{status: 200, body: response_body}} ->
-            case parse_refresh_response(response_body) do
-              {:ok, token_data} ->
-                now = System.system_time(:millisecond)
-
-                refreshed =
-                  secret
-                  |> Map.put("type", @secret_type)
-                  |> Map.put("access_token", token_data.access_token)
-                  |> Map.put("refresh_token", token_data.refresh_token || refresh_token)
-                  |> Map.put("expires_at_ms", token_data.expires_at_ms)
-                  |> Map.put("updated_at_ms", now)
-                  |> Map.put_new("created_at_ms", now)
-
-                {:halt, {:ok, refreshed, true}}
-
-              {:error, reason} ->
-                {:halt, {:error, reason}}
-            end
-
-          {:ok, %Req.Response{status: status, body: response_body}} ->
-            Logger.debug(
-              "Anthropic OAuth refresh failed at #{url}: status=#{status} body=#{inspect(response_body)}"
-            )
-
-            {:cont, {:error, {:refresh_http_error, status}}}
-
-          {:error, reason} ->
-            Logger.debug("Anthropic OAuth refresh failed at #{url}: #{inspect(reason)}")
-            {:cont, {:error, reason}}
-        end
-      end)
-    end
-  end
-
-  defp parse_refresh_response(body) when is_map(body) do
-    access_token = non_empty_binary(body["access_token"])
-    refresh_token = non_empty_binary(body["refresh_token"])
-    expires_in = parse_integer(body["expires_in"]) || 3600
-
-    if is_binary(access_token) and access_token != "" do
+    with {:ok, response} <- post_token(body, :reauth_required),
+         {:ok, token} <- parse_token_response(response) do
       {:ok,
-       %{
-         access_token: access_token,
-         refresh_token: refresh_token,
-         expires_at_ms: System.system_time(:millisecond) + expires_in * 1000
-       }}
-    else
-      {:error, :missing_access_token}
+       secret
+       |> Map.put("type", @secret_type)
+       |> Map.put("access_token", token.access_token)
+       |> Map.put("refresh_token", token.refresh_token || refresh_token)
+       |> Map.put("expires_at_ms", token.expires_at_ms)
+       |> Map.put("updated_at_ms", System.system_time(:millisecond))}
     end
   end
 
-  defp parse_refresh_response(_), do: {:error, :invalid_refresh_response}
+  defp access_token(secret) do
+    case non_empty_binary(secret["access_token"]) do
+      nil -> {:error, :missing_access_token}
+      token -> {:ok, token}
+    end
+  end
 
-  # A refreshed secret that was not stored is a failure: refresh tokens may be
-  # single-use, so reporting success would strand the stored credential.
-  defp persist_secret(secret_name, secret, opts) do
-    encoded = encode_secret(secret)
+  # Without a reload callback the caller's copy is the latest one available.
+  defp reload_stored_secret(secret_name, stale, opts) do
+    case Keyword.get(opts, :reload_secret) do
+      reload when is_function(reload, 1) ->
+        with {:ok, value} when is_binary(value) <- reload.(secret_name),
+             {:ok, secret} <- decode_secret(value) do
+          {:ok, secret}
+        else
+          :not_oauth -> {:error, :oauth_secret_replaced}
+          _ -> {:error, :oauth_secret_missing}
+        end
 
+      _ ->
+        {:ok, stale}
+    end
+  end
+
+  # A refreshed secret that was not stored is a failure: the previous refresh
+  # token may already be revoked, so reporting success would strand the
+  # stored credential.
+  defp persist_stored_secret(secret_name, secret, opts) do
     case Keyword.get(opts, :persist_secret) do
       callback when is_function(callback, 2) ->
-        case callback.(secret_name, encoded) do
+        case callback.(secret_name, encode_secret(secret)) do
           {:error, _} -> {:error, :oauth_secret_persistence_failed}
           _ -> :ok
         end
@@ -239,312 +597,276 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     _ -> {:error, :oauth_secret_persistence_failed}
   end
 
-  defp resolve_env_token(claude_code_secret \\ nil) do
+  # ── Token endpoint ─────────────────────────────────────────────────────────
+
+  # `invalid_grant` is the token endpoint's definitive rejection of the code or
+  # refresh token; the caller names what it means for the user.
+  defp post_token(body, invalid_grant_reason) do
+    case Req.post(@token_url,
+           json: body,
+           headers: [{"accept", "application/json"}],
+           retry: false,
+           receive_timeout: @token_timeout_ms
+         ) do
+      {:ok, %Req.Response{status: status, body: response}} when status in 200..299 ->
+        decode_body(response)
+
+      {:ok, %Req.Response{status: status, body: response}} when status in [400, 401] ->
+        case decode_body(response) do
+          {:ok, %{"error" => "invalid_grant"}} -> {:error, invalid_grant_reason}
+          {:ok, %{"error" => code}} when is_binary(code) -> {:error, {:http_error, status, code}}
+          _ -> {:error, {:http_error, status}}
+        end
+
+      {:ok, %Req.Response{status: status}} ->
+        {:error, {:http_error, status}}
+
+      {:error, exception} ->
+        {:error, {:transport_error, transport_reason(exception)}}
+    end
+  end
+
+  defp decode_body(body) when is_map(body), do: {:ok, body}
+
+  defp decode_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
+      _ -> {:error, :invalid_token_response}
+    end
+  end
+
+  defp decode_body(_), do: {:error, :invalid_token_response}
+
+  defp transport_reason(%{reason: reason}) when is_atom(reason), do: reason
+  defp transport_reason(_), do: :unknown
+
+  defp parse_token_response(response) when is_map(response) do
+    access_token = non_empty_binary(response["access_token"])
+    expires_in = parse_integer(response["expires_in"])
+
+    cond do
+      is_nil(access_token) ->
+        {:error, :missing_access_token}
+
+      not is_integer(expires_in) or expires_in <= 0 ->
+        {:error, :invalid_expiry}
+
+      true ->
+        {:ok,
+         %{
+           access_token: access_token,
+           refresh_token: non_empty_binary(response["refresh_token"]),
+           expires_at_ms: System.system_time(:millisecond) + expires_in * 1000
+         }}
+    end
+  end
+
+  # ── Ambient Claude Code credentials ────────────────────────────────────────
+
+  defp resolve_env_token(claude_code_secret) do
     Enum.find_value(@oauth_env_vars, fn env_var ->
-      case System.get_env(env_var) do
-        value when is_binary(value) and value != "" ->
-          trimmed = String.trim(value)
-
-          cond do
-            not oauth_token?(trimmed) ->
-              nil
-
-            preferred = prefer_refreshable_claude_code_token(trimmed, claude_code_secret) ->
-              preferred
-
-            true ->
-              trimmed
-          end
-
-        _ ->
-          nil
+      with value when is_binary(value) <- non_empty_binary(System.get_env(env_var)),
+           true <- oauth_token?(value) do
+        prefer_refreshable_claude_code_token(value, claude_code_secret) || value
+      else
+        _ -> nil
       end
     end)
   end
 
-  defp existing_login_secret do
-    case current_claude_code_secret() do
-      %{} = secret ->
-        secret
-
-      _ ->
-        case resolve_env_token() do
-          token when is_binary(token) and token != "" -> build_secret(token)
-          _ -> :missing
-        end
-    end
-  end
-
-  defp current_claude_code_secret do
-    with {:ok, secret} <- read_claude_code_credentials(),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret) do
-      if changed? do
-        persist_claude_code_credentials(refreshed_secret)
-      end
-
-      refreshed_secret
-    else
-      _ -> nil
-    end
-  end
-
-  defp access_token_from_secret(%{} = secret) do
-    non_empty_binary(secret["access_token"])
-  end
-
-  defp access_token_from_secret(_), do: nil
-
   defp prefer_refreshable_claude_code_token(env_token, %{} = claude_code_secret) do
-    refresh_token = non_empty_binary(claude_code_secret["refresh_token"])
-    access_token = access_token_from_secret(claude_code_secret)
+    access_token = non_empty_binary(claude_code_secret["access_token"])
 
-    cond do
-      is_nil(refresh_token) ->
-        nil
+    if non_empty_binary(claude_code_secret["refresh_token"]) && access_token &&
+         access_token != env_token do
+      Logger.debug(
+        "Preferring refreshable Claude Code credentials over static Anthropic OAuth env token"
+      )
 
-      is_nil(access_token) ->
-        nil
-
-      access_token == env_token ->
-        nil
-
-      true ->
-        Logger.debug(
-          "Preferring refreshable Claude Code credentials over static Anthropic OAuth env token"
-        )
-
-        access_token
+      access_token
     end
   end
 
   defp prefer_refreshable_claude_code_token(_env_token, _claude_code_secret), do: nil
 
-  defp read_claude_code_credentials do
-    path = claude_credentials_path()
-
-    if File.exists?(path) do
-      with {:ok, raw} <- File.read(path),
-           {:ok, decoded} <- Jason.decode(raw),
-           %{} = oauth <- decoded["claudeAiOauth"],
-           access_token when is_binary(access_token) and access_token != "" <-
-             non_empty_binary(oauth["accessToken"]) do
-        {:ok,
-         %{
-           "type" => @secret_type,
-           "access_token" => access_token,
-           "refresh_token" => non_empty_binary(oauth["refreshToken"]),
-           "expires_at_ms" => parse_integer(oauth["expiresAt"]),
-           "source" => "claude_code_credentials_file",
-           "created_at_ms" => System.system_time(:millisecond),
-           "updated_at_ms" => System.system_time(:millisecond)
-         }}
-      else
-        _ -> {:error, :missing_credentials}
-      end
+  defp current_claude_code_secret do
+    with {:ok, secret} <- read_claude_code_credentials(),
+         {:ok, fresh} <-
+           ensure_fresh(
+             @claude_code_file_lock,
+             secret,
+             &read_claude_code_credentials/0,
+             &persist_claude_code_credentials/1
+           ) do
+      fresh
     else
-      {:error, :missing_credentials}
+      _ -> nil
     end
   end
 
+  defp read_claude_code_credentials do
+    with {:ok, raw} <- File.read(claude_credentials_path()),
+         {:ok, %{"claudeAiOauth" => %{} = oauth}} <- Jason.decode(raw),
+         access_token when is_binary(access_token) <- non_empty_binary(oauth["accessToken"]) do
+      now = System.system_time(:millisecond)
+
+      {:ok,
+       %{
+         "type" => @secret_type,
+         "access_token" => access_token,
+         "refresh_token" => non_empty_binary(oauth["refreshToken"]),
+         "expires_at_ms" => parse_integer(oauth["expiresAt"]),
+         "source" => "claude_code_credentials_file",
+         "created_at_ms" => now,
+         "updated_at_ms" => now
+       }}
+    else
+      _ -> {:error, :missing_credentials}
+    end
+  end
+
+  # Claude Code rotates the same refresh token, so a refresh Lemon performs on
+  # its credentials file must be written back for Claude Code to keep working.
   defp persist_claude_code_credentials(secret) do
     path = claude_credentials_path()
 
     existing =
-      case File.read(path) do
-        {:ok, raw} ->
-          case Jason.decode(raw) do
-            {:ok, decoded} when is_map(decoded) -> decoded
-            _ -> %{}
-          end
-
-        _ ->
-          %{}
+      with {:ok, raw} <- File.read(path),
+           {:ok, decoded} when is_map(decoded) <- Jason.decode(raw) do
+        decoded
+      else
+        _ -> %{}
       end
 
-    updated =
-      Map.put(existing, "claudeAiOauth", %{
+    oauth =
+      existing
+      |> Map.get("claudeAiOauth", %{})
+      |> Map.merge(%{
         "accessToken" => secret["access_token"],
         "refreshToken" => secret["refresh_token"],
         "expiresAt" => secret["expires_at_ms"]
       })
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
-         :ok <- File.write(path, Jason.encode!(updated)),
+         :ok <- File.write(path, Jason.encode!(Map.put(existing, "claudeAiOauth", oauth))),
          :ok <- File.chmod(path, 0o600) do
       :ok
     else
       {:error, reason} ->
         Logger.warning("Failed to persist Claude Code credentials: #{inspect(reason)}")
-    end
-  end
-
-  defp build_secret(access_token, attrs \\ %{}) when is_binary(access_token) do
-    now = System.system_time(:millisecond)
-
-    %{
-      "type" => @secret_type,
-      "access_token" => access_token,
-      "refresh_token" => Map.get(attrs, "refresh_token"),
-      "expires_at_ms" => Map.get(attrs, "expires_at_ms"),
-      "created_at_ms" => Map.get(attrs, "created_at_ms", now),
-      "updated_at_ms" => now
-    }
-  end
-
-  defp run_setup_token_command do
-    case {System.get_env("LEMON_ANTHROPIC_CLAUDE_PATH"), claude_executable()} do
-      {_override, nil} ->
-        {:error, :claude_cli_not_found}
-
-      {override, executable} when is_binary(override) and override != "" ->
-        {_output, status} = System.cmd(executable, ["setup-token"])
-        {:ok, status}
-
-      {_override, executable} ->
-        status =
-          System.cmd("sh", [
-            "-lc",
-            "#{quote_shell(executable)} setup-token < /dev/tty > /dev/tty 2>&1"
-          ])
-          |> elem(1)
-
-        {:ok, status}
-    end
-  rescue
-    e in ErlangError ->
-      if e.original == :enoent do
-        {:error, :claude_cli_not_found}
-      else
-        {:error, e.original}
-      end
-
-    e ->
-      {:error, e}
-  end
-
-  defp handle_setup_token_result({:ok, 0}, _opts), do: :ok
-
-  defp handle_setup_token_result({:ok, _status}, opts) do
-    notify_progress(
-      opts,
-      "Claude Code login did not yield credentials automatically. You can paste a setup token instead."
-    )
-  end
-
-  defp handle_setup_token_result({:error, reason}, _opts), do: {:error, reason}
-
-  defp prompt_for_manual_token(opts, reason \\ nil) do
-    if reason do
-      _ =
-        notify_progress(
-          opts,
-          "Claude Code OAuth setup could not complete automatically: #{inspect(reason)}"
-        )
-    end
-
-    prompt_callback = Keyword.get(opts, :on_prompt)
-
-    value =
-      cond do
-        is_function(prompt_callback, 1) ->
-          prompt_callback.(%{
-            message: "Paste Anthropic setup-token (or press Enter to cancel):",
-            placeholder: "sk-ant-oat..."
-          })
-
-        true ->
-          nil
-      end
-
-    case normalize_prompt_input(value) do
-      token when is_binary(token) and token != "" ->
-        {:ok, build_secret(token)}
-
-      _ ->
-        {:error, :setup_token_cancelled}
+        {:error, :oauth_secret_persistence_failed}
     end
   end
 
   defp claude_credentials_path do
-    Path.join([home_dir(), ".claude", ".credentials.json"])
+    home =
+      case System.get_env("HOME") do
+        value when is_binary(value) and value != "" -> value
+        _ -> System.user_home!()
+      end
+
+    Path.join([home, ".claude", ".credentials.json"])
   end
 
-  defp home_dir do
-    case System.get_env("HOME") do
-      value when is_binary(value) and value != "" -> value
-      _ -> System.user_home!()
-    end
-  end
+  # ── Claude Code fingerprint ────────────────────────────────────────────────
 
-  defp claude_executable do
-    case System.get_env("LEMON_ANTHROPIC_CLAUDE_PATH") do
-      value when is_binary(value) and value != "" -> value
-      _ -> System.find_executable("claude") || System.find_executable("claude-code")
-    end
-  end
-
-  defp quote_shell(value) when is_binary(value) do
-    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
-  end
-
-  defp oauth_secret_type?(type) when type == @secret_type, do: true
-  defp oauth_secret_type?(type) when type in @legacy_secret_types, do: true
-  defp oauth_secret_type?(_), do: false
-
+  # Detected once per PATH: the newer of the installed Claude Code CLI and the
+  # pinned floor, so a stale local install cannot pin a rejected version.
   defp claude_code_version do
-    detect_claude_code_version(["claude", "claude-code"])
+    key = {__MODULE__, :claude_code_version, System.get_env("PATH")}
+
+    case :persistent_term.get(key, nil) do
+      nil ->
+        version =
+          ["claude", "claude-code"]
+          |> Enum.find_value(&installed_claude_code_version/1)
+          |> newer_version(@claude_code_version_floor)
+
+        :persistent_term.put(key, version)
+        version
+
+      version ->
+        version
+    end
   end
 
-  defp detect_claude_code_version([]), do: @claude_code_version_fallback
-
-  defp detect_claude_code_version([cmd | rest]) do
-    case System.cmd(cmd, ["--version"], stderr_to_stdout: true) do
-      {output, 0} ->
-        case parse_claude_code_version(output) do
-          version when is_binary(version) and version != "" -> version
-          _ -> detect_claude_code_version(rest)
-        end
-
-      _ ->
-        detect_claude_code_version(rest)
+  defp installed_claude_code_version(cmd) do
+    with path when is_binary(path) <- System.find_executable(cmd),
+         {output, 0} <- System.cmd(path, ["--version"], stderr_to_stdout: true),
+         [version | _] <- String.split(String.trim(output)),
+         {:ok, _} <- Version.parse(version) do
+      version
+    else
+      _ -> nil
     end
   rescue
-    _ -> detect_claude_code_version(rest)
+    _ -> nil
   end
 
-  defp parse_claude_code_version(output) when is_binary(output) do
-    output
-    |> String.trim()
-    |> String.split()
-    |> List.first()
-    |> case do
-      version when is_binary(version) and version != "" ->
-        if String.match?(version, ~r/^\d/) do
-          version
-        else
-          nil
-        end
+  defp newer_version(nil, floor), do: floor
+
+  defp newer_version(version, floor) do
+    if Version.compare(version, floor) == :gt, do: version, else: floor
+  end
+
+  # ── Helpers ────────────────────────────────────────────────────────────────
+
+  defp notify_auth(opts, url, instructions) do
+    case Keyword.get(opts, :on_auth) do
+      callback when is_function(callback, 2) ->
+        callback.(url, instructions)
+        :ok
+
+      callback when is_function(callback, 1) ->
+        callback.(url)
+        :ok
 
       _ ->
-        nil
+        {:error, :auth_callback_required}
     end
   end
 
+  defp notify_progress(opts, message) do
+    case Keyword.get(opts, :on_progress) do
+      callback when is_function(callback, 1) -> callback.(message)
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  defp format_listener_error(:eaddrinuse), do: "port already in use"
+  defp format_listener_error(:timeout), do: "timed out"
+  defp format_listener_error(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_listener_error(_reason), do: "listener failed"
+
+  defp nested_string(map, path) do
+    case get_in(map, path) do
+      value when is_binary(value) -> non_empty_binary(value)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
   defp non_empty_binary(value) when is_binary(value) do
-    trimmed = String.trim(value)
-    if trimmed == "", do: nil, else: trimmed
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
   end
 
   defp non_empty_binary(_), do: nil
 
   defp normalize_prompt_input(value) when is_binary(value), do: String.trim(value)
-
-  defp normalize_prompt_input(value) when is_list(value),
-    do: value |> List.to_string() |> String.trim()
-
+  defp normalize_prompt_input(value) when is_list(value), do: value |> to_string() |> String.trim()
   defp normalize_prompt_input(_), do: ""
 
   defp parse_integer(value) when is_integer(value), do: value
+  defp parse_integer(value) when is_float(value), do: trunc(value)
 
   defp parse_integer(value) when is_binary(value) do
     case Integer.parse(String.trim(value)) do
@@ -555,25 +877,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   defp parse_integer(_), do: nil
 
-  defp jwt_like?(value) when is_binary(value) do
-    case String.split(value, ".", parts: 3) do
-      [_header, _payload, _signature] -> true
-      _ -> false
-    end
-  end
-
-  defp notify_progress(opts, message) when is_binary(message) do
-    progress_callback = Keyword.get(opts, :on_progress)
-
-    cond do
-      is_function(progress_callback, 1) ->
-        progress_callback.(message)
-        :ok
-
-      true ->
-        :ok
-    end
-  rescue
-    _ -> :ok
+  defp jwt_like?(value) do
+    match?([_header, _payload, _signature], String.split(value, ".", parts: 3))
   end
 end

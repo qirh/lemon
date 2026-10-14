@@ -80,18 +80,6 @@ defmodule LemonAi.Env do
       apps: [:lemon_ai]
     },
     %{
-      name: :lemon_anthropic_claude_path,
-      env_var: "LEMON_ANTHROPIC_CLAUDE_PATH",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Override path to the `claude` executable used for Anthropic OAuth.",
-      secret?: false,
-      required?: false,
-      area: :ai_diagnostics,
-      apps: [:lemon_ai]
-    },
-    %{
       name: :lemon_kimi_max_request_messages,
       env_var: "LEMON_KIMI_MAX_REQUEST_MESSAGES",
       aliases: [],

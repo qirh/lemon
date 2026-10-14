@@ -30,6 +30,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   prompts, and approval buttons. Pickers (sessions, models, command palette,
   `/output`) open as native sheets, and the welcome card draws the lemon as an
   image. Other terminals render as before.
+- **Claude Pro/Max sign-in.** `lemon model anthropic` (and the Anthropic choice
+  in `lemon setup`) signs in with a Claude subscription in the browser using
+  Anthropic's OAuth PKCE flow, without Claude Code installed. The login is
+  stored encrypted, refreshed automatically with one refresh per runtime, and
+  fails closed when Anthropic rejects it. Headless sessions paste the
+  `code#state` from Anthropic's code page. Anthropic currently bills these
+  requests to the account's extra usage, not the plan's included limits.
+- `lemon model PROVIDER --status` shows the auth source, stored login, expiry
+  and whether credentials are usable; `--logout` deletes the stored OAuth login
+  and its config keys.
+
+### Changed
+
+- Anthropic OAuth sign-in no longer runs `claude setup-token` or copies Claude
+  Code's credentials; a pasted setup token is still accepted.
+  `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
 
 ### Fixed
 

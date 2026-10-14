@@ -417,13 +417,15 @@ choose another option, or enter `q` to cancel. The same selector is used for
 providers, authentication methods, models, and confirmation prompts, so setup
 does not switch the terminal between cooked and raw modes.
 
-Anthropic provider auth supports API keys or Claude subscription OAuth. Raw API
-keys live in `llm_anthropic_api_key_raw` and should be referenced by
-`providers.anthropic.api_key_secret`. OAuth-backed Claude Max usage keeps using
-`llm_anthropic_api_key` plus `providers.anthropic.auth_source = "oauth"` /
-`providers.anthropic.oauth_secret`, and Lemon prefers refreshable Claude Code
-credentials from `~/.claude/.credentials.json` over a stale static
-`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
+Anthropic provider auth supports API keys or a Claude Pro/Max subscription
+login. Raw API keys live in `llm_anthropic_api_key_raw` and are referenced by
+`providers.anthropic.api_key_secret`. Browser sign-in (`lemon model anthropic`)
+stores a refreshable login in `llm_anthropic_api_key`, referenced by
+`providers.anthropic.auth_source = "oauth"` and `oauth_secret`. It listens on
+`http://localhost:53692/callback`; when that port is busy it uses Anthropic's
+hosted code page and asks for the pasted `code#state`. `lemon model PROVIDER
+--status` and `--logout` (implemented by `LemonCli.Setup.ProviderAuth`) show
+and remove OAuth logins. See the [CLI guide](../../docs/user-guide/cli.md).
 
 OpenAI Codex browser sign-in starts a temporary loopback HTTP listener before
 opening the authorization URL. The listener binds the redirect URI's port

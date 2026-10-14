@@ -7,7 +7,7 @@ defmodule LemonCli.Onboarding.Providers do
     %Provider{
       id: "anthropic",
       display_name: "Anthropic",
-      description: "Claude Code OAuth or API key",
+      description: "Claude Pro/Max subscription (OAuth) or API key",
       provider_table: "providers.anthropic",
       default_secret_name: "llm_anthropic_api_key",
       default_secret_name_by_mode: %{
@@ -27,10 +27,10 @@ defmodule LemonCli.Onboarding.Providers do
       aliases: ["claude"],
       api_key_prompt: "Enter your Anthropic API key: ",
       api_key_choice_label: "Paste API key",
-      oauth_choice_label: "Claude Code login (OAuth)",
-      oauth_failure_label: "Anthropic Claude OAuth login failed",
+      oauth_choice_label: "Sign in with Claude Pro/Max (browser)",
+      oauth_failure_label: "Claude subscription sign-in failed",
       token_resolution_hint:
-        "Anthropic OAuth flow did not return credentials. Retry and complete `claude setup-token`, or pass --token for API-key mode.",
+        "Claude sign-in did not return credentials. Retry `lemon model anthropic`, or pass --token for API-key mode.",
       auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
       secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "oauth_secret"}
     },

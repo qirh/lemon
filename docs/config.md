@@ -900,27 +900,37 @@ mix lemon.onboard zai --token <token> --set-default --model glm-5
 mix lemon.onboard minimax --token <token> --set-default --model MiniMax-M2.7
 ```
 
-Anthropic provider auth supports either API keys or Claude subscription OAuth.
+Anthropic provider auth supports either API keys or a Claude Pro/Max
+subscription login.
 
 API key flow:
 
 ```bash
+lemon model anthropic --auth api_key
+# or store the key directly:
 mix lemon.secrets.set llm_anthropic_api_key_raw <token>
 ```
 
-OAuth flow:
+Subscription flow (browser sign-in, stored encrypted and refreshed automatically):
+
+```bash
+lemon model anthropic --auth oauth
+```
 
 ```toml
 [providers.anthropic]
 auth_source = "oauth"
-oauth_secret = "llm_anthropic_api_key" # optional if this secret stores an Anthropic OAuth payload
+oauth_secret = "llm_anthropic_api_key" # written by sign-in; this is the default name
 ```
 
-When `auth_source = "oauth"`, Lemon will also use ambient Claude Code credentials from
-`~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_TOKEN`.
-If both a static env token and refreshable Claude Code credentials exist, Lemon prefers the
-refreshable Claude Code credentials.
-You can also create/store that payload through onboarding with `mix lemon.onboard anthropic --auth oauth`.
+`auth_source` decides precedence: `"oauth"` uses only the subscription login
+and ignores `ANTHROPIC_API_KEY`; `"api_key"` or no value uses the API key. A
+stored login whose refresh is rejected fails closed. When no Lemon login is
+stored, `auth_source = "oauth"` falls back to ambient Claude Code credentials
+from `~/.claude/.credentials.json` or `CLAUDE_CODE_OAUTH_TOKEN` /
+`ANTHROPIC_TOKEN`, preferring refreshable Claude Code credentials over a static
+env token. See [Claude subscription sign-in](user-guide/cli.md#claude-subscription-sign-in-anthropic-oauth)
+for `--status`, `--logout`, and refresh behavior.
 
 ## Web Tools (`websearch` / `webfetch`)
 

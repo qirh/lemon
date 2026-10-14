@@ -18,7 +18,6 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    original_claude_path = System.get_env("LEMON_ANTHROPIC_CLAUDE_PATH")
 
     System.put_env("HOME", mock_home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -30,9 +29,6 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-      if original_claude_path,
-        do: System.put_env("LEMON_ANTHROPIC_CLAUDE_PATH", original_claude_path),
-        else: System.delete_env("LEMON_ANTHROPIC_CLAUDE_PATH")
 
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
@@ -97,21 +93,20 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     assert get_in(config_map, ["defaults", "model"]) == "anthropic:claude-sonnet-4-20250514"
   end
 
-  test "supports Claude Code OAuth onboarding", %{tmp_dir: tmp_dir} do
+  test "subscription sign-in accepts a pasted claude setup-token", %{tmp_dir: tmp_dir} do
     config_path = Path.join(tmp_dir, "config.toml")
-    script_path = write_fake_claude_cli(tmp_dir)
-    System.put_env("LEMON_ANTHROPIC_CLAUDE_PATH", script_path)
+    # Keep the loopback redirect port busy so sign-in uses the copy-code prompt.
+    port_holder = :gen_tcp.listen(53692, [:binary, active: false, ip: {127, 0, 0, 1}])
 
     output =
-      capture_io(fn ->
-        Anthropic.run([
-          "--auth",
-          "oauth",
-          "--config-path",
-          config_path
-        ])
+      capture_io("n\nsk-ant-oat01-setup-token\n", fn ->
+        Anthropic.run(["--auth", "oauth", "--config-path", config_path])
       end)
 
+    with {:ok, socket} <- port_holder, do: :gen_tcp.close(socket)
+
+    assert output =~ "https://claude.ai/oauth/authorize?"
+    assert output =~ "Paste the authorization code Anthropic shows"
     assert output =~ "Anthropic onboarding complete."
 
     assert {:ok, secret_value} =
@@ -119,7 +114,8 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
 
     assert {:ok, secret} = Jason.decode(secret_value)
     assert secret["type"] == "anthropic_oauth"
-    assert secret["access_token"] == "sk-ant-oat01-cli-token"
+    assert secret["source"] == "setup_token"
+    assert secret["access_token"] == "sk-ant-oat01-setup-token"
 
     {:ok, config_map} = Toml.decode_file(config_path)
 
@@ -151,26 +147,5 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
     Secrets.table()
     |> LemonCore.Store.list()
     |> Enum.each(fn {key, _} -> LemonCore.Store.delete(Secrets.table(), key) end)
-  end
-
-  defp write_fake_claude_cli(tmp_dir) do
-    bin_dir = Path.join(tmp_dir, "bin")
-    File.mkdir_p!(bin_dir)
-    script_path = Path.join(bin_dir, "claude")
-
-    File.write!(
-      script_path,
-      """
-      #!/bin/sh
-      mkdir -p "$HOME/.claude"
-      cat > "$HOME/.claude/.credentials.json" <<'EOF'
-      {"claudeAiOauth":{"accessToken":"sk-ant-oat01-cli-token","refreshToken":"refresh-token","expiresAt":4102444800000}}
-      EOF
-      exit 0
-      """
-    )
-
-    File.chmod!(script_path, 0o755)
-    script_path
   end
 end

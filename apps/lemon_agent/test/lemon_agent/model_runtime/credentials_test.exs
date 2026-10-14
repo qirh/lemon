@@ -232,6 +232,85 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
              ""
   end
 
+  describe "anthropic subscription login" do
+    setup do
+      previous_defaults = Req.default_options()
+      Req.default_options(plug: {Req.Test, __MODULE__})
+      Req.Test.set_req_test_to_shared(%{})
+
+      on_exit(fn ->
+        Req.default_options(previous_defaults)
+        Req.Test.set_req_test_to_private(%{})
+      end)
+    end
+
+    test "auth_source decides precedence between the login and ANTHROPIC_API_KEY" do
+      assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(3_600_000))
+      System.put_env("ANTHROPIC_API_KEY", "sk-ant-api03-env")
+
+      resolve = fn cfg ->
+        LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, %{
+          "anthropic" => cfg
+        })
+      end
+
+      assert resolve.(%{auth_source: "oauth"}) == "sk-ant-oat01-stored"
+      assert resolve.(%{auth_source: "api_key"}) == "sk-ant-api03-env"
+      assert resolve.(%{}) == "sk-ant-api03-env"
+    end
+
+    test "refreshes an expiring stored login and persists the rotation encrypted" do
+      assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(60_000))
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "access_token" => "sk-ant-oat01-refreshed",
+          "refresh_token" => "sk-ant-ort01-rotated",
+          "expires_in" => 28_800
+        })
+      end)
+
+      providers = %{"anthropic" => %{auth_source: "oauth"}}
+
+      assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, providers) ==
+               "sk-ant-oat01-refreshed"
+
+      assert {:ok, stored} = Secrets.get("llm_anthropic_api_key")
+      assert %{"refresh_token" => "sk-ant-ort01-rotated"} = Jason.decode!(stored)
+    end
+
+    test "a rejected stored login fails closed instead of using ambient tokens" do
+      assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(-1))
+      System.put_env("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-ambient")
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(400, ~s({"error":"invalid_grant"}))
+      end)
+
+      for cfg <- [%{auth_source: "oauth"}, %{auth_source: "oauth", oauth_secret: "llm_anthropic_api_key"}] do
+        assert LemonAgent.ModelRuntime.Credentials.resolve_provider_api_key(:anthropic, %{
+                 "anthropic" => cfg
+               }) == ""
+      end
+
+      refute LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(:anthropic, %{
+               "anthropic" => %{auth_source: "oauth"}
+             })
+    end
+  end
+
+  defp anthropic_login(expires_in_ms) do
+    Jason.encode!(%{
+      "type" => "anthropic_oauth",
+      "source" => "lemon_oauth",
+      "access_token" => "sk-ant-oat01-stored",
+      "refresh_token" => "sk-ant-ort01-stored",
+      "expires_at_ms" => System.system_time(:millisecond) + expires_in_ms
+    })
+  end
+
   test "github copilot oauth payload resolves to access token" do
     secret_name = "llm_github_copilot_api_key"
 

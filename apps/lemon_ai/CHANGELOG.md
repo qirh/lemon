@@ -6,7 +6,26 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- `LemonAi.Auth.AnthropicOAuth` implements Claude Pro/Max sign-in natively:
+  `build_authorize_url/1`, `parse_authorization_input/1`,
+  `exchange_code_for_secret/3`, `describe_secret/1` and a `login_device_flow/1`
+  that uses a loopback listener or Anthropic's hosted code page.
+
+### Changed
+
+- **Breaking:** `AnthropicOAuth.login_device_flow/1` no longer runs
+  `claude setup-token` or copies Claude Code's credentials file; it requires
+  `:on_auth` and `:on_prompt`. A pasted setup token is still accepted.
+  `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
+- Anthropic refresh is single-flight per secret name on the local node and
+  re-reads the stored secret through the new `:reload_secret` option. It runs
+  five minutes before expiry, uses only `platform.claude.com`, and returns
+  `{:error, :reauth_required}` when the token endpoint rejects the refresh
+  token, even if the access token has not expired.
+- The Claude Code user agent uses the newer of the installed CLI version and
+  2.1.296, detected once per `PATH` instead of on every request.
 
 ## [0.2.0] - 2026-10-13
 

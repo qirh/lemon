@@ -16,13 +16,16 @@ defmodule LemonCli.Setup.Provider do
   pass `--skip-verify` to defer it when offline. A failed verification
   returns `{:error, :verification_failed}` with actionable recovery text —
   it never reports setup as complete.
+
+  `--status` and `--logout` with a provider skip onboarding and run
+  `LemonCli.Setup.ProviderAuth` instead.
   """
 
   alias LemonCli.Onboarding.{LogSilencer, PromptUI, Providers, Runner}
   alias LemonCli.Onboarding.Provider, as: ProviderSpec
   alias LemonCli.Setup.Verification
   alias LemonCore.Secrets
-  alias LemonCli.Setup.Scaffold
+  alias LemonCli.Setup.{ProviderAuth, Scaffold}
 
   @doc """
   Runs provider onboarding within the setup context.
@@ -57,6 +60,21 @@ defmodule LemonCli.Setup.Provider do
   def run(args, io, opts \\ []) when is_list(args) and is_map(io) do
     Runner.ensure_required_apps!()
 
+    case Enum.filter(args, &(&1 in ["--status", "--logout"])) do
+      [] ->
+        run_onboarding(args, io, opts)
+
+      [flag] ->
+        with :ok <- ensure_secrets_ready(io) do
+          run_auth_action(flag, List.delete(args, flag), io)
+        end
+
+      _ ->
+        Runner.fail!("Use only one of --status or --logout.")
+    end
+  end
+
+  defp run_onboarding(args, io, opts) do
     {skip_verify?, rest} = extract_skip_verify(args)
     skip_verify? = skip_verify? or Keyword.get(opts, :skip_verify, false)
     live_verify? = Keyword.get(opts, :live_verify, false)
@@ -65,6 +83,22 @@ defmodule LemonCli.Setup.Provider do
          :ok <- maybe_bootstrap_config(io),
          :ok <- onboard(rest, io) do
       verify_onboarded_config(rest, skip_verify? or not live_verify?, io, opts)
+    end
+  end
+
+  defp run_auth_action(flag, args, io) do
+    case extract_provider_arg(args) do
+      {nil, _rest} ->
+        Runner.fail!("#{flag} needs a provider, for example `lemon model anthropic #{flag}`.")
+
+      {provider_name, rest} ->
+        provider = fetch_provider!(provider_name)
+        config_path = extract_config_path(rest)
+
+        case flag do
+          "--status" -> ProviderAuth.status(provider, config_path, io)
+          "--logout" -> ProviderAuth.logout(provider, config_path, io)
+        end
     end
   end
 

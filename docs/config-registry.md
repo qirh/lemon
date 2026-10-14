@@ -306,7 +306,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_AI_PROMPT_DIAGNOSTICS` | boolean | `false` |  | `ai` | Whether prompt diagnostics logging is enabled. |
 | `LEMON_AI_PROMPT_DIAGNOSTICS_LOG_LEVEL` | string | _(none)_ |  | `ai` | Log level used for prompt diagnostics output. |
 | `LEMON_AI_PROMPT_DIAGNOSTICS_TOP_N` | integer | _(none)_ |  | `ai` | Number of top prompt-diagnostics entries to report. |
-| `LEMON_ANTHROPIC_CLAUDE_PATH` | string | _(none)_ |  | `ai` | Override path to the `claude` executable used for Anthropic OAuth. |
 | `LEMON_KIMI_MAX_REQUEST_MESSAGES` | integer | _(none)_ |  | `ai` | Max message-history length sent per request to Kimi (history-limited provider). |
 | `PI_CACHE_RETENTION` | string | _(none)_ |  | `ai` | When set to "long", requests 24h prompt-cache retention from OpenAI-compatible providers. |
 

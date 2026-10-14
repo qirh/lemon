@@ -175,10 +175,13 @@ defmodule LemonCli.CommandRegistry do
         option("--secret-name NAME", ["--secret-name"], "Encrypted secret name"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
-        option("--config-path PATH", ["--config-path"], "Config file to update")
+        option("--config-path PATH", ["--config-path"], "Config file to update"),
+        option("--status", ["--status"], "Show the provider's sign-in and credential status"),
+        option("--logout", ["--logout"], "Delete the stored OAuth login and its config")
       ],
       details: [
-        "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml."
+        "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml.",
+        "`lemon model anthropic` signs in with a Claude Pro/Max subscription in the browser; `--status` and `--logout` need a provider."
       ]
     },
     %{

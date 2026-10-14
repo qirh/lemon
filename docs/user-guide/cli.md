@@ -121,6 +121,61 @@ Lemon copy as needed and persists only Lemon's encrypted secret. A failed
 refresh may reuse an unexpired token, but never returns an expired token as
 successful authentication. This is a one-time copy, not ongoing synchronization.
 
+## Claude subscription sign-in (Anthropic OAuth)
+
+`lemon model anthropic` (or `lemon model --provider anthropic`) offers
+**Sign in with Claude Pro/Max (browser)**, the default, or an API key. Sign-in
+runs Anthropic's authorization-code flow with PKCE on `claude.ai`; Claude Code
+does not need to be installed.
+
+```bash
+lemon model anthropic --auth oauth --set-default --model claude-sonnet-5-5
+lemon model anthropic --status   # auth source, account, expiry, usable or not
+lemon model anthropic --logout   # delete the stored login and its config keys
+```
+
+Lemon listens on `http://localhost:53692/callback` and captures the browser
+redirect. If that port is busy, sign-in uses Anthropic's hosted code page
+instead: paste the `code#state` value it shows. When the listener is running
+but the browser cannot reach it (SSH, containers), wait for the two-minute
+timeout and paste the full redirect URL from the address bar. A token printed
+by `claude setup-token` may be pasted at the same prompt; it is stored as a
+static credential without refresh.
+
+The login is encrypted in Lemon's secret store under `llm_anthropic_api_key`
+(`--secret-name` overrides it) and referenced by `auth_source = "oauth"` and
+`oauth_secret`. Access tokens last about eight hours; Lemon refreshes them five
+minutes before expiry and stores the rotated refresh token. Concurrent sessions
+on one runtime share a single refresh. If Anthropic rejects the refresh, or
+the rotated token cannot be stored, requests fail rather than falling back to
+another credential; sign in again with `lemon model anthropic`. Anthropic ends
+a login about 30 days after sign-in regardless of refreshes, so `--status`
+shows an estimated re-sign-in date.
+
+With `auth_source = "oauth"`, `ANTHROPIC_API_KEY` is ignored. With
+`auth_source = "api_key"` or no auth source, the API key applies and the
+subscription login is not used. `--logout` removes `auth_source` and
+`oauth_secret`, so API-key resolution applies again. It does not revoke the
+grant at Anthropic and does not touch Claude Code's own login.
+
+Requests sent with a subscription token use Claude Code's request shape
+(Bearer authorization, `claude-code-20250219` and `oauth-2025-04-20` betas,
+the Claude Code user agent and system-prompt identity). Anthropic's terms
+govern subscription use in third-party tools; see
+[Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+and [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance).
+
+As of October 2026, Anthropic bills Lemon's subscription requests to the
+account's extra usage rather than the plan's included limits. Without extra
+usage available, sign-in and `--status` succeed but model requests fail with
+"You're out of extra usage. Add more at claude.ai/settings/usage". Lemon does
+not forge Claude Code's billing attestation to change that classification.
+
+claude.ai does not list individual OAuth grants. `--logout` deletes Lemon's
+only copy of the tokens, and Anthropic ends the grant about 30 days after
+sign-in. To revoke every session immediately, use **Settings → Account → Log
+out of all devices** on claude.ai; this also signs out Claude Code and browsers.
+
 ## Non-interactive coding
 
 ```bash

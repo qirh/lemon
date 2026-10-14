@@ -521,9 +521,14 @@ stream. See any module under `lib/ai/providers/` for the pattern.
 ## Authentication and OAuth
 
 Most providers authenticate with a bearer key from options or the environment. Providers
-that require OAuth (GitHub Copilot, Google Gemini CLI, OpenAI Codex, Google Antigravity)
-have helpers under `LemonAi.Auth.*` for the device-code / PKCE flows and token refresh. These
-are protocol helpers only — they do not read or write any external app's secret store.
+that require OAuth (Anthropic Claude Pro/Max, GitHub Copilot, Google Gemini CLI, OpenAI
+Codex, Google Antigravity) have helpers under `LemonAi.Auth.*` for the device-code / PKCE
+flows and token refresh. Callers own encrypted storage through `:persist_secret`. The one
+exception is `LemonAi.Auth.AnthropicOAuth.resolve_access_token/0`, which reads ambient
+Claude Code credentials and writes a refresh it performs back to
+`~/.claude/.credentials.json` so Claude Code's rotated login stays valid. Anthropic refresh
+is single-flight per secret on the local node; pass `:reload_secret` so a queued caller
+reuses the stored rotation.
 
 Common environment variables (used as a standalone fallback when a key isn't passed in
 options):

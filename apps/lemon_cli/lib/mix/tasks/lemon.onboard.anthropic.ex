@@ -9,7 +9,7 @@ defmodule Mix.Tasks.Lemon.Onboard.Anthropic do
   Interactive onboarding flow for Anthropic.
 
   What it does:
-  - Supports Claude Code OAuth login or Anthropic API key entry
+  - Supports Claude Pro/Max browser sign-in (OAuth) or Anthropic API key entry
   - Stores credentials in the encrypted Lemon secrets store
   - Writes `[providers.anthropic].auth_source` and the matching secret reference to config.toml
   - Optionally sets `[defaults].provider` and `[defaults].model`

@@ -6,7 +6,12 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Changed
+
+- Anthropic OAuth resolution fails closed: a stored Lemon login that cannot
+  refresh or persist now yields no credential instead of falling back to
+  ambient Claude Code tokens. OAuth secret resolution passes `:reload_secret`
+  so refresh helpers can re-read the secret under their refresh lock.
 
 ## [0.2.0] - 2026-10-13
 

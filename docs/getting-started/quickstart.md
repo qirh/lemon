@@ -24,8 +24,10 @@ In setup, choose **OpenAI Codex**, then **Sign in with ChatGPT (browser OAuth)**
 Alternatively, explicitly choose **Import existing Codex CLI ChatGPT login
 (read-only copy)** if you already use Codex. Import is opt-in, not an automatic
 read of another client's credentials. Accept the offered default model, or select
-another model available to your account. Other providers and API-key login are
-also supported; see [provider setup](../user-guide/setup.md).
+another model available to your account. With a Claude Pro or Max plan, choose
+**Anthropic**, then **Sign in with Claude Pro/Max (browser)** instead (or run
+`lemon model anthropic` later). Other providers and API-key login are also
+supported; see [provider setup](../user-guide/setup.md).
 
 Skip the optional daily brief and runtime configuration for now. Setup is safe to
 rerun: a usable provider is kept, not logged in again. Do not paste credentials
