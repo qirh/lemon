@@ -6,6 +6,7 @@ import {RuntimeHooks} from "/assets/js/runtime.js"
 import {Hooks as AutomationHooks} from "/assets/js/automation.js"
 import * as ShellHooks from "/assets/js/shell.js"
 import {SessionsHooks} from "/assets/js/sessions.js"
+import {ChatHooks} from "/assets/js/chat.js"
 
 let hljsPromise = null
 
@@ -195,5 +196,6 @@ export const Hooks = {
   ...RuntimeHooks,
   ...AutomationHooks,
   ...ShellHooks,
-  ...SessionsHooks
+  ...SessionsHooks,
+  ...ChatHooks
 }
