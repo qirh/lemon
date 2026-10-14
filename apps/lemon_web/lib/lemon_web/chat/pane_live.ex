@@ -31,7 +31,32 @@ defmodule LemonWeb.Chat.PaneLive do
   alias LemonWeb.Chat.{Backend, Components, Inspector, Setup, Subagents, Tool, Transcript, Uploads}
   alias LemonWeb.{Rpc, SessionCwd}
 
-  on_mount({LemonWeb.LiveAuth, :require_operator})
+  on_mount({__MODULE__, :require_operator})
+
+  @doc """
+  Operator check for a nested pane. Only the root LiveView can read
+  `connect_info`, so the pane inherits the access its authenticated parent
+  (`LemonWeb.ChatLive`, behind `LemonWeb.LiveAuth`) established via
+  `assign_new/3`; a pane joined without that parent has none and is refused.
+  With token auth the session marker is re-verified too, so a rotated token
+  also ends nested panes.
+  """
+  def on_mount(:require_operator, _params, session, socket) do
+    socket = Phoenix.Component.assign_new(socket, :operator_access, fn -> nil end)
+
+    verified? =
+      case LemonWeb.Auth.mode(nil) do
+        {:login, :token} ->
+          match?({:ok, :token}, LemonWeb.Auth.verify(session[LemonWeb.Auth.session_key()], nil))
+
+        _ ->
+          true
+      end
+
+    if socket.assigns.operator_access in [:token, :tokenless_loopback] and verified?,
+      do: {:cont, socket},
+      else: {:halt, redirect(socket, to: "/login")}
+  end
 
   @flush_ms 40
   @subagent_refresh_ms 2_000
@@ -80,8 +105,8 @@ defmodule LemonWeb.Chat.PaneLive do
 
     {items, history_error} =
       case history do
-        {:ok, items} -> {items, nil}
-        {:error, message} -> {[], message}
+        {:ok, items} -> {with_intro(items, session["intro"]), nil}
+        {:error, message} -> {with_intro([], session["intro"]), message}
       end
 
     run =
@@ -152,7 +177,25 @@ defmodule LemonWeb.Chat.PaneLive do
     end)
   end
 
+  # A session started from home may mount before its first prompt reaches
+  # history; show that prompt once, without duplicating it later.
+  defp with_intro(items, intro) when is_binary(intro) and intro != "" do
+    if Enum.any?(items, &(&1.kind == :user and String.trim(&1.text) == String.trim(intro))),
+      do: items,
+      else: items ++ [Transcript.user_item(intro)]
+  end
+
+  defp with_intro(items, _intro), do: items
+
   defp idle_run, do: %{status: :idle, run_id: nil, started_at_ms: nil, model: nil}
+
+  # A brand-new session records its workspace when its first run starts.
+  defp ensure_cwd(%{assigns: %{cwd_recorded?: true}} = socket), do: socket
+
+  defp ensure_cwd(socket) do
+    {cwd, recorded?} = resolve_cwd(socket.assigns.session_key)
+    assign(socket, cwd: cwd, cwd_recorded?: recorded?)
+  end
 
   defp resolve_cwd(key) do
     case SessionCwd.recorded(key) do
@@ -222,7 +265,7 @@ defmodule LemonWeb.Chat.PaneLive do
     raw = chat["prompt"] || ""
     prompt = String.trim(raw)
     mode = normalize_mode(chat["mode"])
-    socket = assign(socket, :draft, raw)
+    socket = socket |> assign(:draft, raw) |> ensure_cwd()
 
     cond do
       not socket.assigns.setup_ready? ->
@@ -456,6 +499,8 @@ defmodule LemonWeb.Chat.PaneLive do
     do: {:noreply, metadata(socket, %{"archived" => value == "true"}, if(value == "true", do: "Archived.", else: "Restored."))}
 
   def handle_event("fork", params, socket) do
+    socket = ensure_cwd(socket)
+
     case Backend.fork(socket.assigns.session_key, socket.assigns.cwd) do
       {:ok, child} ->
         notify_parent(socket, {:open_session, child, if(params["split"] == "true", do: :split, else: :replace)})
@@ -604,9 +649,6 @@ defmodule LemonWeb.Chat.PaneLive do
         refresh_subagents(socket)
 
       true ->
-        {cwd, recorded?} =
-          if socket.assigns.cwd_recorded?, do: {socket.assigns.cwd, true}, else: resolve_cwd(socket.assigns.session_key)
-
         queued =
           if run_id != socket.assigns.run.run_id, do: Enum.drop(socket.assigns.queued, 1), else: socket.assigns.queued
 
@@ -615,10 +657,9 @@ defmodule LemonWeb.Chat.PaneLive do
           run: %{status: :running, run_id: run_id, started_at_ms: now(), model: payload["model"]},
           last_run_id: run_id,
           queued: queued,
-          cwd: cwd,
-          cwd_recorded?: recorded?,
           control_notice: nil
         )
+        |> ensure_cwd()
         |> refresh_subagents()
     end
   end
@@ -735,6 +776,7 @@ defmodule LemonWeb.Chat.PaneLive do
       notify_parent(socket, :sessions_changed)
 
       socket
+      |> ensure_cwd()
       |> refresh_subagents()
       |> then(fn socket -> if connected?(socket), do: socket |> load_context() |> load_plan(), else: socket end)
     else
@@ -1076,12 +1118,15 @@ defmodule LemonWeb.Chat.PaneLive do
   # ── Plan / context / subagents ──────────────────────────────────────────
 
   defp load_plan(socket) do
+    socket = ensure_cwd(socket)
     key = socket.assigns.session_key
     cwd = socket.assigns.cwd
     start_async(socket, :plan, fn -> Backend.plan(key, cwd, "status") end)
   end
 
   defp change_plan(socket, action) do
+    socket = ensure_cwd(socket)
+
     case Backend.plan(socket.assigns.session_key, socket.assigns.cwd, action) do
       {:ok, plan} ->
         text =
@@ -1100,6 +1145,7 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp load_context(socket) do
+    socket = ensure_cwd(socket)
     key = socket.assigns.session_key
     cwd = socket.assigns.cwd
 
@@ -1713,7 +1759,7 @@ defmodule LemonWeb.Chat.PaneLive do
           </button>
         </div>
         <.tabs active={@inspector_tab} label="Inspector sections" class="shrink-0 px-3">
-          <:tab :for={{id, label, icon} <- @tabs} id={id} label={label} icon={icon} click="inspector-tab" />
+          <:tab :for={{id, label, _icon} <- @tabs} id={id} label={label} click="inspector-tab" />
         </.tabs>
         <div class="min-h-0 flex-1 overflow-y-auto p-3 scroll-thin" role="tabpanel">
           <Inspector.tab

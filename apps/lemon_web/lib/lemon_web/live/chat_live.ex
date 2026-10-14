@@ -45,6 +45,7 @@ defmodule LemonWeb.ChatLive do
         setup_state: setup,
         setup_ready?: Setup.ready?(setup),
         home: %{prompt: "", cwd: "", profile: "", error: nil},
+        intro: nil,
         workspaces: [],
         profiles: [],
         default_cwd: SessionCwd.default()
@@ -300,6 +301,7 @@ defmodule LemonWeb.ChatLive do
             {:noreply,
              socket
              |> assign(:home, %{form | prompt: ""})
+             |> assign(:intro, {key, prompt})
              |> load_sessions()
              |> push_patch(to: chat_path(key, nil))}
 
@@ -545,7 +547,12 @@ defmodule LemonWeb.ChatLive do
             <div class="flex min-w-0 flex-1" id={"slot-primary"}>
               {live_render(@socket, LemonWeb.Chat.PaneLive,
                 id: pane_id(@session_key, "primary"),
-                session: %{"session_key" => @session_key, "role" => "primary", "split" => @split_key != nil},
+                session: %{
+                  "session_key" => @session_key,
+                  "role" => "primary",
+                  "split" => @split_key != nil,
+                  "intro" => intro_for(@intro, @session_key)
+                },
                 container: {:div, class: "flex min-w-0 flex-1"}
               )}
             </div>
@@ -562,6 +569,10 @@ defmodule LemonWeb.ChatLive do
     </div>
     """
   end
+
+  # The first prompt sent from home, shown by the new pane until history has it.
+  defp intro_for({key, prompt}, key), do: prompt
+  defp intro_for(_intro, _key), do: nil
 
   defp item_id(key), do: :crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10)
 
