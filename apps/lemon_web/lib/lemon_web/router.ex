@@ -42,9 +42,12 @@ defmodule LemonWeb.Router do
       live("/sessions/:session_key", ManagementLive, :show)
       live("/automation", WorkManagementLive, :index)
       live("/blueprints", BlueprintManagementLive, :index)
+      live("/skills", SkillsLive, :index)
       live("/memory", MemoryManagementLive, :index)
+      live("/mcp", McpLive, :index)
       live("/profiles", ProfileManagementLive, :index)
       live("/models", ProviderManagementLive, :index)
+      live("/nodes", NodesLive, :index)
     end
   end
 

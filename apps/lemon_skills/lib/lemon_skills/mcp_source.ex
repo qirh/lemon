@@ -153,9 +153,9 @@ defmodule LemonSkills.McpSource do
 
   Always returns `:ok`, including in disabled mode, where it is a no-op.
   """
-  @spec refresh() :: :ok
-  def refresh do
-    GenServer.call(__MODULE__, :refresh, :infinity)
+  @spec refresh(GenServer.server()) :: :ok
+  def refresh(server \\ __MODULE__) do
+    GenServer.call(server, :refresh, :infinity)
   end
 
   @doc """
@@ -167,6 +167,27 @@ defmodule LemonSkills.McpSource do
   def status do
     GenServer.call(__MODULE__, :status)
   end
+
+  @doc """
+  Returns a credential-free inventory of the servers configured for one scope
+  (`cwd: nil`, the default, is the global/application scope), in configuration
+  order.
+
+  Each server reports a stable `id` (configuration digest prefix), the configured
+  `name`, a `label` (executable basename or URL host — never arguments, paths,
+  URL credentials, headers or environment), its transport, connection state, the
+  source's fixed `last_error` text, counts, approval default, and the published
+  tools (published name, raw remote name or utility kind, remote description).
+
+  This is a pure read: it neither reloads configuration nor connects. A scope
+  that has never been discovered reports `loaded: false`. `refresh/0` reloads
+  the global configuration and reconnects.
+  """
+  @spec inventory(keyword()) :: map()
+  def inventory(opts \\ []), do: inventory(__MODULE__, opts)
+
+  @spec inventory(GenServer.server(), keyword()) :: map()
+  def inventory(server, opts), do: GenServer.call(server, {:inventory, opts})
 
   @doc """
   Checks one server configuration without installing it.
@@ -446,6 +467,34 @@ defmodule LemonSkills.McpSource do
     {:reply, status, state}
   end
 
+  def handle_call({:inventory, _opts}, _from, %{disabled: true} = state) do
+    {:reply, %{disabled: true, loaded: false, servers: []}, state}
+  end
+
+  def handle_call({:inventory, opts}, _from, state) do
+    scope = source_scope(state, opts)
+
+    reply =
+      case Map.fetch(state.scopes, scope) do
+        {:ok, names} ->
+          servers =
+            names
+            |> Enum.flat_map(fn name ->
+              case Map.fetch(state.servers, name) do
+                {:ok, server} -> [inventory_entry(name, server, state.tool_cache)]
+                :error -> []
+              end
+            end)
+
+          %{disabled: false, loaded: true, servers: servers}
+
+        :error ->
+          %{disabled: false, loaded: false, servers: []}
+      end
+
+    {:reply, reply, state}
+  end
+
   @impl true
   def handle_info(:periodic_refresh, %{disabled: true} = state) do
     {:noreply, state}
@@ -496,6 +545,61 @@ defmodule LemonSkills.McpSource do
   defp approval_selector({:utility, :read_resource, _}), do: "resources/read"
   defp approval_selector({:utility, :list_prompts, _}), do: "prompts/list"
   defp approval_selector({:utility, :get_prompt, _}), do: "prompts/get"
+
+  defp inventory_entry(name, server, tool_cache) do
+    {transport, label, opts} = inventory_identity(server.config)
+
+    tools =
+      tool_cache
+      |> Enum.filter(fn {_published, entry} -> entry.server_name == name end)
+      |> Enum.map(fn {published, entry} ->
+        {kind, remote} =
+          case entry.original_name do
+            {:tool, raw} -> {:tool, raw}
+            {:utility, kind, _filters} -> {kind, nil}
+          end
+
+        %{name: published, remote_name: remote, kind: kind, description: entry.tool.description}
+      end)
+      |> Enum.sort_by(&{&1.kind != :tool, &1.name})
+
+    %{
+      id: String.slice(name, 0, 16),
+      name: Keyword.get(opts, :name),
+      label: label,
+      transport: transport,
+      connected: server.connected,
+      last_error: server.last_error,
+      tool_count: length(server.tools),
+      resource_count: length(Map.get(server, :resources, [])),
+      prompt_count: length(Map.get(server, :prompts, [])),
+      approval:
+        if(Keyword.get(opts, :approval, :never) in [:never, "never"], do: :never, else: :always),
+      tools: tools
+    }
+  end
+
+  defp inventory_identity({:stdio, command, args}),
+    do: inventory_identity({:stdio, command, args, []})
+
+  defp inventory_identity({:stdio, command, _args, opts}),
+    do: {:stdio, command |> String.trim() |> Path.basename(), opts}
+
+  defp inventory_identity({transport, url}) when transport in [:http, :sse],
+    do: inventory_identity({transport, url, []})
+
+  defp inventory_identity({transport, url, opts}) when transport in [:http, :sse] do
+    label =
+      case URI.parse(url) do
+        %URI{host: host, port: port, scheme: scheme} when is_binary(host) and host != "" ->
+          if port in [nil, URI.default_port(scheme)], do: host, else: "#{host}:#{port}"
+
+        _ ->
+          nil
+      end
+
+    {transport, label, opts}
+  end
 
   defp initialize_servers(state, opts), do: maybe_reload_servers(state, opts)
 
