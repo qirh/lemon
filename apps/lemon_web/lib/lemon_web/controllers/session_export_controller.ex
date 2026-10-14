@@ -5,7 +5,8 @@ defmodule LemonWeb.SessionExportController do
 
   alias LemonCore.SessionLifecycle
 
-  def show(conn, %{"session_key" => session_key, "format" => format}) do
+  def show(conn, %{"session_key" => session_key, "format" => format})
+      when format in ["json", "markdown"] do
     case SessionLifecycle.export(session_key, format: format) do
       {:ok, export} ->
         send_download(conn, {:binary, export.content},
@@ -16,9 +17,15 @@ defmodule LemonWeb.SessionExportController do
       {:error, :not_found} ->
         conn |> put_status(:not_found) |> text("Session not found")
 
-      {:error, :unsupported_format} ->
-        conn |> put_status(:bad_request) |> text("Unsupported export format")
+      {:error, _reason} ->
+        conn |> put_status(:service_unavailable) |> text("Session export is unavailable")
     end
+  rescue
+    _ -> conn |> put_status(:service_unavailable) |> text("Session export is unavailable")
+  end
+
+  def show(conn, _params) do
+    conn |> put_status(:bad_request) |> text("Unsupported export format")
   end
 
   defp content_type(:json), do: "application/json"

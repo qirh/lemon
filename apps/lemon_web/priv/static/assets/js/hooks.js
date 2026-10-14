@@ -5,6 +5,7 @@ import * as Theme from "/assets/js/theme.js"
 import {RuntimeHooks} from "/assets/js/runtime.js"
 import {Hooks as AutomationHooks} from "/assets/js/automation.js"
 import * as ShellHooks from "/assets/js/shell.js"
+import {SessionsHooks} from "/assets/js/sessions.js"
 
 let hljsPromise = null
 
@@ -193,5 +194,6 @@ export const Hooks = {
   ThemeSwitcher,
   ...RuntimeHooks,
   ...AutomationHooks,
-  ...ShellHooks
+  ...ShellHooks,
+  ...SessionsHooks
 }

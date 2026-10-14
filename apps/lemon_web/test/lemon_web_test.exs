@@ -484,10 +484,6 @@ defmodule LemonWebTest do
     session_css = File.read!(Path.join(static_root, "session.css"))
     assert session_css =~ ".active-run-control-grid"
     assert session_css =~ "@media (max-width: 640px)"
-    management_css = File.read!(Path.join(static_root, "management.css"))
-    assert management_css =~ ".management-layout"
-    assert management_css =~ ".provider-management-grid"
-    assert management_css =~ "@media (max-width: 640px)"
 
     root_layout =
       Path.expand("../lib/lemon_web/components/layouts/root.html.heex", __DIR__)
@@ -495,7 +491,7 @@ defmodule LemonWebTest do
 
     assert root_layout =~ ~s|href={~p"/assets/app.css"}|
     assert root_layout =~ ~s|href={~p"/assets/session.css"}|
-    assert root_layout =~ ~s|href={~p"/assets/management.css"}|
+    refute File.exists?(Path.join(static_root, "management.css"))
     assert root_layout =~ "Skip to main content"
     refute root_layout =~ "cdn.tailwindcss.com"
   end
