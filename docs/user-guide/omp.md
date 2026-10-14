@@ -49,9 +49,9 @@ or CLI.
 
 ## From the TUI
 
-`/omp` (also in the command palette) opens the omp panel: live and recent
-sessions with status, workspace, model, current activity, elapsed time and
-tokens/cost. Select a session for its detail view — activity, running and
+`/omp` (Alt+M, also in the command palette) opens the omp panel: live and
+recent sessions with status, workspace, model, current activity, elapsed time
+and tokens/cost. Select a session for its detail view — activity, running and
 recent tools, todos, subagents, usage, latest output or result. Keys:
 
 | Key | Action |
@@ -65,8 +65,10 @@ recent tools, todos, subagents, usage, latest output or result. Keys:
 | Esc | close the panel |
 
 `/omp run <prompt>` starts a session in the TUI's working directory, and
-`/omp status` prints a one-line summary of live sessions. The panel updates
-live from the runtime's `omp.session` events.
+`/omp status` prints a one-line summary of live sessions. The panel and the
+status-bar badge (`omp N▶` while sessions run) update live from the runtime's
+`omp.session` events. When Lemon's agent uses the `omp` tool, its card shows
+the session's status, activity, todo progress and usage as they change.
 
 ## From the CLI
 
