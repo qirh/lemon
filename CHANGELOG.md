@@ -19,11 +19,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   yellow gradient with a green leaf, beside the version and key hints. It uses
   only `█ ▀ ▄` cells, so it renders in Tern and any UTF-8 terminal; ASCII
   locales and terminals narrower than 50 columns keep the one-line banner.
-- **`lvm` version switcher.** `bin/lvm` switches `~/.lemon/bin/lemon` between
-  installed releases (`lvm use 2026.10.2`) and a source checkout
-  (`lvm use local [checkout]`), installs and removes releases, and moves a
-  running runtime to the new selection. See
-  [Source development](docs/install.md#switching-between-releases-and-source-with-lvm).
+- **`lemonup` version switcher.** `bin/lemonup` switches `~/.lemon/bin/lemon`
+  between installed releases (`lemonup use 2026.10.2`) and a source checkout
+  (`lemonup use local [checkout]`), installs and removes releases, and moves a
+  running runtime to the new selection. `lemonup update` installs the latest
+  stable release if needed and activates it, from a release or from source.
+  `install.sh --resolve-version` prints the version an install would pick. It
+  was briefly `bin/lvm`, which collides with the Linux LVM2 command; replace a
+  `~/.lemon/bin/lvm` link with one to `bin/lemonup`. Selections made with the
+  old name are still recognized. See
+  [Source development](docs/install.md#switching-between-releases-and-source-with-lemonup).
 - **Tern-native TUI surfaces.** `lemon tui` in Tern now uses the same native
   surfaces as omp instead of painted rows. The composer shows a context meter,
   attachment chips, clickable model and effort chips, status facts, last-run

@@ -132,6 +132,7 @@ warning.
 | `--verify` | Boot the installed runtime on ephemeral ports and poll `/healthz` before finishing. |
 | `--no-modify-path` | Do not add `~/.lemon/bin` to PATH in your shell rc file; only print the line. |
 | `--skip-setup` | Do not start the post-install setup wizard. |
+| `--resolve-version` | Print the version this run would install and exit without installing. |
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -233,33 +234,47 @@ so runtimes started with one still require it when attaching. Every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
 
-### Switching between releases and source with `lvm`
+### Switching between releases and source with `lemonup`
 
-`bin/lvm` switches the `lemon` on your PATH (`~/.lemon/bin/lemon`) between
+`bin/lemonup` switches the `lemon` on your PATH (`~/.lemon/bin/lemon`) between
 installed releases and a source checkout. Config, secrets, and the store in
-`~/.lemon` are shared by every selection. Put it on PATH next to the launcher:
+`~/.lemon` are shared by every selection. `lemonup` belongs to a checkout: it
+installs releases with that checkout's `install.sh` and defaults `use local` to
+that checkout, so the installer does not place it for you. Link it next to the
+launcher:
 
 ```bash
-ln -s "$PWD/bin/lvm" ~/.lemon/bin/lvm
+ln -s "$PWD/bin/lemonup" ~/.lemon/bin/lemonup
 
-lvm list                      # installed releases and this checkout; * is active
-lvm current
-lvm use local                 # run from source (this checkout, compiled on demand)
-lvm use local .worktrees/foo  # or another checkout/worktree
-lvm use 2026.10.2             # back to an installed release
-lvm install 2026.10.1         # download via this checkout's install.sh and activate
-lvm uninstall 2026.10.1       # delete a release that is not versions/current
+lemonup list                      # installed releases and this checkout; * is active
+lemonup current
+lemonup use local                 # run from source (this checkout, compiled on demand)
+lemonup use local .worktrees/foo  # or another checkout/worktree
+lemonup use 2026.10.2             # back to an installed release
+lemonup install 2026.10.1         # download via this checkout's install.sh and activate
+lemonup update                    # latest stable release: install if missing, then activate
+lemonup uninstall 2026.10.1       # delete a release that is not versions/current
 ```
 
 Release selection moves only `versions/current`, the pointer `lemon update`
 manages; `local` repoints `~/.lemon/bin/lemon` at the checkout's `bin/lemon`
-and leaves `versions/current` alone. `lemon update` refuses to run from source,
-so `lvm use <version>` first. Releases and source keep different daemon
-records, so when a runtime answers on the control port, `lvm` stops it with
+and leaves `versions/current` alone. Releases and source keep different daemon
+records, so when a runtime answers on the control port, `lemonup` stops it with
 the active launcher and starts it again with the new selection; if the stop
-fails, nothing is switched. `lvm` refuses to replace a `~/.lemon/bin/lemon`
-it did not create. On Linux, `lvm` shadows or is shadowed by the LVM2 volume
-manager command depending on PATH order; invoke it by path if needed.
+fails, nothing is switched. `lemonup` refuses to replace a `~/.lemon/bin/lemon`
+it did not create.
+
+`lemonup update` asks `install.sh --resolve-version` for the latest stable
+release, ignoring `LEMON_VERSION` and `LEMON_CHANNEL`. If that release is
+already active it reports so and exits 0; if it is installed it is activated
+like `lemonup use`; otherwise it is installed like `lemonup install <version>`.
+It works from any selection, including `local`, and a failed install leaves the
+previous selection active. `lemon update` is the product's own
+[preview-confirm update](#updating-an-installed-release): it runs only from an
+installed release, refuses to run from source, and adds a plan digest,
+checkpoint, and rollback receipts. Use `lemon update` to move a release install
+forward with rollback; use `lemonup update` to get onto the latest release from
+wherever you are, including a source checkout.
 
 ## Browser interface
 
