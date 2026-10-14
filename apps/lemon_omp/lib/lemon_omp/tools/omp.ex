@@ -48,27 +48,40 @@ defmodule LemonOmp.Tools.Omp do
       parameters: %{
         "type" => "object",
         "properties" => %{
-          "action" => %{"type" => "string", "enum" => @actions},
+          "action" => %{
+            "type" => "string",
+            "enum" => @actions,
+            "description" => "What to do; see the tool description."
+          },
           "prompt" => %{"type" => "string", "description" => "Task for omp (start, resume)."},
           "cwd" => %{
             "type" => "string",
-            "description" => "Workspace directory (start, resume, discover). Defaults to this session's cwd."
+            "description" =>
+              "Workspace directory (start, resume, discover). Defaults to this session's cwd."
           },
           "model" => %{
             "type" => "string",
-            "description" => "omp model, e.g. \"anthropic/claude-sonnet-4-5\". Defaults to omp's configured model."
+            "description" =>
+              "omp model, e.g. \"anthropic/claude-sonnet-4-5\". Defaults to omp's configured model."
           },
           "thinking" => %{
             "type" => "string",
-            "enum" => ~w(off minimal low medium high xhigh max auto)
+            "enum" => ~w(off minimal low medium high xhigh max auto),
+            "description" => "omp thinking level (start, resume). Defaults to omp's setting."
           },
           "wait" => %{
             "type" => "boolean",
-            "description" => "start/resume: block until the turn ends, streaming progress (default false)."
+            "description" =>
+              "start/resume: block until the turn ends, streaming progress (default false)."
           },
           "id" => %{"type" => "string", "description" => "Lemon omp session id (omp_…)."},
           "message" => %{"type" => "string", "description" => "Text to send (send)."},
-          "mode" => %{"type" => "string", "enum" => ["steer", "follow_up"]},
+          "mode" => %{
+            "type" => "string",
+            "enum" => ["steer", "follow_up"],
+            "description" =>
+              "send: \"steer\" (default) interrupts the running turn; \"follow_up\" queues after it."
+          },
           "timeout_seconds" => %{
             "type" => "integer",
             "description" =>
@@ -122,7 +135,8 @@ defmodule LemonOmp.Tools.Omp do
        when is_binary(id),
        do: do_wait("wait", id, params, scope, signal, on_update)
 
-  defp run("status", %{"id" => id}, scope, _owner, _signal, _on_update, _opts) when is_binary(id) do
+  defp run("status", %{"id" => id}, scope, _owner, _signal, _on_update, _opts)
+       when is_binary(id) do
     case LemonOmp.get(id, scope) do
       {:ok, wire} -> session_result("status", wire, Projection.summary(wire))
       {:error, reason} -> error_result("status", reason)
@@ -166,14 +180,25 @@ defmodule LemonOmp.Tools.Omp do
     end
   end
 
-  defp run("cancel", %{"id" => id}, scope, _owner, _signal, _on_update, _opts) when is_binary(id) do
+  defp run("cancel", %{"id" => id}, scope, _owner, _signal, _on_update, _opts)
+       when is_binary(id) do
     case LemonOmp.cancel(id, scope) do
-      {:ok, _} -> session_text("cancel", id, scope, "omp aborted the running turn; the session stays open.", %{})
-      {:error, reason} -> error_result("cancel", reason)
+      {:ok, _} ->
+        session_text(
+          "cancel",
+          id,
+          scope,
+          "omp aborted the running turn; the session stays open.",
+          %{}
+        )
+
+      {:error, reason} ->
+        error_result("cancel", reason)
     end
   end
 
-  defp run("close", %{"id" => id}, scope, _owner, _signal, _on_update, _opts) when is_binary(id) do
+  defp run("close", %{"id" => id}, scope, _owner, _signal, _on_update, _opts)
+       when is_binary(id) do
     case LemonOmp.close(id, scope) do
       {:ok, wire} ->
         session_result(
@@ -200,7 +225,10 @@ defmodule LemonOmp.Tools.Omp do
             "- #{s["ompSessionId"]} [#{s["lastStatus"]}#{if s["liveId"], do: ", live as #{s["liveId"]}"}#{if s["activeElsewhere"], do: ", possibly open elsewhere"}] #{s["title"] || "untitled"}"
           end)
 
-        result("omp sessions for #{cwd}:\n" <> text, %{"action" => "discover", "sessions" => sessions})
+        result("omp sessions for #{cwd}:\n" <> text, %{
+          "action" => "discover",
+          "sessions" => sessions
+        })
 
       {:error, reason} ->
         error_result("discover", reason)
@@ -214,7 +242,8 @@ defmodule LemonOmp.Tools.Omp do
     do: error_result(action, :invalid_params, "missing required parameters for #{action}.")
 
   defp run(_action, _params, _scope, _owner, _signal, _on_update, _opts),
-    do: error_result("omp", :invalid_params, "action must be one of: #{Enum.join(@actions, ", ")}.")
+    do:
+      error_result("omp", :invalid_params, "action must be one of: #{Enum.join(@actions, ", ")}.")
 
   defp after_start({:ok, wire}, action, params, scope, signal, on_update) do
     if params["wait"] == true do
@@ -284,7 +313,11 @@ defmodule LemonOmp.Tools.Omp do
 
   defp error_result(action, reason, message \\ nil) do
     %AgentToolResult{
-      content: [%TextContent{text: "omp #{action} failed: " <> (message || LemonOmp.error_message(reason))}],
+      content: [
+        %TextContent{
+          text: "omp #{action} failed: " <> (message || LemonOmp.error_message(reason))
+        }
+      ],
       details: %{"action" => action, "error" => error_code(reason)},
       is_error: true
     }
