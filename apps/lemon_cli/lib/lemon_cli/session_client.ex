@@ -41,6 +41,14 @@ defmodule LemonCli.SessionClient do
     normalize(payload["history"])
   end
 
+  @doc """
+  The `sessions.context` breakdown, kept in its bounded wire shape (string
+  keys) for printing and `--json` output.
+  """
+  def context(session_key, cwd) do
+    request("sessions.context", %{"sessionKey" => session_key, "cwd" => cwd})
+  end
+
   def patch(session_key, patch) do
     params =
       patch
@@ -128,6 +136,9 @@ defmodule LemonCli.SessionClient do
 
       {:error, {:control_plane, %{"code" => "NOT_FOUND"}}} ->
         {:error, :not_found}
+
+      {:error, {:control_plane, %{"code" => "UNAVAILABLE"}}} when method == "sessions.context" ->
+        {:error, :unavailable}
 
       {:error, {:control_plane, %{"code" => "CONFLICT", "message" => message}}} ->
         if String.contains?(message, "candidates"),

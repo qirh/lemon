@@ -29,6 +29,7 @@ defmodule LemonCli.SessionsCommand do
   defp dispatch(["stats" | args]), do: stats(args)
   defp dispatch(["show" | args]), do: show(args)
   defp dispatch(["history" | args]), do: history(args)
+  defp dispatch(["context" | args]), do: context(args)
   defp dispatch(["title" | args]), do: title(args)
   defp dispatch(["pin" | args]), do: patch_boolean(args, :pinned, true, "pinned")
   defp dispatch(["unpin" | args]), do: patch_boolean(args, :pinned, false, "unpinned")
@@ -186,6 +187,34 @@ defmodule LemonCli.SessionsCommand do
       {:error, message} -> usage_error(message)
       nil -> failure("session_not_found", "Session not found.", json_requested?(args))
       _ -> usage_error("History requires exactly one session key.")
+    end
+  end
+
+  defp context(args) do
+    with {:ok, parsed} <- parse(args, cwd: :string, json: :boolean),
+         [session_key] <- parsed.positionals,
+         :ok <- ensure_started() do
+      cwd = Path.expand(parsed.options[:cwd] || File.cwd!())
+      json? = parsed.options[:json] == true
+
+      case SessionClient.context(session_key, cwd) do
+        {:ok, report} ->
+          if json?, do: json_success(%{context: report}), else: print_context(report)
+          @exit_ok
+
+        {:error, :not_found} ->
+          failure(
+            "session_not_found",
+            "No native context recorded for this session in #{cwd}.",
+            json?
+          )
+
+        {:error, :unavailable} ->
+          failure("context_unavailable", "Context usage is not available yet.", json?)
+      end
+    else
+      {:error, message} -> usage_error(message)
+      _ -> usage_error("Context requires exactly one session key.")
     end
   end
 
@@ -646,6 +675,107 @@ defmodule LemonCli.SessionsCommand do
     suffix = if breakdown.omitted > 0, do: " (+#{breakdown.omitted} more)", else: ""
     IO.puts("#{label}: #{values}#{suffix}")
   end
+
+  @context_bar_cells 40
+
+  defp print_context(report) do
+    window = report["window"]
+    used = report["usedTokens"]
+    model = get_in(report, ["model", "id"]) || "unknown model"
+
+    size =
+      if window,
+        do: "#{tokens(used)} / #{tokens(window)} tokens (#{report["percentUsed"]}%)",
+        else: "#{tokens(used)} tokens (window unknown)"
+
+    IO.puts("Context usage: #{report["sessionKey"]}")
+    IO.puts("Model: #{model}  #{size}  [#{context_source(report["source"])}]")
+
+    if window do
+      filled = min(round(used * @context_bar_cells / window), @context_bar_cells)
+
+      IO.puts(
+        "[" <>
+          String.duplicate("#", filled) <>
+          String.duplicate(".", @context_bar_cells - filled) <> "]"
+      )
+    end
+
+    IO.puts("")
+
+    rows =
+      Enum.map(report["categories"], &{&1["label"], &1["tokens"], &1["percent"]}) ++
+        if(report["freeTokens"],
+          do: [{"Free space", report["freeTokens"], percent_of(report["freeTokens"], window)}],
+          else: []
+        )
+
+    width = rows |> Enum.map(fn {label, _, _} -> String.length(label) end) |> Enum.max()
+
+    Enum.each(rows, fn {label, count, percent} ->
+      IO.puts(
+        "  " <>
+          String.pad_trailing(label, width) <>
+          "  " <>
+          String.pad_leading(tokens(count), 8) <>
+          "  " <> String.pad_leading(if(percent, do: "#{percent}%", else: "-"), 6)
+      )
+    end)
+
+    case report["autoCompaction"] do
+      %{"enabled" => true} = budget ->
+        IO.puts(
+          "\nAuto-compaction at #{tokens(budget["thresholdTokens"])} tokens " <>
+            "(#{tokens(budget["headroomTokens"])} headroom)."
+        )
+
+      %{"enabled" => false} ->
+        IO.puts("\nAuto-compaction is disabled.")
+
+      _ ->
+        :ok
+    end
+
+    if report["top"] != [] do
+      IO.puts("\nLargest contributors:")
+
+      report["top"]
+      |> Enum.with_index(1)
+      |> Enum.each(fn {item, index} ->
+        IO.puts("  #{index}. #{item["label"]}  #{tokens(item["tokens"])}")
+      end)
+    end
+
+    IO.puts("\n" <> context_caveat(report))
+  end
+
+  defp context_source("usage"), do: "provider-reported"
+  defp context_source("usage+estimate"), do: "reported + estimated"
+  defp context_source(_), do: "estimated"
+
+  defp context_caveat(report) do
+    split =
+      if report["source"] == "estimate",
+        do: "Counts are estimates (~4 characters per token).",
+        else: "Category splits are estimates (~4 characters per token) scaled to the reported total."
+
+    case report["overhead"] do
+      "snapshot" -> split <> " System prompt and tools were measured when the last turn ended."
+      "unavailable" -> split <> " System prompt and tools are not itemized for this session yet."
+      _ -> split
+    end
+  end
+
+  defp percent_of(_count, nil), do: nil
+  defp percent_of(count, window), do: Float.round(count * 100 / window, 1)
+
+  defp tokens(count) when is_integer(count) and count >= 1_000_000,
+    do: "#{Float.round(count / 1_000_000, 1)}M"
+
+  defp tokens(count) when is_integer(count) and count >= 1_000,
+    do: "#{Float.round(count / 1_000, 1)}k"
+
+  defp tokens(count), do: "#{count}"
 
   defp print_history(session, []) do
     IO.puts("No recorded runs for #{session.session_key}.")

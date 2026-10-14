@@ -15,7 +15,7 @@
 
 import type { ControlPlaneClient } from "../protocol/client.ts";
 import type { ControlPlaneMethods, MethodName } from "../protocol/methods.ts";
-import type { ChatHistoryMessage } from "../protocol/types.ts";
+import type { ChatHistoryMessage, SessionsContextResult } from "../protocol/types.ts";
 import type { AppStore, SubmissionMode } from "../store/app-store.ts";
 import type { SessionStore } from "../store/session-store.ts";
 import type { CompactionDetails, NoticeLevel } from "../store/transcript-model.ts";
@@ -127,6 +127,8 @@ export interface CommandHost {
 	openCommandPalette?(query?: string): void | Promise<void>;
 	toggleTaskTree?(): void;
 	openToolOutput?(mode: "output" | "diff"): void;
+	/** Show one `sessions.context` breakdown in a dismissible panel. */
+	openContextPanel?(usage: SessionsContextResult): void;
 }
 
 export interface CommandContext {

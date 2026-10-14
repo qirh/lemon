@@ -405,7 +405,7 @@ defmodule LemonCli.CommandRegistry do
       usage: "lemon sessions <command> [options]",
       subcommands:
         subcommands(
-          ~w(list search stats show history title pin unpin archive restore export prune delete)
+          ~w(list search stats show history context title pin unpin archive restore export prune delete)
         ),
       options: [
         option("--json", ["--json"], "Emit one redacted JSON document"),
@@ -416,6 +416,7 @@ defmodule LemonCli.CommandRegistry do
         option("--pinned | --unpinned", ["--pinned", "--unpinned"], "Filter pin state"),
         option("--archived | --active", ["--archived", "--active"], "Filter archive state"),
         option("--format json|markdown", ["--format"], "Redacted export format"),
+        option("--cwd DIR", ["--cwd"], "Project directory for context (default: current)"),
         option("--clear", ["--clear"], "Clear a session title"),
         option("--output PATH", ["--output"], "Write export content to a private file"),
         option("--force", ["--force"], "Replace an existing regular export file"),
@@ -425,7 +426,8 @@ defmodule LemonCli.CommandRegistry do
         option("--confirm TOKEN", ["--confirm"], "Exact preview or delete confirmation")
       ],
       details: [
-        "Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key."
+        "Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key.",
+        "Context shows a native session's context-window usage by category (system prompt, tools, skills, context files, memory, messages, free space); splits are estimates scaled to the provider-reported total."
       ]
     },
     %{

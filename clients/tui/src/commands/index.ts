@@ -8,6 +8,7 @@
 
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
 import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
+import { contextCommand } from "./context.ts";
 import {
 	clearCommand,
 	debugCommand,
@@ -85,6 +86,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		resumeCommand,
 		historyCommand,
 		compressCommand,
+		contextCommand,
 		planCommand,
 		heartbeatCommand,
 		profilesCommand,

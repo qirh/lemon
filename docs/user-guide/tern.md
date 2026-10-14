@@ -143,6 +143,12 @@ execute** or **Refine plan**. Approving switches back to normal tool access and
 the agent starts implementing; `/plan` again leaves plan mode without approving.
 See [plan mode](../tools/acp.md#plan-mode).
 
+Type `/context` in the chat (or in `lemon tui` running in a Tern pane) to see how
+the model's context window is spent: system prompt, tool definitions, skills,
+context files, memory, messages, tool results and free space, with the largest
+contributors and the auto-compaction threshold. Both surfaces read the same
+daemon accounting; `lemon sessions context <key>` prints it outside Tern.
+
 ## Delegate from Carly or a plugin
 
 Tern's agent API can target the registered ACP command directly. For example,

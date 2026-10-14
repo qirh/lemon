@@ -88,6 +88,8 @@ export class SessionController {
 
 	/** Sessions whose stored history has been pulled (or never needed pulling). */
 	readonly #hydrated = new Set<string>();
+	/** Sessions whose gauge `sessions.context` already answered for (success or a definite no). */
+	readonly #contextSeeded = new Set<string>();
 
 	constructor(options: SessionControllerOptions) {
 		this.#store = options.store;
@@ -124,6 +126,7 @@ export class SessionController {
 		]);
 		this.#events.rebuildFocused();
 		this.#refreshStatus?.();
+		void this.seedContext(session);
 	}
 
 	/**
@@ -158,6 +161,7 @@ export class SessionController {
 		this.#editor.setText(this.#store.takeDraft(target));
 		this.#tui.requestRender(true, { clearScrollback: true });
 		this.#refreshStatus?.();
+		void this.seedContext(session);
 	}
 
 	/**
@@ -301,6 +305,41 @@ export class SessionController {
 		}
 	}
 
+	/**
+	 * Give the gauge the daemon's measurement for a session that has durable
+	 * history but no run usage yet (a resumed or switched-to session), once.
+	 * Every failure is silent: `not_found`/`unavailable` are definite answers and
+	 * are not asked again; an offline or timed-out attempt may be retried on the
+	 * next focus or resync. Never queued, never polled.
+	 */
+	async seedContext(session: SessionStore): Promise<void> {
+		if (
+			this.#contextSeeded.has(session.key) ||
+			session.usage ||
+			session.contextMeasurement ||
+			!this.#methods.supports(METHOD.sessionsContext) ||
+			this.#methods.client.state !== "online" ||
+			!session.blocks.some((block) => block.kind === "user" || block.kind === "assistant")
+		) {
+			return;
+		}
+		this.#contextSeeded.add(session.key);
+		try {
+			const usage = await this.#methods.sessionsContext({
+				sessionKey: session.key,
+				cwd: this.#cwd ?? process.cwd(),
+			});
+			// A run that completed meanwhile reported something newer.
+			if (usage.sessionKey !== session.key || session.usage || session.contextMeasurement) return;
+			session.applyContextMeasurement(usage.usedTokens, usage.window);
+			if (session.key === this.#store.focusedKey) this.#refreshStatus?.();
+		} catch (error) {
+			if (error instanceof NotConnectedError || error instanceof RequestTimeoutError) {
+				this.#contextSeeded.delete(session.key);
+			}
+		}
+	}
+
 	/** Pull stored history for a session that has nothing on screen yet. */
 	async #hydrateIfCold(session: SessionStore): Promise<void> {
 		if (this.#hydrated.has(session.key)) return;
@@ -346,6 +385,7 @@ export class SessionController {
 			this.hydrateRouting(this.#store.focused),
 		]);
 		this.#refreshStatus?.();
+		void this.seedContext(this.#store.focused);
 	}
 
 	async #resyncActive(): Promise<void> {

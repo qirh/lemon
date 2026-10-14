@@ -32,8 +32,12 @@ defmodule CodingAgent.Session.ContextBudget do
     })
   end
 
-  defp usage_boundary(%{by_id: entries, leaf_id: leaf}), do: usage_boundary(entries, leaf)
-  defp usage_boundary(_), do: nil
+  @doc """
+  Timestamp of the newest compaction or planning boundary on the active branch;
+  provider usage recorded before it no longer describes the current context.
+  """
+  def usage_boundary(%{by_id: entries, leaf_id: leaf}), do: usage_boundary(entries, leaf)
+  def usage_boundary(_), do: nil
   defp usage_boundary(_entries, nil), do: nil
 
   defp usage_boundary(entries, id) do

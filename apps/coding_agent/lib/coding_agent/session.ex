@@ -89,6 +89,8 @@ defmodule CodingAgent.Session do
     :thinking_level,
     :system_prompt,
     :base_system_prompt,
+    :prompt_sections,
+    :context_overhead,
     :base_tools,
     :prompt_environment,
     :relevant_skill_keys,
@@ -144,6 +146,8 @@ defmodule CodingAgent.Session do
           thinking_level: LemonAgent.Types.thinking_level(),
           system_prompt: String.t(),
           base_system_prompt: String.t(),
+          prompt_sections: [CodingAgent.SystemPrompt.section()],
+          context_overhead: map() | nil,
           base_tools: [AgentTool.t()],
           prompt_environment: String.t() | nil,
           relevant_skill_keys: [String.t()],
@@ -531,6 +535,12 @@ defmodule CodingAgent.Session do
 
   @doc "Current context usage and the configured automatic-compaction budget."
   def context_budget(session), do: GenServer.call(session, :context_budget)
+
+  @doc """
+  Per-category context-window usage of the request this session would send.
+  See `CodingAgent.Session.ContextUsage`.
+  """
+  def context_usage(session), do: GenServer.call(session, :context_usage)
 
   @doc """
   Navigate to a different point in the session tree.
@@ -1028,9 +1038,20 @@ defmodule CodingAgent.Session do
 
   def handle_call(:save, _from, state) do
     case Persistence.save(state) do
-      {:ok, new_state} -> {:reply, :ok, new_state}
+      {:ok, new_state} -> {:reply, :ok, record_context_overhead(new_state)}
       {:error, reason, unchanged_state} -> {:reply, {:error, reason}, unchanged_state}
     end
+  end
+
+  def handle_call(:context_usage, _from, state) do
+    usage =
+      CodingAgent.Session.ContextUsage.measure(
+        state,
+        LemonAgent.Agent.get_state(state.agent),
+        strip_recall: &strip_recalled_context/1
+      )
+
+    {:reply, {:ok, usage}, state}
   end
 
   def handle_call({:summarize_branch, opts}, _from, state) do
@@ -1664,10 +1685,31 @@ defmodule CodingAgent.Session do
       :unchanged ->
         CodingAgent.Session.Planning.refresh(state)
 
-      {:changed, next_prompt} ->
-        %{state | base_system_prompt: next_prompt}
+      {:changed, next_prompt, sections} ->
+        %{state | base_system_prompt: next_prompt, prompt_sections: sections}
         |> CodingAgent.Session.Planning.refresh()
     end
+  end
+
+  # Sessions stop between turns, so a save records the prompt/tool overhead
+  # profile (counts and safe labels only) for durable context-usage reads.
+  # Frozen side-query sessions are ephemeral and record nothing.
+  defp record_context_overhead(%{context_frozen: true} = state), do: state
+
+  defp record_context_overhead(state) do
+    profile =
+      CodingAgent.Session.ContextUsage.overhead(state, LemonAgent.Agent.get_state(state.agent))
+
+    recorded =
+      CodingAgent.Session.ContextUsage.record_overhead(
+        state.session_manager && state.session_manager.header.id,
+        profile,
+        state.context_overhead
+      )
+
+    %{state | context_overhead: recorded}
+  catch
+    :exit, _ -> state
   end
 
   # Only the events that carry a message the user is credited with. Every other

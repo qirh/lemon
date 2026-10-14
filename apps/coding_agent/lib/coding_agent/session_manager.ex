@@ -620,6 +620,22 @@ defmodule CodingAgent.SessionManager do
   # Context Building
   # ============================================================================
 
+  # The rebuilt context opens with the latest compaction summary as a user
+  # message carrying this prefix.
+  @compaction_summary_prefix "[Conversation summary: "
+
+  @doc "Whether `message` is the compaction summary `build_session_context/2` emits."
+  @spec compaction_summary?(map()) :: boolean()
+  def compaction_summary?(message) when is_map(message) do
+    role = Map.get(message, :role) || Map.get(message, "role")
+    content = Map.get(message, :content) || Map.get(message, "content")
+
+    role in [:user, "user"] and is_binary(content) and
+      String.starts_with?(content, @compaction_summary_prefix)
+  end
+
+  def compaction_summary?(_message), do: false
+
   @doc """
   Build messages list for LLM.
 
@@ -660,7 +676,7 @@ defmodule CodingAgent.SessionManager do
         # Summary message + kept entries
         summary_msg = %{
           "role" => "user",
-          "content" => "[Conversation summary: #{compaction_entry.summary}]"
+          "content" => "#{@compaction_summary_prefix}#{compaction_entry.summary}]"
         }
 
         compacted_entries =

@@ -12,6 +12,7 @@
  */
 
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
+import { parseSessionsContext } from "./context-usage.ts";
 import { MethodUnavailableError } from "./errors.ts";
 import type {
 	SessionRewindPreview,
@@ -51,6 +52,8 @@ import type {
 	SessionExportFormat,
 	SessionSummary,
 	SessionsCompactParams,
+	SessionsContextParams,
+	SessionsContextResult,
 	SessionsDeleteResult,
 	SessionsExportResult,
 	SessionsForkParams,
@@ -95,6 +98,7 @@ export const METHOD = {
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
 	sessionsPlan: "sessions.plan",
+	sessionsContext: "sessions.context",
 	sessionsTree: "sessions.tree",
 	sessionsRewind: "sessions.rewind",
 	sessionDetail: "session.detail",
@@ -359,6 +363,18 @@ export class ControlPlaneMethods {
 			...options,
 			queueIfOffline: false,
 		});
+	}
+
+	/** Read-only, but never parked offline: a stale queued measurement is worthless. */
+	async sessionsContext(
+		params: SessionsContextParams,
+		options?: RequestOptions,
+	): Promise<SessionsContextResult> {
+		const raw = await this.#call<unknown>(METHOD.sessionsContext, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return parseSessionsContext(raw);
 	}
 
 	sessionsCompact(

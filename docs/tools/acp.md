@@ -146,6 +146,16 @@ and cost totals aggregate the assistant responses separately. Context limits
 are model- and provider-surface-specific; the Codex and direct OpenAI versions
 of a model need not have the same window.
 
+`/context` shows the session's context-window usage by category—system prompt,
+tool definitions, skills, context files (AGENTS.md/CLAUDE.md and assistant-home
+files), memory (USER.md/MEMORY.md, contributed context, automatic recall),
+user/assistant messages, tool results and summaries—with free space, the
+auto-compaction threshold and the largest contributors. It uses the same
+`sessions.context` accounting as the TUI and CLI and also emits a `usage_update`
+carrying the breakdown under `_meta.lemon.context`. The total is the
+provider-reported size of the latest request (plus estimates for newer
+messages); category splits are ~4 characters/token estimates scaled to it.
+
 Plans preserve task priorities and completion state. Retry, compaction and
 subagent lifecycle events use native notices, compaction and subagent updates.
 The runtime preserves message and tool ids so a client can append streams and

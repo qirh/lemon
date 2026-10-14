@@ -30,11 +30,14 @@ defmodule LemonControlPlane.ACP do
   ("Approve and execute" / "Refine plan"); leaving with `/plan` never approves.
   `/compact <focus>` forwards the requested summary focus while native
   approved-plan context remains durable.
+  `/context` renders the shared `sessions.context` breakdown and emits a
+  matching `usage_update`.
   """
 
   alias LemonCore.AgentRuntime
 
-  alias LemonControlPlane.Methods.AgentWait
+  alias LemonControlPlane.ACP.ContextReport
+  alias LemonControlPlane.Methods.{AgentWait, SessionsContext}
   alias LemonCore.Store
   alias LemonCore.RunRequest
 
@@ -333,6 +336,36 @@ defmodule LemonControlPlane.ACP do
       end
     else
       {:error, -32_602, "unknown slash command"}
+    end
+  end
+
+  defp execute_prompt(session_id, session, _params, "/context" <> rest, _run_id, opts) do
+    if String.trim(rest) == "" do
+      text =
+        case SessionsContext.fetch(session.session_key, session.cwd) do
+          {:ok, report} ->
+            if update = ContextReport.usage_update(report), do: emit(session_id, update, opts)
+            ContextReport.markdown(report)
+
+          {:error, {:not_found, _, _}} ->
+            "No context recorded yet — send a prompt first."
+
+          {:error, _} ->
+            "Context usage is unavailable for this session right now."
+        end
+
+      emit(
+        session_id,
+        %{
+          "sessionUpdate" => "agent_message_chunk",
+          "content" => %{"type" => "text", "text" => text}
+        },
+        opts
+      )
+
+      {:ok, %{"stopReason" => "end_turn"}}
+    else
+      {:error, -32_602, "use /context without arguments"}
     end
   end
 
@@ -714,6 +747,10 @@ defmodule LemonControlPlane.ACP do
         "name" => "compact",
         "description" => "Compact this session's context",
         "input" => %{"hint" => "Optional focus: context the summary must preserve"}
+      },
+      %{
+        "name" => "context",
+        "description" => "Show context-window usage by category"
       }
       | commands
     ]

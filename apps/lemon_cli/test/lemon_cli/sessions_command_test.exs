@@ -280,6 +280,90 @@ defmodule LemonCli.SessionsCommandTest do
     assert not_found == "Session not found.\n"
   end
 
+  defmodule ContextProvider do
+    def session_context_usage(key, cwd) do
+      case :persistent_term.get({__MODULE__, :result}) do
+        :report ->
+          ids = ~w(system_prompt tool_definitions skills context_files memory user_messages
+                   assistant_messages tool_results summaries)a
+
+          tokens = [2_000, 6_000, 500, 1_500, 0, 500, 1_500, 8_000, 0]
+          :persistent_term.put({__MODULE__, :request}, {key, cwd})
+
+          {:ok,
+           %{
+             live: false,
+             overhead: :snapshot,
+             model: %{provider: "anthropic", id: "claude-sonnet-4-5"},
+             window: 200_000,
+             used_tokens: 20_000,
+             source: "usage",
+             estimated_tokens: 19_000,
+             auto_compaction: %{
+               enabled: true,
+               threshold_tokens: 168_000,
+               reserve_tokens: 32_000,
+               headroom_tokens: 148_000
+             },
+             categories:
+               Enum.zip_with(ids, tokens, &%{id: &1, tokens: &2, percent: nil, items: 1}),
+             top: [%{category: :tool_results, label: "read result #5", tokens: 8_000}],
+             message_count: 6,
+             measured_at: 1
+           }}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  test "sessions context prints the daemon's context-window breakdown" do
+    previous = Application.get_env(:lemon_core, :agent_runtime_provider)
+    Application.put_env(:lemon_core, :agent_runtime_provider, ContextProvider)
+    :persistent_term.put({ContextProvider, :result}, :report)
+
+    on_exit(fn ->
+      :persistent_term.erase({ContextProvider, :result})
+      :persistent_term.erase({ContextProvider, :request})
+
+      if previous,
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, previous),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
+    end)
+
+    key = "agent:default:tui:local:dm:context"
+    json = run_json(["sessions", "context", key, "--cwd", "/repo", "--json"])
+    assert :persistent_term.get({ContextProvider, :request}) == {key, "/repo"}
+    assert json["context"]["usedTokens"] == 20_000
+    assert Enum.sum(Enum.map(json["context"]["categories"], & &1["tokens"])) == 20_000
+
+    text =
+      capture_io(fn -> assert CLI.run(["sessions", "context", key, "--cwd", "/repo"]) == 0 end)
+
+    assert text =~ "Model: claude-sonnet-4-5  20.0k / 200.0k tokens (10.0%)  [provider-reported]"
+    assert text =~ "[" <> String.duplicate("#", 4) <> String.duplicate(".", 36) <> "]"
+    assert text =~ ~r/Tool results\s+8\.0k\s+4\.0%/
+    assert text =~ ~r/Free space\s+180\.0k\s+90\.0%/
+    assert text =~ "1. read result #5  8.0k"
+    assert text =~ "measured when the last turn ended"
+
+    :persistent_term.put({ContextProvider, :result}, {:error, :session_not_found})
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["sessions", "context", key, "--cwd", "/repo", "--json"]) == 1
+      end)
+
+    assert Jason.decode!(error)["error"]["code"] == "session_not_found"
+
+    :persistent_term.put({ContextProvider, :result}, {:error, :unavailable})
+
+    assert capture_io(:stderr, fn ->
+             assert CLI.run(["sessions", "context", key]) == 1
+           end) =~ "not available yet"
+  end
+
   defp seed_session(session_key, run_id, prompt, answer, updated_at_ms \\ nil) do
     :ok =
       RunStore.finalize(run_id, %{

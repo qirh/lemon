@@ -63,6 +63,7 @@ import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
 import { isApprovedDecision } from "./ui/components/approval-panel.ts";
 import { Banner } from "./ui/components/banner.ts";
+import { ContextPanelComponent } from "./ui/components/context-panel.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
 import { confirmAction, PickerOverlay } from "./ui/components/pickers.ts";
@@ -703,6 +704,9 @@ export class AppShell {
 			case "cost":
 				void this.submit("/cost");
 				return;
+			case "context":
+				void this.submit("/context");
+				return;
 		}
 	}
 
@@ -1341,6 +1345,16 @@ export class AppShell {
 			openCommandPalette: (query) => this.#palette.open(query),
 			toggleTaskTree: () => this.#toggleTaskTree(),
 			openToolOutput: (mode) => this.#toolInspector.open(mode),
+			openContextPanel: (usage) => {
+				let close = () => {};
+				close = this.selectors.open(
+					new ContextPanelComponent(usage, {
+						rows: () => this.tui.terminal.rows,
+						close: () => close(),
+						repaint: () => this.selectors.repaint(),
+					}),
+				);
+			},
 			themeChanged: () => this.#themeChanged(),
 			setThemePreference: (preference: ThemePreference) =>
 				this.appearance.setPreference(preference),
@@ -1421,8 +1435,9 @@ export class AppShell {
  * What the gauge shows, and how honestly it can be labelled.
  *
  * A session that has completed a run knows its own context size from the run's
- * usage, which is a real denominator-bearing measurement and gets a bar. Before
- * that, all the client has is `usage.status` — every session's tokens for the
+ * usage, and `sessions.context` (via `/context` or the seed on focus) is the
+ * daemon's own measurement; both are denominator-bearing and get a bar. Before
+ * either, all the client has is `usage.status` — every session's tokens for the
  * whole day — so the segment falls back to `use 12k` rather than pretending a
  * day's total is a conversation's size.
  */
@@ -1430,7 +1445,10 @@ export function contextGauge(
 	session: SessionStore,
 	store: AppStore,
 ): { tokens: number | undefined; window: number | undefined; source: ContextSource } {
-	const window = session.contextWindow ?? contextWindowFor(store, session.model);
+	const window =
+		session.contextMeasurement?.window ??
+		session.contextWindow ??
+		contextWindowFor(store, session.model);
 	const own = session.contextTokens;
 	if (own !== undefined) return { tokens: own, window, source: "context" };
 	return { tokens: contextTokensFrom(store.usage), window, source: "aggregate" };

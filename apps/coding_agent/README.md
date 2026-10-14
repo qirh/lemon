@@ -683,8 +683,20 @@ automatic-compaction threshold and headroom before that threshold. It shares the
 automatic trigger's estimator, using the latest successful provider usage plus
 newer message estimates—not cumulative run spending. Sources are `usage`,
 `usage+estimate` or `estimate`. Compaction and planning-context changes invalidate
-older usage anchors. A cold read without a valid measured anchor reports
-unavailable rather than omitting unknown system/tool overhead.
+older usage anchors.
+
+`Session.context_usage/1` (`Session.ContextUsage`) splits that same total into
+categories: system prompt, tool definitions, skills, context files, memory
+(USER.md/MEMORY.md, contributed sections, automatic recall), user and assistant
+messages, tool results and summaries, plus the largest contributors. The prompt
+composer keeps labelled sections (`PromptComposer.compose_sections/7`) whose texts
+join to the exact prompt; only sections present in the prompt being sent are
+attributed. Splits use the shared ~4 chars/token estimator and are scaled by
+largest remainder to a provider-reported total. Each save records a bounded
+overhead profile (counts and labels, no text) keyed by native session id, so
+`ControlPlaneProvider.session_context_usage/2` can answer for stopped sessions from
+durable history; without a profile, a measured total reports the overhead as
+unattributed and an estimate-only cold read is unavailable.
 
 ### Tool Execution
 

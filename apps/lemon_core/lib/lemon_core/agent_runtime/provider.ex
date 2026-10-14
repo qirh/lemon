@@ -64,8 +64,12 @@ defmodule LemonCore.AgentRuntime.Provider do
   @callback session_plan(session_key(), Path.t(), atom(), keyword()) ::
               {:ok, map()} | {:error, term()}
 
-  @doc "Current native context usage, model window, reserve and compaction headroom."
-  @callback session_context_budget(session_key(), Path.t()) :: {:ok, map()} | {:error, term()}
+  @doc """
+  Per-category context-window usage of a native session's next request: total
+  (provider-reported or estimated), model window, compaction budget, category
+  splits and largest contributors. Counts and bounded labels only.
+  """
+  @callback session_context_usage(session_key(), Path.t()) :: {:ok, map()} | {:error, term()}
 
   @doc "Returns the tool policy for a named runtime mode."
   @callback tool_policy(atom()) :: map()
@@ -145,7 +149,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       session_rewind: 4,
                       session_create: 2,
                       session_plan: 4,
-                      session_context_budget: 2,
+                      session_context_usage: 2,
                       tool_policy: 1,
                       resolve_subagent: 2,
                       background_start: 2,

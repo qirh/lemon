@@ -166,13 +166,15 @@ defmodule CodingAgent.Session.Lifecycle do
     prompt_environment =
       if is_nil(context_snapshot), do: SystemPromptEnvironment.capture(cwd), else: nil
 
-    system_prompt =
+    # Labelled pieces of the composed prompt, kept for context-usage accounting.
+    # A frozen snapshot prompt has no known structure and counts as one block.
+    prompt_sections =
       case context_snapshot do
-        %{system_prompt: prompt} ->
-          prompt
+        %{system_prompt: _prompt} ->
+          []
 
         nil ->
-          PromptComposer.compose_system_prompt(
+          PromptComposer.compose_sections(
             cwd,
             explicit_system_prompt,
             prompt_template,
@@ -190,7 +192,11 @@ defmodule CodingAgent.Session.Lifecycle do
           )
       end
 
-    base_system_prompt = system_prompt
+    base_system_prompt =
+      case context_snapshot do
+        %{system_prompt: prompt} -> prompt
+        nil -> CodingAgent.SystemPrompt.join_sections(prompt_sections)
+      end
 
     system_prompt =
       CodingAgent.Session.Planning.system_prompt(base_system_prompt, session_manager)
@@ -296,6 +302,7 @@ defmodule CodingAgent.Session.Lifecycle do
       thinking_level: thinking_level,
       system_prompt: system_prompt,
       base_system_prompt: base_system_prompt,
+      prompt_sections: prompt_sections,
       base_tools: lifecycle.tools,
       prompt_environment: prompt_environment,
       explicit_system_prompt: explicit_system_prompt,

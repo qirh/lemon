@@ -1134,6 +1134,136 @@ defmodule LemonControlPlane.ACPTest do
 
   defp plan_status(session),
     do: PlanRuntime.session_plan(session.session_key, session.cwd, :status, [])
+  defmodule ContextRuntime do
+    def session_context_usage(key, cwd) do
+      send(:persistent_term.get({__MODULE__, :observer}), {:context_request, key, cwd})
+
+      case :persistent_term.get({__MODULE__, :result}) do
+        :report ->
+          ids = ~w(system_prompt tool_definitions skills context_files memory user_messages
+                   assistant_messages tool_results summaries)a
+
+          tokens = [2_000, 6_000, 0, 1_000, 0, 500, 1_500, 9_000, 0]
+
+          {:ok,
+           %{
+             live: false,
+             overhead: :snapshot,
+             model: %{provider: "anthropic", id: "claude-sonnet-4-5"},
+             window: 100_000,
+             used_tokens: 20_000,
+             source: "usage",
+             estimated_tokens: 18_000,
+             auto_compaction: %{
+               enabled: true,
+               threshold_tokens: 84_000,
+               reserve_tokens: 16_000,
+               headroom_tokens: 64_000
+             },
+             categories:
+               Enum.zip_with(ids, tokens, &%{id: &1, tokens: &2, percent: nil, items: 1}),
+             top: [%{category: :tool_results, label: "bash result #4", tokens: 9_000}],
+             message_count: 4,
+             measured_at: 1
+           }}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  test "/context shows the server breakdown and a matching usage update" do
+    :persistent_term.put({ContextRuntime, :observer}, self())
+    :persistent_term.put({ContextRuntime, :result}, :report)
+    :ok = LemonCore.AgentRuntime.register(ContextRuntime)
+    parent = self()
+
+    {:ok, %{"result" => %{"sessionId" => id}}} =
+      ACP.handle_jsonrpc(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "new",
+          "method" => "session/new",
+          "params" => %{"cwd" => "/home/z80/dev/lemon", "mcpServers" => []}
+        },
+        session_update_callback: &send(parent, {:bootstrap, &1})
+      )
+
+    assert_receive {:bootstrap,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "available_commands_update",
+                          "availableCommands" => commands
+                        }
+                      }
+                    }}
+
+    assert %{"description" => "Show context-window usage by category"} =
+             Enum.find(commands, &(&1["name"] == "context"))
+
+    session = Store.get(:acp_sessions, id)
+
+    assert {:ok, %{"stopReason" => "end_turn"}} =
+             ACP.prompt(
+               %{"sessionId" => id, "prompt" => [%{"type" => "text", "text" => "/context"}]},
+               session_update_callback: &send(parent, {:context, &1})
+             )
+
+    key = session.session_key
+    cwd = session.cwd
+    assert_receive {:context_request, ^key, ^cwd}
+
+    assert_receive {:context,
+                    %{
+                      "params" => %{
+                        "update" => %{"sessionUpdate" => "usage_update"} = usage
+                      }
+                    }}
+
+    assert usage["size"] == 100_000
+    assert usage["used"] == 20_000
+    assert usage["_meta"]["lemon"]["context"]["usedTokens"] == 20_000
+
+    assert_receive {:context,
+                    %{
+                      "params" => %{
+                        "update" => %{
+                          "sessionUpdate" => "agent_message_chunk",
+                          "content" => %{"text" => text}
+                        }
+                      }
+                    }}
+
+    assert text =~ "20.0k / 100.0k tokens (20.0%)"
+    assert text =~ "provider-reported"
+    assert text =~ "| Tool results | 9.0k | 9.0% |"
+    assert text =~ "| Free space | 80.0k | 80.0% |"
+    refute text =~ "| Skills |"
+    assert text =~ "1. bash result #4 — 9.0k"
+    assert text =~ "measured when the last turn ended"
+
+    :persistent_term.put({ContextRuntime, :result}, {:error, :session_not_found})
+
+    assert {:ok, %{"stopReason" => "end_turn"}} =
+             ACP.prompt(
+               %{"sessionId" => id, "prompt" => [%{"type" => "text", "text" => "/context"}]},
+               session_update_callback: &send(parent, {:empty, &1})
+             )
+
+    assert_receive {:empty, %{"params" => %{"update" => %{"content" => %{"text" => empty}}}}}
+    assert empty =~ "No context recorded yet"
+
+    assert {:error, -32_602, _} =
+             ACP.prompt(%{
+               "sessionId" => id,
+               "prompt" => [%{"type" => "text", "text" => "/context extra"}]
+             })
+  after
+    :persistent_term.erase({ContextRuntime, :observer})
+    :persistent_term.erase({ContextRuntime, :result})
+  end
 
   defp start_plan_runtime do
     :ets.new(PlanRuntime, [:named_table, :public, :set])

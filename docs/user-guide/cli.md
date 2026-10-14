@@ -366,6 +366,25 @@ cardinality is reported. The report never contains session keys, titles,
 messages, prompts, answers, paths, URLs, or credentials. Message/turn counts are
 not inferred because no single canonical store exposes them reliably.
 
+### Context-window usage
+
+```bash
+lemon sessions context agent:default:tui:local:dm:<uuid>
+lemon sessions context agent:research:main --cwd ~/src/project --json
+```
+
+`sessions context` prints how a native session's next request spends the
+model's context window: system prompt, tool definitions, skills, context files,
+memory, user and assistant messages, tool results, summaries and free space,
+with the auto-compaction threshold and the largest contributors. `--cwd`
+(default: the current directory) locates a stopped session's native history.
+The total is the latest provider-reported request size plus estimates for newer
+messages; category splits are ~4 characters/token estimates scaled to that total.
+A stopped session reuses the system-prompt/tool profile recorded when its last
+turn ended. Output contains counts and bounded labels only—no prompt text, tool
+arguments or absolute paths. The TUI `/context` and ACP `/context` commands use
+the same `sessions.context` control-plane method.
+
 ### Title, pin, and archive state
 
 ```bash

@@ -75,8 +75,24 @@ defmodule CodingAgent.ResourceLoader do
   @spec load_instructions(String.t()) :: String.t()
   def load_instructions(cwd) do
     cwd
+    |> instruction_sections()
+    |> Enum.map_join("\n\n", & &1.text)
+  end
+
+  @doc """
+  The pieces `load_instructions/1` joins with blank lines, each labelled for
+  context-usage accounting: the precedence header (category `:system_prompt`)
+  followed by one `:context_files` section per instruction file. Labels carry
+  only the file name and a coarse scope (`global`, `project`, `parent`), never
+  the absolute path.
+  """
+  @spec instruction_sections(String.t()) :: [
+          %{category: atom(), label: String.t(), text: String.t()}
+        ]
+  def instruction_sections(cwd) do
+    cwd
     |> find_instruction_files()
-    |> load_and_combine_files()
+    |> combined_sections(Path.expand(cwd))
   end
 
   @doc """
@@ -137,7 +153,8 @@ defmodule CodingAgent.ResourceLoader do
   def load_agents(cwd) do
     cwd
     |> find_specific_files(["AGENTS.md"])
-    |> load_and_combine_files()
+    |> combined_sections(Path.expand(cwd))
+    |> Enum.map_join("\n\n", & &1.text)
   end
 
   # ============================================================================
@@ -517,40 +534,58 @@ defmodule CodingAgent.ResourceLoader do
     end
   end
 
-  # Load files and combine their content with headers
-  @spec load_and_combine_files([String.t()]) :: String.t()
-  defp load_and_combine_files(paths) do
+  # Load files and split them into the header plus one labelled section per
+  # file; joining the texts with blank lines gives the combined instructions.
+  defp combined_sections(paths, cwd) do
     global_dirs = global_instruction_dirs()
 
-    sections =
-      paths
-      |> Enum.map(fn path ->
-        content = read_file_safe(path)
+    files =
+      Enum.flat_map(paths, fn path ->
+        case read_file_safe(path) do
+          "" ->
+            []
 
-        if content != "" do
-          "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
-        else
-          ""
+          content ->
+            [
+              %{
+                category: :context_files,
+                label: "#{Path.basename(path)} (#{scope_label(path, global_dirs, cwd)})",
+                text:
+                  "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
+              }
+            ]
         end
       end)
-      |> Enum.reject(&(&1 == ""))
 
-    case sections do
+    case files do
       [] ->
-        ""
+        []
 
       _ ->
-        Enum.join(
-          [
-            "## Repository instructions\n" <>
-              "Global instructions apply generally. Directory instructions apply only within " <>
-              "their stated subtree. More specific directory instructions override conflicting " <>
-              "broader instructions; read applicable descendant guides before editing there. " <>
-              "Sources are ordered global first, then ancestors from root to working directory."
-            | sections
-          ],
-          "\n\n"
-        )
+        [
+          %{
+            category: :system_prompt,
+            label: "Repository instruction rules",
+            text:
+              "## Repository instructions\n" <>
+                "Global instructions apply generally. Directory instructions apply only within " <>
+                "their stated subtree. More specific directory instructions override conflicting " <>
+                "broader instructions; read applicable descendant guides before editing there. " <>
+                "Sources are ordered global first, then ancestors from root to working directory."
+          }
+          | files
+        ]
+    end
+  end
+
+  defp scope_label(path, global_dirs, cwd) do
+    dir = Path.dirname(path)
+    scope = if Path.basename(dir) in @config_subdirs, do: Path.dirname(dir), else: dir
+
+    cond do
+      dir in global_dirs -> "global"
+      scope == cwd -> "project"
+      true -> "parent"
     end
   end
 

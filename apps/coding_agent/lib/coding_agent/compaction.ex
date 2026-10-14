@@ -1284,18 +1284,33 @@ defmodule CodingAgent.Compaction do
   end
 
   defp estimate_tool_definitions_tokens(tools) when is_list(tools) do
-    Enum.reduce(tools, 0, fn tool, acc ->
-      text =
-        case Jason.encode(tool) do
-          {:ok, encoded} -> encoded
-          _ -> inspect(tool)
-        end
-
-      acc + estimate_text_tokens(text)
-    end)
+    Enum.reduce(tools, 0, &(estimate_tool_definition_tokens(&1) + &2))
   end
 
   defp estimate_tool_definitions_tokens(_), do: 0
+
+  @doc """
+  Estimate one tool definition as the provider receives it: its JSON-encoded
+  name, description and parameter schema (runtime callbacks are never sent).
+  """
+  @spec estimate_tool_definition_tokens(map()) :: non_neg_integer()
+  def estimate_tool_definition_tokens(tool) when is_map(tool) do
+    definition = %{
+      name: Map.get(tool, :name) || Map.get(tool, "name"),
+      description: Map.get(tool, :description) || Map.get(tool, "description"),
+      parameters: Map.get(tool, :parameters) || Map.get(tool, "parameters")
+    }
+
+    text =
+      case Jason.encode(definition) do
+        {:ok, encoded} -> encoded
+        _ -> inspect(definition)
+      end
+
+    estimate_text_tokens(text)
+  end
+
+  def estimate_tool_definition_tokens(_tool), do: 0
 
   defp provider_request_message_limit(model) do
     if function_exported?(LemonAi.Providers.Anthropic, :request_history_limit, 1) do

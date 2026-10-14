@@ -104,7 +104,7 @@ export interface StatusBarOptions {
 }
 
 /** What a click on a composer fact asks the host to open or change. */
-export type StatusAction = "sessions" | "queue" | "mode" | "approvals" | "cost";
+export type StatusAction = "sessions" | "queue" | "mode" | "approvals" | "cost" | "context";
 
 /**
  * The status facts the TSP prompt composer carries instead of a status strip
@@ -138,6 +138,7 @@ const STATUS_ACTIONS: ReadonlySet<string> = new Set<StatusAction>([
 	"mode",
 	"approvals",
 	"cost",
+	"context",
 ]);
 /** The facts the composer draws as its own controls rather than as segments. */
 const COMPOSER_HOMED: ReadonlySet<SegmentId> = new Set<SegmentId>([
@@ -473,32 +474,43 @@ export function buildComposerFacts(data: StatusBarData): ComposerFacts {
 	};
 }
 
-/** The composer's context hairline: share of the window, unknown without one. */
+/** The composer's context hairline: share of the window, unknown without one. Clicking opens `/context`. */
 function contextMeter(
 	tokens: number | undefined,
 	window: number | undefined,
 ): NativeNode | undefined {
 	if (tokens === undefined || tokens < 0) return undefined;
+	return node(
+		"meter",
+		{
+			role: "omp.composer.context",
+			...contextMeterProps(tokens, window),
+			actions: { click: `${STATUS_ACTION_PREFIX}context` },
+		},
+		undefined,
+		"context",
+	);
+}
+
+/**
+ * One context-share vocabulary for every native meter: the composer hairline
+ * and the `/context` sheet show the same value, label, total and thresholds.
+ */
+export function contextMeterProps(tokens: number, window: number | undefined) {
 	const known = window !== undefined && window > 0;
 	const used = known ? Math.min(1, tokens / window) : null;
 	const lines = [
 		used === null ? "Context window unknown" : `Context ${Math.round(used * 100)}% used`,
 		known ? `${compact(tokens)} of ${compact(window)} tokens` : `${compact(tokens)} tokens`,
 	];
-	return node(
-		"meter",
-		{
-			role: "omp.composer.context",
-			value: used,
-			style: "bar",
-			thresholds: { warn: 0.75, bad: 0.9 },
-			...(used === null ? {} : { label: `${Math.round(used * 100)}%` }),
-			...(known ? { total: compact(window) } : {}),
-			title: lines.join("\n"),
-		},
-		undefined,
-		"context",
-	);
+	return {
+		value: used,
+		style: "bar" as const,
+		thresholds: { warn: 0.75, bad: 0.9 },
+		...(used === null ? {} : { label: `${Math.round(used * 100)}%` }),
+		...(known ? { total: compact(window) } : {}),
+		title: lines.join("\n"),
+	};
 }
 
 /** Drop the lowest-priority optional segments until the row fits. */
