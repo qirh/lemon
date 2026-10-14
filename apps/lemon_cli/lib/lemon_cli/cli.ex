@@ -518,7 +518,7 @@ defmodule LemonCli.CLI do
   # Deliberately does not start :lemon_core: a config with removed settings
   # would stop it from booting, and this command is how such a file is fixed.
   defp migrate_config(opts) do
-    Application.load(:lemon_core)
+    _ = Application.load(:lemon_core)
 
     paths =
       [Modular.global_path(), Modular.project_path(opts[:project_dir] || File.cwd!())]

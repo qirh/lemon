@@ -62,7 +62,7 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Req.Test.set_req_test_to_shared(%{})
     # Keep the loopback redirect port busy so sign-in uses the copy-code
     # prompt; the socket closes with the test process.
-    _ = :gen_tcp.listen(53692, [:binary, active: false, ip: {127, 0, 0, 1}])
+    _ = :gen_tcp.listen(53_692, [:binary, active: false, ip: {127, 0, 0, 1}])
 
     on_exit(fn ->
       Req.default_options(previous_req_defaults)

@@ -353,7 +353,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     complete = blocking_completion(owner, ["Use mix test."])
     opts = [store: store, complete: complete]
 
-    states = for i <- 1..9, do: %{state | workspace_dir: state.workspace_dir <> "-#{i}"}
+    states = for i <- 1..9, do: scoped(state, i)
 
     for scoped <- Enum.take(states, 8) do
       assert {:ok, _} = ProjectMemory.after_turn(scoped, turn("Use mix test."), opts)
@@ -372,6 +372,33 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     assert {:ok, []} = Project.read(List.last(states), store: store)
     assert {:ok, ["Use mix test."]} = Project.read(hd(states), store: store)
     assert {:ok, []} = Project.read(%{hd(states) | cwd: Path.dirname(state.cwd)}, store: store)
+  end
+
+  test "exited workers free their project and slot before the registry prunes them", %{
+    state: state,
+    store: store
+  } do
+    owner = self()
+    opts = [store: store, complete: blocking_completion(owner, ["Use mix test."])]
+    {first, second} = Enum.split(for(i <- 1..16, do: scoped(state, i)), 8)
+
+    # Registry drops an exited process's keys asynchronously, in its partition
+    # processes. Holding them leaves every finished worker's entries behind, as
+    # a loaded scheduler does between a worker exiting and the next admission.
+    partitions =
+      for {_, pid, _, _} <- Supervisor.which_children(CodingAgent.ProcessRegistry), do: pid
+
+    Enum.each(partitions, &:sys.suspend/1)
+
+    try do
+      capture_all(first, opts)
+      capture_all(second, opts)
+      capture_all([hd(first)], opts)
+    after
+      Enum.each(partitions, &:sys.resume/1)
+    end
+
+    assert {:ok, ["Use mix test."]} = Project.read(hd(second), store: store)
   end
 
   test "provider jobs time out without blocking flush or persisting facts", %{
@@ -412,6 +439,21 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
              ProjectMemory.decode_response(response([%{"fact" => "mix test"}]))
 
     assert {:ok, []} = ProjectMemory.decode_response(response([]))
+  end
+
+  defp scoped(state, i), do: %{state | workspace_dir: state.workspace_dir <> "-#{i}"}
+
+  defp capture_all(states, opts) do
+    for scoped <- states do
+      assert {:ok, _} = ProjectMemory.after_turn(scoped, turn("Use mix test."), opts)
+    end
+
+    for _ <- states do
+      assert_receive {:extracting, pid, _}, 2_000
+      send(pid, :finish)
+    end
+
+    for scoped <- states, do: assert(:ok = ProjectMemory.flush(scoped, 5_000))
   end
 
   defp turn(text),

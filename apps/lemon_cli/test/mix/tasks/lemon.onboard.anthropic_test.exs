@@ -96,7 +96,7 @@ defmodule Mix.Tasks.Lemon.Onboard.AnthropicTest do
   test "subscription sign-in accepts a pasted claude setup-token", %{tmp_dir: tmp_dir} do
     config_path = Path.join(tmp_dir, "config.toml")
     # Keep the loopback redirect port busy so sign-in uses the copy-code prompt.
-    port_holder = :gen_tcp.listen(53692, [:binary, active: false, ip: {127, 0, 0, 1}])
+    port_holder = :gen_tcp.listen(53_692, [:binary, active: false, ip: {127, 0, 0, 1}])
 
     output =
       capture_io("n\nsk-ant-oat01-setup-token\n", fn ->

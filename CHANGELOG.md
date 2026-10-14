@@ -152,6 +152,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Document reads (PDF and other converted formats) no longer report
   "Cannot start document backend" when the converter exits while its port is
   being closed; the real result or size/time-limit error is returned.
+- Durable project-fact capture no longer skips a finished turn as busy or
+  unavailable in the moment after an earlier capture for that project or
+  another one ends; a worker that has exited no longer holds its project or
+  one of the eight capture slots.
 
 ---
 

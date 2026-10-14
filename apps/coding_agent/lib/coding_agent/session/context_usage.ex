@@ -86,7 +86,11 @@ defmodule CodingAgent.Session.ContextUsage do
   would understate the request.
   """
   @spec measure_durable(map(), [map()], overhead() | nil) :: {:ok, map()} | {:error, :unavailable}
-  def measure_durable(%{session_manager: _, model: _, settings_manager: _} = state, messages, overhead) do
+  def measure_durable(
+        %{session_manager: _, model: _, settings_manager: _} = state,
+        messages,
+        overhead
+      ) do
     usage_after = ContextBudget.usage_boundary(state.session_manager)
     budget = Compaction.request_context_usage(messages, nil, [], usage_after)
 
@@ -232,7 +236,9 @@ defmodule CodingAgent.Session.ContextUsage do
         label = user_label(message, index)
 
         [item(:user_messages, label, own)] ++
-          if tokens > own, do: [item(:memory, "Recalled memory ##{index}", tokens - own)], else: []
+          if tokens > own,
+            do: [item(:memory, "Recalled memory ##{index}", tokens - own)],
+            else: []
 
       :assistant ->
         [item(:assistant_messages, "Assistant reply ##{index}", tokens)]

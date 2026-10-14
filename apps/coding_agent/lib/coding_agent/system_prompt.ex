@@ -120,7 +120,11 @@ defmodule CodingAgent.SystemPrompt do
       # their situation, which belongs next to the workspace context that follows
       # rather than in the middle of the tool guidance above.
       contributed_context_sections(cwd, session_scope, skill_context, opts),
-      section(:system_prompt, "Workspace boundaries", build_workspace_section(cwd, workspace_dir)),
+      section(
+        :system_prompt,
+        "Workspace boundaries",
+        build_workspace_section(cwd, workspace_dir)
+      ),
       workspace_context_sections(bootstrap_files)
     ]
     |> List.flatten()

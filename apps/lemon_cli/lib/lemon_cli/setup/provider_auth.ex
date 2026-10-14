@@ -72,7 +72,8 @@ defmodule LemonCli.Setup.ProviderAuth do
         |> TomlPatch.delete_key(spec.provider_table, "auth_source")
         |> TomlPatch.delete_key(spec.provider_table, "oauth_secret")
 
-      decode!(updated, expanded)
+      # Refuse to write a patch that no longer parses.
+      _ = decode!(updated, expanded)
       File.write!(expanded, updated)
       io.info.("Removed OAuth settings from [#{spec.provider_table}] in #{expanded}.")
     end

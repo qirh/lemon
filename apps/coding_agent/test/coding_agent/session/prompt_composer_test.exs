@@ -137,8 +137,13 @@ defmodule CodingAgent.Session.PromptComposerTest do
     assert %{category: :system_prompt} = by_label["Custom system prompt"]
     assert %{category: :system_prompt} = by_label["Environment"]
     assert %{category: :skills} = by_label["Available skills"]
-    assert %{category: :memory, text: "## Honcho\nprofile\n\ncontributed body"} = by_label["Honcho profile"]
-    assert %{category: :memory, text: "## USER.md\nuser memory marker"} = by_label["USER.md (assistant home)"]
+
+    assert %{category: :memory, text: "## Honcho\nprofile\n\ncontributed body"} =
+             by_label["Honcho profile"]
+
+    assert %{category: :memory, text: "## USER.md\nuser memory marker"} =
+             by_label["USER.md (assistant home)"]
+
     assert %{category: :context_files} = by_label["SOUL.md (assistant home)"]
     assert %{category: :context_files, text: text} = by_label["AGENTS.md (project)"]
     assert text =~ "project instructions marker"

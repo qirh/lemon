@@ -68,7 +68,12 @@ defmodule CodingAgent.Session.ContextUsageTest do
   defp live_state(tmp_dir, settings, window) do
     workspace = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace)
-    File.write!(Path.join(workspace, "MEMORY.md"), "remembered fact " <> String.duplicate("x", 400))
+
+    File.write!(
+      Path.join(workspace, "MEMORY.md"),
+      "remembered fact " <> String.duplicate("x", 400)
+    )
+
     File.write!(Path.join(tmp_dir, "AGENTS.md"), "project rules " <> String.duplicate("y", 2_000))
 
     sections =
@@ -119,7 +124,12 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert length(report.top) <= 10
     assert report.top == Enum.sort_by(report.top, & &1.tokens, :desc)
 
-    other = Enum.find(ContextUsage.overhead(state, agent).items, &(&1.label == "Other system prompt text"))
+    other =
+      Enum.find(
+        ContextUsage.overhead(state, agent).items,
+        &(&1.label == "Other system prompt text")
+      )
+
     assert other.category == :system_prompt
     refute Enum.any?(labels, &String.contains?(&1, tmp_dir))
   end
@@ -198,8 +208,12 @@ defmodule CodingAgent.Session.ContextUsageTest do
     agent = %{system_prompt: nil, tools: [], messages: [user]}
     report = ContextUsage.measure(state, agent, strip_recall: strip)
 
-    assert tokens(report, :user_messages) == Compaction.estimate_text_tokens("what did we decide?")
-    assert tokens(report, :memory) + tokens(report, :user_messages) == Compaction.estimate_message_tokens(user)
+    assert tokens(report, :user_messages) ==
+             Compaction.estimate_text_tokens("what did we decide?")
+
+    assert tokens(report, :memory) + tokens(report, :user_messages) ==
+             Compaction.estimate_message_tokens(user)
+
     assert sum(report) == report.used_tokens
   end
 
@@ -231,7 +245,15 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert tokens(before, :summaries) == 0
 
     kept_id = manager.leaf_id
-    compacted = SessionManager.append_compaction(manager, "Read lib/app.ex; nothing left.", kept_id, before.used_tokens)
+
+    compacted =
+      SessionManager.append_compaction(
+        manager,
+        "Read lib/app.ex; nothing left.",
+        kept_id,
+        before.used_tokens
+      )
+
     state = %{state | session_manager: compacted}
     messages = Persistence.restore_messages_from_session(compacted)
     assert {:ok, after_compaction} = ContextUsage.measure_durable(state, messages, overhead)
@@ -242,11 +264,18 @@ defmodule CodingAgent.Session.ContextUsageTest do
     assert after_compaction.used_tokens < before.used_tokens
 
     message_ids = [:user_messages, :assistant_messages, :tool_results, :summaries]
-    share = fn report -> Enum.sum(Enum.map(message_ids, &tokens(report, &1))) / report.used_tokens end
+
+    share = fn report ->
+      Enum.sum(Enum.map(message_ids, &tokens(report, &1))) / report.used_tokens
+    end
+
     assert share.(after_compaction) < share.(before)
   end
 
-  test "durable reads without a recorded overhead profile", %{tmp_dir: tmp_dir, settings: settings} do
+  test "durable reads without a recorded overhead profile", %{
+    tmp_dir: tmp_dir,
+    settings: settings
+  } do
     state = %{
       session_manager: SessionManager.new(tmp_dir),
       model: model(100_000),
@@ -279,7 +308,12 @@ defmodule CodingAgent.Session.ContextUsageTest do
     on_exit(fn -> LemonCore.Store.delete(:session_context_overhead, id) end)
 
     state = live_state(tmp_dir, settings, 100_000)
-    agent = %{system_prompt: CodingAgent.SystemPrompt.join_sections(state.prompt_sections), tools: tools()}
+
+    agent = %{
+      system_prompt: CodingAgent.SystemPrompt.join_sections(state.prompt_sections),
+      tools: tools()
+    }
+
     profile = ContextUsage.overhead(state, agent)
 
     assert ContextUsage.record_overhead(id, profile) == profile

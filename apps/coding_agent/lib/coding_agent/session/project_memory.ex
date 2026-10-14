@@ -158,17 +158,24 @@ defmodule CodingAgent.Session.ProjectMemory do
   end
 
   defp admit(key, job) do
+    case live_worker(key) do
+      {:ok, pid} -> submit(pid, job)
+      :none -> start_worker(key, job)
+    end
+  end
+
+  # Registry drops an exited process's keys asynchronously, so a worker that just
+  # finished can still be listed. Its project and slot are free: registering
+  # over a dead owner's unique key succeeds.
+  defp live_worker(key) do
     case Registry.lookup(@registry, key) do
-      [{pid, _}] -> submit(pid, job)
-      [] -> start_worker(key, job)
+      [{pid, _}] -> if Process.alive?(pid), do: {:ok, pid}, else: :none
+      [] -> :none
     end
   end
 
   defp start_worker(key, job) do
-    slot =
-      Enum.find(1..@max_projects, fn slot ->
-        Registry.lookup(@registry, {__MODULE__, :slot, slot}) == []
-      end)
+    slot = Enum.find(1..@max_projects, &(live_worker({__MODULE__, :slot, &1}) == :none))
 
     if slot do
       caller = self()
