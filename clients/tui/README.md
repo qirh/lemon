@@ -168,14 +168,15 @@ remains a legacy client-side alias; it does not configure the daemon.
 
 ### Tern and modern terminals
 
-Run `lemon tui` in a Tern pane for the terminal client (plain `lemon` may select
-the native ACP chat instead). The TUI detects `TERN_PANE` or `TERM_PROGRAM=tern`
-and negotiates pi-tui's Tern Surface Protocol (TSP). Prompts, replies, tool calls
-and the composer are semantic nodes, not painted cell screenshots. This gives
-Tern reply navigation, native markdown/code blocks, and Carly's agent
-start/ask/wait/transcript operations. A delegated prompt waits until the
-connected composer is ready, submits atomically, and preserves any human draft
-in recall history. Configure Carly's agent command as `lemon tui` for this path.
+Plain `lemon` (or `lemon tui`) in a Tern pane opens the terminal client; Tern's
+native ACP chat is separate (`tern acp lemon`). The TUI detects `TERN_PANE` or
+`TERM_PROGRAM=tern` and negotiates pi-tui's Tern Surface Protocol (TSP).
+Prompts, replies, tool calls and the composer are semantic nodes, not painted
+cell screenshots. This gives Tern reply navigation, native markdown/code blocks,
+and Carly's agent start/ask/wait/transcript operations. A delegated prompt waits
+until the connected composer is ready, submits atomically, and preserves any
+human draft in recall history. Configure Carly's agent command as `lemon tui`
+for this path.
 The final reply is published before the terminal is marked idle, so Carly's
 `wait` observes the complete answer rather than the last streaming fragment.
 

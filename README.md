@@ -52,7 +52,7 @@ workflow, recovery, and these next steps:
 | Work your way | Start here |
 | --- | --- |
 | Script a coding session | `lemon -p "Explain this repository; do not edit files." --output json` |
-| Use Tern's native chat | `lemon tern install`, then type `lemon` in a new Tern pane |
+| Use Lemon in Tern | Type `lemon` in a Tern pane; `lemon tern install` adds palette actions and `tern acp lemon` chat |
 | Delegate parallel work | Ask for `scout` and `reviewer` task children; both personas are read-only |
 | Revisit an earlier prompt | `/rewind` previews and confirms a history change; files stay untouched by default |
 | Connect MCP tools | `lemon mcp list`, then [add and test a trusted server](docs/skills.md#manage-named-mcp-servers) |

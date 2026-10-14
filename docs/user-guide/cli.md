@@ -8,7 +8,7 @@ commands are dispatched by the CLI registry.
 
 This behavior is identical in source checkouts and packaged installs:
 
-- In an interactive terminal (stdin and stdout are TTYs), `lemon` opens the TUI; in a registered Tern pane it opens [native ACP chat](tern.md). Use `lemon tui` to choose the standalone terminal UI explicitly.
+- In an interactive terminal (stdin and stdout are TTYs), including a Tern pane, `lemon` opens the TUI, the same as `lemon tui`. Tern's native ACP chat is opened explicitly with `tern acp lemon` after [registration](tern.md).
 - Without a TTY, `lemon` fails immediately with status 2 and points to `lemon -p`, `lemon daemon`, and `lemon --help`. It does not compile, initialize HOME state, or start a daemon.
 - `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
 

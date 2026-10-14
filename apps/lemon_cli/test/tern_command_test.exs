@@ -8,10 +8,11 @@ defmodule LemonCli.TernCommandTest do
     %{directory: directory, path: Path.join(directory, "settings.json")}
   end
 
-  test "registration preserves preferences and other agents and replaces only Lemon", %{
-    directory: directory,
-    path: path
-  } do
+  test "registration preserves preferences, ACP wrapping and other agents and replaces only Lemon",
+       %{
+         directory: directory,
+         path: path
+       } do
     original = %{
       "font_size" => 17,
       "plugins" => false,
@@ -21,7 +22,8 @@ defmodule LemonCli.TernCommandTest do
           %{"id" => "other", "command" => "/other", "args" => ["--acp"]},
           %{"id" => "lemon", "command" => "/old"}
         ],
-        "keep_tui" => ["codex"]
+        "keep_tui" => ["codex"],
+        "auto_acp" => false
       }
     }
 
@@ -33,7 +35,7 @@ defmodule LemonCli.TernCommandTest do
     assert settings["plugins"] == false
     assert settings["plugins_disabled"] == ["lemon", "other"]
     assert settings["agents"]["keep_tui"] == ["codex"]
-    assert settings["agents"]["auto_acp"]
+    assert settings["agents"]["auto_acp"] == false
 
     assert settings["agents"]["custom"] == [
              %{"id" => "other", "command" => "/other", "args" => ["--acp"]},
@@ -45,6 +47,14 @@ defmodule LemonCli.TernCommandTest do
                "env" => %{}
              }
            ]
+  end
+
+  test "registration does not enable Tern's ACP shell wrapping", %{
+    directory: directory,
+    path: path
+  } do
+    assert :ok = LemonCli.TernCommand.install(directory, "/lemon")
+    refute path |> File.read!() |> Jason.decode!() |> get_in(["agents", "auto_acp"])
   end
 
   test "invalid existing settings are never overwritten", %{directory: directory, path: path} do

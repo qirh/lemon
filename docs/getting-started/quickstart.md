@@ -42,8 +42,8 @@ lemon tui
 ```
 
 Lemon starts or reuses its local daemon and opens the standalone TUI in that
-directory. Outside Tern, bare `lemon` is equivalent. Explicit `lemon tui` also
-works before native Tern registration. Send this small, reviewable first task:
+directory. Bare `lemon` is equivalent, including in a Tern pane, where the TUI
+uses Tern's native surfaces. Send this small, reviewable first task:
 
 ```text
 Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff.
@@ -81,15 +81,16 @@ lemon -p "Explain this repository; do not edit files." --output json
 See the [CLI guide](../user-guide/cli.md) for stdin, streaming JSON, continuation
 and explicit tool-approval policy. Bare `lemon` requires a terminal.
 
-**Tern native chat:** with Tern installed, register Lemon once:
+**Tern:** type `lemon` in a Tern pane for the TUI on Tern's native surfaces.
+To also get palette actions and Tern's native ACP chat, register Lemon once:
 
 ```bash
 lemon tern install
 ```
 
-Open a new Tern pane in your repository and type `lemon`. Tern owns the native
-chat, tool cards and permissions; Lemon owns the coding session. Use `lemon tui`
-when you explicitly want the standalone terminal UI instead. See the
+Run `tern plugin reload`, then use **Lemon: New session in split** from the
+palette, or `tern acp lemon` for the ACP chat, where Tern owns the chat, tool
+cards and permissions and Lemon owns the coding session. See the
 [Tern guide](../user-guide/tern.md) for registration paths and troubleshooting.
 
 **Web dashboard:** the default full installation also includes:

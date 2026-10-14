@@ -371,19 +371,7 @@ if [ -z "$COMMAND" ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
   error "No interactive terminal. Use 'lemon -p \"PROMPT\"' for CI, 'lemon daemon' to start a service, or 'lemon --help'."
   exit 2
 fi
-if [ -z "$COMMAND" ] && [ -t 0 ] && [ -t 1 ]; then
-  # Tern's --typed wrapper recognizes built-ins, not custom ACP agents.
-  # Use the registered Lemon id directly; explicit `lemon tui` stays terminal.
-  if [ -n "${TERN_PANE:-}" ]; then
-    tern_bin="${TERN_ACP:-}"
-    [ -n "$tern_bin" ] || tern_bin="$(command -v tern || true)"
-    if [ -n "$tern_bin" ]; then
-      status=0
-      "$tern_bin" acp lemon || status=$?
-      [ "$status" = 2 ] || exit "$status"
-      warn "Lemon ACP is not registered in Tern; opening the TUI. Run 'lemon tern install' to enable native chat."
-    fi
-  fi
+if [ -z "$COMMAND" ]; then
   COMMAND="tui"
   set -- tui
 fi

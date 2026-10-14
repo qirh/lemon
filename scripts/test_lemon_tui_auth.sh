@@ -41,6 +41,15 @@ file_mode() {
   fi
 }
 
+# Bare `lemon` only opens the TUI on a terminal, so run it under a PTY.
+run_in_tty() {
+  if script --version 2>/dev/null | grep -qi 'util-linux'; then
+    script -q -e -c "$(printf '%q ' "$@")" /dev/null
+  else
+    script -q /dev/null "$@"
+  fi
+}
+
 cat > "$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 if [[ -f "$LEMON_TUI_TEST_HEALTH" ]]; then
@@ -100,7 +109,12 @@ cat > "$FAKE_BIN/security" <<'EOF'
 exit 1
 EOF
 
-chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/bun" "$FAKE_BIN/mix" "$FAKE_BIN/elixir" "$FAKE_BIN/security" "$TEST_DIR/runtime-launcher"
+cat > "$FAKE_BIN/tern" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$LEMON_TUI_TEST_TERN_ARGS"
+EOF
+
+chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/bun" "$FAKE_BIN/mix" "$FAKE_BIN/elixir" "$FAKE_BIN/security" "$FAKE_BIN/tern" "$TEST_DIR/runtime-launcher"
 
 export PATH="$FAKE_BIN:$PATH"
 export HOME="$TEST_DIR/home"
@@ -120,6 +134,8 @@ unset LEMON_CONTROL_PLANE_OPERATOR_TOKEN
 unset LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK
 unset LEMON_RUNTIME_PID_FILE
 unset LEMON_WS_TOKEN
+unset TERN_ACP TERN_PANE
+export LEMON_TUI_TEST_TERN_ARGS="$TEST_DIR/tern-args"
 
 bootstrap_output="$TEST_DIR/bootstrap-output"
 "$ROOT/bin/lemon-tui" --test-argument > "$bootstrap_output" 2>&1
@@ -188,6 +204,12 @@ assert_token_absent "$managed_token" "$TEST_DIR/managed-attach-output"
 # unsafe credential file before launching a client.
 "$ROOT/bin/lemon" tui > "$TEST_DIR/source-tui-output" 2>&1
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
+
+# In a Tern pane, bare `lemon` opens the same TUI; it never redirects to `tern acp`.
+rm -f "$LEMON_TUI_TEST_CLIENT_TOKEN"
+run_in_tty env TERN_PANE=test-pane "$ROOT/bin/lemon" < /dev/null > "$TEST_DIR/source-tern-output" 2>&1
+[[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
+[[ ! -e "$LEMON_TUI_TEST_TERN_ARGS" ]]
 chmod 644 "$managed_token_file"
 rm -f "$LEMON_TUI_TEST_CLIENT_TOKEN"
 if "$ROOT/bin/lemon" tui > "$TEST_DIR/source-unsafe-output" 2>&1; then
@@ -299,6 +321,11 @@ fi
 
 [[ "$(<"$package_client_token")" == "$package_token" ]]
 assert_token_absent "$package_token" "$TEST_DIR/package-attach-output"
+
+rm -f "$package_client_token"
+run_in_tty env TERN_PANE=test-pane "$release_root/bin/lemon" < /dev/null > "$TEST_DIR/package-tern-output" 2>&1
+[[ "$(<"$package_client_token")" == "$package_token" ]]
+[[ ! -e "$LEMON_TUI_TEST_TERN_ARGS" ]]
 
 chmod 644 "$package_token_file"
 rm -f "$package_client_token"

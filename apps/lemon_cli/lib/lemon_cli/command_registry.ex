@@ -72,9 +72,11 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "tern",
-      summary: "Register Lemon as a native Tern ACP agent",
+      summary: "Install Lemon's Tern palette plugin and ACP agent",
       usage: "lemon tern install [--config-dir PATH]",
-      subcommands: [%{name: "install", summary: "Merge Lemon into Tern's custom agents"}],
+      subcommands: [
+        %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
+      ],
       options: [
         option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
       ]
@@ -108,9 +110,11 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "tern",
-      summary: "Register Lemon as a native Tern ACP agent",
+      summary: "Install Lemon's Tern palette plugin and ACP agent",
       usage: "lemon tern install [--config-dir PATH]",
-      subcommands: [%{name: "install", summary: "Merge Lemon into Tern's custom agents"}],
+      subcommands: [
+        %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
+      ],
       options: [
         option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
       ]

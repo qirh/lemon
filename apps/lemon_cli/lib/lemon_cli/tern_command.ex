@@ -17,7 +17,7 @@ defmodule LemonCli.TernCommand do
            {:ok, launcher} <- launcher(),
            :ok <- install(directory, launcher) do
         IO.puts(
-          "Installed Lemon's Tern plugin and ACP agent. Run `tern plugin reload` (or restart Tern), then choose `Lemon: New session in split` in the palette. ACP remains available with `tern acp lemon`."
+          "Installed Lemon's Tern plugin and ACP agent. Run `tern plugin reload` (or restart Tern), then type `lemon` in a Tern pane or choose `Lemon: New session in split` in the palette. For Tern's native ACP chat, run `tern acp lemon`."
         )
 
         0
@@ -68,7 +68,9 @@ defmodule LemonCli.TernCommand do
   end
 
   defp register(settings, launcher) do
-    # Keep the shell-launched TUI distinct from the separately registered ACP agent.
+    # The shell-launched TUI stays distinct from this ACP agent (`tern acp lemon`).
+    # Tern's `auto_acp` shell wrapping only affects its built-in agent CLIs, so it
+    # is the user's preference and is left untouched.
     agents = Map.get(settings, "agents", %{})
     custom = if is_map(agents), do: Map.get(agents, "custom", []), else: nil
 
@@ -83,12 +85,7 @@ defmodule LemonCli.TernCommand do
 
       custom = Enum.reject(custom, &(&1["id"] == "lemon")) ++ [lemon]
 
-      {:ok,
-       Map.put(
-         settings,
-         "agents",
-         agents |> Map.put("custom", custom) |> Map.put("auto_acp", true)
-       )}
+      {:ok, Map.put(settings, "agents", Map.put(agents, "custom", custom))}
     else
       {:error, "Tern agents.custom must be an array; settings were not changed."}
     end
