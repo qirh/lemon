@@ -202,7 +202,8 @@ defmodule LemonWeb.ShellLive do
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
 
-  defp set_panel(socket, true), do: assign(socket, panel_open: true, unread: 0)
+  # The panel lists everything the toasts show (and they overlap on mobile).
+  defp set_panel(socket, true), do: assign(socket, panel_open: true, unread: 0, toasts: [])
   defp set_panel(socket, false), do: assign(socket, panel_open: false)
 
   # ── Async palette sources ───────────────────────────────────────────────
@@ -791,13 +792,13 @@ defmodule LemonWeb.ShellLive do
         :if={@shortcuts_open}
         id="shortcuts-dialog"
         show
-        size="lg"
+        size="xl"
         title="Keyboard shortcuts"
         description="Shortcuts never fire while you type, except where noted."
         on_cancel={JS.push("shortcuts:close")}
       >
-        <div class="grid gap-x-8 gap-y-5 sm:grid-cols-2">
-          <section :for={{group, entries} <- @shortcuts} aria-label={group}>
+        <div class="gap-8 sm:columns-2 lg:columns-3">
+          <section :for={{group, entries} <- @shortcuts} aria-label={group} class="mb-5 break-inside-avoid">
             <h3 class="mb-1.5 text-2xs font-semibold uppercase tracking-wider text-subtle">{group}</h3>
             <dl class="divide-y divide-line">
               <div :for={entry <- entries} class="flex items-center justify-between gap-3 py-1.5 text-[13px]">

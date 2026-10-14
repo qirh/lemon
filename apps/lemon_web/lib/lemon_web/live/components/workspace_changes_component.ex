@@ -338,6 +338,7 @@ defmodule LemonWeb.WorkspaceChangesComponent do
               <span class="min-w-0 flex-1 truncate font-mono text-xs">
                 <span class="text-subtle">{dirname(file["path"])}</span><span class="text-fg">{basename(file["path"])}</span>
               </span>
+              <span :if={file["staged"]} class="shrink-0 text-2xs text-subtle">staged</span>
               <span :if={file["binary"]} class="shrink-0 text-2xs text-subtle">binary</span>
               <span class="shrink-0 text-2xs">
                 <.counts additions={file["additions"]} deletions={file["deletions"]} />
@@ -358,7 +359,7 @@ defmodule LemonWeb.WorkspaceChangesComponent do
   defp counts(assigns) do
     ~H"""
     <span class="inline-flex items-center gap-1.5 font-mono tabular-nums">
-      <span :if={is_integer(@additions)} class="text-success">+{@additions}</span>
+      <span :if={is_integer(@additions) and @additions > 0} class="text-success">+{@additions}</span>
       <span :if={is_integer(@deletions) and @deletions > 0} class="text-danger">−{@deletions}</span>
     </span>
     """
@@ -405,20 +406,27 @@ defmodule LemonWeb.WorkspaceChangesComponent do
         </div>
         <div id={"#{@id}-diff"} class="overflow-x-auto border-t border-line code-surface font-mono text-xs leading-5">
           <%= if @view == "split" do %>
-            <table class="w-full min-w-max border-collapse" aria-label="Side-by-side diff">
+            <%!-- Both sides always visible: fixed columns, long lines wrap. --%>
+            <table class="w-full table-fixed border-collapse" aria-label="Side-by-side diff">
+              <colgroup>
+                <col class="w-9" />
+                <col />
+                <col class="w-9" />
+                <col />
+              </colgroup>
               <tbody>
                 <%= for row <- split_rows(diff["lines"]) do %>
                   <%= case row do %>
                     <% {:full, line} -> %>
                       <tr class={line_class(line.type)}>
-                        <td colspan="4" class="whitespace-pre px-2">{line.text}</td>
+                        <td colspan="4" class="whitespace-pre-wrap break-all px-2">{line.text}</td>
                       </tr>
                     <% {left, right} -> %>
                       <tr>
-                        <td class={["w-10 select-none px-2 text-right text-subtle", left && line_class(left.type)]}>{left && left.old}</td>
-                        <td class={["w-1/2 whitespace-pre border-r border-line pr-3", left && line_class(left.type)]}>{left && marker(left.type)}{left && left.text}</td>
-                        <td class={["w-10 select-none px-2 text-right text-subtle", right && line_class(right.type)]}>{right && right.new}</td>
-                        <td class={["w-1/2 whitespace-pre pr-3", right && line_class(right.type)]}>{right && marker(right.type)}{right && right.text}</td>
+                        <td class={["select-none px-1.5 text-right align-top text-subtle", left && line_class(left.type)]}>{left && left.old}</td>
+                        <td class={["whitespace-pre-wrap break-all border-r border-line pr-2 align-top", left && line_class(left.type)]}>{left && marker(left.type)}{left && left.text}</td>
+                        <td class={["select-none px-1.5 text-right align-top text-subtle", right && line_class(right.type)]}>{right && right.new}</td>
+                        <td class={["whitespace-pre-wrap break-all pr-2 align-top", right && line_class(right.type)]}>{right && marker(right.type)}{right && right.text}</td>
                       </tr>
                   <% end %>
                 <% end %>

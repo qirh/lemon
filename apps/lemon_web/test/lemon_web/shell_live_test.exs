@@ -456,7 +456,9 @@ defmodule LemonWeb.ShellLiveTest do
 
       render(view)
       html = render_click(view, "panel:open", %{})
-      assert length(Regex.scan(~r/Approval needed: bash/, html)) == 20 + 3
+      # 20 history rows; opening the panel dismisses the (3) toasts.
+      assert length(Regex.scan(~r/Approval needed: bash/, html)) == 20
+      refute has_element?(view, "#shell-toasts [id^=toast-]")
     end
   end
 

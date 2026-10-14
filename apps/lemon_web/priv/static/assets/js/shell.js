@@ -67,8 +67,8 @@ export const Shell = {
     listen(document.body, "lemon:palette", () => (this.isOpen() ? this.closePalette(true) : this.openPalette()))
     listen(document.body, "lemon:shortcuts", () => this.openShortcuts())
     listen(document.body, "lemon:notifications", () => this.pushEvent("panel:open", {}))
-    listen(document.body, "lemon:notify-prefs-changed", (event) => this.pushEvent("notify:prefs", {prefs: event.detail || notifyPrefs()}))
-    listen(window, "storage", (event) => event.key === NOTIFY_KEY && this.pushEvent("notify:prefs", {prefs: notifyPrefs()}))
+    listen(document.body, "lemon:notify-prefs-changed", (event) => this.push("notify:prefs", {prefs: event.detail || notifyPrefs()}))
+    listen(window, "storage", (event) => event.key === NOTIFY_KEY && this.push("notify:prefs", {prefs: notifyPrefs()}))
 
     const report = () => this.reportLocation()
     listen(window, "phx:navigate", () => setTimeout(report, 0))
@@ -88,18 +88,35 @@ export const Shell = {
       document.body.dispatchEvent(new CustomEvent("lemon:notify-prefs-changed", {detail: notifyPrefs()}))
     })
 
-    this.pushEvent("notify:init", {prefs: notifyPrefs(), permission: permission()})
-    this.reportLocation()
+    this.sync()
+  },
+
+  // A rejoin remounts the server view with fresh state: resend client state.
+  reconnected() {
+    this.sync()
   },
 
   destroyed() {
     for (const cleanup of this.cleanups || []) cleanup()
   },
 
+  sync() {
+    this.push("notify:init", {prefs: notifyPrefs(), permission: permission()})
+    this.reportLocation()
+  },
+
+  // Background reports (navigation, visibility, other tabs) may fire while the
+  // socket is down; they are resent by `reconnected`, so drop them quietly.
+  push(event, payload) {
+    try {
+      this.pushEvent(event, payload)
+    } catch (_) {}
+  },
+
   // ── Location ──────────────────────────────────────────────────────────
 
   reportLocation() {
-    this.pushEvent("location", {path: currentPath(), visible: !document.hidden})
+    this.push("location", {path: currentPath(), visible: !document.hidden})
   },
 
   navigate(href) {
@@ -129,7 +146,12 @@ export const Shell = {
     this.js().show(palette, {display: "block"})
     const input = this.input()
     input.value = ""
-    input.focus()
+    // JS.show applies on the next animation frame; focus once it is visible.
+    const focus = (tries) => {
+      input.focus()
+      if (document.activeElement !== input && tries > 0) requestAnimationFrame(() => focus(tries - 1))
+    }
+    focus(10)
     this.pushEvent("palette:open", {
       recent: readJSON(RECENT_KEY, []),
       chat: !!document.querySelector("[data-chat-workspace]"),
