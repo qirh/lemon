@@ -372,7 +372,7 @@ defmodule LemonWeb.Chat.Tool do
 
   def search_truncated?(tool), do: f(tool.details, :truncated) == true
 
-  @doc "Todo cards: `[%{content, status}]` and progress counts."
+  @doc "Checklist entries (`[%{content, status}]`) and progress counts for todo cards."
   def todos(tool) do
     list =
       Enum.find_value(

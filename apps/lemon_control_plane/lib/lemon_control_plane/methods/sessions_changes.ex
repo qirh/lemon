@@ -175,35 +175,36 @@ defmodule LemonControlPlane.Methods.SessionsChanges do
   # ── Status ─────────────────────────────────────────────────────────────
 
   defp status_response(git, cwd, key, repo) do
-    with {:ok, %{branch: branch, entries: entries, truncated: truncated}} <-
-           status(git, cwd, repo) do
-      counts = numstat(git, cwd, repo)
-      total = length(entries)
-      shown = Enum.take(entries, @max_files)
+    case status(git, cwd, repo) do
+      {:ok, %{branch: branch, entries: entries, truncated: truncated}} ->
+        counts = numstat(git, cwd, repo)
+        total = length(entries)
+        shown = Enum.take(entries, @max_files)
 
-      files =
-        shown
-        |> Enum.with_index()
-        |> Enum.map(fn {entry, index} -> file_entry(entry, counts, cwd, index) end)
+        files =
+          shown
+          |> Enum.with_index()
+          |> Enum.map(fn {entry, index} -> file_entry(entry, counts, cwd, index) end)
 
-      {:ok,
-       %{
-         "sessionKey" => key,
-         "repository" => true,
-         "state" => "ok",
-         "branch" => branch,
-         "files" => files,
-         "totals" => %{
-           "files" => total,
-           "additions" => sum(files, "additions"),
-           "deletions" => sum(files, "deletions")
-         },
-         "truncated" => truncated or total > @max_files,
-         "limit" => @max_files,
-         "measuredAt" => System.system_time(:millisecond)
-       }}
-    else
-      {:error, reason} -> failure(reason)
+        {:ok,
+         %{
+           "sessionKey" => key,
+           "repository" => true,
+           "state" => "ok",
+           "branch" => branch,
+           "files" => files,
+           "totals" => %{
+             "files" => total,
+             "additions" => sum(files, "additions"),
+             "deletions" => sum(files, "deletions")
+           },
+           "truncated" => truncated or total > @max_files,
+           "limit" => @max_files,
+           "measuredAt" => System.system_time(:millisecond)
+         }}
+
+      {:error, reason} ->
+        failure(reason)
     end
   end
 
