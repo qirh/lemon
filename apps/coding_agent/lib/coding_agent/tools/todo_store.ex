@@ -26,6 +26,14 @@ defmodule CodingAgent.Tools.TodoStore do
 
   Uses an ETS table `:coding_agent_todos` with `read_concurrency: true`
   for efficient concurrent access.
+
+  The model-facing tools retain this session-scoped store and checkpoint
+  persistence. `put/2` is the low-level API and preserves its supplied entries;
+  model writes validate and assign IDs in `TodoWrite` before storing.
+  `result_details/1` projects a complete snapshot to string-keyed `todos` and an
+  ordered `plan.entries` list of atom-keyed maps with string content/status/priority.
+  The plan supports pending, in_progress and completed; an internally blocked
+  todo remains blocked in `todos` but projects as pending in the plan.
   """
 
   @table :coding_agent_todos
@@ -91,6 +99,37 @@ defmodule CodingAgent.Tools.TodoStore do
     ensure_table()
     :ets.insert(@table, {session_id, todos})
     :ok
+  end
+
+  @doc """
+  Returns complete normalized todo state and its ACP/TUI plan projection.
+
+  Pass the entire stored list, not a filtered actionable subset. Extra todo
+  fields (including dependencies) are retained; plan entries contain only
+  content, status and priority and never omit completed tasks.
+  """
+  @spec result_details(list(map())) :: %{todos: list(map()), plan: %{entries: list(map())}}
+  def result_details(todos) do
+    todos =
+      Enum.map(todos, fn todo ->
+        todo
+        |> Map.new(fn {key, value} ->
+          {if(is_atom(key), do: Atom.to_string(key), else: key), value}
+        end)
+        |> Map.put("status", Atom.to_string(todo_status(todo)))
+        |> Map.put("priority", Atom.to_string(todo_priority(todo)))
+      end)
+
+    entries =
+      Enum.map(todos, fn todo ->
+        %{
+          content: Map.get(todo, "content", ""),
+          status: if(todo["status"] == "blocked", do: "pending", else: todo["status"]),
+          priority: todo["priority"]
+        }
+      end)
+
+    %{todos: todos, plan: %{entries: entries}}
   end
 
   @doc """

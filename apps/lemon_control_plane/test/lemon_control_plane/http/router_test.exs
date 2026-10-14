@@ -6,12 +6,24 @@ defmodule LemonControlPlane.HTTP.RouterTest do
 
   alias LemonControlPlane.HTTP.Router
 
+  @available_model %LemonAi.Types.Model{
+    provider: :openai,
+    id: "fixture-account-model",
+    name: "Available account model",
+    context_window: 64_000,
+    max_tokens: 4_096,
+    reasoning: true,
+    input: [:text, :image]
+  }
+
   setup do
     previous = Application.get_env(:lemon_control_plane, :openai_compat_submitter)
     previous_waiter = Application.get_env(:lemon_control_plane, :openai_compat_waiter)
     previous_run_getter = Application.get_env(:lemon_control_plane, :openai_compat_run_getter)
     previous_canceller = Application.get_env(:lemon_control_plane, :openai_compat_canceller)
     previous_token = Application.get_env(:lemon_control_plane, :openai_compat_api_token)
+    previous_catalog = Application.fetch_env(:lemon_control_plane, :model_catalog)
+    Application.put_env(:lemon_control_plane, :model_catalog, fn _opts -> [@available_model] end)
 
     previous_image_url_fetch =
       Application.fetch_env(:lemon_control_plane, :openai_compat_image_url_fetch)
@@ -56,6 +68,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       restore_env(:openai_compat_image_url_fetch, previous_image_url_fetch)
       restore_env(:openai_compat_image_url_allowed_hosts, previous_image_url_allowed_hosts)
       restore_env(:openai_compat_image_url_fetcher, previous_image_url_fetcher)
+      restore_env(:model_catalog, previous_catalog)
     end)
 
     :ok
@@ -104,6 +117,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
     assert response.body["object"] == "list"
     assert is_list(response.body["data"])
     assert Enum.any?(response.body["data"], &(&1["object"] == "model"))
+    assert Enum.map(response.body["data"], & &1["id"]) == [@available_model.id]
     assert Enum.all?(response.body["data"], &Map.has_key?(&1, "lemon"))
     assert Enum.all?(response.body["data"], &is_boolean(&1["lemon"]["supportsVision"]))
   end
@@ -115,7 +129,8 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       |> Router.call([])
       |> json_response()
 
-    model_id = list.body["data"] |> List.first() |> Map.fetch!("id")
+    model_id = @available_model.id
+    assert Enum.map(list.body["data"], & &1["id"]) == [model_id]
 
     response =
       :get
@@ -396,7 +411,7 @@ defmodule LemonControlPlane.HTTP.RouterTest do
       send(parent, {:submitted_stream, request})
 
       spawn(fn ->
-        Process.sleep(25)
+        await_bus_subscriber(parent, "run_chat_stream_123")
         broadcast_tool_progress("run_chat_stream_123", "exec", "completed")
         broadcast_delta("run_chat_stream_123", "hello ")
         broadcast_delta("run_chat_stream_123", "world")
@@ -456,17 +471,24 @@ defmodule LemonControlPlane.HTTP.RouterTest do
   end
 
   test "chat completion streams use an absolute timeout across deltas" do
-    Application.put_env(:lemon_control_plane, :openai_compat_submitter, fn _request ->
-      spawn(fn ->
-        Process.sleep(10)
-        broadcast_delta("run_chat_stream_timeout_123", "still ")
-        Process.sleep(15)
-        broadcast_delta("run_chat_stream_timeout_123", "working ")
-        Process.sleep(15)
-        broadcast_delta("run_chat_stream_timeout_123", "late")
-      end)
+    parent = self()
+    run_id = "run_chat_stream_timeout_123"
 
-      {:ok, "run_chat_stream_timeout_123"}
+    # Keeps a delta arriving well inside the idle window for far longer than the stream timeout,
+    # so only an absolute deadline can end the response while the producer is still active.
+    producer_duration_ms = 5_000
+
+    Application.put_env(:lemon_control_plane, :openai_compat_submitter, fn _request ->
+      producer =
+        spawn(fn ->
+          await_bus_subscriber(parent, run_id)
+          broadcast_delta(run_id, "still ")
+          deadline = System.monotonic_time(:millisecond) + producer_duration_ms
+          stream_deltas_until(run_id, deadline)
+        end)
+
+      send(parent, {:producer, producer})
+      {:ok, run_id}
     end)
 
     response =
@@ -475,14 +497,17 @@ defmodule LemonControlPlane.HTTP.RouterTest do
         "model" => "zai:glm-5-turbo",
         "messages" => [%{"role" => "user", "content" => "hello"}],
         "stream" => true,
-        "stream_timeout_ms" => 30
+        "stream_timeout_ms" => 300
       })
       |> Router.call([])
+
+    assert_receive {:producer, producer}
+    assert Process.alive?(producer), "stream ended only after the producer stopped sending"
+    Process.exit(producer, :kill)
 
     assert response.status == 200
     assert response.resp_body =~ "still "
     assert response.resp_body =~ "stream timed out"
-    refute response.resp_body =~ "late"
   end
 
   test "chat completions can wait for a completed Lemon run" do
@@ -711,9 +736,11 @@ defmodule LemonControlPlane.HTTP.RouterTest do
   end
 
   test "responses endpoint can stream output text as SSE" do
+    parent = self()
+
     Application.put_env(:lemon_control_plane, :openai_compat_submitter, fn _request ->
       spawn(fn ->
-        Process.sleep(25)
+        await_bus_subscriber(parent, "run_response_stream_123")
         broadcast_tool_progress("run_response_stream_123", "patch", "started")
         broadcast_delta("run_response_stream_123", "stream ")
         broadcast_delta("run_response_stream_123", "done")
@@ -983,6 +1010,37 @@ defmodule LemonControlPlane.HTTP.RouterTest do
 
   defp restore_env(key, {:ok, value}), do: Application.put_env(:lemon_control_plane, key, value)
   defp restore_env(key, :error), do: Application.delete_env(:lemon_control_plane, key)
+
+  # The streaming router subscribes to the run topic only after the submitter returns, so a
+  # producer spawned by the submitter must wait for that subscription instead of guessing a delay.
+  defp await_bus_subscriber(subscriber, run_id, deadline_ms \\ 5_000) do
+    registry = if LemonCore.Bus.pubsub?(), do: LemonCore.PubSub, else: LemonCore.Bus.Registry
+    topic = LemonCore.Bus.run_topic(run_id)
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+    do_await_bus_subscriber(registry, topic, subscriber, deadline)
+  end
+
+  defp do_await_bus_subscriber(registry, topic, subscriber, deadline) do
+    cond do
+      Enum.any?(Registry.lookup(registry, topic), fn {pid, _} -> pid == subscriber end) ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        :timeout
+
+      true ->
+        Process.sleep(5)
+        do_await_bus_subscriber(registry, topic, subscriber, deadline)
+    end
+  end
+
+  defp stream_deltas_until(run_id, deadline) do
+    if System.monotonic_time(:millisecond) < deadline do
+      broadcast_delta(run_id, "working ")
+      Process.sleep(20)
+      stream_deltas_until(run_id, deadline)
+    end
+  end
 
   defp broadcast_delta(run_id, text) do
     LemonCore.Bus.broadcast(

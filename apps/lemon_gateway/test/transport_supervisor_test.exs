@@ -16,6 +16,7 @@ defmodule LemonGateway.TransportSupervisorTest do
   - Generic transport handling
   """
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
 
   alias Elixir.LemonGateway.TransportRegistry
   alias Elixir.LemonGateway.TransportSupervisor
@@ -256,6 +257,19 @@ defmodule LemonGateway.TransportSupervisorTest do
     :ok
   end
 
+  # Blocks until the supervisor has restarted `name` under a new pid and returns it.
+  defp await_restart(name, old_pid) do
+    assert_eventually(
+      fn ->
+        pid = Process.whereis(name)
+        is_pid(pid) and pid != old_pid
+      end,
+      message: "expected #{inspect(name)} to be restarted"
+    )
+
+    Process.whereis(name)
+  end
+
   # ============================================================================
   # 1. Supervisor Startup and Initialization
   # ============================================================================
@@ -397,11 +411,8 @@ defmodule LemonGateway.TransportSupervisorTest do
       # Wait for DOWN
       assert_receive {:DOWN, ^ref, :process, ^pid1, :killed}, 2000
 
-      # Wait for restart
-      Process.sleep(100)
-
-      # Should be restarted with new pid
-      pid2 = Process.whereis(MockTransportA)
+      # Wait for restart; should be restarted with new pid
+      pid2 = await_restart(MockTransportA, pid1)
       assert is_pid(pid2)
       assert pid2 != pid1
       assert Process.alive?(pid2)
@@ -416,7 +427,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       # Kill the transport
       Process.exit(transport_pid, :kill)
 
-      Process.sleep(100)
+      await_restart(MockTransportA, transport_pid)
 
       # Supervisor should still be the same process
       assert Process.whereis(TransportSupervisor) == supervisor_pid
@@ -433,10 +444,8 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       # Kill the transport
       Process.exit(pid1, :kill)
-      Process.sleep(100)
-
       # Should be restarted and respond to calls
-      pid2 = Process.whereis(MockTransportA)
+      pid2 = await_restart(MockTransportA, pid1)
       assert GenServer.call(pid2, :ping) == :pong
     end
   end
@@ -454,7 +463,7 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       # Kill transport A
       Process.exit(pid_a, :kill)
-      Process.sleep(100)
+      await_restart(MockTransportA, pid_a)
 
       # Transport B should still be the same process and alive
       assert Process.whereis(MockTransportB) == pid_b
@@ -471,7 +480,8 @@ defmodule LemonGateway.TransportSupervisorTest do
       # Kill A and B
       Process.exit(pid_a, :kill)
       Process.exit(pid_b, :kill)
-      Process.sleep(100)
+      await_restart(MockTransportA, pid_a)
+      await_restart(MockTransportB, pid_b)
 
       # C should be unchanged
       assert Process.whereis(MockTransportC) == pid_c
@@ -537,8 +547,7 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 2000
 
-      Process.sleep(50)
-      assert Process.whereis(MockTransportA) == nil
+      assert_eventually(fn -> Process.whereis(MockTransportA) == nil end)
     end
   end
 
@@ -733,9 +742,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       for _ <- 1..10 do
         pid = Process.whereis(MockTransportA)
         Process.exit(pid, :kill)
-        Process.sleep(50)
-
-        new_pid = Process.whereis(MockTransportA)
+        new_pid = await_restart(MockTransportA, pid)
         assert is_pid(new_pid)
         assert Process.alive?(new_pid)
       end
@@ -760,32 +767,6 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       results = Task.await_many(tasks, 10_000)
       assert Enum.all?(results, &(&1 in [:pong, :no_process]))
-    end
-  end
-
-  # ============================================================================
-  # 15. Module Interface Verification
-  # ============================================================================
-
-  describe "module interface verification" do
-    test "start_link/1 exists and works" do
-      # `function_exported?/3` does not auto-load modules.
-      assert Code.ensure_loaded?(TransportSupervisor)
-      assert function_exported?(TransportSupervisor, :start_link, 1)
-
-      setup_app([MockTransportA])
-      assert Process.alive?(Process.whereis(TransportSupervisor))
-    end
-
-    test "implements Supervisor callbacks" do
-      setup_app([MockTransportA])
-
-      # init/1 callback works (verified by supervisor being alive)
-      assert Process.alive?(Process.whereis(TransportSupervisor))
-
-      # Standard Supervisor functions work
-      children = Supervisor.which_children(TransportSupervisor)
-      assert is_list(children)
     end
   end
 
@@ -823,7 +804,6 @@ defmodule LemonGateway.TransportSupervisorTest do
 
       # Terminate
       Supervisor.terminate_child(TransportSupervisor, child_id)
-      Process.sleep(50)
 
       # Restart
       {:ok, new_pid} = Supervisor.restart_child(TransportSupervisor, child_id)
@@ -871,7 +851,7 @@ defmodule LemonGateway.TransportSupervisorTest do
       for _ <- 1..3 do
         pid = Process.whereis(MockTransportA)
         Process.exit(pid, :kill)
-        Process.sleep(100)
+        await_restart(MockTransportA, pid)
       end
 
       # Supervisor should still be running

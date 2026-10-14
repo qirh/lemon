@@ -166,6 +166,8 @@ defmodule LemonGateway.ConfigLoader do
       bot_id: fetch(telegram, :bot_id),
       bot_username: fetch(telegram, :bot_username),
       allowed_chat_ids: fetch(telegram, :allowed_chat_ids),
+      # Explicit opt-out of fail-closed pairing: accept every chat when no allowlist is set.
+      allow_all_chats: fetch(telegram, :allow_all_chats),
       deny_unbound_chats: fetch(telegram, :deny_unbound_chats),
       # When set (string) or enabled (true), send a startup message to bound chats on boot.
       startup_message: fetch(telegram, :startup_message),

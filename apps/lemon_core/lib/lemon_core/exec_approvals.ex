@@ -45,9 +45,9 @@ defmodule LemonCore.ExecApprovals do
   - `:rationale` - Optional rationale for the request
   - `:expires_in_ms` - Timeout in milliseconds (default: no timeout)
   - `:approval_id` - Optional caller-allocated approval id. Callers that may
-  have to cancel the prompt before it resolves (execute_code dispatches,
-  which can be killed while waiting) allocate the id up front so they can
-  name it to `cancel/2` with no registration race.
+  have to cancel the prompt before it resolves (for example, a dispatch that
+  can be killed while waiting) allocate the id up front so they can name it to
+  `cancel/2` with no registration race.
 
   ## Returns
   - `{:ok, :approved, scope}` - Approved at the given scope
@@ -61,7 +61,7 @@ defmodule LemonCore.ExecApprovals do
   @spec request(map()) ::
           {:ok, :approved, scope :: atom()}
           | {:ok, :denied}
-          | {:error, :timeout}
+          | {:error, atom()}
   def request(params) when is_map(params) do
     run_id = params[:run_id]
     session_id = params[:session_id]
@@ -103,54 +103,60 @@ defmodule LemonCore.ExecApprovals do
             session_key: session_key,
             agent_id: agent_id,
             tool: tool,
+            tool_call_id: params[:tool_call_id],
             action: action,
             rationale: rationale,
             requested_at_ms: LemonCore.Clock.now_ms(),
             expires_at_ms: expires_at_ms
           })
 
-        ExecApprovalStore.put_pending(approval_id, pending)
-
-        LemonCore.Telemetry.approval_requested(approval_id, tool, %{
-          run_id: run_id,
-          session_id: session_id,
-          session_key: session_key,
-          agent_id: agent_id
-        })
-
-        record_approval_event(:approval_requested, pending, %{
-          approval_id: approval_id,
-          tool: tool,
-          action_type: action_type(action),
-          action_hash: hash_action(action),
-          rationale_present?: is_binary(rationale) and rationale != "",
-          expires_at_ms: expires_at_ms
-        })
-
-        LemonCore.Bus.broadcast(
-          "exec_approvals",
-          LemonCore.Event.new(
-            :approval_requested,
-            ApprovalRequested.new(%{approval_id: approval_id, pending: pending}),
-            %{
+        case ExecApprovalStore.put_pending_new(approval_id, pending) do
+          :ok ->
+            LemonCore.Telemetry.approval_requested(approval_id, tool, %{
               run_id: run_id,
               session_id: session_id,
               session_key: session_key,
               agent_id: agent_id
-            }
-          )
-        )
+            })
 
-        wait_for_resolution(approval_id, expires_in_ms)
+            record_approval_event(:approval_requested, pending, %{
+              approval_id: approval_id,
+              tool: tool,
+              action_type: action_type(action),
+              action_hash: hash_action(action),
+              rationale_present?: is_binary(rationale) and rationale != "",
+              expires_at_ms: expires_at_ms
+            })
+
+            LemonCore.Bus.broadcast(
+              "exec_approvals",
+              LemonCore.Event.new(
+                :approval_requested,
+                ApprovalRequested.new(%{approval_id: approval_id, pending: pending}),
+                %{
+                  run_id: run_id,
+                  session_id: session_id,
+                  session_key: session_key,
+                  agent_id: agent_id
+                }
+              )
+            )
+
+            wait_for_resolution(approval_id, expires_in_ms)
+
+          {:error, reason} ->
+            LemonCore.Bus.unsubscribe("exec_approvals")
+            {:error, if(reason == :exists, do: :already_pending, else: :store_unavailable)}
+        end
     end
   end
 
   @doc """
   Cancel a pending approval that will never be decided by a user.
 
-  For owners of a blocking `request/1` that can no longer wait — an
-  execute_code dispatch whose sweep was killed while an approval prompt was
-  pending. Removes the pending record (so the prompt disappears and a late
+  For owners of a blocking `request/1` that can no longer wait — for example,
+  a dispatch that was killed while an approval prompt was pending. Removes the
+  pending record (so the prompt disappears and a late
   `resolve/2` can no longer install policy at any scope), wakes a blocked
   waiter as denied, and records the cancellation distinctly from a user
   decision.
@@ -168,11 +174,14 @@ defmodule LemonCore.ExecApprovals do
     * `{:error, :not_pending}` — nothing was pending under `approval_id`
       (unknown, already resolved, or already cancelled); a no-op
   """
-  @spec cancel(approval_id(), binary() | nil) :: :ok | {:error, :not_pending}
+  @spec cancel(approval_id(), binary() | nil) :: :ok | {:error, :not_pending | :store_unavailable}
   def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
     case ExecApprovalStore.take_pending(approval_id) do
       nil ->
         {:error, :not_pending}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
 
       pending ->
         record_approval_event(:approval_cancelled, pending, %{
@@ -210,11 +219,11 @@ defmodule LemonCore.ExecApprovals do
   @doc """
   Resolve a pending approval request.
 
-  The transition is atomic (`ExecApprovalStore.take_pending/1`): `resolve/2`
-  and `cancel/2` racing on the same approval cannot both act. Only the winner
-  takes the pending record — and only then may policy be installed — while
-  the loser gets `{:error, :not_pending}` with no side effects, so a prompt
-  cancelled by its owner can never be approved afterwards.
+  Resolution validates the decision and expiry, then atomically removes the exact
+  pending snapshot. Pass `expected_pending: snapshot` when resolving a preview
+  shown earlier (ACP, TUI, or a channel); changed records fail with `:mismatch`.
+  `resolve/2` reads the current snapshot itself. Cancellation and resolution still
+  have exactly one winner. Store failures never acknowledge or grant approval.
 
   ## Parameters
 
@@ -229,52 +238,103 @@ defmodule LemonCore.ExecApprovals do
   ## Returns
 
     * `:ok` — this call took the pending record and resolved it
-    * `{:error, :not_pending}` — nothing was pending under `approval_id`
-      (unknown, already resolved, or cancelled)
+    * `{:error, reason}` — invalid decision, missing/changed/expired request, or
+      unavailable persistence. No approval is granted on failure.
   """
-  @spec resolve(approval_id(), decision :: atom()) :: :ok | {:error, :not_pending}
-  def resolve(approval_id, decision) when is_binary(approval_id) and is_atom(decision) do
-    case ExecApprovalStore.take_pending(approval_id) do
-      nil ->
+  @spec resolve(approval_id(), atom(), keyword()) :: :ok | {:error, atom()}
+  def resolve(approval_id, decision, opts \\ [])
+
+  def resolve(approval_id, decision, opts)
+      when is_binary(approval_id) and is_list(opts) and
+             decision in [:approve_once, :approve_session, :approve_agent, :approve_global, :deny] do
+    with {:ok, pending} <- resolution_snapshot(approval_id, opts),
+         {:ok, pending} <- ExecApprovalStore.take_pending(approval_id, pending) do
+      cond do
+        expired?(pending) ->
+          emit_approval_timeout(approval_id, pending)
+          {:error, :expired}
+
+        decision == :deny ->
+          emit_resolution(approval_id, pending, decision)
+
+        true ->
+          case store_approval(pending, decision) do
+            :ok ->
+              emit_resolution(approval_id, pending, decision)
+
+            _ ->
+              # The exact request was consumed, but policy was not confirmed.
+              # Wake its waiter as denied rather than allowing execution.
+              emit_resolution(approval_id, pending, :cancelled)
+              {:error, :store_unavailable}
+          end
+      end
+    end
+  end
+
+  def resolve(_, _, _), do: {:error, :invalid_decision}
+
+  defp resolution_snapshot(approval_id, opts) do
+    result =
+      case Keyword.fetch(opts, :expected_pending) do
+        {:ok, expected} -> {:ok, expected}
+        :error -> ExecApprovalStore.fetch_pending(approval_id)
+      end
+
+    case result do
+      {:ok,
+       %{id: ^approval_id, tool: tool, action: _, session_key: _, run_id: _, agent_id: _} =
+           pending}
+      when is_binary(tool) ->
+        {:ok, pending}
+
+      {:ok, nil} ->
         {:error, :not_pending}
 
-      pending ->
-        if decision != :deny do
-          store_approval(pending, decision)
-        end
+      {:ok, _} ->
+        {:error, :mismatch}
 
-        LemonCore.Telemetry.approval_resolved(approval_id, decision, %{
-          tool: pending.tool,
-          run_id: pending.run_id
-        })
-
-        record_approval_event(:approval_resolved, pending, %{
-          approval_id: approval_id,
-          tool: pending.tool,
-          decision: to_string(decision),
-          scope: decision_scope(decision),
-          approved?: decision != :deny
-        })
-
-        LemonCore.Bus.broadcast(
-          "exec_approvals",
-          LemonCore.Event.new(
-            :approval_resolved,
-            ApprovalResolved.new(%{
-              approval_id: approval_id,
-              decision: decision,
-              pending: pending
-            }),
-            %{
-              run_id: pending.run_id,
-              session_id: Map.get(pending, :session_id),
-              session_key: pending.session_key
-            }
-          )
-        )
-
-        :ok
+      {:error, _} ->
+        {:error, :store_unavailable}
     end
+  end
+
+  defp expired?(pending) do
+    case Map.get(pending, :expires_at_ms) do
+      nil -> false
+      expires when is_integer(expires) -> expires <= LemonCore.Clock.now_ms()
+      _ -> true
+    end
+  end
+
+  defp emit_resolution(approval_id, pending, decision) do
+    LemonCore.Telemetry.approval_resolved(approval_id, decision, %{
+      tool: pending.tool,
+      run_id: pending.run_id
+    })
+
+    record_approval_event(:approval_resolved, pending, %{
+      approval_id: approval_id,
+      tool: pending.tool,
+      decision: to_string(decision),
+      scope: decision_scope(decision),
+      approved?: decision not in [:deny, :cancelled]
+    })
+
+    LemonCore.Bus.broadcast(
+      "exec_approvals",
+      LemonCore.Event.new(
+        :approval_resolved,
+        ApprovalResolved.new(%{approval_id: approval_id, decision: decision, pending: pending}),
+        %{
+          run_id: pending.run_id,
+          session_id: Map.get(pending, :session_id),
+          session_key: pending.session_key
+        }
+      )
+    )
+
+    :ok
   end
 
   defp check_existing_approval(tool, action, session_key, agent_id, node_id) do
@@ -428,6 +488,9 @@ defmodule LemonCore.ExecApprovals do
           :cancelled ->
             {:ok, :denied}
 
+          :timeout ->
+            {:error, :timeout}
+
           scope
           when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
             {:ok, :approved, scope}
@@ -446,6 +509,9 @@ defmodule LemonCore.ExecApprovals do
         case ExecApprovalStore.take_pending(approval_id) do
           nil ->
             {:error, :timeout}
+
+          {:error, _} ->
+            {:error, :store_unavailable}
 
           pending ->
             # The take removed the record; emit the timeout side effects for

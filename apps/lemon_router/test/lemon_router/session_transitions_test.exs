@@ -57,6 +57,233 @@ defmodule LemonRouter.SessionTransitionsTest do
     end
   end
 
+  test "backlog bounds count pending steers and preserve full-queue replay" do
+    queued = for n <- 1..127, do: submission("queued-#{n}", "s1", :collect, "queued")
+    steer = submission("pending-steer", "s1", :steer, "correction")
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active", session_key: "s1"},
+      queue: queued,
+      pending_steers: %{"active" => [{steer, :followup}]}
+    }
+
+    assert {:error, :session_queue_full} =
+             SessionTransitions.submit(
+               state,
+               submission("overflow", "s1", :interrupt, "new"),
+               100
+             )
+
+    assert {:ok, ^state, [:noop]} =
+             SessionTransitions.submit(state, List.first(queued), 100)
+
+    assert {:ok, released, _} = SessionTransitions.abort_run(state, steer.run_id, :user_requested)
+
+    assert {:ok, _accepted, []} =
+             SessionTransitions.submit(released, submission("new", "s1", :collect, "new"), 100)
+  end
+
+  test "debounce cannot grow a merged prompt past the byte bound" do
+    previous = submission("previous", "s1", :followup, String.duplicate("a", 1_048_570))
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active", session_key: "s1"},
+      queue: [previous],
+      last_followup_at_ms: 100
+    }
+
+    assert {:error, :session_queue_full} =
+             SessionTransitions.submit(
+               state,
+               submission("overflow", "s1", :followup, "123456"),
+               200
+             )
+
+    assert state.queue == [previous]
+  end
+
+  test "encoded image budget counts typed and map data across queued and pending steers" do
+    chunk = :binary.copy("a", 4_194_304)
+
+    queued =
+      submission("queued-image", "s1", :collect, "",
+        images: [%LemonAi.Types.ImageContent{data: chunk <> chunk}]
+      )
+
+    pending =
+      submission("pending-image", "s1", :steer, "",
+        images: [%{data: chunk}, %{"data" => nil}, %{data: 123}, nil]
+      )
+
+    state = %SessionState{
+      conversation_key: {:session, "s1"},
+      active: %{run_id: "active", session_key: "s1"},
+      queue: [queued],
+      pending_steers: %{"active" => [{pending, :followup}]}
+    }
+
+    boundary =
+      submission("boundary-image", "s1", :steer, "", images: [%{"data" => chunk}])
+
+    assert {:ok, saturated, []} = SessionTransitions.submit(state, boundary, 100)
+
+    assert List.last(saturated.queue).execution_request.images ==
+             boundary.execution_request.images
+
+    assert saturated.pending_steers == state.pending_steers
+    assert length(saturated.queue) == 2
+
+    for mode <- [:collect, :followup, :steer, :steer_backlog, :redirect, :interrupt] do
+      overflow =
+        submission("overflow-#{mode}", "s1", mode, "",
+          images: [%LemonAi.Types.ImageContent{data: "a"}]
+        )
+
+      assert {:error, :session_queue_full} = SessionTransitions.submit(saturated, overflow, 200)
+    end
+
+    # Fixed-ID replay is an acknowledgement lookup even if its new payload alone
+    # would exceed the image budget.
+    oversized_replay =
+      submission("boundary-image", "s1", :interrupt, "",
+        images: [%{"data" => :binary.copy("a", 16_777_217)}]
+      )
+
+    assert {:ok, ^saturated, [:noop]} =
+             SessionTransitions.submit(saturated, oversized_replay, 200)
+
+    assert {:ok, released, [:noop]} =
+             SessionTransitions.steer_accepted(saturated, "pending-image")
+
+    assert {:ok, accepted, []} =
+             SessionTransitions.submit(
+               released,
+               submission("after-release", "s1", :collect, "",
+                 images: [%LemonAi.Types.ImageContent{data: "a"}]
+               ),
+               300
+             )
+
+    assert length(accepted.queue) == 3
+  end
+
+  test "a single over-budget image is rejected before idle start or active interruption" do
+    overflow =
+      submission("oversized", "s1", :interrupt, "",
+        images: [%LemonAi.Types.ImageContent{data: :binary.copy("a", 16_777_217)}]
+      )
+
+    for active <- [nil, %{run_id: "active", session_key: "s1"}] do
+      state = %SessionState{conversation_key: {:session, "s1"}, active: active}
+      assert {:error, :session_queue_full} = SessionTransitions.submit(state, overflow, 100)
+      assert state.queue == []
+      assert state.pending_steers == %{}
+    end
+  end
+
+  test "image followups never debounce away prompt association, attachments or fixed ids" do
+    image = %LemonAi.Types.ImageContent{
+      data:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+    }
+
+    images = List.duplicate(image, 5)
+
+    for {previous_images, current_images} <- [{images, []}, {[], images}, {images, images}] do
+      previous = submission("previous", "s1", :followup, "first", images: previous_images)
+      current = submission("current", "s1", :followup, "second", images: current_images)
+
+      state = %SessionState{
+        conversation_key: {:session, "s1"},
+        active: %{run_id: "active", session_key: "s1"},
+        queue: [previous],
+        last_followup_at_ms: 100
+      }
+
+      assert {:ok, next_state, []} = SessionTransitions.submit(state, current, 200)
+      assert [retained_previous, retained_current] = next_state.queue
+      assert retained_previous.run_id == previous.run_id
+      assert retained_previous.execution_request == previous.execution_request
+      assert retained_current.run_id == current.run_id
+      assert retained_current.execution_request.run_id == current.run_id
+      assert retained_current.execution_request.prompt == "second"
+      assert retained_current.execution_request.images == current_images
+
+      for retained <- [previous, current] do
+        assert {:ok, ^next_state, [:noop]} = SessionTransitions.submit(next_state, retained, 250)
+      end
+    end
+  end
+
+  test "image steering modes queue intact fallback runs and retain requested mode receipts" do
+    images = [%LemonAi.Types.ImageContent{data: "iVBORw0KGgo="}]
+
+    for {mode, fallback} <- [steer: :followup, steer_backlog: :collect, redirect: :followup],
+        active <- [nil, %{run_id: "active", session_key: "s1"}] do
+      meta = %{async_followups: [%{source: :task, task_id: "task", delivery: mode}]}
+
+      input =
+        submission("image-run", "s1", mode, "look",
+          images: images,
+          meta: meta,
+          request_meta: meta
+        )
+
+      state = %SessionState{conversation_key: {:session, "s1"}, active: active}
+
+      assert {:ok, next_state, effects} = SessionTransitions.submit(state, input, 100)
+      assert effects == if(is_nil(active), do: [:maybe_start_next], else: [])
+      assert next_state.pending_steers == %{}
+      assert [queued] = next_state.queue
+      assert queued.queue_mode == fallback
+      assert queued.run_id == input.run_id
+      assert queued.execution_request.run_id == input.run_id
+      assert queued.execution_request.prompt == input.execution_request.prompt
+      assert queued.execution_request.images == images
+
+      assert [
+               %{
+                 delivery_receipt: %{
+                   requested_mode: ^mode,
+                   actual_mode: ^fallback,
+                   status: :queued
+                 }
+               }
+             ] =
+               queued.meta["async_followups"]
+
+      assert queued.execution_request.meta["async_followups"] == queued.meta["async_followups"]
+      assert {:ok, ^next_state, [:noop]} = SessionTransitions.submit(next_state, input, 200)
+    end
+  end
+
+  test "image auto followups remain queued instead of promotion to text-only steering" do
+    images = [%LemonAi.Types.ImageContent{data: "iVBORw0KGgo="}]
+
+    for flag <- [:task_auto_followup, :delegated_auto_followup] do
+      meta = %{flag => true}
+      input = submission("image-followup", "s1", :followup, "", images: images, meta: meta)
+
+      state = %SessionState{
+        conversation_key: {:session, "s1"},
+        active: %{run_id: "active", session_key: "s1"}
+      }
+
+      assert {:ok, next_state, []} = SessionTransitions.submit(state, input, 100)
+      assert next_state.pending_steers == %{}
+      assert [queued] = next_state.queue
+      assert queued.queue_mode == :followup
+      assert queued.run_id == input.run_id
+      assert queued.execution_request.images == images
+      assert queued.execution_request.prompt == ""
+
+      assert [%{delivery_receipt: %{requested_mode: :followup, actual_mode: :followup}}] =
+               queued.meta["async_followups"]
+    end
+  end
+
   test "cancel clears queue and pending steers and emits cancel effect when active exists" do
     state = %SessionState{
       conversation_key: {:session, "s1"},
@@ -839,6 +1066,7 @@ defmodule LemonRouter.SessionTransitionsTest do
       run_id: run_id,
       session_key: session_key,
       prompt: prompt,
+      images: Keyword.get(opts, :images, []),
       conversation_key: {:session, session_key},
       meta: Keyword.get(opts, :request_meta, %{})
     }

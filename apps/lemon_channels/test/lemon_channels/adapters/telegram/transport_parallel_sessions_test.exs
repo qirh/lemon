@@ -172,7 +172,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, msg}, 800
+    assert_receive {:inbound, msg}
     assert msg.meta[:session_key] == base_session_key <> ":sub:" <> Integer.to_string(user_msg_id)
     assert msg.meta[:forked_session] == true
   end
@@ -203,7 +203,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, msg}, 800
+    assert_receive {:inbound, msg}
     assert msg.meta[:forked_session] == true
     assert msg.message.text == "hello"
   end
@@ -232,7 +232,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
                deny_unbound_chats: false
              })
 
-    assert_receive {:inbound, msg1}, 800
+    assert_receive {:inbound, msg1}
     fork_session_key = msg1.meta[:session_key]
     assert is_binary(fork_session_key)
 
@@ -246,7 +246,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     # Reply to the original user message should route to the forked session
     ParallelMockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", user_msg_id1)])
 
-    assert_receive {:inbound, msg2}, 800
+    assert_receive {:inbound, msg2}
     assert msg2.meta[:session_key] == fork_session_key
     refute msg2.meta[:session_key] == base_session_key
 
@@ -295,6 +295,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         stale_resume,
         generation: 0
       )
+
+    trigger_on_all_group_messages(chat_id)
 
     ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
@@ -371,6 +373,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       )
 
     _ = StateStore.put_selected_resume({"default", chat_id, topic_id}, stale_resume)
+
+    trigger_on_all_group_messages(chat_id)
 
     ParallelMockAPI.set_updates([
       topic_message_update(chat_id, topic_id, new_msg_id, "/new"),
@@ -457,31 +461,64 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
         thread_id: Integer.to_string(topic_id)
       })
 
+    config_key = :"Elixir.LemonGateway.Config"
+    previous_config = Application.get_env(:lemon_gateway, config_key)
+    previous_test_mode = Application.get_env(:lemon_core, :config_test_mode)
+    Application.put_env(:lemon_core, :config_test_mode, true)
+
+    Application.put_env(:lemon_gateway, config_key, %{
+      telegram: %{
+        bot_token: "fake-approval-token",
+        api_mod: ParallelMockAPI,
+        account_id: "default",
+        use_markdown: false
+      }
+    })
+
+    previous_plugin = LemonChannels.Registry.get_plugin("telegram")
+    :ok = LemonChannels.Registry.register(LemonChannels.Adapters.Telegram)
+
+    on_exit(fn ->
+      LemonChannels.Registry.unregister("telegram")
+      if previous_plugin, do: LemonChannels.Registry.register(previous_plugin)
+    end)
+
+    on_exit(fn ->
+      if is_nil(previous_config),
+        do: Application.delete_env(:lemon_gateway, config_key),
+        else: Application.put_env(:lemon_gateway, config_key, previous_config)
+
+      if is_nil(previous_test_mode),
+        do: Application.delete_env(:lemon_core, :config_test_mode),
+        else: Application.put_env(:lemon_core, :config_test_mode, previous_test_mode)
+    end)
+
     assert {:ok, transport_pid} =
              start_transport(%{
                allowed_chat_ids: [chat_id],
                deny_unbound_chats: false
              })
 
+    pending =
+      LemonCore.Events.ApprovalPending.new(%{
+        id: approval_id,
+        run_id: "run_#{approval_id}",
+        session_key: session_key,
+        tool: "shell",
+        action: %{"cmd" => "pwd"}
+      })
+
+    :ok = LemonCore.ExecApprovalStore.put_pending(approval_id, pending)
+    on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(approval_id) end)
+
     event =
-      LemonCore.Event.new(
-        :approval_requested,
-        %{
-          approval_id: approval_id,
-          pending: %{
-            id: approval_id,
-            session_key: session_key,
-            tool: "shell",
-            action: %{"cmd" => "pwd"}
-          }
-        }
-      )
+      LemonCore.Event.new(:approval_requested, %{approval_id: approval_id, pending: pending})
 
     send(transport_pid, event)
 
-    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 800
+    assert_receive {:send_message, ^chat_id, text, opts, _parse_mode}, 2_000
     assert text =~ "Approval requested"
-    assert opts["message_thread_id"] == topic_id
+    assert (opts[:message_thread_id] || opts["message_thread_id"]) == topic_id
   end
 
   test "ignores topic creation events and waits for the next topic message" do
@@ -489,6 +526,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     topic_id = 901
     first_msg_id = System.unique_integer([:positive])
     second_msg_id = System.unique_integer([:positive])
+
+    trigger_on_all_group_messages(chat_id)
 
     ParallelMockAPI.set_updates([
       topic_created_update(chat_id, topic_id, first_msg_id),
@@ -520,6 +559,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
       |> Map.merge(overrides)
 
     Elixir.LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+  end
+
+  # Groups default to mention-only triggering; these tests send plain topic text.
+  defp trigger_on_all_group_messages(chat_id) do
+    scope = %LemonCore.ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+    :ok = LemonChannels.Telegram.TriggerMode.set(scope, "default", :all)
   end
 
   defp message_update(chat_id, message_id, text) do
@@ -609,7 +654,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     Application.put_env(:lemon_channels, :gateway, Map.put(cfg, :bindings, bindings))
   end
 
-  defp eventually(fun, timeout_ms \\ 1_500) when is_function(fun, 0) do
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(fun, deadline)
   end

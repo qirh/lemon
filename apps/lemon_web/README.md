@@ -4,7 +4,7 @@ Phoenix web interface for the Lemon platform. Provides real-time agent chat and 
 
 ## Architecture Overview
 
-LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, and checked-in release assets for both Phoenix JavaScript and compiled Tailwind CSS. The page has no runtime CDN dependency.
+LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, vendored Phoenix JavaScript, and a Tailwind build (`assets/`) whose output is committed to `priv/static/assets/app.css`. The page has no runtime CDN dependency.
 
 ### OTP Supervision Tree
 
@@ -66,7 +66,8 @@ authentication establishes the same marker without redirecting.
 
 | Path | Handler | Description |
 |------|---------|-------------|
-| `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage` | `ManagementLive` | Live active runs, runtime/node status, and searchable active/archived sessions |
+| `/manage/work` | `WorkManagementLive` | Live kanban, goal, and cron status with revision-bound preview/confirm controls |
 | `/manage/memory` | `MemoryManagementLive` | Bounded, redacted durable-memory search, provenance inspection, and exact digest-confirmed deletion |
 | `/manage/blueprints` | `BlueprintManagementLive` | Content-free catalog inspection, validation, exact preview, and digest-confirmed activation |
 | `/manage/profiles` | `ProfileManagementLive` | Bounded roster plus preview-first create, clone, rename, recoverable delete, and canonical-chat links |
@@ -88,16 +89,19 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 
 **Features:**
 - Shared first-run readiness through `LemonCore.Setup.Readiness`; incomplete setup is explained before prompt or file persistence
-- Real-time streaming of assistant responses via PubSub deltas
+- Transcript rendered as a LiveView stream (`stream/3`): a streaming delta re-inserts only the active reply, so per-token diffs do not grow with the transcript
+- Finished assistant replies rendered as sanitized markdown (`LemonWeb.Markdown`: headings, lists, tables, links, code blocks with a `language-*` class); raw HTML, script-capable links, inline attributes, and images never become markup. A reply renders as plain text while it is still streaming
 - Multi-file upload (up to 5 files, 20 MB each) with progress tracking and cancellation
-- Tool call visualization in collapsible detail panels
+- Tool call cards, collapsed by default, showing tool name, a one-line argument summary, and running/done/failed/cancelled status; each card updates in place by tool-call identity, including partial output while running and after reload. Expanding shows the (credential-masked) arguments and real visible output, preferring the full result when supplied. Cancelled receipts retain partial output and explain unknown outcomes or tools that never started when reported; cancellation of a run alone does not invent a result for an unfinished call.
+- Approval panel for this session's pending tool approvals with the TUI's choices (approve once, approve for this session, always approve, deny), resolved through `LemonCore.ExecApprovals.resolve/2`
 - System notifications for run lifecycle events (started, completed, failed)
 - Active-run stop control through `LemonRouter.abort_run/2`
 - Honest active-run reconciliation: only an exact router `:none` becomes idle;
   an initial lookup failure renders a disabled "Run status unavailable" state,
   while a later failure preserves the last known running/stopping state and draft
-- Message history capped at 250 messages
-- Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume
+- Transcript capped at 250 messages (stream limit)
+- Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume; historical phases collapse by run/action identity and subsequent live events update that same card
+- Bounded, session-scoped subagent tree from actual task records and run-graph edges, refreshed every two seconds only after connection; up to 50 nodes and eight levels, with explicit unavailable state and no child prompt/result/path projection
 
 **Session key resolution:**
 1. If `params["session_key"]` is present and valid, use it directly
@@ -106,10 +110,18 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 
 **PubSub events handled:**
 - `:run_started` -- Displays "Run started" system message
-- `:delta` -- Streams text into the current assistant message bubble
-- `:engine_action` -- Renders a tool call detail panel
-- `:run_completed` -- Finalizes the assistant message; shows error if the run failed
+- `:delta` -- Streams text into the current assistant reply; a tool starting ends that reply so later text appears below the tool card
+- `:engine_action` -- Inserts or updates the tool call card for that action
+- `:run_completed` -- Finalizes the assistant reply (rendered as markdown); distinguishes a stopped run from a genuine failure
 - `:config_reloaded` / `:secret_changed` on the `"system"` topic -- Re-derives browser setup readiness
+- `:approval_requested` / `:approval_resolved` on the `"exec_approvals"` topic -- Adds approvals whose `session_key` matches this tab and removes resolved, timed-out, or cancelled ones
+
+**Approvals:** pending approvals for the session are loaded from
+`LemonCore.ExecApprovalStore` on mount. A decision is accepted only when the
+store's pending record belongs to this tab's session key, so an id for another
+session is refused; it then goes through `LemonCore.ExecApprovals.resolve/2`,
+the same single-winner transition behind the control plane's
+`exec.approval.resolve` (TUI) and the Telegram approval buttons.
 
 **Submission flow:**
 1. The shared readiness contract confirms config, secrets, provider, credential, and model are usable
@@ -132,6 +144,17 @@ run/tool inspection, and redacted JSON/Markdown export. Runtime status comes
 from `LemonCore.Runtime.Health`; live named-node presence comes from
 `LemonCore.NodeRegistry` with node metadata deliberately omitted from the UI.
 
+Connected management pages refresh every three seconds without clearing search
+filters or pending previews. A separate allowlisted `Working now` projection
+uses shared router state to discover up to 40 active runs, including sessions
+that have not completed their first run. It retains its last known rows on
+lookup failure and links directly to live transcripts. Durable search remains
+owned by `SessionLifecycle` and bounded to 200 rows.
+
+In-page metadata and history pass through `LemonWeb.ManagementText`: shared
+operator credential redaction, path-token omission, UTF-8 bounds, and bounded
+nested collections. This does not change the private chat resume contract.
+
 Guarded prune is preview-first and defaults to archived, unpinned sessions.
 The confirmation token binds the threshold, policy flags, stable session keys,
 index timestamps, and lifecycle metadata. If anything changes, execution fails
@@ -142,6 +165,22 @@ Management inspection and downloads are always redacted and never expose raw
 run records or event payloads. Chat resume is an internal trusted consumer of
 unredacted history so the user can continue their own conversation; no operator
 JSON-RPC method offers that mode.
+
+### WorkManagementLive (`/manage/work`)
+
+The required-auth automation dashboard delegates to the existing kanban, goal,
+and cron stores and managers. Connected refreshes show safe IDs, labels,
+statuses, progress/retry counts, and actual run/session links. Prompts,
+objectives, cwd/worktree paths, environment values, raw results, and runtime
+error terms never enter its management projection.
+
+Board start/stop, bounded goal start/pause/resume/stop, cron run/pause/resume,
+and exact cron-run cancellation are preview-first. The server keeps the target
+and opaque revision; automation managers compare expected state inside their
+serialized mutation boundary. Changed targets reject stale confirmation.
+Unknown outcomes remain owned and visible rather than being labeled finished
+or starting a replacement editor. The page operates existing work; creation
+continues through the `kanban`, `goal`, and `cron` tools.
 
 ### ProviderManagementLive (`/manage/providers`)
 
@@ -198,9 +237,11 @@ survives stale/refused operations, while the stale plan digest is cleared.
 
 | Component | Module | Purpose |
 |-----------|--------|---------|
-| `MessageComponent` | `LemonWeb.Live.Components.MessageComponent` | Renders chat bubbles for user, assistant, system, and tool call messages. Delegates tool calls to `ToolCallComponent`. |
+| `MessageComponent` | `LemonWeb.Live.Components.MessageComponent` | Renders one transcript stream item (user, assistant, system, tool call). Finished assistant replies go through `LemonWeb.Markdown`; tool calls delegate to `ToolCallComponent`. |
 | `FileUploadComponent` | `LemonWeb.Live.Components.FileUploadComponent` | Drag-and-drop file upload area with per-file progress bars, error messages, and cancel buttons. |
-| `ToolCallComponent` | `LemonWeb.Live.Components.ToolCallComponent` | Collapsible `<details>` panel showing tool name, phase, detail payload (as formatted JSON), status, and optional message. Auto-opens when phase is `started` or `updated`. |
+| `ToolCallComponent` | `LemonWeb.Live.Components.ToolCallComponent` | Collapsed `<details>` card: tool name, argument summary, running/done/failed/cancelled status (or completed when success is unknown); expands to credential-masked arguments, visible result, and message. Cancelled cards have no running animation and never render hidden thinking as output. `JS.ignore_attributes("open")` keeps the user's open/closed choice across in-place updates. |
+| `ApprovalComponent` | `LemonWeb.Live.Components.ApprovalComponent` | Pending-approval panel with approve once / approve for this session / always approve / deny buttons. |
+| `Payload` | `LemonWeb.Live.Components.Payload` | Shared helpers: `false`-preserving key reads, credential-key masking, and JSON formatting for display. |
 
 ### Core Components (`lib/lemon_web/components/core_components.ex`)
 
@@ -219,9 +260,16 @@ Shared function components auto-imported into all LiveViews:
 
 ## Static Assets and Frontend
 
-LemonWeb uses a small checked-in static frontend strategy with no runtime build tools:
+LemonWeb ships committed static assets, so releases and runtime startup need no Node toolchain:
 
-- **Tailwind CSS**: Precompiled and minified into `priv/static/assets/app.css`; release digests include it and runtime startup never contacts a CSS CDN
+- **Tailwind CSS**: Source is `assets/css/app.css` with `assets/tailwind.config.js` scanning `lib/**/*.{ex,heex}`; the version-locked build (`assets/package.json`, `package-lock.json`) writes minified `priv/static/assets/app.css`. After changing classes in HEEx or the CSS source, run from the umbrella root:
+
+  ```bash
+  mix do --app lemon_web assets.setup   # once: npm ci
+  mix do --app lemon_web assets.build   # regenerate priv/static/assets/app.css
+  ```
+
+  and commit the regenerated `app.css`. Release digests include it and runtime startup never contacts a CSS CDN. `session.css` and `management.css` are hand-written and not part of the build
 - **Phoenix JS**: Vendored from `deps/phoenix/priv/static/phoenix.mjs` into `priv/static/assets/vendor/phoenix.mjs`
 - **Phoenix LiveView JS**: Vendored from `deps/phoenix_live_view/priv/static/phoenix_live_view.esm.js` into `priv/static/assets/vendor/phoenix_live_view.esm.js`
 - **app.js** (`priv/static/assets/app.js`): Client-side entry point that initializes the LiveSocket, generates stable per-tab session keys via `sessionStorage`, normalizes agent IDs, and strips token params from the URL after authentication
@@ -349,12 +397,14 @@ mix phx.server
 ```
 apps/lemon_web/
 |-- mix.exs
+|-- assets/                                      # Tailwind source, config, locked npm deps
 |-- lib/
 |   |-- lemon_web.ex                              # Module macros (:live_view, :router, :html, etc.)
 |   |-- lemon_web/
 |       |-- application.ex                         # OTP application supervisor
 |       |-- endpoint.ex                            # Phoenix endpoint (Bandit, sessions, static)
 |       |-- router.ex                              # Route definitions and pipelines
+|       |-- markdown.ex                            # Sanitizing markdown renderer
 |       |-- telemetry.ex                           # Telemetry supervisor
 |       |-- gettext.ex                             # i18n backend
 |       |-- plugs/
@@ -365,8 +415,10 @@ apps/lemon_web/
 |       |   |-- provider_management_live.ex        # Authenticated provider-routing LiveView
 |       |   |-- components/
 |       |       |-- file_upload_component.ex        # File upload UI
-|       |       |-- message_component.ex            # Chat message bubbles
-|       |       |-- tool_call_component.ex          # Tool call detail panels
+|       |       |-- message_component.ex            # Transcript stream items
+|       |       |-- tool_call_component.ex          # Collapsed tool call cards
+|       |       |-- approval_component.ex           # Pending approval panel
+|       |       |-- payload.ex                      # Masking/formatting helpers
 |       |-- components/
 |       |   |-- core_components.ex                 # Shared button, input, flash components
 |       |   |-- layouts.ex                         # Layout module (embeds templates)
@@ -383,15 +435,16 @@ apps/lemon_web/
 |-- priv/
 |   |-- static/
 |   |   |-- assets/
-|   |       |-- app.css                            # Precompiled Tailwind stylesheet
+|   |       |-- app.css                            # Built Tailwind stylesheet (from assets/)
 |   |       |-- management.css                     # Responsive management-shell styles
 |   |       |-- app.js                             # Client-side JS (LiveSocket init, session keys)
 |   |-- gettext/
 |       |-- .keep
 |-- test/
     |-- test_helper.exs
-    |-- lemon_web_test.exs                         # Smoke tests (app starts, modules load)
+    |-- lemon_web_test.exs                         # App, readiness, active-run, and asset tests
     |-- lemon_web/
-        |-- live/
-            |-- games_live_test.exs                # LiveView integration tests for games pages
+        |-- session_chat_live_test.exs             # Transcript stream, markdown, tool cards, approvals
+        |-- markdown_test.exs                      # Markdown sanitization
+        |-- *_management_live_test.exs             # Management LiveViews
 ```

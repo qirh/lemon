@@ -13,18 +13,27 @@
  *   bun run gallery --state error            one state (repeatable, or a,b)
  *   bun run gallery --width 100              one width (repeatable, or 80,120)
  *   bun run gallery --plain                  strip ANSI (diffable output)
- *   bun run gallery --section diff           one section: tools|diff|shelf|accordion
- *   bun run gallery --list                   fixture names and their engines
+ *   bun run gallery --section diff           one section: tools|diff|shelf|accordion|context
+ *   bun run gallery --list                   fixture names, states, sections
  */
 
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { parseSessionsContext } from "../protocol/context-usage.ts";
 import { AccordionComponent, type AccordionState } from "../ui/components/accordion.ts";
+import { ContextPanelComponent } from "../ui/components/context-panel.ts";
 import { renderDiff } from "../ui/components/diff.ts";
+import { ReasoningComponent } from "../ui/components/reasoning-block.ts";
 import { ToolCardComponent } from "../ui/components/tool-card.ts";
 import { ToolShelfComponent } from "../ui/components/tool-shelf.ts";
 import { getTheme, initTheme } from "../ui/theme/theme.ts";
-import { buildDiffText, type ToolCardState } from "../ui/tool-view.ts";
-import { fixtureBlock, TOOL_FIXTURES, type ToolFixture } from "./fixtures/tool-fixtures.ts";
+import { buildDiffText, serverDiffToRows, type ToolCardState } from "../ui/tool-view.ts";
+import { estimatedContextFixture, reportedContextFixture } from "./fixtures/context-fixtures.ts";
+import {
+	fixtureBlock,
+	reasoningFixtureBlock,
+	TOOL_FIXTURES,
+	type ToolFixture,
+} from "./fixtures/tool-fixtures.ts";
 
 const STATES: ToolCardState[] = ["streaming", "running", "success", "error"];
 const STATE_LABELS: Record<ToolCardState, string> = {
@@ -32,9 +41,11 @@ const STATE_LABELS: Record<ToolCardState, string> = {
 	running: "running",
 	success: "success",
 	error: "error",
+	cancelled: "cancelled",
+	unknown: "outcome unknown",
 };
 
-const SECTIONS = ["tools", "diff", "shelf", "accordion"] as const;
+const SECTIONS = ["tools", "diff", "shelf", "accordion", "context"] as const;
 type Section = (typeof SECTIONS)[number];
 
 /** Fixed clock so repeated runs are byte-identical (and diffable). */
@@ -124,8 +135,8 @@ export function parseGalleryArgs(argv: readonly string[]): GalleryOptions {
 	if (options.widths.length === 0) options.widths = [80, 120];
 	if (options.states.length === 0) options.states = [...STATES];
 	if (options.sections.length === 0) {
-		// `--tool` is a tool-section filter; the diff/shelf/accordion sections are
-		// not per-tool, so asking for one tool means asking for that section.
+		// `--tool` is a tool-section filter; the other sections are not per-tool,
+		// so asking for one tool means asking for that section.
 		options.sections = options.tool ? ["tools"] : [...SECTIONS];
 	}
 	return options;
@@ -154,9 +165,7 @@ export function renderToolSection(options: GalleryOptions, width: number): strin
 	if (fixtures.length === 0) throw new Error(`no fixture named '${options.tool}'`);
 
 	for (const fixture of fixtures) {
-		out.push(
-			...rule(`${fixture.name}  (${fixture.engine}, kind=${fixture.kind}) @${width}`, width),
-		);
+		out.push(...rule(`${fixture.name}  (kind=${fixture.kind}) @${width}`, width));
 		for (const state of options.states) {
 			out.push(...subheading(`  ${STATE_LABELS[state]}`, width));
 			for (const line of cardFor(fixture, state).render(width)) out.push(line);
@@ -166,7 +175,7 @@ export function renderToolSection(options: GalleryOptions, width: number): strin
 }
 
 function cardFor(fixture: ToolFixture, state: ToolCardState): ToolCardComponent {
-	return new ToolCardComponent(fixtureBlock(fixture, state, { at: STARTED_AT }), {
+	return new ToolCardComponent(fixtureBlock(fixture, state, { at: STARTED_AT, completedAt: NOW }), {
 		now: () => NOW,
 	});
 }
@@ -175,11 +184,19 @@ export function renderDiffSection(width: number): string[] {
 	const out: string[] = [...rule(`diff samples @${width}`, width)];
 	const samples: Array<{ label: string; text: string; path?: string }> = [
 		{
-			label: "  single-line replacement (word-level highlight)",
+			label: "  server diff from the edit tool (real line numbers, two hunks)",
+			path: "lib/run.ex",
+			text: serverDiffToRows(
+				' 11\tdef start(job) do\n-12\t  {:ok, pid} = Runner.start_link(job)\n+12\t  {:ok, pid} = Runner.start_link(job, timeout: :infinity)\n 13\t  Registry.register(job.id, pid)\n...\n 40\tdef stop(pid) do\n+41\t  Logger.info("stopping")\n 41\t  GenServer.stop(pid)',
+			),
+		},
+		{
+			label: "  single-line replacement anchored at line 12 (word-level highlight)",
 			path: "lib/run.ex",
 			text: buildDiffText(
 				"  {:ok, pid} = Runner.start_link(job)\n  Registry.register(job.id, pid)",
 				"  {:ok, pid} = Runner.start_link(job, timeout: :infinity)\n  Registry.register(job.id, pid)",
+				12,
 			),
 		},
 		{
@@ -216,14 +233,16 @@ export function renderShelfSection(width: number): string[] {
 
 	out.push(...subheading("  one completed tool: keeps its full card", width));
 	const single = new ToolShelfComponent({ now: () => NOW });
-	single.add(fixtureBlock(TOOL_FIXTURES[0] as ToolFixture, "success", { at: STARTED_AT }));
+	single.add(
+		fixtureBlock(TOOL_FIXTURES[0] as ToolFixture, "success", { at: STARTED_AT, completedAt: NOW }),
+	);
 	for (const line of single.render(width)) out.push(line);
 
 	out.push(...subheading("  a run of four: merged to one line each", width));
 	const shelf = new ToolShelfComponent({ now: () => NOW });
 	for (const name of names) {
 		const fixture = TOOL_FIXTURES.find((item) => item.name === name);
-		if (fixture) shelf.add(fixtureBlock(fixture, "success", { at: STARTED_AT }));
+		if (fixture) shelf.add(fixtureBlock(fixture, "success", { at: STARTED_AT, completedAt: NOW }));
 	}
 	for (const line of shelf.render(width)) out.push(line);
 
@@ -231,7 +250,7 @@ export function renderShelfSection(width: number): string[] {
 	const live = new ToolShelfComponent({ now: () => NOW });
 	for (const name of ["read", "grep"]) {
 		const fixture = TOOL_FIXTURES.find((item) => item.name === name);
-		if (fixture) live.add(fixtureBlock(fixture, "success", { at: STARTED_AT }));
+		if (fixture) live.add(fixtureBlock(fixture, "success", { at: STARTED_AT, completedAt: NOW }));
 	}
 	const running = TOOL_FIXTURES.find((item) => item.name === "bash");
 	if (running) live.add(fixtureBlock(running, "running", { at: STARTED_AT }));
@@ -261,10 +280,31 @@ export function renderAccordionSection(width: number): string[] {
 	}
 
 	out.push(...subheading("  per-kind defaults: reasoning collapses, tools expand", width));
-	for (const name of ["reasoning", "read"]) {
-		const fixture = TOOL_FIXTURES.find((item) => item.name === name);
-		if (!fixture) continue;
-		for (const line of cardFor(fixture, "success").render(width)) out.push(line);
+	for (const line of new ReasoningComponent(reasoningFixtureBlock({ at: STARTED_AT })).render(
+		width,
+	)) {
+		out.push(line);
+	}
+	const read = TOOL_FIXTURES.find((item) => item.name === "read");
+	if (read) for (const line of cardFor(read, "success").render(width)) out.push(line);
+	return out;
+}
+
+/** The `/context` overlay, tall enough that nothing scrolls out of view. */
+export function renderContextSection(width: number): string[] {
+	const out: string[] = [...rule(`context panel @${width}`, width)];
+	const samples = [
+		{ label: "  provider-reported, live overhead", raw: reportedContextFixture("gallery") },
+		{ label: "  estimated, overhead not itemized", raw: estimatedContextFixture("gallery") },
+	];
+	for (const sample of samples) {
+		out.push(...subheading(sample.label, width));
+		const panel = new ContextPanelComponent(parseSessionsContext(sample.raw), {
+			rows: () => 200,
+			close: () => {},
+			repaint: () => {},
+		});
+		out.push(...panel.render(width));
 	}
 	return out;
 }
@@ -284,6 +324,7 @@ export function renderGallery(options: GalleryOptions): string[] {
 		if (options.sections.includes("diff")) out.push(...renderDiffSection(width));
 		if (options.sections.includes("shelf")) out.push(...renderShelfSection(width));
 		if (options.sections.includes("accordion")) out.push(...renderAccordionSection(width));
+		if (options.sections.includes("context")) out.push(...renderContextSection(width));
 	}
 	return options.plain ? out.map(stripAnsi) : out;
 }

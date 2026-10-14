@@ -1,12 +1,20 @@
 defmodule LemonSim.Bench.Artifacts.Bundle do
   @moduledoc false
 
-  alias LemonSim.Bench.Artifacts.AtomicFile
+  alias LemonSim.Bench.Artifacts.{AtomicFile, Replay}
   alias LemonSim.Bench.Scorecard.Registry
   alias LemonSim.LLM.Usage
 
   @deterministic_artifact_timestamp "1970-01-01T00:00:00Z"
 
+  @doc """
+  Writes a `lemon_sim.run.v1` bundle for `state`.
+
+  Pass `replay: %{config: map, batches: [[event]]}` (or a live
+  `replay_recorder:`) to also write `config.json` and `inputs.jsonl` so the
+  bundle can be replay-verified; `events` must then be the event stream the
+  recorded batches appended.
+  """
   def write_scorecard_bundle(state, events, actions, opts) do
     scenario_id = Keyword.fetch!(opts, :scenario_id)
     artifact_dir = Keyword.fetch!(opts, :artifact_dir)
@@ -28,13 +36,15 @@ defmodule LemonSim.Bench.Artifacts.Bundle do
       manifest: Path.join(artifact_dir, "manifest.json")
     }
 
-    contents = %{
-      paths.final_world => encode_json(state.world),
-      paths.events => jsonl(events),
-      paths.actions => jsonl(actions),
-      paths.scorecard => encode_json(scorecard),
-      paths.usage => Usage.encode_artifact(usage)
-    }
+    contents =
+      %{
+        paths.final_world => encode_json(state.world),
+        paths.events => jsonl(events),
+        paths.actions => jsonl(actions),
+        paths.scorecard => encode_json(scorecard),
+        paths.usage => Usage.encode_artifact(usage)
+      }
+      |> Map.merge(replay_contents(artifact_dir, state, Replay.recording_from_opts(opts)))
 
     hashes =
       write_bundle!(artifact_dir, contents, paths.hashes, paths.manifest, fn hashes ->
@@ -42,6 +52,22 @@ defmodule LemonSim.Bench.Artifacts.Bundle do
       end)
 
     {:ok, Map.put(paths, :hashes_artifact, hashes)}
+  end
+
+  defp replay_contents(_artifact_dir, _state, nil), do: %{}
+
+  defp replay_contents(artifact_dir, state, %{batches: batches} = recording) do
+    config =
+      recording
+      |> Map.get(:config)
+      |> Kernel.||(%{})
+      |> Map.put_new("schema_version", "lemon_sim.config.v1")
+      |> Map.put_new("sim_id", state.sim_id)
+
+    %{
+      Path.join(artifact_dir, "config.json") => encode_json(config),
+      Path.join(artifact_dir, "inputs.jsonl") => Replay.inputs_jsonl(batches)
+    }
   end
 
   def write_contents!(contents) when is_map(contents) do

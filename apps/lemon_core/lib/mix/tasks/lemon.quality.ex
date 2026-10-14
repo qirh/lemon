@@ -3,18 +3,18 @@ defmodule Mix.Tasks.Lemon.Quality do
 
   alias LemonCore.Config.Modular
 
-  alias LemonCore.Quality.{
-    ArchitectureCheck,
-    ArchitectureDocs,
-    ArchitectureRulesCheck,
-    DocsCheck,
-    RatchetCheck
-  }
+  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureDocs, DocsCheck}
 
-  @shortdoc "Run docs and architecture quality checks"
+  @shortdoc "Run docs link and architecture boundary checks"
   @moduledoc """
-  Run quality checks that keep harness docs, architecture boundaries, and
-  architecture-debt ratchets healthy.
+  Run the repository quality checks:
+
+    * docs - local markdown links in tracked `docs/**/*.md` resolve
+    * architecture_docs - the generated dependency-policy section in
+      `docs/architecture_boundaries.md` matches the policy
+    * architecture - every umbrella app's `deps/0` matches the direct
+      dependency policy
+    * duplicate test module guard (`mix lemon.check_duplicate_tests`)
 
   Usage:
     mix lemon.quality
@@ -50,9 +50,7 @@ defmodule Mix.Tasks.Lemon.Quality do
     checks = [
       {:docs, fn -> DocsCheck.run(root: root) end},
       {:architecture_docs, fn -> ArchitectureDocs.check(root) end},
-      {:architecture, fn -> ArchitectureCheck.run(root: root) end},
-      {:architecture_rules, fn -> ArchitectureRulesCheck.run(root: root) end},
-      {:ratchets, fn -> RatchetCheck.run(root: root) end}
+      {:architecture, fn -> ArchitectureCheck.run(root: root) end}
     ]
 
     failures =

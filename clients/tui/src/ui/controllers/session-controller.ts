@@ -35,6 +35,7 @@ import type {
 	ChatHistoryMessage,
 	SessionSummary,
 } from "../../protocol/types.ts";
+import { newSessionKey } from "../../session-key.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
@@ -58,13 +59,12 @@ export interface SessionControllerOptions {
 	events: EventController;
 	tui: TUI;
 	editor: DraftEditor;
+	cwd?: string;
 	/** Sends a prompt as the user (used by "new session with a first prompt"). */
 	sendPrompt?: (text: string) => void | Promise<void>;
 	refreshStatus?: () => void;
 	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
 	confirm?: (spec: ConfirmSpec) => void;
-	/** Clock seam for the generated session keys tests assert on. */
-	now?: () => Date;
 }
 
 export interface ConfirmSpec {
@@ -81,13 +81,15 @@ export class SessionController {
 	readonly #events: EventController;
 	readonly #tui: TUI;
 	readonly #editor: DraftEditor;
+	readonly #cwd: string | undefined;
 	readonly #sendPrompt: ((text: string) => void | Promise<void>) | undefined;
 	readonly #refreshStatus: (() => void) | undefined;
 	readonly #confirm: ((spec: ConfirmSpec) => void) | undefined;
-	readonly #now: () => Date;
 
 	/** Sessions whose stored history has been pulled (or never needed pulling). */
 	readonly #hydrated = new Set<string>();
+	/** Sessions whose gauge `sessions.context` already answered for (success or a definite no). */
+	readonly #contextSeeded = new Set<string>();
 
 	constructor(options: SessionControllerOptions) {
 		this.#store = options.store;
@@ -95,10 +97,10 @@ export class SessionController {
 		this.#events = options.events;
 		this.#tui = options.tui;
 		this.#editor = options.editor;
+		this.#cwd = options.cwd;
 		this.#sendPrompt = options.sendPrompt;
 		this.#refreshStatus = options.refreshStatus;
 		this.#confirm = options.confirm;
-		this.#now = options.now ?? (() => new Date());
 	}
 
 	/** Sessions this client has already hydrated (or minted, so never will). */
@@ -112,6 +114,20 @@ export class SessionController {
 	}
 
 	// -- switching -----------------------------------------------------------
+
+	/** Hydrate an explicit launch key before the initial composer is ready. */
+	async initialize(): Promise<void> {
+		const session = this.#store.focused;
+		await Promise.all([
+			this.#hydrateIfCold(session),
+			this.hydrateRouting(session),
+			this.#resyncActive(),
+			this.#resyncApprovals(),
+		]);
+		this.#events.rebuildFocused();
+		this.#refreshStatus?.();
+		void this.seedContext(session);
+	}
 
 	/**
 	 * Focus `key`, hydrating and rebuilding as needed.
@@ -145,6 +161,7 @@ export class SessionController {
 		this.#editor.setText(this.#store.takeDraft(target));
 		this.#tui.requestRender(true, { clearScrollback: true });
 		this.#refreshStatus?.();
+		void this.seedContext(session);
 	}
 
 	/**
@@ -225,14 +242,32 @@ export class SessionController {
 	resetLocal(key: string = this.#store.focusedKey): void {
 		const session = this.#store.sessions.get(key);
 		if (!session) return;
-		session.blocks.length = 0;
-		session.byActionId.clear();
+		session.resetTranscript();
 		// The transcript is gone, so the stored history may legitimately be
 		// re-pulled on a later switch.
 		this.#hydrated.delete(key);
 		if (key !== this.#store.focusedKey) return;
 		this.#events.rebuildFocused();
 		this.#tui.requestRender(true, { clearScrollback: true });
+	}
+
+	/** Replace abandoned history only after the daemon returned its active branch. */
+	async reload(key: string): Promise<void> {
+		const result = await this.#methods.chatHistory({
+			sessionKey: key,
+			cwd: this.#cwd,
+			limit: HYDRATE_LIMIT,
+			includeFullText: true,
+		});
+		const session = this.#store.session(key);
+		session.resetTranscript();
+		synthesizeHistory(session, result.messages ?? []);
+		this.#hydrated.add(key);
+		if (key === this.#store.focusedKey) {
+			this.#events.rebuildFocused();
+			this.#tui.requestRender(true, { clearScrollback: true });
+			this.#refreshStatus?.();
+		}
 	}
 
 	// -- hydration -----------------------------------------------------------
@@ -251,6 +286,10 @@ export class SessionController {
 		try {
 			const result = await this.#methods.sessionDetail({ sessionKey: session.key });
 			const detail = (result?.session ?? {}) as Record<string, unknown>;
+			const previousTitle = session.title;
+			if (typeof detail.title === "string" || detail.title === null) {
+				session.title = asString(detail.title);
+			}
 			const changed = session.setModel(
 				{
 					model: asString(detail.model),
@@ -260,16 +299,51 @@ export class SessionController {
 				},
 				"detail",
 			);
-			if (changed) this.#refreshStatus?.();
+			if (changed || previousTitle !== session.title) this.#refreshStatus?.();
 		} catch {
 			// Nothing to show and nothing to say: the status bar keeps what it had.
+		}
+	}
+
+	/**
+	 * Give the gauge the daemon's measurement for a session that has durable
+	 * history but no run usage yet (a resumed or switched-to session), once.
+	 * Every failure is silent: `not_found`/`unavailable` are definite answers and
+	 * are not asked again; an offline or timed-out attempt may be retried on the
+	 * next focus or resync. Never queued, never polled.
+	 */
+	async seedContext(session: SessionStore): Promise<void> {
+		if (
+			this.#contextSeeded.has(session.key) ||
+			session.usage ||
+			session.contextMeasurement ||
+			!this.#methods.supports(METHOD.sessionsContext) ||
+			this.#methods.client.state !== "online" ||
+			!session.blocks.some((block) => block.kind === "user" || block.kind === "assistant")
+		) {
+			return;
+		}
+		this.#contextSeeded.add(session.key);
+		try {
+			const usage = await this.#methods.sessionsContext({
+				sessionKey: session.key,
+				cwd: this.#cwd ?? process.cwd(),
+			});
+			// A run that completed meanwhile reported something newer.
+			if (usage.sessionKey !== session.key || session.usage || session.contextMeasurement) return;
+			session.applyContextMeasurement(usage.usedTokens, usage.window);
+			if (session.key === this.#store.focusedKey) this.#refreshStatus?.();
+		} catch (error) {
+			if (error instanceof NotConnectedError || error instanceof RequestTimeoutError) {
+				this.#contextSeeded.delete(session.key);
+			}
 		}
 	}
 
 	/** Pull stored history for a session that has nothing on screen yet. */
 	async #hydrateIfCold(session: SessionStore): Promise<void> {
 		if (this.#hydrated.has(session.key)) return;
-		if (session.blocks.length > 0) {
+		if (session.blocks.some((block) => block.kind !== "notice")) {
 			// Live events already built a transcript; stored history would double it.
 			this.#hydrated.add(session.key);
 			return;
@@ -279,6 +353,7 @@ export class SessionController {
 		try {
 			const result = await this.#methods.chatHistory({
 				sessionKey: session.key,
+				cwd: this.#cwd,
 				limit: HYDRATE_LIMIT,
 				includeFullText: true,
 			});
@@ -310,6 +385,7 @@ export class SessionController {
 			this.hydrateRouting(this.#store.focused),
 		]);
 		this.#refreshStatus?.();
+		void this.seedContext(this.#store.focused);
 	}
 
 	async #resyncActive(): Promise<void> {
@@ -352,6 +428,7 @@ export class SessionController {
 		const result = await this.#methods
 			.chatHistory({
 				sessionKey: session.key,
+				cwd: this.#cwd,
 				limit: cold ? HYDRATE_LIMIT : RESYNC_TAIL_LIMIT,
 				includeFullText: true,
 			})
@@ -400,14 +477,8 @@ export class SessionController {
 		return fallback?.key ?? this.#mintKey();
 	}
 
-	/** `tui-20260817T101112`, with a counter when two land in the same second. */
 	#mintKey(): string {
-		const base = `tui-${this.#now().toISOString().replace(/[-:.]/g, "").slice(0, 15)}`;
-		if (!this.#store.sessions.has(base)) return base;
-		for (let suffix = 2; ; suffix++) {
-			const candidate = `${base}-${suffix}`;
-			if (!this.#store.sessions.has(candidate)) return candidate;
-		}
+		return newSessionKey();
 	}
 
 	#notice(text: string, level: NoticeLevel = "info"): void {
@@ -421,17 +492,24 @@ export class SessionController {
  * Every assistant message becomes a finalized block under a synthetic run id
  * (`history:<message id>`), which is what keeps a rebuilt transcript out of the
  * streaming state: a block that reports itself live pins the native-scrollback
- * commit seam open for the rest of the session. Tool records — daemons vary in
- * how much they store — become completed tool blocks; anything else becomes a
- * notice, so nothing in the stored record is silently dropped.
+ * commit seam open for the rest of the session. Tool calls and results share
+ * their native call id. A saved call without a result remains outcome-unknown,
+ * not a fabricated success or a live execution.
  */
 export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMessage[]): void {
+	const calls = new Map<string, ChatHistoryMessage>();
+	for (const message of messages) {
+		if (message.role === "tool_use" && message.toolCallId) {
+			calls.set(message.toolCallId, message);
+		}
+	}
 	for (const message of messages) {
 		const at = message.timestampMs ?? Date.now();
 		const content = message.content ?? "";
 		const role = (message.role ?? "").toLowerCase();
 		if (role === "user") {
-			session.addUser(content, at);
+			// Only a recorded timestamp is a send time; hydration time is not.
+			session.addUser(content, at, message.timestampMs ? { sentAt: message.timestampMs } : {});
 			continue;
 		}
 		if (role === "assistant" || role === "") {
@@ -445,15 +523,47 @@ export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMe
 			continue;
 		}
 		if (role === "tool" || role === "tool_use" || role === "tool_result") {
+			const actionId = message.toolCallId || `history:${message.id}`;
+			const call = calls.get(actionId);
+			const previous = session.byActionId.get(actionId);
+			const completed = role === "tool_result" || role === "tool" || message.phase === "completed";
+			const details = message.details ?? call?.details ?? previous?.detail?.details;
+			const durationMs = message.durationMs;
 			session.upsertTool(
 				{
-					id: `history:${message.id}`,
+					id: actionId,
 					kind: "tool",
-					title: historyToolTitle(message),
-					detail: { result: content },
+					title: message.title ?? call?.title ?? previous?.title ?? historyToolTitle(message),
+					detail: {
+						...previous?.detail,
+						name:
+							message.toolName ??
+							call?.toolName ??
+							previous?.detail?.name ??
+							historyToolTitle(message),
+						args: message.arguments ?? call?.arguments ?? previous?.detail?.args,
+						details,
+						...(completed ? { result: content } : {}),
+					},
 				},
-				"completed",
-				{ ok: true },
+				completed ? "completed" : "started",
+				{
+					at: message.timestampMs ?? 0,
+					historical: true,
+					ok: message.ok,
+					cancelled:
+						completed &&
+						(message.cancelled === true ||
+							message.details?.cancelled === true ||
+							message.details?.error_type === "aborted"),
+					durationMs:
+						completed &&
+						typeof durationMs === "number" &&
+						Number.isFinite(durationMs) &&
+						durationMs >= 0
+							? durationMs
+							: undefined,
+				},
 			);
 			continue;
 		}
@@ -480,7 +590,12 @@ function historyToolTitle(message: ChatHistoryMessage): string {
 export function lastDaemonBlockAt(session: SessionStore): number | undefined {
 	for (let index = session.blocks.length - 1; index >= 0; index--) {
 		const block = session.blocks[index];
-		if (block.kind === "user" || block.kind === "assistant" || block.kind === "tool") {
+		if (
+			block.kind === "user" ||
+			block.kind === "assistant" ||
+			block.kind === "tool" ||
+			block.kind === "reasoning"
+		) {
 			return block.at;
 		}
 	}

@@ -162,6 +162,11 @@ defmodule LemonAi.EventStream do
   Signal an error on the stream.
   """
   @spec error(t(), AssistantMessage.t()) :: :ok
+  def error(stream, %AssistantMessage{error_details: nil} = message) do
+    details = LemonAi.Error.to_error_details(message.error_message)
+    GenServer.cast(stream, {:error, %{message | error_details: details}})
+  end
+
   def error(stream, message) do
     GenServer.cast(stream, {:error, message})
   end
@@ -405,11 +410,7 @@ defmodule LemonAi.EventStream do
   end
 
   def handle_cast({:complete, message}, state) do
-    stop_reason =
-      cond do
-        is_map(message) -> Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
-        true -> message.stop_reason
-      end
+    stop_reason = Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
 
     done_event = {:done, stop_reason, message}
 
@@ -427,11 +428,7 @@ defmodule LemonAi.EventStream do
   end
 
   def handle_cast({:error, message}, state) do
-    stop_reason =
-      cond do
-        is_map(message) -> Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
-        true -> message.stop_reason
-      end
+    stop_reason = Map.get(message, :stop_reason) || Map.get(message, "stop_reason")
 
     error_event = {:error, stop_reason, message}
 

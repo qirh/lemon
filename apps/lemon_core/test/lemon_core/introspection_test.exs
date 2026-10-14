@@ -49,10 +49,38 @@ defmodule LemonCore.IntrospectionTest do
     assert is_binary(event.event_id)
 
     refute Map.has_key?(event.payload, :prompt)
-    assert event.payload.input == "[redacted]"
-    assert String.contains?(event.payload.result_preview, "[truncated")
+    refute inspect(event.payload.input) =~ "echo test"
+    assert byte_size(event.payload.result_preview) < byte_size(payload.result_preview)
     refute Map.has_key?(event.payload.nested, :secret)
     assert event.payload.nested.kept == "ok"
+  end
+
+  test "preview bounds and captured arguments cannot expose credential values" do
+    secret = "sk-introspection-must-not-leak"
+
+    payload = %{
+      result_preview: String.duplicate("x", 250) <> " " <> secret,
+      input: %{command: "Authorization: Bearer hidden-auth", nested: [%{apiKey: "hidden-key"}]},
+      preview: %{password: "hidden-password", kept: "ready"},
+      message: "api_key=\"hidden first and second\""
+    }
+
+    assert {:ok, event} =
+             Introspection.build_event(:tool_completed, payload, capture_tool_args: true)
+
+    for hidden <- [
+          secret,
+          "hidden-auth",
+          "hidden-key",
+          "hidden-password",
+          "hidden first",
+          "second"
+        ] do
+      refute inspect(event.payload) =~ hidden
+    end
+
+    assert event.payload.preview.kept == "ready"
+    assert byte_size(event.payload.result_preview) < byte_size(payload.result_preview)
   end
 
   test "record persists and list returns queryable introspection events" do

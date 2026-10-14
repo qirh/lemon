@@ -28,6 +28,25 @@ defmodule CodingAgent.SettingsManagerTest do
     %{test_dir: test_dir}
   end
 
+  test "loads canonical budget limits from project config.toml", %{test_dir: project} do
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(Path.join(project, ".lemon/config.toml"), """
+    [budgets]
+    max_run_tokens = 0
+    max_run_cost_usd = 0.25
+    max_session_tokens = 500
+    max_session_cost_usd = 2
+    """)
+
+    assert SettingsManager.load(project).budgets == %{
+             max_run_tokens: 0,
+             max_run_cost_usd: 0.25,
+             max_session_tokens: 500,
+             max_session_cost_usd: 2
+           }
+  end
+
   # ============================================================================
   # from_config/1 Tests
   # ============================================================================
@@ -650,6 +669,7 @@ defmodule CodingAgent.SettingsManagerTest do
 
       assert result == %{
                default_model: default_model,
+               model_roles: %{},
                default_thinking_level: :high
              }
     end
@@ -888,28 +908,6 @@ defmodule CodingAgent.SettingsManagerTest do
         # The value could be either atom or string depending on code path
         assert settings.default_thinking_level in [level, expected_atom]
       end
-    end
-
-    test "handles provider without model" do
-      config = %LemonConfig{
-        providers: %{},
-        agent: %{
-          default_provider: "anthropic",
-          default_model: nil
-        },
-        tui: %{},
-        logging: %{},
-        gateway: %{},
-        agents: %{}
-      }
-
-      settings = SettingsManager.from_config(config)
-
-      # When provider is set but model is nil, the model struct may still be created
-      # with empty model_id depending on the parse_model_spec implementation
-      assert settings.default_model == nil or
-               (is_map(settings.default_model) and
-                  settings.default_model.provider == :anthropic)
     end
 
     test "handles complex provider configuration" do

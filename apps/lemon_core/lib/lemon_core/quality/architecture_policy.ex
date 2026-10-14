@@ -28,8 +28,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_platform_test,
       :lemon_skills
     ],
-    coding_agent_ui: [:coding_agent, :lemon_core],
-    lemon_automation: [:lemon_agent, :lemon_core, :lemon_router, :lemon_skills],
+    lemon_automation: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_router, :lemon_skills],
     lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
     lemon_control_plane: [
       :lemon_ai,
@@ -41,6 +40,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_lsp,
       :lemon_media,
       :lemon_memory,
+      :lemon_omp,
       :lemon_router,
       :lemon_skills
     ],
@@ -53,6 +53,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_ai,
       :coding_agent,
       :lemon_core,
+      :lemon_memory,
       :lemon_skills
     ],
     lemon_gateway: [:lemon_agent, :lemon_core],
@@ -63,7 +64,12 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_honcho: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_memory, :lemon_platform_test],
     lemon_lsp: [:lemon_core],
     lemon_media: [:lemon_core],
-    lemon_mcp: [:lemon_agent, :coding_agent, :lemon_core, :lemon_skills],
+    # test-only: lemon_skills hosts the moved LemonSkills.McpSource suite.
+    lemon_mcp: [:lemon_core, :lemon_skills],
+    # The omp delegate driver implements the agent tool contract and registers
+    # its `omp` tool at boot; the coding product never names it. The control
+    # plane depends on it directly to expose `omp.*` methods.
+    lemon_omp: [:lemon_agent, :lemon_ai, :lemon_core],
     # The contract-test kit is a leaf: one (optional) dep per behaviour it
     # tests, and nothing in the platform depends on it outside test code. ai +
     # agent_core back the FakeLLM double, which drives a real agent loop.
@@ -85,20 +91,29 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
     lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
-    lemon_tcg: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_sim],
-    # The management UI consumes agent-owned provider configuration,
-    # automation-owned blueprint catalog, and memory-owned lifecycle
-    # boundaries; mutation, confirmation, and redaction semantics stay
-    # centralized in their domain services.
-    lemon_web: [:lemon_agent, :lemon_automation, :lemon_core, :lemon_memory, :lemon_router]
+    # The web UI is an in-process client of the control-plane method registry
+    # and event projection (the same contract as the TUI), and consumes
+    # agent-owned provider configuration, automation-owned blueprint catalog,
+    # and memory-owned lifecycle boundaries; mutation, confirmation, and
+    # redaction semantics stay centralized in their domain services.
+    lemon_web: [
+      :lemon_agent,
+      :lemon_automation,
+      :lemon_control_plane,
+      :lemon_core,
+      :lemon_memory,
+      :lemon_router
+    ]
   }
 
-  # Gateway tools still use LemonAi content structs and probe the optional
-  # LemonAutomation cron runtime without making either app a direct dependency.
-  # Keeping these exceptions separate prevents them from silently authorizing a
-  # future mix.exs edge.
+  # Gateway tools still use LemonAi content structs without making it a direct
+  # dependency. Keeping these exceptions separate prevents them from silently
+  # authorizing a future mix.exs edge.
   @reference_only_namespace_exceptions %{
-    lemon_gateway: [:lemon_ai, :lemon_automation]
+    # The shared CLI registry invokes these bundled runtime command handlers
+    # dynamically; setup must not start channel services through a Mix edge.
+    lemon_cli: [:lemon_channels, :lemon_media],
+    lemon_gateway: [:lemon_ai]
   }
 
   @target_allowed_direct_deps @current_allowed_direct_deps

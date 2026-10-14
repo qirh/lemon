@@ -669,19 +669,5 @@ defmodule LemonSim.Examples.Werewolf.ReplayStoryboard do
     end
   end
 
-  defp get(map, key, default) when is_map(map) and is_binary(key) do
-    case Map.get(map, key) do
-      nil ->
-        try do
-          Map.get(map, String.to_existing_atom(key), default)
-        rescue
-          ArgumentError -> default
-        end
-
-      value ->
-        value
-    end
-  end
-
   defp get(_map, _key, default), do: default
 end

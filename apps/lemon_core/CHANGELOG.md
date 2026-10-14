@@ -6,53 +6,93 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] - 2026-10-13
+
 First release as a standalone package. `lemon_core` used to be the umbrella's
 catch-all shared app; this release turns it into a library you can embed. The
 theme of every change below is the same: nothing in `lemon_core` knows about
 Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
-### Removed
-
-- Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
-  `[runtime.cli]` is rejected.
 
 ### Fixed
 
+- Shared `LemonCore.Redact` text, nested-data, and sensitive-key APIs now provide
+  one credential policy for session/config/profile exports and diagnostics,
+  including complete private-key blocks and quoted assignment values. Export
+  allowlists and size limits remain owned by their callers.
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained.
+
+### Removed
+
+- This repository's own tooling is no longer in the package: `LemonCore.Quality.*`,
+  `LemonCore.Update.*`, and the `mix lemon.quality`, `lemon.architecture.docs`,
+  `lemon.check_duplicate_tests`, `lemon.update`, `lemon.bench` and `lemon.help`
+  tasks. They remain in the lemon repository.
+- Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
+  `[runtime.cli]` is rejected.
+- `LemonCore.Store`'s domain functions: `put/get/delete_chat_state`, the
+  agent/channel/session/runtime `*_policy` functions, and
+  `put/delete_progress_mapping` / `get_run_by_progress`. Use
+  `LemonCore.ChatStateStore` and `LemonCore.PolicyStore`, which now sit on the
+  generic table API; the progress mapping moved to its only consumer (see
+  below). The `:chat_state_ttl_ms` store option is gone; chat state always
+  expires after 24 hours.
+- `LemonCore.Quality.RatchetCheck`, `ArchitectureRulesCheck`,
+  `StoreTableOwnershipCheck`, `DocsCatalog`, and `Cleanup`, plus the
+  `mix lemon.ratchet` and `mix lemon.cleanup` tasks. `mix lemon.quality` now
+  runs only the docs link check, the architecture docs check, the `deps/0`
+  policy check, and the duplicate test module guard. `DocsCheck` no longer
+  reads `docs/catalog.exs` or enforces review dates.
+
+### Fixed
+
+- `LemonCore.Backup` digests files with `File.stream!(path, bytes)` instead of
+  the deprecated `File.stream!(path, modes, bytes)` order, so Elixir 1.20 no
+  longer prints a deprecation warning into `lemon backup` JSON output.
 - Run finalization is now synchronous and retry-safe. A session-index failure
   is returned to the caller, retrying repairs the index without double-counting
   the run, conflicting summaries fail without exposing the original summary,
-  and finalize hooks explicitly use at-least-once delivery.
+  and finalize hooks explicitly use at-least-once delivery. The per-session
+  idempotency marker is bounded to the last 32 run ids, so a session index
+  entry no longer grows with every run the session has ever finalized.
 
 ### Added
 
-- `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
-  future cache, retention, persistence, and schema-version metadata without
-  generating CRUD functions or changing backend behavior. The existing
-  architecture quality gate parses all supported generic Store operations at
-  default and explicit server arities, including direct calls, `apply/3`, and
-  multi-entry operations, and permits owner calls only when every resolved
-  table matches the declaration.
-- `LemonCore.PolicyStore` now declares ownership metadata for the existing
-  agent, channel, session, and runtime policy tables while retaining its
-  specialized public API and Store behavior.
-
-- `LemonCore.ChatStateStore` now declares ownership of the cached `:chat` table
-  and its `:expires_at` retention policy. Its public API and the specialized
-  Store runtime that applies TTL, expiry, sweeping, and cache behavior are
-  unchanged.
-- `LemonCore.RunStore` declares `:runs` and `:sessions_index` as its owned
-  tables. The declaration records their cache and persistence intent explicitly
-  and brings the existing wrapper under the AST ownership gate without changing
-  the specialized `LemonCore.Store` run lifecycle or finalization semantics.
-
+- `LemonCore.Secrets.KeyRotation` rotates the secrets master key: `preview/1`
+  checks that every stored secret decrypts with the current key and returns a
+  confirmation token bound to the key and the exact record set; `rotate/2`
+  re-encrypts every secret under a generated key and writes it to the provider
+  that supplied the current one. It refuses while a Lemon runtime answers on
+  the control port, fails closed on any undecryptable record, leaves external
+  sources and environment fallback alone, makes staged ciphertext durable
+  before the key moves, confirms the switch against the provider it wrote, and
+  converges every record to the new key, so every secret stays readable by
+  whichever key loads next if it is interrupted (`Secrets.get/2` reads the
+  staged copy). New task: `mix lemon.secrets.rotate_key [--confirm TOKEN]`.
+- `LemonCore.Secrets.Lock`: a Store-backed lease, exclusive across OS
+  processes on a SQLite store, held by key rotation and by `Secrets.set/3`
+  around key resolution and persistence. A lease never expires; it is
+  reclaimed only from a holder that is provably gone on this host. `set/3`
+  can now return `{:error, :secrets_locked}` (a live holder outlasted the
+  30 s wait, configurable as `write_lock_wait_ms`) or
+  `{:error, {:secrets_lock_held, host}}` (a lease from another host).
+- `LemonCore.Store.sync/1` durability barrier and optional
+  `LemonCore.Store.Backend` callbacks `compare_and_swap/5` and `sync/1`. The
+  SQLite backend implements compare-and-swap in one `BEGIN IMMEDIATE`
+  transaction (atomic across OS processes) and `sync/1` as a `TRUNCATE` WAL
+  checkpoint; JSONL fsyncs its table files and directory; ETS answers `sync/1`
+  trivially. `LemonCore.Secrets.MasterKey.fetch_from/2` reads one provider's
+  key, and `LemonCore.Durable` provides file and verified synchronous
+  directory flushes (GNU coreutils `sync DIR`; never claimed on macOS).
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
   exposes the check used by router startup; optional callbacks remain optional,
   and invalid behaviour metadata returns a structured error instead of escaping
   the validation boundary.
-- `LemonCore.Quality.RatchetCheck` and `mix lemon.ratchet` provide a
-  data-only baseline for a narrow set of parsed architecture-debt metrics.
-  `mix lemon.quality` now fails when those counts increase.
-
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and
@@ -95,6 +135,21 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.Secrets.KeyProvider.File` replaces the key file through a synced,
+  `0600` temporary file, an atomic rename and, where the host has one, a
+  synchronous directory flush. Key rotation of a file key refuses on hosts
+  without that flush (macOS): keep the key in the Keychain there.
+- The SQLite backend finishes its single-row read statement after every
+  `get/3`, and resets cached statements before `BEGIN IMMEDIATE` and WAL
+  checkpoints, so a read no longer pins a stale snapshot that turned the next
+  write on that connection into `:sqlite_busy`. Its connections set
+  `checkpoint_fullfsync`, so the `sync/1` checkpoint reaches stable storage on
+  macOS too.
+- **Breaking for custom key providers:** `use LemonCore.Secrets.KeyProvider` no
+  longer defines a default `put/2` returning `{:error, :unavailable}`; read-only
+  providers simply omit it, and `KeyProvider.supports_put?/1` now reports real
+  writability. Secret reads update usage metadata with compare-and-swap, so a
+  read never overwrites a concurrent write.
 - `LemonCore.RouterBridge.configure/1` validates the router and run
   orchestrator against explicit behaviours before registration. Command
   functions return `:ok` only for an exact `:ok` callback result. A malformed
@@ -191,6 +246,19 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   `lemon_agent` as `LemonAgent.Workspace.*`.
 - `LemonCore.ProviderPoolRotator` and `ProviderConfigResolver` — moved to their
   single consumers (`coding_agent` and `lemon_agent` respectively).
+- `LemonCore.ProgressStore` — moved to its only consumer, the (unpublished)
+  `lemon_gateway` app, as `LemonGateway.ProgressStore`. `:progress` is no
+  longer in `LemonCore.Store`'s default cached tables; gateway registers it
+  with `register_cached_table/2` at boot, like any other owner's hot index.
+- `LemonCore.Doctor.Checks.Memory` and `LemonCore.Doctor.Checks.Skills` are no
+  longer built-in checks. They moved to `lemon_memory`
+  (`LemonMemory.Doctor.Checks.Memory`) and `lemon_skills`
+  (`LemonSkills.Doctor.Checks.Skills`) and register through
+  `config :lemon_core, :doctor_checks`; the `:memory_store` key of
+  `:doctor_runtime` is no longer read. The remaining core-resident stores,
+  `ConfigReloader` and doctor diagnostics stay because a consumer outside their
+  target app (or core itself) still uses them; `docs/platform-split.md`
+  ("Known gaps") lists the blocking consumer for each.
 - Weak raw master keys are rejected with `:weak_master_key` rather than being
   silently stretched; `allow_legacy_raw_keys: true` is the deprecation escape
   hatch. Stretching would have quietly broken existing ciphertexts.
@@ -232,14 +300,3 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   - `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN` and `XMTP_WALLET_KEY` left
     `HermeticEnv`'s built-in scrub list for the `:test_credential_env_vars`
     registration described above.
-  - `LemonCore.Quality.ArchitectureRulesCheck` gained
-    `:core_vendor_channel_reference`, which fails the quality gate on any
-    mention of a chat platform under `apps/lemon_core/lib`, and retired
-    `:core_telegram_store_leak` / `:core_telegram_resume_index_leak`, which the
-    broader rule subsumes (`:core_known_target_store_leak` keeps the
-    non-vendor half).
-
-### Known gaps
-
-- Secrets key rotation and re-encryption are not implemented; the gap is
-  documented in `LemonCore.Secrets`'s moduledoc.

@@ -14,6 +14,8 @@ defmodule LemonMCP.Client.HTTP do
 
   alias LemonMCP.Protocol
 
+  require Logger
+
   @type client_state :: :disconnected | :initializing | :ready
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -913,7 +915,20 @@ defmodule LemonMCP.Client.HTTP do
         oauth_metadata: metadata
     }
 
-    persist_oauth_token_cache(state)
+    # The fresh token is used for this connection either way; a failed save is
+    # reported so a rotated refresh token is not lost silently. Only the
+    # error's tag is logged: tokens and the server URL stay out of logs.
+    case persist_oauth_token_cache(state) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "MCP OAuth token was refreshed but could not be saved to its token cache " <>
+            "(#{inspect(reason)}); the next connection may need to authorize again"
+        )
+    end
+
     state
   end
 
@@ -988,7 +1003,9 @@ defmodule LemonMCP.Client.HTTP do
     case cache_save(state.config.oauth_token_cache, payload) do
       :ok -> :ok
       {:ok, _} -> :ok
-      _ -> :ok
+      :no_save -> :ok
+      {:error, reason} when is_atom(reason) -> {:error, reason}
+      _failed -> {:error, :token_cache_save_failed}
     end
   end
 
@@ -998,11 +1015,11 @@ defmodule LemonMCP.Client.HTTP do
   defp cache_save(cache, payload) when is_list(cache) do
     case Keyword.get(cache, :save) do
       save when is_function(save, 1) -> cache_save(save, payload)
-      _ -> :error
+      _ -> :no_save
     end
   end
 
-  defp cache_save(_cache, _payload), do: :error
+  defp cache_save(_cache, _payload), do: :no_save
 
   defp put_client_auth(params, oauth) do
     case token_auth_method(oauth) do

@@ -109,15 +109,9 @@ defmodule LemonAutomation.SkillCuratorManager do
   end
 
   defp start_unlinked_task(fun) do
-    case Task.start(fun) do
-      {:ok, pid} ->
-        ref = Process.monitor(pid)
-        {:ok, {pid, ref}}
-
-      {:error, reason} ->
-        Logger.warning("[SkillCuratorManager] Failed to start task: #{inspect(reason)}")
-        :error
-    end
+    {:ok, pid} = Task.start(fun)
+    ref = Process.monitor(pid)
+    {:ok, {pid, ref}}
   end
 
   defp schedule_tick(opts) do

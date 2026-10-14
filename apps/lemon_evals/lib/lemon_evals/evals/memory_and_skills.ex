@@ -1,6 +1,6 @@
 defmodule LemonEvals.Evals.MemoryAndSkills do
   @moduledoc """
-  Memory and skill contract evals: search/topic memory scoping, progressive
+  Memory and skill contract evals: recall scoping, remember persistence, progressive
   skill-prompt disclosure, dedicated-tool-preference prompts, skill curator
   lifecycle behavior, learning-tool tracing, tool-use claim detection, and
   untrusted tool-result prompt-injection wrapping.
@@ -9,127 +9,112 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
   import LemonEvals.Support
 
   alias LemonAgent.Types.AgentToolResult
-  alias CodingAgent.PromptBuilder
   alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.SystemPrompt
   alias CodingAgent.Tools.{ReadSkill, SkillManage}
   alias LemonEvals.Types
   alias LemonSkills.Curator
-  alias LemonSkills.Tools.{MemoryTopic, SearchMemory}
+  alias LemonSkills.Tools.{Recall, Remember}
   alias LemonAi.Types.{TextContent, ToolResultMessage}
 
   @spec memory_scope_contract_eval(String.t()) :: Types.eval_result()
   def memory_scope_contract_eval(_cwd) do
-    tmp_dir =
+    project_dir =
       Path.join(
         System.tmp_dir!(),
         "lemon_memory_scope_eval_#{System.unique_integer([:positive, :monotonic])}"
       )
 
-    project_dir = Path.join(tmp_dir, "project")
-    home_dir = Path.join(tmp_dir, "home")
+    {:ok, search_calls} = Agent.start_link(fn -> [] end)
 
     search_fn = fn query, opts ->
-      scope_key = Keyword.fetch!(opts, :scope_key)
-      limit = Keyword.fetch!(opts, :limit)
-
-      [
-        %{
-          doc_id: "#{Path.basename(scope_key)}-doc",
-          query: query,
-          limit: limit,
-          scope_key: scope_key
-        }
-      ]
-    end
-
-    format_results_fn = fn docs ->
-      docs
-      |> Enum.map(&Map.fetch!(&1, :doc_id))
-      |> Enum.join(",")
+      Agent.update(search_calls, &[{query, opts} | &1])
+      [eval_memory_doc("scoped-deployment-notes", project_dir, project_dir, "eval-agent")]
     end
 
     tool =
-      SearchMemory.tool(project_dir,
-        workspace_dir: home_dir,
-        search_fn: search_fn,
-        format_results_fn: format_results_fn
+      Recall.tool(project_dir,
+        workspace_dir: project_dir,
+        session_scope: :main,
+        agent_id: "eval-agent",
+        search_fn: search_fn
       )
 
-    result = tool.execute.("eval-search-memory", %{"query" => "deployment notes"}, nil, nil)
-    text = flatten_text(result)
+    agent_result = tool.execute.("eval-recall-agent", %{"query" => "deployment notes"}, nil, nil)
+
+    project_result =
+      tool.execute.(
+        "eval-recall-project",
+        %{"query" => "deployment notes", "scope" => "project"},
+        nil,
+        nil
+      )
+
+    calls = search_calls |> Agent.get(&Enum.reverse/1) |> Enum.map(fn {_q, opts} -> opts end)
+    Agent.stop(search_calls)
 
     cond do
-      result.details[:scope] != :current ->
-        contract_fail("memory_scope_contract", "expected default scope :current", result.details)
-
-      result.details[:resolved_scopes] != [:project, :home] ->
-        contract_fail("memory_scope_contract", "expected project and home scopes", result.details)
-
-      not String.contains?(text, "project-doc") or not String.contains?(text, "home-doc") ->
-        contract_fail("memory_scope_contract", "expected project and home search hits", %{
-          text: text
+      agent_result.details[:scope] != "agent" ->
+        contract_fail("memory_scope_contract", "expected default scope agent", %{
+          details: agent_result.details
         })
+
+      not String.contains?(flatten_text(agent_result), "scoped-deployment-notes") or
+          not String.contains?(flatten_text(project_result), "scoped-deployment-notes") ->
+        contract_fail("memory_scope_contract", "expected agent and project recall hits", %{})
 
       true ->
         %{
           name: "memory_scope_contract",
           status: :pass,
-          details: %{
-            scope: result.details[:scope],
-            resolved_scopes: result.details[:resolved_scopes]
-          }
+          details: %{scopes: Enum.map(calls, & &1[:scope])}
         }
     end
   rescue
     e -> contract_fail("memory_scope_contract", Exception.message(e), %{})
   end
 
-  @spec memory_topic_contract_eval(String.t()) :: Types.eval_result()
-  def memory_topic_contract_eval(_cwd) do
+  @spec remember_contract_eval(String.t()) :: Types.eval_result()
+  def remember_contract_eval(_cwd) do
     case create_tmp_dir() do
       {:ok, tmp_dir} ->
         try do
           workspace_dir = Path.join(tmp_dir, "workspace")
-          template_path = Path.join(workspace_dir, "memory/topics/TEMPLATE.md")
-          topic_path = Path.join(workspace_dir, "memory/topics/harness-contract.md")
-
-          File.mkdir_p!(Path.dirname(template_path))
-          File.write!(template_path, "# Topic: <topic-slug>\n\ncontract-template")
+          memory_path = Path.join(workspace_dir, "MEMORY.md")
+          File.mkdir_p!(workspace_dir)
 
           result =
-            MemoryTopic.execute(
-              "eval-memory-topic",
-              %{"topic" => "Harness Contract"},
+            Remember.execute(
+              "eval-remember",
+              %{"text" => "Harness contract evals run before every release."},
               nil,
               nil,
-              workspace_dir
+              %{workspace_dir: workspace_dir, session_scope: :main}
             )
 
           cond do
             not match?(%AgentToolResult{}, result) ->
-              contract_fail("memory_topic_contract", "unexpected result", %{
-                result: inspect(result)
-              })
+              contract_fail("remember_contract", "unexpected result", %{result: inspect(result)})
 
-            result.details[:created] != true ->
-              contract_fail("memory_topic_contract", "topic was not created", result.details)
+            result.details[:action] != "add" or result.details[:changed] != true ->
+              contract_fail("remember_contract", "fact was not saved", result.details)
 
-            result.details[:path] != topic_path ->
-              contract_fail("memory_topic_contract", "topic path drifted", result.details)
+            result.details[:path] != memory_path ->
+              contract_fail("remember_contract", "MEMORY.md path drifted", result.details)
 
-            not File.exists?(topic_path) ->
-              contract_fail("memory_topic_contract", "topic file missing", %{path: topic_path})
-
-            not String.contains?(File.read!(topic_path), "# Topic: harness-contract") ->
-              contract_fail("memory_topic_contract", "template slug replacement failed", %{
-                path: topic_path
+            not String.contains?(
+              File.read!(memory_path),
+              "- Harness contract evals run before every release."
+            ) ->
+              contract_fail("remember_contract", "fact missing from MEMORY.md", %{
+                path: memory_path
               })
 
             true ->
               %{
-                name: "memory_topic_contract",
+                name: "remember_contract",
                 status: :pass,
-                details: %{slug: result.details[:slug], path: result.details[:path]}
+                details: %{target: result.details[:target], path: result.details[:path]}
               }
           end
         after
@@ -137,10 +122,10 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
         end
 
       {:error, reason} ->
-        contract_fail("memory_topic_contract", format_reason(reason), %{})
+        contract_fail("remember_contract", format_reason(reason), %{})
     end
   rescue
-    e -> contract_fail("memory_topic_contract", Exception.message(e), %{})
+    e -> contract_fail("remember_contract", Exception.message(e), %{})
   end
 
   @spec auto_skill_prompt_contract_eval(String.t()) :: Types.eval_result()
@@ -170,33 +155,22 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           """)
 
           prompt =
-            PromptBuilder.build(tmp_dir, %{
-              base_prompt: "Base.",
-              context: "improve hermes memory recall and profile discipline",
-              include_skills: true,
-              include_commands: false,
-              include_mentions: false
+            SystemPrompt.build(tmp_dir, %{
+              workspace_dir: tmp_dir,
+              session_scope: :main,
+              skill_context: "improve hermes memory recall and profile discipline"
             })
 
           cond do
-            not String.contains?(prompt, "<relevant-skills>") ->
-              contract_fail("auto_skill_prompt_contract", "missing relevant skills block", %{
+            not String.contains?(prompt, "<available_skills>") ->
+              contract_fail("auto_skill_prompt_contract", "missing available skills block", %{
                 prompt: prompt
               })
 
             not String.contains?(prompt, "<key>hermes-memory</key>") ->
-              contract_fail("auto_skill_prompt_contract", "missing relevant skill key", %{
+              contract_fail("auto_skill_prompt_contract", "missing skill key", %{
                 prompt: prompt
               })
-
-            not String.contains?(prompt, "Use `read_skill`") ->
-              contract_fail(
-                "auto_skill_prompt_contract",
-                "missing read_skill loading reminder",
-                %{
-                  prompt: prompt
-                }
-              )
 
             String.contains?(prompt, sentinel) ->
               contract_fail(
@@ -233,62 +207,34 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
 
           system_prompt =
-            CodingAgent.SystemPrompt.build(tmp_dir, %{
+            SystemPrompt.build(tmp_dir, %{
               workspace_dir: workspace_dir,
               session_scope: :main
             })
 
-          learning_prompt = PromptBuilder.build_learning_section()
-
           cond do
-            not String.contains?(system_prompt, "Prefer the dedicated memory and skill tools") ->
+            not Enum.all?(["remember", "recall"], &String.contains?(system_prompt, "`#{&1}`")) ->
               contract_fail(
                 "dedicated_tool_preference_contract",
-                "system prompt missing dedicated tool preference",
+                "system prompt does not name the remember and recall tools",
                 %{}
               )
 
-            not String.contains?(
-              system_prompt,
-              "not for bypassing `search_memory`, `session_search`"
+            Enum.any?(
+              ~w(search_memory session_search memory_topic),
+              &String.contains?(system_prompt, "`#{&1}`")
             ) ->
               contract_fail(
                 "dedicated_tool_preference_contract",
-                "system prompt does not protect dedicated memory tools from shell bypass",
+                "prompt still names a removed memory tool",
                 %{}
-              )
-
-            not String.contains?(learning_prompt, "Prefer dedicated memory and skill tools") ->
-              contract_fail(
-                "dedicated_tool_preference_contract",
-                "learning prompt missing dedicated tool preference",
-                %{}
-              )
-
-            not Enum.all?(
-              [
-                "read_skill",
-                "search_memory",
-                "session_search",
-                "memory_topic",
-                "memory",
-                "skill_manage"
-              ],
-              fn tool ->
-                String.contains?(learning_prompt, "`#{tool}`")
-              end
-            ) ->
-              contract_fail(
-                "dedicated_tool_preference_contract",
-                "learning prompt missing dedicated memory or skill tool names",
-                %{prompt: learning_prompt}
               )
 
             true ->
               %{
                 name: "dedicated_tool_preference_contract",
                 status: :pass,
-                details: %{memory_and_skill_tools_preferred: true}
+                details: %{memory_tools_named: true, obsolete_memory_tools_absent: true}
               }
           end
         after
@@ -414,19 +360,13 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
             Agent.update(search_calls, &[{query, opts} | &1])
 
             [
-              %{
-                doc_id: "prior-deployment-incident",
-                title: "Prior deployment incident",
-                scope_key: Keyword.fetch!(opts, :scope_key),
-                query: query
-              }
+              eval_memory_doc(
+                "prior-deployment-incident",
+                project_dir,
+                home_dir,
+                "learning-tool-trace-eval"
+              )
             ]
-          end
-
-          format_results_fn = fn docs ->
-            docs
-            |> Enum.map(&Map.fetch!(&1, :doc_id))
-            |> Enum.join(",")
           end
 
           tool_opts = [
@@ -437,29 +377,34 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
           ]
 
           search_tool =
-            SearchMemory.tool(project_dir,
+            Recall.tool(project_dir,
               workspace_dir: home_dir,
               search_fn: search_fn,
-              format_results_fn: format_results_fn
+              agent_id: "learning-tool-trace-eval",
+              session_scope: :main
             )
 
-          memory_tool = MemoryTopic.tool(project_dir, workspace_dir: project_dir)
+          memory_tool =
+            Remember.tool(project_dir, workspace_dir: project_dir, session_scope: :main)
+
           skill_tool = SkillManage.tool(project_dir, tool_opts)
-          learning_prompt = PromptBuilder.build_learning_section()
+
+          learning_prompt =
+            SystemPrompt.build(project_dir, %{workspace_dir: home_dir, session_scope: :main})
 
           with :ok <- assert_learning_prompt(learning_prompt),
                {:ok, search_result} <-
                  execute_tool_result(search_tool, "trace-search-prior-work", %{
                    "query" => "last time deployment incident handoff",
-                   "scope" => "current"
+                   "scope" => "project"
                  }),
                :ok <- assert_contains(flatten_text(search_result), "prior-deployment-incident"),
-               :ok <- assert_learning_search(search_result, search_calls),
+               :ok <- assert_learning_search(search_result),
                {:ok, memory_result} <-
-                 execute_tool_result(memory_tool, "trace-create-memory-topic", %{
-                   "topic" => "Deployment Incident Handoff"
+                 execute_tool_result(memory_tool, "trace-remember", %{
+                   "text" => "Deployment incident handoffs go to the on-call lead."
                  }),
-               :ok <- assert_memory_topic_created(memory_result, project_dir),
+               :ok <- assert_remembered(memory_result, project_dir),
                {:ok, _skill_create_result} <-
                  execute_tool_result(skill_tool, "trace-create-skill", %{
                    "action" => "create",
@@ -479,7 +424,7 @@ defmodule LemonEvals.Evals.MemoryAndSkills do
               status: :pass,
               details: %{
                 search_calls: length(Agent.get(search_calls, & &1)),
-                memory_topic: memory_result.details[:slug],
+                remembered: memory_result.details[:path],
                 skill: "deployment-incident-handoff",
                 report_action: report_result.details[:action]
               }

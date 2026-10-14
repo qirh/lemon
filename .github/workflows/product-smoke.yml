@@ -14,8 +14,8 @@ on:
       - "priv/**"
       - ".github/workflows/product-smoke.yml"
   schedule:
-    # Daily at 05:30 UTC (off-peak, intentionally not :00 or :30)
-    - cron: "30 5 * * *"
+    # Weekly, Monday 05:30 UTC. PRs touching apps/** already run it.
+    - cron: "30 5 * * 1"
   workflow_dispatch:
     inputs:
       profile:
@@ -28,7 +28,7 @@ permissions:
 
 env:
   MIX_ENV: prod
-  LEMON_SECRETS_MASTER_KEY: "smoke-test-dummy-key-32-chars-!!"
+  LEMON_SECRETS_MASTER_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
   LEMON_CONTROL_PLANE_PORT: "14040"
   LEMON_WEB_PORT: "14080"
   LEMON_SIM_UI_PORT: "14090"
@@ -216,6 +216,7 @@ jobs:
 
           [providers.openai]
           base_url = "http://127.0.0.1:14110/v1"
+          api_key_secret = "OPENAI_API_KEY"
 
           [gateway]
           max_concurrent_runs = 1

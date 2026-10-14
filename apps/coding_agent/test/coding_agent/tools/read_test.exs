@@ -9,36 +9,6 @@ defmodule CodingAgent.Tools.ReadTest do
   @moduletag :tmp_dir
 
   # ============================================================================
-  # Tool Definition Tests
-  # ============================================================================
-
-  describe "tool/2" do
-    test "returns an AgentTool struct with correct properties" do
-      tool = Read.tool("/tmp")
-
-      assert tool.name == "read"
-      assert tool.label == "Read File"
-      assert tool.description =~ "Read the contents of a file"
-      assert tool.parameters["type"] == "object"
-      assert tool.parameters["required"] == ["path"]
-      assert tool.parameters["properties"]["path"]["type"] == "string"
-      assert tool.parameters["properties"]["offset"]["type"] == "integer"
-      assert tool.parameters["properties"]["limit"]["type"] == "integer"
-      assert is_function(tool.execute, 4)
-    end
-
-    test "tool execute function can be invoked", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "test.txt")
-      File.write!(path, "hello world")
-
-      tool = Read.tool(tmp_dir)
-      result = tool.execute.("call_1", %{"path" => path}, nil, nil)
-
-      assert %AgentToolResult{} = result
-    end
-  end
-
-  # ============================================================================
   # Basic Text File Reading
   # ============================================================================
 
@@ -63,7 +33,7 @@ defmodule CodingAgent.Tools.ReadTest do
 
       params =
         reply_acp_request("fs/read_text_file", %{
-          "result" => %{"content" => "line one\nline two\nline three"}
+          "result" => %{"content" => "line two"}
         })
 
       assert params["path"] == path
@@ -108,7 +78,7 @@ defmodule CodingAgent.Tools.ReadTest do
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      assert text == "1: "
+      assert text =~ "\n1: "
     end
 
     test "reads file with only newlines", %{tmp_dir: tmp_dir} do
@@ -121,7 +91,7 @@ defmodule CodingAgent.Tools.ReadTest do
       assert text =~ "1: "
       assert text =~ "2: "
       assert text =~ "3: "
-      assert text =~ "4: "
+      refute text =~ "4: "
     end
 
     test "reads file with unicode content", %{tmp_dir: tmp_dir} do
@@ -132,6 +102,34 @@ defmodule CodingAgent.Tools.ReadTest do
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "Hello 世界! 🌍"
+    end
+
+    test "caps a giant first line and keeps UTF-8 previews valid", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "long-line.txt")
+      File.write!(path, String.duplicate("🌍", 100_000) <> "\nsecond")
+      result = Read.execute("long", %{"path" => path}, nil, nil, tmp_dir, max_bytes: 101)
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert String.valid?(text)
+      assert byte_size(text |> String.split("\n") |> Enum.at(1)) <= 101
+      assert details.total_lines == 2
+      assert details.truncation.reason == "long_line"
+      assert text =~ path
+
+      assert %AgentToolResult{content: [%TextContent{text: next_text}]} =
+               Read.execute("next", %{"path" => path, "offset" => 2}, nil, nil, tmp_dir, [])
+
+      assert next_text =~ "\n2: second"
+    end
+
+    test "validates UTF-8 across chunk boundaries and retains the full-file digest", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "chunk-boundary.txt")
+      content = String.duplicate("x", 65_535) <> "🌍\nsecond"
+      File.write!(path, content)
+      assert {:ok, window} = CodingAgent.Tools.ReadText.read(path, 1, 1, 10, 100, nil)
+      assert window.lines == ["second"]
+      assert window.digest == :erlang.md5(content)
     end
   end
 
@@ -231,36 +229,35 @@ defmodule CodingAgent.Tools.ReadTest do
       assert details.lines_shown == 2
     end
 
-    test "offset of 0 or negative is treated as 1", %{tmp_dir: tmp_dir} do
+    test "rejects non-positive offsets", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "negative.txt")
       File.write!(path, "line1\nline2\nline3")
 
       result1 = Read.execute("call_1", %{"path" => path, "offset" => 0}, nil, nil, tmp_dir, [])
       result2 = Read.execute("call_1", %{"path" => path, "offset" => -5}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{details: %{start_line: 1}} = result1
-      assert %AgentToolResult{details: %{start_line: 1}} = result2
+      assert {:error, "offset must be a positive integer" <> _} = result1
+      assert {:error, "offset must be a positive integer" <> _} = result2
     end
 
-    test "offset beyond file length returns empty content", %{tmp_dir: tmp_dir} do
+    test "offset beyond file length reports its bounds", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "beyond.txt")
       File.write!(path, "line1\nline2")
 
       result = Read.execute("call_1", %{"path" => path, "offset" => 100}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{details: details} = result
-      assert details.lines_shown == 0
+      assert {:error, message} = result
+      assert message =~ "offset=100"
+      assert message =~ "2 lines"
     end
 
-    test "limit of 0 or negative returns no lines", %{tmp_dir: tmp_dir} do
+    test "rejects non-positive limits", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "zero_limit.txt")
       File.write!(path, "line1\nline2\nline3")
 
       result1 = Read.execute("call_1", %{"path" => path, "limit" => 0}, nil, nil, tmp_dir, [])
 
-      # limit <= 0 does not apply user limit (reads all lines)
-      assert %AgentToolResult{details: details} = result1
-      assert details.lines_shown == 3
+      assert {:error, "limit must be a positive integer" <> _} = result1
     end
   end
 
@@ -276,7 +273,7 @@ defmodule CodingAgent.Tools.ReadTest do
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      lines = String.split(text, "\n")
+      lines = text |> String.split("\n") |> Enum.drop(1)
       assert Enum.at(lines, 0) == "1: a"
       assert Enum.at(lines, 1) == "2: b"
       assert Enum.at(lines, 2) == "3: c"
@@ -289,7 +286,7 @@ defmodule CodingAgent.Tools.ReadTest do
       result = Read.execute("call_1", %{"path" => path, "offset" => 3}, nil, nil, tmp_dir, [])
 
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
-      lines = String.split(text, "\n")
+      lines = text |> String.split("\n") |> Enum.drop(1)
       assert Enum.at(lines, 0) == "3: c"
       assert Enum.at(lines, 1) == "4: d"
       assert Enum.at(lines, 2) == "5: e"
@@ -357,75 +354,23 @@ defmodule CodingAgent.Tools.ReadTest do
   # ============================================================================
 
   describe "execute/6 - image files" do
-    test "returns ImageContent for PNG files", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "image.png")
-      # Minimal valid PNG header
-      png_data =
-        <<0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-          0x44, 0x52>>
-
-      File.write!(path, png_data)
-
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
-
-      assert %AgentToolResult{content: [%ImageContent{} = image], details: details} = result
-      assert image.mime_type == "image/png"
-      assert is_binary(image.data)
-      assert Base.decode64!(image.data) == png_data
-      assert details.mime_type == "image/png"
-      assert details.size == byte_size(png_data)
-    end
-
-    test "returns ImageContent for JPEG files (.jpg)", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "image.jpg")
-      # Minimal JPEG header
-      jpeg_data = <<0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46>>
-      File.write!(path, jpeg_data)
-
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
-
-      assert %AgentToolResult{content: [%ImageContent{mime_type: "image/jpeg"}]} = result
-    end
-
-    test "returns ImageContent for JPEG files (.jpeg)", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "image.jpeg")
-      jpeg_data = <<0xFF, 0xD8, 0xFF, 0xE0>>
-      File.write!(path, jpeg_data)
-
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
-
-      assert %AgentToolResult{content: [%ImageContent{mime_type: "image/jpeg"}]} = result
-    end
-
-    test "returns ImageContent for GIF files", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "image.gif")
-      # GIF87a header
-      gif_data = <<0x47, 0x49, 0x46, 0x38, 0x37, 0x61>>
-      File.write!(path, gif_data)
-
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
-
-      assert %AgentToolResult{content: [%ImageContent{mime_type: "image/gif"}]} = result
-    end
-
-    test "returns ImageContent for WebP files", %{tmp_dir: tmp_dir} do
-      path = Path.join(tmp_dir, "image.webp")
-      webp_data = "RIFF" <> <<0x00, 0x00, 0x00, 0x00>> <> "WEBP"
-      File.write!(path, webp_data)
-
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
-
-      assert %AgentToolResult{content: [%ImageContent{mime_type: "image/webp"}]} = result
-    end
-
-    test "case insensitive extension matching for images", %{tmp_dir: tmp_dir} do
+    test "returns real native PNG bytes with case-insensitive extension", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "IMAGE.PNG")
-      png_data = <<0x89, 0x50, 0x4E, 0x47>>
+
+      png_data =
+        Base.decode64!(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDnoAAAAASUVORK5CYII="
+        )
+
       File.write!(path, png_data)
 
-      result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
+      assert %AgentToolResult{content: content, details: details} =
+               Read.execute("image", %{"path" => path}, nil, nil, tmp_dir, [])
 
-      assert %AgentToolResult{content: [%ImageContent{mime_type: "image/png"}]} = result
+      assert %ImageContent{} = image = Enum.find(content, &match?(%ImageContent{}, &1))
+      assert image.mime_type == "image/png"
+      assert Base.decode64!(image.data) == png_data
+      assert details.size == byte_size(png_data)
     end
   end
 
@@ -434,11 +379,7 @@ defmodule CodingAgent.Tools.ReadTest do
   # ============================================================================
 
   describe "execute/6 - binary files" do
-    # Note: The current implementation does not explicitly detect binary files
-    # other than images. Non-image binary files are read as text.
-    # This test documents current behavior.
-
-    test "binary file without image extension is read as text", %{tmp_dir: tmp_dir} do
+    test "binary file without image extension is refused", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "binary.bin")
       # Binary data with null bytes
       binary_data = <<0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE>>
@@ -446,8 +387,9 @@ defmodule CodingAgent.Tools.ReadTest do
 
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
-      # Current behavior: returns TextContent (may have encoding issues)
-      assert %AgentToolResult{content: [%TextContent{}]} = result
+      assert {:error, message} = result
+      assert message =~ "binary"
+      assert message =~ "bash"
     end
   end
 
@@ -456,9 +398,6 @@ defmodule CodingAgent.Tools.ReadTest do
   # ============================================================================
 
   describe "execute/6 - invalid UTF-8" do
-    # Note: The current implementation reads file as binary and splits on regex
-    # which handles invalid UTF-8 gracefully by treating it as bytes.
-
     test "handles file with invalid UTF-8 sequences", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "invalid_utf8.txt")
       # Invalid UTF-8 sequence (continuation byte without start)
@@ -467,8 +406,8 @@ defmodule CodingAgent.Tools.ReadTest do
 
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])
 
-      # Should not crash - either returns text or handles gracefully
-      assert %AgentToolResult{} = result
+      assert {:error, message} = result
+      assert message =~ "invalid UTF-8"
     end
   end
 
@@ -525,30 +464,17 @@ defmodule CodingAgent.Tools.ReadTest do
   end
 
   describe "execute/6 - directory handling" do
-    test "returns error when path is a directory", %{tmp_dir: tmp_dir} do
+    test "lists directory entries through the read tool", %{tmp_dir: tmp_dir} do
       dir_path = Path.join(tmp_dir, "subdir")
       File.mkdir_p!(dir_path)
+      File.write!(Path.join(dir_path, "entry.txt"), "content")
 
       result = Read.execute("call_1", %{"path" => dir_path}, nil, nil, tmp_dir, [])
 
-      assert {:error, msg} = result
-      assert msg =~ "directory"
-    end
-  end
-
-  describe "execute/6 - missing path parameter" do
-    test "returns error when path is empty" do
-      result = Read.execute("call_1", %{"path" => ""}, nil, nil, "/tmp", [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Path is required"
-    end
-
-    test "returns error when path is missing" do
-      result = Read.execute("call_1", %{}, nil, nil, "/tmp", [])
-
-      assert {:error, msg} = result
-      assert msg =~ "Path is required"
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert text =~ "entry.txt"
+      assert details.is_directory
+      assert result.trust == :untrusted
     end
   end
 
@@ -675,7 +601,12 @@ defmodule CodingAgent.Tools.ReadTest do
 
     test "includes complete details for image files", %{tmp_dir: tmp_dir} do
       path = Path.join(tmp_dir, "details.png")
-      png_data = <<0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A>>
+
+      png_data =
+        Base.decode64!(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDnoAAAAASUVORK5CYII="
+        )
+
       File.write!(path, png_data)
 
       result = Read.execute("call_1", %{"path" => path}, nil, nil, tmp_dir, [])

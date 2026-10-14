@@ -132,7 +132,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
   @spec help() :: String.t()
   def help do
     """
-    Usage: ./bin/lemon node join --name NAME --controller wss://HOST/ws [options]
+    Usage: lemon node join --name NAME --controller wss://HOST/ws [options]
 
     Options:
       --pair                    Pair and store a controller-issued node token

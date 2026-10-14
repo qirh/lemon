@@ -53,22 +53,21 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end
   end
 
-  @spec list_boards(keyword()) :: [map()]
+  @doc "List boards. `strict: true` returns `{:ok, boards}` or a store error, never false emptiness."
+  @spec list_boards(keyword()) :: [map()] | {:ok, [map()]} | {:error, term()}
   def list_boards(opts \\ []) do
-    status = opts[:status] && to_string(opts[:status])
-    owner = opts[:owner] && to_string(opts[:owner])
-    workspace = opts[:workspace] && to_string(opts[:workspace])
-    limit = positive_limit(opts[:limit], 50)
+    project = fn records ->
+      records
+      |> Enum.map(fn {_key, board} -> normalize_board(board) end)
+      |> Enum.reject(&(&1 == %{}))
+      |> maybe_filter(:status, opts[:status] && to_string(opts[:status]))
+      |> maybe_filter(:owner, opts[:owner] && to_string(opts[:owner]))
+      |> maybe_filter(:workspace, opts[:workspace] && to_string(opts[:workspace]))
+      |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
+      |> Enum.take(positive_limit(opts[:limit], 50))
+    end
 
-    @boards_table
-    |> Store.list()
-    |> Enum.map(fn {_key, board} -> normalize_board(board) end)
-    |> Enum.reject(&(&1 == %{}))
-    |> maybe_filter(:status, status)
-    |> maybe_filter(:owner, owner)
-    |> maybe_filter(:workspace, workspace)
-    |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
-    |> Enum.take(limit)
+    list_records(@boards_table, opts, project)
   end
 
   @spec archive_board(binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -99,7 +98,8 @@ defmodule LemonAgent.Workspace.KanbanStore do
 
     with {:ok, board} <- fetch_board(board_id),
          :ok <- validate_title(title),
-         {:ok, status} <- normalize_task_status(opts[:status], board.columns) do
+         {:ok, status} <- normalize_task_status(opts[:status], board.columns),
+         :ok <- workflow_completion_allowed(%{meta: %{}}, board, status) do
       now = now_ms()
 
       task = %{
@@ -137,21 +137,29 @@ defmodule LemonAgent.Workspace.KanbanStore do
     end
   end
 
-  @spec list_tasks(binary(), keyword()) :: [map()]
+  @doc "List cards. `strict: true` preserves backend failure instead of returning an empty board."
+  @spec list_tasks(binary(), keyword()) :: [map()] | {:ok, [map()]} | {:error, term()}
   def list_tasks(board_id, opts \\ []) when is_binary(board_id) do
-    status = opts[:status] && to_string(opts[:status])
-    assignee = opts[:assignee] && to_string(opts[:assignee])
-    limit = positive_limit(opts[:limit], 100)
+    project = fn records ->
+      records
+      |> Enum.map(fn {_key, task} -> normalize_task(task) end)
+      |> Enum.reject(&(&1 == %{}))
+      |> Enum.filter(&(&1.board_id == board_id))
+      |> maybe_filter(:status, opts[:status] && to_string(opts[:status]))
+      |> maybe_filter(:assignee, opts[:assignee] && to_string(opts[:assignee]))
+      |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
+      |> Enum.take(positive_limit(opts[:limit], 100))
+    end
 
-    @tasks_table
-    |> Store.list()
-    |> Enum.map(fn {_key, task} -> normalize_task(task) end)
-    |> Enum.reject(&(&1 == %{}))
-    |> Enum.filter(&(&1.board_id == board_id))
-    |> maybe_filter(:status, status)
-    |> maybe_filter(:assignee, assignee)
-    |> Enum.sort_by(&(&1.updated_at_ms || 0), :desc)
-    |> Enum.take(limit)
+    list_records(@tasks_table, opts, project)
+  end
+
+  defp list_records(table, opts, project) do
+    if opts[:strict] do
+      with {:ok, records} <- Store.fetch_all(table), do: {:ok, project.(records)}
+    else
+      project.(Store.list(table))
+    end
   end
 
   @spec update_task(binary(), keyword() | map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -245,7 +253,6 @@ defmodule LemonAgent.Workspace.KanbanStore do
             updated =
               task
               |> Map.put(:status, to_status)
-              |> Map.put(:assignee, task.assignee || worker_id)
               |> Map.put(
                 :worker_profile,
                 string_opt(opts[:worker_profile]) || task.worker_profile
@@ -302,7 +309,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
         reclaimed =
           board_id
           |> list_tasks(limit: 10_000)
-          |> Enum.filter(&expired_lease?(&1, now))
+          |> Enum.filter(&(expired_lease?(&1, now) and not tracked_run?(&1)))
           |> Enum.map(fn task -> reclaim_task_unlocked(task, board, target_status, opts) end)
 
         {:ok, reclaimed}
@@ -343,7 +350,9 @@ defmodule LemonAgent.Workspace.KanbanStore do
         reclaimed =
           board_id
           |> list_tasks(limit: 10_000)
-          |> Enum.filter(&(lease_worker_id(active_lease(&1)) == worker_id))
+          |> Enum.filter(
+            &(lease_worker_id(active_lease(&1)) == worker_id and not tracked_run?(&1))
+          )
           |> Enum.map(&reclaim_task_unlocked(&1, board, target_status, opts))
 
         {:ok, reclaimed}
@@ -352,12 +361,72 @@ defmodule LemonAgent.Workspace.KanbanStore do
   end
 
   @doc """
+  Persist a router invocation before submission, guarded by the exact task lease.
+  Tracked invocations are not reclaimed on expiry or dispatcher restart: their
+  outcome must be reconciled before another worker can edit the same checkout.
+  """
+  def track_leased_run(task_id, lease_id, run_id, attrs \\ %{}) do
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        {workflow, attrs} = attrs |> Map.new() |> Map.pop("codingWorkflow")
+        run = attrs |> Map.put_new("status", "running") |> Map.put("runId", run_id)
+
+        meta =
+          task.meta
+          |> Map.put("kanbanRun", run)
+          |> put_workflow(workflow)
+
+        updated =
+          task
+          |> Map.put(:run_id, run_id)
+          |> Map.put(:session_key, run["sessionKey"] || task.session_key)
+          |> Map.put(:meta, meta)
+          |> Map.put(:updated_at_ms, now_ms())
+
+        with :ok <- Store.put(@tasks_table, task.id, updated) do
+          emit(:kanban_task_updated, board, updated, [])
+          {:ok, updated}
+        end
+      end
+    end)
+  end
+
+  @doc "Persist a coding workflow checkpoint under the exact still-owned card lease."
+  def checkpoint_leased_workflow(task_id, lease_id, checkpoint) when is_map(checkpoint) do
+    with_task_board_lock(task_id, fn ->
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+        checkpoint =
+          if get_in(task.meta, ["codingWorkflow", "cancelRequested"]) == true,
+            do: Map.put(checkpoint, "cancelRequested", true),
+            else: checkpoint
+
+        updated = %{
+          task
+          | meta: Map.put(task.meta, "codingWorkflow", checkpoint),
+            updated_at_ms: now_ms()
+        }
+
+        with :ok <- Store.put(@tasks_table, task.id, updated) do
+          emit(:kanban_task_updated, board, updated, [])
+          {:ok, updated}
+        end
+      end
+    end)
+  end
+
+  defp put_workflow(meta, workflow) when is_map(workflow),
+    do: Map.put(meta, "codingWorkflow", workflow)
+
+  defp put_workflow(meta, _), do: meta
+
+  @doc """
   Complete a task only if the supplied lease is still authoritative.
   """
   @spec complete_leased_task(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
   def complete_leased_task(task_id, lease_id, opts \\ []) do
     with_task_board_lock(task_id, fn ->
-      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id) do
+      with {:ok, task, board} <- fetch_task_with_lease(task_id, lease_id),
+           :ok <- workflow_completion_allowed(task, board, "done") do
         complete_task_unlocked(task, board, opts)
       end
     end)
@@ -385,7 +454,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
       |> Map.put(:run_id, string_opt(opts[:run_id]) || task.run_id)
       |> Map.put(:updated_at_ms, now)
       |> Map.put(:completed_at_ms, now)
-      |> Map.put(:meta, clear_lease(task.meta))
+      |> Map.put(:meta, terminal_meta(task.meta, "completed", opts))
 
     with :ok <- Store.put(@tasks_table, task.id, updated) do
       emit(:kanban_task_completed, board, updated, opts)
@@ -408,7 +477,10 @@ defmodule LemonAgent.Workspace.KanbanStore do
       |> Map.put(:status, status || "todo")
       |> Map.put(:updated_at_ms, now)
       |> Map.put(:completed_at_ms, nil)
-      |> Map.put(:meta, task.meta |> clear_lease() |> Map.put("lastFailure", failure))
+      |> Map.put(
+        :meta,
+        terminal_meta(task.meta, "failed", opts) |> Map.put("lastFailure", failure)
+      )
 
     with :ok <- Store.put(@tasks_table, task.id, updated) do
       emit(:kanban_task_failed, board, updated, opts)
@@ -520,7 +592,8 @@ defmodule LemonAgent.Workspace.KanbanStore do
     |> list_tasks(status: from_status, limit: 10_000)
     |> Enum.sort_by(&(&1.created_at_ms || 0), :asc)
     |> Enum.find(fn task ->
-      is_nil(active_lease(task)) and Enum.all?(task.depends_on, &MapSet.member?(completed, &1))
+      is_nil(active_lease(task)) and not Map.has_key?(task.meta, "lastFailure") and
+        not tracked_run?(task) and Enum.all?(task.depends_on, &MapSet.member?(completed, &1))
     end)
   end
 
@@ -535,6 +608,7 @@ defmodule LemonAgent.Workspace.KanbanStore do
     attrs = Map.new(attrs)
 
     with {:ok, status} <- maybe_status(attrs, task.status, board.columns),
+         :ok <- workflow_completion_allowed(task, board, status),
          {:ok, title} <- maybe_title(attrs, task.title) do
       {:ok,
        task
@@ -547,11 +621,65 @@ defmodule LemonAgent.Workspace.KanbanStore do
        |> maybe_put(:session_key, attr(attrs, :session_key) || attr(attrs, :sessionKey))
        |> maybe_put(:run_id, attr(attrs, :run_id) || attr(attrs, :runId))
        |> maybe_put_list(:depends_on, attr(attrs, :depends_on) || attr(attrs, :dependsOn))
-       |> maybe_put_meta(attr(attrs, :meta))}
+       |> maybe_put_meta(attr(attrs, :meta))
+       |> maybe_retry(attr(attrs, :status), List.first(board.columns))}
     end
   end
 
   defp apply_task_attrs(_task, _board, _attrs), do: {:error, :invalid_attrs}
+
+  defp maybe_retry(task, status, first_column) do
+    if status == first_column and not tracked_run?(task) do
+      update_in(task.meta, fn meta ->
+        meta = Map.delete(meta, "lastFailure")
+
+        case meta["codingWorkflow"] do
+          %{"phase" => "completed"} ->
+            Map.delete(meta, "codingWorkflow")
+
+          %{} = workflow ->
+            Map.put(meta, "codingWorkflow", Map.delete(workflow, "cancelRequested"))
+
+          _ ->
+            meta
+        end
+      end)
+    else
+      task
+    end
+  end
+
+  defp workflow_completion_allowed(task, board, "done") do
+    workflow = task.meta["codingWorkflow"]
+    required? = is_map(workflow) or is_map(board.meta["codingWorkflow"])
+
+    approved? =
+      is_map(workflow) and workflow["phase"] == "completed" and
+        get_in(workflow, ["review", "approved"]) == true and
+        is_binary(workflow["commitSha"]) and workflow["cancelRequested"] != true
+
+    if not required? or approved?, do: :ok, else: {:error, :review_required}
+  end
+
+  defp workflow_completion_allowed(_task, _board, _status), do: :ok
+
+  defp tracked_run?(task) do
+    get_in(task, [:meta, "kanbanRun", "status"]) in ["running", "outcome_unknown"]
+  end
+
+  defp terminal_meta(meta, status, opts) do
+    run = Map.get(meta, "kanbanRun", %{})
+
+    meta
+    |> clear_lease()
+    |> Map.put(
+      "kanbanRun",
+      run
+      |> Map.put("status", status)
+      |> Map.put("finishedAtMs", now_ms())
+      |> Map.put("output", string_opt(opts[:output]))
+    )
+  end
 
   defp maybe_title(attrs, existing) do
     case attr(attrs, :title) do
@@ -572,7 +700,6 @@ defmodule LemonAgent.Workspace.KanbanStore do
   end
 
   defp normalize_task_status(nil, [first | _]), do: {:ok, first}
-  defp normalize_task_status(nil, []), do: {:ok, "todo"}
 
   defp normalize_task_status(status, columns) do
     status = String.trim(to_string(status))

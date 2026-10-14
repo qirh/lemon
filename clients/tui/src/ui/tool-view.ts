@@ -8,31 +8,24 @@
  * ToolShelfComponent} and the gallery all render the same view, so what the
  * gallery shows is what the transcript shows.
  *
- * ## Why an adapter is needed at all
+ * ## The wire shape
  *
- * `action.detail` is passed through the Elixir pipeline verbatim: every engine
- * adapter (claude, codex, opencode, kimi, pi, the native lemon engine) puts its
- * own keys in, and nothing normalises them. The formatters, in contrast, were
- * written against the native engine's tool argument shape. The three tables
- * below are the whole translation:
+ * Every action comes from Lemon's native engine
+ * (`CodingAgent.Session.RunTranslator`), projected for operator clients by the
+ * control plane's event bridge. `action.detail` carries:
  *
- *   tool name  `detail.name` (claude/opencode/kimi/native) · `detail.tool_name`
- *              (pi) · `detail.tool` (codex MCP) · `detail.result_meta.tool_name`
- *              (native, error paths) · else inferred from `action.kind`
- *   arguments  `detail.input` (claude/opencode/kimi) · `detail.args` (pi/native)
- *              · `detail.arguments` (codex MCP)
- *   result     `detail.result` (pi/native) · `detail.result_preview`
- *              (claude/kimi/codex) · `detail.output_preview` (opencode) ·
- *              `detail.result_summary` (codex, duplicate) · `detail.error_message`
+ *   name            the tool name (`bash`, `edit`, `browser_click`, …)
+ *   args            the tool's arguments, exactly as the model sent them
+ *   result          the result text — bounded to ~32 KB for operator clients
+ *                   (a server that predates that sends a 500-char preview)
+ *   details         the tool's structured details, JSON-safe and bounded: an
+ *                   edit's `diff` + `first_changed_line`, a command's
+ *                   `exit_code`, a read's `path`/`total_lines`, …; optional
+ *   result_meta     error/task/command metadata (`error_type`, `exit_code`, …)
+ *   partial_result  the latest streamed partial, while the tool runs
  *
- * On top of that, argument *keys* differ per engine (`file_path` vs `path`,
- * `old_string` vs `old_text`, `cmd` vs `command`), so {@link normalizeToolArgs}
- * fills in the canonical alias the formatters read without dropping anything the
- * engine sent.
- *
- * Codex is the one engine that reports shell commands with no tool name and no
- * detail at all on `started` — those fall through to the kind-based inference
- * (`command` → `bash`) and the action title, which already carries the command.
+ * Reasoning never reaches this module: the event controller routes
+ * `kind: "reasoning"` actions to their own transcript block.
  */
 
 import { diffLines } from "@oh-my-pi/pi-natives";
@@ -40,8 +33,8 @@ import { defaultRegistry, type FormatterRegistry } from "../formatters/index.ts"
 import type { FormattedOutput } from "../formatters/types.ts";
 import type { ToolBlock } from "../store/transcript-model.ts";
 
-/** The four lifecycle states a tool card renders. */
-export type ToolCardState = "streaming" | "running" | "success" | "error";
+/** Live execution states and durable outcomes, including incomplete history. */
+export type ToolCardState = "streaming" | "running" | "success" | "error" | "cancelled" | "unknown";
 
 /** A diff the card can render in colour, over and above the formatter's lines. */
 export interface ToolDiff {
@@ -66,57 +59,10 @@ export interface ToolView {
 	body: string[];
 	isError: boolean;
 	diff: ToolDiff | undefined;
-	/** Set for `reasoning`/`note` actions that carry a thought. */
-	reasoning: string | undefined;
-	/** Paths from `detail.changes`, for engines that report changes not diffs. */
-	changedPaths: string[];
 }
 
 /** Body lines a card shows before the accordion starts eliding. */
 export const MAX_BODY_LINES = 24;
-
-/**
- * Tool names an engine reports that mean the same thing as a registered
- * formatter. Names are matched after lowercasing and stripping `_`/`-`/spaces,
- * so `Web_Search`, `webSearch` and `WEBSEARCH` all arrive here as `websearch`.
- */
-const TOOL_NAME_ALIASES: Record<string, string> = {
-	agent: "task",
-	applypatch: "patch",
-	editfile: "edit",
-	execute: "bash",
-	fetch: "webfetch",
-	fileread: "read",
-	filewrite: "write",
-	killshell: "bash",
-	listdirectory: "ls",
-	readfile: "read",
-	run: "bash",
-	runcommand: "bash",
-	search: "grep",
-	shell: "bash",
-	strreplace: "edit",
-	strreplaceeditor: "edit",
-	todo: "todowrite",
-	updatefile: "edit",
-	writefile: "write",
-};
-
-/** Kind → formatter key, for engines that report no tool name (codex). */
-function toolNameForKind(kind: string, args: Record<string, unknown>): string | undefined {
-	switch (kind) {
-		case "command":
-			return "bash";
-		case "file_change":
-			return "edit";
-		case "web_search":
-			return typeof args.url === "string" ? "webfetch" : "websearch";
-		case "subagent":
-			return "task";
-		default:
-			return undefined;
-	}
-}
 
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -128,96 +74,43 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 		: undefined;
 }
 
-/** Normalise an engine's tool name to a formatter key. */
-export function normalizeToolName(raw: string): string {
-	const key = raw
-		.trim()
-		.toLowerCase()
-		.replace(/[\s_-]/g, "");
-	return TOOL_NAME_ALIASES[key] ?? key;
-}
-
 /**
- * Resolve the formatter key for an action, or undefined when neither the detail
- * nor the kind identifies a tool (a bare `note`, a null-kind engine warning).
+ * The formatter key for an action: `detail.name`, or the tool name an error
+ * path recorded in `result_meta`. Undefined for a bare note or an approval.
  */
 export function resolveToolName(block: ToolBlock): string | undefined {
 	const detail = block.detail ?? {};
-	const meta = asRecord(detail.result_meta);
-	const raw =
-		asString(detail.name) ??
-		asString(detail.tool_name) ??
-		asString(detail.tool) ??
-		asString(meta?.tool_name);
-	if (raw) return normalizeToolName(raw);
-	return toolNameForKind(String(block.toolKind ?? ""), toolArgs(block));
+	const raw = asString(detail.name) ?? asString(asRecord(detail.result_meta)?.tool_name);
+	return raw?.trim().toLowerCase();
 }
 
-/** The raw argument map, under whichever key the engine used. */
+/** The tool's argument map (`detail.args`). */
 export function toolArgs(block: ToolBlock): Record<string, unknown> {
-	const detail = block.detail ?? {};
-	return asRecord(detail.input) ?? asRecord(detail.args) ?? asRecord(detail.arguments) ?? {};
+	return asRecord(block.detail?.args) ?? {};
+}
+
+/** The tool's structured details (`detail.details`), when the server sent them. */
+export function toolDetails(block: ToolBlock): Record<string, unknown> {
+	return asRecord(block.detail?.details) ?? {};
 }
 
 /**
- * Add the argument keys the formatters read, keeping every key the engine sent.
- * Aliases only ever fill a gap: an engine that already speaks the canonical
- * name is passed through untouched.
- */
-export function normalizeToolArgs(args: Record<string, unknown>): Record<string, unknown> {
-	const out: Record<string, unknown> = { ...args };
-	const fill = (canonical: string, ...aliases: string[]) => {
-		if (out[canonical] !== undefined) return;
-		for (const alias of aliases) {
-			if (args[alias] !== undefined) {
-				out[canonical] = args[alias];
-				return;
-			}
-		}
-	};
-	fill("path", "file_path", "filePath", "filename", "file", "target_file");
-	fill("old_text", "old_string", "oldString", "oldText");
-	fill("new_text", "new_string", "newString", "newText");
-	fill("command", "cmd", "script");
-	fill("patch_text", "patch", "diff");
-	fill("pattern", "regex");
-	return out;
-}
-
-/**
- * Rebuild the `{content, details, is_error}` result shape the formatters were
- * written against out of whatever flat keys the engine reported.
+ * Rebuild the `{content, details, is_error}` result shape the formatters read:
+ * the result text, and `result_meta` merged with the structured details.
  */
 export function normalizeToolResult(block: ToolBlock, toolName?: string): unknown {
 	const detail = block.detail ?? {};
-	const text =
-		asString(detail.result) ??
-		asString(detail.result_preview) ??
-		asString(detail.output_preview) ??
-		asString(detail.result_summary) ??
-		asString(detail.error_message) ??
-		asString(block.message);
-	// `result` is occasionally a structured payload rather than a string (pi
-	// forwards the tool's own return value); the formatters know those shapes,
-	// so hand them through rather than stringifying.
-	const structured = asRecord(detail.result);
-	if (structured && (structured.content !== undefined || structured.details !== undefined)) {
-		return structured;
-	}
-	const details: Record<string, unknown> = { ...(asRecord(detail.result_meta) ?? {}) };
-	if (detail.exit_code !== undefined && details.exit_code === undefined) {
-		details.exit_code = detail.exit_code;
-	}
-	if (Array.isArray(detail.changes) && details.files === undefined) {
-		details.files = detail.changes;
-	}
+	const text = asString(detail.result) ?? asString(block.message);
+	const details: Record<string, unknown> = {
+		...(asRecord(detail.result_meta) ?? {}),
+		...toolDetails(block),
+	};
 	// The command formatters read their output from `details.stdout`/`stderr`
-	// and ignore `content` entirely once `details` is present. Engines report a
-	// single combined stream, so mirror it onto the side the exit status implies.
-	if (text !== undefined && (toolName === "bash" || toolName === "exec")) {
-		const failed = isToolError(block);
+	// and ignore `content` once `details` is present. The server reports one
+	// combined stream, so mirror it onto the side the exit status implies.
+	if (text !== undefined && (toolName === "bash" || toolName === "bash_output")) {
 		if (details.stdout === undefined && details.stderr === undefined) {
-			if (failed) details.stderr = text;
+			if (isToolError(block)) details.stderr = text;
 			else details.stdout = text;
 		}
 	}
@@ -228,73 +121,67 @@ export function normalizeToolResult(block: ToolBlock, toolName?: string): unknow
 	};
 }
 
-/** Whether the action failed, across the four error shapes engines report. */
+/** Cancellation is a terminal outcome, not an execution failure. */
+export function isToolCancelled(block: ToolBlock): boolean {
+	if (block.phase !== "completed") return false;
+	const details = toolDetails(block);
+	const meta = asRecord(block.detail?.result_meta);
+	return (
+		block.cancelled === true ||
+		details.cancelled === true ||
+		details.error_type === "aborted" ||
+		meta?.error_type === "aborted"
+	);
+}
+
+/** Whether the action failed: the event said so, or the result carries an error type. */
 export function isToolError(block: ToolBlock): boolean {
+	if (isToolCancelled(block)) return false;
 	if (block.ok === false) return true;
-	const detail = block.detail ?? {};
-	if (detail.is_error === true || detail.isError === true) return true;
-	if (asString(detail.error_message) !== undefined) return true;
-	if (asString(detail.error) !== undefined) return true;
-	const meta = asRecord(detail.result_meta);
+	const meta = asRecord(block.detail?.result_meta);
 	return meta?.error_type !== undefined && meta.error_type !== null;
 }
 
 /**
  * The lifecycle state. `streaming` is the window between the action being
- * announced and its arguments arriving — codex opens a `command` action with an
- * empty detail, and claude streams tool input in.
+ * announced and its arguments arriving.
  */
 export function toolCardState(block: ToolBlock): ToolCardState {
-	if (block.phase === "completed") return isToolError(block) ? "error" : "success";
-	const args = toolArgs(block);
-	const hasArgs = Object.keys(args).length > 0;
-	if (block.phase === "started" && !hasArgs && block.detail === undefined) return "streaming";
+	if (isToolCancelled(block)) return "cancelled";
+	if (block.phase === "completed") {
+		if (block.historical && block.ok === undefined && !isToolError(block)) return "unknown";
+		return isToolError(block) ? "error" : "success";
+	}
+	if (block.historical) return "unknown";
+	if (block.phase === "started" && block.detail === undefined) return "streaming";
 	return "running";
 }
 
-/** The reasoning text an action carries, if any. */
-function reasoningText(block: ToolBlock): string | undefined {
-	const reasoning = asRecord(block.detail?.reasoning);
-	return asString(reasoning?.text);
-}
-
-function changedPaths(block: ToolBlock): string[] {
-	const changes = block.detail?.changes;
-	if (!Array.isArray(changes)) return [];
-	const paths: string[] = [];
-	for (const change of changes) {
-		const path = asString(asRecord(change)?.path);
-		if (path) paths.push(path);
-	}
-	return paths;
-}
-
 /**
- * Render `old` → `new` as diff rows with old-side line numbers, in the
- * `±N|content` form {@link renderDiff} parses.
+ * Render `old` → `new` as diff rows in the `±N|content` form {@link renderDiff}
+ * parses. Removals number against the old text, additions against the new one,
+ * context advances both.
  *
- * The line numbers are relative to the replaced fragment (an engine that sends
- * `old_string`/`new_string` never says where in the file it sat), which is why
- * they start at 1 unless a caller knows better.
+ * With a `startLine` the rows carry real file line numbers. Without one the
+ * fragment's position in the file is unknown, so the rows carry no numbers at
+ * all rather than numbers that would claim the edit sat at line 1.
  */
-export function buildDiffText(oldText: string, newText: string, startLine = 1): string {
+export function buildDiffText(oldText: string, newText: string, startLine?: number): string {
 	const rows: string[] = [];
-	// Removals number against the old text, additions against the new one, and
-	// context advances both — otherwise a replacement renders as `-1 / +2`,
-	// implying the edit moved the line down a row.
-	let oldLine = startLine;
-	let newLine = startLine;
+	let oldLine = startLine ?? 0;
+	let newLine = startLine ?? 0;
+	const num = (n: number) => (startLine === undefined ? "" : `${n}|`);
 	for (const change of diffLines(oldText, newText)) {
 		const value = change.value.endsWith("\n") ? change.value.slice(0, -1) : change.value;
 		for (const content of value.split("\n")) {
 			if (change.added) {
-				rows.push(`+${newLine}|${content}`);
+				rows.push(`+${num(newLine)}${content}`);
 				newLine++;
 			} else if (change.removed) {
-				rows.push(`-${oldLine}|${content}`);
+				rows.push(`-${num(oldLine)}${content}`);
 				oldLine++;
 			} else {
-				rows.push(` ${newLine}|${content}`);
+				rows.push(` ${num(newLine)}${content}`);
 				oldLine++;
 				newLine++;
 			}
@@ -303,59 +190,88 @@ export function buildDiffText(oldText: string, newText: string, startLine = 1): 
 	return rows.join("\n");
 }
 
-/** Unified-diff noise that would be misparsed as content rows. */
-const UNIFIED_HEADER = /^(diff --git |index |--- |\+\+\+ |@@|new file mode|deleted file mode)/;
+/** Context lines `diffLines` reports before the first changed row. */
+function leadingContextLines(oldText: string, newText: string): number {
+	let count = 0;
+	for (const change of diffLines(oldText, newText)) {
+		if (change.added || change.removed) return count;
+		const value = change.value.endsWith("\n") ? change.value.slice(0, -1) : change.value;
+		count += value.split("\n").length;
+	}
+	return count;
+}
 
-/** Keep a raw unified diff's hunk body, dropping its headers. */
+/** One row of the edit tool's diff: ` 12\tctx`, `-12\told`, `+12\tnew`. */
+const SERVER_DIFF_ROW = /^([ +-])(\d+)\t(.*)$/;
+
+/**
+ * Convert the server's diff (`CodingAgent.Tools.Edit` format: marker, real
+ * line number, tab, content; hunks separated by `...`) to renderDiff rows.
+ */
+export function serverDiffToRows(diff: string): string {
+	return diff
+		.split(/\r?\n/)
+		.map((line) => {
+			const match = SERVER_DIFF_ROW.exec(line);
+			return match ? `${match[1]}${match[2]}|${match[3]}` : line;
+		})
+		.join("\n");
+}
+
+/** Unified-diff and patch-envelope noise that would be misparsed as content rows. */
+const PATCH_HEADER =
+	/^(diff --git |index |--- |\+\+\+ |@@|new file mode|deleted file mode|\*\*\* (Begin|End) Patch)/;
+
+/** Keep a raw patch's hunk body, dropping its headers. */
 export function stripUnifiedHeaders(patch: string): string {
 	return patch
 		.split(/\r?\n/)
-		.filter((line) => !UNIFIED_HEADER.test(line))
+		.filter((line) => !PATCH_HEADER.test(line))
 		.join("\n")
 		.trim();
 }
 
 /**
  * Pull a renderable diff out of an action, in descending order of fidelity:
- * an explicit patch, an old/new pair, or a whole-file write.
+ * the diff the tool itself computed (real line numbers), a patch, an edit's
+ * old/new pair (anchored at `first_changed_line` when the server sent it), or a
+ * whole-file write.
  */
 export function extractToolDiff(
 	block: ToolBlock,
 	args: Record<string, unknown>,
 	toolName: string | undefined,
 ): ToolDiff | undefined {
-	const path = asString(args.path);
-	const patch = asString(args.patch_text);
-	if (patch) {
-		const text = stripUnifiedHeaders(patch);
+	const details = toolDetails(block);
+	const path = asString(args.path) ?? asString(details.path);
+	const serverDiff = asString(details.diff);
+	if (serverDiff) return { path, text: serverDiffToRows(serverDiff) };
+	if (toolName === "patch") {
+		const patch = asString(args.patch_text);
+		const text = patch ? stripUnifiedHeaders(patch) : "";
 		return text.length > 0 ? { path, text } : undefined;
 	}
-	const oldText = asString(args.old_text);
-	const newText = asString(args.new_text);
-	if (oldText !== undefined || newText !== undefined) {
-		return { path, text: buildDiffText(oldText ?? "", newText ?? "") };
+	if (toolName === "edit") {
+		const oldText = asString(args.old_text) ?? "";
+		const newText = asString(args.new_text) ?? "";
+		if (oldText.length === 0 && newText.length === 0) return undefined;
+		const firstChanged = details.first_changed_line;
+		const startLine =
+			typeof firstChanged === "number" && Number.isInteger(firstChanged) && firstChanged > 0
+				? Math.max(1, firstChanged - leadingContextLines(oldText, newText))
+				: undefined;
+		return { path, text: buildDiffText(oldText, newText, startLine) };
 	}
-	// A write replaces the file wholesale: every line is an addition. Only for
-	// `write` — `content` means something else on most other tools.
-	const content = toolName === "write" ? asString(args.content) : undefined;
-	if (content !== undefined) {
+	// A write replaces the file wholesale: every line is an addition, and the
+	// numbering is the file's own.
+	if (toolName === "write") {
+		const content = asString(args.content);
+		if (content === undefined) return undefined;
 		const rows = content
 			.split(/\r?\n/)
 			.map((line, index) => `+${index + 1}|${line}`)
 			.join("\n");
 		return { path, text: rows };
-	}
-	// Multi-edit: diff the first edit so the card shows something concrete.
-	const edits = Array.isArray(args.edits) ? args.edits : undefined;
-	const first = asRecord(edits?.[0]);
-	if (first) {
-		const from = asString(first.old_text) ?? asString(first.old_string) ?? "";
-		const to = asString(first.new_text) ?? asString(first.new_string) ?? "";
-		if (from || to) return { path, text: buildDiffText(from, to) };
-	}
-	if (block.detail?.diff !== undefined) {
-		const raw = asString(block.detail.diff);
-		if (raw) return { path, text: stripUnifiedHeaders(raw) };
 	}
 	return undefined;
 }
@@ -371,20 +287,43 @@ export function buildToolView(
 	const state = toolCardState(block);
 	const kind = String(block.toolKind ?? "tool");
 	const toolName = resolveToolName(block);
-	const rawArgs = toolArgs(block);
-	const args = normalizeToolArgs(rawArgs);
+	const args = toolArgs(block);
 	const generic = toolName === undefined || !registry.hasFormatter(toolName);
-	const reasoning = reasoningText(block);
 
 	let formatted: FormattedOutput;
-	if (reasoning !== undefined) {
-		const lines = reasoning.split(/\r?\n/);
-		formatted = { summary: lines[0] ?? "", details: lines };
-	} else if (state === "streaming") {
+	if (kind === "note") {
+		const retry = asRecord(block.detail?.retry);
+		return {
+			state,
+			kind,
+			toolName,
+			generic: false,
+			title: block.title,
+			summary: asString(block.detail?.text) ?? "",
+			body: retry && asString(retry.reason) ? [asString(retry.reason)!] : [],
+			isError: state === "error",
+			diff: undefined,
+		};
+	}
+	if (state === "streaming") {
 		// Nothing is known yet. Running the formatters on an empty argument map
 		// yields placeholder noise (`unknown`, `(no arguments)`), so the card shows
 		// its header alone until the arguments land.
 		formatted = { summary: "", details: [] };
+	} else if (state === "cancelled" || state === "unknown") {
+		const details = toolDetails(block);
+		const labels = [state === "cancelled" ? "Cancelled" : "Outcome unknown"];
+		if (state === "cancelled" && details.outcome === "unknown") labels.push("outcome unknown");
+		if (details.outcome === "not_started") labels.push("not started");
+		// Do not ask a success-oriented formatter to infer effects from arguments
+		// (for example, a write's proposed content is not an applied file change).
+		const output: string[] = [];
+		for (const value of [block.detail?.result, details.stdout, details.stderr]) {
+			if (typeof value === "string" && value.length > 0 && !output.includes(value)) {
+				output.push(value);
+			}
+		}
+		formatted = { summary: labels.join(" · "), details: output };
 	} else if (state === "success" || state === "error") {
 		formatted = formatCompleted(block, args, toolName, registry);
 	} else if (block.detail?.partial_result !== undefined) {
@@ -393,8 +332,6 @@ export function buildToolView(
 		formatted = registry.formatArgs(toolName ?? "", args);
 	}
 
-	const paths = changedPaths(block);
-	const body = buildBody(formatted, block, paths);
 	return {
 		state,
 		kind,
@@ -402,11 +339,13 @@ export function buildToolView(
 		generic,
 		title: block.title,
 		summary: firstLine(formatted.summary),
-		body,
+		body: buildBody(formatted, block),
 		isError: state === "error" || formatted.isError === true,
-		diff: reasoning === undefined ? extractToolDiff(block, args, toolName) : undefined,
-		reasoning,
-		changedPaths: paths,
+		// Only a known successful edit can claim its argument diff was applied.
+		diff:
+			state === "error" || state === "cancelled" || state === "unknown"
+				? undefined
+				: extractToolDiff(block, args, toolName),
 	};
 }
 
@@ -418,9 +357,8 @@ function formatCompleted(
 ): FormattedOutput {
 	const result = normalizeToolResult(block, toolName);
 	let formatted = registry.formatResult(toolName ?? "", result, args);
-	// A completed action with no result text at all (codex commands report only
-	// an exit code) would render an empty card; the argument summary is the only
-	// thing left that says what ran.
+	// A completed action with no result text at all would render an empty
+	// card; the argument summary is the only thing left that says what ran.
 	if (formatted.summary.length === 0 && formatted.details.length === 0) {
 		formatted = { ...registry.formatArgs(toolName ?? "", args), isError: formatted.isError };
 	}
@@ -430,8 +368,8 @@ function formatCompleted(
 	if (formatted.isError !== true && isToolError(block)) {
 		const detail = block.detail ?? {};
 		const reason =
-			asString(detail.error) ??
-			asString(detail.error_message) ??
+			asString(detail.result) ??
+			asString(asRecord(detail.result_meta)?.message) ??
 			asString(asRecord(detail.result_meta)?.reason) ??
 			asString(block.message);
 		return {
@@ -443,17 +381,10 @@ function formatCompleted(
 	return formatted;
 }
 
-function buildBody(
-	formatted: FormattedOutput,
-	block: ToolBlock,
-	paths: readonly string[],
-): string[] {
+function buildBody(formatted: FormattedOutput, block: ToolBlock): string[] {
 	const body: string[] = [];
 	for (const line of formatted.details) {
 		for (const part of String(line).split(/\r?\n/)) body.push(part);
-	}
-	if (body.length === 0 && paths.length > 0) {
-		for (const path of paths) body.push(path);
 	}
 	// The daemon's own message (an approval note, a timeout reason) is not part
 	// of any formatter's output but is often the only explanation of a failure.

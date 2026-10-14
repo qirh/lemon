@@ -40,12 +40,12 @@ When setup completes, start the interactive TUI and send your first message:
 $HOME/.lemon/bin/lemon
 ```
 
-The installer prints the PATH entry for its launcher. Once `~/.lemon/bin` is
-on your `PATH`, use `lemon` for this and the commands below. `lemon` starts the
-daemon when needed. If provider readiness is incomplete at a first interactive
-launch, it opens setup before starting the daemon. If it cannot open a
-terminal, it leaves the daemon stopped and tells you to run `lemon setup` from
-an interactive terminal.
+The installer adds `~/.lemon/bin` to PATH in your shell rc file (zsh, bash or
+fish), so new terminals find `lemon`. In an interactive terminal,
+invoking `lemon` with no arguments opens the TUI; without a TTY it prints usage
+and exits. The TUI runs setup when required, starts a daemon if needed, and
+then attaches. Use `lemon start` (or `lemon run`) to run the runtime in the
+foreground.
 
 ## Installer handoff and non-interactive installs
 
@@ -108,6 +108,10 @@ lemon gateway setup discord
 lemon channels
 ```
 
+`lemon channels` inspects redacted Telegram and Discord configuration status,
+including enabled state, configured credentials, binding and allowlist counts,
+and registered transports.
+
 The Telegram and Discord setup adapters store their bot tokens in encrypted
 secrets, write their configuration, and verify the adapter inputs. Follow the
 prompt for the allowed Telegram chat or Discord channel scope.
@@ -126,8 +130,9 @@ warning.
 | --- | --- |
 | `--force` | Reinstall a version already present. |
 | `--verify` | Boot the installed runtime on ephemeral ports and poll `/healthz` before finishing. |
-| `--modify-path` | Add the printed PATH entry to the appropriate shell rc file. |
+| `--no-modify-path` | Do not add `~/.lemon/bin` to PATH in your shell rc file; only print the line. |
 | `--skip-setup` | Do not start the post-install setup wizard. |
+| `--resolve-version` | Print the version this run would install and exit without installing. |
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -139,7 +144,8 @@ warning.
 
 The installed launcher is `~/.lemon/bin/lemon`; updates atomically move only
 `~/.lemon/versions/current`. Your configuration, encrypted secrets, and store
-remain in place. Add the launcher to your PATH if needed:
+remain in place. The installer adds the launcher to PATH unless you pass
+`--no-modify-path`; to add it yourself:
 
 ```bash
 export PATH="$HOME/.lemon/bin:$PATH"
@@ -214,18 +220,61 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 ```
 
 The source wrapper follows the same setup and provider behavior described
-above. `./bin/lemon-tui` is the development TUI entry point after the source
-runtime is configured. When it starts a fresh runtime, the launcher generates
-and shares an in-memory operator token with the TUI, then stops that owned
-runtime when the TUI exits.
+above. In an interactive terminal, bare `./bin/lemon` opens the TUI; without a
+TTY it prints usage. `./bin/lemon start` (or `./bin/lemon run`) runs the runtime
+in the foreground. `./bin/lemon-tui` remains the development TUI entry point.
+When it starts a fresh runtime, the launcher generates and shares an in-memory
+operator token with the TUI, then stops that owned runtime when the TUI exits.
 
-Persistent runtimes started with `./bin/lemon --daemon` receive a private,
+Persistent runtimes started with `./bin/lemon daemon` receive a private,
 port-scoped credential at `~/.lemon/run/control-plane-<port>.token`; later TUI
 launches load it automatically after validating ownership, mode 0600, and
 format. Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are not persisted,
 so runtimes started with one still require it when attaching. Every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
+
+### Switching between releases and source with `lemonup`
+
+`bin/lemonup` switches the `lemon` on your PATH (`~/.lemon/bin/lemon`) between
+installed releases and a source checkout. Config, secrets, and the store in
+`~/.lemon` are shared by every selection. `lemonup` belongs to a checkout: it
+installs releases with that checkout's `install.sh` and defaults `use local` to
+that checkout, so the installer does not place it for you. Link it next to the
+launcher:
+
+```bash
+ln -s "$PWD/bin/lemonup" ~/.lemon/bin/lemonup
+
+lemonup list                      # installed releases and this checkout; * is active
+lemonup current
+lemonup use local                 # run from source (this checkout, compiled on demand)
+lemonup use local .worktrees/foo  # or another checkout/worktree
+lemonup use 2026.10.2             # back to an installed release
+lemonup install 2026.10.1         # download via this checkout's install.sh and activate
+lemonup update                    # latest stable release: install if missing, then activate
+lemonup uninstall 2026.10.1       # delete a release that is not versions/current
+```
+
+Release selection moves only `versions/current`, the pointer `lemon update`
+manages; `local` repoints `~/.lemon/bin/lemon` at the checkout's `bin/lemon`
+and leaves `versions/current` alone. Releases and source keep different daemon
+records, so when a runtime answers on the control port, `lemonup` stops it with
+the active launcher and starts it again with the new selection; if the stop
+fails, nothing is switched. `lemonup` refuses to replace a `~/.lemon/bin/lemon`
+it did not create.
+
+`lemonup update` asks `install.sh --resolve-version` for the latest stable
+release, ignoring `LEMON_VERSION` and `LEMON_CHANNEL`. If that release is
+already active it reports so and exits 0; if it is installed it is activated
+like `lemonup use`; otherwise it is installed like `lemonup install <version>`.
+It works from any selection, including `local`, and a failed install leaves the
+previous selection active. `lemon update` is the product's own
+[preview-confirm update](#updating-an-installed-release): it runs only from an
+installed release, refuses to run from source, and adds a plan digest,
+checkpoint, and rollback receipts. Use `lemon update` to move a release install
+forward with rollback; use `lemonup update` to get onto the latest release from
+wherever you are, including a source checkout.
 
 ## Browser interface
 
@@ -239,10 +288,9 @@ lemon web
 ```
 
 Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
-`./bin/lemon web`; invoking `./bin/lemon` beside an already healthy source
-runtime also reports and reuses it instead of registering a duplicate Erlang
-node. The browser checks the same config, secrets, provider,
-credential, and model readiness as setup. If anything is missing it lists the
+`./bin/lemon web`; the interactive no-argument source launcher opens the TUI,
+which reuses an already healthy runtime instead of registering a duplicate
+Erlang node. The browser checks the same config, secrets, provider,
 pending items, disables prompt/file submission, and points back to `lemon
 setup`; it never waits for a failed agent request to explain first-run setup.
 

@@ -1,1 +1,144 @@
-<%= @inner_content %>
+<div id="app-shell" class="flex h-dvh overflow-hidden bg-bg">
+  <div
+    id="rail-backdrop"
+    class="fixed inset-0 z-30 hidden bg-black/40 md:hidden"
+    phx-click={close_rail()}
+    aria-hidden="true"
+  >
+  </div>
+  <aside
+    id="rail"
+    data-open="false"
+    aria-label="Primary"
+    class="fixed inset-y-0 left-0 z-40 flex w-[232px] -translate-x-full flex-col border-r border-line bg-surface transition-transform duration-150 data-[open=true]:translate-x-0 data-[open=true]:shadow-overlay md:static md:z-auto md:w-[212px] md:translate-x-0 md:bg-surface/60"
+  >
+    <div class="flex h-12 items-center gap-2 px-3">
+      <.link navigate="/" class="flex items-center gap-2 rounded-md px-1 py-1 font-semibold tracking-tight text-fg">
+        <span class="flex h-6 w-6 items-center justify-center rounded-md bg-accent text-accent-fg">
+          <.icon name="lemon" class="h-4 w-4" />
+        </span>
+        Lemon
+      </.link>
+      <button
+        type="button"
+        class="btn btn-ghost btn-icon btn-sm ml-auto md:hidden"
+        phx-click={close_rail()}
+        aria-label="Close navigation"
+      >
+        <.icon name="x" />
+      </button>
+    </div>
+
+    <div class="px-2 pb-2">
+      <button
+        type="button"
+        id="rail-palette-button"
+        class="flex h-8 w-full items-center gap-2 rounded-md border border-line bg-surface px-2.5 text-[13px] text-subtle shadow-sm transition-colors hover:border-line-strong hover:text-muted"
+        phx-click={JS.dispatch("lemon:palette", to: "body")}
+        aria-label="Open command palette"
+      >
+        <.icon name="search" class="h-3.5 w-3.5" />
+        <span class="flex-1 text-left">Search or run…</span>
+        <.kbd keys="mod+k" />
+      </button>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto px-2 pb-3 scroll-thin" aria-label="Main">
+      <div :for={{group, items} <- LemonWeb.Nav.groups()} class="mt-3 first:mt-1">
+        <p class="px-2.5 pb-1 text-2xs font-semibold uppercase tracking-wider text-subtle">{group}</p>
+        <ul class="space-y-px">
+          <li :for={item <- items}>
+            <.link
+              navigate={item.path}
+              class="nav-item"
+              aria-current={assigns[:nav] == item.id && "page"}
+              phx-click={close_rail()}
+            >
+              <.icon name={item.icon} class="h-4 w-4" />
+              <span class="flex-1 truncate">{item.label}</span>
+            </.link>
+          </li>
+        </ul>
+      </div>
+    </nav>
+
+    <div class="space-y-2 border-t border-line p-2">
+      <div
+        id="theme-switcher"
+        class="segmented w-full"
+        role="group"
+        aria-label="Theme"
+        phx-hook="ThemeSwitcher"
+        phx-update="ignore"
+      >
+        <button type="button" data-theme-choice="light" class="flex-1 justify-center" aria-pressed="false" title="Light">
+          <.icon name="sun" class="h-3.5 w-3.5" /><span class="sr-only">Light theme</span>
+        </button>
+        <button type="button" data-theme-choice="dark" class="flex-1 justify-center" aria-pressed="false" title="Dark">
+          <.icon name="moon" class="h-3.5 w-3.5" /><span class="sr-only">Dark theme</span>
+        </button>
+        <button type="button" data-theme-choice="system" class="flex-1 justify-center" aria-pressed="false" title="System">
+          <.icon name="monitor" class="h-3.5 w-3.5" /><span class="sr-only">System theme</span>
+        </button>
+      </div>
+      <div class="flex items-center gap-1">
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm flex-1 justify-start"
+          phx-click={JS.dispatch("lemon:shortcuts", to: "body")}
+        >
+          <.icon name="keyboard" class="h-3.5 w-3.5" /> Shortcuts <.kbd keys="?" class="ml-auto" />
+        </button>
+        <.link
+          :if={assigns[:operator_access] != :tokenless_loopback}
+          href="/logout"
+          method="delete"
+          class="btn btn-ghost btn-icon btn-sm"
+          aria-label="Sign out"
+          title="Sign out"
+        >
+          <.icon name="log-out" class="h-3.5 w-3.5" />
+        </.link>
+      </div>
+    </div>
+  </aside>
+
+  <div class="flex min-w-0 flex-1 flex-col">
+    <header class="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-surface px-2 md:hidden">
+      <button type="button" class="btn btn-ghost btn-icon" phx-click={open_rail()} aria-label="Open navigation">
+        <.icon name="menu" />
+      </button>
+      <span class="truncate text-sm font-semibold">{assigns[:page_heading] || assigns[:page_title] || "Lemon"}</span>
+      <button
+        type="button"
+        class="btn btn-ghost btn-icon ml-auto"
+        phx-click={JS.dispatch("lemon:palette", to: "body")}
+        aria-label="Open command palette"
+      >
+        <.icon name="search" />
+      </button>
+    </header>
+
+    <div
+      id="connection-banner"
+      class="hidden items-center justify-center gap-2 border-b border-warning/30 bg-warning/10 px-3 py-1.5 text-xs font-medium text-warning"
+      role="status"
+      phx-disconnected={JS.show(to: "#connection-banner", display: "flex")}
+      phx-connected={JS.hide(to: "#connection-banner")}
+    >
+      <.icon name="loader" class="h-3.5 w-3.5 animate-spin" />
+      Reconnecting to Lemon… changes are paused until the connection returns.
+    </div>
+
+    <main id="main-content" class="min-h-0 flex-1" tabindex="-1">
+      {@inner_content}
+    </main>
+  </div>
+
+  {live_render(@socket, LemonWeb.ShellLive,
+    id: "lemon-shell",
+    sticky: true,
+    session: %{"parent_access" => to_string(assigns[:operator_access])}
+  )}
+  <.flash_group flash={@flash} />
+</div>

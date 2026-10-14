@@ -1,0 +1,66 @@
+<main id="main-content" class="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-12">
+  <div
+    class="pointer-events-none absolute inset-0 opacity-[0.55]"
+    style="background: radial-gradient(60rem 30rem at 50% -10%, rgb(var(--accent) / 0.18), transparent 70%);"
+    aria-hidden="true"
+  >
+  </div>
+  <div class="relative w-full max-w-sm animate-slide-up">
+    <div class="mb-6 flex flex-col items-center text-center">
+      <span class="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-accent text-accent-fg shadow-pop">
+        <.icon name="lemon" class="h-6 w-6" />
+      </span>
+      <h1 class="text-xl font-semibold tracking-tight">Sign in to Lemon</h1>
+      <p class="mt-1 text-[13px] text-muted">Use the operator token of this Lemon runtime.</p>
+    </div>
+
+    <div class="card p-5">
+      <%= if @error == :not_configured do %>
+        <.callout tone="warning" title="No operator token is configured">
+          Start Lemon with <code class="font-mono">LEMON_CONTROL_PLANE_OPERATOR_TOKEN</code>
+          set. <code class="font-mono">lemon web</code>
+          uses the launcher-managed token and signs you in automatically.
+        </.callout>
+      <% else %>
+        <form
+          id="login-form"
+          action={~p"/login"}
+          method="post"
+          class="space-y-4"
+        >
+          <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+          <input type="hidden" name="return_to" value={@return_to} />
+          <.callout :if={error_message(@error)} tone="danger" id="login-error">
+            {error_message(@error)}
+          </.callout>
+          <div>
+            <label for="token" class="field-label">Operator token</label>
+            <input
+              id="token"
+              name="token"
+              type="password"
+              class="input h-9 font-mono"
+              autocomplete="current-password"
+              autocapitalize="off"
+              spellcheck="false"
+              required
+              autofocus
+              aria-describedby="token-hint"
+              aria-invalid={@error == :invalid_token && "true"}
+            />
+            <p id="token-hint" class="field-hint">
+              Run <code class="font-mono text-fg">lemon web</code>
+              to open this page already signed in.
+            </p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg w-full">
+            Sign in <.icon name="arrow-right" class="h-4 w-4" />
+          </button>
+        </form>
+      <% end %>
+    </div>
+    <p class="mt-4 text-center text-xs text-subtle">
+      The token is checked on the server and never stored in this browser.
+    </p>
+  </div>
+</main>

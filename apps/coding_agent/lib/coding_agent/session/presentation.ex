@@ -10,6 +10,18 @@ defmodule CodingAgent.Session.Presentation do
   @engine "lemon"
   @reasoning_update_threshold 700
 
+  # Channel renderers (Telegram, Discord) show `detail.result`, a 500-char
+  # preview. Operator clients (TUI, web over the control plane) additionally get
+  # these bounded full-fidelity copies; see `put_operator_result/2`.
+  @operator_result_max_bytes 32_768
+  @operator_reasoning_max_bytes 16_384
+  @operator_diff_max_bytes 32_768
+  @operator_detail_string_max_bytes 2_048
+  @operator_detail_list_max 200
+  @operator_detail_max_depth 4
+  # Internal bookkeeping or payloads another field already carries.
+  @operator_detail_dropped_keys ["acp_client", "events", "current_action", "action_detail"]
+
   defmodule ReasoningAccumulator do
     @moduledoc false
 
@@ -44,6 +56,11 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:session_key, session_key)
     |> maybe_add_opt(:agent_id, agent_id)
     |> maybe_add_opt(:acp_session_id, Keyword.get(opts, :acp_session_id))
+    |> maybe_add_opt(:acp_mcp_session_id, Keyword.get(opts, :acp_mcp_session_id))
+    |> maybe_add_opt(
+      :acp_client_elicitation_form,
+      Keyword.get(opts, :acp_client_elicitation_form)
+    )
     |> maybe_add_opt(
       :acp_client_fs_read_text_file,
       Keyword.get(opts, :acp_client_fs_read_text_file)
@@ -198,8 +215,7 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def session_file_path(session_id, cwd) do
-    dir = CodingAgent.Config.sessions_dir(cwd)
-    Path.join(dir, "#{session_id}.jsonl")
+    CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
   def finalize_session(state) do
@@ -269,7 +285,10 @@ defmodule CodingAgent.Session.Presentation do
 
   def reasoning_action({:thinking_start, idx, partial}, %ReasoningAccumulator{} = acc) do
     {block, acc} = new_reasoning_block(idx, partial, acc)
-    {:emit, reasoning_action(block, :started, nil), acc}
+    delta = block.text
+    block = %{block | emitted_bytes: byte_size(block.text)}
+    acc = put_reasoning_block(acc, idx, block)
+    {:emit, reasoning_action(block, :started, nil, delta), acc}
   end
 
   def reasoning_action(
@@ -281,9 +300,10 @@ defmodule CodingAgent.Session.Presentation do
     block = %{block | text: block.text <> text}
 
     if byte_size(block.text) - block.emitted_bytes >= acc.threshold do
+      delta = un_emitted_reasoning(block)
       block = %{block | emitted_bytes: byte_size(block.text)}
       acc = put_reasoning_block(acc, idx, block)
-      {:emit, reasoning_action(block, :updated, nil), acc}
+      {:emit, reasoning_action(block, :updated, nil, delta), acc}
     else
       {:skip, put_reasoning_block(acc, idx, block)}
     end
@@ -295,9 +315,11 @@ defmodule CodingAgent.Session.Presentation do
       ) do
     {block, acc} = get_or_new_reasoning_block(idx, acc)
     text = reasoning_end_text(text, partial, idx, block.text)
-    block = %{block | text: text, emitted_bytes: byte_size(text)}
+    block = %{block | text: text}
+    delta = un_emitted_reasoning(block)
+    block = %{block | emitted_bytes: byte_size(text)}
     acc = delete_reasoning_block(acc, idx)
-    {:emit, reasoning_action(block, :completed, true), acc}
+    {:emit, reasoning_action(block, :completed, true, delta), acc}
   end
 
   def reasoning_action({:thinking_end, idx, partial}, %ReasoningAccumulator{} = acc) do
@@ -351,11 +373,7 @@ defmodule CodingAgent.Session.Presentation do
   end
 
   def visible_text_delta(msg, accumulated_text) do
-    text =
-      case safe_get_visible_text(msg) do
-        visible when is_binary(visible) -> visible
-        _ -> ""
-      end
+    text = safe_get_visible_text(msg)
 
     cond do
       text == "" ->
@@ -394,10 +412,12 @@ defmodule CodingAgent.Session.Presentation do
   def tool_kind(name) do
     case String.downcase(name || "") do
       "bash" -> :command
+      "bash_output" -> :command
+      "kill_process" -> :command
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
-      "glob" -> :tool
+      "patch" -> :file_change
       "grep" -> :tool
       "websearch" -> :web_search
       "webfetch" -> :web_search
@@ -415,7 +435,16 @@ defmodule CodingAgent.Session.Presentation do
       "bash" ->
         cmd = a["command"] || ""
         cmd_preview = cmd |> String.split("\n") |> hd() |> String.slice(0, 60)
-        "`#{cmd_preview}`"
+
+        if a["run_in_background"] == true,
+          do: "`#{cmd_preview}` (background)",
+          else: "`#{cmd_preview}`"
+
+      "bash_output" ->
+        "bash output: #{a["process_id"] || ""}"
+
+      "kill_process" ->
+        "kill: #{a["process_id"] || ""}"
 
       "read" ->
         path = a["path"] || a["file_path"] || ""
@@ -429,8 +458,8 @@ defmodule CodingAgent.Session.Presentation do
         path = a["path"] || a["file_path"] || ""
         "edit: `#{path_label(path)}`"
 
-      "glob" ->
-        "glob: `#{a["pattern"] || ""}`"
+      "find" ->
+        "find: `#{String.slice(a["pattern"] || "", 0, 40)}`"
 
       "grep" ->
         pattern = String.slice(a["pattern"] || "", 0, 30)
@@ -611,7 +640,7 @@ defmodule CodingAgent.Session.Presentation do
 
   def truncate_result(%LemonAgent.Types.AgentToolResult{} = result) do
     result
-    |> LemonAgent.get_text()
+    |> result_text()
     |> truncate_result()
   end
 
@@ -619,6 +648,160 @@ defmodule CodingAgent.Session.Presentation do
     do: truncate_result(text)
 
   def truncate_result(content) when is_list(content) do
+    content
+    |> result_text()
+    |> truncate_result()
+  end
+
+  def truncate_result(result), do: inspect(result, limit: 500)
+
+  @doc """
+  Adds the operator-client view of a tool result to an action `detail`.
+
+  `detail.result` stays the 500-char preview channel renderers show. This adds
+  `result_full` (the result text bounded to 32 KB, only when it is longer than
+  the preview) and `details` (the tool's structured details — diff,
+  first_changed_line, path, exit_code, ... — made JSON-safe and bounded).
+  `LemonControlPlane.EventBridge` promotes both for operator clients.
+  """
+  @spec put_operator_result(map(), term()) :: map()
+  def put_operator_result(detail, result) when is_map(detail) do
+    detail
+    |> maybe_put_result_full(result)
+    |> maybe_put_operator_details(result)
+  end
+
+  defp maybe_put_result_full(detail, result) do
+    full =
+      result
+      |> result_text()
+      |> LemonAi.Text.truncate_middle_utf8(@operator_result_max_bytes,
+        marker: fn removed -> "\n\n… [#{removed} bytes omitted] …\n\n" end
+      )
+
+    if full == Map.get(detail, :result), do: detail, else: Map.put(detail, :result_full, full)
+  end
+
+  defp maybe_put_operator_details(detail, %LemonAgent.Types.AgentToolResult{details: details})
+       when is_map(details) do
+    case operator_details(details) do
+      empty when map_size(empty) == 0 -> detail
+      sanitized -> Map.put(detail, :details, sanitized)
+    end
+  end
+
+  defp maybe_put_operator_details(detail, _result), do: detail
+
+  @doc """
+  Projects a tool's structured `details` into a JSON-safe, bounded map.
+
+  Structs, pids, functions and tuples are dropped, as are internal bookkeeping
+  keys. `diff` keeps up to 32 KB; complete ACP file snapshots keep up to 16 KB
+  per side and are omitted as a pair if either side is oversized. Other strings
+  keep 2 KB. Lists keep their first 200 items and nesting stops at depth 4.
+  """
+  @spec operator_details(map()) :: map()
+  def operator_details(details) when is_map(details) and not is_struct(details) do
+    sanitize_detail_map(details, 1)
+  end
+
+  def operator_details(_details), do: %{}
+
+  defp sanitize_detail_map(map, depth) do
+    map = bounded_file_snapshots(map)
+
+    Enum.reduce(map, %{}, fn {key, value}, acc ->
+      with name when is_binary(name) <- detail_key_name(key),
+           false <- name in @operator_detail_dropped_keys,
+           {:ok, sanitized} <- sanitize_detail_value(name, value, depth) do
+        Map.put(acc, key, sanitized)
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  defp bounded_file_snapshots(map) do
+    snapshots = [:oldText, :newText, "oldText", "newText"]
+
+    if Enum.any?(snapshots, fn key ->
+         case Map.get(map, key) do
+           nil -> false
+           text when is_binary(text) -> byte_size(text) > 16_384 or not String.valid?(text)
+           _ -> true
+         end
+       end) do
+      Map.drop(map, snapshots)
+    else
+      map
+    end
+  end
+
+  defp detail_key_name(key) when is_atom(key), do: Atom.to_string(key)
+  defp detail_key_name(key) when is_binary(key), do: key
+  defp detail_key_name(_key), do: nil
+
+  defp sanitize_detail_value(_name, value, _depth)
+       when is_nil(value) or is_boolean(value) or is_number(value),
+       do: {:ok, value}
+
+  defp sanitize_detail_value(_name, value, _depth) when is_atom(value), do: {:ok, value}
+
+  defp sanitize_detail_value(name, value, _depth)
+       when name in ["oldText", "newText"] and is_binary(value),
+       do: {:ok, value}
+
+  defp sanitize_detail_value(name, value, _depth) when is_binary(value) do
+    max_bytes =
+      if name == "diff", do: @operator_diff_max_bytes, else: @operator_detail_string_max_bytes
+
+    if String.valid?(value) do
+      {:ok, LemonAi.Text.truncate_bytes_utf8(value, max_bytes, marker: "\n...")}
+    else
+      :drop
+    end
+  end
+
+  defp sanitize_detail_value(_name, _value, depth) when depth >= @operator_detail_max_depth,
+    do: :drop
+
+  defp sanitize_detail_value(_name, value, depth) when is_map(value) and not is_struct(value) do
+    {:ok, sanitize_detail_map(value, depth + 1)}
+  end
+
+  defp sanitize_detail_value(name, value, depth) when is_list(value) do
+    items =
+      value
+      |> Enum.take(@operator_detail_list_max)
+      |> Enum.flat_map(fn item ->
+        case sanitize_detail_value(name, item, depth + 1) do
+          {:ok, sanitized} -> [sanitized]
+          :drop -> []
+        end
+      end)
+
+    {:ok, items}
+  end
+
+  defp sanitize_detail_value(_name, _value, _depth), do: :drop
+
+  @doc """
+  The full text of a tool result: every text block joined, or an inspected
+  fallback for results that carry no text.
+  """
+  @spec result_text(term()) :: String.t()
+  def result_text(result) when is_binary(result), do: result
+
+  def result_text(%LemonAgent.Types.AgentToolResult{} = result) do
+    case LemonAgent.get_text(result) do
+      text when is_binary(text) -> text
+      _ -> ""
+    end
+  end
+
+  def result_text(%LemonAi.Types.TextContent{text: text}) when is_binary(text), do: text
+
+  def result_text(content) when is_list(content) do
     content
     |> Enum.map(fn
       %LemonAi.Types.TextContent{text: text} when is_binary(text) -> text
@@ -629,10 +812,9 @@ defmodule CodingAgent.Session.Presentation do
     end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n")
-    |> truncate_result()
   end
 
-  def truncate_result(result), do: inspect(result, limit: 500)
+  def result_text(result), do: inspect(result, limit: 200, printable_limit: 4_096)
 
   def maybe_put_result_meta(detail, %LemonAgent.Types.AgentToolResult{} = result, name)
       when is_map(detail) do
@@ -790,15 +972,65 @@ defmodule CodingAgent.Session.Presentation do
     end)
     |> case do
       empty when map_size(empty) == 0 -> nil
-      usage -> usage
+      usage -> Map.put(usage, :context_tokens, latest_context_tokens(messages))
     end
   end
 
-  def merge_usage(acc, usage) do
-    Map.merge(acc, usage, fn _k, v1, v2 ->
-      if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
+  defp latest_context_tokens(messages) do
+    messages
+    |> Enum.reverse()
+    |> Enum.find_value(0, fn message ->
+      case Map.get(message, :usage) do
+        %{input: input, output: output, cache_read: cache_read, cache_write: cache_write}
+        when is_number(input) and is_number(output) and is_number(cache_read) and
+               is_number(cache_write) ->
+          input + output + cache_read + cache_write
+
+        _ ->
+          nil
+      end
     end)
   end
+
+  def merge_usage(acc, usage) do
+    merged =
+      Map.merge(acc, usage, fn _k, v1, v2 ->
+        if is_number(v1) and is_number(v2), do: v1 + v2, else: v2
+      end)
+
+    previous_cost = Map.get(acc, :cost) || Map.get(acc, "cost")
+    current_cost = Map.get(usage, :cost) || Map.get(usage, "cost")
+
+    if is_map(previous_cost) or is_map(current_cost) do
+      merged |> Map.delete("cost") |> Map.put(:cost, merge_cost(previous_cost, current_cost))
+    else
+      merged
+    end
+  end
+
+  defp merge_cost(previous, current) do
+    Enum.reduce(
+      [:input, :output, :cache_read, :cache_write, :cache_write_long, :total],
+      %{},
+      fn key, cost ->
+        first = cost_component(previous, key)
+        second = cost_component(current, key)
+
+        if is_nil(first) and is_nil(second),
+          do: cost,
+          else: Map.put(cost, key, (first || 0) + (second || 0))
+      end
+    )
+  end
+
+  defp cost_component(cost, key) when is_map(cost) do
+    case Map.get(cost, key, Map.get(cost, Atom.to_string(key))) do
+      value when is_number(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp cost_component(_cost, _key), do: nil
 
   defp new_reasoning_block(idx, partial, %ReasoningAccumulator{} = acc) do
     seq = acc.seq + 1
@@ -827,7 +1059,12 @@ defmodule CodingAgent.Session.Presentation do
     %{acc | blocks: Map.delete(acc.blocks, idx)}
   end
 
-  defp reasoning_action(block, phase, ok) do
+  defp un_emitted_reasoning(block) do
+    offset = min(block.emitted_bytes, byte_size(block.text))
+    binary_part(block.text, offset, byte_size(block.text) - offset)
+  end
+
+  defp reasoning_action(block, phase, ok, delta) do
     text = block.text || ""
 
     %{
@@ -836,10 +1073,21 @@ defmodule CodingAgent.Session.Presentation do
       title: reasoning_title(text),
       phase: phase,
       ok: ok,
-      detail: %{
-        reasoning: %{text: reasoning_payload_text(text, phase), source: "lemon_reasoning"}
-      }
+      detail: %{reasoning: reasoning_payload(text, phase, delta)}
     }
+  end
+
+  # Cumulative previews are bounded, while each incremental delta remains available
+  # after that preview fills. This lets ACP append long thought streams faithfully.
+  defp reasoning_payload(text, phase, delta) do
+    preview = reasoning_payload_text(text, phase)
+
+    full =
+      LemonAi.Text.truncate_bytes_utf8(text, @operator_reasoning_max_bytes,
+        marker: fn removed -> "\n… [#{removed} bytes of reasoning omitted]" end
+      )
+
+    %{text: preview, full_text: full, delta: delta, source: "lemon_reasoning"}
   end
 
   defp reasoning_payload_text(text, :updated) when byte_size(text) <= 500, do: text
@@ -965,8 +1213,6 @@ defmodule CodingAgent.Session.Presentation do
     end
   end
 
-  defp latest_task_current_action(_), do: nil
-
   defp latest_task_action_detail(details) when is_map(details) do
     details
     |> task_result_events()
@@ -985,14 +1231,10 @@ defmodule CodingAgent.Session.Presentation do
     end)
   end
 
-  defp latest_task_action_detail(_), do: nil
-
   defp task_result_events(details) when is_map(details) do
     events = Map.get(details, :events) || Map.get(details, "events")
     if is_list(events), do: events, else: []
   end
-
-  defp task_result_events(_), do: []
 
   defp maybe_put_meta(meta, _key, nil), do: meta
 

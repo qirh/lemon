@@ -966,8 +966,6 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
     end
   end
 
-  defp format_time(nil), do: "00:00"
-
   defp format_time(minutes) when is_integer(minutes) do
     h = div(minutes, 60) |> rem(24)
     m = rem(minutes, 60)
@@ -1036,7 +1034,7 @@ defmodule LemonSimUi.Live.Components.VendingBenchBoard do
         "Customer desk is active after refund pressure"
 
       pending_deliveries != [] ->
-        "Supply chain watch: #{length(pending_deliveries)} delivery run(s) inbound"
+        "Restock watch: #{length(pending_deliveries)} delivery run(s) inbound"
 
       performance.units_sold > 0 ->
         "Machine is moving product and banking cash"

@@ -12,7 +12,32 @@
  */
 
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
+import { parseSessionsContext } from "./context-usage.ts";
 import { MethodUnavailableError } from "./errors.ts";
+import {
+	type OmpCancelResult,
+	type OmpSendResult,
+	type OmpSessionResult,
+	type OmpSessionsDiscoverResult,
+	type OmpSessionsGetResult,
+	type OmpSessionsListParams,
+	type OmpSessionsListResult,
+	type OmpSessionsResumeParams,
+	type OmpSessionsSendParams,
+	type OmpSessionsStartParams,
+	type OmpStatus,
+	parseOmpDiscoveredList,
+	parseOmpSession,
+	parseOmpSessions,
+	parseOmpStatus,
+} from "./omp.ts";
+import type {
+	SessionRewindPreview,
+	SessionRewindResult,
+	SessionRewindTarget,
+	SessionTreeParams,
+	SessionTreeResult,
+} from "./session-tree.ts";
 import type {
 	ApprovalResolveParams,
 	BlueprintActivationResult,
@@ -43,13 +68,20 @@ import type {
 	SessionDetailResult,
 	SessionExportFormat,
 	SessionSummary,
+	SessionsCompactParams,
+	SessionsContextParams,
+	SessionsContextResult,
 	SessionsDeleteResult,
 	SessionsExportResult,
+	SessionsForkParams,
+	SessionsForkResult,
 	SessionsListParams,
 	SessionsListResult,
 	SessionsMetadataPatchParams,
 	SessionsMetadataPatchResult,
 	SessionsPatchParams,
+	SessionsPlanParams,
+	SessionsPlanResult,
 	SessionsPreviewResult,
 	SessionsPruneParams,
 	SessionsPruneResult,
@@ -70,6 +102,8 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsCreate: "sessions.create",
+	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
 	sessionsActive: "sessions.active",
 	sessionsActiveList: "sessions.active.list",
@@ -80,7 +114,10 @@ export const METHOD = {
 	sessionsReset: "sessions.reset",
 	sessionsDelete: "sessions.delete",
 	sessionsCompact: "sessions.compact",
-	sessionHeartbeat: "sessions.heartbeat",
+	sessionsPlan: "sessions.plan",
+	sessionsContext: "sessions.context",
+	sessionsTree: "sessions.tree",
+	sessionsRewind: "sessions.rewind",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -106,6 +143,12 @@ export const METHOD = {
 	goalPause: "goal.pause",
 	goalResume: "goal.resume",
 	goalClear: "goal.clear",
+	cronList: "cron.list",
+	cronAdd: "cron.add",
+	cronUpdate: "cron.update",
+	cronPause: "cron.pause",
+	cronResume: "cron.resume",
+	cronRemove: "cron.remove",
 	logsTail: "logs.tail",
 	configGet: "config.get",
 	configSet: "config.set",
@@ -116,7 +159,34 @@ export const METHOD = {
 	blueprintsValidate: "blueprints.validate",
 	blueprintsPreview: "blueprints.preview",
 	blueprintsActivate: "blueprints.activate",
+	ompStatus: "omp.status",
+	ompSessionsList: "omp.sessions.list",
+	ompSessionsGet: "omp.sessions.get",
+	ompSessionsDiscover: "omp.sessions.discover",
+	ompSessionsStart: "omp.sessions.start",
+	ompSessionsResume: "omp.sessions.resume",
+	ompSessionsSend: "omp.sessions.send",
+	ompSessionsCancel: "omp.sessions.cancel",
+	ompSessionsClose: "omp.sessions.close",
 } as const;
+
+/** Every `omp.*` method; a daemon advertising none of them has no omp integration. */
+export const OMP_METHODS: readonly string[] = [
+	METHOD.ompStatus,
+	METHOD.ompSessionsList,
+	METHOD.ompSessionsGet,
+	METHOD.ompSessionsDiscover,
+	METHOD.ompSessionsStart,
+	METHOD.ompSessionsResume,
+	METHOD.ompSessionsSend,
+	METHOD.ompSessionsCancel,
+	METHOD.ompSessionsClose,
+];
+
+/** Spawning (or resuming) an omp process waits for its RPC handshake. */
+export const OMP_START_REQUEST_TIMEOUT_MS = 60_000;
+/** A send is acknowledged only after omp itself accepted it. */
+export const OMP_SEND_REQUEST_TIMEOUT_MS = 30_000;
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD];
 
@@ -217,6 +287,13 @@ export class ControlPlaneMethods {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
 	}
 
+	sessionsFork(params: SessionsForkParams, options?: RequestOptions): Promise<SessionsForkResult> {
+		return this.#call<SessionsForkResult>(METHOD.sessionsFork, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
 	sessionsPreview(
 		params: { sessionKey: string; limit?: number },
 		options?: RequestOptions,
@@ -240,6 +317,48 @@ export class ControlPlaneMethods {
 
 	sessionsPatch(params: SessionsPatchParams, options?: RequestOptions): Promise<unknown> {
 		return this.#call(METHOD.sessionsPatch, params, options);
+	}
+
+	sessionsTree(params: SessionTreeParams, options?: RequestOptions): Promise<SessionTreeResult> {
+		return this.#call<SessionTreeResult>(METHOD.sessionsTree, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsRewindPreview(
+		params: SessionRewindTarget,
+		options?: RequestOptions,
+	): Promise<SessionRewindPreview> {
+		return this.#call<SessionRewindPreview>(
+			METHOD.sessionsRewind,
+			{ ...params, dryRun: true },
+			{
+				...options,
+				queueIfOffline: false,
+			},
+		);
+	}
+
+	sessionsRewindConfirm(
+		params: SessionRewindTarget & { confirmationToken: string },
+		options?: RequestOptions,
+	): Promise<SessionRewindResult> {
+		return this.#call<SessionRewindResult>(
+			METHOD.sessionsRewind,
+			{ ...params, dryRun: false },
+			{
+				...options,
+				queueIfOffline: false,
+			},
+		);
+	}
+
+	sessionsCreate(
+		params: { sessionKey: string; cwd: string },
+		options?: RequestOptions,
+	): Promise<{ sessionKey: string; sessionId: string; created: boolean }> {
+		return this.#call(METHOD.sessionsCreate, params, { ...options, queueIfOffline: false });
 	}
 
 	sessionsMetadataPatch(
@@ -283,23 +402,34 @@ export class ControlPlaneMethods {
 		});
 	}
 
-	sessionsCompact(
-		params: { sessionKey: string },
-		options?: RequestOptions,
-	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, options);
+	sessionsPlan(params: SessionsPlanParams, options?: RequestOptions): Promise<SessionsPlanResult> {
+		return this.#call<SessionsPlanResult>(METHOD.sessionsPlan, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
-	sessionHeartbeat(
-		params: {
-			sessionKey: string;
-			action?: "status" | "set" | "pause" | "resume" | "clear";
-			prompt?: string;
-			intervalSeconds?: number;
-		},
+	/** Read-only, but never parked offline: a stale queued measurement is worthless. */
+	async sessionsContext(
+		params: SessionsContextParams,
+		options?: RequestOptions,
+	): Promise<SessionsContextResult> {
+		const raw = await this.#call<unknown>(METHOD.sessionsContext, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return parseSessionsContext(raw);
+	}
+
+	sessionsCompact(
+		params: SessionsCompactParams,
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.sessionHeartbeat, params, options);
+		return this.#call<Record<string, unknown>>(METHOD.sessionsCompact, params, {
+			...options,
+			queueIfOffline: false,
+			timeoutMs: options?.timeoutMs ?? 360_000,
+		});
 	}
 
 	sessionDetail(
@@ -460,6 +590,57 @@ export class ControlPlaneMethods {
 		return this.#call(METHOD.goalClear, params, options);
 	}
 
+	// -- cron ---------------------------------------------------------------
+
+	cronList(
+		params?: { agentId?: string; includeTargetText?: boolean },
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronList, params, options);
+	}
+
+	cronAdd(
+		params: {
+			name: string;
+			schedule: string;
+			agentId: string;
+			sessionKey: string;
+			prompt: string;
+			timezone?: string;
+			enabled?: boolean;
+			meta?: Record<string, unknown>;
+		},
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronAdd, params, options);
+	}
+
+	cronUpdate(
+		params: {
+			id: string;
+			name?: string;
+			schedule?: string;
+			prompt?: string;
+			timezone?: string;
+			enabled?: boolean;
+		},
+		options?: RequestOptions,
+	): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronUpdate, params, options);
+	}
+
+	cronPause(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronPause, params, options);
+	}
+
+	cronResume(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronResume, params, options);
+	}
+
+	cronRemove(params: { id: string }, options?: RequestOptions): Promise<Record<string, unknown>> {
+		return this.#call<Record<string, unknown>>(METHOD.cronRemove, params, options);
+	}
+
 	// -- misc ---------------------------------------------------------------
 
 	logsTail(params?: LogsTailParams, options?: RequestOptions): Promise<unknown> {
@@ -529,4 +710,122 @@ export class ControlPlaneMethods {
 			queueIfOffline: false,
 		});
 	}
+
+	// -- omp delegates --------------------------------------------------------
+	// Replies carry untrusted omp output; they are parsed defensively here and
+	// sanitized by whatever renders them. Mutations are never parked offline.
+
+	async ompStatus(options?: RequestOptions): Promise<OmpStatus> {
+		return parseOmpStatus(await this.#call(METHOD.ompStatus, {}, options));
+	}
+
+	async ompSessionsList(
+		params: OmpSessionsListParams = {},
+		options?: RequestOptions,
+	): Promise<OmpSessionsListResult> {
+		const result = await this.#call<{ sessions?: unknown }>(
+			METHOD.ompSessionsList,
+			params,
+			options,
+		);
+		return { sessions: parseOmpSessions(result?.sessions) };
+	}
+
+	async ompSessionsGet(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<OmpSessionsGetResult> {
+		const result = await this.#call<{ session?: unknown; summary?: unknown }>(
+			METHOD.ompSessionsGet,
+			params,
+			options,
+		);
+		return {
+			session: requireSession(result?.session, METHOD.ompSessionsGet),
+			summary: typeof result?.summary === "string" ? result.summary : null,
+		};
+	}
+
+	async ompSessionsDiscover(
+		params: { cwd: string; limit?: number },
+		options?: RequestOptions,
+	): Promise<OmpSessionsDiscoverResult> {
+		const result = await this.#call<{ sessions?: unknown }>(
+			METHOD.ompSessionsDiscover,
+			params,
+			options,
+		);
+		return { sessions: parseOmpDiscoveredList(result?.sessions) };
+	}
+
+	async ompSessionsStart(
+		params: OmpSessionsStartParams,
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsStart, params, {
+			timeoutMs: OMP_START_REQUEST_TIMEOUT_MS,
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsStart) };
+	}
+
+	async ompSessionsResume(
+		params: OmpSessionsResumeParams,
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsResume, params, {
+			timeoutMs: OMP_START_REQUEST_TIMEOUT_MS,
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsResume) };
+	}
+
+	async ompSessionsSend(
+		params: OmpSessionsSendParams,
+		options?: RequestOptions,
+	): Promise<OmpSendResult> {
+		const result = await this.#call<{ accepted?: unknown; delivery?: unknown }>(
+			METHOD.ompSessionsSend,
+			params,
+			{ timeoutMs: OMP_SEND_REQUEST_TIMEOUT_MS, ...options, queueIfOffline: false },
+		);
+		if (result?.accepted !== true) {
+			throw new Error(`${METHOD.ompSessionsSend} returned no acceptance receipt`);
+		}
+		return {
+			accepted: true,
+			delivery: typeof result.delivery === "string" ? result.delivery : null,
+		};
+	}
+
+	async ompSessionsCancel(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<OmpCancelResult> {
+		const result = await this.#call<{ cancelled?: unknown }>(METHOD.ompSessionsCancel, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return { cancelled: result?.cancelled === true };
+	}
+
+	async ompSessionsClose(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsClose, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsClose) };
+	}
+}
+
+/** A mutation reply without a parseable session is not a receipt of success. */
+function requireSession(value: unknown, method: string) {
+	const session = parseOmpSession(value);
+	if (!session) throw new Error(`${method} returned no session`);
+	return session;
 }

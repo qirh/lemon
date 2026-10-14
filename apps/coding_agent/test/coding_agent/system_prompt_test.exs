@@ -2,7 +2,6 @@ defmodule CodingAgent.SystemPromptTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.SystemPrompt
-  alias CodingAgent.Tools
 
   @tag :tmp_dir
   test "injects workspace files into prompt", %{tmp_dir: tmp_dir} do
@@ -17,93 +16,9 @@ defmodule CodingAgent.SystemPromptTest do
         bootstrap_max_chars: 10_000
       })
 
-    assert String.contains?(prompt, "You are a personal assistant running inside Lemon.")
     assert String.contains?(prompt, "## Workspace Files (injected)")
     assert String.contains?(prompt, "AGENTS content here")
     assert String.contains?(prompt, "SOUL content here")
-  end
-
-  @tag :tmp_dir
-  test "includes memory workflow guidance for main sessions", %{tmp_dir: tmp_dir} do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
-
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :main
-      })
-
-    assert String.contains?(prompt, "## Memory Workflow")
-    assert String.contains?(prompt, "Prefer the dedicated memory and skill tools")
-    assert String.contains?(prompt, "not for bypassing `search_memory`, `session_search`")
-    assert String.contains?(prompt, "Use `search_memory` to recall completed run history")
-    assert String.contains?(prompt, "Use `session_search` when a prompt or imported workflow")
-    assert String.contains?(prompt, "Use `memory` for compact assistant-home")
-    assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes")
-    assert String.contains?(prompt, "memory/topics/*.md")
-    assert String.contains?(prompt, "Use `grep` with `path: \"memory\"`")
-    assert String.contains?(prompt, "memory/topics/<topic-slug>.md")
-    assert String.contains?(prompt, "Use `memory_topic` to scaffold durable topic notes")
-    assert String.contains?(prompt, "memory/topics/TEMPLATE.md")
-    assert String.contains?(prompt, "Use `skill_manage` to create or update a skill")
-    assert String.contains?(prompt, "Use `todo` only for the active run")
-    assert String.contains?(prompt, "Use `edit` to keep `MEMORY.md` concise")
-  end
-
-  @tag :tmp_dir
-  test "includes learning trigger guidance for main sessions", %{tmp_dir: tmp_dir} do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
-
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :main
-      })
-
-    assert String.contains?(prompt, "<learning-workflow>")
-    assert String.contains?(prompt, "Choose the right persistence surface")
-    assert String.contains?(prompt, "Prefer dedicated memory and skill tools")
-    assert String.contains?(prompt, "Use `read_skill`")
-    assert String.contains?(prompt, "reusable workflow, recurring command sequence")
-    assert String.contains?(prompt, "project convention")
-    assert String.contains?(prompt, "Use `skill_manage`")
-    assert String.contains?(prompt, "Use `memory`")
-    assert String.contains?(prompt, "Use `memory_topic`")
-    assert String.contains?(prompt, "Use `search_memory`")
-    assert String.contains?(prompt, "Use `session_search`")
-    assert String.contains?(prompt, "Use `todo`")
-    assert String.contains?(prompt, "At the end of substantial work")
-  end
-
-  @tag :tmp_dir
-  test "tool names referenced by the system prompt are available in default coding tools", %{
-    tmp_dir: tmp_dir
-  } do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
-
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :main
-      })
-
-    referenced_tools = SystemPrompt.referenced_tool_names(prompt)
-    default_tool_names = Tools.coding_tools(tmp_dir) |> Enum.map(& &1.name) |> MapSet.new()
-
-    assert "read_skill" in referenced_tools
-    assert "search_memory" in referenced_tools
-    assert "session_search" in referenced_tools
-    assert "skill_manage" in referenced_tools
-
-    missing_tools = Enum.reject(referenced_tools, &MapSet.member?(default_tool_names, &1))
-
-    assert missing_tools == []
   end
 
   @tag :tmp_dir
@@ -195,19 +110,21 @@ defmodule CodingAgent.SystemPromptTest do
     File.write!(Path.join(workspace_dir, "TOOLS.md"), "TOOLS content here")
     File.write!(Path.join(workspace_dir, "SOUL.md"), "SOUL content here")
     File.write!(Path.join(workspace_dir, "MEMORY.md"), "MEMORY content here")
+    File.write!(Path.join(workspace_dir, "USER.md"), "Private user preferences")
 
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :subagent
-      })
+    for scope <- [:subagent, "subagent"] do
+      prompt =
+        SystemPrompt.build(tmp_dir, %{
+          workspace_dir: workspace_dir,
+          session_scope: scope
+        })
 
-    assert String.contains?(prompt, "Session scope: subagent")
-    assert String.contains?(prompt, "This is a subagent session.")
-    assert String.contains?(prompt, "AGENTS content here")
-    assert String.contains?(prompt, "TOOLS content here")
-    refute String.contains?(prompt, "SOUL content here")
-    refute String.contains?(prompt, "MEMORY content here")
+      assert String.contains?(prompt, "AGENTS content here")
+      assert String.contains?(prompt, "TOOLS content here")
+      refute String.contains?(prompt, "SOUL content here")
+      refute String.contains?(prompt, "MEMORY content here")
+      refute String.contains?(prompt, "Private user preferences")
+    end
   end
 
   @tag :tmp_dir
@@ -215,22 +132,18 @@ defmodule CodingAgent.SystemPromptTest do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)
 
-    # Use subagent scope so the bootstrap filter strips out all required files
-    # except AGENTS.md and TOOLS.md (which are missing). This leaves only [MISSING]
-    # stubs, so the workspace context section is still present but contains no
-    # real file content.
+    # Missing assistant-home files must not become apparent repository context.
     prompt =
       SystemPrompt.build(tmp_dir, %{
         workspace_dir: workspace_dir,
         session_scope: :subagent
       })
 
-    assert String.contains?(prompt, "You are a personal assistant running inside Lemon.")
     assert String.contains?(prompt, "## Boundaries")
     # SOUL.md is filtered out by subagent scope, so no persona instruction
     refute String.contains?(prompt, "embody its persona")
-    # No real file content was written, so all entries are [MISSING] stubs
-    assert String.contains?(prompt, "[MISSING]")
+    refute String.contains?(prompt, "## Workspace Files (injected)")
+    refute String.contains?(prompt, "[MISSING]")
   end
 
   @tag :tmp_dir
@@ -290,36 +203,12 @@ defmodule CodingAgent.SystemPromptTest do
              "Expected scope: main for invalid input #{inspect(invalid_scope)}"
 
       # Main sessions get the full memory workflow, not the subagent restriction
-      assert String.contains?(prompt, "Use `read` to inspect user-editable workspace notes"),
+      assert String.contains?(prompt, "use `recall`"),
              "Expected main memory workflow for invalid input #{inspect(invalid_scope)}"
 
       refute String.contains?(prompt, "This is a subagent session."),
              "Should not contain subagent notice for invalid input #{inspect(invalid_scope)}"
     end
-  end
-
-  @tag :tmp_dir
-  test "string session scope \"subagent\" is normalized", %{tmp_dir: tmp_dir} do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "AGENTS content")
-    File.write!(Path.join(workspace_dir, "TOOLS.md"), "TOOLS content")
-    File.write!(Path.join(workspace_dir, "SOUL.md"), "SOUL content")
-
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: "subagent"
-      })
-
-    assert String.contains?(prompt, "Session scope: subagent")
-    assert String.contains?(prompt, "This is a subagent session.")
-    assert String.contains?(prompt, "Do not read or modify MEMORY.md")
-    # Subagent filters out SOUL.md
-    refute String.contains?(prompt, "SOUL content")
-    # Subagent keeps AGENTS.md and TOOLS.md
-    assert String.contains?(prompt, "AGENTS content")
-    assert String.contains?(prompt, "TOOLS content")
   end
 
   @tag :tmp_dir
@@ -345,32 +234,5 @@ defmodule CodingAgent.SystemPromptTest do
 
     assert String.contains?(subagent_prompt, "## Runtime")
     assert String.contains?(subagent_prompt, "Session scope: subagent")
-  end
-
-  @tag :tmp_dir
-  test "boundaries section shows assistant home and project root", %{tmp_dir: tmp_dir} do
-    workspace_dir = Path.join(tmp_dir, "workspace")
-    File.mkdir_p!(workspace_dir)
-    File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
-
-    prompt =
-      SystemPrompt.build(tmp_dir, %{
-        workspace_dir: workspace_dir,
-        session_scope: :main
-      })
-
-    assert String.contains?(prompt, "## Boundaries")
-    assert String.contains?(prompt, "Assistant home: #{workspace_dir}")
-    assert String.contains?(prompt, "Project root (cwd): #{tmp_dir}")
-
-    assert String.contains?(
-             prompt,
-             "Use the assistant home for persistent identity, memory, and operating notes."
-           )
-
-    assert String.contains?(
-             prompt,
-             "Use the project root for repo files, shell commands, and task execution."
-           )
   end
 end

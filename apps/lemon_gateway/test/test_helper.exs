@@ -14,4 +14,4 @@ System.put_env("LEMON_LOCK_DIR", lock_dir)
 
 Code.require_file("support/async_helpers.ex", __DIR__)
 
-ExUnit.start()
+ExUnit.start(capture_log: true)

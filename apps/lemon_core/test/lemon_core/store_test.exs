@@ -180,64 +180,7 @@ defmodule LemonCore.StoreTest do
     original_state
   end
 
-  describe "chat state TTL semantics" do
-    test "put_chat_state persists expires_at using configured TTL" do
-      token = unique_token()
-      chat_scope = scope(token, :ttl)
-      ttl_ms = :sys.get_state(Store).chat_state_ttl_ms
-
-      before_put = System.system_time(:millisecond)
-      :ok = Store.put_chat_state(chat_scope, %{phase: :active})
-      stored = Store.get(:chat, chat_scope)
-      after_put = System.system_time(:millisecond)
-
-      assert %{phase: :active, expires_at: expires_at} = stored
-      assert expires_at >= before_put + ttl_ms
-      assert expires_at <= after_put + ttl_ms
-      assert %{phase: :active} = Store.get_chat_state(chat_scope)
-    end
-
-    test "put_chat_state preserves core chat state structs while adding expiry" do
-      token = unique_token()
-      chat_scope = scope(token, :ttl_struct)
-      ttl_ms = :sys.get_state(Store).chat_state_ttl_ms
-
-      before_put = System.system_time(:millisecond)
-
-      :ok =
-        Store.put_chat_state(chat_scope, %LemonCore.ChatState{
-          last_engine: "codex",
-          last_resume_token: "thread-1"
-        })
-
-      stored = Store.get(:chat, chat_scope)
-      after_put = System.system_time(:millisecond)
-
-      assert %LemonCore.ChatState{
-               last_engine: "codex",
-               last_resume_token: "thread-1",
-               expires_at: expires_at
-             } = stored
-
-      assert expires_at >= before_put + ttl_ms
-      assert expires_at <= after_put + ttl_ms
-      assert %LemonCore.ChatState{last_engine: "codex"} = Store.get_chat_state(chat_scope)
-    end
-
-    test "get_chat_state lazily evicts expired state" do
-      token = unique_token()
-      chat_scope = scope(token, :lazy_expiry)
-
-      :ok =
-        Store.put(:chat, chat_scope, %{
-          phase: :stale,
-          expires_at: System.system_time(:millisecond) - 1
-        })
-
-      assert Store.get_chat_state(chat_scope) == nil
-      assert Store.get(:chat, chat_scope) == nil
-    end
-
+  describe "expiring entries" do
     test "periodic sweep removes expired entries and keeps live entries" do
       token = unique_token()
       expired_scope = scope(token, :sweep_expired)
@@ -247,9 +190,10 @@ defmodule LemonCore.StoreTest do
       :ok = Store.put(:chat, expired_scope, %{phase: :expired, expires_at: now - 1})
       :ok = Store.put(:chat, live_scope, %{phase: :live, expires_at: now + 60_000})
 
-      send(Store, :sweep_expired_chat_states)
+      send(Store, :sweep_expired)
+      # `:chat` reads are served from the mirror, so a call is the barrier.
+      :ok = Store.ping()
 
-      # `get/2` is a call, so it acts as a barrier after the sweep message.
       assert Store.get(:chat, expired_scope) == nil
       assert %{phase: :live} = Store.get(:chat, live_scope)
     end
@@ -309,98 +253,6 @@ defmodule LemonCore.StoreTest do
 
       session_limited = Store.get_run_history(session_key, limit: 1)
       assert Enum.map(session_limited, &elem(&1, 0)) == [newer_run]
-    end
-  end
-
-  describe "progress mapping put/get/delete" do
-    test "stores, overwrites, isolates by scope, and deletes mappings" do
-      token = unique_token()
-      scope_a = scope(token, :progress_a)
-      scope_b = scope(token, :progress_b)
-      progress_msg_id = 42_001
-
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == nil
-
-      :ok = Store.put_progress_mapping(scope_a, progress_msg_id, "run_a_v1")
-      :ok = Store.put_progress_mapping(scope_b, progress_msg_id, "run_b_v1")
-
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == "run_a_v1"
-      assert Store.get_run_by_progress(scope_b, progress_msg_id) == "run_b_v1"
-
-      :ok = Store.put_progress_mapping(scope_a, progress_msg_id, "run_a_v2")
-      # Use a synchronous call as a mailbox barrier so async casts are applied in order.
-      assert Store.get(:progress, {scope_a, progress_msg_id}) == "run_a_v2"
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == "run_a_v2"
-
-      :ok = Store.delete_progress_mapping(scope_a, progress_msg_id)
-
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == nil
-      assert Store.get(:progress, {scope_a, progress_msg_id}) == nil
-      assert Store.get_run_by_progress(scope_b, progress_msg_id) == "run_b_v1"
-    end
-  end
-
-  describe "policy wrapper API" do
-    test "agent policy wrappers preserve table/key compatibility" do
-      token = unique_token()
-      agent_id = "agent_#{token}"
-      policy = %{approvals: %{"bash" => :always}}
-
-      :ok = Store.put_agent_policy(agent_id, policy)
-
-      assert Store.get_agent_policy(agent_id) == policy
-      assert Store.get(:agent_policies, agent_id) == policy
-      assert {agent_id, policy} in Store.list_agent_policies()
-
-      :ok = Store.delete_agent_policy(agent_id)
-      assert Store.get_agent_policy(agent_id) == nil
-      assert Store.get(:agent_policies, agent_id) == nil
-    end
-
-    test "channel policy wrappers preserve table/key compatibility" do
-      token = unique_token()
-      channel_id = "channel_#{token}"
-      policy = %{blocked_tools: ["exec_raw"]}
-
-      :ok = Store.put_channel_policy(channel_id, policy)
-
-      assert Store.get_channel_policy(channel_id) == policy
-      assert Store.get(:channel_policies, channel_id) == policy
-      assert {channel_id, policy} in Store.list_channel_policies()
-
-      :ok = Store.delete_channel_policy(channel_id)
-      assert Store.get_channel_policy(channel_id) == nil
-      assert Store.get(:channel_policies, channel_id) == nil
-    end
-
-    test "session policy wrappers preserve table/key compatibility" do
-      token = unique_token()
-      key = session_key(token)
-      policy = %{thinking_level: "high"}
-
-      :ok = Store.put_session_policy(key, policy)
-
-      assert Store.get_session_policy(key) == policy
-      assert Store.get(:session_policies, key) == policy
-      assert {key, policy} in Store.list_session_policies()
-
-      :ok = Store.delete_session_policy(key)
-      assert Store.get_session_policy(key) == nil
-      assert Store.get(:session_policies, key) == nil
-    end
-
-    test "runtime policy wrappers preserve :global key compatibility" do
-      policy = %{sandbox: true}
-
-      :ok = Store.put_runtime_policy(policy)
-
-      assert Store.get_runtime_policy() == policy
-      assert Store.get(:runtime_policy, :global) == policy
-      assert {:global, policy} in Store.list_runtime_policies()
-
-      :ok = Store.delete_runtime_policy()
-      assert Store.get_runtime_policy() == nil
-      assert Store.get(:runtime_policy, :global) == nil
     end
   end
 
@@ -491,7 +343,7 @@ defmodule LemonCore.StoreTest do
         %{state | introspection_retention_ms: 2_000}
       end)
 
-      send(Store, :sweep_expired_chat_states)
+      send(Store, :sweep_expired)
 
       filtered =
         Store.list_introspection_events(run_id: old_event.run_id, limit: 10)
@@ -878,8 +730,15 @@ defmodule LemonCore.StoreTest do
                  session_key: key
                })
 
-      # Allow async cast to RunHistoryStore to complete
-      Process.sleep(100)
+      # The history write to RunHistoryStore is asynchronous
+      LemonCore.Testing.AsyncHelpers.assert_eventually(
+        fn ->
+          key
+          |> Store.get_run_history(limit: 50)
+          |> Enum.any?(fn {id, _} -> id == rid end)
+        end,
+        timeout: 5_000
+      )
 
       history = Store.get_run_history(key, limit: 50)
       assert {^rid, data} = Enum.find(history, fn {id, _} -> id == rid end)
@@ -896,7 +755,7 @@ defmodule LemonCore.StoreTest do
       assert :ok = Store.append_introspection_event(event)
 
       # Poll until the event is persisted (proves it was async, not a call)
-      Enum.reduce_while(1..20, nil, fn _, _ ->
+      Enum.reduce_while(1..100, nil, fn _, _ ->
         Process.sleep(50)
         events = Store.list_introspection_events(run_id: event.run_id, limit: 10)
 

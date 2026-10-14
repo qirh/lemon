@@ -1,6 +1,7 @@
 defmodule LemonCli.Onboarding.Runner do
   @moduledoc false
 
+  alias LemonAgent.ModelRuntime.ModelCatalog
   alias LemonCli.CLI
   alias LemonCli.Onboarding.LogSilencer
   alias LemonCore.OAuth.LocalCallbackListener
@@ -16,7 +17,9 @@ defmodule LemonCli.Onboarding.Runner do
     config_path: :string,
     set_default: :boolean,
     model: :string,
-    auth: :string
+    non_interactive: :boolean,
+    auth: :string,
+    codex_auth_path: :string
   ]
 
   @type io_callbacks :: %{
@@ -54,6 +57,29 @@ defmodule LemonCli.Onboarding.Runner do
 
     {cli_opts, _positional, _invalid} =
       OptionParser.parse(args, switches: @common_switches ++ spec.switches)
+
+    explicit_auth =
+      if value = normalize_optional_string(cli_opts[:auth]), do: parse_auth_mode!(value, spec)
+
+    if cli_opts[:codex_auth_path] && explicit_auth != :codex_cli do
+      fail!("--codex-auth-path requires --auth codex-cli.")
+    end
+
+    if cli_opts[:non_interactive] == true and
+         is_nil(normalize_optional_string(cli_opts[:token])) and explicit_auth != :codex_cli do
+      fail!(
+        "Non-interactive provider setup requires --token or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
+      )
+    end
+
+    io =
+      if cli_opts[:non_interactive] do
+        io
+        |> Map.put(:prompt, fn _ -> "" end)
+        |> Map.put(:select, fn _ -> :fallback end)
+      else
+        io
+      end
 
     ensure_secrets_ready!()
 
@@ -142,17 +168,19 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp resolve_auth_mode!(opts, %Provider{} = spec, io) do
     token = normalize_optional_string(opts[:token])
-    explicit_auth = normalize_optional_string(opts[:auth])
+
+    explicit_auth =
+      if value = normalize_optional_string(opts[:auth]), do: parse_auth_mode!(value, spec)
 
     cond do
-      token && explicit_auth == "oauth" ->
-        fail!("Cannot combine --token with --auth oauth.")
+      token && explicit_auth in [:oauth, :codex_cli] ->
+        fail!("Cannot combine --token with --auth #{auth_mode_output_label(explicit_auth)}.")
 
       token ->
         :api_key
 
       explicit_auth ->
-        parse_auth_mode!(explicit_auth, spec)
+        explicit_auth
 
       spec.auth_modes == [:oauth] ->
         :oauth
@@ -171,6 +199,8 @@ defmodule LemonCli.Onboarding.Runner do
         "oauth" -> :oauth
         "api_key" -> :api_key
         "api-key" -> :api_key
+        "codex-cli" -> :codex_cli
+        "codex_cli" -> :codex_cli
         other -> fail!("Unknown auth mode #{inspect(other)} for #{spec.id}.")
       end
 
@@ -281,6 +311,13 @@ defmodule LemonCli.Onboarding.Runner do
           |> require_non_empty!("Credential cannot be empty.")
 
         {secret_value, secret_provider_for_auth(spec, :api_key)}
+
+      nil when auth_mode == :codex_cli ->
+        result =
+          spec.oauth_module.import_codex_cli_login(path: opts[:codex_auth_path])
+
+        {normalize_oauth_result!(result, spec.oauth_module, spec),
+         secret_provider_for_auth(spec, :oauth)}
 
       nil ->
         oauth_payload = run_oauth_flow!(opts, spec, io)
@@ -518,9 +555,10 @@ defmodule LemonCli.Onboarding.Runner do
            provider_atom_for_models(models_module, spec.id) do
       models_module
       |> apply(:get_models, [provider])
+      |> Enum.map(&%{provider: to_string(&1.provider), id: &1.id, name: &1.name})
+      |> ModelCatalog.sort_for_picker()
       |> Enum.map(& &1.id)
       |> Enum.uniq()
-      |> Enum.sort()
     else
       _ ->
         []
@@ -742,6 +780,11 @@ defmodule LemonCli.Onboarding.Runner do
           :cancel ->
             :cancel
 
+          # Non-interactive runs install a selector that always asks for the
+          # prompt path; it must not be mistaken for a selected value.
+          :fallback ->
+            :fallback
+
           {:error, reason} ->
             io.error.(
               "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."
@@ -771,6 +814,10 @@ defmodule LemonCli.Onboarding.Runner do
     spec.api_key_choice_label || "Paste API key"
   end
 
+  defp auth_mode_choice_label(%Provider{}, :codex_cli),
+    do: "Import existing Codex CLI ChatGPT login (read-only copy)"
+
+  defp auth_mode_output_label(:codex_cli), do: "codex-cli (OAuth copy)"
   defp auth_mode_output_label(:oauth), do: "oauth"
   defp auth_mode_output_label(:api_key), do: "api_key"
 

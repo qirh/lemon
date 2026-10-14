@@ -5,6 +5,7 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.ConfigReloader.Watcher
+  import LemonCore.Testing.AsyncHelpers
 
   @short_debounce_ms 50
   @short_poll_ms 5_000
@@ -281,7 +282,6 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
       path = watched_event_path(pid)
       send(pid, {:file_event, self(), {path, [:modified]}})
-      Process.sleep(10)
 
       state_after = :sys.get_state(pid)
       assert state_after.debounce_ref != nil
@@ -292,12 +292,10 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       path = watched_event_path(pid)
 
       send(pid, {:file_event, self(), {path, [:modified]}})
-      Process.sleep(10)
       state1 = :sys.get_state(pid)
       ref1 = state1.debounce_ref
 
       send(pid, {:file_event, self(), {path, [:modified]}})
-      Process.sleep(10)
       state2 = :sys.get_state(pid)
       ref2 = state2.debounce_ref
 
@@ -306,22 +304,19 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
     end
 
     test "debounced_reload fires after debounce_ms elapses" do
-      pid = start_watcher!(debounce_ms: 30)
+      pid = start_watcher!(debounce_ms: 300)
       path = watched_event_path(pid)
 
       send(pid, {:file_event, self(), {path, [:modified]}})
-      Process.sleep(10)
       state = :sys.get_state(pid)
       assert state.debounce_ref != nil
 
       # Wait for debounce to fire
-      Process.sleep(50)
-      state_after = :sys.get_state(pid)
-      assert state_after.debounce_ref == nil
+      assert_eventually(fn -> :sys.get_state(pid).debounce_ref == nil end, timeout: 5_000)
     end
 
     test "multiple rapid events coalesce via debounce" do
-      pid = start_watcher!(debounce_ms: 100)
+      pid = start_watcher!(debounce_ms: 500)
       path = watched_event_path(pid)
 
       # Send multiple events in rapid succession
@@ -335,16 +330,13 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       assert state.debounce_ref != nil
 
       # Wait for debounce to fire
-      Process.sleep(150)
-      state_after = :sys.get_state(pid)
-      assert state_after.debounce_ref == nil
+      assert_eventually(fn -> :sys.get_state(pid).debounce_ref == nil end, timeout: 5_000)
     end
 
     test "file_event :stop sets mode to polling and clears watcher_pid" do
       pid = start_watcher!()
 
       send(pid, {:file_event, self(), :stop})
-      Process.sleep(10)
 
       state = :sys.get_state(pid)
       assert state.mode == :polling
@@ -379,13 +371,11 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
       # Set up a debounce_ref via file event
       send(pid, {:file_event, self(), {path, [:modified]}})
-      Process.sleep(10)
       state = :sys.get_state(pid)
       assert state.debounce_ref != nil
 
       # Manually trigger debounced_reload
       send(pid, :debounced_reload)
-      Process.sleep(10)
 
       state_after = :sys.get_state(pid)
       assert state_after.debounce_ref == nil
@@ -395,7 +385,6 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       pid = start_watcher!()
 
       send(pid, :debounced_reload)
-      Process.sleep(10)
 
       state = :sys.get_state(pid)
       assert state.debounce_ref == nil
@@ -412,8 +401,8 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       pid = start_watcher!(poll_interval_ms: 60_000)
 
       send(pid, :poll)
-      Process.sleep(10)
-
+      # Round trip so the :poll message was handled before we check liveness
+      _ = :sys.get_state(pid)
       assert Process.alive?(pid)
     end
 
@@ -438,7 +427,6 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       state_before = :sys.get_state(pid)
 
       send(pid, :some_random_message)
-      Process.sleep(10)
 
       state_after = :sys.get_state(pid)
       assert state_after.cwd == state_before.cwd
@@ -453,8 +441,8 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       send(pid, {:unexpected, :tuple})
       send(pid, %{unexpected: "map"})
       send(pid, 42)
-      Process.sleep(10)
-
+      # Round trip so every message was handled before we check liveness
+      _ = :sys.get_state(pid)
       assert Process.alive?(pid)
     end
   end
@@ -469,7 +457,6 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
 
       # Force watcher_pid to nil via :stop event
       send(pid, {:file_event, self(), :stop})
-      Process.sleep(10)
 
       state = :sys.get_state(pid)
       assert state.watcher_pid == nil
@@ -487,10 +474,10 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
         watcher_pid = state.watcher_pid
         assert Process.alive?(watcher_pid)
 
+        watcher_ref = Process.monitor(watcher_pid)
         GenServer.stop(pid, :normal, 1_000)
-        Process.sleep(50)
 
-        refute Process.alive?(watcher_pid)
+        assert_receive {:DOWN, ^watcher_ref, :process, _, _}, 5_000
       end
     end
 
@@ -501,11 +488,19 @@ defmodule LemonCore.ConfigReloader.WatcherTest do
       if state.mode == :native and is_pid(state.watcher_pid) do
         # Stop the file system watcher normally (normal exit doesn't crash linked procs)
         GenServer.stop(state.watcher_pid, :normal, 1_000)
-        Process.sleep(50)
 
         # The main GenServer should handle terminate with dead watcher_pid
-        # It may still be alive or may have received an exit signal
-        if Process.alive?(pid) do
+        # It may still be alive or may have received an exit signal. A round
+        # trip tells us whether it settled as alive.
+        settled =
+          try do
+            :sys.get_state(pid)
+            :alive
+          catch
+            :exit, _ -> :down
+          end
+
+        if settled == :alive do
           GenServer.stop(pid, :normal, 1_000)
           refute Process.alive?(pid)
         end

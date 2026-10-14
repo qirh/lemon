@@ -1,6 +1,10 @@
 defmodule LemonChannels.Telegram.Delivery do
   @moduledoc """
-  Telegram delivery helpers backed only by LemonChannels.Outbox.
+  Telegram enqueue helpers backed only by LemonChannels.Outbox.
+
+  `:ok` means queued, not delivered. Use `:notify` to receive the platform
+  result. An enqueue timeout is ambiguous and must not trigger a direct-send
+  fallback, since the queued write may still be delivered.
   """
 
   alias LemonChannels.{OutboundPayload, Outbox}
@@ -53,17 +57,10 @@ defmodule LemonChannels.Telegram.Delivery do
 
   defp enqueue_channels(payload) do
     if channels_outbox_available?() do
-      try do
-        Outbox.enqueue(payload)
-      catch
-        :exit, {:timeout, _} -> {:error, :channels_outbox_timeout}
-        :exit, reason -> {:error, {:channels_outbox_exit, reason}}
-      end
+      Outbox.enqueue(payload)
     else
       {:error, :channels_outbox_unavailable}
     end
-  rescue
-    _ -> {:error, :channels_outbox_exception}
   end
 
   defp channels_outbox_available? do

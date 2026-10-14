@@ -33,16 +33,18 @@ defmodule LemonAi do
   Models are defined with their provider, API type, and capabilities:
 
       model = %LemonAi.Types.Model{
-        id: "claude-sonnet-4-20250514",
-        name: "Claude Sonnet 4",
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
         api: :anthropic_messages,
         provider: :anthropic,
         base_url: "https://api.anthropic.com",
         reasoning: true,
+        adaptive_thinking: true,
+        reasoning_efforts: [:low, :medium, :high, :xhigh],
         input: [:text, :image],
-        cost: %{input: 3.0, output: 15.0, cache_read: 0.3, cache_write: 3.75},
-        context_window: 200_000,
-        max_tokens: 64_000
+        cost: %{input: 2.0, output: 10.0, cache_read: 0.2, cache_write: 2.5},
+        context_window: 1_000_000,
+        max_tokens: 128_000
       }
   """
 
@@ -157,11 +159,22 @@ defmodule LemonAi do
   """
   @spec calculate_cost(Model.t(), LemonAi.Types.Usage.t()) :: LemonAi.Types.Cost.t()
   def calculate_cost(%Model{cost: model_cost}, %LemonAi.Types.Usage{} = usage) do
+    input_tokens = usage.input + usage.cache_read + usage.cache_write
+
+    model_cost =
+      case Map.get(model_cost, :long_context) do
+        %{input_threshold: threshold} = long_context when input_tokens > threshold -> long_context
+        _ -> model_cost
+      end
+
     # Cost is per million tokens
     input_cost = usage.input * model_cost.input / 1_000_000
     output_cost = usage.output * model_cost.output / 1_000_000
     cache_read_cost = usage.cache_read * model_cost.cache_read / 1_000_000
-    cache_write_cost = usage.cache_write * model_cost.cache_write / 1_000_000
+
+    cache_write_cost =
+      (usage.cache_write + min(usage.cache_write_long, usage.cache_write) * 0.6) *
+        model_cost.cache_write / 1_000_000
 
     %LemonAi.Types.Cost{
       input: input_cost,

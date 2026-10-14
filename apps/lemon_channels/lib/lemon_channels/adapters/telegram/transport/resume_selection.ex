@@ -78,8 +78,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           end
         end
     end
-  rescue
-    _ -> {state, inbound}
   end
 
   @spec handle_resume_command(map(), map(), callbacks) :: map()
@@ -194,8 +192,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           end
       end
     end
-  rescue
-    _ -> state
   end
 
   defp parse_inline_resume_args(args) when is_binary(args) do
@@ -230,7 +226,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         end
     end
   rescue
-    _ -> nil
+    ArgumentError -> nil
   end
 
   defp parse_inline_resume_args(_), do: nil
@@ -258,7 +254,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         end
     end
   rescue
-    _ -> nil
+    ArgumentError -> nil
   end
 
   @spec list_recent_sessions(binary(), keyword()) :: list()
@@ -284,8 +280,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     |> elem(0)
     |> Enum.reverse()
     |> Enum.take(limit)
-  rescue
-    _ -> []
   end
 
   def list_recent_sessions(_session_key, _opts), do: []
@@ -314,7 +308,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         end
     end
   rescue
-    _ -> {nil, text}
+    ArgumentError -> {nil, text}
   end
 
   def extract_explicit_resume_and_strip(text), do: {nil, text}
@@ -359,14 +353,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           inbound
         end
     end
-  rescue
-    _ -> inbound
   end
 
   @spec extract_resume_from_history(term()) :: ResumeToken.t() | nil
   def extract_resume_from_history(data) when is_map(data) do
-    summary = data[:summary] || data["summary"] || %{}
-    completed = summary[:completed] || summary["completed"]
+    summary = data[:summary] || data["summary"]
+    summary = if is_map(summary), do: summary, else: %{}
+    completed = Map.get(summary, :completed) || Map.get(summary, "completed")
 
     resume =
       cond do
@@ -393,8 +386,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
       _ ->
         nil
     end
-  rescue
-    _ -> nil
   end
 
   def extract_resume_from_history(_), do: nil
@@ -422,8 +413,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
           _ -> {nil, nil}
         end
     end
-  rescue
-    _ -> {nil, nil}
   end
 
   @spec switching_session?(term(), ResumeToken.t() | term()) :: boolean()
@@ -434,8 +423,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
     last_token = chat_state_value(chat_state, :last_resume_token)
 
     last_engine != resume.engine or last_token != resume.value
-  rescue
-    _ -> true
   end
 
   def switching_session?(_chat_state, _resume), do: true
@@ -443,13 +430,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
   defp chat_state_value(%{} = state, key),
     do: Map.get(state, key) || Map.get(state, Atom.to_string(key))
 
-  defp chat_state_value(_state, _key), do: nil
-
   @spec maybe_prefix_resume_to_prompt(map(), ResumeToken.t()) :: map()
   def maybe_prefix_resume_to_prompt(inbound, %ResumeToken{engine: "lemon"} = resume) do
     %{inbound | meta: (inbound.meta || %{}) |> Map.put(:resume, resume)}
-  rescue
-    _ -> inbound
   end
 
   def maybe_prefix_resume_to_prompt(inbound, _resume), do: inbound
@@ -482,10 +465,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         end
     end
   rescue
-    _ -> nil
+    ArgumentError -> nil
   end
-
-  defp parse_resume_selector(_), do: nil
 
   defp parse_explicit_resume(text) when is_binary(text),
     do: ResumeToken.extract_resume(text, "lemon")
@@ -513,7 +494,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
         nil
     end
   rescue
-    _ -> nil
+    ArgumentError -> nil
   end
 
   defp explicit_non_native_resume_engine(_), do: nil
@@ -545,7 +526,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ResumeSelection do
       _ -> ""
     end
   rescue
-    _ -> ""
+    ArgumentError -> ""
   end
 
   defp unsupported_resume_message(engine) do

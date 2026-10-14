@@ -1,20 +1,25 @@
 # LemonAutomation
 
-Cron scheduling, heartbeat health checks, and automation orchestration for agents in the Lemon umbrella project. This OTP application manages the full lifecycle of scheduled and manually triggered prompt or operator-command runs, from cron expression parsing through job execution, completion tracking, and event broadcasting.
+Cron scheduling, heartbeats, scheduled-result delivery, and automation orchestration for agents in the Lemon umbrella project. This OTP application manages the full lifecycle of scheduled and manually triggered prompt or operator-command runs, from cron expression parsing through job execution, completion tracking, chat delivery, and event broadcasting.
 
 ## Architecture Overview
 
-LemonAutomation is built around supervised cron, heartbeat, goal-loop, kanban,
-and skill-curation workers managed by a `one_for_one` supervisor:
+LemonAutomation is built around supervised cron, goal-loop, kanban,
+skill-curation, and synthesis workers managed by a `one_for_one` supervisor.
+Heartbeats are not a separate process: they are cron jobs, and their policy runs
+inside `CronManager` terminalization.
 
 ```
 LemonAutomation.Supervisor
   |-- Task.Supervisor (LemonAutomation.TaskSupervisor)
-  |-- CronManager     (GenServer - scheduling engine)
-  |-- HeartbeatManager (GenServer - health check suppression)
+  |-- CronManager     (GenServer - scheduling engine, heartbeat policy, delivery)
+  |-- Task :daily_brief_sync (one-shot - reconciles [automation] daily_brief; skipped when
+  |                           config :lemon_automation, daily_brief_sync: false)
   |-- GoalContinuationManager (GenServer - supervised one-shot goal continuation)
   |-- GoalLoopManager (GenServer - preview goal judge loop tick)
+  |-- KanbanDispatcher (GenServer - durable board task leasing)
   |-- SkillCuratorManager (GenServer - idle learned-skill maintenance)
+  |-- SynthesisRunnerManager (GenServer - scheduled skill synthesis)
 ```
 
 ### Execution Flow
@@ -43,42 +48,36 @@ CronManager (tick every 60s)
                             +-- returns through a monitored Task ref owned by CronManager
                                     |
                                     +-- updates CronStore
+                                    +-- applies monitor/preflight/heartbeat delivery policy
                                     +-- emits :cron_run_completed
-                                    +-- forwards prompt-job summary to base session and, for channel_peer origins,
-                                        bridges channel delivery through LemonRouter.ChannelsDelivery into LemonChannels
+                                    +-- forwards prompt-job summary to the base session and sends the
+                                        result to the chat chosen by CronDelivery (explicit deliver_to,
+                                        originating chat, or paired owner chat) through
+                                        LemonChannels.Supervision and its durable outbox
+                                    +-- one-shot (`once`) jobs are deleted after their run finishes
 ```
 
 Before a scheduled launch, CronManager checks the persisted run table for
 pending/running runs for the same job, then claims a deterministic scheduled-run
 slot through `LemonCore.Store.put_new/3`. It skips duplicate scheduled starts
 while an active run exists, and competing dispatchers claiming the same scheduled
-slot preserve the first persisted run instead of overwriting it. Active runs
-older than the job's `timeout_ms` are recovered through the normal terminalizer
-as `:timeout`, including monitor suppression, forwarding, audit, and retry
-policy, so a crashed runtime cannot leave the job locked forever. On
-`CronManager` restart, persisted
-jobs are reloaded and the same active-run recovery path runs during
-initialization, so a manager crash cannot immediately double-submit a scheduled
-job that already has a pending/running persisted run. The opt-in
-`scripts/live_cron_runtime_restart_smoke.exs` proof boots the full runtime twice
-against the same durable store and verifies that scheduled run history survives
-the restart and a fresh scheduled run fires after restart.
-`scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and
-Discord plugins, completes channel-peer cron runs through `CronManager`, and
-proves forwarded run history plus outbox delivery without exposing raw channel,
-peer, session, or cron IDs in the proof artifact.
-Scheduled failures and timeouts can retry when `max_retries` is greater than
-zero. The terminal source run persists retry due time, attempt, and root/source
+slot preserve the first persisted run instead of overwriting it. Prompt runs
+claim their fixed router ID before submission. A timeout, worker death after
+submission, or lost acknowledgement retains that invocation as active and
+reconciling: it is not a retry-safe failure. Recovery checks durable router
+completion before releasing ownership, including after manager restart.
+Unsubmitted work and local command jobs use their normal terminalization path.
+Definite scheduled failures can retry when `max_retries` is greater than zero.
+The terminal source run persists retry due time, attempt, and root/source
 lineage. Restart rebuilds the wake timer from that state, while a deterministic
 retry ID and atomic claim enforce one run per `{root, attempt}`. Retries are
 separate `CronRun` records with `triggered_by: :retry`; manual and wake runs do
-not retry by default. Cron workers are monitored supervised tasks, so
-supervisor start failures and worker `:DOWN` messages terminalize immediately.
-An unsupervised fallback is available only in explicit standalone mode.
-Operators can abort an active cron run by cron run id. The abort path calls the
-underlying LemonRouter run cancellation when the router run is still active,
-persists the cron run as `:aborted`, emits the normal completion event, and
-ignores late submitter completions.
+not retry by default. Workers are monitored supervised tasks; standalone
+fallback is explicit.
+Operators can abort an active cron run by cron run ID. Cancellation uses the
+claimed router ID and records abort intent before dispatch. Unknown outcomes
+remain under reconciliation and are not automatically retried. Confirmed
+abort terminalizes once and ignores late submitter completions.
 Cron lifecycle actions also record durable audit events in `:cron_audit_events`
 through `CronStore.record_audit/2`. The audit stream covers job lifecycle
 changes, manual run requests, run start/abort/retry/stale recovery, and
@@ -91,13 +90,14 @@ IDs, and reasons.
 `:cron_run_submitter` used by CronManager (normally RunSubmitter ->
 LemonRouter), and routes completion back through CronManager.
 
-**GoalContinuationManager** is the preview persistent-goal runner. It accepts one
-active session goal at a time, starts the work through `TaskSupervisor`, submits
-a `LemonRouter` request with `origin: :goal` and `queue_mode: :followup`, then
-records the router run id back into `LemonAgent.Workspace.GoalStore`.
+**GoalContinuationManager** runs persistent-goal continuations. It accepts one
+active session goal at a time and starts work through `TaskSupervisor` with
+`origin: :goal` and `queue_mode: :followup`. Goal targets persist their `cwd`;
+continuations and the read-only judge use that directory rather than daemon cwd.
+The goal records the accepted router run ID and bounded completion result.
 
 **GoalLoopManager** runs conservative goal loops. `run_once/2` performs one
-preview judge tick. `start_loop/2` starts one bounded supervised loop per
+judge tick. `start_loop/2` starts one bounded supervised loop per
 session, waits for each submitted continuation to emit `:run_completed`, and
 stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 `auto: true` persists opt-in auto-loop intent in `LemonAgent.Workspace.GoalStore`; the
@@ -133,45 +133,161 @@ deterministic runtime. Set `LEMON_GOAL_JUDGE_MODEL` to pin the judge run model.
 Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
 
+The session-scoped `goal` agent tool exposes set/status/start/stop/pause/resume
+and a bounded asynchronous run-once action. Prompt `cron` jobs created by the
+agent tool inherit the current repository cwd and accept an explicit model pin.
+Neither automatically creates a worktree: use a dedicated target directory
+when other editors are active. See the
+[coding automation workflow](../../docs/user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
+
 Every automation path that both submits and waits uses
 `RunCompletionWaiter.submit_and_wait/2`. Cron, goal judge, autonomous goal
-continuation, timer heartbeat, and Kanban worker runs subscribe to their fixed
+continuation, and Kanban worker runs subscribe to their fixed
 run id before router submission and always unsubscribe after a terminal result.
 A goal-loop ownership claim runs synchronously after subscription and before
 submission; rejection prevents the router call.
 A router run-id mismatch is an explicit error rather than a late subscription
 to a replacement id, because a synchronous completion may already have fired.
 
-**KanbanDispatcher** is the first supervised fleet-work layer for durable boards.
-It scans `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
-dependency-unblocked tasks, runs a worker module under `TaskSupervisor`, and
-records task completion or failure back into durable state. Focused dispatcher
-coverage proves bounded multi-worker leasing, completion, explicit worker
-failure, crashed-worker failure marking, expired-lease reclaim, and a
-production-shaped bounded-concurrency path through the real `KanbanRunWorker`
-with router/waiter stubs. The default `KanbanRunWorker` submits leased work
-through `LemonRouter` with `origin: :kanban`, board/task metadata, a blocked
-`kanban` tool policy, and an isolated git worktree cwd when the board workspace
-is a git repository. The worktree layer creates
-`<repo>/.worktrees/kanban-<task_id>` on a
-`lemon-kanban/<task_id>` branch before submitting the router run, so broad
-multi-agent execution does not share one mutable checkout.
-Stopping a board is a hard cancellation: worker pids are killed and their exact
-lease IDs are reclaimed before return. Completion/failure writes require the
-same lease ID, so late worker results cannot mutate a newer lease. Starting a
-board reconciles unexpired leases left by the same dispatcher worker ID after a
-manager restart.
+**KanbanDispatcher** runs durable coding tasks through the same router and native
+coding sessions as interactive work. From a CLI or TUI coding session, ask the
+agent to use the `kanban` tool:
 
-**HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every
-`:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to
-decide suppression. Cron is selected only for intervals that stay exact at UTC
-day boundaries (minute divisors of 60, hour divisors of 24, and daily); every
-other positive interval, including 90 minutes and 5 hours, uses an exact Erlang
-timer. Reconfiguration disables the previous mechanism before enabling the new
-one. Timer runs persist terminal status, router run id, response, and suppression
-state in `HeartbeatStore` and allow only one in-flight run per agent; overlapping
-ticks increment skip stats, log the decision, and emit
-`[:lemon, :heartbeat, :skipped]` telemetry.
+1. `board_create` with `name` and a repository `workspace` (defaults to the
+   current project), then `task_create` with a concrete coding task.
+2. `dispatch_start` with `board_id`, optional `max_concurrency` (1–8, default 1)
+   and optional `model` (`provider:model`).
+3. `task_get` or `board_get` to inspect progress and results;
+   `dispatch_status` to inspect worker and reconciliation counts.
+4. `dispatch_stop` to stop leasing and cancel the board's router runs.
+
+Workers lease dependency-unblocked cards and execute with `origin: :kanban`.
+The `kanban` tool is blocked inside workers to prevent recursive dispatch. A
+Git-backed board gets a separate `<repo>/.worktrees/kanban-<task_id>` checkout
+on `lemon-kanban/<task_id>` for each task. By default, changes stay there for
+manual review and are **not** automatically committed, pushed, or merged.
+Inspect `task.meta.kanbanRun.cwd` and `.branch` to find them. Tasks without an assignee
+use the default agent, not the dispatcher's lease-owner ID.
+
+Before router submission, the exact lease records the fixed `run_id`, session,
+worktree location and `kanbanRun.status = "running"`. Completion marks the card
+done and persists the bounded result summary at `task.meta.kanbanRun.output`;
+the full conversation remains available under the linked session/run.
+
+Failures record a sanitized `lastFailure` and stop that card from being leased
+again, even on boards without a `blocked` column. Correct the cause, then
+explicitly `task_update` its status back to the board's first column to retry.
+There is no unbounded automatic retry loop.
+
+A timeout, lost waiter or ambiguous submission retains its run ID and lease
+with `kanbanRun.status = "outcome_unknown"`. It occupies a concurrency slot
+until durable completion is reconciled; expiry and manager restart cannot
+launch a second editor in the same worktree. Restart the dispatcher for a board
+after a runtime restart to resume reconciliation. Hard stop aborts claimed
+router runs once, not just waiter processes. Unknown abort outcomes retain
+their leases for reconciliation and are reported in the stop result's `aborts`.
+
+### Reviewed commits and optional publication
+
+Set `coding_workflow: {}` on `kanban` `board_create` to opt into a coding →
+independent reviewer → local commit workflow. Omit it (or use `false`) to retain
+the coding-only behavior above. This requires an isolated Git worktree and an
+explicitly configured Git author/committer identity; Lemon never invents one.
+
+The registered `reviewer` persona receives the task and exact staged diff in a
+separate, read-only session. `reviewModel` can pin its model. A blocking review
+gets one corrective coding pass; a second rejection or invalid verdict blocks
+the card. Neither an editor's successful run nor manually moving the card to
+`done` bypasses review. Binary/submodule diffs and oversized diffs fail closed.
+The controller commits only the approved tree and refuses changes made after
+review. It does not run commit hooks, merge into your checkout, or push by default.
+
+Publication requires explicit configuration, for example:
+
+```json
+{
+  "action": "board_create",
+  "name": "Reviewed fixes",
+  "workspace": "/absolute/path/to/repo",
+  "coding_workflow": {
+    "publish": {
+      "mode": "pull_request",
+      "remote": "origin",
+      "repository": "owner/repository",
+      "base": "main",
+      "draft": true
+    }
+  }
+}
+```
+
+Use `"mode": "branch"` with `"remote": "origin"` to push only the reviewed
+commit without opening a PR; a local bare Git remote is suitable for testing.
+PR mode requires an installed, authenticated `gh` CLI and pushes the reviewed
+branch before `gh pr create`. No force-push is used. `draft` defaults to true.
+An existing PR is accepted only when its repository/head/base and head commit
+match. Ambiguous push/PR outcomes keep the lease and are reconciled by read-only
+queries: Lemon never retries a possibly successful remote mutation.
+
+`task_get` exposes `meta.codingWorkflow`: phase, coding/review run and session
+IDs, reviewed tree, branch, commit SHA, approval, publication status, and `prUrl`.
+The Work dashboard shows the phase, approval, commit and PR link while keeping
+instructions and review findings private. Stop records cancellation before
+terminating workers; it cannot undo an already-created commit or remote update.
+Restart the board dispatcher after a runtime restart to resume the same
+checkpoint without replaying a completed editor or reviewer.
+Late terminal writes require the original lease ID.
+
+**Heartbeat** (`LemonAutomation.Heartbeat`) is Lemon's one heartbeat
+mechanism: a cron job whose `meta` has `heartbeat: true` (atom or string key).
+It is scheduled, run, and delivered like every other cron job. During
+terminalization `CronManager` calls `Heartbeat.apply_policy/2`: a completed run
+whose output trims to exactly `"HEARTBEAT_OK"` is marked suppressed, kept in run
+history, emits `:heartbeat_suppressed`, and is not delivered; any other outcome
+emits `:heartbeat_alert` and is delivered. Heartbeat schedules are cron
+schedules, so intervals must be cron-exact. The module also owns the opt-in
+daily brief: `[automation] daily_brief = "HH:MM"` is reconciled at boot
+(`sync_daily_brief/0`) into the heartbeat job `cron_daily_brief`
+(`timezone: "local"`, agent `default`, session `agent:default:main`); a changed
+time updates the job and removing the key removes it.
+
+**CronDelivery** (`LemonAutomation.CronDelivery`) chooses where a delivered
+run result is sent, in order: `deliver_to: "none"` (nowhere); an explicit
+`"telegram:<chat_id>[:<thread_id>]"` or `"discord:<channel_id>[:<thread_id>]"`;
+the originating chat when the job's session key is a channel-peer key of a
+registered chat platform; otherwise the paired owner chat (the first
+`gateway.telegram.allowed_chat_ids` entry when Telegram is enabled, else
+`gateway.discord.default_channel_id` when Discord is enabled); otherwise
+nowhere. `RunNotifications` binds router invocations to the exact target before
+submission; `LemonChannels.Supervision` owns bounded completion/failure rendering,
+durable admission and per-kind/job/run/status deduplication. Telegram `/remind`
+(`LemonChannels.Reminders`) and the agent `cron` tool create ordinary jobs through
+`CronManager` and rely on this resolution.
+
+### Remote supervision
+
+Goals and kanban boards use the same target grammar as cron. Set `deliver_to` on
+the `goal` tool's `set` or `kanban` tool's `board_create`: `auto` uses the originating
+Telegram/Discord account/chat/topic, then the configured owner; `none` opts out;
+`telegram:<chat_id>[:<thread_id>]` or `discord:<channel_id>[:<thread_id>]` selects an
+explicit target. Channel-created boards preserve their origin even when workers
+run in isolated sessions. Programmatic callers store these options in goal/board
+`meta["deliverTo"]` and board `meta["notificationSessionKey"]`.
+
+Known terminal results produce notices with task/run identity, bounded redacted
+summary, and reviewed commit/PR when present. An uncertain submission or abort is
+not reported as completed/failed: inspect the existing run and reconcile it.
+Goal loops that pause or exhaust their bound report incomplete work rather than
+claiming success. Existing CLI/TUI goal and kanban tools still control start,
+status, stop and explicit retry; cron retains its scheduled retry policy.
+
+Approval-requiring tools remain blocked until the corresponding channel's
+**Approve once** or **Deny** control resolves the exact pending request.
+Controls bind the full approval ID and pending snapshot to the immutable run,
+session, account, chat and topic; stale, expired, foreign and failed decisions
+never acknowledge success. Remote controls cannot grant persistent policy.
+See [channel supervision](../lemon_channels/README.md#automation-supervision)
+for delivery and recovery guarantees.
 
 **SkillCuratorManager** runs Lemon's learned-skill curator after the runtime has
 been idle long enough and the persisted curator interval gate is due. It asks
@@ -179,14 +295,13 @@ been idle long enough and the persisted curator interval gate is due. It asks
 transitions, then submits the generated review prompt to `LemonRouter` only when
 agent-authored skills require a consolidation pass. Curator review runs default
 to a learning-only tool policy that exposes `read_skill`, `skill_manage`,
-`search_memory`, and `memory_topic`; override it with `tool_policy` in the
-curator config when an operator needs a narrower or broader surface. When a
-review is submitted, the curator report is updated with the router run id so the
-automatic pass and model review can be audited together.
+`remember`, and `recall`; override it with `tool_policy` in the curator config
+when an operator needs a narrower or broader surface. A submitted review updates
+the curator report with the router run id for auditability.
 
 ### Session Isolation
 
-Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_12345`) to prevent cron activity from polluting the originating session's conversation history. Completion summaries are forwarded back to the base session as synthetic `run_completed` entries with `meta.cron_forwarded_summary = true`. For `channel_peer` base sessions, the forwarded summary is also delivered through the `LemonRouter.ChannelsDelivery` -> `LemonChannels` path so channel-origin cron jobs are visible even when no process is subscribed to the session topic.
+Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_12345`) to prevent cron activity from polluting the originating session's conversation history. Completion summaries are forwarded back to the base session as synthetic `run_completed` entries with `meta.cron_forwarded_summary = true`. The result is also sent through the `LemonRouter.ChannelsDelivery` -> `LemonChannels` path to the chat chosen by `CronDelivery`, so jobs created from the TUI, web UI, or CLI reach the paired owner chat and channel-origin jobs return to their chat even when no process is subscribed to the session topic.
 
 ### Persistent Cross-Run Memory
 
@@ -231,9 +346,11 @@ and the harmless disabled example under
 | `LemonAutomation.CronSchedule` | `lib/lemon_automation/cron_schedule.ex` | Cron expression parser and next-run time computation |
 | `LemonAutomation.CronStore` | `lib/lemon_automation/cron_store.ex` | Persistence layer using `LemonCore.Store` (tables: `:cron_jobs`, `:cron_runs`) |
 | `LemonAutomation.CronMemory` | `lib/lemon_automation/cron_memory.ex` | Persistent markdown-based cross-run memory for cron jobs |
+| `LemonAutomation.Tools.Cron` | `lib/lemon_automation/tools/cron.ex` | The agent `cron` tool (list/add/update/pause/resume/abort/remove/run/runs); registered with `LemonAgent.ToolRegistry` by `LemonAutomation.Application`, so sessions are offered it through the platform tool registry; non-Lemon session ids (e.g. TUI `tui-…`) fall back to `agent:<id>:main` |
 | `LemonAutomation.CronCommandRunner` | `lib/lemon_automation/cron_command_runner.ex` | Supervised no-agent local shell command runner for operator-created command cron jobs |
 | `LemonCore.Doctor.CronDiagnostics` | `apps/lemon_core/lib/lemon_core/doctor/cron_diagnostics.ex` | Core-owned redacted support-bundle diagnostics for cron jobs and runs |
-| `LemonAutomation.HeartbeatManager` | `lib/lemon_automation/heartbeat_manager.ex` | Heartbeat suppression GenServer; manages both cron-based and timer-based heartbeats |
+| `LemonAutomation.Heartbeat` | `lib/lemon_automation/heartbeat.ex` | Heartbeat policy (`meta.heartbeat` jobs; `HEARTBEAT_OK` suppression) applied during CronManager terminalization, plus daily-brief reconciliation from `[automation] daily_brief` |
+| `LemonAutomation.CronDelivery` | `lib/lemon_automation/cron_delivery.ex` | Resolves the shared automation target grammar; `RunNotifications` binds invocations and hands terminal facts to channels |
 | `LemonAutomation.GoalContinuation` | `lib/lemon_automation/goal_continuation.ex` | Builds and submits one persistent-goal continuation run through LemonRouter |
 | `LemonAutomation.GoalContinuationManager` | `lib/lemon_automation/goal_continuation_manager.ex` | Supervised task entrypoint for one-shot goal continuation |
 | `LemonAutomation.GoalJudge` | `lib/lemon_automation/goal_judge.ex` | Normalizes preview goal-loop verdicts |
@@ -260,8 +377,9 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 - **Memory file limits**: 24,000 chars max per memory file, 8,000 chars injected into prompts, 2,000 chars per run result entry
 - **Memory file location**: Defaults to `~/.lemon/cron_memory/{job_id}.md`, overridable via `memory_file` field on the job or in `meta`
 - **Goal judge runner**: dev/prod default to `LemonAutomation.GoalJudge.RouterRunner`; set `LEMON_GOAL_JUDGE_MODEL` or pass `judge_model` from the control plane/TUI to choose a specific judge model
-- **Goal loop scheduler**: `goal.loop.start` with `auto: true` persists per-goal auto scheduling; `goal.loop.stop` disables it. `:goal_loop_scheduler_interval_ms` defaults to 30,000 and `:goal_loop_scan_limit` defaults to 50.
-- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "search_memory", "memory_topic"]}`
+- **Goal loop scheduler**: automatic per-goal scheduling persists across restarts; `:goal_loop_scheduler_interval_ms` defaults to 30,000 and `:goal_loop_scan_limit` defaults to 50.
+- **Skill curator**: `config :lemon_automation, :skill_curator, enabled: true, agent_id: "default", interval_hours: 168, min_idle_hours: 2, tool_policy: %{allow: ["read_skill", "skill_manage", "remember", "recall"]}`
+- **Daily brief sync**: `[automation] daily_brief = "HH:MM"` (see `LemonCore.Config.Automation`) is reconciled into the `cron_daily_brief` heartbeat job by a one-shot boot task; `config :lemon_automation, daily_brief_sync: false` disables the task (set in `config/test.exs`)
 
 ## Usage
 
@@ -277,28 +395,56 @@ LemonAutomation behavior is controlled through cron job fields plus a small appl
 })
 ```
 
-### With Timezone and Jitter
+### With Local Time, Jitter, and Retries
 
 ```elixir
 {:ok, job} = LemonAutomation.add_job(%{
-  name: "Hourly Check",
-  schedule: "0 * * * *",
+  name: "Morning Check",
+  schedule: "0 9 * * 1-5",
   agent_id: "agent_abc",
   session_key: "agent:agent_abc:main",
   prompt: "Check system status",
-  timezone: "America/New_York",
+  timezone: "local",
   jitter_sec: 30,
   max_retries: 2,
   retry_backoff_ms: 60_000
 })
 ```
 
+`timezone: "UTC"` (the default) evaluates the schedule in UTC; `"local"` uses
+the server's OS wall-clock time, DST-aware. The build ships no timezone
+database, so any other zone name (for example `"America/New_York"`) is
+evaluated as UTC.
+
+### One-Shot Jobs and Delivery Targets
+
+```elixir
+# Fires once at 14:30 local time on 28 September, then is deleted.
+{:ok, job} = LemonAutomation.add_job(%{
+  name: "Reminder: call the bank",
+  schedule: "30 14 28 9 *",
+  timezone: "local",
+  once: true,
+  agent_id: "agent_abc",
+  session_key: "agent:agent_abc:main",
+  prompt: "Remind the user to call the bank.",
+  deliver_to: "telegram:123456789"
+})
+```
+
+A `once` job is disabled when its scheduled run is claimed, so a restart or
+slow run cannot fire it twice, and it is deleted after that run (and any retry)
+finishes. `deliver_to` accepts `"none"`, `"telegram:<chat_id>[:<thread_id>]"`,
+`"discord:<channel_id>[:<thread_id>]"`, or `nil`/`""`/`"auto"` for the default
+resolution described under **CronDelivery**; any other value is rejected.
+
 ### Operator Command Job
 
 Control-plane operators can create no-agent command jobs with `command` instead
 of `agent_id`/`session_key`/`prompt`. Command jobs run under the
-`CronManager` supervised task path, store output in cron run history, do not
-create LemonRouter runs, and do not forward channel summaries.
+`CronManager` supervised task path, store output in cron run history, and do
+not create LemonRouter runs. They are delivered to chat only when they set an
+explicit `deliver_to` target; otherwise `CronDelivery` resolves them to nowhere.
 
 ```elixir
 {:ok, job} = LemonAutomation.add_job(%{
@@ -331,7 +477,9 @@ immutable.
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `true` | Whether the job is active |
-| `timezone` | `"UTC"` | Timezone for schedule interpretation |
+| `timezone` | `"UTC"` | `"UTC"` or `"local"` (server wall-clock, DST-aware); other names are evaluated as UTC |
+| `deliver_to` | `nil` | Delivery target: `nil` (originating chat, else paired owner chat), `"none"`, `"telegram:<chat_id>[:<thread_id>]"`, or `"discord:<channel_id>[:<thread_id>]"` |
+| `once` | `false` | One-shot: disabled when its scheduled run is claimed, deleted after that run finishes |
 | `jitter_sec` | `0` | Random delay spread in seconds |
 | `timeout_ms` | `300_000` | Max execution time (5 minutes) |
 | `max_retries` | `0` | Number of retries after scheduled failure/timeout |
@@ -408,47 +556,40 @@ results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 
 ### Heartbeats
 
-Heartbeats are scheduled agent health checks. Intervals that remain exact at
-UTC day boundaries use cron jobs; every other positive interval uses an Erlang
-timer. A cron job is treated as a heartbeat if its name contains `"heartbeat"`
-(case-insensitive) or its `meta` has `heartbeat: true` (atom key).
+A heartbeat is an ordinary cron job whose `meta` has `heartbeat: true` (atom or
+string key). It runs in an isolated sub-session like every cron job and is
+delivered by `CronDelivery`. Schedules are cron schedules, so intervals must be
+cron-exact (`every 30m`, `every 2h`, `daily at 8am`, ...).
 
 ```elixir
-# Create a heartbeat job
 {:ok, job} = LemonAutomation.add_job(%{
-  name: "heartbeat-agent-abc",
-  schedule: "*/5 * * * *",
+  name: "heartbeat-agent_abc",
+  schedule: "every 30m",
+  timezone: "local",
   agent_id: "agent_abc",
-  session_key: "agent:agent_abc:heartbeat",
-  prompt: "HEARTBEAT"
+  session_key: "agent:agent_abc:main",
+  prompt: "Work through HEARTBEAT.md; reply HEARTBEAT_OK if nothing needs attention.",
+  meta: %{heartbeat: true, agent_id: "agent_abc"}
 })
 
-# Configure a cron-exact heartbeat via HeartbeatManager
-LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
-  enabled: true,
-  interval_ms: 300_000,
-  prompt: "HEARTBEAT"
-})
+LemonAutomation.Heartbeat.heartbeat?(job)                    # => true
+LemonAutomation.Heartbeat.healthy_response?("  HEARTBEAT_OK\n") # => true
 
-# Intervals cron cannot represent exactly use Erlang timers
-LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
-  enabled: true,
-  interval_ms: 90 * 60_000,
-  prompt: "HEARTBEAT"
-})
-
-# Query heartbeat state
-LemonAutomation.HeartbeatManager.get_config("agent_abc")
-LemonAutomation.HeartbeatManager.get_last("agent_abc")
-LemonAutomation.HeartbeatManager.stats()
+# Reconcile the daily brief with a HH:MM time (nil removes it)
+LemonAutomation.Heartbeat.sync_daily_brief("08:00")
 ```
 
-**Suppression rules**: Only responses that trim to exactly `"HEARTBEAT_OK"` are
-suppressed. Cron heartbeat runs retain suppression in cron history; timer runs
-retain terminal and suppression state in `HeartbeatStore`. Any other response
-emits `:heartbeat_alert` with `severity: :warning`. Overlapping timer ticks are
-skipped rather than submitted concurrently and increment
-`HeartbeatManager.stats().skipped_overlap`.
+The TUI `/heartbeat every <interval> <prompt>` command creates or updates this
+per-agent job (`meta.heartbeat`, `timezone: "local"`, `agent:<id>:main`).
+
+**Suppression rules**: `Heartbeat.apply_policy/2` runs synchronously in
+`CronManager` terminalization, after the monitor and preflight policies. Only a
+`:completed` run whose output trims to exactly `"HEARTBEAT_OK"` is suppressed:
+`CronRun.suppress/1` marks it in cron history, `:heartbeat_suppressed` is
+emitted, and nothing is delivered. Any other outcome (including failures and
+timeouts) emits `:heartbeat_alert` with `severity: :warning` and is delivered
+unless the monitor or preflight policy already withheld it. Non-heartbeat jobs
+pass through unchanged.
 
 ### Events
 
@@ -460,10 +601,10 @@ All events are broadcast on the `"cron"` bus topic as `%LemonCore.Event{}` struc
 | `:cron_job_created` | CronManager | Job added |
 | `:cron_job_updated` | CronManager | Job updated |
 | `:cron_job_deleted` | CronManager | Job removed |
-| `:cron_run_started` | CronManager, Wake, HeartbeatManager | Run begins |
-| `:cron_run_completed` | CronManager, HeartbeatManager | Run finishes |
-| `:heartbeat_suppressed` | HeartbeatManager | "HEARTBEAT_OK" response |
-| `:heartbeat_alert` | HeartbeatManager | Non-OK heartbeat response |
+| `:cron_run_started` | CronManager, Wake | Run begins |
+| `:cron_run_completed` | CronManager | Run finishes (terminalization) |
+| `:heartbeat_suppressed` | `Heartbeat` policy in CronManager terminalization | Heartbeat run replied exactly "HEARTBEAT_OK" |
+| `:heartbeat_alert` | `Heartbeat` policy in CronManager terminalization | Any other heartbeat outcome |
 
 ```elixir
 LemonCore.Bus.subscribe("cron")
@@ -529,6 +670,8 @@ Predicates: `CronRun.active?/1` (pending or running), `CronRun.finished?/1` (com
 
 | Dependency | Type | Purpose |
 |-----------|------|---------|
+| `lemon_agent` | Umbrella | `LemonAgent.ToolRegistry` registration and agent tool types for the `cron` tool |
+| `lemon_ai` | Umbrella | Content structs returned by the `cron` tool |
 | `lemon_core` | Umbrella | Store, Bus, Clock, Id generation, SessionKey, Event |
 | `lemon_router` | Umbrella | Run submission via `LemonRouter.submit/1` |
 | `jason` | Hex | JSON serialization |
@@ -563,21 +706,14 @@ MIX_ENV=test mix test \
   apps/lemon_automation/test/lemon_automation/cron_manager_update_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_forwarding_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_unavailable_test.exs \
+  apps/lemon_automation/test/lemon_automation/cron_delivery_test.exs \
+  apps/lemon_automation/test/lemon_automation/heartbeat_test.exs \
   apps/lemon_control_plane/test/lemon_control_plane/methods/cron_methods_test.exs \
-  apps/lemon_gateway/test/tools/cron_test.exs \
+  apps/lemon_automation/test/lemon_automation/tools/cron_test.exs \
   --seed 1
 
-# Redacted cron support-bundle smoke
-MIX_ENV=test mix run scripts/live_cron_diagnostics_smoke.exs
-
-# Telegram/Discord channel-origin cron delivery proof
-MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs
-
-# Full-runtime cron restart smoke (boots runtime_full twice; minute-granularity)
+# Optional manual full-runtime restart smoke (boots runtime_full twice)
 MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs
-
-# Booted control-plane bundle activation and duplicate-safe replay
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
 
 # Provider-backed goal-judge proof
 ZAI_API_KEY="$(MIX_ENV=dev mix run --no-start -e 'Logger.configure(level: :emergency); Logger.remove_backend(:console); {:ok, _} = Application.ensure_all_started(:lemon_core); IO.write(LemonCore.Secrets.fetch_value("llm_zai_api_key") || "")')" \
@@ -612,20 +748,20 @@ mix test --cover apps/lemon_automation
 
 | Test File | Coverage |
 |-----------|----------|
+| `tools/cron_test.exs` | The `cron` agent tool against a real `CronManager`: add/list/update/pause/resume/abort/remove, session and agent defaults, delivery targets, run history, and registry registration |
 | `cron_job_test.exs` | CronJob struct creation, update, due?, serialization |
 | `blueprint_test.exs` | Portable manifest policy, staged revalidation, profile-local enablement, exact confirmation, rollback, stable cron provenance, and idempotent replay |
 | `cron_run_test.exs` | CronRun state transitions, duration computation, serialization |
-| `cron_schedule_test.exs` | Cron parsing, next_run computation, matches?, common patterns |
+| `cron_schedule_test.exs` | Cron parsing, next_run computation, matches?, common patterns, `"local"` timezone occurrences |
 | `cron_store_test.exs` | Persistence CRUD, filtering, ordering, cleanup_old_runs |
 | `cron_manager_retry_test.exs` | Scheduled retry/backoff, restart reconstruction, deterministic attempt uniqueness, stale recovery, and manual no-retry behavior |
 | `cron_manager_worker_lifecycle_test.exs` | Monitored submitter crash and task-supervisor start failure terminalization |
 | `cron_manager_scheduler_lock_test.exs` | Scheduled ticks and manager restarts skip duplicate launches when a persisted active run exists and recover stale active runs as timeouts |
 | `cron_manager_update_test.exs` | Immutable field rejection, mutable field updates |
-| `cron_manager_forwarding_test.exs` | Summary forwarding to main/channel_peer sessions and channel outbox delivery |
+| `cron_manager_forwarding_test.exs` | Summary forwarding to main/channel_peer sessions and channel outbox delivery; default delivery to the paired owner chat (including non-Lemon session ids), explicit `deliver_to` and `"none"`, heartbeat suppression vs. delivery, and one-shot delivery then removal |
+| `cron_delivery_test.exs` | `deliver_to` validation and target resolution (explicit, originating chat, Telegram/Discord owner chat, unpaired) |
 | `events_test.exs` | Event emission for all event types |
-| `heartbeat_manager_test.exs` | Suppression logic, heartbeat? detection |
-| `heartbeat_scheduling_test.exs` | Cron-based heartbeat scheduling and interval conversion |
-| `heartbeat_timer_test.exs` | Exact timer-based heartbeats for intervals cron cannot represent, including terminal persistence and overlap suppression |
+| `heartbeat_test.exs` | `apply_policy/2` suppression/alert behavior and daily-brief create/reschedule/remove/invalid-time reconciliation |
 | `run_completion_waiter_test.exs` | Bus-based completion waiting, output truncation |
 | `run_submitter_test.exs` | Router submission, session key forking, error handling, memory file writes |
 | `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof, authoritative run tracking, and hard-stop abort/no-next-tick semantics |

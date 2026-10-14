@@ -30,8 +30,6 @@ defmodule LemonRouter.PendingCompaction do
       marker when is_map(marker) -> prepare_marker(prompt, session_key, marker)
       _ -> {prompt, nil}
     end
-  rescue
-    _ -> {prompt, nil}
   end
 
   def prepare(prompt, _session_key, _origin), do: {prompt, nil}
@@ -64,8 +62,6 @@ defmodule LemonRouter.PendingCompaction do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec build_prompt(String.t(), String.t()) :: String.t()
@@ -147,8 +143,6 @@ defmodule LemonRouter.PendingCompaction do
       _ ->
         true
     end
-  rescue
-    _ -> false
   end
 
   defp format_history_entry({_run_id, data}) when is_map(data) do

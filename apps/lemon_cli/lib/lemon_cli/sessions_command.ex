@@ -1,6 +1,6 @@
 defmodule LemonCli.SessionsCommand do
   @moduledoc """
-  Mix-free CLI adapter for `LemonCore.SessionLifecycle`.
+  Mix-free, authenticated daemon client for durable session management.
 
   Every read is bounded, history/export output stays redacted, destructive
   pruning is preview-token bound, and single-session deletion requires the
@@ -8,7 +8,7 @@ defmodule LemonCli.SessionsCommand do
   """
 
   alias LemonCli.CommandRegistry
-  alias LemonCore.SessionLifecycle
+  alias LemonCli.SessionClient
 
   @exit_ok 0
   @exit_error 1
@@ -18,20 +18,27 @@ defmodule LemonCli.SessionsCommand do
   @max_query_bytes 512
 
   @spec run([String.t()]) :: 0 | 1 | 2
-  def run(["list" | args]), do: list(args, nil)
-  def run(["search" | args]), do: search(args)
-  def run(["stats" | args]), do: stats(args)
-  def run(["show" | args]), do: show(args)
-  def run(["history" | args]), do: history(args)
-  def run(["title" | args]), do: title(args)
-  def run(["pin" | args]), do: patch_boolean(args, :pinned, true, "pinned")
-  def run(["unpin" | args]), do: patch_boolean(args, :pinned, false, "unpinned")
-  def run(["archive" | args]), do: patch_boolean(args, :archived, true, "archived")
-  def run(["restore" | args]), do: patch_boolean(args, :archived, false, "restored")
-  def run(["export" | args]), do: export(args)
-  def run(["prune" | args]), do: prune(args)
-  def run(["delete" | args]), do: delete(args)
-  def run(_args), do: usage_error("Missing or invalid sessions command.")
+  def run(args) do
+    dispatch(args)
+  rescue
+    error in SessionClient.Error -> failure(error.kind, error.message, json_requested?(args))
+  end
+
+  defp dispatch(["list" | args]), do: list(args, nil)
+  defp dispatch(["search" | args]), do: search(args)
+  defp dispatch(["stats" | args]), do: stats(args)
+  defp dispatch(["show" | args]), do: show(args)
+  defp dispatch(["history" | args]), do: history(args)
+  defp dispatch(["context" | args]), do: context(args)
+  defp dispatch(["title" | args]), do: title(args)
+  defp dispatch(["pin" | args]), do: patch_boolean(args, :pinned, true, "pinned")
+  defp dispatch(["unpin" | args]), do: patch_boolean(args, :pinned, false, "unpinned")
+  defp dispatch(["archive" | args]), do: patch_boolean(args, :archived, true, "archived")
+  defp dispatch(["restore" | args]), do: patch_boolean(args, :archived, false, "restored")
+  defp dispatch(["export" | args]), do: export(args)
+  defp dispatch(["prune" | args]), do: prune(args)
+  defp dispatch(["delete" | args]), do: delete(args)
+  defp dispatch(_args), do: usage_error("Missing or invalid sessions command.")
 
   defp stats(args) do
     with {:ok, parsed} <- parse_stats_options(args),
@@ -42,7 +49,7 @@ defmodule LemonCli.SessionsCommand do
          {:ok, archived} <- paired_filter(parsed.options, :archived, :active),
          :ok <- ensure_started(),
          {:ok, report} <-
-           SessionLifecycle.stats(
+           SessionClient.stats(
              query: query,
              agent_id: parsed.options[:agent_id],
              pinned: pinned,
@@ -52,13 +59,6 @@ defmodule LemonCli.SessionsCommand do
       if parsed.options[:json], do: json_success(%{stats: report}), else: print_stats(report)
       @exit_ok
     else
-      {:error, :session_store_unavailable} ->
-        failure(
-          "session_store_unavailable",
-          "Session statistics are temporarily unavailable.",
-          json_requested?(args)
-        )
-
       {:error, message} when is_binary(message) ->
         usage_error(message)
     end
@@ -110,13 +110,13 @@ defmodule LemonCli.SessionsCommand do
   end
 
   defp list_from_parsed(parsed, query) do
-    with :ok <- ensure_started(),
-         {:ok, limit} <- bounded_option(parsed.options[:limit], 100, 1, @max_list_limit, "limit"),
+    with {:ok, limit} <- bounded_option(parsed.options[:limit], 100, 1, @max_list_limit, "limit"),
          {:ok, offset} <- bounded_option(parsed.options[:offset], 0, 0, 1_000_000, "offset"),
          {:ok, pinned} <- paired_filter(parsed.options, :pinned, :unpinned),
-         {:ok, archived} <- paired_filter(parsed.options, :archived, :active) do
+         {:ok, archived} <- paired_filter(parsed.options, :archived, :active),
+         :ok <- ensure_started() do
       result =
-        SessionLifecycle.list(
+        SessionClient.list(
           limit: limit,
           offset: offset,
           query: query,
@@ -154,7 +154,7 @@ defmodule LemonCli.SessionsCommand do
     with {:ok, parsed} <- parse(args, json: :boolean),
          [session_key] <- parsed.positionals,
          :ok <- ensure_started(),
-         %{} = session <- SessionLifecycle.get(session_key) do
+         %{} = session <- SessionClient.get(session_key) do
       if parsed.options[:json],
         do: json_success(%{session: session}),
         else: print_session(session)
@@ -173,8 +173,8 @@ defmodule LemonCli.SessionsCommand do
          {:ok, limit} <-
            bounded_option(parsed.options[:limit], 50, 1, @max_history_limit, "limit"),
          :ok <- ensure_started(),
-         %{} = session <- SessionLifecycle.get(session_key) do
-      history = SessionLifecycle.history(session_key, limit: limit, redact: true)
+         %{} = session <- SessionClient.get(session_key) do
+      history = SessionClient.history(session_key, limit: limit, redact: true)
 
       if parsed.options[:json] do
         json_success(%{session: session, history: history, redacted: true})
@@ -190,12 +190,40 @@ defmodule LemonCli.SessionsCommand do
     end
   end
 
+  defp context(args) do
+    with {:ok, parsed} <- parse(args, cwd: :string, json: :boolean),
+         [session_key] <- parsed.positionals,
+         :ok <- ensure_started() do
+      cwd = Path.expand(parsed.options[:cwd] || File.cwd!())
+      json? = parsed.options[:json] == true
+
+      case SessionClient.context(session_key, cwd) do
+        {:ok, report} ->
+          if json?, do: json_success(%{context: report}), else: print_context(report)
+          @exit_ok
+
+        {:error, :not_found} ->
+          failure(
+            "session_not_found",
+            "No native context recorded for this session in #{cwd}.",
+            json?
+          )
+
+        {:error, :unavailable} ->
+          failure("context_unavailable", "Context usage is not available yet.", json?)
+      end
+    else
+      {:error, message} -> usage_error(message)
+      _ -> usage_error("Context requires exactly one session key.")
+    end
+  end
+
   defp title(args) do
     with {:ok, parsed} <- parse(args, clear: :boolean, json: :boolean),
          {:ok, session_key, value} <- title_arguments(parsed),
          :ok <- ensure_started() do
       mutation_result(
-        SessionLifecycle.patch(session_key, %{title: value}),
+        SessionClient.patch(session_key, %{title: value}),
         "title updated",
         parsed
       )
@@ -232,7 +260,7 @@ defmodule LemonCli.SessionsCommand do
     with {:ok, parsed} <- parse(args, json: :boolean),
          [session_key] <- parsed.positionals,
          :ok <- ensure_started() do
-      mutation_result(SessionLifecycle.patch(session_key, %{field => value}), action, parsed)
+      mutation_result(SessionClient.patch(session_key, %{field => value}), action, parsed)
     else
       {:error, message} -> usage_error(message)
       _ -> usage_error("This command requires exactly one session key.")
@@ -266,7 +294,7 @@ defmodule LemonCli.SessionsCommand do
          [session_key] <- parsed.positionals,
          {:ok, format} <- export_format(parsed.options[:format]),
          :ok <- ensure_started(),
-         {:ok, result} <- SessionLifecycle.export(session_key, format: format),
+         {:ok, result} <- SessionClient.export(session_key, format: format),
          :ok <-
            maybe_write_export(parsed.options[:output], result.content, parsed.options[:force]) do
       print_export(result, parsed)
@@ -387,7 +415,7 @@ defmodule LemonCli.SessionsCommand do
         confirm_token: parsed.options[:confirm]
       ]
 
-      prune_result(SessionLifecycle.prune(opts), parsed)
+      prune_result(SessionClient.prune(opts), parsed)
     else
       {:error, message} -> usage_error(message)
       [_ | _] -> usage_error("Prune does not accept positional arguments.")
@@ -440,7 +468,7 @@ defmodule LemonCli.SessionsCommand do
          [session_key] <- parsed.positionals,
          :ok <- exact_delete_confirmation(session_key, parsed.options[:confirm]),
          :ok <- ensure_started() do
-      case SessionLifecycle.delete(session_key) do
+      case SessionClient.delete(session_key) do
         {:ok, result} ->
           if parsed.options[:json] do
             json_success(%{delete: result})
@@ -576,19 +604,7 @@ defmodule LemonCli.SessionsCommand do
       else: {:error, "Older-than cutoff cannot be in the future."}
   end
 
-  defp ensure_started do
-    previous_level = Logger.level()
-    Logger.configure(level: :warning)
-
-    try do
-      case Application.ensure_all_started(:lemon_core) do
-        {:ok, _apps} -> :ok
-        {:error, _reason} -> {:error, "The Lemon session store is unavailable."}
-      end
-    after
-      Logger.configure(level: previous_level)
-    end
-  end
+  defp ensure_started, do: SessionClient.ensure_running()
 
   defp print_session_list(result) do
     IO.puts(
@@ -659,6 +675,107 @@ defmodule LemonCli.SessionsCommand do
     suffix = if breakdown.omitted > 0, do: " (+#{breakdown.omitted} more)", else: ""
     IO.puts("#{label}: #{values}#{suffix}")
   end
+
+  @context_bar_cells 40
+
+  defp print_context(report) do
+    window = report["window"]
+    used = report["usedTokens"]
+    model = get_in(report, ["model", "id"]) || "unknown model"
+
+    size =
+      if window,
+        do: "#{tokens(used)} / #{tokens(window)} tokens (#{report["percentUsed"]}%)",
+        else: "#{tokens(used)} tokens (window unknown)"
+
+    IO.puts("Context usage: #{report["sessionKey"]}")
+    IO.puts("Model: #{model}  #{size}  [#{context_source(report["source"])}]")
+
+    if window do
+      filled = min(round(used * @context_bar_cells / window), @context_bar_cells)
+
+      IO.puts(
+        "[" <>
+          String.duplicate("#", filled) <>
+          String.duplicate(".", @context_bar_cells - filled) <> "]"
+      )
+    end
+
+    IO.puts("")
+
+    rows =
+      Enum.map(report["categories"], &{&1["label"], &1["tokens"], &1["percent"]}) ++
+        if(report["freeTokens"],
+          do: [{"Free space", report["freeTokens"], percent_of(report["freeTokens"], window)}],
+          else: []
+        )
+
+    width = rows |> Enum.map(fn {label, _, _} -> String.length(label) end) |> Enum.max()
+
+    Enum.each(rows, fn {label, count, percent} ->
+      IO.puts(
+        "  " <>
+          String.pad_trailing(label, width) <>
+          "  " <>
+          String.pad_leading(tokens(count), 8) <>
+          "  " <> String.pad_leading(if(percent, do: "#{percent}%", else: "-"), 6)
+      )
+    end)
+
+    case report["autoCompaction"] do
+      %{"enabled" => true} = budget ->
+        IO.puts(
+          "\nAuto-compaction at #{tokens(budget["thresholdTokens"])} tokens " <>
+            "(#{tokens(budget["headroomTokens"])} headroom)."
+        )
+
+      %{"enabled" => false} ->
+        IO.puts("\nAuto-compaction is disabled.")
+
+      _ ->
+        :ok
+    end
+
+    if report["top"] != [] do
+      IO.puts("\nLargest contributors:")
+
+      report["top"]
+      |> Enum.with_index(1)
+      |> Enum.each(fn {item, index} ->
+        IO.puts("  #{index}. #{item["label"]}  #{tokens(item["tokens"])}")
+      end)
+    end
+
+    IO.puts("\n" <> context_caveat(report))
+  end
+
+  defp context_source("usage"), do: "provider-reported"
+  defp context_source("usage+estimate"), do: "reported + estimated"
+  defp context_source(_), do: "estimated"
+
+  defp context_caveat(report) do
+    split =
+      if report["source"] == "estimate",
+        do: "Counts are estimates (~4 characters per token).",
+        else: "Category splits are estimates (~4 characters per token) scaled to the reported total."
+
+    case report["overhead"] do
+      "snapshot" -> split <> " System prompt and tools were measured when the last turn ended."
+      "unavailable" -> split <> " System prompt and tools are not itemized for this session yet."
+      _ -> split
+    end
+  end
+
+  defp percent_of(_count, nil), do: nil
+  defp percent_of(count, window), do: Float.round(count * 100 / window, 1)
+
+  defp tokens(count) when is_integer(count) and count >= 1_000_000,
+    do: "#{Float.round(count / 1_000_000, 1)}M"
+
+  defp tokens(count) when is_integer(count) and count >= 1_000,
+    do: "#{Float.round(count / 1_000, 1)}k"
+
+  defp tokens(count), do: "#{count}"
 
   defp print_history(session, []) do
     IO.puts("No recorded runs for #{session.session_key}.")

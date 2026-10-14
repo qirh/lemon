@@ -112,7 +112,6 @@ defmodule LemonSim.LLM.GameHelpers.Config do
       when (is_atom(provider) or is_binary(provider)) and is_binary(model_id) do
     case normalize_provider(provider) do
       normalized when is_atom(normalized) -> LemonAi.Models.get_model(normalized, model_id)
-      nil -> nil
     end
   end
 

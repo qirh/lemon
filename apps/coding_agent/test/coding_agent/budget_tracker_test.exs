@@ -96,7 +96,12 @@ defmodule CodingAgent.BudgetTrackerTest do
           end)
         end
 
-      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      workers =
+        for _ <- tasks do
+          assert_receive {:ready, pid}
+          pid
+        end
+
       Enum.each(workers, &send(&1, :record))
       assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
 
@@ -240,7 +245,12 @@ defmodule CodingAgent.BudgetTrackerTest do
           end)
         end)
 
-      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      workers =
+        for _ <- tasks do
+          assert_receive {:ready, pid}
+          pid
+        end
+
       Enum.each(workers, &send(&1, :reserve))
       results = Task.await_many(tasks)
 

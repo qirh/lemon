@@ -102,7 +102,8 @@ defmodule LemonCli.Setup.WizardTest do
     } do
       io = recording_io()
 
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
 
       # Config scaffold was created.
       assert File.exists?(config_path)
@@ -131,14 +132,19 @@ defmodule LemonCli.Setup.WizardTest do
       key_file: key_file
     } do
       io = recording_io()
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
+
       drain_events([])
 
       {:ok, config_before} = File.read(config_path)
       {:ok, key_before} = File.read(key_file)
 
       io = recording_io()
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
 
       assert File.read!(config_path) == config_before
       assert File.read!(key_file) == key_before
@@ -165,7 +171,8 @@ defmodule LemonCli.Setup.WizardTest do
 
       io = recording_io()
 
-      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) == :ok
+      assert Wizard.run_full([], io, non_interactive: true, config_path: config_path) ==
+               {:error, :setup_incomplete}
 
       # The user's config is never overwritten and no key is initialized.
       assert File.read!(config_path) == original_config
@@ -177,6 +184,45 @@ defmodule LemonCli.Setup.WizardTest do
       assert info_event?(events, &String.contains?(squish(&1), "[done] secrets"))
       assert info_event?(events, &String.contains?(squish(&1), "[pending] provider"))
       refute info_event?(events, &String.contains?(&1, "Setup complete"))
+    end
+  end
+
+  describe "run_full/3 — legacy config" do
+    test "rewrites a TUI-written [agent] table to the current schema, keeping a backup", %{
+      config_path: config_path
+    } do
+      legacy = """
+      [agent]
+      default_provider = "openai"
+      default_model = "openai:gpt-5.1"
+
+      [control_plane]
+
+      [providers."anthropic"]
+      api_key_secret = "anthropic_api_key"
+
+      [providers."openai-codex"]
+      oauth_secret = "llm_openai_codex_api_key"
+      auth_source = "oauth"
+      """
+
+      File.write!(config_path, legacy)
+      set_master_key_env()
+
+      io = recording_io()
+      Wizard.run_full([], io, non_interactive: true, config_path: config_path)
+
+      settings = Toml.decode_file!(config_path)
+      refute Map.has_key?(settings, "agent")
+      assert settings["defaults"] == %{"provider" => "openai", "model" => "openai:gpt-5.1"}
+      assert settings["providers"]["openai-codex"]["auth_source"] == "oauth"
+
+      assert [backup] = Path.wildcard(config_path <> ".bak-*")
+      assert File.read!(backup) == legacy
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "agent.default_model → defaults.model"))
+      assert info_event?(events, &String.contains?(&1, "Backup: #{backup}"))
     end
   end
 
@@ -196,8 +242,8 @@ defmodule LemonCli.Setup.WizardTest do
         api_key_secret = "wizard_openai_key"
       """)
 
-      # One scripted answer: declining the optional runtime configuration.
-      io = recording_io(["n"])
+      # Scripted answers: decline the optional daily brief and runtime configuration.
+      io = recording_io(["n", "n"])
 
       assert Wizard.run_full([], io, config_path: config_path) == :ok
 
@@ -209,6 +255,8 @@ defmodule LemonCli.Setup.WizardTest do
 
       # Provider onboarding is never asked for again; runtime stays optional.
       assert Enum.any?(prompt_events(events), &String.contains?(&1, "Configure runtime profile"))
+      assert Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
+      refute File.read!(config_path) =~ "[automation]"
 
       assert Enum.all?(
                prompt_events(events),
@@ -219,16 +267,130 @@ defmodule LemonCli.Setup.WizardTest do
     end
   end
 
+  describe "run_full/3 — daily brief" do
+    test "opting in records the brief time; rerunning does not ask again", %{
+      config_path: config_path
+    } do
+      set_master_key_env()
+      assert {:ok, _metadata} = Secrets.set("wizard_openai_key", "sk-wizard-brief")
+
+      File.write!(config_path, """
+      [defaults]
+        provider = "openai"
+        model = "openai:gpt-5"
+
+      [providers.openai]
+        api_key_secret = "wizard_openai_key"
+      """)
+
+      # yes to the brief, an invalid time, then 7:30; decline runtime configuration.
+      io = recording_io(["y", "7am", "7:30", "n"])
+      assert Wizard.run_full([], io, config_path: config_path) == :ok
+
+      assert %{"automation" => %{"daily_brief" => "07:30"}} =
+               config_path |> File.read!() |> Toml.decode!()
+
+      events = drain_events([])
+      assert error_event?(events, &String.contains?(&1, "24-hour time"))
+      assert info_event?(events, &String.contains?(&1, "Daily brief scheduled for 07:30"))
+
+      assert Wizard.run_full([], recording_io(["n"]), config_path: config_path) == :ok
+      events = drain_events([])
+      refute Enum.any?(prompt_events(events), &String.contains?(&1, "daily brief"))
+      assert info_event?(events, &String.contains?(&1, "Daily brief: scheduled at 07:30"))
+    end
+
+    test "non-interactive setup stays off unless --daily-brief is given", %{
+      config_path: config_path
+    } do
+      assert Wizard.run(["--non-interactive", "--config-path", config_path], recording_io()) ==
+               {:error, :setup_incomplete}
+
+      refute File.read!(config_path) =~ "daily_brief"
+
+      assert Wizard.run(
+               ["--non-interactive", "--config-path", config_path, "--daily-brief", "6:45"],
+               recording_io()
+             ) == {:error, :setup_incomplete}
+
+      assert %{"automation" => %{"daily_brief" => "06:45"}} =
+               config_path |> File.read!() |> Toml.decode!()
+    end
+  end
+
   describe "run/3 — full wizard flags" do
     test "top-level flags drive the non-interactive full wizard", %{config_path: config_path} do
       io = recording_io()
 
-      assert Wizard.run(["--non-interactive", "--config-path", config_path], io) == :ok
+      assert Wizard.run(["--non-interactive", "--config-path", config_path], io) ==
+               {:error, :setup_incomplete}
 
       assert File.exists?(config_path)
 
       events = drain_events([])
       assert info_event?(events, &String.contains?(&1, "Setup unfinished"))
+    end
+
+    test "full setup stores credentials and selects a default without prompts", %{
+      config_path: path
+    } do
+      io = %{recording_io() | prompt: fn _ -> flunk("non-interactive setup prompted") end}
+
+      assert :ok =
+               Wizard.run(
+                 [
+                   "--non-interactive",
+                   "--provider",
+                   "openai",
+                   "--token",
+                   "wizard-test-token",
+                   "--model",
+                   "gpt-5",
+                   "--skip-verify",
+                   "--config-path",
+                   path
+                 ],
+                 io
+               )
+
+      settings = Toml.decode_file!(path)
+      assert settings["defaults"]["provider"] == "openai"
+      assert settings["defaults"]["model"] == "openai:gpt-5"
+
+      assert {:ok, "wizard-test-token"} =
+               Secrets.get(settings["providers"]["openai"]["api_key_secret"],
+                 prefer_env: false,
+                 env_fallback: false
+               )
+    end
+  end
+
+  describe "run/3 — fresh non-interactive setup" do
+    test "writes a current-schema config whose default matches the onboarded provider", %{
+      config_path: path
+    } do
+      assert :ok =
+               Wizard.run(
+                 [
+                   "--non-interactive",
+                   "--provider",
+                   "openai",
+                   "--token",
+                   "wizard-test-token",
+                   "--skip-verify",
+                   "--config-path",
+                   path
+                 ],
+                 recording_io()
+               )
+
+      settings = Toml.decode_file!(path)
+      refute Map.has_key?(settings, "agent")
+      assert settings["defaults"]["provider"] == "openai"
+      assert "openai:" <> model = settings["defaults"]["model"]
+      refute model == "fallback"
+      assert Map.keys(settings["providers"]) == ["openai"]
+      assert {:ok, _config} = LemonCore.Config.Modular.validate_settings(settings)
     end
   end
 

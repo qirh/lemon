@@ -179,3 +179,105 @@ describe("PickerOverlay", () => {
 		expect(overlay.items).toHaveLength(1);
 	});
 });
+
+test("bracketed paste filters a picker instead of silently selecting the first unfiltered row", () => {
+	const selected: string[] = [];
+	const picker = new PickerOverlay({
+		title: "models",
+		items: ITEMS,
+		onSelect: (item) => {
+			selected.push(item.value);
+		},
+		detail: () => ["Two messages leave the branch", "Files stay unchanged"],
+	});
+	picker.handleInput("\x1b[200~gpt-4o\x1b[201~");
+	expect(picker.filter).toBe("gpt-4o");
+	expect(picker.selected?.value).toBe("gpt-4o");
+	picker.handleInput("\r");
+	expect(selected).toEqual(["gpt-4o"]);
+	const screen = renderPlain(picker.render(80));
+	expect(screen).toContain("Two messages leave the branch");
+	expect(screen).toContain("Files stay unchanged");
+});
+
+describe("native picker sheet", () => {
+	const terminal = (picker: boolean) => ({
+		cols: 80,
+		dark: true,
+		reduceMotion: true,
+		supports: (kind: string) => picker || kind !== "picker",
+		feature: () => false,
+	});
+	const action = (act: string) => ({ type: "action" as const, key: "", act, mods: [] });
+
+	test("is a picker sheet only where the terminal draws one, and stable while unchanged", () => {
+		const picker = new PickerOverlay({ title: "models", items: ITEMS, onSelect: () => {} });
+		expect(picker.nativeSheet(terminal(false))).toBe(false);
+		expect(picker.describe(terminal(false))).toBeNull();
+		const sheet = picker.describe(terminal(true));
+		expect(sheet?.k).toBe("picker");
+		expect(picker.describe(terminal(true))).toBe(sheet);
+		picker.handleInput("gpt");
+		const filtered = picker.describe(terminal(true));
+		expect(filtered).not.toBe(sheet);
+		expect(filtered?.p).toMatchObject({ query: "gpt", order: ["gpt-4o"], selected: "gpt-4o" });
+	});
+
+	test("groups rows only while unfiltered and shows the detail lines as a preview", () => {
+		const picker = new PickerOverlay({
+			title: "models",
+			items: ITEMS.map((item) => ({
+				...item,
+				group: { id: item.value.startsWith("gpt") ? "openai" : "anthropic", label: "x" },
+			})),
+			detail: () => ["Revision: r3"],
+			onSelect: () => {},
+		});
+		const sheet = picker.describe(terminal(true));
+		expect(sheet?.p).toMatchObject({
+			order: [
+				{ group: "anthropic:0", count: 2 },
+				"claude-sonnet-4",
+				"claude-opus-4",
+				{ group: "openai:2", count: 1 },
+				"gpt-4o",
+			],
+			preview: "below",
+		});
+		expect(sheet?.c).toEqual([
+			{ k: "text", p: { wrap: "word", text: "Revision: r3" }, c: undefined, key: undefined },
+		]);
+		picker.handleInput("o");
+		expect(picker.describe(terminal(true))?.p).not.toHaveProperty("order.0.group");
+	});
+
+	test("pointer events run the paths of the keys they stand for", () => {
+		const keys: string[] = [];
+		const selected: string[] = [];
+		let cancelled = 0;
+		const picker = new PickerOverlay({
+			title: "models",
+			items: ITEMS,
+			onKey: (data) => {
+				keys.push(data);
+				return false;
+			},
+			onSelect: (item) => {
+				selected.push(item.value);
+			},
+			onCancel: () => {
+				cancelled += 1;
+			},
+		});
+		picker.handleNativeEvent({ type: "select", key: "", item: "gpt-4o" });
+		expect(picker.selected?.value).toBe("gpt-4o");
+		expect(selected).toEqual([]);
+		picker.handleNativeEvent(action("confirm"));
+		picker.handleNativeEvent({ type: "activate", key: "", item: "claude-opus-4" });
+		expect(selected).toEqual(["gpt-4o", "claude-opus-4"]);
+		picker.handleNativeEvent(action("close"));
+		expect(cancelled).toBe(1);
+		// The host saw Enter, Enter and Esc first, as from the keyboard.
+		expect(keys).toEqual(["\r", "\r", "\x1b"]);
+	});
+});

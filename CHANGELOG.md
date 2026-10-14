@@ -8,17 +8,360 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.3]
+
+### Added
+
+- **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
+  control-plane methods and events as the TUI. Chat streams Markdown with
+  highlighted code, thinking blocks and rich tool cards (shell output and exit
+  status, diffs, reads, searches, todos, subagents), with attachments,
+  follow-up/steer/redirect queueing, stop, inline approvals, model/thinking/
+  tool-policy pickers, plan mode with Approve & execute / Refine, a context
+  usage inspector with Compact, a git Changes viewer, fork and split view. New
+  pages: omp, session manager, automation (kanban, goals, cron create/edit),
+  blueprints, skills, memory, MCP, nodes, models, usage, diagnostics and
+  settings; plus a ⌘K command palette with global search, `?` shortcut help,
+  `g` navigation chords, run/approval notifications, light/dark themes and
+  phone layouts. See [Use Lemon in a Browser](docs/user-guide/web.md).
+- Control-plane methods for the web UI: `sessions.changes` (git status and
+  bounded diffs of a session workspace), `doctor.run` (read-only `lemon doctor`
+  checks), skill, MCP and node listings and lifecycle actions, `usage.cost`
+  breakdowns by provider/model/session/day, and model pricing in
+  `models.list`. `ProviderConfiguration` can set the default model and thinking
+  level with the same preview/apply revision flow.
+- **Delegate work to omp.** Lemon can run tasks in
+  [omp](https://github.com/can1357/oh-my-pi) sessions: ask in chat ("run this
+  in omp"), use the TUI's `/omp` panel, or `lemon omp start`. Lemon starts omp
+  in the workspace over its RPC protocol and reports live status — activity,
+  tools, todos, subagents, tokens and cost, latest output — and can steer,
+  queue follow-ups, cancel, close and resume sessions. `lemon omp discover`
+  lists omp's stored sessions for a workspace (read-only). omp output is
+  treated as untrusted data, control fails closed, omp processes end with the
+  runtime, and everything degrades to "omp is not installed" without the
+  binary. See [Delegating to omp](docs/user-guide/omp.md).
+- `lemon config migrate` rewrites deprecated sections (`[agent]`, `[agents.*]`,
+  `[tools.*]`) in the global and project config to the current schema, keeping
+  comments and a `config.toml.bak-<timestamp>` backup; `lemon setup` does the
+  same for an existing config.
+
+- **TUI startup logo.** `lemon` now opens with a block-glyph lemon painted in a
+  yellow gradient with a green leaf, beside the version and key hints. It uses
+  only `█ ▀ ▄` cells, so it renders in Tern and any UTF-8 terminal; ASCII
+  locales and terminals narrower than 50 columns keep the one-line banner.
+- **`lemonup` version switcher.** `bin/lemonup` switches `~/.lemon/bin/lemon`
+  between installed releases (`lemonup use 2026.10.2`) and a source checkout
+  (`lemonup use local [checkout]`), installs and removes releases, and moves a
+  running runtime to the new selection. `lemonup update` installs the latest
+  stable release if needed and activates it, from a release or from source.
+  `install.sh --resolve-version` prints the version an install would pick. It
+  was briefly `bin/lvm`, which collides with the Linux LVM2 command; replace a
+  `~/.lemon/bin/lvm` link with one to `bin/lemonup`. Selections made with the
+  old name are still recognized. See
+  [Source development](docs/install.md#switching-between-releases-and-source-with-lemonup).
+- **Tern-native TUI surfaces.** `lemon tui` in Tern now uses the same native
+  surfaces as omp instead of painted rows. The composer shows a context meter,
+  attachment chips, clickable model and effort chips, status facts, last-run
+  usage, and Send/Stop. Tool calls are structured cards: shell run boxes with
+  exit status, native diffs, numbered reads, file rows, web-search sources, a
+  todo checklist, and subagent rows. Prompts show their send time, finished
+  turns get a Copy/usage footer, and thinking shows a live spinner. The
+  transcript also has error frames, a working row with Stop, editable queued
+  prompts, and approval buttons. Pickers (sessions, models, command palette,
+  `/output`) open as native sheets, and the welcome card draws the lemon as an
+  image. Other terminals render as before.
+- **Claude Pro/Max sign-in.** `lemon model anthropic` (and the Anthropic choice
+  in `lemon setup`) signs in with a Claude subscription in the browser using
+  Anthropic's OAuth PKCE flow, without Claude Code installed. The login is
+  stored encrypted, refreshed automatically with one refresh per runtime, and
+  fails closed when Anthropic rejects it. Headless sessions paste the
+  `code#state` from Anthropic's code page. Anthropic currently bills these
+  requests to the account's extra usage, not the plan's included limits.
+- `lemon model PROVIDER --status` shows the auth source, stored login, expiry
+  and whether credentials are usable; `--logout` deletes the stored OAuth login
+  and its config keys.
+- **Context-window usage breakdown.** `/context` (alias `/ctx`) in the TUI and
+  `/context` in ACP chat, plus `lemon sessions context <key>`, show how the next
+  request spends the model's context window: system prompt, tool definitions,
+  skills, context files, memory, messages, tool results, summaries and free
+  space, with the largest contributors and the auto-compaction threshold. In
+  Tern the TUI renders it as a native sheet whose meter matches the composer's
+  context meter (click the meter to open it); the status-bar gauge and composer
+  meter also use the measurement for resumed sessions before their first run.
+  All surfaces read the new read-scoped `sessions.context` control-plane method;
+  category splits are estimates scaled to the provider-reported total.
+
 ### Changed
+
+- **Lemon Web sign-in uses the operator token.** Every page now requires the
+  control-plane operator token (the launcher-managed token by default) through
+  a login page; `lemon web` signs in automatically via the URL fragment. The
+  separate `LEMON_WEB_ACCESS_TOKEN`, `?token=` login, the optional unauthenticated
+  chat route and the `/manage/*` pages are removed. Without a token the UI fails
+  closed unless tokenless loopback compatibility is explicitly enabled and the
+  peer is loopback; failed logins are throttled.
+
+- Anthropic OAuth sign-in no longer runs `claude setup-token` or copies Claude
+  Code's credentials; a pasted setup token is still accepted.
+  `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
+
+- **Plan mode works like omp's `/plan`.** `/plan` toggles plan mode in the TUI
+  and in ACP chat (`/plan <request>` enters it and sends the request). While on,
+  only read-only tools run; the agent drafts `<slug>-plan.md` in a
+  session-private plan directory and calls `propose_plan`, which asks
+  **Approve and execute** / **Refine plan**. Approving turns plan mode off and
+  the agent implements the plan in the same turn; `/plan` again exits without
+  approving. The TUI status line shows `plan` while active. ACP no longer
+  advertises Code/Plan session modes or a `mode` config option, so Tern shows no
+  plan-mode selector; `session/set_mode`, `/approve-plan`, `/discard-plan` and
+  the `sessions.plan` `approve`/`discard` actions are removed (`exit` replaces
+  discard). Sessions saved with the previous reviewed-plan lifecycle keep their
+  plan mode or approved plan when loaded.
+
+- **`lemon` opens the TUI in Tern.** Plain `lemon` in a Tern pane now opens the
+  Lemon TUI on Tern's native surfaces, as `lemon tui` does, instead of
+  redirecting to `tern acp lemon`. The native ACP chat stays available with
+  `tern acp lemon` (or any ACP client running `lemon acp`). `lemon tern install`
+  no longer turns on Tern's `agents.auto_acp`, which only wraps Tern's built-in
+  agent CLIs (`claude`, `codex`, `copilot`); an existing value is left as is.
+
+### Fixed
+
+- `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;
+  the router previously merged the whole policy row instead of its tool policy.
+- Usage is recorded: `usage.status`/`usage.cost` were always zero because
+  finished runs were never added to a ledger. `logs.tail` now returns recent
+  runtime log lines from a bounded in-memory buffer.
+
+- The TUI no longer rewrites `~/.lemon/config.toml` with a deprecated `[agent]`
+  table when you pick a default model (Ctrl+G / **Make default**) or run
+  `/theme`. That rewrite dropped `[defaults]`, `[runtime]`, `[gateway]` and
+  `[tui]`, and the `[agent]` table then stopped the runtime, `lemon setup` and
+  every test run from starting. The TUI now edits only `[defaults]
+  provider`/`model` and `[tui] theme` in place.
+- A config with a legacy `[agent]` table loads again: it is read as
+  `[defaults]`/`[runtime]`/`[tui]` with a warning (log, `lemon doctor`,
+  `lemon config validate`) instead of failing boot.
+- Fresh `lemon setup` no longer leaves an `[providers.anthropic]` reference to
+  a credential that does not exist when you sign in to another provider, and
+  non-interactive setup without `--model` no longer writes the model
+  `<provider>:fallback`.
+- Config edits by setup match table headers written with quoted keys
+  (`[providers."openai-codex"]`) instead of appending a duplicate table.
+- Umbrella tests run with an isolated `HOME`, so a personal
+  `~/.lemon/config.toml` can no longer fail or skew them.
+
+- Document reads (PDF and other converted formats) no longer report
+  "Cannot start document backend" when the converter exits while its port is
+  being closed; the real result or size/time-limit error is returned.
+- Durable project-fact capture no longer skips a finished turn as busy or
+  unavailable in the moment after an earlier capture for that project or
+  another one ends; a worker that has exited no longer holds its project or
+  one of the eight capture slots.
+
+---
+
+## [2026.10.2]
+
+### Fixed
+
+- **ChatGPT model discovery.** Codex requests and model discovery send client
+  version 0.159.0 (matching omp). With 0.153.0 the ChatGPT backend omitted
+  GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol, so they never appeared as available.
+
+### Removed
+
+- **Retired ChatGPT models.** `openai-codex` no longer lists `gpt-5.5`,
+  `gpt-5.4`, `gpt-5.4-mini` or `gpt-5.3-codex-spark`, matching omp and the live
+  ChatGPT model list. Configs that pin them should switch, for example to
+  `openai-codex:gpt-6.1-sol` or `openai-codex:gpt-6-luna`. Sim and eval
+  defaults now use the GPT-6 models.
+
+---
+
+## [2026.10.1]
+
+### Added
+
+- **Current model catalogs.** Bundled catalogs gain the latest models from
+  each provider shared with the oh-my-pi reference catalog, including
+  ChatGPT/Codex GPT-6 Luna, GPT-6 Sol and GPT-6.1 Sol, Claude Sonnet/Haiku 5.5,
+  and current Grok, Gemini (Antigravity), GLM, Kimi, MiniMax, DeepSeek,
+  Mistral, Fireworks, Copilot, OpenCode and aggregator entries. Existing model
+  ids are unchanged; earlier ChatGPT models stay selectable for existing
+  configs.
+
+### Fixed
+
+- **Setup model picker.** `lemon setup` lists models newest first and
+  defaults to each provider's current flagship instead of an alphabetical,
+  oldest-first list. Model pickers no longer treat snapshot dates, parameter
+  counts or vendor prefixes as version numbers.
+- **Quiet setup.** `lemon setup` no longer prints runtime log lines, such as
+  the config reloader noticing setup's own config write.
+
+---
+
+## [2026.10.0]
+
+### Added
+
+- **`mix lemon.new --hex`.** The generator can emit `~> 0.2` Hex requirements
+  for `lemon_core`, `lemon_ai`, `lemon_agent` (and `lemon_memory` with
+  `--memory`) instead of path dependencies, so a project needs no checkout of
+  this repository. It resolves once 0.2.0 is on hex.pm. `--hex --channel` is
+  refused with an explanation, since `lemon_channels` is not published. The
+  `installer/` package (`lemon_new`) now carries Hex package metadata, a
+  license and a changelog so it can be published; an installer built outside a
+  checkout generates the `--hex` form by default. Path mode and
+  `--packages-path` are unchanged.
+
+- **Tern integration.** `lemon acp` is a runtime-attached ACP stdio agent and
+  `lemon tern install` registers Lemon as a native Tern chat agent plus a
+  managed plugin ("New session in split", "Focus existing session"). In a Tern
+  pane, `lemon` opens the native chat (`lemon tui` keeps the terminal UI).
+  ACP sessions are durable and forkable, stream rich tool cards, diffs, plans,
+  thoughts, usage and subagent updates, run bash in native client terminals,
+  bind client MCP servers to the session, support plan mode with reviewed
+  revision approval, `ask` forms via `elicitation/create`, and exact-preview
+  permissions. The TUI emits Tern-native surfaces (prompt/reply marks, Run
+  controls, working/approval states, Carly delegation, `/fork` in a split) and
+  file links that open at the exact line.
+- **Non-interactive coding.** `lemon -p`/`lemon run` take stdin prompts, emit
+  text/JSON/stream-JSON, continue sessions, select model/cwd, control tool
+  approvals, report usage and budgets, and use automation-friendly exit codes.
+- **Subagents.** Parallel fan-out with live progress, optional git-worktree
+  isolation, named personas (`.lemon/agents/*.md`; built-in scout, reviewer,
+  task-executor), configurable model roles, schema-validated results, scoped
+  `agent_message` messaging, first-result waits, and dependency-aware
+  `task(action="swarm")` DAGs.
+- **Sessions.** Checkpoint-backed `/rewind` (preview-bound, with explicit
+  consent for partial restore across shell effects), `/tree`, `/name`, search,
+  independent forks, plan mode (`/plan`, `/approve-plan <revision>`),
+  `/compact <focus>`, context-budget snapshots, and bounded per-repository
+  project memory recalled as labelled background context.
+- **Coding tools.** Snapshot-anchored edits, bounded directory/archive/PDF/
+  notebook/image reads, optional ast-grep structural search/replace, native
+  plans, `skill://` and session-scoped `artifact://` URLs with ranged recovery
+  of complete shell output.
+- **TUI.** Image drafts and `@` file mentions, fuzzy command/skill/prompt
+  palette, live subagent tree, full tool/diff inspector, faster bytecode
+  startup (first frame ~48 ms), and fixed shutdown/editor handoff hangs.
+- **Providers.** Opt-in import of an existing Codex CLI login, per-account
+  Codex model discovery, refreshed GPT/Claude/Gemini catalogs and pricing,
+  Codex prompt-cache affinity, and per-run/per-session token and cost budgets.
+- **MCP.** `lemon mcp add|list|remove|test`, session-owned connections,
+  capability-aware discovery and per-tool approvals; omp/Claude-compatible
+  skill layouts are discovered.
+- **Automation.** Goals, cron and kanban dispatch repository-targeted coding
+  runs with persisted results; opt-in reviewed kanban workflows (isolated
+  worktree, independent read-only review, exact-tree commit, explicitly
+  configured publication; never pushes by default); channel notifications and
+  exact-preview Telegram/Discord approvals; `/manage/work` web dashboard with
+  live sessions, tool output and subagent trees.
+- **Operations.** `lemon update` with verified daemon restart and rollback,
+  build identity in `--version` and doctor, image input on
+  `chat.send`/`profile.chat`, and an opt-in 12-task live coding benchmark
+  (`mix lemon.eval.coding`) with omp comparison and token profiling.
+- **Secrets master-key rotation.** `lemon secrets rotate-key` previews how
+  many stored secrets will be re-encrypted and prints a confirmation token;
+  `--confirm <token>` generates a new master key, re-encrypts every secret, and
+  replaces the key in the Keychain entry or key file. It refuses stale tokens,
+  changes nothing if any secret does not decrypt, never touches external
+  sources or environment fallback, refuses while a runtime is running, and
+  keeps every secret readable if interrupted at any step. A key file is
+  rotated only where the host can flush the rename synchronously (GNU
+  coreutils); on macOS keep the master key in the Keychain. Secret writes and
+  OAuth token refreshes report a held secrets lock instead of claiming success.
+
+### Fixed
+
+- TUI cancellation keeps its interrupted marker when a notice has already
+  sealed the current text segment.
+
+- `lemon doctor`'s `skills.directory` check inspects the global skills
+  directory Lemon actually installs into (`~/.lemon/agent/skill`, or
+  `LEMON_AGENT_DIR`), not the unused `~/.lemon/skills`. The check now lives in
+  `lemon_skills` and the memory check in `lemon_memory`; both register with the
+  doctor through `config :lemon_core, :doctor_checks`.
+
+- Accepted runs always receive durable, ordered terminal receipts across
+  admission, queue retirement, cancellation and crash recovery; cancelling
+  drains in-flight events so tool output and partial prose persist with honest
+  unknown/not-started outcomes; uncertain admissions keep their fixed run ID.
+- WebSocket clients no longer disconnect on streamed tool results, encoding
+  failures, or after 60 s of inbound idle time (server keepalive pings).
+- Transient transport errors (closed/reset/timeout) retry inside the agent
+  loop using structured error metadata; permanent failures and exhausted quotas
+  do not.
+- Coding tools reject ambiguous edits, bound reads, refuse binary content,
+  keep long shell output retrievable, and kill shell process trees on forced
+  cancellation.
+- Source startup is faster, reuses healthy daemons, preserves the caller's
+  directory and keeps CLI JSON stdout clean; setup selects usable defaults and
+  doctor diagnoses unreadable credentials and port conflicts.
+- Wire usage counts native cache read/write tokens; session restores preserve
+  provider identity and costs; cold checkpoint reads no longer create atoms.
+
+### Changed
+
+- The agent `cron` tool moved from `lemon_gateway` to `lemon_automation`, which
+  registers it with `LemonAgent.ToolRegistry` at boot; the gateway no longer
+  references automation. The tool's name, schema and results are unchanged. As
+  with every registered tool it is now subject to session tool policy and
+  approval (so cron-run prompt sessions, which block `cron`, no longer see it).
+- Source and packaged launchers now share command dispatch, help, completion,
+  and lifecycle semantics. Running `lemon` in a terminal opens the TUI;
+  `lemon start` starts the foreground runtime. Non-interactive
+  no-argument calls return usage with exit code 2. `send`, `media`, `models`,
+  `policy`, `skill`, `usage`, and `migrate hermes` also work without Mix in
+  runtime releases.
+- Native coding sessions no longer stop at an incidental default turn cap.
+  Explicit limits remain available; retries, thinking state, and tool results
+  survive the appropriate session transitions.
+- Durable memory is recalled automatically into the next user message using
+  agent-scoped full-text search and the selected workspace's `USER.md`.
+  Recall is bounded to 2 KiB, stays out of the cached system prompt, and can
+  be disabled with `[memory] auto_recall = false`. The model-facing memory
+  tools are now `remember` and `recall`.
+- Heartbeats use cron rather than a second session scheduler. Reminder and
+  proactive jobs preserve their originating delivery target.
+- Shared credential redaction now covers session, profile, memory, config,
+  diagnostic, webhook, and Web surfaces while preserving their stricter
+  content allowlists and output bounds.
+- Standalone packaging is limited to `lemon_ai`, `lemon_core`, `lemon_agent`,
+  `lemon_memory`, and `lemon_platform_test`. Version 0.2.0 tarballs are locally
+  installable; these packages have not been published by this change.
+- Consolidated contributor and architecture guides; removed duplicate
+  walkthroughs and generate machine-readable documentation during site builds
+  instead of committing copies.
 
 - Refreshed the public website, README, and onboarding docs with a shared Lemon
   visual identity, clearer task navigation, and current feature guidance.
 
-- `CodingAgent.Session` now keeps heartbeat, automatic-compaction, and
-  overflow-recovery bookkeeping in state structs owned by those subsystems
-  instead of twenty loose session fields. Public APIs, emitted events, and
-  the persisted session format are unchanged.
+- `CodingAgent.Session` keeps automatic-compaction and overflow-recovery
+  bookkeeping in subsystem-owned state structs. The persisted session format
+  is unchanged.
 
 ### Removed
+
+- The duplicate `clients/lemon-web` application, `coding_agent_ui`, and
+  `lemon_tcg`; the supported clients are the Bun TUI and Phoenix LiveView Web.
+- `execute_code`, `python_repl`, their persistent Python/RPC bridge, the MCP
+  server surface, and obsolete agent factories. Native tools and the MCP
+  client remain; browser actions use explicit browser-tab tools.
+- Unused control-plane methods: the built-in registry is reduced from 188 to
+  79 methods used by retained clients. Retired device, proof/readiness,
+  heartbeat, and other unsupported APIs have no compatibility aliases.
+- Long-tail simulation arenas, generated proof/readiness machinery, orphaned
+  modules, and duplicate or implementation-only tests. LemonSim's product
+  focus is Werewolf, Poker, and VendingBench.
+- The `memory_topic`, `session_search`, and `search_memory` tool names. Use
+  `remember` and `recall`; no deprecated aliases are retained.
 
 - The built-in `x_api` satellite, its X/Twitter tools and channel adapter,
   OAuth helpers, credential registry entries, release wiring, and developer
@@ -28,13 +371,52 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Requests to the `opencode_go` provider (OpenAI-completions and Anthropic
+  transports) now send the `x-opencode-session` header OpenCode Go requires
+  since 2026-09, avoiding `400 MissingSessionID`. The id is
+  `StreamOptions.session_id` (LemonSim sets one per game and player), with a
+  stable per-system-prompt fallback. Other providers are unaffected.
+
+- Finished LemonSim spectator games now display `COMPLETED`, rather than
+  `STOPPED`, after their runner exits. Live Werewolf playback keeps its
+  playback indicator until the final scene has been shown.
+
+- Router callback defects now reach callers or OTP supervision instead of
+  being acknowledged as success. Durable replay/admission and cancellation
+  fences remain intact; rejected final deliveries remain retryable.
+- Channel delivery no longer replays an external write after an adapter crash
+  or lost acknowledgement. A failed Telegram update does not stop the rest of
+  its fetched batch; WhatsApp acknowledgement timeouts report unknown outcome.
+- File edits handle normalized whitespace and Unicode without damaging
+  original UTF-8, BOM, line endings, or surrounding content. Read freshness
+  and mutation locks prevent stale or concurrent overwrites.
+- Provider handling preserves Retry-After delays, image tool results, and
+  usage/cost accounting. Telegram access checks remain fail-closed, including
+  pairing, group policy, and attachment-size refusal.
+- LemonSim replay verification checks artifact integrity and replays recorded
+  batches; seeded randomness makes retained offline arenas reproducible.
+- Removed unreachable and unused Elixir paths rather than suppressing
+  compiler diagnostics.
+- Hermes migration now treats omitted confirmation/overwrite flags as false:
+  declining confirmation writes nothing, and conflicts fail closed rather
+  than raising.
+- Source and packaged `--json` commands keep application-startup logs out of
+  machine-readable stdout. The duplicate-test checker resolves nested module
+  names, avoiding false collisions between independently scoped helpers.
+- Updated locked Bandit, Mint, LiveView, LazyHTML, Gun, and Cowlib releases
+  after Hex reported upstream security advisories; refreshed the vendored
+  LiveView browser client to match. Cowlib's
+  [structured-header](https://cna.erlef.org/cves/CVE-2026-43966.html) and
+  [cookie-encoder](https://cna.erlef.org/cves/CVE-2026-43969.html) advisories
+  still have no fixed Hex release and remain tracked upstream.
+
 - Bash streaming previews retain the most recent 50,000 output bytes plus an
   omission marker, preserving UTF-8 boundaries without retaining discarded
   source binaries. Final results and full-output files are unchanged.
 
-- Restricted tool profiles now deny alternate hashline editing, topic-memory
-  writes, and task delegation through `hashline_edit`, `memory_topic`, and
-  `task`. Full-access and orchestrator profiles are unchanged.
+- Restricted tool profiles deny alternate hashline editing, memory writes,
+  and task delegation through `hashline_edit`, `remember`, and `task`.
+  Full-access and orchestrator profiles are unchanged.
 
 - Tool approval failures now block execution on exceptions, exits, throws,
   malformed replies, and unsupported approval scopes without exposing raw
@@ -113,13 +495,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   user-relevant tools. Automatic filesystem checkpoint lifecycle events remain
   auditable internally and available through explicit `/checkpoint` and
   `/rollback` commands without being pushed into ordinary channel chats.
-- Source `./bin/lemon` now detects and reuses a healthy local control plane
-  before compilation or Erlang distribution startup, so invoking it beside an
-  existing runtime no longer fails with a duplicate `lemon@host` node name.
+- Source `./bin/lemon start` detects and reuses a healthy local control plane
+  before compilation or Erlang distribution startup, avoiding duplicate
+  `lemon@host` registration.
   Web health probes tolerate bounded slow responses and trailing whitespace,
   and the quality lane exercises both direct-launch and `web --no-open` reuse.
 
 ### Added
+
+- Background shell execution with session-owned `bash_output` and
+  `kill_process` tools, explicit millisecond timeouts, and preserved partial
+  output on timeout or cancellation.
+- Structured TUI tool cards with real-line-number edit diffs, bounded command
+  output, and reasoning display; LiveView chat improvements for streaming,
+  Markdown, and tool approvals.
+- A keyless `mix lemon.sim.demo` Werewolf spectator demo and offline
+  Werewolf/Poker run bundles for local replay verification.
 
 - `mix lemon.eval --output <path> --revision <full-sha>` writes versioned,
   redacted contract reports with check outcomes and explicit revision metadata,
@@ -279,10 +670,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - A shared `LemonCore.Setup.Readiness` contract plus a fail-closed Web first-run
   guide, live config/secret refresh, active-run stop control, and accessible
   responsive status/composer states.
-- Durable same-session heartbeats with idle-only recurring turns, queued-user
-  priority, missed-tick coalescing, pause/resume/clear lifecycle, restart-safe
-  fire claims, reset tombstones, logical session-key resolution, an admin
-  `sessions.heartbeat` API, and TUI `/heartbeat`/`/hb` commands.
+- Cron-backed TUI `/heartbeat`/`/hb` commands and channel `/remind` scheduling
+  reuse the automation scheduler rather than retaining session heartbeat
+  state or a `sessions.heartbeat` API.
 - Portable Hermes-compatible slash-command discovery metadata for channel and
   interactive clients, exposed through the read-only `commands.catalog`
   control-plane method while preserving Lemon's router/session ownership and
@@ -351,69 +741,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   external resources for recompilation, malformed entries fail compilation
   with their model key, and atom-valued API/provider/input/compatibility fields
   accept only explicit allowlists.
-- `execute_code` gained an explicit result channel: `text()` blocks are the tool
-  result (write-through flushed per call, so they survive a timeout/abort kill),
-  while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts
-  that never call `text()` keep the historic stdout-only result byte-for-byte.
-  New knobs: `max_text_bytes` (text budget, default 64 KiB) and
-  `max_parallel_rpc` (pump dispatch concurrency, default 4).
-- `execute_code` result-channel hardening (fix round): the `text()` budget now
-  charges the JSON-encoded frame, so NUL-heavy strings that expand six-fold
-  under escaping are refused on the script side instead of being written and
-  silently dropped by the host; persistent kernels reset the per-cell bridge
-  (fresh text budget, fresh counters) and refuse calls from threads stamped
-  with an earlier cell; `notify()` caps are per run across sweeps, malformed
-  frames are no longer forwarded or counted, and a final notification drain
-  forwards a `notify()` issued immediately before exit; claimed RPC requests
-  always end answered (a killed sweep leaves in-flight claim markers that the
-  successor sweep or the cancel path answers in writing, reconstructing the
-  call accounting), and an approval prompt left pending by a killed dispatch
-  is cancelled, so it can never be approved into policy after the script died.
-- `execute_code` result-channel adversarial hardening (fix round 2): RPC
-  dispatch is now gated on publishing a regular-file claim marker (a planted
-  object at the marker name or a symlinked request is answered with an error
-  and never dispatched), recovery trusts only regular-file markers (planted
-  directories are ignored, never charged) and restores the real accounting
-  beside an already-published successful response, marker deletion failures
-  can never re-charge the budget on a later sweep, and approval cancel/resolve
-  is one atomic store transition (`LemonCore.ExecApprovals.cancel/2` and
-  `resolve/2` now return `{:error, :not_pending}` to the loser) with the
-  dispatch watcher cancelling after each owner death so a prompt registered
-  after its sweep died cannot be orphaned; a killed sweep's lost accounting
-  is flagged (`rpc_accounting_loss`) and forces the result to `:untrusted`;
-  persistent-cell thread quarantine now stamps threads with their creator's
-  cell generation at construction time, so a stale thread's descendants stay
-  stale; the `text()` host-side budget charges the encoded frame (identical
-  to the shim) and the shim normalizes lone surrogates, so an in-budget
-  block is always delivered.
-- `execute_code` result-channel hardening (fix round 4): a sweep caught
-  raising or throwing mid-flight is still contained (the server stays
-  alive) but no longer reported as if it had merely kept its old stats —
-  it settles through the same recovery-plus-`rpc_accounting_loss` path as
-  an abnormal death, so claims it dispatched are answered and charged from
-  the host-side claim ledger and surviving responses instead of being
-  silently discarded; claim recovery takes the tool identity from the
-  host-owned ledger whenever both ledger and script-writable marker exist,
-  so overwriting a marker body can no longer forge the recorded tool; and
-  a successful cancel folds the sweep's still-queued claim-ledger messages
-  through the same deduplicating recovery instead of reinserting them as
-  stale ledger entries.
-- `execute_code` result-channel hardening (fix round 5): the persistent
-  server's claim ledger now records a reservation entry the moment a
-  request spends its `max_calls` slot — refined by its disposition
-  (`:invalid`, `:unknown_tool`, `:denied` when answered without dispatch,
-  `:claimed` for dispatch-bound requests) — and sweep-failure settlement
-  re-applies reserved entries exactly (one call, one error or denial, the
-  replay memory, no response writes), so a contained fault after an
-  answered-but-never-dispatched request can no longer erase that spend and
-  let resumed sweeps exceed the call budget.
-- `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
-  messages are forwarded to the tool's partial-update callback (capped at 4 KiB
-  per message, 64 per run) — and `batch([...])`, which runs helper calls in
-  parallel through the pump's bounded wave dispatch with exact call-limit,
-  replay, and byte-budget accounting.
-
-
 - Packaged and Mix `secrets check` output now reports only `present` and source
   category counts; it no longer reveals credential prefixes or suffixes.
 - Lemon Web now ships compiled CSS inside the release instead of loading
@@ -535,12 +862,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   submit errors with injection-safe whole-entry history envelopes; and cleared
   stale session follow-up diagnostics/background compaction when turns end or a
   new prompt supersedes the snapshot.
-- Heartbeat reconfiguration now updates cron jobs with mutable fields only,
-  disables the superseded cron or timer mechanism, preserves nonrepresentable
-  intervals with exact timers, records timer terminal/suppression state, and
-  skips overlapping timer runs with telemetry. Automation submit-and-wait paths
-  now subscribe before submission through one fixed-run-id lifecycle, closing
-  synchronous-completion races in cron, goal, heartbeat, and Kanban runs.
+- Automation submit-and-wait paths subscribe before submission through one
+  fixed-run-id lifecycle, closing synchronous-completion races in cron,
+  goal, heartbeat, and Kanban runs.
 - Cron retries now persist due time and lineage across manager restarts, claim
   deterministic attempt IDs, and share one terminal policy path for normal,
   stale, aborted, start-failed, and crashed-worker outcomes. Cron work is

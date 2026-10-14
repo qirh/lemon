@@ -3,15 +3,20 @@ defmodule CodingAgent.Tools.Read do
   Read file tool for the coding agent.
 
   Reads the contents of a file with support for:
-  - Text files with line number formatting
-  - Image files (returned as base64-encoded data)
-  - Offset and limit parameters for partial reads
-  - Automatic truncation for large files
+  - Numbered physical text lines and full-byte snapshots for anchored edits
+  - Directories, in-memory archive members, PDF pages and notebook cells/outputs
+  - Native image content with bounded proportional previews when a backend exists
+  - Offset and limit parameters for partial reads, with format-specific continuation
+  - Bounded chunked text scanning, including oversized single-line files
+  - Binary/invalid UTF-8 refusal with actionable inspection guidance
+  - `agent://` live family rosters and `agent://<task-id-or-name>` identities
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.{TextContent, ImageContent}
+  alias CodingAgent.FileReadTracker
+  alias CodingAgent.InternalUrls
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.FileValidation
   alias CodingAgent.Tools.PathHelpers
@@ -38,22 +43,50 @@ defmodule CodingAgent.Tools.Read do
     %AgentTool{
       name: "read",
       description:
-        "Read the contents of a file. For images, the contents will be returned as a base64-encoded data URL.",
+        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, and images. " <>
+          "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
+          "to change line ranges without copying old text. Use offset/limit to page text. " <>
+          "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
+          "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
+      parallel_safe: true,
       parameters: %{
         "type" => "object",
         "properties" => %{
           "path" => %{
             "type" => "string",
-            "description" => "The path to the file to read (relative to cwd or absolute)"
+            "description" =>
+              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, or agent://[task-id-or-name] live roster"
           },
           "offset" => %{
             "type" => "integer",
-            "description" => "Line number to start reading from (1-indexed)"
+            "description" => "Line number to start reading from (positive, 1-indexed)",
+            "minimum" => 1
           },
           "limit" => %{
             "type" => "integer",
-            "description" => "Maximum number of lines to read"
+            "description" => "Maximum number of lines to read (positive integer)",
+            "minimum" => 1
+          },
+          "page" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "First PDF page (1-based)"
+          },
+          "page_limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Maximum PDF pages to extract"
+          },
+          "cell" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "First notebook cell (1-based)"
+          },
+          "cell_limit" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Maximum notebook cells to show"
           }
         },
         "required" => ["path"]
@@ -87,6 +120,12 @@ defmodule CodingAgent.Tools.Read do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(_tool_call_id, %{"path" => "agent://" <> _ = path}, signal, _on_update, _cwd, opts) do
+    if aborted?(signal),
+      do: {:error, "Operation aborted"},
+      else: CodingAgent.Tools.Task.Messaging.read(path, opts)
+  end
+
   def execute(tool_call_id, params, signal, _on_update, cwd, opts) do
     _ = tool_call_id
 
@@ -105,30 +144,55 @@ defmodule CodingAgent.Tools.Read do
     offset = Map.get(params, "offset")
     limit = Map.get(params, "limit")
 
-    with {:ok, resolved_path} <- resolve_path(path, cwd, opts),
+    with :ok <- validate_params(path, offset, limit),
+         {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_abort(signal) do
-      cond do
-        ACPFileBridge.read_enabled?(opts) and is_nil(detect_mime_type(resolved_path)) ->
-          read_text_file_from_acp(resolved_path, offset, limit, opts)
+      # Client filesystem reads are authoritative for unsaved text buffers.
+      # Internal references deliberately stay local, as do native rich reads.
+      rich_result =
+        if not ACPFileBridge.read_enabled?(opts) or InternalUrls.internal_url?(path),
+          do: CodingAgent.Tools.ReadFormats.read(resolved_path, params, signal, cwd, opts),
+          else: :not_supported
 
-        true ->
-          case resolve_existing_read_path(path, resolved_path, cwd, opts) do
-            {:ok, readable_path, stat} ->
-              case detect_mime_type(readable_path) do
-                nil ->
-                  read_text_file(readable_path, stat, offset, limit, opts)
-
-                mime_type ->
-                  read_image_file(readable_path, mime_type)
-              end
-
-            {:ok_optional_missing, readable_path} ->
-              optional_missing_daily_memory_result(readable_path)
-
-            {:error, _} = error ->
-              error
-          end
+      case rich_result do
+        {:ok, result} -> result
+        :not_supported -> read_plain(path, resolved_path, offset, limit, signal, cwd, opts)
+        {:error, _} = error -> error
       end
+    end
+  end
+
+  defp read_plain(path, resolved_path, offset, limit, signal, cwd, opts) do
+    cond do
+      not InternalUrls.internal_url?(path) and ACPFileBridge.read_enabled?(opts) and
+          is_nil(detect_mime_type(resolved_path)) ->
+        read_text_file_from_acp(resolved_path, offset, limit, opts)
+
+      true ->
+        case resolve_existing_read_path(path, resolved_path, cwd, opts) do
+          {:ok, readable_path, stat} ->
+            case detect_mime_type(readable_path) do
+              nil ->
+                read_text_file(
+                  readable_path,
+                  stat,
+                  offset,
+                  limit,
+                  signal,
+                  opts,
+                  not InternalUrls.internal_url?(path)
+                )
+
+              mime_type ->
+                read_image_file(readable_path, mime_type, stat)
+            end
+
+          {:ok_optional_missing, readable_path} ->
+            optional_missing_daily_memory_result(readable_path)
+
+          {:error, _} = error ->
+            error
+        end
     end
   end
 
@@ -261,7 +325,11 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp resolve_path(path, cwd, opts) do
-    {:ok, PathHelpers.resolve_path(path, cwd, opts)}
+    if InternalUrls.internal_url?(path) do
+      InternalUrls.resolve(path, Keyword.put(opts, :cwd, cwd))
+    else
+      {:ok, PathHelpers.resolve_path(path, cwd, opts)}
+    end
   end
 
   # ============================================================================
@@ -291,7 +359,12 @@ defmodule CodingAgent.Tools.Read do
   # Image File Reading
   # ============================================================================
 
-  defp read_image_file(path, mime_type) do
+  defp read_image_file(_path, _mime_type, %{size: size}) when size > 20 * 1024 * 1024 do
+    {:error,
+     "Image is #{size} bytes, exceeding the 20 MiB limit. Resize or crop it with bash before reading."}
+  end
+
+  defp read_image_file(path, mime_type, _stat) do
     case File.read(path) do
       {:ok, binary} ->
         base64_data = Base.encode64(binary)
@@ -319,139 +392,139 @@ defmodule CodingAgent.Tools.Read do
   # Text File Reading
   # ============================================================================
 
-  defp read_text_file(path, _stat, offset, limit, opts) do
-    case File.read(path) do
-      {:ok, content} ->
-        text_file_result(path, content, offset, limit, opts, %{})
+  defp read_text_file(path, _stat, offset, limit, signal, opts, editable?) do
+    max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
+    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
-      {:error, reason} ->
-        {:error, "Failed to read file: #{path} (#{reason})"}
+    case CodingAgent.Tools.ReadText.read(
+           path,
+           normalize_offset(offset),
+           limit,
+           max_lines,
+           max_bytes,
+           signal
+         ) do
+      {:ok, window} ->
+        FileReadTracker.record_digest(opts, path, window.digest)
+
+        render_window(path, window, normalize_offset(offset), max_bytes, %{
+          immutable: not editable?
+        })
+
+      {:error, _} = error ->
+        error
     end
   end
 
   defp read_text_file_from_acp(path, offset, limit, opts) do
     case ACPFileBridge.read_text_file(path, offset, limit, opts) do
       {:ok, content} ->
-        text_file_result(path, content, offset, limit, opts, %{acp_client: true})
+        max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
+        max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+
+        with {:ok, window} <-
+               CodingAgent.Tools.ReadText.from_content(content, max_lines, max_bytes) do
+          window =
+            if normalize_offset(offset) == 0 and is_nil(limit),
+              do: Map.put(window, :digest, :erlang.md5(content)),
+              else: window
+
+          # The ACP client has already applied line/limit; do not slice twice.
+          render_window(path, window, normalize_offset(offset), max_bytes, %{acp_client: true})
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp text_file_result(path, content, offset, limit, opts, extra_details) do
-    max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
-    max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
+  defp render_window(path, window, start_line, max_bytes, extra_details) do
+    if not Map.get(extra_details, :acp_client, false) and start_line >= window.total_lines do
+      {:error,
+       "offset=#{start_line + 1} is beyond the end of the file (#{window.total_lines} lines)."}
+    else
+      shown = length(window.lines)
+      next_offset = start_line + shown + 1
 
-    lines = String.split(content, ~r/\r?\n/, trim: false)
-    total_lines = length(lines)
+      total =
+        if Map.get(extra_details, :acp_client, false),
+          do: start_line + window.total_lines,
+          else: window.total_lines
 
-    # Apply offset (1-indexed to 0-indexed)
-    start_line = normalize_offset(offset)
-    lines_after_offset = Enum.drop(lines, start_line)
+      truncation =
+        case window.truncation do
+          nil ->
+            nil
 
-    # Apply user limit
-    lines_after_limit =
-      if limit && limit > 0 do
-        Enum.take(lines_after_offset, limit)
-      else
-        lines_after_offset
-      end
+          "long_line" ->
+            %{
+              truncated: true,
+              reason: "long_line",
+              next_offset: next_offset,
+              message:
+                "[Line #{start_line + 1} exceeds the #{max_bytes}-byte read budget; only a prefix is shown. Full content remains at #{path}; use bash to inspect byte ranges on this line.]"
+            }
 
-    # Apply truncation (max lines and max bytes)
-    {truncated_lines, truncation_info} =
-      truncate_head(lines_after_limit, start_line, total_lines, max_lines, max_bytes)
+          reason ->
+            %{
+              truncated: true,
+              reason: reason,
+              next_offset: next_offset,
+              message:
+                "[Showing lines #{start_line + 1}-#{next_offset - 1} of #{total}. Use offset=#{next_offset} to continue.]"
+            }
+        end
 
-    # Format with line numbers
-    formatted = format_line_numbers(truncated_lines, start_line + 1)
+      formatted = format_line_numbers(window.lines, start_line + 1)
+      text = if truncation, do: formatted <> "\n" <> truncation.message, else: formatted
 
-    # Build result text
-    result_text =
-      if truncation_info do
-        formatted <> "\n" <> truncation_info.message
-      else
-        formatted
-      end
+      snapshot =
+        case {Map.get(extra_details, :immutable, false), Map.get(window, :digest)} do
+          {false, digest} when is_binary(digest) ->
+            CodingAgent.Tools.AnchoredEdit.snapshot_for_digest(digest)
 
-    %AgentToolResult{
-      content: [%TextContent{text: result_text}],
-      details:
-        Map.merge(
-          %{
-            path: path,
-            total_lines: total_lines,
-            start_line: start_line + 1,
-            lines_shown: length(truncated_lines),
-            truncation: truncation_info
-          },
-          extra_details
-        )
-    }
+          _ ->
+            nil
+        end
+
+      text = if snapshot, do: "[#{path}##{snapshot}]\n" <> text, else: text
+
+      %AgentToolResult{
+        content: [%TextContent{text: text}],
+        details:
+          Map.merge(
+            %{
+              path: path,
+              total_lines: total,
+              start_line: start_line + 1,
+              lines_shown: shown,
+              truncation: truncation,
+              snapshot: snapshot
+            },
+            extra_details
+          )
+      }
+    end
+  end
+
+  defp validate_params(path, offset, limit) do
+    cond do
+      not is_binary(path) or String.trim(path) == "" ->
+        {:error, "path must be a non-empty string"}
+
+      not is_nil(offset) and (not is_integer(offset) or offset < 1) ->
+        {:error, "offset must be a positive integer (1-indexed line number)"}
+
+      not is_nil(limit) and (not is_integer(limit) or limit < 1) ->
+        {:error, "limit must be a positive integer (number of lines)"}
+
+      true ->
+        :ok
+    end
   end
 
   defp normalize_offset(nil), do: 0
-  defp normalize_offset(offset) when offset < 1, do: 0
   defp normalize_offset(offset), do: offset - 1
-
-  # ============================================================================
-  # Truncation
-  # ============================================================================
-
-  defp truncate_head(lines, start_line, total_lines, max_lines, max_bytes) do
-    # First apply max_lines limit
-    {lines_by_count, truncated_by_lines?} =
-      if length(lines) > max_lines do
-        {Enum.take(lines, max_lines), true}
-      else
-        {lines, false}
-      end
-
-    # Then apply max_bytes limit
-    {final_lines, truncated_by_bytes?} = truncate_by_bytes(lines_by_count, max_bytes)
-
-    truncated? = truncated_by_lines? || truncated_by_bytes?
-    shown_count = length(final_lines)
-    end_line = start_line + shown_count
-
-    if truncated? do
-      message =
-        "[Showing lines #{start_line + 1}-#{end_line} of #{total_lines}. Use offset=#{end_line + 1} to continue.]"
-
-      truncation_info = %{
-        truncated: true,
-        reason: truncation_reason(truncated_by_lines?, truncated_by_bytes?),
-        message: message,
-        next_offset: end_line + 1
-      }
-
-      {final_lines, truncation_info}
-    else
-      {final_lines, nil}
-    end
-  end
-
-  defp truncate_by_bytes(lines, max_bytes) do
-    truncate_by_bytes(lines, max_bytes, 0, [])
-  end
-
-  defp truncate_by_bytes([], _max_bytes, _acc_bytes, acc_lines) do
-    {Enum.reverse(acc_lines), false}
-  end
-
-  defp truncate_by_bytes([line | rest], max_bytes, acc_bytes, acc_lines) do
-    line_bytes = byte_size(line) + 1
-
-    if acc_bytes + line_bytes > max_bytes and acc_lines != [] do
-      {Enum.reverse(acc_lines), true}
-    else
-      truncate_by_bytes(rest, max_bytes, acc_bytes + line_bytes, [line | acc_lines])
-    end
-  end
-
-  defp truncation_reason(true, true), do: "lines_and_bytes"
-  defp truncation_reason(true, false), do: "max_lines"
-  defp truncation_reason(false, true), do: "max_bytes"
-  defp truncation_reason(false, false), do: nil
 
   # ============================================================================
   # Line Number Formatting

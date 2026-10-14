@@ -71,6 +71,11 @@ defmodule LemonGateway.RunTest do
     end
 
     @impl true
+    def cancel(%{scenario: "drain_cancel", runner_pid: pid, controller_pid: observer}) do
+      send(observer, {:cancel_dispatched, pid})
+      :ok
+    end
+
     def cancel(%{task_pid: pid}) when is_pid(pid) do
       Process.exit(pid, :kill)
       :ok
@@ -191,12 +196,21 @@ defmodule LemonGateway.RunTest do
           end
         end)
 
-      {:ok, run_ref,
-       %{
-         task_pid: task_pid,
-         scenario: scenario,
-         steer_notify_pid: Map.get(meta, :steer_notify_pid)
-       }}
+      if scenario == "linked_controlled", do: Process.link(task_pid)
+
+      ctx = %{
+        task_pid: task_pid,
+        scenario: scenario,
+        steer_notify_pid: Map.get(meta, :steer_notify_pid),
+        controller_pid: Map.get(meta, :controller_pid)
+      }
+
+      ctx =
+        if scenario in ["linked_controlled", "drain_cancel"],
+          do: Map.put(ctx, :runner_pid, task_pid),
+          else: ctx
+
+      {:ok, run_ref, ctx}
     end
 
     defp notify_start(meta, request, opts) do
@@ -310,6 +324,92 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
   # 1. Run Initialization
   # ============================================================================
+
+  test "linked executor death terminalizes immediately with a durable receipt" do
+    request =
+      make_request(make_scope(), scenario: "linked_controlled", meta: %{controller_pid: self()})
+
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(request.run_id))
+    {:ok, pid} = start_run_direct(request)
+    assert_receive {:engine_started, _}, 2_000
+    state = :sys.get_state(pid)
+    Process.exit(state.control_ctx.runner_pid, :kill)
+
+    assert_receive %LemonCore.Event{
+                     type: :run_completed,
+                     meta: %{run_id: run_id},
+                     payload: %{
+                       completed: %{ok: false, error: %{type: :executor_down, reason: :killed}}
+                     }
+                   },
+                   2_000
+
+    assert run_id == request.run_id
+    assert %{summary: %{completed: %{ok: false}}} = LemonCore.RunStore.get(request.run_id)
+    assert_receive {:run_complete, ^pid, _}, 2_000
+    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^run_id}}, 50
+  end
+
+  test "cancelling a slot waiter removes it before execution and frees the pool" do
+    :sys.replace_state(LemonGateway.Scheduler, &%{&1 | max: 1})
+
+    blocker =
+      make_request(make_scope(), scenario: "controllable", meta: %{controller_pid: self()})
+
+    waiting =
+      make_request(make_scope(), scenario: "controllable", meta: %{controller_pid: self()})
+
+    :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(waiting.run_id))
+    :ok = LemonGateway.Scheduler.submit_execution(blocker)
+    assert_receive {:engine_started, _}, 2_000
+    :ok = LemonGateway.Scheduler.submit_execution(waiting)
+
+    assert is_pid(
+             wait_for(
+               fn ->
+                 case LemonGateway.ThreadRegistry.whereis(waiting.conversation_key) do
+                   pid when is_pid(pid) ->
+                     if :sys.get_state(pid).slot_pending, do: pid
+
+                   _ ->
+                     nil
+                 end
+               end,
+               2_000,
+               10
+             )
+           )
+
+    assert :ok = LemonGateway.Runtime.cancel_by_run_id(waiting.run_id, :user_requested)
+
+    assert_receive %LemonCore.Event{
+                     type: :run_completed,
+                     meta: %{run_id: run_id},
+                     payload: %{
+                       completed: %{ok: false, error: :user_requested, meta: %{cancelled: true}}
+                     }
+                   },
+                   2_000
+
+    assert run_id == waiting.run_id
+    assert LemonGateway.Runtime.run_pid(waiting.run_id) == nil
+    assert %{summary: %{completed: %{ok: false}}} = LemonCore.RunStore.get(waiting.run_id)
+
+    pid = LemonGateway.Runtime.run_pid(blocker.run_id)
+    send(:sys.get_state(pid).control_ctx.task_pid, {:complete, "done"})
+    assert_receive {:lemon_gateway_run_completed, ^blocker, _}, 2_000
+
+    assert wait_for(
+             fn ->
+               state = :sys.get_state(LemonGateway.Scheduler)
+               if map_size(state.in_flight) == 0 and :queue.is_empty(state.waitq), do: true
+             end,
+             2_000,
+             10
+           )
+
+    refute_receive {:engine_started, _}, 50
+  end
 
   describe "initialization" do
     test "starts successfully with a valid execution request" do
@@ -733,6 +833,41 @@ defmodule LemonGateway.RunTest do
   # ============================================================================
 
   describe "cancellation handling" do
+    test "native cancellation keeps the run until terminal tool events drain" do
+      request =
+        make_request(make_scope(),
+          scenario: "drain_cancel",
+          meta: %{controller_pid: self()}
+        )
+
+      {:ok, pid} = start_run_direct(request)
+      assert_receive {:engine_started, _}, 2_000
+      state = :sys.get_state(pid)
+      GenServer.cast(pid, {:cancel, :interrupted})
+      assert_receive {:cancel_dispatched, runner}, 2_000
+      GenServer.cast(pid, {:cancel, :user_requested})
+      refute_receive {:run_complete, ^pid, _}, 20
+      assert Process.alive?(pid)
+
+      action = Event.action(%{id: "tool_cancel", kind: :command, title: "Cancelled bash"})
+      event = Event.action_event(%{engine: "lemon", action: action, phase: :completed, ok: false})
+      send(pid, {:engine_event, state.run_ref, event})
+      assert :sys.get_state(pid).cancel_reason == :interrupted
+      send(runner, {:complete, "observed partial answer"})
+
+      assert_receive {:run_complete, ^pid, %{ok: false, error: :interrupted}}, 2_000
+      stored = LemonCore.RunStore.get(request.run_id)
+      assert stored.summary.completed.error == :interrupted
+      assert stored.summary.completed.meta.cancelled == true
+
+      assert Enum.any?(
+               stored.events,
+               &(&1[:__event__] == :action_event && &1[:phase] == :completed)
+             )
+
+      refute_receive {:run_complete, ^pid, _}, 20
+    end
+
     test "cancels run when cancel cast is received" do
       scope = make_scope()
 
@@ -1231,7 +1366,7 @@ defmodule LemonGateway.RunTest do
       # Check mapping exists (stores run_id string, not PID)
       stored_run_id =
         wait_for(
-          fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) end,
+          fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) end,
           500,
           10
         )
@@ -1246,7 +1381,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for unregistration to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -1260,7 +1395,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # No mapping should exist
-      assert LemonCore.Store.get_run_by_progress(scope, nil) == nil
+      assert LemonGateway.ProgressStore.get_run(scope, nil) == nil
     end
 
     test "unregisters progress mapping on completion" do
@@ -1275,7 +1410,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on completion"
       )
     end
@@ -1295,16 +1430,15 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists (stores run_id string, not PID)
-      assert Enum.any?(1..20, fn _attempt ->
-               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
-                 run_id when is_binary(run_id) and run_id != "" ->
-                   true
-
-                 _ ->
-                   Process.sleep(10)
-                   false
-               end
-             end)
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn ->
+          case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
+            run_id when is_binary(run_id) and run_id != "" -> true
+            _ -> false
+          end
+        end,
+        message: "run progress mapping was never registered"
+      )
 
       # Cancel
       GenServer.cast(pid, {:cancel, :user_requested})
@@ -1313,7 +1447,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on cancellation"
       )
     end
@@ -2019,7 +2153,9 @@ defmodule LemonGateway.RunTest do
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run(run_id) != nil end,
+        fn ->
+          match?(%{events: events} when length(events) >= 2, LemonCore.Store.get_run(run_id))
+        end,
         message: "run data was not stored"
       )
 
@@ -2220,16 +2356,15 @@ defmodule LemonGateway.RunTest do
       assert_receive {:engine_started, _run_ref}, 2000
 
       # Verify mapping exists (stores run_id string, not PID)
-      assert Enum.any?(1..20, fn _attempt ->
-               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
-                 run_id when is_binary(run_id) and run_id != "" ->
-                   true
-
-                 _ ->
-                   Process.sleep(10)
-                   false
-               end
-             end)
+      Elixir.LemonGateway.AsyncHelpers.assert_eventually(
+        fn ->
+          case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
+            run_id when is_binary(run_id) and run_id != "" -> true
+            _ -> false
+          end
+        end,
+        message: "run progress mapping was never registered"
+      )
 
       # Cancel
       GenServer.cast(pid, {:cancel, :user_requested})
@@ -2237,7 +2372,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonGateway.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end

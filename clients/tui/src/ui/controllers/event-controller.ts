@@ -31,16 +31,25 @@ import type { SessionStore } from "../../store/session-store.ts";
 import {
 	type AssistantBlock,
 	type Block,
+	type CompactionDetails,
 	type NoticeLevel,
 	type ToolBlock,
 	toToolPhase,
+	type UserDetails,
 } from "../../store/transcript-model.ts";
+import {
+	type AccordionState,
+	accordionSettings,
+	resolveAccordionState,
+} from "../components/accordion.ts";
 import { ApprovalRecordComponent } from "../components/approval-panel.ts";
 import { AssistantMessageComponent } from "../components/assistant-message.ts";
 import { NoticeComponent } from "../components/notice-message.ts";
+import { ReasoningComponent } from "../components/reasoning-block.ts";
 import { ToolShelfComponent } from "../components/tool-shelf.ts";
 import type { TranscriptContainer } from "../components/transcript-container.ts";
 import { UserMessageComponent } from "../components/user-message.ts";
+import { taskProgressEvent } from "../task-progress.ts";
 import { StreamingRevealController } from "./streaming-reveal.ts";
 
 export interface EventControllerOptions {
@@ -132,13 +141,23 @@ export class EventController {
 	// -- writes the app drives ----------------------------------------------
 
 	/** Echo the user's prompt. Called by the shell right before `chat.send`. */
-	addUserBlock(text: string, session: SessionStore = this.#store.focused): void {
-		session.addUser(text);
+	addUserBlock(
+		text: string,
+		session: SessionStore = this.#store.focused,
+		details?: Omit<UserDetails, "sentAt">,
+	): void {
+		const at = Date.now();
+		session.addUser(text, at, { sentAt: at, ...details });
 		this.#sync(session);
 	}
 
-	notice(text: string, level: NoticeLevel = "info", session = this.#store.focused): void {
-		session.addNotice(text, level);
+	notice(
+		text: string,
+		level: NoticeLevel = "info",
+		session = this.#store.focused,
+		compaction?: CompactionDetails,
+	): void {
+		session.addNotice(text, level, undefined, compaction);
 		this.#sync(session);
 	}
 
@@ -154,7 +173,7 @@ export class EventController {
 	/** Mark a run the user aborted: keeps partial text, adds the marker. */
 	markInterrupted(runId: string, session: SessionStore = this.#store.focused): void {
 		const block = session.assistantFor(runId);
-		if (block?.status !== "streaming") return;
+		if (!block || session.activeRunId !== runId || !session.busy) return;
 		const component = session === this.#store.focused ? this.#componentFor(block.id) : undefined;
 		// Only this run's own reveal may be flushed and torn down; another run's
 		// stream keeps revealing.
@@ -162,10 +181,65 @@ export class EventController {
 		if (revealing) this.#reveal.finish();
 		session.markInterrupted(runId);
 		if (component instanceof AssistantMessageComponent) this.#sealAssistant(block, component);
+		this.#refreshReasoning(session, runId);
 		if (revealing) this.#reveal.stop();
 		if (session === this.#store.focused) this.#sealOpenShelf();
 		this.#scheduleRender();
 		this.#onStatusChanged?.();
+	}
+
+	/**
+	 * The expand key: toggle the most recent tool card or reasoning block in the
+	 * focused session. False when the transcript has neither.
+	 */
+	toggleLatestBlock(): boolean {
+		const blocks = this.#store.focused.blocks;
+		for (let index = blocks.length - 1; index >= 0; index--) {
+			const block = blocks[index];
+			if (block?.kind === "tool") {
+				const toggled = this.#shelves.get(block.id)?.toggle(block.id);
+				if (toggled === undefined) return false;
+				this.#scheduleRender();
+				return true;
+			}
+			if (block?.kind === "reasoning") {
+				const component = this.#components.get(block.id);
+				if (!(component instanceof ReasoningComponent)) return false;
+				component.toggleAccordion();
+				this.#scheduleRender();
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The detail key: cycle the global accordion override (collapsed → expanded
+	 * → per-kind default) and apply it to every card and reasoning block already
+	 * on screen, not just to the ones built afterwards.
+	 */
+	cycleAccordionOverride(): AccordionState | undefined {
+		const override = accordionSettings.cycleOverride();
+		this.#applyAccordionOverride();
+		return override;
+	}
+
+	/** Binary whole-transcript toggle, without disturbing the model-picker key. */
+	toggleToolOutputs(): AccordionState {
+		const next = accordionSettings.override === "expanded" ? "collapsed" : "expanded";
+		accordionSettings.setOverride(next);
+		this.#applyAccordionOverride();
+		return next;
+	}
+
+	#applyAccordionOverride(): void {
+		for (const shelf of new Set(this.#shelves.values())) shelf.applyAccordionOverride();
+		for (const component of this.#components.values()) {
+			if (component instanceof ReasoningComponent) {
+				component.setAccordionState(resolveAccordionState("reasoning"));
+			}
+		}
+		this.#scheduleRender();
 	}
 
 	/**
@@ -230,14 +304,23 @@ export class EventController {
 					},
 					"run",
 				);
-				session.ensureAssistant(started.runId);
 				this.#sync(session);
 				this.#onStatusChanged?.();
 				return;
 			}
 			case "tool_use": {
-				const tool = event as AgentToolUseEvent;
+				const tool = taskProgressEvent(event as AgentToolUseEvent) ?? (event as AgentToolUseEvent);
 				const session = this.#sessionFor(tool.sessionKey);
+				if (tool.action?.kind === "reasoning") {
+					const block = session.upsertReasoning(tool.action, toToolPhase(tool.phase), {
+						runId: tool.runId,
+					});
+					this.#sync(session);
+					const component = this.#components.get(block.id);
+					if (component instanceof ReasoningComponent) component.update(block);
+					this.#scheduleRender();
+					return;
+				}
 				const block = session.upsertTool(tool.action, toToolPhase(tool.phase), {
 					runId: tool.runId,
 					ok: tool.ok,
@@ -272,10 +355,25 @@ export class EventController {
 				const block = session.finalizeRun(completed.runId, {
 					ok: completed.ok,
 					answer: completed.answer,
+					interrupted: completed.cancelled === true,
+					error:
+						typeof completed.error === "string"
+							? completed.error
+							: completed.error == null
+								? undefined
+								: JSON.stringify(completed.error),
+					turn: {
+						...(typeof completed.durationMs === "number" && completed.durationMs >= 0
+							? { durationMs: completed.durationMs }
+							: {}),
+						...(completed.usage ? { usage: completed.usage } : {}),
+						...(completed.model?.trim() ? { model: completed.model.trim() } : {}),
+					},
 				});
 				// finalizeRun may have created the block (completed outran started),
 				// so resolve its component only after the tree is in step.
 				this.#sync(session);
+				if (focused) this.#refreshReasoning(session, completed.runId);
 				if (block && focused) {
 					const component = this.#componentFor(block.id);
 					if (component instanceof AssistantMessageComponent) this.#sealAssistant(block, component);
@@ -284,7 +382,7 @@ export class EventController {
 				// The run is over, so the trailing run of tool activity is too: seal it
 				// and let its rows reach native scrollback.
 				if (focused) this.#sealOpenShelf();
-				if (completed.ok === false && !block) {
+				if (completed.ok === false && !completed.cancelled && !block) {
 					this.notice(`run ${completed.runId} failed`, "error", session);
 				}
 				this.#scheduleRender();
@@ -336,6 +434,16 @@ export class EventController {
 		return this.#components.get(blockId);
 	}
 
+	/** Repaint a run's reasoning blocks after the store closed them. */
+	#refreshReasoning(session: SessionStore, runId: string): void {
+		if (session !== this.#store.focused) return;
+		for (const block of session.reasoningByActionId.values()) {
+			if (block.runId !== runId) continue;
+			const component = this.#components.get(block.id);
+			if (component instanceof ReasoningComponent) component.update(block);
+		}
+	}
+
 	/**
 	 * Render a finished run's block in its sealed form. The single place that
 	 * translates {@link AssistantBlock.status} into component state, so a live
@@ -353,6 +461,7 @@ export class EventController {
 			// reports `ok: false, answer: ""`); without a fallback the block would
 			// render as nothing at all and the failure would be invisible.
 			error: block.status === "error" ? (block.error ?? "run failed") : undefined,
+			turn: block.turn,
 		});
 	}
 
@@ -368,6 +477,19 @@ export class EventController {
 		}
 		let appended = false;
 		for (const block of session.blocks) {
+			const existing = this.#components.get(block.id);
+			if (
+				block.kind === "assistant" &&
+				block.status !== "streaming" &&
+				existing instanceof AssistantMessageComponent &&
+				!existing.isTranscriptBlockFinalized()
+			) {
+				if (this.#reveal.component === existing) {
+					this.#reveal.finish();
+					this.#reveal.stop();
+				}
+				this.#sealAssistant(block, existing);
+			}
 			if (this.#components.has(block.id) || this.#shelves.has(block.id)) continue;
 			if (block.kind === "tool") {
 				this.#placeToolBlock(block);
@@ -415,7 +537,7 @@ export class EventController {
 	#createComponent(block: Block): Component | undefined {
 		switch (block.kind) {
 			case "user":
-				return new UserMessageComponent(block.text);
+				return new UserMessageComponent(block.text, block);
 			case "assistant": {
 				const component = new AssistantMessageComponent(block.text);
 				// A rebuilt session (or a block created straight from `completed`)
@@ -429,7 +551,9 @@ export class EventController {
 				// Owned by a ToolShelfComponent; see #placeToolBlock.
 				return undefined;
 			case "notice":
-				return new NoticeComponent(block.text, block.level);
+				return new NoticeComponent(block.text, block.level, block.compaction);
+			case "reasoning":
+				return new ReasoningComponent(block);
 			case "approval":
 				// The decision itself belongs to the panel below the transcript; this
 				// is only the history line, sealed once an answer exists.

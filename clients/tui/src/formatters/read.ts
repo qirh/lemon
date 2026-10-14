@@ -28,7 +28,6 @@ type ContentBlock = TextContentBlock | ImageContentBlock | { type: string };
 /** Read tool arguments */
 interface ReadArgs {
 	path?: string;
-	file_path?: string;
 	offset?: number;
 	limit?: number;
 }
@@ -117,7 +116,7 @@ export const readFormatter: ToolFormatter = {
 
 	formatArgs(args: Record<string, unknown>): FormattedOutput {
 		const typedArgs = args as ReadArgs;
-		const path = typedArgs.path || typedArgs.file_path || "";
+		const path = typedArgs.path || "";
 		const formattedPath = formatPath(path);
 
 		// Build range suffix if offset/limit specified
@@ -173,26 +172,36 @@ export const readFormatter: ToolFormatter = {
 		}
 
 		const lines = text.split(/\r?\n/);
-		const lineCount = lines.length;
+		const metadata =
+			result && typeof result === "object" && "details" in result ? result.details : undefined;
+		// Lemon supplies 1-based source numbers in the text. They are not output
+		// row numbers: preserve them rather than numbering the numbered lines.
+		const numbered =
+			metadata !== null &&
+			typeof metadata === "object" &&
+			"start_line" in metadata &&
+			typeof metadata.start_line === "number";
+		const lineCount =
+			numbered && "lines_shown" in metadata && typeof metadata.lines_shown === "number"
+				? metadata.lines_shown
+				: lines.length;
 		const byteSize = new TextEncoder().encode(text).length;
-
-		// Calculate starting line number (accounting for offset)
 		const typedArgs = args as ReadArgs | undefined;
-		const startLine = (typedArgs?.offset ?? 0) + 1;
+		const startLine = Math.max(1, typedArgs?.offset ?? 1);
 
 		// Build summary
 		const summary = `${lineCount} lines, ${formatBytes(byteSize)}`;
 
 		// Build details with line numbers
 		const details: string[] = [];
-		const previewCount = Math.min(PREVIEW_LINES, lineCount);
+		const previewCount = Math.min(PREVIEW_LINES, lines.length);
 		const maxLineNumber = startLine + previewCount - 1;
 
 		for (let i = 0; i < previewCount; i++) {
 			const lineNumber = startLine + i;
 			const lineContent = lines[i] ?? "";
 			const formattedNumber = formatLineNumber(lineNumber, maxLineNumber);
-			details.push(`${formattedNumber}| ${lineContent}`);
+			details.push(numbered ? lineContent : `${formattedNumber}| ${lineContent}`);
 		}
 
 		// Add "more lines" indicator if truncated

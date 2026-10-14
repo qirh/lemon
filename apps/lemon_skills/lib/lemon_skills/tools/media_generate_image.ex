@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   @moduledoc """
   Supervised image-generation preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local SVG previews,
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local SVG previews,
   OpenAI image generation (OpenAI credentials) and Vertex AI Imagen (Google
   service-account credentials).
   """
@@ -765,8 +764,6 @@ defmodule LemonSkills.Tools.MediaGenerateImage do
   end
 
   defp optional_string(_value), do: nil
-
-  defp provider_config_value(nil, _key), do: nil
 
   defp provider_config_value(cfg, key) when is_map(cfg) do
     Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))

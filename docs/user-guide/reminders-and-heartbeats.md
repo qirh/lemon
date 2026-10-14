@@ -1,0 +1,234 @@
+# Reminders, heartbeats, and the daily brief
+
+Lemon can reach out to you instead of waiting to be asked. Scheduled proactive
+features are ordinary cron jobs run by the agent:
+
+- **Reminders** — one-off or recurring messages you set from Telegram with
+  `/remind`, or by asking the agent.
+- **Heartbeats** — a recurring check-in where the agent works through a
+  checklist and only messages you when something needs attention.
+- **Daily brief** — an opt-in morning heartbeat, configured by `lemon setup`.
+
+Scheduled work needs Lemon to be running when the job is due. A paired chat is
+needed only for chat delivery; results remain available in run history.
+
+---
+
+## Where results go
+
+When a scheduled job finishes, Lemon sends the result to one chat, chosen in
+this order:
+
+| Job | Delivered to |
+|---|---|
+| `deliver_to = "none"` | Nowhere. The run is still recorded in run history. |
+| `deliver_to = "telegram:<chat_id>[:<topic_id>]"` or `"discord:<channel_id>[:<thread_id>]"` | That chat, topic, or thread. |
+| Created from a Telegram or Discord conversation | The chat (and topic/thread) it was created in. |
+| Created anywhere else (TUI, browser, CLI) | Your **paired owner chat**: the first `gateway.telegram.allowed_chat_ids` entry when Telegram is enabled, otherwise `gateway.discord.default_channel_id` when Discord is enabled. |
+| No owner chat configured | Nowhere. |
+
+The message is the job name followed by the agent's reply. A failed or
+timed-out run sends `<job name> (<status>): <reason>` instead.
+
+Most people only need the owner chat. Pair Telegram once and every reminder,
+heartbeat, and brief reaches your phone:
+
+```bash
+lemon gateway setup telegram
+lemon restart
+```
+
+See [Setup › Optional Telegram or Discord](setup.md#optional-telegram-or-discord)
+for pairing details.
+
+---
+
+## Telegram reminders
+
+In a paired Telegram chat:
+
+```text
+/remind 9am stand-up
+/remind in 20m check oven
+/remind every weekday 8:30 daily brief
+```
+
+Lemon replies with the schedule, the next run time, and the reminder id. When
+the reminder fires, the agent writes the message (doing any lookup the reminder
+asks for) and sends it back to the same chat or forum topic.
+
+Supported `<when>` forms:
+
+| Form | Examples | Repeats |
+|---|---|---|
+| Relative delay | `in 20m`, `in 2h`, `in 1h30m`, `in 3d` (up to 364 days) | once |
+| Time of day | `9am`, `9:30pm`, `21:15`, `at 9am`, `noon`, `midnight` | once — today, or tomorrow if that time has passed |
+| Tomorrow | `tomorrow 9am` | once |
+| Every day | `every day 8:30`, `daily at 8:30` | daily |
+| Weekdays / weekends | `every weekday 8:30`, `every weekend 10am` | weekly pattern |
+| Day of week | `every monday 9am` | weekly |
+| Interval | `every 30m`, `every 2h`, `every hour` | minutes must divide 60, hours must divide 24 |
+
+A bare number is not a time: `/remind 5 things` is rejected. Use `5am` or
+`05:00`. Any unrecognized form replies with the usage text.
+
+Manage reminders for the current chat:
+
+```text
+/reminders          # list this chat's reminders, soonest first
+/unremind <id>      # cancel one (ids come from /remind and /reminders)
+```
+
+`/reminders` and `/unremind` only see reminders created in the same chat or
+topic. One-off reminders are removed automatically after they fire.
+
+**Times are the server's local time** — the clock of the machine running
+Lemon, including daylight-saving changes. If Lemon runs on a server in another
+timezone, write times in that server's zone.
+
+---
+
+## Asking the agent
+
+You can also ask in plain language from any interface: "remind me at 3pm to
+call the bank", "every Friday at 5pm summarise this week's commits". The agent
+uses its `cron` tool, which supports:
+
+- `once: true` — a one-shot job that runs at its next scheduled time and is then
+  removed.
+- `timezone: "local"` — interpret the schedule in the server's local time. The
+  default is `"UTC"`; any other zone name is also evaluated as UTC.
+- `deliverTo` — override the destination (`"none"`, `"telegram:<chat_id>"`,
+  `"discord:<channel_id>"`, or `"auto"` to restore the default).
+
+Jobs created from the TUI or browser are delivered to your paired owner chat.
+Ask the agent to list, pause, or remove its scheduled jobs the same way.
+
+## Coding goals and scheduled coding jobs
+
+Goals and prompt cron jobs execute real native coding sessions, with the same
+file and shell tools as interactive work. From the CLI or TUI, ask the agent to
+create and control them using its `goal` and `cron` tools. Use a concrete task
+and verification command, for example:
+
+> Set a goal in this repository: fix the addition bug in arithmetic.py, run
+> `python3 -m unittest`, and summarize the change. Start a bounded two-tick loop.
+
+### A bounded goal
+
+The `goal` tool manages the current session's durable objective:
+
+- `set` stores `objective` and `cwd`; cwd defaults to the current coding
+  session's directory.
+- `start` launches a bounded loop; `max_ticks` limits judge/continuation cycles.
+  `run_once` starts one cycle. An optional `model` pins the coding model.
+- `status` shows the objective, target directory, loop state, active/last run,
+  and last result. `meta.lastResult` records completion status and output.
+- `pause` or `stop` disables automatic continuation and cancels the owned run.
+  `resume` makes the objective active again; use `start` to execute more work.
+
+The judge checks progress in the goal's directory with read-only tools.
+Continuation runs use that same directory. A failed or ambiguous run does not
+silently start another editor: unknown completion remains under reconciliation
+until the original run is terminal. Loops do not enable automatic restart by
+default.
+
+### A scheduled coding task
+
+Ask for a `cron` job with `prompt`, `schedule`, and an optional `cwd` and `model`.
+For example:
+
+> Create a disabled cron job in this repository to fix arithmetic.py and run
+> its Python tests. Use gpt-6.1-sol and no chat delivery, then run it once now.
+
+The tool's `add` action inherits the current coding directory unless `cwd` is
+specified. The directory is persisted, so daemon cwd and future interactive
+sessions do not redirect the job to another repository. You can update it
+explicitly. Prompt jobs run in separate conversation sub-sessions; their
+completed summaries and router run IDs remain in `cron` → `runs` history.
+
+- `run` executes a job immediately, including a disabled job.
+- `pause` disables future scheduled launches; `resume` enables them again.
+- `abort` takes the **cron run ID**, not the job ID, and stops an active run.
+  Pausing a schedule alone does not cancel work already in progress.
+- `runs` reports progress, output, and the underlying router run ID.
+
+`maxRetries` applies to definite scheduled-run failures with bounded backoff.
+Manual runs are single-shot. A timeout or lost acknowledgement is not proof of
+failure: Lemon retains the fixed run ID and reconciles completion rather than
+launching a duplicate coding session.
+
+These jobs edit the target directory directly; they do not create or merge Git
+worktrees automatically. Point `cwd` at a dedicated worktree when other agents
+or people are editing the same repository.
+
+---
+
+## Heartbeats
+
+A heartbeat is a recurring job for an agent's main session: the agent runs the
+prompt you give it and reports back only when something needs attention. Keep
+the checklist in `HEARTBEAT.md` in the assistant workspace
+(`~/.lemon/agent/workspace/HEARTBEAT.md`), one line per thing worth checking —
+failing CI, unanswered messages, tomorrow's calendar — and point the prompt at
+it.
+
+The reply rule (the default `HEARTBEAT.md` template spells it out for the
+agent):
+
+- If nothing needs your attention, the agent replies exactly `HEARTBEAT_OK`.
+  That run is marked **suppressed**, kept in run history, and **not** sent.
+- Any other reply, and any failed run, is delivered like any other job result.
+
+Set a heartbeat from the TUI (`/hb` is an alias):
+
+```text
+/heartbeat every 30m check HEARTBEAT.md and tell me only what needs attention
+/heartbeat status
+/heartbeat pause
+/heartbeat resume
+/heartbeat clear
+```
+
+Setting a heartbeat again updates the agent's existing heartbeat job. It runs
+in the server's local time and is delivered to your paired owner chat.
+
+Intervals must be cron-exact: minutes that divide 60 (`1m` … `30m`), hours that
+divide 24 (`1h`, `2h`, `3h`, `4h`, `6h`, `8h`, `12h`), or `1d` (daily at 09:00).
+Values such as `90m` or `5h` are rejected, and the minimum is `1m`.
+
+---
+
+## Daily brief
+
+The daily brief is a heartbeat that runs once a day in the default agent's main
+session. The agent follows `HEARTBEAT.md` if present, then sends a few bullets:
+today's reminders and scheduled jobs, anything due from memory, and open
+follow-ups. On a day with nothing worth saying it replies `HEARTBEAT_OK`, so
+you get no message.
+
+`lemon setup` offers it (default: off) and asks for a time. For scripted
+installs:
+
+```bash
+lemon setup --non-interactive --daily-brief 07:30
+```
+
+Either way the choice is written to your config:
+
+```toml
+[automation]
+daily_brief = "08:00"   # HH:MM, 24-hour, server-local time
+```
+
+The brief is reconciled when Lemon boots, so a change takes effect at the next
+start (`lemon restart`). To turn it off, remove the `daily_brief` key and
+restart; the job is removed. See [Configuration](../config.md#automation).
+
+---
+
+## See Also
+
+- [`docs/user-guide/setup.md`](setup.md) — setup wizard and Telegram/Discord pairing
+- [`docs/config.md`](../config.md#automation) — the `[automation]` section
+- [`docs/user-guide/cli.md`](cli.md) — CLI and session commands

@@ -56,7 +56,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
   end
 
   defp summary(key, redacted_value) do
-    sensitive? = sensitive_key?(key)
+    sensitive? = LemonCore.Redact.sensitive_key?(key)
 
     %{
       "requestedKey" => key,
@@ -76,7 +76,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
     sensitive_key_count =
       config
       |> Map.keys()
-      |> Enum.count(&sensitive_key?/1)
+      |> Enum.count(&LemonCore.Redact.sensitive_key?/1)
 
     %{
       "keyCount" => map_size(config),
@@ -156,7 +156,7 @@ defmodule LemonControlPlane.Methods.ConfigGet do
       is_nil(value) ->
         nil
 
-      sensitive_key?(key) ->
+      LemonCore.Redact.sensitive_key?(key) ->
         %{"redacted" => true, "kind" => "secret"}
 
       is_map(value) ->
@@ -165,14 +165,5 @@ defmodule LemonControlPlane.Methods.ConfigGet do
       true ->
         value
     end
-  end
-
-  defp sensitive_key?(key) do
-    normalized = key |> to_string() |> String.downcase()
-
-    Enum.any?(
-      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
-      fn marker -> String.contains?(normalized, marker) end
-    )
   end
 end

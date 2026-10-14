@@ -6,9 +6,9 @@
  * imports pi-tui — a block knows what happened, not how it looks.
  */
 
-import type { AgentAction, AgentActionKind } from "../protocol/types.ts";
+import type { AgentAction, AgentActionKind, ImageContent, RunUsage } from "../protocol/types.ts";
 
-export type BlockKind = "user" | "assistant" | "tool" | "approval" | "notice";
+export type BlockKind = "user" | "assistant" | "tool" | "reasoning" | "approval" | "notice";
 
 interface BlockBase {
 	/** Unique within a session; stable for the block's lifetime. */
@@ -18,9 +18,28 @@ interface BlockBase {
 	at: number;
 }
 
-export interface UserBlock extends BlockBase {
+/** How a prompt reached a busy run (absent: it started its own turn). */
+export type UserDelivery = "steer" | "redirect" | "interrupt";
+
+/** What is known about a prompt beyond its text. */
+export interface UserDetails {
+	/** When it was sent; absent for saved history without a timestamp. */
+	sentAt?: number;
+	/** Images sent with it (the text names them as `[image: …]`). */
+	images?: readonly ImageContent[];
+	delivery?: UserDelivery;
+}
+
+export interface UserBlock extends BlockBase, UserDetails {
 	kind: "user";
 	text: string;
+}
+
+/** A finished run's own report, attached to its final answer segment. */
+export interface TurnSummary {
+	durationMs?: number;
+	usage?: RunUsage;
+	model?: string;
 }
 
 export type AssistantStatus = "streaming" | "done" | "error" | "aborted";
@@ -33,6 +52,8 @@ export interface AssistantBlock extends BlockBase {
 	status: AssistantStatus;
 	/** Set when the run ended badly and the server had something to say. */
 	error?: string;
+	/** Present on the run's last segment once the daemon reported completion. */
+	turn?: TurnSummary;
 }
 
 export type ToolPhase = "started" | "updated" | "completed";
@@ -46,8 +67,32 @@ export interface ToolBlock extends BlockBase {
 	title: string;
 	detail: Record<string, unknown> | undefined;
 	phase: ToolPhase;
+	/**
+	 * Client-observed terminal time, frozen when a live block completes.
+	 * Absent for receipts with no observed start; `at` alone is not a duration.
+	 */
+	completedAt?: number;
 	ok: boolean | undefined;
 	message: string | undefined;
+	/** A saved receipt, not a currently executing call (even if its outcome is unknown). */
+	historical?: boolean;
+	cancelled?: boolean;
+	/** Known execution time; history must never derive this from hydration time. */
+	durationMs?: number;
+}
+
+/**
+ * The model's thinking for one reasoning block of a run. Its own transcript
+ * block (not a tool card): `kind: "reasoning"` actions carry the accumulated
+ * text, so each phase replaces {@link text} rather than appending to it.
+ */
+export interface ReasoningBlock extends BlockBase {
+	kind: "reasoning";
+	runId: string | undefined;
+	/** `action.id` from the protocol; the upsert key. */
+	actionId: string;
+	text: string;
+	phase: ToolPhase;
 }
 
 export interface ApprovalBlock extends BlockBase {
@@ -60,13 +105,27 @@ export interface ApprovalBlock extends BlockBase {
 
 export type NoticeLevel = "info" | "warning" | "error";
 
+/** Token amounts a confirmed context compaction reported. */
+export interface CompactionDetails {
+	tokensBefore?: number;
+	tokensAfter?: number;
+}
+
 export interface NoticeBlock extends BlockBase {
 	kind: "notice";
 	level: NoticeLevel;
 	text: string;
+	/** Set when the notice records a context compaction. */
+	compaction?: CompactionDetails;
 }
 
-export type Block = UserBlock | AssistantBlock | ToolBlock | ApprovalBlock | NoticeBlock;
+export type Block =
+	| UserBlock
+	| AssistantBlock
+	| ToolBlock
+	| ReasoningBlock
+	| ApprovalBlock
+	| NoticeBlock;
 
 let blockSeq = 0;
 

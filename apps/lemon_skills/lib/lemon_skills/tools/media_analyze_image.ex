@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   @moduledoc """
   Supervised image-analysis preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local vision previews
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local vision previews
   and OpenAI vision analysis; OpenAI jobs require OpenAI vision credentials.
   """
 
@@ -521,8 +520,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
     |> Enum.flat_map(fn
       %{"text" => text} when is_binary(text) -> [text]
       %{text: text} when is_binary(text) -> [text]
-      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
-      %{type: "text", text: text} when is_binary(text) -> [text]
       _other -> []
     end)
     |> Enum.join("\n")
@@ -703,8 +700,6 @@ defmodule LemonSkills.Tools.MediaAnalyzeImage do
   end
 
   defp optional_string(_value), do: nil
-
-  defp provider_config_value(nil, _key), do: nil
 
   defp provider_config_value(cfg, key) when is_map(cfg) do
     Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))

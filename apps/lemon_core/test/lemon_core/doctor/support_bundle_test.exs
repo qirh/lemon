@@ -123,7 +123,7 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     end
   end
 
-  # Channel diagnostics and readiness are owned by lemon_channels and reach
+  # Channel diagnostics are owned by lemon_channels and reach
   # the bundle through :doctor_runtime like the stubs above. Their vendor
   # content is covered by lemon_channels' own suite; core only proves the
   # bundle carries the probe's output verbatim.
@@ -146,31 +146,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     end
   end
 
-  defmodule StubChannelReadiness do
-    def status(_opts) do
-      %{
-        status: "ready",
-        promoted_platforms: ["stub"],
-        gates: [%{id: "stub.launch_ready", status: "passed", evidence: "stub evidence"}],
-        gate_count: 1,
-        passed_count: 1,
-        blocked_count: 0,
-        warning_count: 0,
-        skipped_count: 0,
-        cleanup: %{
-          includes_raw_bot_tokens: false,
-          includes_secret_names: false,
-          includes_chat_ids: false,
-          includes_channel_ids: false,
-          includes_guild_ids: false,
-          includes_message_bodies: false,
-          includes_raw_proof_paths: false,
-          includes_raw_proof_details: false
-        }
-      }
-    end
-  end
-
   defp register_runtime_stubs do
     original = Application.get_env(:lemon_core, :doctor_runtime, [])
 
@@ -179,8 +154,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     base =
       Keyword.drop(original, [
         :channel_diagnostics,
-        :channel_readiness,
-        :channel_proofs,
         :channel_registry
       ])
 
@@ -194,16 +167,48 @@ defmodule LemonCore.Doctor.SupportBundleTest do
         browser_artifacts: StubBrowserArtifacts,
         lsp_server_manager: StubLspServerManager,
         memory_providers: StubMemoryProviders,
-        channel_diagnostics: StubChannelDiagnostics,
-        channel_readiness: StubChannelReadiness
+        channel_diagnostics: StubChannelDiagnostics
       )
     )
 
     on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
   end
 
+  # The bundle reports resolved configuration, so ambient LEMON_* variables from
+  # the host (or from tests that ran earlier in the same VM) must not leak in.
+  defp isolate_lemon_env do
+    names = [
+      "LEMON_EXTENSIONS_ENABLED",
+      "LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS",
+      "LEMON_EXTENSION_PATHS",
+      "LEMON_DEFAULT_PROVIDER",
+      "LEMON_DEFAULT_MODEL",
+      "LEMON_PROVIDER_ROUTING_ENABLED",
+      "LEMON_PROVIDER_FALLBACK_PROVIDERS",
+      "LEMON_PROVIDER_ROUTING_DEFAULT_POOL",
+      "LEMON_PROVIDER_ROUTING_DEFAULT_PROFILE",
+      "LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS",
+      "LEMON_TERMINAL_BACKENDS_ALLOW",
+      "LEMON_TERMINAL_BACKENDS_DENY",
+      "LEMON_TERMINAL_BACKENDS_REQUIRE_APPROVAL",
+      "LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES",
+      "LEMON_SSH_TERMINAL_ALLOWED_TARGETS"
+    ]
+
+    previous = Map.new(names, &{&1, System.get_env(&1)})
+    Enum.each(names, &System.delete_env/1)
+
+    on_exit(fn ->
+      Enum.each(previous, fn
+        {name, nil} -> System.delete_env(name)
+        {name, value} -> System.put_env(name, value)
+      end)
+    end)
+  end
+
   test "writes a zip containing diagnostics and metadata" do
     register_runtime_stubs()
+    isolate_lemon_env()
     tmp_dir = tmp_dir()
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
@@ -288,130 +293,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
           url: "https://token@example.invalid/private/plugin.git"
         },
         audit: %{status: "pending"}
-      })
-    )
-
-    File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-    File.write!(
-      Path.join([tmp_dir, ".lemon", "proofs", "private-proof.json"]),
-      Jason.encode!(%{
-        status: "failed",
-        completed_count: 0,
-        failed_count: 1,
-        skipped_count: 0,
-        generated_at: "2026-05-16T12:01:00Z",
-        cleanup: %{
-          includes_raw_api_keys: false,
-          includes_raw_prompts: false,
-          includes_raw_provider_responses: false
-        },
-        details: %{
-          provider: "openai_vision",
-          model: "openrouter:test-model",
-          artifact_mime_type: "application/json",
-          artifact_bytes: 59,
-          analysis_chars: 43,
-          artifact_hash: "private-artifact-hash",
-          job_id_hash: "private-job-hash",
-          reason_kind: "provider_http_error",
-          proof_scope: "provider live media",
-          raw_prompt: "private proof prompt"
-        }
-      })
-    )
-
-    File.write!(
-      Path.join([tmp_dir, ".lemon", "proofs", "provider-fallback-proof.json"]),
-      Jason.encode!(%{
-        status: "completed",
-        proof_object: "lemon.provider_fallback_smoke",
-        completed_count: 1,
-        failed_count: 0,
-        skipped_count: 0,
-        generated_at: "2026-05-16T12:03:00Z",
-        cleanup: %{
-          includes_raw_api_keys: false,
-          includes_raw_prompts: false,
-          includes_raw_answer: false
-        },
-        details: %{
-          model: "glm-5-turbo",
-          primary_provider: "openai",
-          fallback_provider: "zai",
-          final_provider: "zai",
-          answer_hash: "private-answer-hash"
-        }
-      })
-    )
-
-    File.write!(
-      Path.join([tmp_dir, ".lemon", "proofs", "wasm-lifecycle-latest.json"]),
-      Jason.encode!(%{
-        status: "completed",
-        proof: "wasm_lifecycle_smoke",
-        completed_count: 5,
-        failed_count: 0,
-        generated_at: "2026-05-17T02:35:01.331778Z",
-        checks: [
-          %{name: "wasm_lifecycle_discover_emits_redacted_start_stop", status: "completed"},
-          %{name: "wasm_lifecycle_invoke_emits_redacted_start_stop", status: "completed"},
-          %{name: "wasm_lifecycle_status_tracks_running_sidecar", status: "completed"},
-          %{name: "wasm_lifecycle_stop_terminates_sidecar", status: "completed"},
-          %{name: "wasm_lifecycle_telemetry_omits_raw_sensitive_values", status: "completed"}
-        ],
-        lifecycle_boundary: %{
-          host: "wasm",
-          discover_emits_redacted_start_stop: true,
-          invoke_emits_redacted_start_stop: true,
-          status_tracks_running_sidecar: true,
-          stop_terminates_sidecar: true,
-          tool_count: 1
-        },
-        redaction: %{
-          contains_raw_cwd: false,
-          contains_raw_session_ids: false,
-          contains_raw_tool_names: false,
-          contains_raw_params: false
-        }
-      })
-    )
-
-    File.write!(
-      Path.join([tmp_dir, ".lemon", "proofs", "terminal-backend-latest.json"]),
-      Jason.encode!(%{
-        status: "completed",
-        completed_count: 4,
-        failed_count: 0,
-        skipped_count: 0,
-        generated_at: "2026-05-17T06:26:25.028059Z",
-        command_hash: "safe-command-hash",
-        cwd_hash: "safe-cwd-hash",
-        results: [
-          %{backend: "local", status: "completed", output_hash: "safe-local-output"},
-          %{backend: "local_pty", status: "completed", output_hash: "safe-pty-output"},
-          %{
-            backend: "docker",
-            status: "completed",
-            output_hash: "safe-docker-output",
-            hardening: %{
-              read_only_rootfs: true,
-              tmpfs_noexec: true,
-              drops_capabilities: true,
-              no_new_privileges: true,
-              cgroup_memory_limit: true,
-              cgroup_cpu_quota: true,
-              cgroup_pids_limit: true,
-              pull_policy: "never",
-              network: "none",
-              memory: "1g",
-              cpus: "2",
-              pids_limit: "256",
-              raw_command: "private command"
-            }
-          },
-          %{backend: "ssh", status: "completed", output_hash: "safe-ssh-output"}
-        ]
       })
     )
 
@@ -513,8 +394,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert "environment.json" in names
     assert "browser_diagnostics.json" in names
     assert "channel_diagnostics.json" in names
-    assert "channel_readiness.json" in names
-    assert "readiness_summary.json" in names
     assert "checkpoint_diagnostics.json" in names
     assert "cron_diagnostics.json" in names
     assert "extension_diagnostics.json" in names
@@ -523,7 +402,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert "lsp_diagnostics.json" in names
     assert "media_diagnostics.json" in names
     assert "memory_diagnostics.json" in names
-    assert "proof_diagnostics.json" in names
     assert "provider_diagnostics.json" in names
     assert "terminal_diagnostics.json" in names
     assert "usage_diagnostics.json" in names
@@ -532,14 +410,11 @@ defmodule LemonCore.Doctor.SupportBundleTest do
 
     {_, readme_text} = Enum.find(entries, fn {name, _content} -> name == ~c"README.txt" end)
     readme = IO.iodata_to_binary(readme_text)
-    assert readme =~ "channel readiness"
     assert readme =~ "chat/channel/guild ids"
-    assert readme =~ "proof file contents"
 
     {_, manifest_json} = Enum.find(entries, fn {name, _content} -> name == ~c"manifest.json" end)
     manifest = manifest_json |> IO.iodata_to_binary() |> Jason.decode!()
 
-    assert manifest["lemon_version"] == "0.1.0"
     assert manifest["runtime_mode"] in ["source-dev", "release-runtime"]
     assert is_map(manifest["git"])
     assert is_binary(manifest["elixir"])
@@ -590,55 +465,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert channels["cleanup"]["includes_channel_ids"] == false
     assert channels["cleanup"]["includes_guild_ids"] == false
     assert channels["cleanup"]["includes_message_bodies"] == false
-
-    {_, channel_readiness_json} =
-      Enum.find(entries, fn {name, _content} -> name == ~c"channel_readiness.json" end)
-
-    channel_readiness = channel_readiness_json |> IO.iodata_to_binary() |> Jason.decode!()
-
-    assert channel_readiness["status"] == "ready"
-    assert channel_readiness["promoted_platforms"] == ["stub"]
-    assert channel_readiness["gate_count"] == 1
-    assert channel_readiness["passed_count"] == 1
-    assert Enum.any?(channel_readiness["gates"], &(&1["id"] == "stub.launch_ready"))
-    assert channel_readiness["cleanup"]["includes_raw_bot_tokens"] == false
-    assert channel_readiness["cleanup"]["includes_raw_proof_details"] == false
-
-    {_, readiness_summary_json} =
-      Enum.find(entries, fn {name, _content} -> name == ~c"readiness_summary.json" end)
-
-    readiness_summary = readiness_summary_json |> IO.iodata_to_binary() |> Jason.decode!()
-
-    assert readiness_summary["status"] == "ready"
-    assert readiness_summary["doctor"]["overall"] == "pass"
-    assert readiness_summary["channels"]["status"] == "ready"
-    assert readiness_summary["channels"]["promoted_platforms"] == ["stub"]
-    assert readiness_summary["channels"]["gate_count"] == 1
-    assert readiness_summary["proofs"]["proof_count"] >= 1
-    assert readiness_summary["proof_gates"]["providerMedia"]["status"] in ["passed", "warning"]
-    # Without a channel proof spec registered, only the two core launch gates
-    # (provider media, terminal backends) remain.
-    assert readiness_summary["proof_gate_summary"]["gateCount"] == 2
-    assert is_map(readiness_summary["proof_gate_summary"]["statuses"])
-    assert is_list(readiness_summary["unresolved_gates"])
-
-    provider_media_gate =
-      Enum.find(readiness_summary["unresolved_gates"], &(&1["id"] == "provider_media"))
-
-    assert "provider_http_error" in provider_media_gate["reason_kinds"]
-    assert readiness_summary["cleanup"]["includes_raw_bot_tokens"] == false
-    assert readiness_summary["cleanup"]["includes_secret_names"] == false
-    assert readiness_summary["cleanup"]["includes_chat_ids"] == false
-    assert readiness_summary["cleanup"]["includes_channel_ids"] == false
-    assert readiness_summary["cleanup"]["includes_message_bodies"] == false
-    assert readiness_summary["cleanup"]["includes_raw_proof_paths"] == false
-    assert readiness_summary["cleanup"]["includes_raw_proof_details"] == false
-    assert readiness_summary["cleanup"]["includes_raw_prompts"] == false
-    assert readiness_summary["cleanup"]["includes_raw_provider_responses"] == false
-    assert readiness_summary["cleanup"]["includes_secret_values"] == false
-
-    readiness_summary_text = inspect(readiness_summary)
-    refute readiness_summary_text =~ "private proof prompt"
 
     {_, checkpoint_json} =
       Enum.find(entries, fn {name, _content} -> name == ~c"checkpoint_diagnostics.json" end)
@@ -722,16 +548,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert extensions["host_runtime"]["degraded_host_count"] == 0
     assert extensions["host_runtime"]["manifest_only_host_count"] >= 1
     assert extensions["host_runtime"]["runtime_health_loads_extension_code"] == false
-    assert extensions["wasm_lifecycle"]["proof_present"] == true
-    assert extensions["wasm_lifecycle"]["proof_status"] == "completed"
-    assert extensions["wasm_lifecycle"]["completed_count"] == 5
-    assert extensions["wasm_lifecycle"]["failed_count"] == 0
-    assert extensions["wasm_lifecycle"]["lifecycle_supported"] == true
-    assert extensions["wasm_lifecycle"]["lifecycle_boundary"]["stop_terminates_sidecar"] == true
-    assert extensions["wasm_lifecycle"]["redaction"]["contains_raw_cwd"] == false
-    assert extensions["wasm_lifecycle"]["redaction"]["contains_raw_session_ids"] == false
-    assert extensions["wasm_lifecycle"]["redaction"]["contains_raw_tool_names"] == false
-    assert extensions["wasm_lifecycle"]["redaction"]["contains_raw_params"] == false
     assert extensions["cleanup"]["includes_raw_source_paths"] == false
     assert extensions["cleanup"]["includes_file_contents"] == false
     assert extensions["cleanup"]["includes_load_error_messages"] == false
@@ -806,19 +622,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert media["summary"]["cleanup"]["includes_prompts"] == false
     assert media["summary"]["cleanup"]["includes_provider_responses"] == false
     assert media["summary"]["cleanup"]["includes_channel_message_bodies"] == false
-    assert media["provider_live"]["status"] == "incomplete"
-    assert media["provider_live"]["required_count"] == 5
-    assert is_integer(media["provider_live"]["completed_count"])
-    assert length(media["provider_live"]["providers"]) == 5
-    assert media["provider_live"]["cleanup"]["includes_raw_provider_responses"] == false
-
-    vision_provider =
-      Enum.find(media["provider_live"]["providers"], &(&1["label"] == "vision"))
-
-    assert vision_provider["status"] in ["completed", "failed"]
-    assert vision_provider["command"] =~ "scripts/live_media_vision_smoke.exs"
-    assert vision_provider["secret_command"] =~ "--api-key-secret SECRET_NAME"
-
     assert [media_job] = media["recent_jobs"]
     assert media_job["job_id"] == "support-media"
     assert media_job["prompt_hash"]
@@ -837,107 +640,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     assert memory["cleanup"]["includes_secret_values"] == false
     refute inspect(memory) =~ "external prompt"
     refute inspect(memory) =~ "private-memory-provider"
-
-    {_, proof_json} =
-      Enum.find(entries, fn {name, _content} -> name == ~c"proof_diagnostics.json" end)
-
-    proofs = proof_json |> IO.iodata_to_binary() |> Jason.decode!()
-
-    assert proofs["proof_count"] == 4
-    assert proofs["failed_count"] == 1
-    assert proofs["completed_count"] == 3
-    assert proofs["invalid_count"] == 0
-    assert proofs["reason_kind_counts"]["provider_http_error"] == 1
-    assert proofs["proof_scope_counts"]["provider_fallback"] == 1
-    assert proofs["proof_scope_counts"]["provider_live_media"] == 1
-    assert proofs["proof_scope_counts"]["media_provider"] == 1
-    assert proofs["proof_scope_counts"]["wasm_lifecycle_smoke"] == 1
-    assert proofs["proof_scope_counts"]["terminal_backend"] == 1
-    assert proofs["check_name_counts"]["wasm_lifecycle_stop_terminates_sidecar"] == 1
-    assert proofs["check_name_counts"]["terminal_backend_docker"] == 1
-
-    assert Enum.all?(proofs["latest_checks"], &is_binary(&1["file_hash"]))
-    assert Enum.all?(proofs["latest_checks"], &is_binary(&1["proof_hash"]))
-    assert proofs["cleanup"]["includes_raw_paths"] == false
-    assert proofs["cleanup"]["includes_raw_filenames"] == false
-    assert proofs["cleanup"]["includes_raw_proof_details"] == false
-    assert proofs["cleanup"]["includes_raw_prompts"] == false
-    assert proofs["cleanup"]["includes_raw_provider_responses"] == false
-    assert proofs["cleanup"]["embeds_proof_file_contents"] == false
-    assert Enum.any?(proofs["directories"], &(&1["label"] == ".lemon/proofs"))
-    assert Enum.any?(proofs["recent_proofs"], &(&1["status"] == "completed"))
-    assert Enum.any?(proofs["recent_proofs"], &(&1["status"] == "failed"))
-    assert Enum.any?(proofs["recent_proofs"], &(&1["model"] == "openrouter:test-model"))
-    assert Enum.any?(proofs["recent_proofs"], &(&1["reason_kind"] == "provider_http_error"))
-
-    assert Enum.any?(
-             proofs["recent_proofs"],
-             &(&1["proof_object"] == "lemon.provider_fallback_smoke")
-           )
-
-    assert Enum.any?(
-             proofs["recent_proofs"],
-             &(&1["proof_object"] == "wasm_lifecycle_smoke")
-           )
-
-    wasm_lifecycle_proof =
-      Enum.find(
-        proofs["recent_proofs"],
-        &(&1["proof_object"] == "wasm_lifecycle_smoke")
-      )
-
-    assert wasm_lifecycle_proof["redaction"]["contains_raw_cwd"] == false
-    assert wasm_lifecycle_proof["redaction"]["contains_raw_session_ids"] == false
-    assert wasm_lifecycle_proof["redaction"]["contains_raw_tool_names"] == false
-    assert wasm_lifecycle_proof["redaction"]["contains_raw_params"] == false
-    assert wasm_lifecycle_proof["cleanup"] == %{}
-
-    media_provider_proof =
-      Enum.find(
-        proofs["recent_proofs"],
-        &(&1["provider"] == "openai_vision")
-      )
-
-    assert media_provider_proof["media_proof"]["provider"] == "openai_vision"
-    assert media_provider_proof["media_proof"]["model"] == "openrouter:test-model"
-    assert media_provider_proof["media_proof"]["artifact_mime_type"] == "application/json"
-    assert media_provider_proof["media_proof"]["artifact_bytes"] == 59
-    assert media_provider_proof["media_proof"]["analysis_chars"] == 43
-    assert media_provider_proof["media_proof"]["has_artifact_hash"] == true
-    assert media_provider_proof["media_proof"]["has_job_id_hash"] == true
-
-    terminal_proof =
-      Enum.find(
-        proofs["recent_proofs"],
-        &("terminal_backend" in &1["proof_scopes"])
-      )
-
-    assert terminal_proof["terminal_hardening"]["docker"]["read_only_rootfs"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["tmpfs_noexec"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["drops_capabilities"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["no_new_privileges"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["cgroup_memory_limit"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["cgroup_cpu_quota"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["cgroup_pids_limit"] == true
-    assert terminal_proof["terminal_hardening"]["docker"]["pull_policy"] == "never"
-    assert terminal_proof["terminal_hardening"]["docker"]["network"] == "none"
-    assert terminal_proof["terminal_hardening"]["docker"]["memory"] == "1g"
-    assert terminal_proof["terminal_hardening"]["docker"]["cpus"] == "2"
-    assert terminal_proof["terminal_hardening"]["docker"]["pids_limit"] == "256"
-    refute inspect(terminal_proof) =~ "private command"
-
-    assert Enum.any?(proofs["recent_proofs"], &(&1["primary_provider"] == "openai"))
-    assert Enum.any?(proofs["recent_proofs"], &(&1["fallback_provider"] == "zai"))
-    assert Enum.any?(proofs["recent_proofs"], &(&1["final_provider"] == "zai"))
-
-    assert Enum.all?(proofs["recent_proofs"], &is_binary(&1["file_hash"]))
-    assert Enum.all?(proofs["recent_proofs"], &is_binary(&1["proof_hash"]))
-    refute inspect(proofs) =~ "private-proof.json"
-    refute inspect(proofs) =~ "provider-fallback-proof.json"
-    refute inspect(proofs) =~ Path.join([tmp_dir, ".lemon", "proofs"])
-    refute inspect(proofs) =~ Path.join([tmp_dir, "tmp"])
-    refute inspect(proofs) =~ "private proof prompt"
-    refute inspect(proofs) =~ "private-answer-hash"
 
     {_, provider_json} =
       Enum.find(entries, fn {name, _content} -> name == ~c"provider_diagnostics.json" end)
@@ -1054,13 +756,13 @@ defmodule LemonCore.Doctor.SupportBundleTest do
     refute usage_text =~ "usage-secret-key"
   end
 
-  test "channel diagnostics and readiness degrade when no channel runtime is registered" do
+  test "channel diagnostics degrade when no channel runtime is registered" do
     original = Application.get_env(:lemon_core, :doctor_runtime, [])
 
     Application.put_env(
       :lemon_core,
       :doctor_runtime,
-      Keyword.drop(original, [:channel_diagnostics, :channel_readiness, :channel_proofs])
+      Keyword.drop(original, [:channel_diagnostics])
     )
 
     on_exit(fn -> Application.put_env(:lemon_core, :doctor_runtime, original) end)
@@ -1095,112 +797,6 @@ defmodule LemonCore.Doctor.SupportBundleTest do
                "includes_message_bodies" => false
              }
            }
-
-    {_, readiness_json} =
-      Enum.find(entries, fn {name, _content} -> name == ~c"channel_readiness.json" end)
-
-    # The probe fallback documented in SupportBundle.channel_readiness/1.
-    assert readiness_json |> IO.iodata_to_binary() |> Jason.decode!() == %{
-             "status" => "unknown",
-             "promoted_platforms" => [],
-             "gates" => [],
-             "gate_count" => 0,
-             "passed_count" => 0,
-             "blocked_count" => 0,
-             "warning_count" => 0,
-             "skipped_count" => 0,
-             "cleanup" => %{
-               "includes_raw_bot_tokens" => false,
-               "includes_secret_names" => false,
-               "includes_chat_ids" => false,
-               "includes_channel_ids" => false,
-               "includes_guild_ids" => false,
-               "includes_message_bodies" => false,
-               "includes_raw_proof_paths" => false,
-               "includes_raw_proof_details" => false
-             }
-           }
-
-    {_, summary_json} =
-      Enum.find(entries, fn {name, _content} -> name == ~c"readiness_summary.json" end)
-
-    summary = summary_json |> IO.iodata_to_binary() |> Jason.decode!()
-
-    assert summary["channels"]["status"] == "unknown"
-    assert summary["channels"]["promoted_platforms"] == []
-    assert summary["channels"]["gate_count"] == 0
-  end
-
-  test "media diagnostics include target-provider proof rerun commands" do
-    tmp_dir = tmp_dir()
-    bundle_path = Path.join(tmp_dir, "support.zip")
-
-    File.mkdir_p!(Path.join([tmp_dir, ".lemon", "proofs"]))
-
-    File.write!(
-      Path.join([tmp_dir, ".lemon", "proofs", "media-image-smoke-latest.json"]),
-      Jason.encode!(%{
-        status: "failed",
-        proof_object: "lemon.media_image_smoke",
-        proof_scope: "media_provider",
-        completed_count: 0,
-        failed_count: 1,
-        skipped_count: 0,
-        reason_kind: "vertex_imagen_http_error:permission_denied",
-        cleanup: %{
-          includes_raw_api_keys: false,
-          includes_raw_prompts: false,
-          includes_raw_provider_response: false
-        },
-        details: %{
-          provider: "vertex_imagen",
-          raw_provider_response: "private provider response"
-        }
-      })
-    )
-
-    on_exit(fn -> File.rm_rf!(tmp_dir) end)
-
-    report = Report.from_checks([Check.warn("media.provider_live", "blocked", "rerun")])
-
-    assert {:ok, ^bundle_path} =
-             SupportBundle.write(report, bundle_path: bundle_path, project_dir: tmp_dir)
-
-    assert {:ok, entries} = :zip.extract(String.to_charlist(bundle_path), [:memory])
-
-    {_, media_json} =
-      Enum.find(entries, fn {name, _content} -> name == ~c"media_diagnostics.json" end)
-
-    media = media_json |> IO.iodata_to_binary() |> Jason.decode!()
-    image = Enum.find(media["provider_live"]["providers"], &(&1["label"] == "image"))
-
-    assert image["status"] == "failed"
-    assert image["target_provider"] == "vertex_imagen"
-    assert image["reason_kind"] == "vertex_imagen_http_error:permission_denied"
-    assert image["command"] =~ "--provider vertex_imagen"
-    assert image["secret_command"] =~ "--provider vertex_imagen --api-key-secret SECRET_NAME"
-    refute inspect(media) =~ "private provider response"
-  end
-
-  test "redacts sensitive config assignments and inline tokens" do
-    text = """
-    model = "claude"
-    api_key = "sk-ant-real-secret"
-    bot_token = "123:abc"
-    wallet_key = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-    note = "Bearer abc.def"
-    """
-
-    redacted = SupportBundle.redact_text(text)
-
-    assert redacted =~ ~s(model = "claude")
-    assert redacted =~ ~s(api_key = "[redacted]")
-    assert redacted =~ ~s(bot_token = "[redacted]")
-    assert redacted =~ ~s(wallet_key = "[redacted]")
-    assert redacted =~ "Bearer [redacted]"
-    refute redacted =~ "sk-ant-real-secret"
-    refute redacted =~ "123:abc"
-    refute redacted =~ "0123456789abcdef"
   end
 
   defp tmp_dir do

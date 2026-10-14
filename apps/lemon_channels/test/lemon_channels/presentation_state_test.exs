@@ -143,8 +143,7 @@ defmodule LemonChannels.PresentationStateTest do
         {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 42}}}}
       )
 
-      # Give the GenServer time to process
-      Process.sleep(50)
+      flush_presentation_state()
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert entry.platform_message_id == 42
@@ -160,7 +159,7 @@ defmodule LemonChannels.PresentationStateTest do
       # Simulate failed delivery
       send(PresentationState, {:presentation_delivery, ref, {:error, :timeout}})
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert is_nil(entry.platform_message_id)
@@ -177,7 +176,7 @@ defmodule LemonChannels.PresentationStateTest do
         {:presentation_delivery, unknown_ref, {:ok, %{"result" => %{"message_id" => 99}}}}
       )
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       # Should not crash, and no entry should exist
       entry = PresentationState.get(@route, run_id, :answer)
@@ -196,7 +195,7 @@ defmodule LemonChannels.PresentationStateTest do
         {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 77}}}}
       )
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert is_nil(entry.pending_create_at)
@@ -214,7 +213,7 @@ defmodule LemonChannels.PresentationStateTest do
         {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 42}}}}
       )
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert entry.platform_message_id == 42
@@ -243,7 +242,7 @@ defmodule LemonChannels.PresentationStateTest do
         {:presentation_delivery, ref, {:ok, %{"result" => %{"message_id" => 55}}}}
       )
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       # Deferred text should have been flushed
       entry = PresentationState.get(@route, run_id, :answer)
@@ -261,7 +260,7 @@ defmodule LemonChannels.PresentationStateTest do
 
       send(PresentationState, {:presentation_delivery, ref, {:ok, %{"ok" => true}}})
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert is_nil(entry.pending_edit_ref)
@@ -287,7 +286,7 @@ defmodule LemonChannels.PresentationStateTest do
 
       send(PresentationState, {:presentation_delivery, stale_ref, {:ok, %{"ok" => true}}})
 
-      Process.sleep(50)
+      flush_presentation_state()
 
       entry = PresentationState.get(@route, run_id, :answer)
       assert entry.pending_edit_ref == current_ref
@@ -325,4 +324,7 @@ defmodule LemonChannels.PresentationStateTest do
       assert existing_entry.pending_create_ref == entry.pending_create_ref
     end
   end
+
+  # Messages sent directly to the GenServer are handled before this call returns.
+  defp flush_presentation_state, do: :sys.get_state(PresentationState)
 end

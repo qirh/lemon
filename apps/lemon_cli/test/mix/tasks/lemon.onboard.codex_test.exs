@@ -15,6 +15,8 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
+    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", mock_home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -25,6 +27,10 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
       if original_master_key,
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      if original_secrets_config,
+        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
 
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
@@ -76,7 +82,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
         config_path,
         "--set-default",
         "--model",
-        "gpt-5.2"
+        "gpt-6.1-sol"
       ])
     end)
 
@@ -88,7 +94,7 @@ defmodule Mix.Tasks.Lemon.Onboard.CodexTest do
              "llm_openai_codex_api_key"
 
     assert get_in(config_map, ["defaults", "provider"]) == "openai-codex"
-    assert get_in(config_map, ["defaults", "model"]) == "openai-codex:gpt-5.2"
+    assert get_in(config_map, ["defaults", "model"]) == "openai-codex:gpt-6.1-sol"
   end
 
   test "raises for unknown explicit model", %{tmp_dir: tmp_dir} do

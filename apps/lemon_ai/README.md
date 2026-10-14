@@ -13,20 +13,19 @@ a `%LemonAi.Types.Model{}` at any provider and the rest of your code stays ident
 
 ## Install
 
-`lemon_ai` is not yet on Hex. Add it as a git dependency for now:
-
 ```elixir
 def deps do
   [
-    {:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
+    {:lemon_ai, "~> 0.2"}
   ]
 end
 ```
 
-Once published, this becomes:
+`0.2.0` is the first installable release line; the `0.1.0` release on Hex cannot be
+installed and is retired. Until `0.2.0` is on Hex, depend on the repository instead:
 
 ```elixir
-{:lemon_ai, "~> 0.1"}
+{:lemon_ai, github: "z80dev/lemon", sparse: "apps/lemon_ai"}
 ```
 
 The OTP application is named `:lemon_ai`, so you call it as `LemonAi.*`. It starts its own
@@ -146,9 +145,9 @@ The migration replaced 25 provider-module literal catalogs with 26 JSON resource
 `priv/models/`, loaded at compile time by `LemonAi.Models.Catalog`. The counts differ
 because Google uses `google.json` plus `google_antigravity_extras.json`. The
 `:google_antigravity` registry is derived from entries tagged for that provider plus the
-extras file; `:"openai-codex"` is derived from the direct OpenAI catalog plus OAuth-only
-model IDs and therefore has no separate JSON catalog. The files are compiler external
-resources, so edits recompile their provider modules. Invalid JSON and malformed entries
+extras file; `:"openai-codex"` uses an explicit ChatGPT OAuth catalog rather than
+exposing API-key-only models under the subscription endpoint. The files are compiler
+external resources, so edits recompile their provider modules. Invalid JSON and malformed entries
 fail compilation with catalog and model-key context, including invalid field types,
 negative sizes, negative costs, and unsupported compatibility overrides. Atom-valued API,
 provider, input, and compatibility keys use explicit allowlists rather than creating atoms
@@ -169,13 +168,65 @@ from arbitrary catalog strings.
 
 Vision and reasoning are additionally gated **per model** by the model's `input` and
 `reasoning` fields — a wire module supporting vision doesn't make a text-only model
-accept images. Query the specific model:
+accept images. The thinking request shape is driven by explicit capability flags on
+each catalog entry: `adaptive_thinking` (Anthropic `thinking: adaptive` plus
+`output_config.effort`, required from Claude Opus 4.7 on) and `reasoning_efforts` (the
+Lemon levels a model accepts; other levels clamp to the nearest declared one via
+`LemonAi.Models.reasoning_effort_for/2`). Query the specific model:
 
 ```elixir
 LemonAi.Models.supports_vision?(model)
 LemonAi.Models.supports_reasoning?(model)
 LemonAi.Models.supports_xhigh(model)
 ```
+
+### Codex and Anthropic request controls
+
+Codex accepts a ChatGPT access token through `api_key`, including Lemon's configured
+API-key authentication mode. The account header is derived from the URL-safe JWT
+claims; an OpenAI API key is not a ChatGPT token. Reuse `session_id` across turns
+and resumes: it supplies the prompt-cache key and matching `session_id`,
+`conversation_id` and `x-client-request-id` affinity headers. IDs longer than
+64 wire bytes become deterministic SHA-256-derived keys; IDs are never truncated
+or replaced with a per-request random identity. Native coding sessions supply their
+persisted session ID automatically. Provider cache hits appear in `usage.cache_read`;
+hits depend on the provider's prefix length, retention and routing, not merely on
+sending a key. Sampling temperature and output-token caps are deliberately omitted
+because the Codex endpoint rejects them.
+Codex sends the same pinned `version: 0.159.0` used for live model discovery;
+caller headers cannot accidentally override that capability version. Function
+tools explicitly use `strict: false` so optional parameters remain optional rather
+than being auto-filled by the endpoint.
+
+For deliberate local diagnostics, `StreamOptions.on_payload` observes the final
+request body and `on_usage` observes raw terminal usage, including vendor
+`attribution.request_fields`. Both receive only provider/model/session metadata,
+have ignored return values, and propagate callback failures as stream errors.
+Bodies can contain private content: retain only counts/hashes, never raw payloads
+or authentication data. These hooks are disabled by default.
+
+Lemon onboarding can explicitly import an existing Codex CLI ChatGPT login with
+`lemon setup --provider openai-codex --auth codex-cli --non-interactive`.
+This copies refreshable OAuth credentials into Lemon's encrypted secret store;
+it neither refreshes during import nor writes the Codex login file. Import is a
+snapshot, not continuous synchronization or a separate browser login. Subsequent
+refreshes persist only Lemon's secret, and persistence failure is surfaced rather
+than reporting success with lost rotating credentials.
+
+For Responses and Codex, `thinking_budgets: %{summary: "auto", service_tier: "priority"}`
+selects reasoning summaries and a service tier (`"auto"`, `"default"`, `"flex"` or
+`"priority"` where the model supports it). Codex honors `tool_choice`. Returned
+service tiers take precedence for billing; Codex tier multipliers come from model
+metadata (for example GPT-6.1 Sol priority is 2.5×). Reasoning output tokens are already
+included in the provider's output count, not charged twice.
+
+Native Anthropic requests support `provider_options: %{anthropic: %{cache_retention: :none | :short | :long}}`.
+Short-lived caching is the default; `:long` requests the one-hour TTL and `:none`
+removes cache markers. Adaptive thinking uses catalog capabilities, and catalog
+context limits include current 1M-context Claude models without adding an obsolete
+context beta. Provider conversion preserves full history; preflight compaction is
+the caller's responsibility rather than silent wire truncation.
+
 
 The 27 registered provider IDs: `:anthropic`, `:openai`, `:"openai-codex"`,
 `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`,
@@ -205,7 +256,10 @@ LemonAi.CircuitBreaker.get_state(:anthropic)   # state, failure count, last fail
 ### Rate limiting and concurrency caps
 
 A per-provider token bucket plus an in-flight concurrency cap, both enforced by the
-dispatcher before the provider is ever called.
+dispatcher before the provider is ever called. A caller that finds the provider at its
+cap waits in a FIFO queue for a free slot (default up to 120s,
+`config :lemon_ai, LemonAi.CallDispatcher, queue_timeout_ms: ...`) before
+`{:error, :max_concurrency}` is returned.
 
 ```elixir
 config :lemon_ai, :rate_limiter,
@@ -225,18 +279,48 @@ Every model carries pricing, so you can price any response:
 cost = LemonAi.calculate_cost(model, message.usage)
 # cost.total, cost.input, cost.output, cost.cache_read, cost.cache_write  (US dollars)
 ```
+Input usage excludes cache-read/write tokens; total tokens include them. Hourly
+Anthropic writes are reported as `usage.cache_write_long`, a subset of `cache_write`.
+The canonical cost calculation includes their higher write price and uses the
+catalog's long-context rate when **all** input tokens (including cache) cross its
+threshold. Prefer the returned `message.usage.cost` when a service tier was used,
+since recalculating base model prices alone does not retain the response's tier.
+
 
 ### Automatic retries
 
-Providers retry transient failures (429, 5xx, connection resets, TLS hiccups) on the
-call's own async task with exponential backoff + jitter, honoring `retry-after` headers
-when present. Retries are bounded — 2 for Anthropic, 3 for the OpenAI family — and each
-request retries in isolation, so one slow retry never blocks another caller.
+Providers retry transient failures (429, 529 overloaded, 5xx, connection resets, TLS
+hiccups) on the call's own async task, so one slow retry never blocks another caller.
+Anthropic, OpenAI Chat Completions, Responses and Codex share one policy: 4 attempts,
+exponential backoff with jitter starting around 1s and capped at 30s, and the server's
+`retry-after` / `retry-after-ms` / Anthropic `anthropic-ratelimit-*-reset` hint when
+present. A server-requested wait longer than `max_retry_after_ms` (60s) is not slept
+in-provider; the error message carries it as `AssistantMessage.retry_after_ms` so the
+caller can schedule its own retry.
 
-### Context compaction
+```elixir
+config :lemon_ai, :provider_retry,
+  max_attempts: 4, base_delay_ms: 1_000, max_delay_ms: 30_000, max_retry_after_ms: 60_000
+```
+Authentication failures, invalid requests, context overflow and exhausted billing
+or subscription quotas are not retried in place. Quota exhaustion remains
+`:rate_limit` for credential rotation, but `LemonAi.Error.retryable?/1` returns
+`false`; temporary throttling returns `true`. `classify/1` and `retryable?/1` accept
+HTTP tuples, parsed error maps, transport failures and terminal assistant messages.
+Responses streams that disconnect or time out before a terminal event are errors,
+not successful empty/truncated replies. Both CRLF and multiline SSE data are parsed.
+Terminal `AssistantMessage.error_details` carries the canonical classification,
+retry eligibility, HTTP status and server retry hints; `error_message` is only
+display text. Call `Error.retryable?(message)` on the whole terminal message.
+Req, Finch and Mint closed/reset/timeout failures retain typed reasons through
+Responses parsing and are transient even when their display text is opaque.
+Structured metadata survives JSON session persistence without creating atoms
+from external category names.
+Generic resource exhaustion/throttling remains retryable under the bounded policy;
+only explicit account, credit, billing or depleted-quota evidence makes it permanent.
+Legacy provider wrappers using status `0` for closed connections classify as
+transport failures, not malformed HTTP requests.
 
-`LemonAi.CompactingClient` wraps a call and, on a `ContextLengthExceeded` error,
-automatically compacts the conversation and retries instead of failing outright.
 
 ### Token estimation
 
@@ -281,6 +365,36 @@ LemonAi.Models.find_by_id("gpt-4o")                         # search all provide
 LemonAi.Models.get_models(:openai)                          # all models for a provider
 LemonAi.Models.get_providers()                              # all known provider atoms
 ```
+The bundled current families include GPT-5.6 and GPT-6 API models, ChatGPT Codex
+GPT-5.6 Luna, Sol and Terra / GPT-6 Astra, Luna and Sol / GPT-6.1 Sol, Claude 5 and
+5.5 families, and Gemini 3.1 Pro through Gemini 3.8 Flash. Limits and per-million-token
+prices track the local omp catalog; unsupported realtime/audio/image-generation
+protocols are not advertised through the text coding APIs.
+Existing integration exclusions remain in effect even when the reference catalog
+still lists an old preview: Vertex's `gemini-3-flash-preview`, `gemini-3-pro-preview`
+and `gemini-3.1-pro-preview` are not advertised by Lemon.
+
+Lemon's runtime model picker uses account-scoped Codex discovery, not every
+bundled Codex SKU. The ChatGPT `/codex/models?client_version=0.159.0` result is
+cached for five minutes by account and endpoint; tokens, account identifiers and
+login files are not stored in that cache. Refreshing the picker may explicitly
+bypass the cache (`models.list` with `forceRefresh: true`). A discovery failure
+does not advertise unverified Codex models. Known hidden models remain usable
+when the account advertises support; `visibility` is not an authorization flag.
+
+```elixir
+LemonAi.Models.list_models(
+  discover_codex: true,
+  codex_access_token: concrete_chatgpt_token
+)
+```
+
+Runtime role selectors (`@smol`, `@slow`, custom roles) are checked against the
+same account cache once a concrete ChatGPT credential is available. Unsupported
+roles fail before submitting a model request and identify the role, rejected
+model and supported alternatives; change `[model_roles]` or choose a model from
+the picker. Static registry lookups remain network-free for metadata and tests.
+
 
 You can also skip the registry entirely and hand-build a `%LemonAi.Types.Model{}` — the
 registry is a convenience, not a requirement.
@@ -307,6 +421,8 @@ All defined in `LemonAi.Types`:
   provider: atom(),          # keyed for circuit breaker / rate limiter
   base_url: String.t(),
   reasoning: boolean(),
+  adaptive_thinking: boolean(),  # Anthropic adaptive thinking + effort
+  reasoning_efforts: [:minimal | :low | :medium | :high | :xhigh],  # [] = undeclared
   input: [:text | :image],
   cost: %LemonAi.Types.ModelCost{input: float(), output: float()},
   context_window: non_neg_integer(),
@@ -405,9 +521,14 @@ stream. See any module under `lib/ai/providers/` for the pattern.
 ## Authentication and OAuth
 
 Most providers authenticate with a bearer key from options or the environment. Providers
-that require OAuth (GitHub Copilot, Google Gemini CLI, OpenAI Codex, Google Antigravity)
-have helpers under `LemonAi.Auth.*` for the device-code / PKCE flows and token refresh. These
-are protocol helpers only — they do not read or write any external app's secret store.
+that require OAuth (Anthropic Claude Pro/Max, GitHub Copilot, Google Gemini CLI, OpenAI
+Codex, Google Antigravity) have helpers under `LemonAi.Auth.*` for the device-code / PKCE
+flows and token refresh. Callers own encrypted storage through `:persist_secret`. The one
+exception is `LemonAi.Auth.AnthropicOAuth.resolve_access_token/0`, which reads ambient
+Claude Code credentials and writes a refresh it performs back to
+`~/.claude/.credentials.json` so Claude Code's rotated login stays valid. Anthropic refresh
+is single-flight per secret on the local node; pass `:reload_secret` so a queued caller
+reuses the stored rotation.
 
 Common environment variables (used as a standalone fallback when a key isn't passed in
 options):

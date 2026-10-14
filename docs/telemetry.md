@@ -52,7 +52,7 @@ event you are attaching to:
 |---|---|
 | `duration` in **native** units | `[:lemon, :channels, :deliver, :stop]`, `[:lemon_agent, :loop, :end]`, `[:lemon_ai, :dispatcher, :rejected]` |
 | `duration_us` | `[:coding_agent, :extension, :tool, ...]`, `[:coding_agent, :wasm, :tool, ...]`, `[:lemon, :memory, :ingest, ...]` |
-| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]`, `[:coding_agent, :python_repl, ...]` |
+| `duration_ms` | `[:lemon, :reload, ...]`, `[:lemon, :run, :stop]`, `[:lemon, :wasm, :*, :stop]` |
 | both `duration` (native) and `duration_ms` | `[:lemon, :config, :reload, :stop]` and `:exception` — `duration` is a real monotonic native reading and `duration_ms` is derived from it via `System.convert_time_unit/3` |
 
 `LemonCore.Telemetry`'s moduledoc records the intended convention for **new** emitters:
@@ -145,7 +145,6 @@ for exact lifecycle counts; `[:lemon, :cron, :tick]` remains only a liveness sig
 
 | Event | Measurements | Metadata | Emitter |
 |---|---|---|---|
-| `[:lemon, :heartbeat, :skipped]` | `count: 1` | `agent_id`, `reason: :overlap` | `LemonAutomation.HeartbeatManager`, when a timer tick arrives while the prior timer heartbeat for that agent is still in flight |
 
 ### Channels — `[:lemon, :channels, ...]`
 
@@ -213,8 +212,6 @@ ownership changes only on explicit release or confirmed owner death.
 | `[:lemon_ai, :circuit_breaker, :closed]` | `system_time` | `provider` | [`circuit_breaker.ex:258`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), recovery confirmed |
 | `[:lemon_ai, :circuit_breaker, :half_opened]` | `system_time` | `provider`, `recovery_timeout` | [`circuit_breaker.ex:370`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex) |
 | `[:lemon_ai, :circuit_breaker, :reopened]` | `system_time` | `provider`, `reason` | [`circuit_breaker.ex:317`](../apps/lemon_ai/lib/lemon_ai/circuit_breaker.ex), probe failed during half-open |
-| `[:lemon_ai, :compacting_client, <event>]` | varies by call site | varies | [`compacting_client.ex:233`](../apps/lemon_ai/lib/lemon_ai/compacting_client.ex). Runtime suffix: `:request_started`, `:request_succeeded`, `:request_failed`, `:compaction_retry` |
-| `[:lemon_ai, :context_compactor, <event>]` | `system_time` | varies | [`context_compactor.ex:370`](../apps/lemon_ai/lib/lemon_ai/context_compactor.ex). Runtime suffix: `:compaction_started`, `:compaction_succeeded`, `:compaction_failed` |
 | `[:lemon_ai, :prompt_diagnostics, :llm_call]` | `system_time` | `data`, `engine: "ai"`, `session_key`, `agent_id`, `run_id` | [`prompt_diagnostics.ex:158`](../apps/lemon_ai/lib/lemon_ai/prompt_diagnostics.ex). Correlation fields come from `x-lemon-*` request headers and are `nil` when absent |
 
 ### Memory — `[:lemon, :memory, ...]`
@@ -267,51 +264,12 @@ ownership changes only on explicit release or confirmed owner death.
 
 Session and cwd identifiers in the WASM events are hashed, not raw.
 
-### Execute code and persistent Python kernels — `[:coding_agent, :execute_code | :python_repl, ...]`
+### Session recovery — `[:coding_agent, :session, :overflow_recovery, ...]`
 
-The `execute_code` per-call path emits one event from
-[`execute_code.ex`](../apps/coding_agent/lib/coding_agent/tools/execute_code.ex)
-(`LemonCore.Telemetry.emit/3`):
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:coding_agent, :execute_code, :stop]` | `count: 1`, `duration_us` | `rpc_calls`, `rpc_denied`, `exit_code` (integer or `nil`) |
-
-The persistent-kernel subsystem (`kernel_mode = "session"`; see
-[`docs/tools/execute-code.md`](tools/execute-code.md)) emits the
-`[:coding_agent, :python_repl, ...]` families below. Measurements carry only bounded
-counts, capacities, and durations; metadata is a strict allowlist of categorical atoms.
-These events **never** include code, output, traceback text, bridge tokens, bridge or
-workspace paths, cwd, interpreter paths, PIDs, key digests, or raw errors.
-
-| Event | Measurements | Metadata |
-|---|---|---|
-| `[:coding_agent, :python_repl, :session, :start]` | `count: 1`, `live_kernels`, `capacity` | `%{}` |
-| `[:coding_agent, :python_repl, :session, :stop]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :session, :crash]` | `count: 1`, `duration_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :session, :reap]` | `count: 1`, `idle_ms`, `live_kernels`, `capacity` | `reason` |
-| `[:coding_agent, :python_repl, :cell, :start]` | `count: 1`, `queue_depth`, `queue_capacity` | `%{}` |
-| `[:coding_agent, :python_repl, :cell, :stop]` | `count: 1`, `duration_ms` | `outcome` |
-| `[:coding_agent, :python_repl, :cell, :cancel]` | `count: 1`, `duration_ms` | `cause` |
-| `[:coding_agent, :python_repl, :fallback]` | `count: 1` | `reason` (`:missing_session_scope` \| `:registry_unavailable` \| `:capacity_exhausted` \| `:startup_failed` \| `:stop_failed`) |
-| `[:coding_agent, :python_repl, :bridge, :deny]` | `count: 1` | `reason: :authentication` |
-
-Each of these is also recorded best-effort through `LemonCore.Introspection` as a redacted
-`:python_repl_lifecycle_observed` summary containing only the event atom plus the same
-bounded measurements and categorical metadata — no run/session/key identity or payload.
-`CodingAgent.PythonRepl.snapshot/0` exposes only aggregate state (live/capacity counts,
-per-phase counts, owner and fork counts, reap settings). There is no control-plane API
-for kernel management.
-
-### Session recovery and rate limiting — `[:coding_agent, ...]`
-
-All four families build the last segment at runtime.
+The last segment is built at runtime.
 
 | Event | Suffix values | Measurements | Metadata |
 |---|---|---|---|
-| `[:coding_agent, :rate_limit_pause, <event>]` | `:paused`, `:resumed` | `retry_after_ms`, `time_to_resume` | `session_id` and pause context ([`rate_limit_pause.ex:265`](../apps/coding_agent/lib/coding_agent/rate_limit_pause.ex)) |
-| `[:coding_agent, :rate_limit_healer, <event>]` | `:probe_attempt`, `:probe_success`, `:probe_rate_limited`, `:probe_error`, `:healed`, `:failed`, `:stopped` | caller-supplied | `session_id`, `provider`, `model`, `healing_state`, `probe_count` ([`rate_limit_healer.ex:566`](../apps/coding_agent/lib/coding_agent/rate_limit_healer.ex)) |
-| `[:coding_agent, :session_fork, <event>]` | `:fork_completed`, `:fork_failed`, `:original_terminated` | `%{}` (empty) | caller map plus `original_session_id`, `timestamp` ([`session_fork.ex:175`](../apps/coding_agent/lib/coding_agent/session_fork.ex)) |
 | `[:coding_agent, :session, :overflow_recovery, <stage>]` | `:attempt`, `:success`, `:failure` | `count: 1` | recovery context including `duration_ms` ([`session/compaction_manager.ex:209`](../apps/coding_agent/lib/coding_agent/session/compaction_manager.ex)) |
 
 ### Skills — `[:lemon_skills, :skill, ...]`
@@ -503,11 +461,10 @@ Three things bite when you do this, all of them consequences of items in
   A single `unit: {:native, :millisecond}` applied across the board silently produces
   numbers that are wrong by six orders of magnitude on the `_us` events.
 - **`counter/2` still needs a measurement key that exists.**
-  `[:coding_agent, :tool_call, :name_normalized]` and `[:coding_agent, :session_fork, _]`
-  emit empty measurement maps, so they cannot be counted without first adding a measurement
-  at the emit site.
+  `[:coding_agent, :tool_call, :name_normalized]` emits an empty measurement map, so it
+  cannot be counted without first adding a measurement at the emit site.
 - **Runtime-suffixed events cannot be declared with a wildcard.** `Telemetry.Metrics` needs
-  a concrete event name, so each value of the nine dynamic families has to be listed
+  a concrete event name, so each value of the five dynamic families has to be listed
   individually; the known values are in the catalog above.
 
 For an interactive view instead of a scrape endpoint, `phoenix_live_dashboard` consumes the
@@ -519,24 +476,12 @@ emit site.
 These are recorded, not fixed. Renaming events is a breaking change for any attached
 consumer and belongs in its own change.
 
-**Events that exist as code but never fire.**
-`CodingAgent.RateLimitRecovery.emit_recovery_telemetry/3`
-([`rate_limit_recovery.ex:217`](../apps/coding_agent/lib/coding_agent/rate_limit_recovery.ex))
-is public with no callers, so `[:coding_agent, :rate_limit_recovery, _]` never fires. This is
-the last remaining dead emitter. (The run-span helpers `run_start` / `run_first_token` /
-`run_stop` and `cron_tick` were previously listed here as dead; they are in fact live — see
-their catalog entries above — and the genuinely dead `run_exception/3` helper was removed.)
-
-**Eight families build their final segment at runtime**, so they cannot be discovered by
+**Three families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
-advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
-`[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
-`[:coding_agent, :rate_limit_healer, _]`, `[:coding_agent, :rate_limit_recovery, _]`,
-`[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
-`[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
+advance: `[:lemon, :gateway, :scheduler, _]`, `[:coding_agent, :session, :overflow_recovery, _]`,
+and `[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
 
-**Measurement gaps.** `[:coding_agent, :session_fork, _]` emits an empty measurement map, so
-it cannot drive a counter without a synthetic measurement. `[:lemon_agent, :loop, :end]`
+**Measurement gaps.** `[:lemon_agent, :loop, :end]`
 reports `duration: nil` when the process-dictionary start time is missing. The scheduler
 family emits empty metadata, so slot pressure cannot be attributed to a run, session, or
 engine.

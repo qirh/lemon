@@ -110,8 +110,21 @@ defmodule LemonControlPlane.Methods.AgentWait do
       "error" => format_error(completed_value(completed, :error, "error"))
     }
 
-    Map.put(result, "summary", summary(result))
+    meta = completed_value(completed, :meta, "meta") || %{}
+
+    result
+    |> maybe_put(
+      "usage",
+      completed
+      |> completed_value(:usage, "usage")
+      |> LemonControlPlane.EventProjection.action_detail()
+    )
+    |> maybe_put("budget", completed_value(meta, :budget, "budget"))
+    |> Map.put("summary", summary(result))
   end
+
+  defp maybe_put(result, _key, nil), do: result
+  defp maybe_put(result, key, value), do: Map.put(result, key, value)
 
   defp completed_value(completed, atom_key, string_key) do
     if Map.has_key?(completed, atom_key) do
@@ -146,24 +159,10 @@ defmodule LemonControlPlane.Methods.AgentWait do
   defp error_kind(_error), do: "other"
 
   defp format_answer(nil), do: nil
-  defp format_answer(answer) when is_binary(answer), do: redact_text(answer)
-  defp format_answer(answer), do: answer |> inspect() |> redact_text()
+  defp format_answer(answer) when is_binary(answer), do: LemonCore.Redact.text(answer)
+  defp format_answer(answer), do: answer |> inspect() |> LemonCore.Redact.text()
 
   defp format_error(nil), do: nil
-  defp format_error(error) when is_binary(error), do: redact_text(error)
-  defp format_error(error), do: error |> inspect() |> redact_text()
-
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
+  defp format_error(error) when is_binary(error), do: LemonCore.Redact.text(error)
+  defp format_error(error), do: error |> inspect() |> LemonCore.Redact.text()
 end

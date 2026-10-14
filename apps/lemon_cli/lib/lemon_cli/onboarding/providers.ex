@@ -7,7 +7,7 @@ defmodule LemonCli.Onboarding.Providers do
     %Provider{
       id: "anthropic",
       display_name: "Anthropic",
-      description: "Claude Code OAuth or API key",
+      description: "Claude Pro/Max subscription (OAuth) or API key",
       provider_table: "providers.anthropic",
       default_secret_name: "llm_anthropic_api_key",
       default_secret_name_by_mode: %{
@@ -20,17 +20,17 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
       preferred_models: [
-        "claude-sonnet-4-20250514",
-        "claude-sonnet-4-5-20250929",
-        "claude-opus-4-6"
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-sonnet-5"
       ],
       aliases: ["claude"],
       api_key_prompt: "Enter your Anthropic API key: ",
       api_key_choice_label: "Paste API key",
-      oauth_choice_label: "Claude Code login (OAuth)",
-      oauth_failure_label: "Anthropic Claude OAuth login failed",
+      oauth_choice_label: "Sign in with Claude Pro/Max (browser)",
+      oauth_failure_label: "Claude subscription sign-in failed",
       token_resolution_hint:
-        "Anthropic OAuth flow did not return credentials. Retry and complete `claude setup-token`, or pass --token for API-key mode.",
+        "Claude sign-in did not return credentials. Retry `lemon model anthropic`, or pass --token for API-key mode.",
       auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
       secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "oauth_secret"}
     },
@@ -43,31 +43,35 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_openai",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["gpt-5", "gpt-5-mini", "gpt-4.1"],
+      preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
       api_key_prompt: "Enter your OpenAI API key: ",
       api_key_choice_label: "Paste API key"
     },
     %Provider{
       id: "openai-codex",
       display_name: "OpenAI Codex",
-      description: "ChatGPT Codex OAuth or token",
+      description: "ChatGPT browser OAuth, explicit Codex CLI login import, or token",
       provider_table: "providers.openai-codex",
       default_secret_name: "llm_openai_codex_api_key",
       api_key_secret_provider: "onboarding_openai_codex",
       oauth_secret_provider: "onboarding_openai_codex_oauth",
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenAICodexOAuth]),
-      auth_modes: [:oauth, :api_key],
+      auth_modes: [:oauth, :api_key, :codex_cli],
       default_auth_mode: :oauth,
-      preferred_models: ["gpt-5.2", "gpt-5", "gpt-5-mini"],
-      aliases: ["codex", "openai_codex"],
+      preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
+      aliases: ["chatgpt", "codex", "openai_codex"],
       api_key_prompt: "Enter your OpenAI Codex token: ",
       api_key_choice_label: "Paste existing token",
-      oauth_choice_label: "Browser sign-in (OAuth)",
+      oauth_choice_label: "Sign in with ChatGPT (browser OAuth)",
       oauth_failure_label: "OpenAI Codex OAuth login failed",
       token_resolution_hint:
         "OpenAI Codex OAuth flow did not return credentials. Retry and paste the callback URL/code, or pass --token.",
-      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
-      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "oauth_secret"}
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth", codex_cli: "oauth"},
+      secret_config_key_by_mode: %{
+        api_key: "api_key_secret",
+        oauth: "oauth_secret",
+        codex_cli: "oauth_secret"
+      }
     },
     %Provider{
       id: "github_copilot",
@@ -80,7 +84,7 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GitHubCopilotOAuth]),
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
-      preferred_models: ["gpt-5", "claude-sonnet-4-20250514", "gemini-2.5-pro"],
+      preferred_models: ["gpt-6.1-sol", "claude-sonnet-5.5", "gpt-5"],
       aliases: ["copilot", "github-copilot"],
       switches: [enterprise_domain: :string, skip_enable_models: :boolean],
       oauth_opts_builder: &__MODULE__.copilot_oauth_opts/1,
@@ -100,7 +104,7 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :GoogleAntigravityOAuth]),
       auth_modes: [:oauth, :api_key],
       default_auth_mode: :oauth,
-      preferred_models: ["gemini-3-pro-high", "gemini-3-pro-low", "gemini-3-flash"],
+      preferred_models: ["gemini-4-argon-high", "gemini-pro-agent", "gemini-3-pro-high"],
       aliases: ["antigravity", "google-antigravity"],
       api_key_prompt:
         "Paste an Antigravity credential payload (for example JSON with token/projectId): ",
@@ -117,7 +121,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_zai",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["glm-5", "glm-5-turbo", "glm-4.7"],
+      preferred_models: ["glm-5.3", "glm-5.2", "glm-5"],
       aliases: ["glm", "zhipu", "z-ai", "z.ai"],
       api_key_prompt: "Enter your Z.AI API key: ",
       api_key_choice_label: "Paste API key",
@@ -132,7 +136,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_kimi",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["k2p5", "kimi-k2-thinking", "kimi-for-coding"],
+      preferred_models: ["kimi-k3", "kimi-k2.7-code", "k2p5"],
       aliases: ["kimi-k2", "moonshot"],
       api_key_prompt: "Enter your Kimi API key: ",
       api_key_choice_label: "Paste API key",
@@ -147,7 +151,7 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_minimax",
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
-      preferred_models: ["MiniMax-M2.7", "MiniMax-M2.5", "minimax-m2.5"],
+      preferred_models: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
       aliases: ["mini-max", "minimax-m2"],
       api_key_prompt: "Enter your MiniMax API key: ",
       api_key_choice_label: "Paste API key",
@@ -163,9 +167,9 @@ defmodule LemonCli.Onboarding.Providers do
       auth_modes: [:api_key],
       default_auth_mode: :api_key,
       preferred_models: [
-        "accounts/fireworks/routers/kimi-k2p5-turbo",
-        "accounts/fireworks/models/deepseek-v3p2",
-        "accounts/fireworks/models/glm-4p7"
+        "accounts/fireworks/models/kimi-k3",
+        "accounts/fireworks/models/glm-5p3",
+        "accounts/fireworks/routers/kimi-k2p5-turbo"
       ],
       aliases: ["fireworks-ai", "fireworks_ai"],
       api_key_prompt: "Enter your Fireworks API key: ",
@@ -329,5 +333,6 @@ defmodule LemonCli.Onboarding.Providers do
   end
 
   defp auth_mode_label(:oauth), do: "OAuth"
+  defp auth_mode_label(:codex_cli), do: "Codex CLI login import"
   defp auth_mode_label(:api_key), do: "API key"
 end

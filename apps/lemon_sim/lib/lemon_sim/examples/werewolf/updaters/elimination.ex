@@ -1,7 +1,7 @@
 defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
   @moduledoc false
 
-  alias LemonSim.Kernel.State
+  alias LemonSim.Kernel.{Rng, State}
   alias LemonSim.Examples.Werewolf.{Events, Roles}
   alias LemonSim.Examples.Werewolf.Updaters.Items
   alias LemonSim.Examples.Werewolf.Updaters.Meetings
@@ -123,7 +123,11 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
         )
       else
         # After night kill, generate village event + items, then meetings
-        village_event_data = VillageEvents.maybe_generate_village_event(day_number, state.world)
+        rng = Rng.fetch!(state.world)
+
+        {village_event_data, rng} =
+          VillageEvents.maybe_generate_village_event(day_number, state.world, rng)
+
         village_event_history = get(state.world, :village_event_history, [])
 
         {village_events_list, new_event_history, current_event} =
@@ -138,7 +142,9 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
               {[], village_event_history, nil}
           end
 
-        item_data = Items.maybe_distribute_items(updated_players, day_number, state.world)
+        {item_data, rng} =
+          Items.maybe_distribute_items(updated_players, day_number, state.world, rng)
+
         existing_items = get(state.world, :player_items, %{})
 
         {item_events, final_player_items} =
@@ -158,6 +164,7 @@ defmodule LemonSim.Examples.Werewolf.Updaters.Elimination do
           |> State.put_world(
             world_updates(state.world, %{
               players: updated_players,
+              rng_state: rng,
               pending_elimination: nil,
               elimination_log: new_elimination_log,
               village_event_history: new_event_history,

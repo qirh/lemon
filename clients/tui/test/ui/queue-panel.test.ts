@@ -133,3 +133,21 @@ describe("QueuePanelComponent", () => {
 		expect(panel.render(80)).not.toBe(first);
 	});
 });
+
+describe("native description", () => {
+	test("an Edit click pulls back the clicked item; offline items offer no Edit", () => {
+		const list: QueueItem[] = [
+			...items("first", "second"),
+			{ id: "offline:1", text: "parked", state: "waiting-connection", at: 0 },
+		];
+		const { panel, edited } = build(list);
+		const pills = panel.describe().c ?? [];
+		const edits = pills.map((pill) =>
+			"k" in pill ? (pill.c ?? []).some((child) => "key" in child && child.key === "edit") : false,
+		);
+		expect(edits).toEqual([true, true, false]);
+		panel.handleNativeEvent({ type: "action", key: "q-1/edit", act: "queue.edit", mods: [] });
+		expect(edited.map((item) => item.id)).toEqual(["q-1"]);
+		expect(panel.describe()).toBe(panel.describe());
+	});
+});

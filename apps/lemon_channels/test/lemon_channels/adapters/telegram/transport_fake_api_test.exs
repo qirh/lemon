@@ -10,6 +10,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
 
   alias LemonChannels.Telegram.FakeAPI
   alias LemonChannels.Adapters.Telegram
+  alias LemonChannels.Telegram.TriggerMode
+  alias LemonCore.ChatScope
 
   defmodule FakeApiTestRouter do
     use LemonCore.RouterBridge.Router
@@ -201,14 +203,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       foreign_chat_id = 310_011
       gateway_config_key = :"Elixir.LemonGateway.Config"
       previous_gateway_config = Application.get_env(:lemon_gateway, gateway_config_key)
-      previous_runtime = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+      previous_runtime = Application.get_env(:lemon_core, :agent_runtime_provider)
 
       Application.put_env(:lemon_gateway, gateway_config_key, %{
         telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
       })
 
       Application.put_env(
-        :lemon_control_plane,
+        :lemon_core,
         :agent_runtime_provider,
         FakeBackgroundRuntime
       )
@@ -223,9 +225,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
         end
 
         if previous_runtime do
-          Application.put_env(:lemon_control_plane, :agent_runtime_provider, previous_runtime)
+          Application.put_env(:lemon_core, :agent_runtime_provider, previous_runtime)
         else
-          Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+          Application.delete_env(:lemon_core, :agent_runtime_provider)
         end
       end)
 
@@ -335,6 +337,14 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       chat_id = -100_320_002
       thread_id = 777
 
+      # Groups default to mention-only triggering; this test is about thread ids.
+      :ok =
+        TriggerMode.set(
+          %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil},
+          "default",
+          :all
+        )
+
       assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
 
       _update =
@@ -349,15 +359,35 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       assert msg.message.text == "topic message"
     end
 
-    test "callback query flows through the pipeline and is answered" do
+    test "stale approval callback is answered without consuming the changed request" do
       chat_id = 330_003
       assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
 
-      update = FakeAPI.simulate_callback_query(chat_id, "unknown|decision")
+      id = LemonCore.Id.approval_id()
+
+      preview =
+        LemonCore.Events.ApprovalPending.new(%{
+          id: id,
+          run_id: LemonCore.Id.run_id(),
+          session_key: "agent:default:telegram:default:dm:#{chat_id}",
+          tool: "bash",
+          action: %{command: "echo original"}
+        })
+
+      pending = %{preview | action: %{command: "echo changed"}}
+      :ok = LemonCore.ExecApprovalStore.put_pending(id, pending)
+      on_exit(fn -> LemonCore.ExecApprovalStore.delete_pending(id) end)
+      callback = LemonChannels.RemoteApproval.callback(preview, :approve_once)
+      update = FakeAPI.simulate_callback_query(chat_id, callback)
       cb_id = update["callback_query"]["id"]
 
-      assert {:ok, %{fun: :answer_callback_query, args: [^cb_id, %{"text" => "Unknown"}]}} =
+      assert {:ok, %{fun: :answer_callback_query, args: [^cb_id, %{"text" => reply}]}} =
                FakeAPI.await_send(:answer_callback_query, 2_000)
+
+      assert is_binary(reply) and reply != ""
+      refute reply == "Recorded"
+      assert {:ok, ^pending} = LemonCore.ExecApprovalStore.fetch_pending(id)
+      assert FakeAPI.sent(:edit_message_text) == []
     end
   end
 

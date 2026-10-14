@@ -71,7 +71,30 @@ Part of the `lemon` Elixir umbrella project.
 5. On slot grant, the worker starts a **Run** via `RunSupervisor`. The Run acquires `EngineLock` and starts Lemon's native executor.
 6. The native executor executes the AI request and streams lifecycle events and deltas back to the Run process.
 7. The **Run** broadcasts all events to `LemonCore.Bus` on topic `"run:<run_id>"`. Router and channels consume those events and handle semantic output plus channel rendering.
-8. On completion, the Run stores chat state for future auto-resume, releases the engine lock and scheduler slot, and finalizes its lifecycle.
+8. On completion, the Run durably stores its terminal receipt and releases the engine lock and scheduler slot; router stores resume state before advancing the conversation.
+
+Exact-run cancellation also removes executions waiting for a slot; cancelled
+waiters cannot launch later. Worker enqueue is acknowledged synchronously, so a
+worker finishing its previous run cannot silently lose the next request.
+Only a definite missing worker permits retry; a lost acknowledgement remains
+`:outcome_unknown` and is never automatically re-enqueued.
+Normally drained workers are temporary children, not restarted empty shells;
+the next submission gets a newly acknowledged worker instead of being cast
+into a retiring mailbox.
+
+Gateway limits each worker's pending launch queue to 128 requests and the global
+slot-wait queue to 1,024 workers. Overflow terminalizes the rejected run with
+`:execution_queue_full` instead of leaving its router conversation busy.
+Native executor death publishes an immediate structured `:executor_down`
+completion and releases the slot/lock. The native session runner monitors its
+event sink and aborts/saves/stops its owned session when that sink disappears.
+Terminal receipts are durable before their bus notification is emitted.
+Cancellation of a running native session retains its slot until ordered terminal
+tool results and the agent's cancellation/error event have drained. The original
+cancellation reason wins even if the executor races with successful completion;
+the owned native journal is saved before publishing the terminal receipt. A
+15-second drain deadline bounds an unresponsive executor, without claiming that
+an interrupted tool had no effects.
 
 ## Singleton Executor Contract
 
@@ -117,7 +140,7 @@ runner ever selects or replaces the Gateway executor.
 
 Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `start_link/1`). They are registered in `TransportRegistry` and started under `TransportSupervisor` only when gateway ingress is explicitly enabled with `config :lemon_gateway, gateway_ingress_enabled: true`. Telegram, Discord, XMTP and email are owned by the `lemon_channels` sibling app. Voice and SMS are not registry transports; they are dedicated Twilio support services included in the same explicit ingress startup.
 
-Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See `docs/platform/transport-unification.md`.
+Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See decision D2 in `docs/platform-split.md`.
 
 Webhook submissions use a caller-fixed run ID. If the router cannot confirm
 whether a submission took effect, the HTTP request receives a `200` receipt
@@ -156,10 +179,8 @@ with `retry_safe: false` and never submit another run.
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
 | `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
 | `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`) |
-| `LemonGateway.Shared` | `shared.ex` | Shared utilities (config access, data normalization, IP parsing) |
 | `LemonGateway.DependencyManager` | `dependency_manager.ex` | Centralized app startup, module availability checks, safe bus/telemetry |
 | `LemonGateway.AI` | `ai.ex` | Direct HTTP chat completions for OpenAI and Anthropic APIs |
-| `LemonGateway.Dev` | `dev.ex` | Development helpers (recompile and hot-reload) |
 
 ### Scheduling and Run Execution
 
@@ -172,6 +193,7 @@ with `retry_safe: false` and never submit another run.
 | `LemonGateway.Run` | `run.ex` | Individual run GenServer: native execution lifecycle, bus events, steer/cancel |
 | `LemonGateway.RunSupervisor` | `run_supervisor.ex` | DynamicSupervisor for run processes (temporary restart) |
 | `LemonGateway.EngineLock` | `engine_lock.ex` | Per-session mutex with FIFO queueing, waiter timeouts, owner-death release, and over-age live-owner observation |
+| `LemonGateway.ProgressStore` | `progress_store.ex` | Progress/status message → run id index in the `:progress` store table (registered for the store read cache at boot); backs cancel-by-message |
 
 `EngineLock` never transfers an exclusive lock because of age alone. Explicit
 release and confirmed owner-process death are the ownership-transfer paths; a
@@ -188,7 +210,6 @@ failures without parsing rendered command output.
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonGateway.Executor` | `executor.ex` | Validates and invokes the configured singleton executor |
-| `LemonGateway.Workspace` | `workspace.ex` | Workspace directory for channel-bound files, configured rather than read from the agent |
 
 The public engine plugin, registration, enumeration, and test-compliance
 surfaces are removed. `EngineInfoBridge` retains transport-registry and
@@ -249,7 +270,6 @@ in-process subagents.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Tools.Cron` | `tools/cron.ex` | Manage cron jobs and active cron runs via `LemonAutomation.CronManager` |
 | `LemonGateway.Tools.SmsGetInboxNumber` | `tools/sms_get_inbox_number.ex` | Get the Twilio inbox phone number |
 | `LemonGateway.Tools.SmsWaitForCode` | `tools/sms_wait_for_code.ex` | Block until a matching SMS verification code arrives |
 | `LemonGateway.Tools.SmsListMessages` | `tools/sms_list_messages.ex` | List recent SMS messages |

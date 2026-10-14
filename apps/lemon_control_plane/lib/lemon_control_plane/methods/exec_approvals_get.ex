@@ -2,7 +2,10 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
   @moduledoc """
   Handler for the exec.approvals.get method.
 
-  Gets the current approval policy.
+  Gets the current approval policy and active pending requests. Pending actions
+  redact credential fields and text. The action's exact `authorization_url` field
+  may retain a credential-free HTTP(S) URL so operators can complete OAuth;
+  URLs containing userinfo or recognizable credentials remain redacted.
   """
 
   @behaviour LemonControlPlane.Method
@@ -108,22 +111,31 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
     Map.new(map, fn {key, value} ->
       string_key = to_string(key)
 
-      if sensitive_key?(string_key) do
-        {string_key, %{"redacted" => true, "kind" => "secret"}}
-      else
-        {string_key, redact_action(value)}
+      cond do
+        string_key == "authorization_url" and safe_authorization_url?(value) ->
+          {string_key, value}
+
+        LemonCore.Redact.sensitive_key?(string_key) ->
+          {string_key, %{"redacted" => true, "kind" => "secret"}}
+
+        true ->
+          {string_key, redact_action(value)}
       end
     end)
   end
 
   defp redact_action(list) when is_list(list), do: Enum.map(list, &redact_action/1)
-  defp redact_action(value), do: value
+  defp redact_action(value), do: LemonCore.Redact.text(value)
 
-  defp sensitive_key?(key) do
-    normalized = String.downcase(key)
-
-    Enum.any?(["token", "secret", "password", "api_key", "apikey", "credential", "cookie"], fn
-      marker -> String.contains?(normalized, marker)
-    end)
+  defp safe_authorization_url?(value) when is_binary(value) do
+    with {:ok, %URI{scheme: scheme, host: host, userinfo: nil}} <- URI.new(value),
+         true <- scheme in ["http", "https"] and is_binary(host) and host != "" do
+      decoded = URI.decode(value)
+      LemonCore.Redact.text(decoded) == decoded
+    else
+      _ -> false
+    end
   end
+
+  defp safe_authorization_url?(_), do: false
 end

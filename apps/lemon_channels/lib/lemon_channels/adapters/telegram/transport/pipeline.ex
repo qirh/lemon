@@ -8,6 +8,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
   """
 
   alias LemonChannels.Adapters.Telegram.Transport.{
+    Commands,
     InboundContext,
     RuntimeState,
     UpdateProcessor
@@ -21,6 +22,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
           | {:process_media_group, map()}
           | {:send_approval_request, map()}
           | {:log_drop, map(), term()}
+          | {:reply_whoami, map()}
+          | {:send_unpaired_notice, map()}
           | :noop
 
   @spec run(InboundContext.t(), map()) :: {map(), [action()]}
@@ -64,11 +67,34 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
     end
   end
 
-  def run(%InboundContext{kind: :message, raw_update: update, inbound: inbound}, state)
+  def run(%InboundContext{kind: :message, raw_update: update, inbound: inbound} = ctx, state)
       when is_map(update) and is_map(inbound) do
+    # /whoami is answered before authorization: it is how an owner discovers
+    # the chat id to pair, and it only echoes the requester's own ids.
+    if Commands.whoami_command?(inbound.message[:text], Map.get(state, :bot_username)) do
+      {state, [{:index_known_target, update}, {:reply_whoami, inbound}]}
+    else
+      route_message(state, update, inbound, ctx.chat_id || inbound_chat_id(inbound))
+    end
+  end
+
+  def run(_event, state), do: {state, [:noop]}
+
+  defp route_message(state, update, inbound, chat_id) do
     case UpdateProcessor.route_authorized_inbound_action(state, inbound) do
       {:ok, inbound} ->
         {state, [{:index_known_target, update}, {:execute_inbound_message, inbound}]}
+
+      {:drop, :unpaired, inbound} ->
+        {state, notify?} =
+          RuntimeState.claim_unpaired_notice(
+            state,
+            chat_id,
+            System.monotonic_time(:millisecond)
+          )
+
+        notice = if notify?, do: [{:send_unpaired_notice, inbound}], else: []
+        {state, [{:log_drop, inbound, :unpaired} | notice]}
 
       {:drop, reason, inbound} ->
         {state, [{:index_known_target, update}, {:log_drop, inbound, reason}]}
@@ -78,5 +104,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Pipeline do
     end
   end
 
-  def run(_event, state), do: {state, [:noop]}
+  defp inbound_chat_id(inbound) do
+    case (inbound.meta || %{})[:chat_id] || inbound.peer.id do
+      id when is_integer(id) ->
+        id
+
+      id when is_binary(id) ->
+        case Integer.parse(id) do
+          {int, ""} -> int
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
 end

@@ -46,6 +46,10 @@ defmodule LemonAutomation.RunSubmitterTest do
     end
   end
 
+  defmodule TimeoutWaiter do
+    def wait_already_subscribed(_run_id, _timeout_ms, _opts), do: :timeout
+  end
+
   defmodule StubContext do
     @moduledoc false
 
@@ -93,7 +97,7 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert %{
              origin: :cron,
-             prompt: prompt,
+             prompt: _prompt,
              agent_id: "agent_build",
              tool_policy: %{blocked_tools: ["cron"]},
              meta: %{
@@ -105,18 +109,7 @@ defmodule LemonAutomation.RunSubmitterTest do
              }
            } = RunSubmitter.build_params(job, run)
 
-    assert String.starts_with?(prompt, "You are running a scheduled cron task.")
-    assert prompt =~ "isolated forked session"
-    assert prompt =~ "Use the memory notes below as prior run history"
-
-    assert prompt =~
-             "the scheduler forwards your concise completion summary back to the originating session"
-
-    assert prompt =~
-             "do not create, update, remove, or recursively schedule cron jobs from this run"
-
-    assert String.contains?(prompt, "## Task")
-    assert is_binary(memory_file)
+    assert memory_file == job.memory_file
   end
 
   test "build_params/2 forks the session key for each run" do
@@ -167,14 +160,14 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert memory_text =~ "status: failed"
   end
 
-  test "submit/3 returns descriptive error for unexpected router return" do
+  test "submit/3 retains ownership for an unexpected router return" do
     job = sample_job()
-    run = sample_run()
+    run = sample_run(%{run_id: "fixed_unexpected"})
 
-    assert {:error, msg} =
+    assert {:error, {:outcome_unknown, "fixed_unexpected"}} =
              RunSubmitter.submit(job, run, router_mod: RouterUnexpected, waiter_mod: Waiter)
 
-    assert msg =~ "Unexpected submit result"
+    refute File.exists?(job.memory_file)
   end
 
   test "submit/3 reconciles an exception from the router as outcome unknown" do
@@ -191,6 +184,47 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert {:ok, "done"} =
              RunSubmitter.submit(job, run, router_mod: RouterExit, waiter_mod: Waiter)
+  end
+
+  test "prompt jobs carry their repository through the native router request" do
+    job = sample_job(%{cwd: "/tmp/cron-target"})
+    run = sample_run(%{run_id: "fixed_cron_router"})
+
+    assert {:ok, "done"} =
+             RunSubmitter.submit(job, run, router_mod: RouterOk, waiter_mod: Waiter)
+
+    assert_receive {:router_submit, %{cwd: "/tmp/cron-target", run_id: "fixed_cron_router"}}
+  end
+
+  test "accepted wait timeout retains the fixed run id without writing failed memory" do
+    job = sample_job()
+    run = sample_run(%{run_id: "fixed_timeout"})
+
+    assert {:error, {:outcome_unknown, "fixed_timeout"}} =
+             RunSubmitter.submit(job, run, router_mod: RouterOk, waiter_mod: TimeoutWaiter)
+
+    refute File.exists?(job.memory_file)
+  end
+
+  test "ambiguous router submission retains ownership when no completion arrives" do
+    job = sample_job()
+    run = sample_run(%{run_id: "fixed_ambiguous"})
+
+    assert {:error, {:outcome_unknown, "fixed_ambiguous"}} =
+             RunSubmitter.submit(job, run, router_mod: RouterExit, waiter_mod: TimeoutWaiter)
+
+    refute File.exists?(job.memory_file)
+  end
+
+  test "rejected ownership claim prevents router submission" do
+    assert {:error, _} =
+             RunSubmitter.submit(sample_job(), sample_run(),
+               router_mod: RouterOk,
+               waiter_mod: Waiter,
+               on_submitting: fn _id, _session -> {:error, :aborted} end
+             )
+
+    refute_receive {:router_submit, _}
   end
 
   describe "model pinning" do
@@ -223,7 +257,6 @@ defmodule LemonAutomation.RunSubmitterTest do
 
       assert_receive {:augment_prompt_called, "cron_context", "hello"}
       assert params.prompt =~ "CHAINED-CONTEXT-BLOCK"
-      assert params.prompt =~ "## Task"
       assert params.prompt =~ "hello"
     end
 

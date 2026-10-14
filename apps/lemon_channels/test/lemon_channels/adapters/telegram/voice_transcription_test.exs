@@ -181,6 +181,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: true,
@@ -192,10 +193,10 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
     VoiceMockAPI.set_updates([voice_update()])
 
-    assert_receive {:transcribe, opts}, 200
+    assert_receive {:transcribe, opts}
     assert opts[:audio_bytes] == "AUDIO"
 
-    assert_receive {:inbound, msg}, 200
+    assert_receive {:inbound, msg}
     assert msg.message.text == "hello from voice"
     assert msg.meta[:voice_transcribed] == true
   end
@@ -206,6 +207,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: true,
@@ -216,7 +218,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
     VoiceMockAPI.set_updates([voice_update()])
 
-    assert_receive {:inbound, msg}, 200
+    assert_receive {:inbound, msg}
     assert msg.message.text =~ "local voice transcript preview"
     assert msg.message.text =~ "5 bytes"
     assert msg.meta[:voice_transcribed] == true
@@ -228,6 +230,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
         config: %{
           bot_token: "token",
           api_mod: VoiceMockAPI,
+          allow_all_chats: true,
           poll_interval_ms: 10,
           debounce_ms: 10,
           voice_transcription: false,
@@ -237,7 +240,7 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
 
     VoiceMockAPI.set_updates([voice_update()])
 
-    assert_receive {:sent, text}, 200
+    assert_receive {:sent, text}
     assert String.contains?(text, "Voice transcription is disabled")
     refute_receive {:inbound, _msg}, 100
   end

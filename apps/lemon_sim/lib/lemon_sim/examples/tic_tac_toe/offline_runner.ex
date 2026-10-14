@@ -101,7 +101,8 @@ defmodule LemonSim.Examples.TicTacToe.OfflineRunner do
     end
   end
 
-  defp terminal?(state), do: MapHelpers.get_key(state.world, :status) in ["won", "draw"]
+  defp terminal?(state),
+    do: MapHelpers.get_key(state.world, :status) in TicTacToe.terminal_statuses()
 
   defp print_step(state) do
     board = MapHelpers.get_key(state.world, :board)

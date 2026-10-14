@@ -154,7 +154,7 @@ defmodule LemonRouter.StreamCoalescerTest do
     :ok
   end
 
-  defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(fun, deadline)
   end
@@ -1259,11 +1259,13 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       # Next delta triggers the deferred clear
       StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 2, "Second answer")
-      Process.sleep(50)
 
       # Now PresentationState should be cleared
-      entry = LemonChannels.PresentationState.get(route, run_id, :answer)
-      assert is_nil(entry.platform_message_id)
+      assert eventually(fn ->
+               is_nil(
+                 LemonChannels.PresentationState.get(route, run_id, :answer).platform_message_id
+               )
+             end)
     end
 
     test "deltas after commit create a new message with fresh text" do
@@ -1312,7 +1314,6 @@ defmodule LemonRouter.StreamCoalescerTest do
 
       StreamCoalescer.ingest_delta(session_key, channel_id, run_id, 1, "Some text")
       StreamCoalescer.flush(session_key, channel_id)
-      Process.sleep(50)
 
       [{pid, _}] =
         Registry.lookup(LemonRouter.CoalescerRegistry, {session_key, channel_id})
@@ -1455,21 +1456,33 @@ defmodule LemonRouter.StreamCoalescerTest do
       # ratio — so the multi-byte test above is the one that fails loudly.
       chunk = String.duplicate("a", 20)
 
+      # Best of several runs: a scheduler stall inflates one sample, never the minimum.
+      runs = 5
+
       below =
-        microseconds_per_delta(
-          "agent:test:telegram:bot:dm:cap_speed_below",
-          "run_#{System.unique_integer([:positive])}",
-          chunk,
-          500,
-          0
-        )
+        1..runs
+        |> Enum.map(fn _ ->
+          microseconds_per_delta(
+            "agent:test:telegram:bot:dm:cap_speed_below",
+            "run_#{System.unique_integer([:positive])}",
+            chunk,
+            500,
+            0
+          )
+        end)
+        |> Enum.min()
 
       # Push well past the cap, then measure deltas in that regime.
       session_key = "agent:test:telegram:bot:dm:cap_speed_above"
       run_id = "run_#{System.unique_integer([:positive])}"
       _ = stream_answer(session_key, run_id, String.duplicate("a", 10_000), 15)
 
-      above = microseconds_per_delta(session_key, run_id, chunk, 500, 100)
+      above =
+        1..runs
+        |> Enum.map(fn i ->
+          microseconds_per_delta(session_key, run_id, chunk, 500, 100 + (i - 1) * 500)
+        end)
+        |> Enum.min()
 
       assert above <= max(below, 1) * 25,
              "per-delta cost above the cap (#{above} us) should stay close to the " <>

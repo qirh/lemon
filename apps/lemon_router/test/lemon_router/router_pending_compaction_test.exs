@@ -205,7 +205,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
 
       assert :ok = Router.handle_inbound(msg)
 
-      assert_receive {:orchestrator_submit, request}, 500
+      assert_receive {:orchestrator_submit, request}
 
       # The prompt should have been modified with compaction context
       assert request.prompt =~ "previous conversation"
@@ -242,7 +242,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       Process.put(:router_submit_result, {:error, :submit_failed})
 
       assert {:error, :submit_failed} = Router.handle_inbound(msg)
-      assert_receive {:orchestrator_submit, request}, 500
+      assert_receive {:orchestrator_submit, request}
       assert request.prompt =~ "previous conversation"
       assert PendingCompactionStore.get(session_key) == marker
 

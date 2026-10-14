@@ -125,8 +125,6 @@ defmodule LemonRouter.RunProcess.Watchdog do
       _ ->
         :error
     end
-  rescue
-    _ -> :error
   end
 
   @spec fail_run_for_idle_timeout(map()) :: map()
@@ -207,8 +205,6 @@ defmodule LemonRouter.RunProcess.Watchdog do
     else
       _ -> :error
     end
-  rescue
-    _ -> :error
   end
 
   defp emit_synthetic_run_completion(state, error, duration_ms) do
@@ -222,11 +218,12 @@ defmodule LemonRouter.RunProcess.Watchdog do
       LemonCore.Event.new(
         :run_completed,
         LemonCore.Events.RunCompleted.new(%{
-          completed: LemonCore.Events.Completion.new(%{
-            ok: false,
-            error: error,
-            answer: ""
-          }),
+          completed:
+            LemonCore.Events.Completion.new(%{
+              ok: false,
+              error: error,
+              answer: ""
+            }),
           duration_ms: duration_ms
         }),
         %{
@@ -236,7 +233,7 @@ defmodule LemonRouter.RunProcess.Watchdog do
         }
       )
 
-    LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(state.run_id), event)
+    LemonRouter.RunCompletion.publish(state.execution_request, event)
   end
 
   defp put_in_watchdog_confirmation(state, ref) do

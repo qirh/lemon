@@ -6,9 +6,9 @@ defmodule LemonMemory.Store do
   payloads in run history never block memory reads, and so that memory can be
   managed independently (retention, erasure by scope).
 
-  Memory documents are compact, indexed summaries of finalized runs.  They are
-  intended to support full-text search (M5-02) and routing feedback analytics
-  (M6).
+  Memory documents are compact, indexed summaries of finalized runs. They back
+  full-text recall (the `recall` tool and automatic per-turn recall) and routing
+  feedback analytics.
 
   ## Configuration
 
@@ -19,9 +19,16 @@ defmodule LemonMemory.Store do
 
   ## Schema
 
-  The `memory_documents` table stores one row per memory document.  FTS support
-  (M5-02) will add a virtual `memory_fts` table over `prompt_summary` and
-  `answer_summary`.
+  The `memory_documents` table stores one row per memory document, mirrored into
+  the FTS5 virtual table `memory_fts` over `prompt_summary` and `answer_summary`.
+
+  ## Search
+
+  `search/3` builds its `MATCH` expression with `LemonMemory.Query.fts_match/1`:
+  stopwords are dropped, the remaining terms are quoted and `OR`-joined (terms of
+  four or more characters as prefixes), and results are ordered by
+  `bm25(memory_fts)`. A query with no search terms returns `[]` without touching
+  SQLite.
   """
 
   use GenServer
@@ -29,6 +36,7 @@ defmodule LemonMemory.Store do
 
   alias Exqlite.Sqlite3
   alias LemonMemory.Document
+  alias LemonMemory.Query
 
   # :exqlite is an optional dependency of lemon_core; LemonCore.Application only
   # starts this store when it is present.
@@ -274,7 +282,7 @@ defmodule LemonMemory.Store do
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1 AND md.session_key = ?2
-  ORDER BY memory_fts.rank
+  ORDER BY bm25(memory_fts)
   LIMIT ?3
   """
 
@@ -286,7 +294,7 @@ defmodule LemonMemory.Store do
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1 AND md.agent_id = ?2
-  ORDER BY memory_fts.rank
+  ORDER BY bm25(memory_fts)
   LIMIT ?3
   """
 
@@ -298,7 +306,7 @@ defmodule LemonMemory.Store do
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1 AND md.workspace_key = ?2
-  ORDER BY memory_fts.rank
+  ORDER BY bm25(memory_fts)
   LIMIT ?3
   """
 
@@ -310,7 +318,7 @@ defmodule LemonMemory.Store do
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1
-  ORDER BY memory_fts.rank
+  ORDER BY bm25(memory_fts)
   LIMIT ?2
   """
 
@@ -592,7 +600,17 @@ defmodule LemonMemory.Store do
   end
 
   @doc """
+  The SQLite file the default store opens from application config
+  (`config :lemon_memory, LemonMemory.Store, path: ...`), without starting it.
+  """
+  @spec database_path() :: Path.t()
+  def database_path, do: resolve_path(Application.get_env(:lemon_memory, __MODULE__, []))
+
+  @doc """
   Full-text search over `prompt_summary` and `answer_summary`.
+
+  Any query term may match (see `LemonMemory.Query`); results are ordered by
+  BM25 relevance, best first.
 
   ## Options
 
@@ -827,7 +845,7 @@ defmodule LemonMemory.Store do
         |> Keyword.get(:backend_opts, [])
         |> Keyword.get(:path, "~/.lemon/store")
 
-    dir = Path.expand(raw)
+    dir = LemonCore.Paths.store_dir(raw)
     Path.join(dir, @filename)
   end
 
@@ -1283,43 +1301,40 @@ defmodule LemonMemory.Store do
   end
 
   defp do_search(state, query, scope, scope_key, limit) do
-    safe_query = sanitize_fts_query(query)
+    safe_query = Query.fts_match(query)
 
-    # Scoped searches with a nil scope_key must NOT fall back to :all
-    if scope in [:session, :agent, :workspace] and not is_binary(scope_key) do
-      []
-    else
-      {stmt, params} =
-        case scope do
-          :session ->
-            {state.stmts.search_session, [safe_query, scope_key, limit]}
+    cond do
+      # A query made only of stopwords has nothing to match; an empty MATCH
+      # expression is an FTS5 syntax error, not an empty result.
+      is_nil(safe_query) ->
+        []
 
-          :agent ->
-            {state.stmts.search_agent, [safe_query, scope_key, limit]}
+      # Scoped searches with a nil scope_key must NOT fall back to :all
+      scope in [:session, :agent, :workspace] and not is_binary(scope_key) ->
+        []
 
-          :workspace ->
-            {state.stmts.search_workspace, [safe_query, scope_key, limit]}
+      true ->
+        {stmt, params} =
+          case scope do
+            :session ->
+              {state.stmts.search_session, [safe_query, scope_key, limit]}
 
-          _ ->
-            {state.stmts.search_all, [safe_query, limit]}
-        end
+            :agent ->
+              {state.stmts.search_agent, [safe_query, scope_key, limit]}
 
-      do_query(state, stmt, params)
+            :workspace ->
+              {state.stmts.search_workspace, [safe_query, scope_key, limit]}
+
+            _ ->
+              {state.stmts.search_all, [safe_query, limit]}
+          end
+
+        do_query(state, stmt, params)
     end
   end
 
   defp clamp_limit(value, max) when is_integer(value) and value > 0, do: min(value, max)
   defp clamp_limit(_, _max), do: 20
-
-  # Strip FTS5 special characters and join tokens for AND-matching.
-  # Individual words must all appear in the document; order doesn't matter.
-  defp sanitize_fts_query(query) when is_binary(query) do
-    query
-    |> String.replace(~r/["*():.,!?;]+/, " ")
-    |> String.split()
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join(" ")
-  end
 
   defp schedule_sweep do
     Process.send_after(self(), :sweep, @sweep_interval_ms)

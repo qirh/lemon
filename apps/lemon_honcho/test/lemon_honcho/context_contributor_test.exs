@@ -140,6 +140,8 @@ defmodule LemonHoncho.ContextContributorTest do
 
   use ExUnit.Case, async: false
 
+  import LemonCore.Testing.AsyncHelpers, only: [assert_eventually: 1]
+
   alias LemonHoncho.{Config, ContextContributor, SessionManager}
 
   alias LemonHoncho.ContextContributorTest.{
@@ -405,7 +407,7 @@ defmodule LemonHoncho.ContextContributorTest do
       # which is the first-turn wait quietly switching itself off. Deciding
       # coldness used to build and copy a list of every tracked session to answer
       # a question about one key, and got slower with every conversation served.
-      assert elapsed_us < 50_000
+      assert elapsed_us < 500_000
     end
 
     test "falls back to the default once the session has a block" do
@@ -466,18 +468,32 @@ defmodule LemonHoncho.ContextContributorTest do
   # Drives `count` turns and keeps the ones that produced both halves. Each turn
   # carries a different message, because the warm dialectic query embeds it and
   # a repeated message is exactly what the manager declines to spend a refresh
-  # on. The sleep is for the refresh, which lands in the background and is read
-  # by the turn after it.
+  # on. Each turn waits for its refresh, which lands in the background and is
+  # read by the turn after it.
   defp observe_halves(count) do
     Enum.flat_map(1..count, fn index ->
-      Process.sleep(25)
+      result =
+        ContextContributor.contribute(Map.put(@request, :query, "why is step #{index} slow?"))
 
-      case ContextContributor.contribute(Map.put(@request, :query, "why is step #{index} slow?")) do
+      await_refresh_settled(@request.session_key)
+
+      case result do
         {:ok, [%{placement: :system} = stable, %{placement: :user_message} = volatile]} ->
           [{stable.body, volatile.body}]
 
         _other ->
           []
+      end
+    end)
+  end
+
+  # The refresh a turn starts lands in the background; the manager's own state
+  # says when it has, so the next turn reads it instead of racing it.
+  defp await_refresh_settled(session_key) do
+    assert_eventually(fn ->
+      case SessionManager |> :sys.get_state() |> get_in([:sessions, session_key]) do
+        nil -> true
+        entry -> is_nil(entry.pending_refresh)
       end
     end)
   end

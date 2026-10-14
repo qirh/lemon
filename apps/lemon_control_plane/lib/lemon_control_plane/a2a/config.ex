@@ -11,7 +11,7 @@ defmodule LemonControlPlane.A2A.Config do
   alias LemonCore.Config.Validator
   alias LemonCore.Env
 
-  @default_tools ~w(read read_skill search_memory session_search grep find ls webfetch websearch kanban peer)
+  @default_tools ~w(read read_skill recall grep find ls webfetch websearch kanban peer)
 
   @impl true
   def id, do: :a2a

@@ -30,19 +30,19 @@ defmodule LemonGateway.Run do
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
   alias LemonCore.{
-    ProgressStore,
     RunPhase,
     RunPhaseGraph,
     RunStore
   }
 
   alias LemonCore.Events
-  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor}
+  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor, ProgressStore}
   alias LemonCore.ResumeToken
 
   @engine_provenance "lemon"
   @max_logged_error_bytes 4_096
   @executor_start_error_banner_bytes 1_024
+  @cancel_drain_timeout_ms 15_000
 
   def start_link(args) do
     # Allow cancel-by-run-id (used by router/control-plane) by registering the run
@@ -63,6 +63,8 @@ defmodule LemonGateway.Run do
 
   @impl true
   def init(args) when is_map(args) do
+    Process.flag(:trap_exit, true)
+
     %{
       execution_request: %ExecutionRequest{} = request,
       slot_ref: slot_ref,
@@ -103,6 +105,8 @@ defmodule LemonGateway.Run do
       executor: nil,
       run_ref: nil,
       control_ctx: nil,
+      executor_pid: nil,
+      executor_monitor_ref: nil,
       renderer: LemonGateway.Renderers.Basic,
       renderer_state: nil,
       completed: false,
@@ -110,6 +114,8 @@ defmodule LemonGateway.Run do
       last_resume: request.resume,
       current_phase: nil,
       cancelled: false,
+      cancel_reason: nil,
+      cancel_timeout_ref: nil,
       delta_seq: 0,
       start_ts_ms: System.system_time(:millisecond),
       accumulated_text: "",
@@ -207,11 +213,32 @@ defmodule LemonGateway.Run do
     {:stop, :normal, %{state | completed: true}}
   end
 
-  def handle_continue({:start_run, {:error, reason}}, state) do
+  def handle_continue({:start_run, executor_result}, state) do
+    case RunStore.fetch(state.run_id) do
+      {:ok, %{summary: %{completed: completed}}} when is_map(completed) ->
+        # A queued cancellation/terminal fence may win before this child binds.
+        # Do not execute it later or publish a second result for the fixed ID.
+        if is_function(state.lock_release_fn), do: state.lock_release_fn.()
+        LemonGateway.Scheduler.release_slot(state.slot_ref)
+        send(state.worker_pid, {:run_complete, self(), completed})
+        {:stop, :normal, %{state | completed: true}}
+
+      {:ok, nil} ->
+        start_executor(executor_result, state)
+
+      {:ok, %{summary: nil}} ->
+        start_executor(executor_result, state)
+
+      _ ->
+        {:stop, :run_state_unavailable, state}
+    end
+  end
+
+  defp start_executor({:error, reason}, state) do
     finalize_start_failure(state, reason)
   end
 
-  def handle_continue({:start_run, {:ok, executor}}, state) do
+  defp start_executor({:ok, executor}, state) do
     state = maybe_track_phase(state, :dispatched_to_gateway)
     request = state.execution_request
 
@@ -267,6 +294,8 @@ defmodule LemonGateway.Run do
            | executor: executor,
              run_ref: run_ref,
              control_ctx: control_ctx,
+             executor_pid: executor_pid(control_ctx),
+             executor_monitor_ref: monitor_executor(control_ctx),
              renderer_state: renderer_state,
              progress_mapping_registered?: true
          }}
@@ -344,6 +373,16 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
+    event =
+      if state.cancelled and is_completed(event),
+        do: %{
+          event
+          | ok: false,
+            error: state.cancel_reason,
+            meta: Map.put(event.meta || %{}, :cancelled, true)
+        },
+        else: event
+
     RunStore.append_event(state.run_id, event)
 
     state =
@@ -387,14 +426,14 @@ defmodule LemonGateway.Run do
         resume = event.resume
         # Note: Do NOT store chat state here. Storing on Started allows new messages
         # to auto-resume to this token while the run is still active, creating
-        # concurrent runs. Chat state is stored in finalize/2 after Completed.
+        # concurrent runs. Router stores chat state after Completed.
         {:noreply, %{state | last_resume: resume || state.last_resume}}
 
       is_completed(event) ->
         resume = event.resume
         state = %{state | last_resume: resume || state.last_resume}
         finalize(state, event)
-        {:stop, :normal, state}
+        {:stop, :normal, %{state | completed: true}}
 
       true ->
         {:noreply, state}
@@ -447,7 +486,54 @@ defmodule LemonGateway.Run do
     {:noreply, %{state | delta_seq: new_seq, accumulated_text: state.accumulated_text <> text}}
   end
 
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %{executor_pid: pid, executor_monitor_ref: ref} = state
+      ) do
+    finalize_executor_down(state, reason)
+  end
+
+  def handle_info({:EXIT, pid, reason}, %{executor_pid: pid} = state) when is_pid(pid) do
+    finalize_executor_down(state, reason)
+  end
+
+  def handle_info(:cancel_timeout, %{cancelled: true, completed: false} = state) do
+    finalize_cancel(state)
+  end
+
   def handle_info(_msg, state), do: {:noreply, state}
+
+  defp finalize_executor_down(%{cancelled: true} = state, _reason), do: finalize_cancel(state)
+
+  defp finalize_executor_down(state, reason) do
+    completed =
+      Event.completed(%{
+        engine: @engine_provenance,
+        ok: false,
+        error: %{type: :executor_down, reason: executor_exit_class(reason)},
+        answer: "",
+        resume: state.last_resume,
+        run_id: state.run_id,
+        session_key: state.session_key
+      })
+
+    finalize(state, completed)
+    {:stop, :normal, %{state | completed: true}}
+  end
+
+  defp executor_exit_class(reason) when reason in [:normal, :killed, :shutdown], do: reason
+  defp executor_exit_class({:shutdown, _}), do: :shutdown
+  defp executor_exit_class(_), do: :crashed
+
+  defp executor_pid(%{runner_pid: pid}) when is_pid(pid), do: pid
+  defp executor_pid(_), do: nil
+
+  defp monitor_executor(ctx) do
+    case executor_pid(ctx) do
+      pid when is_pid(pid) -> Process.monitor(pid)
+      nil -> nil
+    end
+  end
 
   @impl true
   def handle_cast({:steer, submission_run_id, prompt, worker_pid}, state)
@@ -467,34 +553,37 @@ defmodule LemonGateway.Run do
 
   @impl true
   def handle_cast({:cancel, reason}, state) do
-    if state.completed do
+    if state.completed or state.cancelled do
       {:noreply, state}
     else
-      Logger.warning(
-        "Gateway run cancel run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
-      )
+      state = %{state | cancelled: true, cancel_reason: reason || :user_requested}
 
-      if state.executor do
-        _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
+      if state.executor &&
+           safe_executor_control(state.executor, :cancel, state.control_ctx) == :ok &&
+           is_pid(state.executor_pid) do
+        timer = Process.send_after(self(), :cancel_timeout, @cancel_drain_timeout_ms)
+        {:noreply, %{state | cancel_timeout_ref: timer}}
+      else
+        finalize_cancel(state)
       end
-
-      resume = state.last_resume || state.execution_request.resume
-
-      completed =
-        Event.completed(%{
-          engine: @engine_provenance,
-          resume: resume,
-          ok: false,
-          error: reason,
-          answer: "",
-          run_id: state.run_id,
-          session_key: state.session_key
-        })
-
-      state = %{state | cancelled: true}
-      finalize(state, completed)
-      {:stop, :normal, %{state | completed: true}}
     end
+  end
+
+  defp finalize_cancel(state) do
+    completed =
+      Event.completed(%{
+        engine: @engine_provenance,
+        resume: state.last_resume || state.execution_request.resume,
+        ok: false,
+        meta: %{cancelled: true},
+        error: state.cancel_reason,
+        answer: state.accumulated_text,
+        run_id: state.run_id,
+        session_key: state.session_key
+      })
+
+    finalize(state, completed)
+    {:stop, :normal, %{state | completed: true}}
   end
 
   defp handle_steer(kind, submission_run_id, prompt, worker_pid, state) do
@@ -591,6 +680,23 @@ defmodule LemonGateway.Run do
   defp action_event_ok_fragment(ok?) when is_boolean(ok?), do: "ok=#{inspect(ok?)}"
   defp action_event_ok_fragment(_), do: "ok=unknown"
 
+  @impl true
+  def terminate(_reason, state) do
+    if state.cancel_timeout_ref, do: Process.cancel_timer(state.cancel_timeout_ref)
+
+    if not state.completed and state.executor do
+      _ = safe_executor_control(state.executor, :cancel, state.control_ctx)
+    end
+
+    if is_function(state.lock_release_fn), do: state.lock_release_fn.()
+    LemonGateway.Scheduler.release_slot(state.slot_ref)
+
+    if state.progress_mapping_registered?,
+      do: unregister_progress_mapping(state.execution_request)
+
+    :ok
+  end
+
   defp finalize(state, %{__event__: :completed} = completed) do
     state = %{state | completed: true}
     terminal_phase = terminal_phase_for_completion(state, completed)
@@ -628,40 +734,39 @@ defmodule LemonGateway.Run do
     # Emit completion event to bus (channel delivery handled by subscribers)
     duration_ms = System.system_time(:millisecond) - state.start_ts_ms
 
-    # Emit run_stop telemetry
-    emit_telemetry_stop(
-      state.run_id,
-      %{
-        session_key: state.session_key,
-        engine: @engine_provenance
-      },
-      duration_ms,
-      Map.get(completed, :ok)
-    )
+    published? =
+      case RunStore.finalize(state.run_id, %{
+             completed: completed,
+             session_key: state.session_key,
+             run_id: state.run_id,
+             run_ref: state.run_ref,
+             prompt: state.execution_request.prompt,
+             duration_ms: duration_ms,
+             engine: @engine_provenance,
+             meta: state.execution_request.meta
+           }) do
+        :ok -> true
+        {:error, {:already_finalized, _run_id}} -> false
+        {:error, _reason} -> exit(:terminal_persistence_failed)
+      end
 
-    emit_to_bus(
-      state.run_id,
-      :run_completed,
-      Events.RunCompleted.new(%{
-        completed: completed_to_bus_map(completed),
-        duration_ms: duration_ms
-      }),
-      build_event_meta(state)
-    )
+    if published? do
+      emit_telemetry_stop(
+        state.run_id,
+        %{session_key: state.session_key, engine: @engine_provenance},
+        duration_ms,
+        Map.get(completed, :ok)
+      )
 
-    if state.run_id do
-      prompt = state.execution_request.prompt
-
-      RunStore.finalize(state.run_id, %{
-        completed: completed,
-        session_key: state.session_key,
-        run_id: state.run_id,
-        run_ref: state.run_ref,
-        prompt: prompt,
-        duration_ms: duration_ms,
-        engine: @engine_provenance,
-        meta: state.execution_request.meta
-      })
+      emit_to_bus(
+        state.run_id,
+        :run_completed,
+        Events.RunCompleted.new(%{
+          completed: completed_to_bus_map(completed),
+          duration_ms: duration_ms
+        }),
+        build_event_meta(state)
+      )
     end
 
     LemonGateway.Scheduler.release_slot(state.slot_ref)
@@ -669,7 +774,7 @@ defmodule LemonGateway.Run do
 
     notify_pid = meta_field(state.execution_request, :notify_pid)
 
-    if is_pid(notify_pid) do
+    if published? and is_pid(notify_pid) do
       send(
         notify_pid,
         {:lemon_gateway_run_completed, state.submitted_execution_request, completed}
@@ -680,7 +785,7 @@ defmodule LemonGateway.Run do
       unregister_progress_mapping(state.execution_request)
     end
 
-    maybe_track_phase(state, terminal_phase)
+    if published?, do: maybe_track_phase(state, terminal_phase)
     :ok
   end
 

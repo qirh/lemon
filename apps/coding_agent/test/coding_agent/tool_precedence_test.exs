@@ -4,14 +4,16 @@ defmodule CodingAgent.ToolPrecedenceTest do
   platform tool. This is that promise tested from the side that matters: the
   module which actually runs when the model emits a call.
 
-  `CodingAgent.Tools.all_tools/2` is what `get_tool/3` resolves through, and it
-  used to merge registered tools *over* its built-ins — so a registration taking
-  the name `bash` would run instead of the built-in whose schema the model had
-  been shown.
+  `CodingAgent.ToolRegistry.get_tool/3` resolves through the same list the model
+  was shown, so a registration taking the name `bash` must never run instead of
+  the built-in whose schema the model saw.
   """
   use ExUnit.Case, async: false
 
-  alias LemonAgent.ToolRegistry
+  alias LemonAgent.ToolRegistry, as: SatelliteRegistry
+  alias CodingAgent.ToolRegistry
+
+  @moduletag :tmp_dir
 
   defmodule PrecedenceFakeBash do
     def tool(_cwd, _opts), do: %LemonAgent.Types.AgentTool{name: "bash", label: "satellite"}
@@ -21,37 +23,37 @@ defmodule CodingAgent.ToolPrecedenceTest do
     def tool(_cwd, _opts), do: %LemonAgent.Types.AgentTool{name: "weather", label: "satellite"}
   end
 
+  @opts [include_extensions: false, include_mcp: false]
+
   setup do
-    original = :persistent_term.get({ToolRegistry, :registered}, [])
+    original = :persistent_term.get({SatelliteRegistry, :registered}, [])
 
-    on_exit(fn -> :persistent_term.put({ToolRegistry, :registered}, original) end)
+    on_exit(fn -> :persistent_term.put({SatelliteRegistry, :registered}, original) end)
 
-    :persistent_term.put({ToolRegistry, :registered}, [])
+    :persistent_term.put({SatelliteRegistry, :registered}, [])
     :ok
   end
 
-  test "a satellite cannot replace the module behind a built-in tool name" do
-    ToolRegistry.register(:bash, PrecedenceFakeBash)
+  test "a satellite cannot replace the module behind a built-in tool name", %{tmp_dir: cwd} do
+    SatelliteRegistry.register(:bash, PrecedenceFakeBash)
 
-    tool = CodingAgent.Tools.get_tool("bash", File.cwd!())
-
-    assert tool
+    assert {:ok, tool} = ToolRegistry.get_tool(cwd, "bash", @opts)
 
     refute tool.label == "satellite",
            "a registered tool replaced the built-in it collided with"
   end
 
-  test "a non-colliding registration is still contributed" do
-    ToolRegistry.register(:weather, PrecedenceWeather)
+  test "a non-colliding registration is still contributed", %{tmp_dir: cwd} do
+    SatelliteRegistry.register(:weather, PrecedenceWeather)
 
-    assert CodingAgent.Tools.all_tools(File.cwd!())["weather"].label == "satellite"
+    assert {:ok, %{label: "satellite"}} = ToolRegistry.get_tool(cwd, "weather", @opts)
   end
 
-  test "coding_tools contributes each registered tool exactly once" do
-    ToolRegistry.register(:bash, PrecedenceFakeBash)
-    ToolRegistry.register(:weather, PrecedenceWeather)
+  test "each registered tool is contributed exactly once", %{tmp_dir: cwd} do
+    SatelliteRegistry.register(:bash, PrecedenceFakeBash)
+    SatelliteRegistry.register(:weather, PrecedenceWeather)
 
-    names = File.cwd!() |> CodingAgent.Tools.coding_tools() |> Enum.map(& &1.name)
+    names = cwd |> ToolRegistry.get_tools(@opts) |> Enum.map(& &1.name)
 
     assert Enum.count(names, &(&1 == "bash")) == 1,
            "a colliding registration was appended alongside the built-in"
@@ -59,9 +61,12 @@ defmodule CodingAgent.ToolPrecedenceTest do
     assert Enum.count(names, &(&1 == "weather")) == 1
   end
 
-  test "coding_tools does not raise when a registered module is absent" do
-    ToolRegistry.register(:ghost, :"Elixir.NoSuchToolModule")
+  test "a registration whose module is absent is skipped", %{tmp_dir: cwd} do
+    SatelliteRegistry.register(:ghost, :"Elixir.NoSuchToolModule")
 
-    assert is_list(CodingAgent.Tools.coding_tools(File.cwd!()))
+    names = cwd |> ToolRegistry.get_tools(@opts) |> Enum.map(& &1.name)
+
+    refute "ghost" in names
+    assert "bash" in names
   end
 end

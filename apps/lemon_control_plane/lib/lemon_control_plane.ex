@@ -21,11 +21,10 @@ defmodule LemonControlPlane do
 
   ## Authentication
 
-  The control plane supports three roles:
+  The control plane supports two roles:
 
   - `operator` - Default role for admin/operator clients
   - `node` - Role for paired nodes (browser, etc.)
-  - `device` - Role for paired devices
 
   Each role has associated scopes that control method access:
 
@@ -33,7 +32,7 @@ defmodule LemonControlPlane do
   - `operator.read` - Read-only operations
   - `operator.write` - Write operations
   - `operator.approvals` - Approval management
-  - `operator.pairing` - Node/device pairing
+  - `operator.pairing` - Node pairing
 
   ## Example
 
@@ -71,7 +70,7 @@ defmodule LemonControlPlane do
   def max_payload do
     case Application.get_env(:lemon_control_plane, :max_payload) do
       value when is_integer(value) and value > 0 -> value
-      _ -> LemonCore.JSONPayload.default_max_bytes()
+      _ -> 16_777_216
     end
   end
 

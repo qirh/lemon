@@ -24,9 +24,9 @@ defmodule LemonGatewayTest do
     Elixir.LemonGateway.Scheduler.submit_execution(request)
   end
 
-  defp request(session_key, prompt, scenario, meta \\ %{}) do
+  defp request(session_key, prompt, scenario, meta) do
     %ExecutionRequest{
-      run_id: nil,
+      run_id: LemonCore.Id.run_id(),
       session_key: session_key,
       prompt: prompt,
       resume: nil,
@@ -390,8 +390,10 @@ defmodule LemonGatewayTest do
                     %{__event__: :completed, ok: true, answer: "Echo: one"}},
                    2_000
 
-    # Allow worker to stop when idle.
-    Process.sleep(50)
+    # Wait for the worker to stop when idle.
+    LemonGateway.AsyncHelpers.assert_eventually(fn ->
+      LemonGateway.ThreadRegistry.whereis({:session, session_key}) == nil
+    end)
 
     submit_request(request2)
 

@@ -79,19 +79,19 @@ defmodule LemonControlPlane.Methods.BackgroundCommandsTest do
   end
 
   setup do
-    previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+    previous = Application.get_env(:lemon_core, :agent_runtime_provider)
 
     Application.put_env(
-      :lemon_control_plane,
+      :lemon_core,
       :agent_runtime_provider,
       BackgroundCommandsFakeRuntime
     )
 
     on_exit(fn ->
       if previous do
-        Application.put_env(:lemon_control_plane, :agent_runtime_provider, previous)
+        Application.put_env(:lemon_core, :agent_runtime_provider, previous)
       else
-        Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        Application.delete_env(:lemon_core, :agent_runtime_provider)
       end
     end)
   end

@@ -10,39 +10,39 @@ defmodule LemonCore.Runtime.HealthTest do
       refute Health.running?(19_999, timeout_ms: 200)
     end
 
-    test "repeated failures on closed port do not leak file descriptors" do
-      # Probe a closed port many times and confirm we don't run out of fds.
-      # If sockets leak, this would eventually fail with {:error, :emfile} or similar.
-      before_fds = count_open_fds()
+    test "requires Lemon's health body, not an unrelated HTTP 200" do
+      for {body, expected} <- [
+            {~s({"ok":true}), true},
+            {~s({"ok":false}), false},
+            {"unrelated server", false}
+          ] do
+        {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+        {:ok, port} = :inet.port(listener)
 
-      for _ <- 1..20 do
-        Health.running?(19_997, timeout_ms: 100)
+        server =
+          Task.async(fn ->
+            {:ok, socket} = :gen_tcp.accept(listener)
+            {:ok, _request} = :gen_tcp.recv(socket, 0, 1_000)
+
+            :ok =
+              :gen_tcp.send(
+                socket,
+                "HTTP/1.0 200 OK\r\nContent-Length: #{byte_size(body)}\r\n\r\n#{body}"
+              )
+
+            :gen_tcp.close(socket)
+          end)
+
+        assert Health.running?(port, timeout_ms: 1_000) == expected
+        Task.await(server)
+        :gen_tcp.close(listener)
       end
-
-      after_fds = count_open_fds()
-
-      # Allow a small margin for any transient fds (e.g. from test infra), but
-      # reject a large growth that would indicate socket leaks.
-      assert after_fds - before_fds < 5,
-             "Expected fewer than 5 new fds, got #{after_fds - before_fds} (before=#{before_fds}, after=#{after_fds})"
     end
   end
 
   describe "await/2" do
     test "returns {:error, :timeout} when port is closed" do
       assert {:error, :timeout} = Health.await(19_998, timeout_ms: 300)
-    end
-  end
-
-  # Returns a count of open file descriptors for the current process (Unix only).
-  # Falls back to 0 on platforms that don't support /proc.
-  defp count_open_fds do
-    fd_dir = "/proc/self/fd"
-
-    if File.dir?(fd_dir) do
-      fd_dir |> File.ls!() |> length()
-    else
-      0
     end
   end
 
@@ -64,6 +64,43 @@ defmodule LemonCore.Runtime.HealthTest do
       result = Health.status()
       # :kernel is always started
       assert :kernel in result.apps
+    end
+  end
+end
+
+defmodule LemonCore.Runtime.HealthFdLeakTest do
+  # Runs outside the async pool: /proc/self/fd is VM-wide, so concurrently
+  # running async tests opening sockets would otherwise skew the count.
+  use ExUnit.Case, async: false
+
+  alias LemonCore.Runtime.Health
+
+  test "repeated failures on closed port do not leak file descriptors" do
+    # Probe a closed port many times and confirm we don't run out of fds.
+    # If sockets leak, this would eventually fail with {:error, :emfile} or similar.
+    before_fds = count_open_fds()
+
+    for _ <- 1..20 do
+      Health.running?(19_997, timeout_ms: 100)
+    end
+
+    after_fds = count_open_fds()
+
+    # A leak would add roughly one fd per probe (20); allow a margin for transient
+    # fds from background processes.
+    assert after_fds - before_fds < 15,
+           "Expected fewer than 15 new fds, got #{after_fds - before_fds} (before=#{before_fds}, after=#{after_fds})"
+  end
+
+  # Returns a count of open file descriptors for the VM (Unix only).
+  # Falls back to 0 on platforms that don't support /proc.
+  defp count_open_fds do
+    fd_dir = "/proc/self/fd"
+
+    if File.dir?(fd_dir) do
+      fd_dir |> File.ls!() |> length()
+    else
+      0
     end
   end
 end

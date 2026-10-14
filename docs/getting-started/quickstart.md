@@ -1,148 +1,143 @@
-# Your first conversation with Lemon
+# Start coding with Lemon in five minutes
 
-Install Lemon, connect your preferred model provider, and get a first answer.
-Then pick up the same conversation again to see how persistent sessions work.
+Connect a model, make one small repository change, and keep the same session for
+larger work. You need a supported macOS or Linux machine, an interactive terminal,
+`curl`, `tar`, `python3`, and a model-provider account. Prebuilt releases include
+Elixir and the terminal client; model requests use your provider's account.
 
-**You’ll need:** a supported macOS or Linux machine, an interactive terminal,
-`curl`, `tar`, `python3`, and credentials for a model provider. Model requests
-use that provider’s account and billing. The prebuilt release includes the
-runtime; you do not need Elixir to get started.
+> **Release availability:** the published `2026.08.1` release predates the current
+> Tern and agent-workflow features below. Until a newer release is published, use
+> [source development](../install.md#source-development) for those features.
 
-Building Lemon itself? Follow [source development](../install.md#source-development).
-
-## 1. Install the release
-
-Run the installer from an interactive terminal:
+## 1. Install and connect ChatGPT
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-```
-
-The installer selects the release for your platform, verifies its SHA-256, and
-installs under `~/.lemon`. On the normal `full` or `min` profile it opens the
-idempotent setup wizard on your terminal. Complete the provider, authentication,
-and default-model prompts.
-
-If you did not let the installer modify your shell path, make the launcher
-available in the current terminal:
-
-```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
 export PATH="$HOME/.lemon/bin:$PATH"
+lemon setup
 ```
 
-Supported platforms, Linux compatibility, non-interactive flags, and release
-channels are in [Install Lemon](../install.md).
+The installer verifies both runtime and TUI checksums and adds `~/.lemon/bin`
+to PATH in your shell rc file; the `export` line covers the current terminal.
 
-## 2. Verify setup before chatting
+In setup, choose **OpenAI Codex**, then **Sign in with ChatGPT (browser OAuth)**.
+Alternatively, explicitly choose **Import existing Codex CLI ChatGPT login
+(read-only copy)** if you already use Codex. Import is opt-in, not an automatic
+read of another client's credentials. Accept the offered default model, or select
+another model available to your account. With a Claude Pro or Max plan, choose
+**Anthropic**, then **Sign in with Claude Pro/Max (browser)** instead (or run
+`lemon model anthropic` later). Other providers and API-key login are also
+supported; see [provider setup](../user-guide/setup.md).
 
-Run the local configuration and runtime checks:
+Skip the optional daily brief and runtime configuration for now. Setup is safe to
+rerun: a usable provider is kept, not logged in again. Do not paste credentials
+into chat or a repository.
+
+## 2. Make one useful change
+
+In your repository's terminal, start:
 
 ```bash
-lemon config validate
-lemon secrets status
+lemon tui
+```
+
+Lemon starts or reuses its local daemon and opens the standalone TUI in that
+directory. Bare `lemon` is equivalent, including in a Tern pane, where the TUI
+uses Tern's native surfaces. Send this small, reviewable first task:
+
+```text
+Read the repository instructions. Find how to run the tests. Add the test command to README if missing, run the focused tests, and show the diff.
+```
+
+Watch the streamed answer, file edits and test output. Review the diff before
+keeping the change. A completed turn proves the provider and tools work together;
+a green diagnostic alone is not that proof.
+
+Use **Ctrl+O** to choose a model and **Ctrl+X** to reopen a persisted session.
+While running, **Escape** stops the turn. While idle with an empty input,
+**Ctrl+C twice** quits the TUI without stopping the daemon.
+
+To revisit an earlier prompt, enter:
+
+```text
+/rewind
+```
+
+Pick a prompt and inspect the preview. Confirmation is required and cancellation
+is the default. Ordinary rewind changes conversation history, **not your files**;
+the explicit file-restoration option and session tree are described in the
+[TUI guide](https://github.com/z80dev/lemon/blob/main/clients/tui/README.md).
+
+## 3. Choose your interface
+
+**Scripts and CI:** run from the same repository. JSON mode returns one result
+object; stdout is machine-readable and failures exit nonzero. This example is
+read-only, so it does not need an interactive approval:
+
+```bash
+lemon -p "Explain this repository; do not edit files." --output json
+```
+
+See the [CLI guide](../user-guide/cli.md) for stdin, streaming JSON, continuation
+and explicit tool-approval policy. Bare `lemon` requires a terminal.
+
+**Tern:** type `lemon` in a Tern pane for the TUI on Tern's native surfaces.
+To also get palette actions and Tern's native ACP chat, register Lemon once:
+
+```bash
+lemon tern install
+```
+
+Run `tern plugin reload`, then use **Lemon: New session in split** from the
+palette, or `tern acp lemon` for the ACP chat, where Tern owns the chat, tool
+cards and permissions and Lemon owns the coding session. See the
+[Tern guide](../user-guide/tern.md) for registration paths and troubleshooting.
+
+**Web dashboard:** the default full installation also includes:
+
+```bash
+lemon web --no-open
+```
+
+Open the printed local URL. Sessions show stored conversations; **Automation**
+shows goals and kanban dispatch with status, progress, results and run links.
+See the [web guide](../user-guide/web.md#manage-automated-coding-work).
+
+Management pages are opt-in. Follow [management access](../user-guide/web.md#management-access)
+to set `LEMON_WEB_ACCESS_TOKEN` before starting the daemon; use `lemon restart`
+if it is already running. Without a configured token, management pages return
+503 rather than exposing your work records. Keep the token private.
+
+## 4. Grow the workflow, not the setup ceremony
+
+- **Parallel subagents and personas:** ask, “Use two task children in parallel:
+  a scout to locate the tests and a reviewer to inspect edge cases. Summarize
+  their findings; do not edit files.” Shipped `scout` and `reviewer` personas are
+  read-only. Custom personas live in project or user `.lemon/agents/` directories;
+  see [subagents and commands](https://github.com/z80dev/lemon/blob/main/apps/coding_agent/README.md#subagents-and-commands).
+- **MCP tools:** inspect configured servers with `lemon mcp list`. Then follow
+  the [MCP guide](../skills.md#manage-named-mcp-servers) to add and test a server before relying
+  on its tools. Server processes can execute code; configure only servers you
+  trust.
+- **Durable goals and kanban:** ask the agent to create a repository goal and a
+  board with a small, concrete task. Explicitly say whether to start execution.
+  A safe first request is: “Use the goal and kanban tools to record a goal to
+  improve test coverage, pause that goal, and create a board called Coverage
+  with one task to add a negative-number test. Do not start any work.” Inspect
+  the records in the dashboard before starting a bounded goal loop or board
+  dispatch. Goal loops edit their target directory directly; Git-backed kanban
+  tasks use separate worktrees whose changes need review before merging. See
+  [automation controls](../user-guide/web.md#manage-automated-coding-work) and the
+  [coding automation guide](../user-guide/reminders-and-heartbeats.md#coding-goals-and-scheduled-coding-jobs).
+
+## If the first turn fails
+
+```bash
 lemon doctor
 ```
 
-These checks prove that Lemon can resolve its config, secret store, release, and
-runtime dependencies. Provider setup normally performs a live credential check
-when the provider supports one. To rerun that path explicitly:
-
-```bash
-lemon setup provider
-```
-
-If you intentionally installed with `--skip-setup`, run `lemon setup` first.
-Setup is safe to rerun: it performs only incomplete steps and does not replace
-an existing secret key.
-
-## 3. Send your first message
-
-Start Lemon:
-
-```bash
-lemon
-```
-
-The launcher starts the local runtime when needed and opens the terminal UI.
-At the prompt, send:
-
-```text
-Reply with exactly: LEMON_READY
-```
-
-Wait for the final assistant message. A completed answer proves more than a
-doctor check: the TUI connected to the runtime, the runtime created a durable
-session, the selected provider accepted the request, streaming reached the
-client, and the turn finalized.
-
-Inspect the live state without leaving the TUI:
-
-```text
-/status
-/session info
-/usage
-```
-
-Use `/help` or `/commands` to browse commands supported by the connected
-runtime. With an empty input, `Ctrl+C` aborts an active run. While idle, press it twice
-to quit. If you have a draft, the first press clears that draft.
-
-## 4. Pick up where you left off
-
-First record the key shown by `/session info`. Create a second conversation:
-
-```text
-/session new quickstart-two
-```
-
-Send a short message in the new session, then press `Ctrl+X` or run `/sessions`.
-Select the original session. Lemon reloads its stored transcript when switching
-to a cold session.
-
-You can also switch or replay by key:
-
-```text
-/session switch <session-key>
-/resume <session-key>
-/history 20
-```
-
-Quit and start `lemon` again, then use `Ctrl+X` to reopen the same session. That
-is the daily continuity path. `/reset` intentionally clears the current
-session; `/session delete <session-key>` deletes stored history and requires the
-explicit key.
-
-Session rename, pin, archive, search, export, and guarded prune workflows are
-documented in the [CLI guide](../user-guide/cli.md).
-
-## 5. Make it useful
-
-Pick one path to try next. Advanced background and goal workflows have
-[preview support boundaries](../support.md#automation-and-cron):
-
-| Goal | First action | Guide |
-| --- | --- | --- |
-| Work in a repository | Start `lemon` from that repository, then ask it to inspect before editing | [Demo Lemon](../demo.md) |
-| Add a reusable skill | Run `/skills`, inspect the selected skill, then confirm installation | [Skills](../user-guide/skills.md) |
-| Recall durable context | Ask the agent to search the current project memory; keep adaptive writes opt-in until reviewed | [Memory](../user-guide/memory.md) |
-| Run work in the background | Use `/bg start <prompt>`, then `/bg list` and `/bg result <id>` | [Long-running harnesses](../long-running-agent-harnesses.md) |
-| Keep a standing objective | Use `/goal set <objective>`, inspect `/goal status`, and pause or clear it explicitly | [Long-running harnesses](../long-running-agent-harnesses.md) |
-| Browse or fetch the Web | Ask for a bounded search/fetch task and inspect sources before acting on them | [Web and Browser Tools](../tools/web.md) |
-| Add Telegram or Discord | Leave the TUI, run `lemon gateway setup telegram` or `lemon gateway setup discord`, then `lemon channels` | [Setup](../user-guide/setup.md#optional-telegram-or-discord) |
-| Migrate from Hermes | Preview the import before writing any Lemon state | [Migrate from Hermes](../user-guide/migrate-from-hermes.md) |
-
-## Recovery path
-
-If the first real turn fails, keep the failure text and check in this order:
-
-1. `lemon config validate` — resolve malformed or conflicting config.
-2. `lemon secrets status` — confirm the encrypted store is available.
-3. `lemon setup provider` — correct the credential/model and rerun the live
-   provider check.
-4. `lemon doctor --verbose` — inspect runtime and dependency diagnostics.
-5. `lemon doctor --bundle` — create a redacted support bundle if the problem
-   remains.
-
-Do not paste provider keys, raw config secrets, or an unreviewed bundle into an
-issue. The [Support guide](../support.md) explains the required evidence,
-redaction boundary, logs, and current support limits.
+Follow the failing check's concrete fix. Doctor checks config, resolvable
+credentials, model selection, dependencies and runtime health; it does not claim
+to have made a model request. For credential changes, use the
+[setup guide](../user-guide/setup.md); for logs and redacted support bundles, use
+[Support](../support.md). Never post tokens, raw secrets or an unreviewed bundle.

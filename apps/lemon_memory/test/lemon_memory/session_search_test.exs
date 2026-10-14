@@ -4,8 +4,8 @@ defmodule LemonMemory.SessionSearchTest do
 
   Everything here is driven through `LemonMemory.SessionSearch` itself against
   an isolated, seeded `LemonMemory.Store` reached through the built-in local
-  provider, so the assertions describe what consumers (`search_memory`,
-  `session_search`) actually observe: the feature gate and its kill switch, the
+  provider, so the assertions describe what consumers (`recall`) actually
+  observe: the feature gate and its kill switch, the
   blank-query and limit contracts, scope isolation, and the rendering injected
   into an agent's context.
   """
@@ -95,19 +95,32 @@ defmodule LemonMemory.SessionSearchTest do
   end
 
   describe "search/2 results" do
-    test "returns matching documents newest first", %{store: store, now: now} do
+    test "returns matching documents best match first, not newest first", %{
+      store: store,
+      now: now
+    } do
       session = "agent:order:main"
 
       seed(store, [
-        doc(session_key: session, ingested_at_ms: now - 30_000, prompt_summary: "deploy the api"),
-        doc(session_key: session, ingested_at_ms: now, prompt_summary: "deploy the api again"),
-        doc(session_key: session, ingested_at_ms: now - 10_000, prompt_summary: "deploy the docs")
+        doc(
+          session_key: session,
+          ingested_at_ms: now - 30_000,
+          prompt_summary: "deploy the api",
+          answer_summary: "completed"
+        ),
+        doc(
+          session_key: session,
+          ingested_at_ms: now,
+          prompt_summary: "rotate the docs",
+          answer_summary: "completed"
+        )
       ])
 
-      results = search(store, "deploy", scope: :session, scope_key: session, limit: 10)
+      results = search(store, "deploy api docs", scope: :session, scope_key: session, limit: 10)
 
-      assert length(results) == 3
-      assert Enum.map(results, & &1.ingested_at_ms) == [now, now - 10_000, now - 30_000]
+      # Both indexed columns matter: keep answers neutral so only the older
+      # document matches two query terms, with equal document lengths.
+      assert Enum.map(results, & &1.ingested_at_ms) == [now - 30_000, now]
     end
 
     test "documents that do not match the query are not returned", %{store: store} do
@@ -127,24 +140,21 @@ defmodule LemonMemory.SessionSearchTest do
   end
 
   describe "search/2 limits" do
-    test "returns at most the default 5 results, still ordered newest first", %{
-      store: store,
-      now: now
-    } do
+    test "returns at most the default 5 results", %{store: store, now: now} do
       session = "agent:default_limit:main"
       seed(store, matching_docs(8, session, now))
 
       results = search(store, "deploy", scope: :session, scope_key: session)
 
       assert length(results) == 5
-      assert_newest_first(results)
     end
 
     test "a caller limit above the cap is clamped to 20", %{store: store, now: now} do
       session = "agent:capped:main"
       seed(store, matching_docs(22, session, now))
 
-      assert length(search(store, "deploy", scope: :session, scope_key: session, limit: 100)) == 20
+      assert length(search(store, "deploy", scope: :session, scope_key: session, limit: 100)) ==
+               20
     end
 
     test "a caller limit below the cap is honoured", %{store: store, now: now} do
@@ -408,10 +418,5 @@ defmodule LemonMemory.SessionSearchTest do
     }
 
     struct!(defaults, attrs)
-  end
-
-  defp assert_newest_first(results) do
-    timestamps = Enum.map(results, & &1.ingested_at_ms)
-    assert timestamps == Enum.sort(timestamps, :desc)
   end
 end

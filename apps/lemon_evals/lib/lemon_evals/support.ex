@@ -311,64 +311,76 @@ defmodule LemonEvals.Support do
       not String.contains?(prompt, "Use `skill_manage`") ->
         {:error, "learning prompt does not mention skill_manage"}
 
-      not String.contains?(prompt, "Use `memory_topic`") ->
-        {:error, "learning prompt does not mention memory_topic"}
+      not String.contains?(prompt, "`remember`") ->
+        {:error, "learning prompt does not mention remember"}
 
-      not String.contains?(prompt, "Use `memory`") ->
-        {:error, "learning prompt does not mention memory"}
-
-      not String.contains?(prompt, "Use `search_memory`") ->
-        {:error, "learning prompt does not mention search_memory"}
-
-      not String.contains?(prompt, "Use `session_search`") ->
-        {:error, "learning prompt does not mention session_search"}
-
-      not String.contains?(prompt, "At the end of substantial work") ->
-        {:error, "learning prompt does not include end-of-run capture trigger"}
+      Enum.any?(removed_memory_tools(), &String.contains?(prompt, "`#{&1}`")) ->
+        {:error, "learning prompt still names a removed memory tool"}
 
       true ->
         :ok
     end
   end
 
-  def assert_learning_search(result, search_calls) do
-    calls = Agent.get(search_calls, &Enum.reverse/1)
-
+  def assert_learning_search(result) do
     cond do
-      result.details[:scope] != :current ->
-        {:error, "expected search_memory scope :current, got #{inspect(result.details)}"}
+      result.details[:scope] != "project" ->
+        {:error, "expected recall scope project, got #{inspect(result.details)}"}
 
-      result.details[:resolved_scopes] != [:project, :home] ->
-        {:error, "expected current search to resolve project and home scopes"}
-
-      length(calls) != 2 ->
-        {:error, "expected search_memory to query project and home, got #{inspect(calls)}"}
+      result.details[:conversations] != 1 ->
+        {:error, "expected one recalled conversation, got #{inspect(result.details)}"}
 
       true ->
         :ok
     end
   end
 
-  def assert_memory_topic_created(result, workspace_dir) do
-    expected_path =
-      Path.join([workspace_dir, "memory", "topics", "deployment-incident-handoff.md"])
+  defp removed_memory_tools, do: ~w(search_memory session_search memory_topic)
+
+  def assert_remembered(result, workspace_dir) do
+    expected_path = Path.join(workspace_dir, "MEMORY.md")
 
     cond do
-      result.details[:created] != true ->
-        {:error, "expected memory_topic to create a topic, got #{inspect(result.details)}"}
-
-      result.details[:slug] != "deployment-incident-handoff" ->
-        {:error, "unexpected memory topic slug #{inspect(result.details)}"}
+      result.details[:action] != "add" or result.details[:changed] != true ->
+        {:error, "expected remember to save a fact, got #{inspect(result.details)}"}
 
       result.details[:path] != expected_path ->
-        {:error, "unexpected memory topic path #{inspect(result.details)}"}
+        {:error, "unexpected MEMORY.md path #{inspect(result.details)}"}
 
       not File.exists?(expected_path) ->
-        {:error, "memory topic file missing at #{expected_path}"}
+        {:error, "MEMORY.md missing at #{expected_path}"}
 
       true ->
         :ok
     end
+  end
+
+  @doc """
+  A memory document for scripted `recall` search functions. `doc_id` is also
+  the prompt text, so it shows up in the tool's rendered result.
+  """
+  def eval_memory_doc(doc_id, cwd, workspace_dir, agent_id \\ "eval") do
+    {:ok, identity} =
+      LemonMemory.Project.scope(%{
+        cwd: cwd,
+        workspace_dir: workspace_dir,
+        agent_id: agent_id,
+        session_scope: :main
+      })
+
+    %LemonMemory.Document{
+      doc_id: doc_id,
+      run_id: "run-#{doc_id}",
+      session_key: "agent:#{agent_id}:main",
+      agent_id: agent_id,
+      workspace_key: identity.root,
+      scope: :workspace,
+      started_at_ms: 1_758_000_000_000,
+      ingested_at_ms: 1_758_000_000_000,
+      prompt_summary: doc_id,
+      answer_summary: "Recalled #{doc_id}.",
+      meta: %{"home_digest" => identity.home_digest}
+    }
   end
 
   def assert_curator_prompt(prompt) do
@@ -450,9 +462,8 @@ defmodule LemonEvals.Support do
 
   def eval_event_callbacks do
     %{
-      set_working_message: fn _state, _message -> :ok end,
-      notify: fn _state, _message, _type -> :ok end,
       complete_event_streams: fn _state, _event -> :ok end,
+      broadcast_event: fn _state, _event -> :ok end,
       maybe_trigger_compaction: fn state -> state end,
       persist_message: fn state, _message -> state end
     }
@@ -529,9 +540,6 @@ defmodule LemonEvals.Support do
       length(calls) != expected_count ->
         {:error, "expected #{expected_count} search calls, got #{inspect(calls)}"}
 
-      not Enum.all?(calls, fn {_query, opts} -> Keyword.get(opts, :scope) == :workspace end) ->
-        {:error, "expected search calls to use workspace scopes, got #{inspect(calls)}"}
-
       true ->
         :ok
     end
@@ -543,9 +551,6 @@ defmodule LemonEvals.Support do
     cond do
       length(calls) < minimum_count ->
         {:error, "expected at least #{minimum_count} search calls, got #{inspect(calls)}"}
-
-      not Enum.all?(calls, fn {_query, opts} -> Keyword.get(opts, :scope) == :workspace end) ->
-        {:error, "expected search calls to use workspace scopes, got #{inspect(calls)}"}
 
       true ->
         :ok

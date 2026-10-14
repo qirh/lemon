@@ -887,6 +887,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       :agent_id,
       :resume_source,
       :acp_session_id,
+      :acp_client_terminal,
       :acp_client_fs_read_text_file,
       :acp_client_fs_write_text_file,
       :async_followups
@@ -980,7 +981,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp authentication_failure_reason(_error, _mode), do: :authentication_failed
 
   defp value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, key_atom(key))
-  defp value(_map, _key), do: nil
 
   defp key_atom("version"), do: :version
   defp key_atom("runId"), do: :run_id

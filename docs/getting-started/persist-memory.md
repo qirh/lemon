@@ -17,7 +17,7 @@ different answers:
 | Problem | Answer |
 |---|---|
 | The model should remember what was said five minutes ago | The conversation, already in `AgentState.messages` |
-| The conversation is longer than the context window | Compaction — `LemonAi.ContextCompactor`, or a `transform_context` function |
+| The conversation is longer than the context window | Compaction — an `AgentLoopConfig` `transform_context` function (coding sessions use `CodingAgent.Compaction`) |
 | The agent should remember something from last week | This guide |
 
 A memory document is a *summary* of one exchange, not a transcript. Keep them
@@ -32,11 +32,14 @@ You can generate the whole thing:
 mix lemon.new my_agent --memory
 ```
 
+(`--hex` makes the generated `mix.exs` use the Hex requirements instead of a
+checkout.)
+
 or add it by hand. In `mix.exs`:
 
 ```elixir
 {:lemon_memory, path: "/path/to/lemon/apps/lemon_memory"},
-# {:lemon_memory, "~> 0.1"},
+# {:lemon_memory, "~> 0.2"},
 ```
 
 `lemon_memory` depends on `exqlite`, which builds a SQLite NIF, so the first
@@ -174,12 +177,10 @@ def ask_with_context(session_key, prompt) do
 end
 ```
 
-Prepending to the user message is the simplest thing that works and is easy to
-inspect. The alternatives, in rough order of effort: put recalled context in the
-system prompt instead (better cache behaviour, but it changes per run); use
-`AgentLoopConfig`'s `transform_context` to inject it on every turn rather than
-only the first; or expose a `search_memory` tool and let the model decide when
-to look — see [Add a tool](add-a-tool.md).
+Automatic recall may attach a bounded **Relevant memory** block to each user
+message. In a Lemon coding-agent session, the read-only `recall` tool is also
+available to search past conversations and workspace notes; `remember` saves
+compact facts to `USER.md` or `MEMORY.md`.
 
 ## 5. Test it
 
@@ -253,5 +254,5 @@ mix test
 
 - [Add a channel](add-a-channel.md) — reach the agent from somewhere other than
   a terminal.
-- [Add a tool](add-a-tool.md) — including a `search_memory` tool, so the model
-  can look things up itself.
+- [Add a tool](add-a-tool.md) — including a `recall` tool, so the model can
+  look things up itself.

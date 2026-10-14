@@ -21,7 +21,7 @@ defmodule LemonRouter.SessionCoordinator do
 
   require Logger
 
-  alias LemonCore.{Bus, Events, MapHelpers}
+  alias LemonCore.{Events, MapHelpers}
 
   alias LemonRouter.{
     PhasePublisher,
@@ -182,9 +182,9 @@ defmodule LemonRouter.SessionCoordinator do
       end
     end
   rescue
-    _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   catch
-    _, _ -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
   end
 
   defp runtime_active_sessions do
@@ -195,9 +195,15 @@ defmodule LemonRouter.SessionCoordinator do
         [%{run_id: :"$1", session_key: :"$3"}]}
      ])}
   rescue
-    _ -> {:error, :unavailable}
-  catch
-    _, _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
+  end
+
+  @doc false
+  def pending_count do
+    DynamicSupervisor.which_children(LemonRouter.SessionCoordinatorSupervisor)
+    |> Enum.reduce(0, fn {_id, pid, _type, _modules}, count ->
+      count + GenServer.call(pid, :pending_count)
+    end)
   end
 
   def start_link(opts) do
@@ -241,6 +247,13 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
+  def handle_call(:pending_count, _from, state) do
+    pending_steers =
+      Enum.reduce(state.pending_steers, 0, fn {_id, entries}, n -> n + length(entries) end)
+
+    {:reply, length(state.queue) + pending_steers, state}
+  end
+
   def handle_call({:submit, submission}, _from, state) do
     case recover_surviving_session_run(state, submission.session_key) do
       {:ok, recovered_state} ->
@@ -265,7 +278,7 @@ defmodule LemonRouter.SessionCoordinator do
   @impl true
   def handle_cast({:cancel, reason}, state) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.cancel(state, reason), state)
+      apply_transition(SessionTransitions.cancel(state, reason), state, dropped_reason: reason)
 
     {:noreply, next_state}
   end
@@ -279,14 +292,18 @@ defmodule LemonRouter.SessionCoordinator do
 
   def handle_cast({:abort_session, session_key, reason}, state) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.abort_session(state, session_key, reason), state)
+      apply_transition(SessionTransitions.abort_session(state, session_key, reason), state,
+        dropped_reason: reason
+      )
 
     {:noreply, next_state}
   end
 
   def handle_cast({:abort_run, run_id, reason}, state) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.abort_run(state, run_id, reason), state)
+      apply_transition(SessionTransitions.abort_run(state, run_id, reason), state,
+        dropped_reason: reason
+      )
 
     {:noreply, next_state}
   end
@@ -310,7 +327,9 @@ defmodule LemonRouter.SessionCoordinator do
   def handle_info({:steer_accepted, submission_run_id}, state)
       when is_binary(submission_run_id) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state)
+      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state,
+        steered_into: active_submission_run_id(state)
+      )
 
     {:noreply, next_state}
   end
@@ -318,7 +337,9 @@ defmodule LemonRouter.SessionCoordinator do
   def handle_info({:steer_backlog_accepted, submission_run_id}, state)
       when is_binary(submission_run_id) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state)
+      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state,
+        steered_into: active_submission_run_id(state)
+      )
 
     {:noreply, next_state}
   end
@@ -356,7 +377,9 @@ defmodule LemonRouter.SessionCoordinator do
   def handle_info({:redirect_accepted, submission_run_id}, state)
       when is_binary(submission_run_id) do
     {:noreply, next_state} =
-      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state)
+      apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state,
+        steered_into: active_submission_run_id(state)
+      )
 
     {:noreply, next_state}
   end
@@ -410,9 +433,11 @@ defmodule LemonRouter.SessionCoordinator do
     :ok
   end
 
-  defp apply_transition({:ok, transitioned_state, effects}, original_state, opts \\ []) do
+  defp apply_transition(transition, original_state, opts \\ [])
+
+  defp apply_transition({:ok, transitioned_state, effects}, original_state, opts) do
+    complete_dropped_submissions(original_state, transitioned_state, opts)
     {next_state, reply} = apply_effects(transitioned_state, effects, opts)
-    maybe_emit_superseded_queue_phase(original_state, next_state)
     maybe_cleanup_event_bridge_runs(original_state, next_state)
 
     if opts[:reply?] do
@@ -420,6 +445,10 @@ defmodule LemonRouter.SessionCoordinator do
     else
       {:noreply, next_state}
     end
+  end
+
+  defp apply_transition({:error, reason}, original_state, _opts) do
+    {:reply, {:error, reason}, original_state}
   end
 
   @spec apply_effects(SessionState.t(), [QueueEffect.t()], keyword()) ::
@@ -569,6 +598,8 @@ defmodule LemonRouter.SessionCoordinator do
   defp put_active_submission_phase(state, _run_id, _phase), do: state
 
   defp maybe_start_next(%SessionState{active: nil, queue: [next | rest]} = state, opts) do
+    next = refresh_queued_resume(next)
+
     case RunStarter.start(next, self(), state.conversation_key) do
       {:ok, pid} when is_pid(pid) ->
         next_state = activate_submission(state, next, rest, pid, opts)
@@ -605,6 +636,29 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp maybe_start_next(state, _opts), do: {state, :noop}
 
+  defp refresh_queued_resume(%Submission{} = submission) do
+    request = submission.execution_request
+    source = MapHelpers.get_key(request.meta || %{}, :resume_source)
+
+    if source == :explicit or (is_nil(source) and not is_nil(request.resume)) do
+      submission
+    else
+      case LemonRouter.ResumeResolver.resolve(nil, submission.session_key, request.meta || %{}) do
+        {:ok, resume, resume_source} ->
+          request = %{
+            request
+            | resume: resume,
+              meta: Map.put(request.meta || %{}, :resume_source, resume_source)
+          }
+
+          %{submission | execution_request: request}
+
+        {:error, _reason} ->
+          submission
+      end
+    end
+  end
+
   # SessionRegistry is an ephemeral read model. A registry restart can remove
   # its row while the independently supervised RunProcess survives. Before an
   # idle coordinator accepts new work, adopt that authoritative process so the
@@ -634,9 +688,9 @@ defmodule LemonRouter.SessionCoordinator do
         {:error, :session_busy}
     end
   rescue
-    _ -> {:error, :router_not_ready}
+    ArgumentError -> {:error, :router_not_ready}
   catch
-    _, _ -> {:error, :router_not_ready}
+    :exit, _ -> {:error, :router_not_ready}
   end
 
   defp recover_surviving_session_run(state, _session_key), do: {:ok, state}
@@ -702,8 +756,6 @@ defmodule LemonRouter.SessionCoordinator do
       [{pid, _} | _] when is_pid(pid) -> if Process.alive?(pid), do: pid
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp partially_started_run_pid(_run_id), do: nil
@@ -731,15 +783,7 @@ defmodule LemonRouter.SessionCoordinator do
         }
       )
 
-    Bus.broadcast(Bus.run_topic(submission.run_id), event)
-  rescue
-    error ->
-      Logger.error(
-        "SessionCoordinator failed to emit start failure run_id=#{inspect(submission.run_id)} " <>
-          "error=#{Exception.message(error)}"
-      )
-
-      :ok
+    LemonRouter.RunCompletion.publish(submission.execution_request, event)
   end
 
   defp start_failure_reason(reason)
@@ -759,33 +803,53 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp maybe_emit_waiting_for_slot(%Submission{} = submission, false), do: submission
 
-  defp maybe_emit_superseded_queue_phase(
-         %SessionState{queue: original_queue},
-         %SessionState{queue: next_queue}
-       ) do
-    case {List.last(original_queue), List.last(next_queue)} do
-      {%Submission{queue_mode: :followup} = previous,
-       %Submission{queue_mode: :followup} = current}
-      when previous.run_id != current.run_id and length(original_queue) == length(next_queue) ->
-        if same_queue_prefix?(original_queue, next_queue) and phase_emission_enabled?(previous) do
-          previous_phase = previous.current_phase || :queued_in_session
-          _ = PhasePublisher.emit(previous, :aborted, previous_phase)
+  defp complete_dropped_submissions(original_state, next_state, opts) do
+    retained = retained_run_ids(next_state)
+    replacement = List.last(next_state.queue)
+
+    submissions =
+      original_state.queue ++
+        Enum.flat_map(original_state.pending_steers, fn {_run_id, entries} ->
+          Enum.map(entries, fn {submission, _mode} -> submission end)
+        end)
+
+    Enum.each(submissions, fn submission ->
+      unless MapSet.member?(retained, submission.run_id) do
+        {ok?, error, meta} =
+          cond do
+            Keyword.has_key?(opts, :dropped_reason) ->
+              {false, opts[:dropped_reason], %{disposition: :cancelled, cancelled: true}}
+
+            is_binary(opts[:steered_into]) ->
+              {true, nil, %{disposition: :steered, active_run_id: opts[:steered_into]}}
+
+            match?(%Submission{}, replacement) ->
+              {false, %{type: :superseded, replacement_run_id: replacement.run_id},
+               %{disposition: :merged, replacement_run_id: replacement.run_id}}
+          end
+
+        event =
+          LemonCore.Event.new(
+            :run_completed,
+            Events.RunCompleted.new(%{
+              completed: Events.Completion.new(%{ok: ok?, error: error, answer: "", meta: meta}),
+              duration_ms: 0
+            }),
+            %{run_id: submission.run_id, session_key: submission.session_key, synthetic: true}
+          )
+
+        LemonRouter.RunCompletion.publish(submission.execution_request, event)
+
+        if not ok? and phase_emission_enabled?(submission) do
+          _ =
+            PhasePublisher.emit(
+              submission,
+              :aborted,
+              submission.current_phase || :queued_in_session
+            )
         end
-
-        :ok
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp maybe_emit_superseded_queue_phase(_original_state, _next_state), do: :ok
-
-  defp same_queue_prefix?(original_queue, next_queue) do
-    original_prefix = Enum.drop(original_queue, -1)
-    next_prefix = Enum.drop(next_queue, -1)
-
-    Enum.map(original_prefix, & &1.run_id) == Enum.map(next_prefix, & &1.run_id)
+      end
+    end)
   end
 
   defp phase_emission_enabled?(%Submission{} = submission) do
@@ -836,8 +900,6 @@ defmodule LemonRouter.SessionCoordinator do
   defp maybe_cancel_active(%SessionState{active: %{pid: pid}} = state, reason) when is_pid(pid) do
     LemonRouter.RunProcess.abort(pid, reason)
     state
-  rescue
-    _ -> state
   end
 
   defp maybe_cancel_active(state, _reason), do: state
@@ -852,13 +914,11 @@ defmodule LemonRouter.SessionCoordinator do
         GenServer.cast(run_pid, {steer_mode, submission_run_id, prompt || "", self()})
         :ok
     end
-  rescue
-    _ -> :error
   end
 
   # Redirect degrades to a queued follow-up when the run cannot accept it. The
   # correction is not lost, but the user asked to change an in-flight request,
-  # so tell them what actually happened. Never crash the coordinator over it.
+  # so tell them what actually happened.
   defp notify_redirect_fallback(%Submission{run_id: run_id, session_key: session_key}) do
     parsed = LemonRouter.ChannelContext.parse_session_key(session_key)
 
@@ -892,8 +952,6 @@ defmodule LemonRouter.SessionCoordinator do
     else
       _ -> :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp notify_redirect_fallback(_submission), do: :ok
@@ -925,9 +983,9 @@ defmodule LemonRouter.SessionCoordinator do
       :ok
     end
   rescue
-    _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   catch
-    _, _ -> {:error, :unavailable}
+    :exit, _ -> {:error, :unavailable}
   end
 
   defp clear_active_session_registry(
@@ -944,7 +1002,7 @@ defmodule LemonRouter.SessionCoordinator do
 
     state
   rescue
-    _ -> state
+    ArgumentError -> state
   end
 
   defp clear_active_session_registry(state), do: state
@@ -956,7 +1014,21 @@ defmodule LemonRouter.SessionCoordinator do
       runtime.run_pid(run_id)
     end
   rescue
-    _ -> nil
+    error in ArgumentError ->
+      # Registry metadata can disappear or be incomplete during a restart.
+      # ArgumentErrors from the runtime callback itself must still surface.
+      case __STACKTRACE__ do
+        [{Registry, :key_info!, _, _} | _] ->
+          nil
+
+        [{:ets, :lookup_element, [_registry, 0, 2], _}, {Registry, :key_ets!, _, _} | _] ->
+          nil
+
+        stacktrace ->
+          reraise error, stacktrace
+      end
+  catch
+    :exit, {:noproc, {GenServer, :call, _}} -> nil
   end
 
   defp runtime_run_pid(_), do: nil
@@ -971,9 +1043,7 @@ defmodule LemonRouter.SessionCoordinator do
        {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
      ])}
   rescue
-    _ -> {:error, :unavailable}
-  catch
-    _, _ -> {:error, :unavailable}
+    ArgumentError -> {:error, :unavailable}
   end
 
   defp maybe_cancel_resume_conversation(session_key, reason) do
@@ -981,8 +1051,6 @@ defmodule LemonRouter.SessionCoordinator do
       nil -> :ok
       conversation_key -> cancel_conversation(conversation_key, reason)
     end
-  rescue
-    _ -> :ok
   end
 
   defp resume_conversation_key(session_key) when is_binary(session_key) do

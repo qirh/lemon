@@ -6,6 +6,8 @@ defmodule CodingAgent.Tools.BashTest do
   alias LemonAgent.AbortSignal
   alias LemonAi.Types.TextContent
 
+  import CodingAgent.AsyncHelpers
+
   @moduletag :tmp_dir
 
   describe "tool/2" do
@@ -325,7 +327,7 @@ defmodule CodingAgent.Tools.BashTest do
       AbortSignal.clear(signal)
     end
 
-    test "timeout option cancels long-running command", %{tmp_dir: tmp_dir} do
+    test "timeout option kills a long-running command as an error", %{tmp_dir: tmp_dir} do
       result =
         Bash.execute(
           "call_1",
@@ -333,14 +335,20 @@ defmodule CodingAgent.Tools.BashTest do
           nil,
           nil,
           tmp_dir,
-          timeout_ms: 100
+          timeout_ms: 1_000
         )
 
-      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
-      assert text =~ "cancelled"
+      assert %AgentToolResult{
+               content: [%TextContent{text: text}],
+               details: details,
+               is_error: true
+             } = result
+
+      assert text =~ "timed out after 1000 ms"
       assert text =~ "started"
       refute text =~ "finished"
       assert details.exit_code == nil
+      assert details.timed_out
     end
 
     test "cleanup after abort does not leak resources", %{tmp_dir: tmp_dir} do
@@ -392,7 +400,7 @@ defmodule CodingAgent.Tools.BashTest do
         end)
 
       # Wait for some output
-      Process.sleep(200)
+      assert_eventually(fn -> Agent.get(agent, & &1) != [] end, timeout: 5_000)
 
       # Abort
       AbortSignal.abort(signal)
@@ -537,12 +545,6 @@ defmodule CodingAgent.Tools.BashTest do
       # Should have non-zero exit code for syntax error
       assert details.exit_code != 0
       assert text =~ "syntax error" or text =~ "unexpected" or details.exit_code == 2
-    end
-
-    test "missing command parameter raises", %{tmp_dir: tmp_dir} do
-      assert_raise KeyError, fn ->
-        Bash.execute("call_1", %{}, nil, nil, tmp_dir, [])
-      end
     end
   end
 

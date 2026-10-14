@@ -5,6 +5,7 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
 
   alias LemonCore.Config.Modular
   alias LemonSim.Examples.Helpers, as: GameHelpers
+  alias LemonSim.Examples.Poker
   alias LemonSim.Examples.Poker.Artifacts
   alias LemonSim.LLM.GameHelpers.Config, as: GameConfig
 
@@ -15,10 +16,14 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
 
       mix lemon.sim.poker
       mix lemon.sim.poker --player-count 2 --max-hands 1 --seed 7
+      mix lemon.sim.poker --offline-strategy heuristic --seed 1 --deterministic-artifacts --artifact-dir /tmp/poker
       mix lemon.sim.poker --model anthropic:claude-sonnet-4-20250514
       mix lemon.sim.poker --player-count 3 --models zai:glm-5,anthropic:claude-sonnet-4-20250514,openai:gpt-4.1
 
   Multi-model assignments are applied in seat order (player_1..player_N).
+  Every run writes a replay-verifiable `lemon_sim.run.v1` bundle to
+  `--artifact-dir` (default `apps/lemon_sim/priv/game_logs/poker/<sim_id>`).
+  `--offline-strategy heuristic` needs no provider credentials.
   """
 
   @switches [
@@ -31,6 +36,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
     seed: :integer,
     sim_id: :string,
     artifact_dir: :string,
+    deterministic_artifacts: :boolean,
+    offline_strategy: :string,
     model: :string,
     models: :string,
     transcript_path: :string,
@@ -51,9 +58,12 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       opts[:model] && opts[:models] ->
         Mix.raise("pass either --model or --models, not both")
 
+      opts[:offline_strategy] && (opts[:model] || opts[:models]) ->
+        Mix.raise("--offline-strategy cannot be combined with --model or --models")
+
       true ->
         Common.ensure_runtime_started!()
-        config = Modular.load(project_dir: File.cwd!())
+        sim_id = opts[:sim_id] || "poker_#{System.unique_integer([:positive])}"
 
         run_opts =
           []
@@ -63,39 +73,42 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
           |> GameHelpers.maybe_put(:starting_stack, opts[:starting_stack])
           |> GameHelpers.maybe_put(:max_hands, opts[:max_hands])
           |> GameHelpers.maybe_put(:seed, opts[:seed])
-          |> GameHelpers.maybe_put(:sim_id, opts[:sim_id])
+          |> GameHelpers.maybe_put(:deterministic_artifacts?, opts[:deterministic_artifacts])
+          |> Keyword.put(:sim_id, sim_id)
+          |> Keyword.put(
+            :artifact_dir,
+            opts[:artifact_dir] || Artifacts.default_artifact_dir(sim_id)
+          )
 
-        result =
-          if opts[:models] do
-            run_opts
-            |> Keyword.put(:model_assignments, build_model_assignments!(opts, config))
-            |> GameHelpers.maybe_put(:transcript_path, opts[:transcript_path])
-            |> LemonSim.Examples.Poker.run_multi_model()
-          else
-            run_opts
-            |> GameHelpers.maybe_put(:model, resolve_model(opts[:model], config))
-            |> LemonSim.Examples.Poker.run()
-          end
-
-        case result do
-          {:ok, final_state} ->
-            artifact_opts =
-              run_opts
-              |> GameHelpers.maybe_put(:artifact_dir, opts[:artifact_dir])
-
-            {:ok, _artifacts} =
-              Artifacts.write_run_artifacts(
-                final_state,
-                final_state.recent_events,
-                [],
-                artifact_opts
-              )
-
-            :ok
+        case run_poker(opts, run_opts) do
+          {:ok, _result} ->
+            Mix.shell().info("Artifacts written to #{Keyword.fetch!(run_opts, :artifact_dir)}")
 
           {:error, reason} ->
             Mix.raise("poker sim failed: #{inspect(reason)}")
         end
+    end
+  end
+
+  defp run_poker(opts, run_opts) do
+    cond do
+      strategy = opts[:offline_strategy] ->
+        Poker.run_offline_strategy(strategy, run_opts)
+
+      opts[:models] ->
+        config = Modular.load(project_dir: File.cwd!())
+
+        run_opts
+        |> Keyword.put(:model_assignments, build_model_assignments!(opts, config))
+        |> GameHelpers.maybe_put(:transcript_path, opts[:transcript_path])
+        |> Poker.run_multi_model()
+
+      true ->
+        config = Modular.load(project_dir: File.cwd!())
+
+        run_opts
+        |> GameHelpers.maybe_put(:model, resolve_model(opts[:model], config))
+        |> Poker.run()
     end
   end
 
@@ -140,7 +153,7 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
     mix lemon.sim.poker [options]
 
     Options:
-      --persist / --no-persist     Persist the final state (default: true)
+      --persist / --no-persist     Persist the final state (live default: true, offline: false)
       --max-turns N                Maximum decision steps before the sim stops
       --max-driver-turns N         Deprecated alias for --max-turns
       --player-count N             Number of seats to fill (default: 4)
@@ -149,6 +162,8 @@ defmodule Mix.Tasks.Lemon.Sim.Poker do
       --seed N                     Base seed for deterministic shuffles
       --sim-id ID                  Override generated simulation id
       --artifact-dir DIR           Override benchmark artifact output directory
+      --deterministic-artifacts    Pin artifact timestamps for byte-reproducible bundles
+      --offline-strategy NAME      Keyless self-play strategy (heuristic)
       --model PROVIDER:MODEL       Override the configured default model
       --models A,B,C               Per-seat models in seat order (player_1..N)
       --transcript-path PATH       JSONL transcript path for multi-model runs

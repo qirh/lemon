@@ -13,11 +13,6 @@
 #   clients/tui/package.json
 #   clients/lemon-browser-node/package.json
 #   clients/lemon-browser-node/package-lock.json
-#   clients/lemon-web/package.json
-#   clients/lemon-web/package-lock.json
-#   clients/lemon-web/shared/package.json
-#   clients/lemon-web/server/package.json
-#   clients/lemon-web/web/package.json
 
 set -euo pipefail
 
@@ -134,36 +129,6 @@ else:
 PYEOF
 }
 
-bump_lemon_web_workspace_lock() {
-  local new_ver="$1"
-  local file="$REPO_ROOT/clients/lemon-web/package-lock.json"
-
-  if [ ! -f "$file" ]; then
-    return
-  fi
-
-  python3 - "$file" "$new_ver" <<'PYEOF'
-import json, sys
-path, new_ver = sys.argv[1], sys.argv[2]
-with open(path) as f:
-    d = json.load(f)
-packages = d.get("packages", {})
-changed = False
-for key in ("server", "shared", "web"):
-    entry = packages.get(key)
-    if isinstance(entry, dict) and entry.get("version") != new_ver:
-        entry["version"] = new_ver
-        changed = True
-if changed:
-    with open(path, "w") as f:
-        json.dump(d, f, indent=2)
-        f.write("\n")
-    print(f"  {path}: workspace versions -> {new_ver}")
-else:
-    print(f"  {path}: workspace versions already {new_ver}")
-PYEOF
-}
-
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 if [ $# -eq 0 ]; then
@@ -186,10 +151,6 @@ bump_mix "$NEW_VERSION"
 CLIENT_PACKAGES=(
   "clients/tui/package.json"
   "clients/lemon-browser-node/package.json"
-  "clients/lemon-web/package.json"
-  "clients/lemon-web/shared/package.json"
-  "clients/lemon-web/server/package.json"
-  "clients/lemon-web/web/package.json"
 )
 
 for rel_path in "${CLIENT_PACKAGES[@]}"; do
@@ -198,14 +159,12 @@ done
 
 PACKAGE_LOCKS=(
   "clients/lemon-browser-node/package-lock.json"
-  "clients/lemon-web/package-lock.json"
 )
 
 for rel_path in "${PACKAGE_LOCKS[@]}"; do
   bump_package_lock_root "$NEW_VERSION" "$REPO_ROOT/$rel_path"
 done
 
-bump_lemon_web_workspace_lock "$NEW_VERSION"
 # clients/tui/bun.lock does not embed the package version, so it needs no bump.
 
 echo ""

@@ -225,7 +225,7 @@ defmodule LemonCli.HermesMigrationTest do
     end
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 100)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

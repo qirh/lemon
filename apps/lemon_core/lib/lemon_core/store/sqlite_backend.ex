@@ -196,25 +196,32 @@ defmodule LemonCore.Store.SqliteBackend do
       encoded_key = encode(key)
 
       with :ok <- bind_statement(state.statements.get, [table_name, {:blob, encoded_key}]) do
-        case Sqlite3.step(state.conn, state.statements.get) do
-          {:row, [value_blob]} ->
-            case decode(value_blob, table: table, field: :value, key: key) do
-              {:ok, value} -> {:ok, value, state}
-              {:error, reason} -> {:error, reason}
-            end
+        result =
+          case Sqlite3.step(state.conn, state.statements.get) do
+            {:row, [value_blob]} ->
+              case decode(value_blob, table: table, field: :value, key: key) do
+                {:ok, value} -> {:ok, value, state}
+                {:error, reason} -> {:error, reason}
+              end
 
-          :done ->
-            {:ok, nil, state}
+            :done ->
+              {:ok, nil, state}
 
-          :busy ->
-            {:error, :sqlite_busy}
+            :busy ->
+              {:error, :sqlite_busy}
 
-          {:error, reason} ->
-            {:error, reason}
+            {:error, reason} ->
+              {:error, reason}
 
-          other ->
-            {:error, {:sqlite_get_failed, other}}
-        end
+            other ->
+              {:error, {:sqlite_get_failed, other}}
+          end
+
+        # A single-row SELECT left on SQLITE_ROW keeps its read snapshot open;
+        # a later write or checkpoint on this connection would then see a stale
+        # WAL snapshot and fail with SQLITE_BUSY. Finish it on every path.
+        _ = Sqlite3.reset(state.statements.get)
+        result
       end
     end
   end
@@ -237,6 +244,61 @@ defmodule LemonCore.Store.SqliteBackend do
         {:error, reason} -> {:error, reason}
         other -> {:error, {:sqlite_delete_failed, other}}
       end
+    end
+  end
+
+  # BEGIN IMMEDIATE takes the database write lock before the read, so another
+  # process sharing the file cannot change the row between compare and write.
+  @impl true
+  def compare_and_swap(state, table, key, expected, replacement) do
+    if ephemeral_table?(state, table) do
+      {table_ets, state} = ensure_ephemeral_table(state, table)
+
+      current =
+        case :ets.lookup(table_ets, key) do
+          [{^key, found}] -> found
+          _ -> nil
+        end
+
+      if current === expected do
+        :ets.insert(table_ets, {key, replacement})
+        {:ok, state}
+      else
+        {:error, :mismatch, state}
+      end
+    else
+      compare_and_swap_persistent(state, table, key, expected, replacement)
+    end
+  end
+
+  @doc """
+  Checkpoints the write-ahead log into the database file with `TRUNCATE`.
+
+  The store runs with `synchronous=NORMAL`, so a committed transaction may
+  still sit unsynced in the WAL. A complete checkpoint syncs the WAL, copies
+  it into the database, and syncs the database file (with `F_FULLFSYNC` on
+  macOS, via `checkpoint_fullfsync`); a checkpoint blocked by
+  another connection is reported as `{:error, :sqlite_checkpoint_busy}`
+  rather than claiming durability. Cached statements are reset first: a read
+  statement left on its last row holds a read transaction on this connection
+  that would block the checkpoint.
+  """
+  @impl true
+  def sync(state) do
+    reset_statements(state)
+
+    with {:ok, statement} <- Sqlite3.prepare(state.conn, "PRAGMA wal_checkpoint(TRUNCATE)") do
+      result =
+        case Sqlite3.step(state.conn, statement) do
+          {:row, [0, _log_frames, _checkpointed]} -> {:ok, state}
+          {:row, [_busy | _rest]} -> {:error, :sqlite_checkpoint_busy}
+          :busy -> {:error, :sqlite_checkpoint_busy}
+          {:error, reason} -> {:error, reason}
+          other -> {:error, {:sqlite_checkpoint_failed, other}}
+        end
+
+      _ = Sqlite3.release(state.conn, statement)
+      result
     end
   end
 
@@ -387,6 +449,10 @@ defmodule LemonCore.Store.SqliteBackend do
   defp init_db(conn) do
     with :ok <- Sqlite3.execute(conn, "PRAGMA journal_mode=WAL"),
          :ok <- Sqlite3.execute(conn, "PRAGMA synchronous=NORMAL"),
+         # Checkpoints are the `sync/1` durability barrier; on macOS a plain
+         # fsync does not reach stable storage, so they use F_FULLFSYNC there
+         # (a no-op elsewhere). Ordinary commits are unaffected.
+         :ok <- Sqlite3.execute(conn, "PRAGMA checkpoint_fullfsync=ON"),
          :ok <- Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY"),
          :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout=5000"),
          :ok <- Sqlite3.execute(conn, @schema_sql) do
@@ -425,7 +491,7 @@ defmodule LemonCore.Store.SqliteBackend do
       File.dir?(expanded) ->
         Path.join(expanded, @default_filename)
 
-      String.ends_with?(expanded, "/") ->
+      String.ends_with?(path, "/") ->
         Path.join(expanded, @default_filename)
 
       ext in [".db", ".sqlite", ".sqlite3"] ->
@@ -510,7 +576,51 @@ defmodule LemonCore.Store.SqliteBackend do
     end
   end
 
+  # Every cached statement is finished first: one left mid-result would pin an
+  # old read snapshot and turn BEGIN IMMEDIATE into SQLITE_BUSY.
+  defp reset_statements(state), do: Enum.each(Map.values(state.statements), &Sqlite3.reset/1)
+
+  defp compare_and_swap_persistent(state, table, key, expected, replacement) do
+    reset_statements(state)
+
+    case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      :ok ->
+        result =
+          with :ok <- validate_persistent_snapshots(state, [{table, key, expected}]),
+               {:ok, _state} <- put(state, table, key, replacement),
+               :ok <- Sqlite3.execute(state.conn, "COMMIT") do
+            :ok
+          end
+
+        case result do
+          :ok ->
+            {:ok, state}
+
+          {:error, :mismatch} ->
+            _ = Sqlite3.execute(state.conn, "ROLLBACK")
+            {:error, :mismatch, state}
+
+          error ->
+            _ = Sqlite3.execute(state.conn, "ROLLBACK")
+            {:error, normalize_transaction_error(error), state}
+        end
+
+      error ->
+        {:error, normalize_transaction_error(error), state}
+    end
+  rescue
+    error ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:sqlite_transaction_failed, Exception.message(error)}, state}
+  catch
+    kind, reason ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:sqlite_transaction_failed, kind, reason}, state}
+  end
+
   defp compare_and_delete_persistent(state, entries) do
+    reset_statements(state)
+
     case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
       :ok ->
         result =
@@ -558,7 +668,6 @@ defmodule LemonCore.Store.SqliteBackend do
       case delete(state, table, key) do
         {:ok, _state} -> {:cont, :ok}
         {:error, reason} -> {:halt, {:error, reason}}
-        other -> {:halt, {:error, {:sqlite_delete_failed, other}}}
       end
     end)
   end

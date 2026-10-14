@@ -45,89 +45,83 @@ defmodule CodingAgent.Tools.Agent do
           "action" => %{
             "type" => "string",
             "enum" => @valid_actions,
-            "description" => "Action to perform: run (default), poll, or join"
+            "description" => "Default: run"
           },
           "agent_id" => agent_id_property,
           "prompt" => %{
             "type" => "string",
-            "description" => "Prompt to send to the delegated agent"
+            "description" => "Delegated assignment"
           },
           "role" => role_property,
           "description" => %{
             "type" => "string",
-            "description" => "Optional short description for tracking"
+            "description" => "Short tracking label"
           },
           "async" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), run in background and return task_id immediately. ALWAYS use async=true unless you absolutely must wait for the result before continuing."
+            "description" => "Default/recommended true: return receipt immediately; false waits"
           },
           "auto_followup" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), forward delegated completion back into this session"
+            "description" => "Default true: forward completion into this session"
           },
           "continue_session" => %{
             "type" => "boolean",
-            "description" =>
-              "When true (default), reuse a deterministic delegated session for continuity"
+            "description" => "Default true: reuse the deterministic delegated session"
           },
           "session_key" => %{
             "type" => "string",
-            "description" =>
-              "Optional explicit delegated session key (must be a valid Lemon session key)"
+            "description" => "Explicit delegated session key; must be valid"
           },
           "queue_mode" => %{
             "type" => "string",
             "enum" => @valid_queue_modes,
-            "description" => "Queue mode for delegated run (default: collect)"
+            "description" => "Submission queue; default collect"
           },
           "followup_queue_mode" => %{
             "type" => "string",
             "enum" => @valid_queue_modes,
-            "description" =>
-              "Optional queue mode for delegated completion followup (default: app config, fallback: followup)"
+            "description" => "Completion queue; default configured mode or followup"
           },
           "model" => %{
             "type" => "string",
-            "description" => "Optional model override for delegated run"
+            "description" => "Model override"
           },
           "tool_policy" => %{
             "type" => "object",
-            "description" => "Optional delegated tool policy override map"
+            "description" => "Delegated tool policy"
           },
           "cwd" => %{
             "type" => "string",
             "description" =>
-              "Optional delegated working directory. Local runs default to the current cwd; named-node runs default to the destination cwd."
+              "Working directory; defaults to current cwd locally, destination cwd remotely"
           },
           "node" => %{
             "type" => "string",
             "description" =>
-              "Optional execution node name. Omit or use local for this node; named nodes use their own credentials and default cwd unless cwd is explicit."
+              "Execution node; omit or local for this node. Remote nodes use destination credentials"
           },
           "meta" => %{
             "type" => "object",
-            "description" => "Optional metadata map merged into delegated request"
+            "description" => "Delegated request metadata"
           },
           "timeout_ms" => %{
             "type" => "integer",
-            "description" =>
-              "Timeout for synchronous waiting (action=run and async=false, default: 120000)"
+            "description" => "Synchronous wait timeout; default 120000"
           },
           "task_id" => %{
             "type" => "string",
-            "description" => "Task id to poll (action=poll) or join (single id shortcut)"
+            "description" => "Poll target or single join target"
           },
           "task_ids" => %{
             "type" => "array",
             "items" => %{"type" => "string"},
-            "description" => "Task ids to join (action=join)"
+            "description" => "Join targets"
           },
           "mode" => %{
             "type" => "string",
             "enum" => ["wait_all", "wait_any"],
-            "description" => "Join mode for action=join (default: wait_all)"
+            "description" => "Join mode; default wait_all"
           }
         },
         "required" => []
@@ -411,13 +405,17 @@ defmodule CodingAgent.Tools.Agent do
         description: validated.description,
         kind: :agent,
         run_id: run_id,
+        parent_run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
+        session_key: Keyword.get(opts, :session_key),
+        parent_session_id: Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session),
+        parent_agent_id: Keyword.get(opts, :agent_id),
         agent_id: validated.agent_id,
         delegated_session_key: delegated_session_key,
         role: validated.role_id,
         node: result_node(validated)
       })
 
-    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key)
+    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key, opts)
 
     watcher_result =
       start_completion_watcher(
@@ -497,7 +495,9 @@ defmodule CodingAgent.Tools.Agent do
     }
   end
 
-  defp register_delegated_run(run_id, task_id, validated, delegated_session_key) do
+  defp register_delegated_run(run_id, task_id, validated, delegated_session_key, opts) do
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
+
     case RunGraph.get(run_id) do
       {:ok, _record} ->
         :ok
@@ -510,7 +510,9 @@ defmodule CodingAgent.Tools.Agent do
           status: :queued,
           inserted_at: now,
           updated_at: now,
-          parent: nil,
+          parent: parent_run_id,
+          session_key: Keyword.get(opts, :session_key),
+          parent_session_id: Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session),
           children: [],
           type: :agent,
           task_id: task_id,
@@ -520,6 +522,12 @@ defmodule CodingAgent.Tools.Agent do
           node: result_node(validated)
         })
     end
+
+    if is_binary(parent_run_id) and parent_run_id != "" and parent_run_id != run_id do
+      RunGraph.add_child(parent_run_id, run_id)
+    end
+
+    :ok
   end
 
   defp wait_sync_completion(run_id, validated, delegated_session_key) do
@@ -554,15 +562,19 @@ defmodule CodingAgent.Tools.Agent do
 
   defp build_run_request(validated, delegated_session_key, cwd, opts) do
     parent_session_key = Keyword.get(opts, :session_key)
-    parent_session_id = Keyword.get(opts, :session_id)
+    parent_session_id = Keyword.get(opts, :session_id) || Keyword.get(opts, :parent_session)
     parent_agent_id = Keyword.get(opts, :agent_id)
+    parent_run_id = Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id)
 
     role_cwd = validated.cwd || cwd
 
-    with {:ok, prompt} <- maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
+    with {:ok, prompt, persona} <-
+           maybe_apply_role_prompt(validated.prompt, validated.role_id, role_cwd) do
       base_meta =
         %{
+          parent_run_id: parent_run_id,
           delegated_by: %{
+            run_id: parent_run_id,
             session_key: parent_session_key,
             session_id: parent_session_id,
             agent_id: parent_agent_id
@@ -576,8 +588,16 @@ defmodule CodingAgent.Tools.Agent do
         |> compact_map()
 
       meta =
-        base_meta
-        |> Map.merge(validated.meta)
+        validated.meta
+        |> Map.drop([
+          :delegated_by,
+          "delegated_by",
+          :delegated,
+          "delegated",
+          :parent_run_id,
+          "parent_run_id"
+        ])
+        |> Map.merge(base_meta)
         |> Map.drop([
           :node,
           "node",
@@ -596,9 +616,13 @@ defmodule CodingAgent.Tools.Agent do
           agent_id: validated.agent_id,
           prompt: prompt,
           queue_mode: validated.queue_mode,
-          model: validated.model,
+          model: validated.model || persona_model(persona),
           cwd: validated.cwd || cwd,
-          tool_policy: validated.tool_policy,
+          tool_policy:
+            if(persona,
+              do: Subagents.tool_policy(persona, validated.tool_policy),
+              else: validated.tool_policy
+            ),
           meta: meta
         })
 
@@ -1085,8 +1109,6 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp completion_from_summary(_), do: nil
-
   defp normalize_answer(answer, _fallback) when is_binary(answer), do: answer
   defp normalize_answer(nil, fallback) when is_binary(fallback), do: fallback
   defp normalize_answer(nil, _fallback), do: ""
@@ -1336,15 +1358,18 @@ defmodule CodingAgent.Tools.Agent do
 
   defp validate_run_params(_, _cwd), do: {:error, "params must be an object"}
 
-  defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt}
-  defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt}
+  defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt, nil}
+  defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt, nil}
 
   defp maybe_apply_role_prompt(prompt, role_id, cwd) do
-    case Subagents.get(cwd, role_id) do
-      nil -> {:error, "Unknown role: #{role_id}"}
-      role -> {:ok, role.prompt <> "\n\n" <> prompt}
+    with {:ok, persona} <- Subagents.fetch(cwd, role_id) do
+      {:ok, persona.prompt <> "\n\n" <> prompt, persona}
     end
   end
+
+  defp persona_model(%{model: model}) when is_binary(model), do: model
+  defp persona_model(%{role: role}) when is_binary(role), do: "@" <> role
+  defp persona_model(_), do: nil
 
   defp normalize_join_mode(nil), do: :wait_all
   defp normalize_join_mode("wait_all"), do: :wait_all
@@ -1543,34 +1568,11 @@ defmodule CodingAgent.Tools.Agent do
 
   defp build_description do
     """
-    Delegate work to another Lemon agent profile via the router/orchestrator.
-
-    **When to use `agent` vs `task`:**
-    - `agent`: Route work through Lemon's run pipeline using agent profiles, queue modes, and delegated session continuity.
-    - `task`: Run a native focused subtask directly from the current coding session.
-
-    **Default behavior (recommended):** async=true means the delegated run executes in background and notifies you when done. This keeps the user conversation flowing smoothly without blocking.
-
-    **Agent selection:**
-    - Default: use the same agent_id as the current session (matches your profile/capabilities)
-    - Specialized tasks: choose a different agent if the work requires different tools/privileges
-    - Review/oracle patterns: delegate to a specific agent for independent verification
-
-    **Usage patterns:**
-    - Fire-and-forget: async=true, auto_followup=true (you'll get notified when done)
-    - Check later: async=true, then poll with action=poll and task_id
-    - Wait on many tasks: action=join with task_ids (mode=wait_all or wait_any)
-    - Wait for result: async=false (blocks until completion - use sparingly for simple/quick tasks only)
-
-    **Key parameters:**
-    - action: run (default), poll, or join
-    - role: optional subagent prompt preset applied to the delegated prompt
-    - async: true (default) = non-blocking, false = blocking/wait
-    - auto_followup: true (default) = completion forwards back to this session
-    - queue_mode: delegated run submission mode (default: collect)
-    - followup_queue_mode: delegated completion delivery mode (default: app config, fallback: followup)
-    - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
-    - node: optional named execution node (omitted or "local" runs locally)
+    Delegate via Lemon's router for agent-profile/node workflows and session continuity.
+    Use task for native coding subagents. Prefer async=true: receipts are not answers;
+    join task_ids for required same-turn results. auto_followup delivers later.
+    Delegated sessions preserve continuity by default. Named execution nodes use their
+    own credentials and working directory; cwd overrides the latter explicitly.
     """
     |> String.trim()
   end
@@ -1580,19 +1582,13 @@ defmodule CodingAgent.Tools.Agent do
 
     base = %{
       "type" => "string",
-      "description" =>
-        "Target agent id for action=run. DEFAULT: use the same agent_id as this session (inherits your profile, tools, and capabilities)."
+      "description" => "Target agent profile; normally the current agent_id"
     }
 
     if ids == [] do
       base
     else
-      base
-      |> Map.put("enum", ids)
-      |> Map.put(
-        "description",
-        "Target agent id for action=run. Available: #{Enum.join(ids, ", ")}"
-      )
+      Map.put(base, "enum", ids)
     end
   end
 
@@ -1601,8 +1597,7 @@ defmodule CodingAgent.Tools.Agent do
 
     base = %{
       "type" => "string",
-      "description" =>
-        "Optional role prompt preset (from Subagents) to prepend to the delegated prompt."
+      "description" => "Optional discovered persona preset"
     }
 
     if ids == [] do
@@ -1650,8 +1645,6 @@ defmodule CodingAgent.Tools.Agent do
     |> ensure_default_agent_id()
     |> Enum.sort()
   end
-
-  defp normalize_agent_ids(_), do: ["default"]
 
   defp normalize_agent_id(id) when is_binary(id) do
     id = String.trim(id)

@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   @moduledoc """
   Supervised speech-generation preview tool backed by LemonMedia.MediaJobSupervisor.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Supports deterministic local WAV previews,
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Supports deterministic local WAV previews,
   OpenAI TTS, ElevenLabs TTS, and Google Cloud Text-to-Speech; the cloud
   providers require their respective credentials.
   """
@@ -830,8 +829,6 @@ defmodule LemonSkills.Tools.MediaGenerateSpeech do
   end
 
   defp optional_string(_value), do: nil
-
-  defp provider_config_value(nil, _key), do: nil
 
   defp provider_config_value(cfg, key) when is_map(cfg) do
     Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))

@@ -89,8 +89,6 @@ defmodule LemonRouter.Router do
       peer_kind: msg.peer.kind,
       agent_id: meta[:agent_id] || meta["agent_id"] || "default"
     })
-  rescue
-    _ -> :ok
   end
 
   @doc """
@@ -173,10 +171,8 @@ defmodule LemonRouter.Router do
 
   defp register_abort_tombstone(run_id, reason) do
     RunOrchestrator.register_abort(run_id, reason)
-  rescue
-    _exception -> {:error, :outcome_unknown}
   catch
-    _kind, _reason -> {:error, :outcome_unknown}
+    :exit, _reason -> {:error, :outcome_unknown}
   end
 
   @doc """
@@ -207,7 +203,17 @@ defmodule LemonRouter.Router do
           account_id: msg.account_id,
           peer: msg.peer,
           sender: msg.sender,
-          raw: msg.raw
+          raw: msg.raw,
+          # Read by LemonRouter.Policy so per-channel and group-chat tool
+          # restrictions apply to real channel ingress. Always derived from
+          # the transport-normalized message, never from caller meta.
+          channel_context: %{
+            channel_id: msg.channel_id,
+            account_id: msg.account_id,
+            peer_kind: msg.peer.kind,
+            peer_id: msg.peer.id,
+            thread_id: msg.peer.thread_id
+          }
         })
     })
   end
@@ -250,8 +256,6 @@ defmodule LemonRouter.Router do
     {text, marker} = PendingCompaction.prepare(msg.message.text, session_key, :channel)
     meta = PendingCompaction.put_prepared_marker(meta, marker)
     {%{msg | message: Map.put(msg.message, :text, text)}, meta}
-  rescue
-    _ -> {msg, meta}
   end
 
   @doc false

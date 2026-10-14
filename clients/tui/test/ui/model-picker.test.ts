@@ -3,12 +3,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { ModelPicker } from "../../src/ui/components/model-picker.ts";
 import type { PickerOverlay } from "../../src/ui/components/pickers.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { createHarness, type Harness } from "../helpers/command-harness.ts";
 import { renderPlain } from "../helpers/memory-terminal.ts";
+import { waitFor } from "../helpers/wait.ts";
 
 const ESC = "\x1b";
 const ENTER = "\r";
@@ -75,7 +80,10 @@ describe("stages", () => {
 		await picker.open();
 		current().handleInput(ENTER);
 		expect(picker.stage).toBe("model");
-		expect(current().items.map((item) => item.value)).toEqual(["claude-sonnet-4", "claude-opus-4"]);
+		expect(current().items.map((item) => item.value)).toEqual([
+			"anthropic:claude-sonnet-4",
+			"anthropic:claude-opus-4",
+		]);
 		expect(renderPlain(current().render(70))).toContain("anthropic");
 	});
 
@@ -108,7 +116,7 @@ describe("stages", () => {
 		const picker = makePicker();
 		await picker.open();
 		expect(picker.stage).toBe("model");
-		expect(current().items.map((item) => item.value)).toEqual(["gpt-4o"]);
+		expect(current().items.map((item) => item.value)).toEqual(["openai:gpt-4o"]);
 	});
 
 	test("nothing to choose from is said, not shown", async () => {
@@ -129,10 +137,53 @@ describe("applying", () => {
 		await Bun.sleep(20);
 		expect(harness.server.requestsFor("sessions.patch")[0].params).toEqual({
 			sessionKey: "tui-session",
-			model: "claude-sonnet-4",
+			model: "anthropic:claude-sonnet-4",
 		});
-		expect(harness.store.focused.model).toBe("claude-sonnet-4");
+		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
 		expect(harness.host.statusRefreshes).toBeGreaterThan(0);
+	});
+
+	test("Make default writes [defaults] and keeps the rest of config.toml", async () => {
+		const previousHome = process.env.HOME;
+		const home = mkdtempSync(join(tmpdir(), "lemon-tui-default-"));
+		process.env.HOME = home;
+		try {
+			mkdirSync(join(home, ".lemon"));
+			const original = [
+				"# setup wrote this",
+				"[defaults]",
+				'provider = "openai-codex"',
+				'model = "openai-codex:gpt-5"',
+				"",
+				'[providers."openai-codex"]',
+				'oauth_secret = "llm_openai_codex_api_key"',
+				"",
+				"[gateway]",
+				"max_concurrent_runs = 2",
+				"",
+			].join("\n");
+			writeFileSync(join(home, ".lemon", "config.toml"), original);
+
+			const picker = makePicker();
+			await picker.open();
+			current().handleInput("openai");
+			current().handleInput(ENTER);
+			current().handleInput(CTRL_G);
+			current().handleInput(ENTER);
+			await waitFor(() => harness.host.text.includes("default model: openai:gpt-4o"));
+
+			const written = readFileSync(join(home, ".lemon", "config.toml"), "utf-8");
+			expect(written).toBe(
+				original
+					.replace('provider = "openai-codex"', 'provider = "openai"')
+					.replace('model = "openai-codex:gpt-5"', 'model = "openai:gpt-4o"'),
+			);
+			expect(written).not.toContain("[agent]");
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			rmSync(home, { recursive: true, force: true });
+		}
 	});
 
 	test("Ctrl+G toggles the global persist hint", async () => {
@@ -163,6 +214,32 @@ describe("applying", () => {
 		expect(current().items[0].label).toContain("(current)");
 	});
 
+	test("provider search does not contaminate the model search or back navigation", async () => {
+		const picker = makePicker();
+		await picker.open();
+		current().handleInput("anthropic");
+		current().handleInput(ENTER);
+		expect(current().filter).toBe("");
+		current().handleInput("sonnet");
+		expect(renderPlain(current().render(80))).toContain("claude-sonnet-4");
+		current().handleInput(ESC);
+		expect(current().filter).toBe("");
+	});
+
+	test("switching models replaces stale context and provider metadata", async () => {
+		harness.store.focused.setModel(
+			{ model: "openai:gpt-4o", provider: "openai", contextWindow: 128_000 },
+			"run",
+		);
+		const picker = makePicker();
+		await picker.open();
+		current().handleInput(ENTER);
+		current().handleInput(ENTER);
+		await waitFor(() => harness.store.focused.modelSource === "local", { what: "model patch" });
+		expect(harness.store.focused.contextWindow).toBe(200_000);
+		expect(harness.store.focused.provider).toBe("anthropic");
+	});
+
 	test("hints describe the model", async () => {
 		const picker = makePicker();
 		await picker.open();
@@ -171,4 +248,59 @@ describe("applying", () => {
 		expect(text).toContain("200k ctx");
 		expect(text).toContain("thinking");
 	});
+});
+
+test("an exact model ID ranks before a longer sibling even when marked current", async () => {
+	harness.server.respondWith("models.list", {
+		models: [
+			{ id: "gpt-5.5-pro", provider: "openai-codex" },
+			{ id: "gpt-5.5", provider: "openai-codex" },
+		],
+	});
+	harness.store.focused.model = "openai-codex:gpt-5.5";
+	const picker = makePicker();
+	await picker.open();
+	current().handleInput("gpt-5.5");
+	expect(current().selected?.value).toBe("openai-codex:gpt-5.5");
+});
+
+test("a native surface gets one provider-grouped stage with the current model marked", async () => {
+	harness.store.focused.model = "gpt-4o";
+	setNativeRendering(true);
+	try {
+		const picker = makePicker();
+		await picker.open();
+		expect(picker.stage).toBe("model");
+		const sheet = current().describe({
+			cols: 80,
+			dark: true,
+			reduceMotion: true,
+			supports: () => true,
+			feature: () => false,
+		});
+		expect(sheet?.p).toMatchObject({
+			current: ["openai:gpt-4o"],
+			order: [
+				{ group: "anthropic:0", label: "anthropic", count: 2 },
+				"anthropic:claude-sonnet-4",
+				"anthropic:claude-opus-4",
+				{ group: "openai:2", label: "openai", count: 1 },
+				"openai:gpt-4o",
+			],
+		});
+		// Esc closes rather than stepping back to a provider stage that is not shown.
+		const before = closed;
+		current().handleInput(ESC);
+		expect(closed).toBeGreaterThan(before);
+	} finally {
+		setNativeRendering(false);
+	}
+});
+
+test("the native Make default button toggles persistence like Ctrl+G", async () => {
+	const picker = makePicker();
+	await picker.open();
+	current().handleInput(ENTER);
+	current().handleNativeEvent({ type: "action", key: "", act: "global", mods: [] });
+	expect(picker.persistGlobally).toBe(true);
 });

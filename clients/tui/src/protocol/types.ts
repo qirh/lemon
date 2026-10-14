@@ -71,6 +71,10 @@ export interface AgentCompletedEvent {
 	runId: string;
 	sessionKey: Nullable<string>;
 	ok: Nullable<boolean>;
+	/** Authoritative terminal cancellation; never inferred from a failed run. */
+	cancelled?: boolean;
+	/** Bounded/redacted JSON value projected by the daemon. */
+	error?: unknown;
 	/**
 	 * Server-truncated to 500 bytes. The accumulated delta buffer is the source
 	 * of truth for final text; this is a fallback for runs with no deltas.
@@ -144,6 +148,13 @@ export interface ApprovalRequestedEvent {
 	requestedAtMs: Nullable<number>;
 	expiresAtMs: Nullable<number>;
 }
+
+/**
+ * The tool a plan-mode agent calls when its plan is decision-complete. Its
+ * `action` is `{ title, path, plan }` (plan = Markdown); `approve_once` executes
+ * the plan, `deny` sends it back for refinement, and no scope applies.
+ */
+export const PROPOSE_PLAN_TOOL = "propose_plan";
 
 export type ApprovalDecision = "once" | "session" | "global" | "deny" | string;
 
@@ -257,9 +268,11 @@ export interface ProtocolEventMap {
 	"exec.approval.requested": ApprovalRequestedEvent;
 	"exec.approval.resolved": ApprovalResolvedEvent;
 	"channel.delivery": ChannelDeliveryEvent;
-	"talk.mode": { sessionKey: Nullable<string>; mode: string };
-	"voicewake.changed": Record<string, unknown>;
-	custom: Record<string, unknown>;
+	/**
+	 * `{reason, session: session_wire}` for an omp delegate. Untrusted and
+	 * unvalidated on the wire: consumers parse it with `parseOmpSessionEvent`.
+	 */
+	"omp.session": unknown;
 }
 
 export type ProtocolEventName = keyof ProtocolEventMap & string;
@@ -301,10 +314,21 @@ export interface ConnectParams {
 
 export type QueueMode = "collect" | "followup" | "steer" | "redirect" | "interrupt";
 
+/** Canonical LemonAi image content; data is raw base64, not a data URL or path. */
+export interface ImageContent {
+	type: "image";
+	mime_type: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+	data: string;
+}
+
 export interface ChatSendParams {
 	sessionKey: string;
 	prompt: string;
+	/** At most five images and 10 MiB aggregate decoded bytes. */
+	images?: readonly ImageContent[];
 	agentId?: string;
+	/** Launch workspace for ordinary TUI sessions; profiles keep server-owned cwd. */
+	cwd?: string;
 	queueMode?: QueueMode;
 }
 
@@ -391,6 +415,8 @@ export interface ProfileDeleteResult {
 export interface ProfileChatParams {
 	id: string;
 	prompt: string;
+	/** Same canonical multimodal payload as chat.send, through the profile route. */
+	images?: readonly ImageContent[];
 	model?: string;
 	queueMode?: QueueMode;
 }
@@ -476,6 +502,8 @@ export interface ChatAbortResult {
 
 export interface ChatHistoryParams {
 	sessionKey: string;
+	/** Resolve the native active branch instead of archived run summaries. */
+	cwd?: string;
 	/** Server clamps to 200. */
 	limit?: number;
 	beforeId?: string;
@@ -488,6 +516,17 @@ export interface ChatHistoryMessage {
 	content: string;
 	timestampMs: Nullable<number>;
 	truncated?: boolean;
+	/** Native tool identity, shared by its call and result rows. */
+	toolCallId?: string;
+	toolName?: string;
+	title?: string;
+	arguments?: Record<string, unknown>;
+	details?: Record<string, unknown>;
+	phase?: "started" | "completed";
+	ok?: Nullable<boolean>;
+	cancelled?: boolean;
+	/** Persisted duration only; absence is not a zero-length execution. */
+	durationMs?: Nullable<number>;
 	[key: string]: unknown;
 }
 
@@ -551,6 +590,109 @@ export interface SessionsListResult {
 	filters?: Record<string, unknown>;
 	summary?: Record<string, unknown>;
 	[key: string]: unknown;
+}
+
+export interface SessionsForkParams {
+	sessionKey: string;
+	cwd: string;
+}
+
+export interface SessionsForkResult {
+	sessionKey: string;
+	sourceSessionKey: string;
+}
+
+export interface SessionsPlanParams {
+	sessionKey: string;
+	cwd: string;
+	/** `status` reads; `enter`/`exit` toggle and refuse while a run is active. */
+	action: "status" | "enter" | "exit";
+}
+
+export interface SessionsPlanResult {
+	sessionKey: string;
+	plan: {
+		mode: "code" | "plan";
+		/** The session-private plan file, once one exists. */
+		path: string | null;
+		/** Its current Markdown; null when missing or unreadable. */
+		content: string | null;
+	};
+}
+
+export interface SessionsCompactParams {
+	sessionKey: string;
+	cwd?: string;
+	focus?: string;
+	summary?: string;
+	force?: boolean;
+}
+
+export interface SessionsContextParams {
+	sessionKey: string;
+	cwd: string;
+}
+
+/** `sessions.context` category ids, in the contract's fixed display order. */
+export type ContextCategoryId =
+	| "system_prompt"
+	| "tool_definitions"
+	| "skills"
+	| "context_files"
+	| "memory"
+	| "user_messages"
+	| "assistant_messages"
+	| "tool_results"
+	| "summaries"
+	| "unattributed";
+
+export interface ContextCategoryUsage {
+	id: ContextCategoryId;
+	label: string;
+	tokens: number;
+	/** Share of the window (1 decimal), or null when the window is unknown. */
+	percent: number | null;
+	items: number | undefined;
+}
+
+export interface ContextContributor {
+	/** Undefined when the daemon named a category this client does not know. */
+	category: ContextCategoryId | undefined;
+	label: string;
+	tokens: number;
+}
+
+export interface ContextAutoCompaction {
+	enabled: boolean;
+	thresholdTokens: number;
+	reserveTokens: number | undefined;
+	headroomTokens: number | undefined;
+}
+
+/**
+ * A validated `sessions.context` receipt. Unknown category ids are dropped;
+ * whatever they held is reported as {@link otherTokens} so the rows shown
+ * still sum to {@link usedTokens}.
+ */
+export interface SessionsContextResult {
+	sessionKey: string;
+	live: boolean;
+	/** How system prompt/tool overhead was measured. */
+	overhead: "live" | "snapshot" | "unavailable";
+	model: { provider: string | undefined; id: string } | null;
+	window: number | null;
+	usedTokens: number;
+	freeTokens: number | null;
+	percentUsed: number | null;
+	source: "usage" | "usage+estimate" | "estimate";
+	estimatedTokens: number | undefined;
+	autoCompaction: ContextAutoCompaction | null;
+	categories: ContextCategoryUsage[];
+	/** Tokens in categories this client does not know, so the shown rows stay honest. */
+	otherTokens: number;
+	top: ContextContributor[];
+	messageCount: number | undefined;
+	measuredAt: number | undefined;
 }
 
 export interface SessionsListParams {

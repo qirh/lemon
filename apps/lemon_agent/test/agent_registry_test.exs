@@ -15,6 +15,8 @@ defmodule LemonAgent.AgentRegistryTest do
 
   alias LemonAgent.AgentRegistry
 
+  import LemonCore.Testing.AsyncHelpers
+
   # Helper to generate unique session IDs for test isolation
   defp unique_session_id do
     "session_#{System.unique_integer([:positive, :monotonic])}"
@@ -197,10 +199,8 @@ defmodule LemonAgent.AgentRegistryTest do
 
       # Terminate the process
       send(pid, :exit)
-      # Give the registry time to clean up
-      Process.sleep(50)
-
-      assert :error = AgentRegistry.lookup(key)
+      # The registry removes the entry asynchronously after the process exits
+      assert_eventually(fn -> AgentRegistry.lookup(key) == :error end, timeout: 5_000)
     end
 
     test "returns correct pid when multiple sessions exist" do
@@ -542,9 +542,8 @@ defmodule LemonAgent.AgentRegistryTest do
 
       # Make the process crash
       send(pid, :crash)
-      Process.sleep(50)
-
-      assert :error = AgentRegistry.lookup(key)
+      # The registry removes the entry asynchronously after the process exits
+      assert_eventually(fn -> AgentRegistry.lookup(key) == :error end, timeout: 5_000)
     end
 
     test "lookup returns :error after normal process exit" do
@@ -558,9 +557,8 @@ defmodule LemonAgent.AgentRegistryTest do
       end)
 
       assert_receive :registered
-      Process.sleep(50)
-
-      assert :error = AgentRegistry.lookup(key)
+      # The registry removes the entry asynchronously after the process exits
+      assert_eventually(fn -> AgentRegistry.lookup(key) == :error end, timeout: 5_000)
     end
   end
 
@@ -891,10 +889,8 @@ defmodule LemonAgent.AgentRegistryTest do
       send(pid, :exit)
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-      # Give registry time to clean up
-      Process.sleep(50)
-
-      assert :error = AgentRegistry.lookup(key)
+      # The registry removes the entry asynchronously after the process exits
+      assert_eventually(fn -> AgentRegistry.lookup(key) == :error end, timeout: 5_000)
     end
 
     test "linked process termination cleans up registration" do
@@ -934,9 +930,8 @@ defmodule LemonAgent.AgentRegistryTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, reason}
       assert reason in [:intentional, :noproc]
 
-      Process.sleep(50)
-
-      assert :error = AgentRegistry.lookup(key)
+      # The registry removes the entry asynchronously after the process exits
+      assert_eventually(fn -> AgentRegistry.lookup(key) == :error end, timeout: 5_000)
     end
   end
 end

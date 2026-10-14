@@ -42,6 +42,59 @@ defmodule LemonCore.Config.ModularIntegrationTest do
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
   end
 
+  test "real TOML budget caps merge globally and project overrides retain zero", %{
+    mock_home: home,
+    tmp_dir: project
+  } do
+    File.mkdir_p!(Path.join(home, ".lemon"))
+    File.mkdir_p!(Path.join(project, ".lemon"))
+
+    File.write!(Path.join(home, ".lemon/config.toml"), """
+    [budgets]
+    max_run_tokens = 500
+    max_run_cost_usd = 1.5
+    max_session_tokens = 2000
+    """)
+
+    File.write!(Path.join(project, ".lemon/config.toml"), """
+    [budgets]
+    max_run_tokens = 0
+    max_session_cost_usd = 4
+    """)
+
+    config = LemonCore.Config.load_base_from_disk(project)
+
+    assert config.budgets == %{
+             max_run_tokens: 0,
+             max_run_cost_usd: 1.5,
+             max_session_tokens: 2000,
+             max_session_cost_usd: 4
+           }
+
+    assert LemonCore.Config.to_map(config).budgets == config.budgets
+  end
+
+  test "omitted caps are unlimited and invalid caps fail validation and runtime loading", %{
+    tmp_dir: project
+  } do
+    assert {:ok, config} = Modular.validate_settings(%{})
+    assert Enum.all?(config.budgets, fn {_key, value} -> is_nil(value) end)
+
+    for {key, invalid} <- [
+          {"max_run_tokens", -1},
+          {"max_session_tokens", 0.5},
+          {"max_run_cost_usd", -0.01},
+          {"max_session_cost_usd", "unlimited"}
+        ] do
+      assert {:error, errors} = Modular.validate_settings(%{"budgets" => %{key => invalid}})
+      assert Enum.any?(errors, &String.contains?(&1, "budgets.#{key}"))
+    end
+
+    File.mkdir_p!(Path.join(project, ".lemon"))
+    File.write!(Path.join(project, ".lemon/config.toml"), "[budgets]\nmax_run_tokens = -1\n")
+    assert_raise ValidationError, fn -> Modular.load(project_dir: project) end
+  end
+
   describe "load/1 with validation" do
     test "loads config without validation by default", %{mock_home: mock_home} do
       # Create a minimal valid config using canonical sections
@@ -192,9 +245,7 @@ defmodule LemonCore.Config.ModularIntegrationTest do
       model = ""
       """)
 
-      assert {:error, errors} = Modular.load_with_validation()
-      assert is_list(errors)
-      assert errors != []
+      assert {:error, _errors} = Modular.load_with_validation()
     end
 
     test "includes specific error messages", %{mock_home: mock_home} do
@@ -293,18 +344,33 @@ defmodule LemonCore.Config.ModularIntegrationTest do
   end
 
   describe "deprecated sections" do
-    test "raises on [agent] section", %{mock_home: mock_home} do
+    test "loads a legacy [agent] section as its canonical sections, with a warning",
+         %{mock_home: mock_home} do
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
       [agent]
-      default_model = "test-model"
+      default_provider = "openai"
+      default_model = "openai:test-model"
+      theme = "light"
+      max_tool_turns = 40
       """)
 
-      assert_raise ValidationError, ~r/deprecated/i, fn ->
-        Modular.load()
-      end
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          config = Modular.load()
+
+          assert config.agent.default_provider == "openai"
+          assert config.agent.default_model == "openai:test-model"
+          assert config.agent.max_tool_turns == 40
+          assert config.tui.theme == "light"
+        end)
+
+      assert log =~ "[agent] is deprecated"
+      assert log =~ "lemon config migrate"
+      assert [warning] = Modular.deprecation_warnings()
+      assert warning =~ "[agent] is deprecated"
     end
 
     test "raises on [agents] section", %{mock_home: mock_home} do

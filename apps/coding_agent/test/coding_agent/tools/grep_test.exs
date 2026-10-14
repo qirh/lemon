@@ -6,6 +6,19 @@ defmodule CodingAgent.Tools.GrepTest do
   alias LemonAi.Types.TextContent
 
   @moduletag :tmp_dir
+  test "fallback skips explicitly targeted binary files", %{tmp_dir: tmp_dir} do
+    File.write!(Path.join(tmp_dir, "binary.dat"), <<"needle", 0, 255>>)
+
+    assert %AgentToolResult{details: %{match_count: 0}} =
+             Grep.execute(
+               "binary",
+               %{"pattern" => "needle", "path" => "binary.dat"},
+               nil,
+               nil,
+               tmp_dir,
+               ripgrep_available?: false
+             )
+  end
 
   describe "tool/2" do
     test "returns an AgentTool struct with correct properties" do
@@ -607,7 +620,7 @@ defmodule CodingAgent.Tools.GrepTest do
           ripgrep_available?: true,
           ripgrep_timeout_ms: 20,
           rg_cmd_fun: fn "rg", _args, _opts ->
-            Process.sleep(200)
+            Process.sleep(10_000)
             {"", 0}
           end
         )
@@ -634,7 +647,7 @@ defmodule CodingAgent.Tools.GrepTest do
           ripgrep_available?: true,
           ripgrep_timeout_ms: 2_000,
           rg_cmd_fun: fn "rg", _args, _opts ->
-            Process.sleep(500)
+            Process.sleep(10_000)
             {"", 0}
           end
         )
@@ -693,6 +706,21 @@ defmodule CodingAgent.Tools.GrepTest do
     test "returns boolean" do
       result = Grep.ripgrep_available?()
       assert is_boolean(result)
+    end
+  end
+
+  describe "patterns that start with a dash" do
+    test "are searched for, not parsed as flags", %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "flags.ex"), "-foo value\nfn x -> y end\nplain\n")
+
+      result = Grep.execute("call_1", %{"pattern" => "-foo"}, nil, nil, tmp_dir, [])
+      assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+      assert details.match_count == 1
+      assert text =~ "-foo value"
+
+      params = %{"pattern" => "->", "literal" => true}
+      arrow = Grep.execute("call_2", params, nil, nil, tmp_dir, [])
+      assert %AgentToolResult{details: %{match_count: 1}} = arrow
     end
   end
 end

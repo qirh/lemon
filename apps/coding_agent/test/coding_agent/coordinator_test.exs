@@ -123,7 +123,7 @@ defmodule CodingAgent.CoordinatorTest do
           :ok
 
         {:ok, pid} ->
-          assert_receive {:EXIT, ^pid, _reason}, 100
+          assert_receive {:EXIT, ^pid, _reason}, 2_000
       end
 
       Process.flag(:trap_exit, false)
@@ -138,7 +138,7 @@ defmodule CodingAgent.CoordinatorTest do
           :ok
 
         {:ok, pid} ->
-          assert_receive {:EXIT, ^pid, _reason}, 100
+          assert_receive {:EXIT, ^pid, _reason}, 2_000
       end
 
       Process.flag(:trap_exit, false)
@@ -272,9 +272,9 @@ defmodule CodingAgent.CoordinatorTest do
       coordinator = start_coordinator(cwd: tmp_dir, default_timeout: 1_000)
 
       specs = [
-        %{prompt: "Research task", subagent: "research"},
+        %{prompt: "Research task", subagent: "scout"},
         %{prompt: "Invalid task", subagent: "nonexistent_subagent"},
-        %{prompt: "Review task", subagent: "review"}
+        %{prompt: "Review task", subagent: "reviewer"}
       ]
 
       results = Coordinator.run_subagents(coordinator, specs, timeout: 200)
@@ -346,12 +346,8 @@ defmodule CodingAgent.CoordinatorTest do
 
       _results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
 
-      # Give cleanup a moment
-      Process.sleep(100)
-
-      # Should have no active subagents
-      active = Coordinator.list_active(coordinator)
-      assert active == []
+      # Should have no active subagents once cleanup completes
+      assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
     end
   end
 
@@ -376,8 +372,8 @@ defmodule CodingAgent.CoordinatorTest do
         send(parent, {:results, results})
       end)
 
-      # Give time for subagents to start
-      Process.sleep(50)
+      # Wait for subagents to start
+      assert_eventually(fn -> Coordinator.list_active(coordinator) != [] end, 5_000)
 
       # Abort all
       :ok = Coordinator.abort_all(coordinator)

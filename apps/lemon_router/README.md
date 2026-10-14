@@ -88,7 +88,8 @@ attachment policy.
   tombstone was registered; an unknown registration outcome is propagated to
   the bridge. These commands do not wait for synchronous application by every
   target run process.
-- Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
+- Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd` (channel-origin runs default to the assistant home, not `$HOME`).
+- Channel ingress sets `meta.channel_context`, so group chats require approval for every `bash`, `write`, `edit`, `patch`, and `hashline_edit` call.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from
   `action.detail.result_meta`, including `error_type`, tool name, timeout,
@@ -105,8 +106,8 @@ attachment policy.
 
 `SessionCoordinator` serializes by conversation key:
 
-- `{:resume, engine, token}` when a structured resume token is available
-- `{:session, session_key}` otherwise
+- `{:resume, engine, token}` for explicit shared resume tokens
+- `{:session, session_key}` for ordinary sessions, including automatic resume
 
 Queue-mode behavior lives here:
 
@@ -116,6 +117,33 @@ Queue-mode behavior lives here:
 - `:steer_backlog` attempts in-run steer and falls back to collect
 - active async task/delegated auto-followups are promoted to `:steer` so completions try to reach the live parent run before falling back to a queued followup
 - `:interrupt` cancels the active run and inserts the new request at the front
+
+When the target runtime registry or lookup process is absent, steering uses the
+same queued fallback. Redirect also queues the correction as a follow-up and
+notifies the channel that it could not redirect the in-flight run. Unexpected
+runtime lookup or notification-dispatch exceptions still propagate.
+
+Conversation backlogs are bounded to 128 queued/pending submissions, 1 MiB
+of pending prompt text and 16 MiB of encoded pending image data. A new submission
+exceeding a bound returns `:session_queue_full` without mutating the queue or
+interrupting the active run;
+replaying an already retained fixed run ID remains an acknowledgement lookup.
+Gateway admission additionally bounds launch queues and global slot waiters.
+
+Each accepted submission retains a durable terminal receipt even if it never
+starts an executor. A merged followup ends with `error.type: :superseded` and its
+`replacement_run_id`; the replacement executes the merged prompt in order.
+An accepted steer ends with `ok: true`, `meta.disposition: :steered` and its
+`active_run_id`; that active run owns the eventual answer. Queued cancellation
+publishes a failed completion with the cancellation reason. These receipts are
+persisted before terminal notifications, so `agent.wait` also works after the
+event was delivered. Queue counts reflect live coordinator backlogs, not
+submit/start telemetry that can drift after merges or cancellation.
+
+Queued automatic-resume requests resolve their native token again when they
+start, after the prior turn persisted its resume state. They retain the session
+conversation owner while the backlog drains, preventing split queues and fresh
+sessions caused by a token that was unavailable at enqueue time.
 
 Pending compaction is coupled to this submission boundary. Fresh markers remain
 stored while the compacted prompt is prepared and are deleted only after the
@@ -142,6 +170,28 @@ and the durable terminal `RunStore` record before any retry can enqueue work.
 `SessionRegistry` remains an ephemeral read model: submission reconstructs an
 idle coordinator from surviving authoritative run processes after a registry
 restart so the one-run-per-session rule still holds.
+
+### Failure boundaries
+
+Unexpected exceptions in router callbacks and internal state transitions propagate
+to OTP instead of being converted into successful acknowledgements, empty policy,
+or unchanged state. Coalescer crashes are visible to their callers and supervisors;
+async task-surface subscribers restart after abnormal exits, but stop normally on
+terminal task events. A restart resumes future events, not a replay of lost deltas.
+
+Expected failures remain distinct: unavailable registry reads return explicit
+errors, store/process exits at admission boundaries retain an outcome-unknown
+result, and malformed enqueue acknowledgements retain the durable submitting
+fence. A callback crash also leaves that fence intact, so supervisor recovery
+cannot accidentally enqueue the same fixed run ID twice. Definite pre-enqueue
+rejections still roll back the claim for retry.
+
+`SurfaceManager.finalize_answer/3` returns final-dispatch errors rather than
+acknowledging a rejected delivery, and does not mark streamed coalescer state
+finalized after that rejection. `StreamCoalescer` preserves explicit dispatch
+errors for retry and reports a crashed finalize call separately. Completion-time
+artifact enrichment and termination-time cancellation remain best-effort so a
+secondary failure cannot suppress the final answer or terminal event.
 
 ## Output Semantics
 

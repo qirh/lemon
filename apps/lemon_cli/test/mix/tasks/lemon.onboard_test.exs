@@ -17,7 +17,6 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
 
     original_home = System.get_env("HOME")
     original_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    original_claude_path = System.get_env("LEMON_ANTHROPIC_CLAUDE_PATH")
 
     System.put_env("HOME", mock_home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -29,9 +28,6 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
         do: System.put_env("LEMON_SECRETS_MASTER_KEY", original_master_key),
         else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
 
-      if original_claude_path,
-        do: System.put_env("LEMON_ANTHROPIC_CLAUDE_PATH", original_claude_path),
-        else: System.delete_env("LEMON_ANTHROPIC_CLAUDE_PATH")
 
       clear_secrets_table()
       File.rm_rf!(tmp_dir)
@@ -59,11 +55,51 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
              "llm_anthropic_api_key_raw"
   end
 
-  test "interactive provider picker supports anthropic oauth", %{tmp_dir: tmp_dir} do
+  test "interactive provider picker supports Claude subscription sign-in", %{tmp_dir: tmp_dir} do
     config_path = Path.join(tmp_dir, "config.toml")
-    System.put_env("LEMON_ANTHROPIC_CLAUDE_PATH", write_fake_claude_cli(tmp_dir))
+    previous_req_defaults = Req.default_options()
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+    # Keep the loopback redirect port busy so sign-in uses the copy-code
+    # prompt; the socket closes with the test process.
+    _ = :gen_tcp.listen(53_692, [:binary, active: false, ip: {127, 0, 0, 1}])
 
-    io = build_io(self(), [], [], [Providers.fetch!("anthropic"), :oauth, false])
+    on_exit(fn ->
+      Req.default_options(previous_req_defaults)
+      Req.Test.set_req_test_to_private(%{})
+    end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      assert %{"grant_type" => "authorization_code", "code" => "browser-code"} = Jason.decode!(body)
+
+      Req.Test.json(conn, %{
+        "access_token" => "sk-ant-oat01-browser",
+        "refresh_token" => "sk-ant-ort01-browser",
+        "expires_in" => 28_800,
+        "account" => %{"uuid" => "acct-1", "email_address" => "user@example.com"}
+      })
+    end)
+
+    {:ok, auth_url} = start_supervised({Agent, fn -> nil end})
+    base_io = build_io(self(), [], [], [Providers.fetch!("anthropic"), :oauth, false])
+
+    io =
+      base_io
+      |> Map.put(:info, fn message ->
+        if String.starts_with?(message, "https://claude.ai/oauth/authorize?"),
+          do: Agent.update(auth_url, fn _ -> message end)
+
+        base_io.info.(message)
+      end)
+      |> Map.put(:prompt, fn message ->
+        if message =~ "code#state" do
+          state = Agent.get(auth_url, &(&1 |> URI.parse() |> Map.fetch!(:query)))
+          "browser-code#" <> URI.decode_query(state)["state"]
+        else
+          base_io.prompt.(message)
+        end
+      end)
 
     Onboard.run_with_io(["--config-path", config_path], io)
 
@@ -72,7 +108,9 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
 
     assert {:ok, secret} = Jason.decode(secret_value)
     assert secret["type"] == "anthropic_oauth"
-    assert secret["access_token"] == "sk-ant-oat01-cli-token"
+    assert secret["access_token"] == "sk-ant-oat01-browser"
+    assert secret["refresh_token"] == "sk-ant-ort01-browser"
+    assert secret["account_email"] == "user@example.com"
 
     {:ok, config_map} = Toml.decode_file(config_path)
 
@@ -257,26 +295,5 @@ defmodule Mix.Tasks.Lemon.OnboardTest do
     Secrets.table()
     |> LemonCore.Store.list()
     |> Enum.each(fn {key, _} -> LemonCore.Store.delete(Secrets.table(), key) end)
-  end
-
-  defp write_fake_claude_cli(tmp_dir) do
-    bin_dir = Path.join(tmp_dir, "bin")
-    File.mkdir_p!(bin_dir)
-    script_path = Path.join(bin_dir, "claude")
-
-    File.write!(
-      script_path,
-      """
-      #!/bin/sh
-      mkdir -p "$HOME/.claude"
-      cat > "$HOME/.claude/.credentials.json" <<'EOF'
-      {"claudeAiOauth":{"accessToken":"sk-ant-oat01-cli-token","refreshToken":"refresh-token","expiresAt":4102444800000}}
-      EOF
-      exit 0
-      """
-    )
-
-    File.chmod!(script_path, 0o755)
-    script_path
   end
 end

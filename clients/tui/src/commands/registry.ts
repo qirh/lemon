@@ -15,10 +15,10 @@
 
 import type { ControlPlaneClient } from "../protocol/client.ts";
 import type { ControlPlaneMethods, MethodName } from "../protocol/methods.ts";
-import type { ChatHistoryMessage } from "../protocol/types.ts";
+import type { ChatHistoryMessage, SessionsContextResult } from "../protocol/types.ts";
 import type { AppStore, SubmissionMode } from "../store/app-store.ts";
 import type { SessionStore } from "../store/session-store.ts";
-import type { NoticeLevel } from "../store/transcript-model.ts";
+import type { CompactionDetails, NoticeLevel } from "../store/transcript-model.ts";
 import type { ThemePreference } from "../ui/theme/appearance.ts";
 
 /** One entry in a picker overlay opened from a command. */
@@ -33,6 +33,8 @@ export interface PickerSpec {
 	items: PickerChoice[];
 	/** Hint line under the list. */
 	footer?: string;
+	/** Preview lines above the choices, visible while the modal is open. */
+	detail?: readonly string[];
 	onSelect: (choice: PickerChoice) => void | Promise<void>;
 	onCancel?: () => void;
 }
@@ -54,8 +56,8 @@ export interface MultiPickerSpec {
  * check for them before calling, and tell the user when they are missing.
  */
 export interface CommandHost {
-	/** Append a notice block to the focused transcript. */
-	notice(text: string, level?: NoticeLevel): void;
+	/** Append a notice block to the focused transcript; `compaction` marks a confirmed compaction. */
+	notice(text: string, level?: NoticeLevel, compaction?: CompactionDetails): void;
 	/** Append a multi-line notice; continuation lines are indented for reading. */
 	noticeBlock(lines: string[], level?: NoticeLevel): void;
 	/** Drop every transcript block and clear native scrollback. */
@@ -82,6 +84,8 @@ export interface CommandHost {
 	openSessionSwitcher?(): void;
 	/** Focus another session, hydrating it if cold. */
 	switchSession?(sessionKey: string): void | Promise<void>;
+	/** Open an already-durable fork in a Tern split, or focus it in this client. */
+	openFork?(sessionKey: string): Promise<void>;
 	/** Remember one server-confirmed profile route and open its canonical chat. */
 	openProfile?(profileId: string, sessionKey: string): void | Promise<void>;
 	/** Forget a route after the server deletes that profile. */
@@ -94,6 +98,8 @@ export interface CommandHost {
 	forgetDeletedSession?(sessionKey: string): void | Promise<void>;
 	/** Forget a session's transcript locally without touching the daemon. */
 	resetSession?(sessionKey: string): void;
+	/** Replace local transcript with the daemon's active branch after a rewind. */
+	reloadSession?(sessionKey: string): Promise<void>;
 	/** Focus the pending-queue panel (`/queue`, Ctrl+Q). */
 	focusQueue?(): boolean;
 	/** Deliver a command-supplied prompt through the normal submission state machine. */
@@ -118,6 +124,13 @@ export interface CommandHost {
 	themeStatus?(): { preference: ThemePreference; appearance: "dark" | "light"; source?: string };
 	/** The two-stage model picker (Ctrl+O), when the UI has one mounted. */
 	openModelPicker?(): void | Promise<void>;
+	openCommandPalette?(query?: string): void | Promise<void>;
+	toggleTaskTree?(): void;
+	/** Open (and focus) the omp delegate panel. */
+	openOmpPanel?(): void;
+	openToolOutput?(mode: "output" | "diff"): void;
+	/** Show one `sessions.context` breakdown in a dismissible panel. */
+	openContextPanel?(usage: SessionsContextResult): void;
 }
 
 export interface CommandContext {

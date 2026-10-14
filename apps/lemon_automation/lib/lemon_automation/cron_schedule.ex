@@ -26,6 +26,13 @@ defmodule LemonAutomation.CronSchedule do
   - `hourly`, `every 2h` - Hour intervals that divide one day
   - `daily at 9am`, `weekdays at 09:30`, `weekly monday at 8am`
 
+  ## Timezones
+
+  `"UTC"` (the default) evaluates schedules in UTC. `"local"` evaluates them in
+  the server's OS-local wall-clock time, DST-aware through `:calendar`, so
+  "09:00" means 09:00 where Lemon runs. The build ships no timezone database,
+  so any other zone name is evaluated as UTC.
+
   ## Examples
 
       # Parse a schedule
@@ -153,8 +160,11 @@ defmodule LemonAutomation.CronSchedule do
   def next_run_datetime(expression, timezone \\ "UTC") do
     case parse(expression) do
       {:ok, parsed} ->
-        now = now_in_timezone(timezone)
-        find_next_run(parsed, now, 0)
+        if local?(timezone) do
+          next_local_run(parsed, local_now())
+        else
+          find_next_run(parsed, now_in_timezone(timezone), 0)
+        end
 
       {:error, _} ->
         nil
@@ -175,8 +185,11 @@ defmodule LemonAutomation.CronSchedule do
 
     case parse(expression) do
       {:ok, parsed} ->
-        now = now_in_timezone(timezone)
-        collect_next_runs(parsed, now, count, [])
+        if local?(timezone) do
+          collect_next_local_runs(parsed, local_now(), count, [])
+        else
+          collect_next_runs(parsed, now_in_timezone(timezone), count, [])
+        end
 
       {:error, _} ->
         []
@@ -485,7 +498,7 @@ defmodule LemonAutomation.CronSchedule do
 
   defp find_next_run(parsed, datetime, iterations) do
     # Move to next minute
-    candidate = DateTime.add(datetime, 1, :minute) |> truncate_to_minute()
+    candidate = datetime |> add_minute() |> truncate_to_minute()
 
     if matches_parsed?(parsed, candidate) do
       candidate
@@ -505,6 +518,52 @@ defmodule LemonAutomation.CronSchedule do
         collect_next_runs(parsed, next, count - 1, [next | acc])
     end
   end
+
+  # Local schedules match against OS-local wall-clock minutes, then convert the
+  # matching minute to UTC. A wall-clock minute skipped by a DST jump has no UTC
+  # instant and is passed over; an ambiguous one (clocks falling back) uses its
+  # first occurrence.
+  defp next_local_run(parsed, local_naive) do
+    case find_next_run(parsed, local_naive, 0) do
+      nil ->
+        nil
+
+      candidate ->
+        case local_to_utc(candidate) do
+          nil -> next_local_run(parsed, candidate)
+          utc -> utc
+        end
+    end
+  end
+
+  defp collect_next_local_runs(_parsed, _from, 0, acc), do: Enum.reverse(acc)
+
+  defp collect_next_local_runs(parsed, from, count, acc) do
+    case find_next_run(parsed, from, 0) do
+      nil ->
+        Enum.reverse(acc)
+
+      candidate ->
+        case local_to_utc(candidate) do
+          nil -> collect_next_local_runs(parsed, candidate, count, acc)
+          utc -> collect_next_local_runs(parsed, candidate, count - 1, [utc | acc])
+        end
+    end
+  end
+
+  defp local_to_utc(%NaiveDateTime{} = local) do
+    case :calendar.local_time_to_universal_time_dst(NaiveDateTime.to_erl(local)) do
+      [utc | _] -> utc |> NaiveDateTime.from_erl!() |> DateTime.from_naive!("Etc/UTC")
+      [] -> nil
+    end
+  end
+
+  defp local?(timezone), do: timezone == "local"
+
+  defp local_now, do: NaiveDateTime.from_erl!(:calendar.local_time())
+
+  defp add_minute(%DateTime{} = datetime), do: DateTime.add(datetime, 1, :minute)
+  defp add_minute(%NaiveDateTime{} = datetime), do: NaiveDateTime.add(datetime, 1, :minute)
 
   defp matches_parsed?(parsed, datetime) do
     datetime.minute in parsed.minute and

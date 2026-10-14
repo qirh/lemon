@@ -173,7 +173,7 @@ defmodule LemonRouter.RunProcessTest do
 
     def track_generated_images(state, _action_event), do: state
     def track_requested_send_files(state, _action_event), do: state
-    def finalize_meta(_state), do: raise("artifact finalize boom")
+    def finalize_meta(_state, _answer), do: raise("artifact finalize boom")
   end
 
   setup do
@@ -343,9 +343,12 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), event)
 
-      refute eventually(fn ->
-               Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) != []
-             end)
+      refute eventually(
+               fn ->
+                 Registry.lookup(Elixir.LemonRouter.SessionRegistry, session_key) != []
+               end,
+               500
+             )
 
       GenServer.stop(pid)
     end
@@ -403,7 +406,7 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
-  defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(fun, deadline)
   end
@@ -885,10 +888,16 @@ defmodule LemonRouter.RunProcessTest do
       assert String.contains?(task_text, "task(codex): review fix")
       assert String.contains?(task_text, "Read: AGENTS.md")
 
-      refute eventually(fn ->
-               Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", :status}) !=
-                 []
-             end)
+      refute eventually(
+               fn ->
+                 Registry.lookup(
+                   LemonRouter.ToolStatusRegistry,
+                   {session_key, "telegram", :status}
+                 ) !=
+                   []
+               end,
+               500
+             )
 
       GenServer.stop(pid)
     end
@@ -1071,7 +1080,7 @@ defmodule LemonRouter.RunProcessTest do
                  session_key: session_key,
                  execution_request: job,
                  submit_to_gateway?: false,
-                 run_watchdog_timeout_ms: 80
+                 run_watchdog_timeout_ms: 250
                })
 
       started_event =
@@ -1083,23 +1092,31 @@ defmodule LemonRouter.RunProcessTest do
 
       :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), started_event)
 
-      Process.sleep(40)
+      # Keep the run active for twice the idle timeout. Without activity extending the
+      # watchdog it would have fired long before the loop ends.
+      keep_active_until = System.monotonic_time(:millisecond) + 2 * 250
 
-      delta_event =
-        LemonCore.Event.new(
-          :delta,
-          %{seq: 1, text: "still working"},
-          %{run_id: run_id, session_key: session_key}
-        )
+      keep_active = fn keep_active, seq ->
+        if System.monotonic_time(:millisecond) < keep_active_until do
+          delta_event =
+            LemonCore.Event.new(
+              :delta,
+              %{seq: seq, text: "still working"},
+              %{run_id: run_id, session_key: session_key}
+            )
 
-      :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event)
+          :ok = LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(run_id), delta_event)
+          refute_receive %LemonCore.Event{type: :run_completed}, 20
+          keep_active.(keep_active, seq + 1)
+        end
+      end
 
-      refute_receive %LemonCore.Event{type: :run_completed}, 50
+      keep_active.(keep_active, 1)
 
       assert_receive %LemonCore.Event{
                        type: :run_completed,
                        payload: %{
-                         completed: %{ok: false, error: {:run_idle_watchdog_timeout, 80}}
+                         completed: %{ok: false, error: {:run_idle_watchdog_timeout, 250}}
                        },
                        meta: %{run_id: ^run_id, session_key: ^session_key, synthetic: true}
                      },
@@ -1837,10 +1854,16 @@ defmodule LemonRouter.RunProcessTest do
                end
              end)
 
-      refute eventually(fn ->
-               Registry.lookup(LemonRouter.ToolStatusRegistry, {session_key, "telegram", :status}) !=
-                 []
-             end)
+      refute eventually(
+               fn ->
+                 Registry.lookup(
+                   LemonRouter.ToolStatusRegistry,
+                   {session_key, "telegram", :status}
+                 ) !=
+                   []
+               end,
+               500
+             )
 
       LemonRouter.ToolStatusCoalescer.flush(session_key, "telegram", surface: task_surface)
 

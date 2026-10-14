@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { SessionStore } from "../../src/store/session-store.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
 
@@ -39,6 +39,38 @@ describe("SessionStore deltas", () => {
 		session.appendDelta("run-1", Number.NaN, "x");
 		expect(session.bufferFor("run-1")).toBe("x");
 	});
+
+	test("text after a tool starts a new segment below the tool without duplicating prior text", () => {
+		const session = new SessionStore("s");
+		const first = session.appendDelta("run", 1, "I will inspect.").block;
+		session.upsertTool(
+			{ id: "read-1", kind: "tool", title: "read", detail: { name: "read" } },
+			"completed",
+			{ runId: "run" },
+		);
+		const replay = session.appendDelta("run", 1, "I will inspect.");
+		expect(replay.accepted).toBe(false);
+		expect(session.blocks).toHaveLength(2);
+		const last = session.appendDelta("run", 2, "The answer.").block;
+		session.finalizeRun("run", { ok: true, answer: "I will inspect.The answer." });
+		expect(session.blocks.map((block) => block.kind)).toEqual(["assistant", "tool", "assistant"]);
+		expect(first.text).toBe("I will inspect.");
+		expect(first.status).toBe("done");
+		expect(last.text).toBe("The answer.");
+		expect(last.status).toBe("done");
+		expect(session.bufferFor("run")).toBe("I will inspect.The answer.");
+	});
+
+	test("completion before a late post-tool delta preserves chronological segments", () => {
+		const session = new SessionStore("s");
+		session.appendDelta("run", 1, "Before");
+		session.addNotice("tool boundary");
+		session.finalizeRun("run", { ok: true });
+		const late = session.appendDelta("run", 2, "After");
+		expect(late.amended).toBe(true);
+		expect(late.block.text).toBe("After");
+		expect(late.block.status).toBe("done");
+	});
 });
 
 describe("SessionStore finalize", () => {
@@ -76,6 +108,19 @@ describe("SessionStore finalize", () => {
 		expect(block?.text).toBe("half a thou");
 		expect(session.busy).toBe(false);
 		expect(session.activeRunId).toBeUndefined();
+	});
+
+	test("the daemon's turn report still lands after a client-side interrupt", () => {
+		const session = new SessionStore("s");
+		session.appendDelta("run-1", 1, "half");
+		session.markInterrupted("run-1");
+		const block = session.finalizeRun("run-1", {
+			ok: false,
+			interrupted: true,
+			turn: { durationMs: 1200, model: "m" },
+		});
+		expect(block?.status).toBe("aborted");
+		expect(block?.turn).toEqual({ durationMs: 1200, model: "m" });
 	});
 
 	test("a replayed delta after finalize is still ignored", () => {
@@ -165,6 +210,64 @@ describe("SessionStore tools", () => {
 		expect(session.blocks.filter((b) => b.kind === "tool")).toHaveLength(1);
 	});
 
+	test("freezes the observed terminal time for success, failure and cancellation", () => {
+		let clock = 1000;
+		const now = spyOn(Date, "now").mockImplementation(() => clock);
+		try {
+			for (const outcome of ["success", "failure", "cancelled"]) {
+				clock = 1000;
+				const session = new SessionStore("s");
+				const action = { id: outcome, kind: "tool", title: "read", detail: null };
+				const block = session.upsertTool(action, "started");
+				expect(block.at).toBe(1000);
+				expect(block.completedAt).toBeUndefined();
+
+				clock = 1020;
+				session.upsertTool(action, "updated");
+				expect(block.at).toBe(1000);
+				expect(block.completedAt).toBeUndefined();
+
+				clock = 1042;
+				const terminal = {
+					...action,
+					detail: {
+						name: "read",
+						result: outcome,
+						details: { cancelled: outcome === "cancelled" },
+					},
+				};
+				session.upsertTool(terminal, "completed", { ok: outcome === "success" });
+				expect(block.completedAt).toBe(1042);
+
+				clock += 600_000;
+				session.upsertTool(terminal, "completed", { ok: outcome === "success" });
+				session.upsertTool(action, "started");
+				session.upsertTool(action, "updated");
+				expect(block.at).toBe(1000);
+				expect(block.completedAt).toBe(1042);
+			}
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	test("an already-completed receipt never acquires an invented duration on replay", () => {
+		let clock = 1000;
+		const now = spyOn(Date, "now").mockImplementation(() => clock);
+		try {
+			const session = new SessionStore("s");
+			const action = { id: "receipt", kind: "tool", title: "read", detail: null };
+			const block = session.upsertTool(action, "completed", { ok: true });
+			expect(block.completedAt).toBeUndefined();
+			clock += 600_000;
+			session.upsertTool(action, "started");
+			session.upsertTool(action, "completed", { ok: false });
+			expect(block.completedAt).toBeUndefined();
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	test("a phase never regresses once the action completed", () => {
 		const session = new SessionStore("s");
 		const action = { id: "a1", kind: "command", title: "bash", detail: null };
@@ -221,6 +324,47 @@ describe("SessionStore tools", () => {
 			runId: "run-1",
 		});
 		expect(session.blocks.filter((b) => b.kind === "tool")).toHaveLength(1);
+	});
+});
+
+describe("SessionStore reasoning", () => {
+	const thought = (text: string) => ({
+		id: "lemon.reasoning.0.1",
+		kind: "reasoning",
+		title: "reasoning",
+		detail: { reasoning: { text, source: "lemon_reasoning" } },
+	});
+
+	test("each phase replaces the block's text in place", () => {
+		const session = new SessionStore("s");
+		const first = session.upsertReasoning(thought("checking"), "updated", { runId: "r" });
+		const second = session.upsertReasoning(thought("checking the seam"), "completed", {
+			runId: "r",
+		});
+		expect(second).toBe(first);
+		expect(second.text).toBe("checking the seam");
+		expect(session.blocks.filter((block) => block.kind === "reasoning")).toHaveLength(1);
+	});
+
+	test("a replayed update cannot reopen a completed thought", () => {
+		const session = new SessionStore("s");
+		session.upsertReasoning(thought("done thinking"), "completed", { runId: "r" });
+		const replay = session.upsertReasoning(thought("half"), "updated", { runId: "r" });
+		expect(replay.phase).toBe("completed");
+		expect(replay.text).toBe("done thinking");
+	});
+
+	test("finalizing the run completes its open thoughts, and only its own", () => {
+		const session = new SessionStore("s");
+		const mine = session.upsertReasoning(thought("mine"), "updated", { runId: "r1" });
+		const other = session.upsertReasoning(
+			{ ...thought("other"), id: "lemon.reasoning.0.2" },
+			"updated",
+			{ runId: "r2" },
+		);
+		session.finalizeRun("r1", { ok: true });
+		expect(mine.phase).toBe("completed");
+		expect(other.phase).toBe("updated");
 	});
 });
 
@@ -367,4 +511,58 @@ describe("SessionStore context tokens", () => {
 	test("is undefined before any run has completed", () => {
 		expect(new SessionStore("s").contextTokens).toBeUndefined();
 	});
+
+	test("a sessions.context measurement wins until the next run reports usage", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ contextTokens: 5_000 });
+		session.applyContextMeasurement(45_210, 200_000);
+		expect(session.contextTokens).toBe(45_210);
+		expect(session.contextMeasurement).toEqual({ tokens: 45_210, window: 200_000 });
+		session.applyUsage({ contextTokens: 47_000 });
+		expect(session.contextTokens).toBe(47_000);
+		expect(session.contextMeasurement).toBeUndefined();
+	});
+
+	test("a model change keeps the measured total but drops its window", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "claude-sonnet-4-5" }, "run");
+		session.applyContextMeasurement(1_000, 200_000);
+		session.setModel({ model: "gpt-4o" }, "local");
+		expect(session.contextMeasurement).toEqual({ tokens: 1_000, window: undefined });
+	});
+
+	test("ignores nonsense measurements and forgets them on reset", () => {
+		const session = new SessionStore("s");
+		session.applyContextMeasurement(-1, 200_000);
+		session.applyContextMeasurement(Number.NaN, 200_000);
+		expect(session.contextMeasurement).toBeUndefined();
+		session.applyContextMeasurement(0, null);
+		expect(session.contextTokens).toBe(0);
+		session.resetTranscript();
+		expect(session.contextMeasurement).toBeUndefined();
+	});
+});
+
+test("a notice seals text layout without hiding the later interrupt outcome", () => {
+	const session = new SessionStore("s");
+	session.activeRunId = "run";
+	session.busy = true;
+	session.appendDelta("run", 1, "partial answer");
+	session.addNotice("aborting");
+	const block = session.markInterrupted("run");
+	expect(block?.status).toBe("aborted");
+	expect(block?.text).toBe("partial answer");
+	session.finalizeRun("run", { ok: true });
+	expect(block?.status).toBe("aborted");
+});
+
+test("replacing history clears synthetic run indexes as well as visible blocks", () => {
+	const session = new SessionStore("s");
+	session.appendDelta("history:entry", Number.NaN, "abandoned text");
+	session.finalizeRun("history:entry", { ok: true });
+	session.resetTranscript();
+	session.appendDelta("history:entry", Number.NaN, "active text");
+	session.finalizeRun("history:entry", { ok: true });
+	expect(session.blocks).toHaveLength(1);
+	expect(session.assistantFor("history:entry")?.text).toBe("active text");
 });

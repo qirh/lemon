@@ -7,6 +7,7 @@ defmodule CodingAgent.SettingsManager do
   """
 
   alias LemonCore.Config, as: LemonConfig
+  alias LemonAgent.ModelRuntime.ModelRoles
 
   @type thinking_level :: :off | :minimal | :low | :medium | :high | :xhigh
 
@@ -18,7 +19,8 @@ defmodule CodingAgent.SettingsManager do
 
   @type t :: %__MODULE__{
           # Model settings
-          default_model: model_config() | nil,
+          default_model: model_config() | String.t() | nil,
+          model_roles: ModelRoles.roles(),
           default_thinking_level: thinking_level(),
 
           # Provider settings
@@ -46,6 +48,10 @@ defmodule CodingAgent.SettingsManager do
           max_retries: non_neg_integer(),
           base_delay_ms: non_neg_integer(),
 
+          # Agent loop settings
+          max_tool_turns: pos_integer() | :infinity,
+          budgets: map(),
+
           # Shell settings
           shell_path: String.t() | nil,
           command_prefix: String.t() | nil,
@@ -65,6 +71,7 @@ defmodule CodingAgent.SettingsManager do
   defstruct [
     # Model settings
     default_model: nil,
+    model_roles: %{},
     default_thinking_level: :medium,
 
     # Provider settings
@@ -80,6 +87,10 @@ defmodule CodingAgent.SettingsManager do
     retry_enabled: true,
     max_retries: 3,
     base_delay_ms: 1000,
+
+    # Agent loop settings: unlimited tool turns unless configured
+    max_tool_turns: :infinity,
+    budgets: %{},
 
     # Shell settings
     shell_path: nil,
@@ -118,6 +129,11 @@ defmodule CodingAgent.SettingsManager do
 
     default_model = parse_model_spec(provider, model)
 
+    case ModelRoles.validate(config.model_roles) do
+      :ok -> :ok
+      {:error, reason} -> raise ArgumentError, reason
+    end
+
     compaction = Map.get(agent, :compaction, %{})
     retry = Map.get(agent, :retry, %{})
     provider_routing = Map.get(agent, :provider_routing, %{})
@@ -127,6 +143,7 @@ defmodule CodingAgent.SettingsManager do
 
     %__MODULE__{
       default_model: default_model,
+      model_roles: config.model_roles,
       default_thinking_level: Map.get(agent, :default_thinking_level, :medium),
       providers: config.providers || %{},
       provider_routing:
@@ -140,6 +157,8 @@ defmodule CodingAgent.SettingsManager do
       retry_enabled: Map.get(retry, :enabled, true),
       max_retries: Map.get(retry, :max_retries, 3),
       base_delay_ms: Map.get(retry, :base_delay_ms, 1000),
+      max_tool_turns: Map.get(agent, :max_tool_turns) || :infinity,
+      budgets: config.budgets,
       shell_path: Map.get(shell, :path),
       command_prefix: Map.get(shell, :command_prefix),
       auto_resize_images: Map.get(tools, :auto_resize_images, true),
@@ -186,12 +205,14 @@ defmodule CodingAgent.SettingsManager do
   Get model settings as a map.
   """
   @spec get_model_settings(t()) :: %{
-          default_model: model_config() | nil,
+          default_model: model_config() | String.t() | nil,
+          model_roles: ModelRoles.roles(),
           default_thinking_level: thinking_level()
         }
   def get_model_settings(%__MODULE__{} = settings) do
     %{
       default_model: settings.default_model,
+      model_roles: settings.model_roles,
       default_thinking_level: settings.default_thinking_level
     }
   end
@@ -215,6 +236,7 @@ defmodule CodingAgent.SettingsManager do
   # ============================================================================
 
   defp parse_model_spec(nil, nil), do: nil
+  defp parse_model_spec(_provider, "@" <> _role = selector), do: selector
 
   defp parse_model_spec(provider, model) when is_binary(model) do
     # Try colon separator first (Lemon's current format)

@@ -7,9 +7,24 @@ defmodule LemonAi.Error do
   - Extracting rate limit information from response headers
   - Classifying errors for appropriate handling
   - Generating user-friendly error messages
+
+  `classify/1` is shared by HTTP, transport and stream-terminal errors.
+  `retryable?/1` retries rate limits, transient/network failures and server
+  errors, but never authentication, client or context-overflow failures.
+  Account quota/credit/spend exhaustion is classified as `:rate_limit` for
+  credential failover, but is not retryable against the same credential.
+  Retry timing metadata is a hint, not permission to retry.
   """
 
-  require Logger
+  @category_names %{
+    "rate_limit" => :rate_limit,
+    "auth" => :auth,
+    "client" => :client,
+    "context_length" => :context_length,
+    "server" => :server,
+    "transient" => :transient,
+    "unknown" => :unknown
+  }
 
   # ============================================================================
   # Types
@@ -54,11 +69,15 @@ defmodule LemonAi.Error do
   @spec parse_http_error(non_neg_integer(), term(), map() | [{term(), term()}]) :: parsed_error()
   def parse_http_error(status, body, headers \\ []) do
     body = normalize_error_body(body)
-    provider_message = extract_provider_message(body)
+    provider_message = extract_provider_message(body) |> preserve_error_marker(body)
     category = classify_error(status, body, provider_message)
 
+    info = extract_rate_limit_info(headers, body)
+
     rate_limit_info =
-      if category == :rate_limit, do: extract_rate_limit_info(headers, body), else: nil
+      if category == :rate_limit or Enum.any?(info, fn {_key, value} -> not is_nil(value) end),
+        do: info,
+        else: nil
 
     %{
       category: category,
@@ -66,7 +85,7 @@ defmodule LemonAi.Error do
       message: build_error_message(status, provider_message, category),
       provider_message: provider_message,
       rate_limit_info: rate_limit_info,
-      retryable: retryable_category?(category) or retryable_status?(status)
+      retryable: retryable_category?(category) and not quota_exhausted_message?(provider_message)
     }
   end
 
@@ -138,6 +157,14 @@ defmodule LemonAi.Error do
     "Unknown API type: #{inspect(api)}. Please check your model configuration."
   end
 
+  def format_error(%{__struct__: module, reason: reason})
+      when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],
+      do: format_error(reason)
+
+  def format_error(%{message: message}) when is_binary(message), do: message
+  def format_error(error) when is_exception(error), do: Exception.message(error)
+  def format_error(%{"message" => message}) when is_binary(message), do: message
+
   def format_error(error) when is_binary(error), do: error
 
   def format_error(error) do
@@ -145,32 +172,114 @@ defmodule LemonAi.Error do
   end
 
   @doc """
-  Check if an error is retryable.
+  Check if an error is retryable against the same provider and credential.
+
+  Accepts the same inputs as `classify/1`. A parsed `retryable: false`
+  decision is retained; `retryable: true` cannot override a permanent category.
+  Quota exhaustion rotates credentials via `failover_action/1` instead of
+  spinning in the seconds-scale provider retry loop.
   """
   @spec retryable?(term()) :: boolean()
-  def retryable?({:http_error, status, _}), do: retryable_status?(status)
-  def retryable?(:rate_limited), do: true
-  def retryable?(:timeout), do: true
-  def retryable?(:closed), do: true
-  def retryable?(:econnrefused), do: true
-  def retryable?(:econnreset), do: true
-  def retryable?(:circuit_open), do: true
-  def retryable?(:max_concurrency), do: true
-  def retryable?({:unknown_api, _}), do: false
+  def retryable?({:http_error, status, body}),
+    do: parse_http_error(status, body, []).retryable
 
-  def retryable?(error) when is_binary(error) do
-    downcased = String.downcase(error)
+  def retryable?({:http_error, status, body, headers}),
+    do: parse_http_error(status, body, headers).retryable
 
-    String.contains?(downcased, "timeout") or
-      String.contains?(downcased, "rate limit") or
-      String.contains?(downcased, "overloaded") or
-      String.contains?(downcased, "temporarily") or
-      String.contains?(downcased, "503") or
-      String.contains?(downcased, "502") or
-      String.contains?(downcased, "504")
+  def retryable?(%{error_details: details}) when is_map(details), do: retryable?(details)
+
+  def retryable?(%{"category" => _} = error) do
+    error["retryable"] != false and retryable_category?(classify(error)) and
+      not quota_exhausted_message?(error["provider_message"]) and
+      not quota_exhausted_message?(error["message"])
   end
 
-  def retryable?(_), do: false
+  def retryable?({:error, _stop_reason, message}), do: retryable?(message)
+  def retryable?({:error, reason}), do: retryable?(reason)
+  def retryable?(%{retryable: false}), do: false
+
+  def retryable?(%{category: category} = error) do
+    retryable_category?(category) and
+      not quota_exhausted_message?(Map.get(error, :provider_message)) and
+      not quota_exhausted_message?(Map.get(error, :message))
+  end
+
+  def retryable?(%{error_message: message}) when is_binary(message), do: retryable?(message)
+
+  def retryable?(error) do
+    retryable_category?(classify(error)) and not quota_exhausted_error?(error)
+  end
+
+  @doc """
+  Canonical, serializable error metadata for assistant stream terminals.
+  Transport exceptions are classified from their typed reason, not their
+  display text. SDK structs and request internals are not exposed to clients.
+  """
+  @spec to_error_details(term()) :: parsed_error()
+  def to_error_details({:http_error, status, body}),
+    do: parse_http_error(status, body, [])
+
+  def to_error_details({:http_error, status, body, headers}),
+    do: parse_http_error(status, body, headers)
+
+  def to_error_details(%{error_details: details}) when is_map(details),
+    do: to_error_details(details)
+
+  def to_error_details(error) do
+    defaults = %{
+      category: classify(error),
+      status: if(is_binary(error), do: status_from_message(error)),
+      message: format_error(error),
+      provider_message: nil,
+      rate_limit_info: nil,
+      retryable: retryable?(error)
+    }
+
+    if is_map(error) and (Map.has_key?(error, :category) or Map.has_key?(error, "category")) do
+      result =
+        Enum.reduce([:status, :message, :provider_message], defaults, fn key, acc ->
+          case error_field(error, key) do
+            nil -> acc
+            value -> Map.put(acc, key, value)
+          end
+        end)
+
+      %{
+        result
+        | rate_limit_info: normalize_error_rate_limit_info(error_field(error, :rate_limit_info))
+      }
+    else
+      defaults
+    end
+  end
+
+  defp error_field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+
+  defp normalize_error_rate_limit_info(nil), do: nil
+
+  defp normalize_error_rate_limit_info(info) when is_map(info) do
+    reset_at =
+      case error_field(info, :reset_at) do
+        %DateTime{} = datetime ->
+          datetime
+
+        value when is_binary(value) ->
+          case DateTime.from_iso8601(value) do
+            {:ok, datetime, _} -> datetime
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    Enum.reduce([:limit, :remaining, :retry_after], %{reset_at: reset_at}, fn key, acc ->
+      value = error_field(info, key)
+      Map.put(acc, key, if(is_integer(value) and value >= 0, do: value))
+    end)
+  end
+
+  defp normalize_error_rate_limit_info(_), do: nil
 
   @doc """
   Suggest a retry delay based on the error.
@@ -369,11 +478,33 @@ defmodule LemonAi.Error do
            ],
       do: category
 
+  def classify(%{error_details: details}) when is_map(details), do: classify(details)
+  def classify(%{"category" => category}), do: Map.get(@category_names, category, :unknown)
   def classify({:http_error, status, body}), do: parse_http_error(status, body, []).category
+
+  def classify({:http_error, status, body, headers}),
+    do: parse_http_error(status, body, headers).category
+
   def classify({:error, _stop_reason, message}), do: classify(message)
   def classify({:error, reason}), do: classify(reason)
   def classify(:context_length_exceeded), do: :context_length
   def classify(:rate_limited), do: :rate_limit
+  def classify(reason) when reason in [:circuit_open, :max_concurrency], do: :transient
+
+  def classify(%{__struct__: module, reason: reason})
+      when module in [Req.TransportError, Finch.TransportError, Mint.TransportError],
+      do: classify(reason)
+
+  def classify({:closed, _}), do: :transient
+
+  def classify({:tls_alert, {alert, detail}}) do
+    if alert in [:internal_error, :bad_record_mac, :decrypt_error] or
+         transient_message?(inspect(detail)),
+       do: :transient,
+       else: :unknown
+  end
+
+  def classify({:failed_connect, details}), do: classify_message_text(inspect(details))
 
   def classify(reason)
       when reason in [
@@ -383,6 +514,9 @@ defmodule LemonAi.Error do
              :econnreset,
              :nxdomain,
              :enetdown,
+             :enetunreach,
+             :enetwork_unreachable,
+             :unreachable,
              :ehostunreach
            ],
       do: :transient
@@ -394,6 +528,7 @@ defmodule LemonAi.Error do
     do: classify_message_text(Exception.message(exception))
 
   def classify(message) when is_binary(message), do: classify_message_text(message)
+  def classify(reason) when is_tuple(reason), do: classify_message_text(inspect(reason))
   def classify(_), do: :unknown
 
   @doc """
@@ -414,9 +549,10 @@ defmodule LemonAi.Error do
   `:context_length` never fails over: the context is too large for the model,
   a condition no fallback candidate can satisfy — retrying the same oversized
   context would just burn every provider in the chain. Context-overflow
-  recovery is owned by `LemonAi.CompactingClient`, which compacts the context
-  and retries, so the error must surface to it (`:compact`) instead of walking
-  the fallback chain.
+  recovery belongs to the caller that owns the conversation (for coding
+  sessions, `CodingAgent.Session.OverflowRecovery` compacts the session and
+  retries the turn), so the error must surface to it (`:compact`) instead of
+  walking the fallback chain.
 
   `:retry_same` is reserved in the type for callers that retry in place (see
   `transport_retry_statuses/0` for that set); no category currently maps to it.
@@ -502,18 +638,16 @@ defmodule LemonAi.Error do
     classify(reason) not in [:auth, :rate_limit, :client, :context_length]
   end
 
-  @transport_retry_statuses [408, 409, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+  @transport_retry_statuses [408, 409, 425, 429] ++ Enum.to_list(500..599)
 
   @doc """
   HTTP status codes worth retrying in place against the SAME provider (with
   backoff). Used by `LemonAi.Providers.RetryHelper.retryable_http_status?/1`.
 
-  This is deliberately broader than the failover path (`failover_action/1`):
-  408/409/425/500 are often one-off hiccups that an immediate same-provider
-  retry absorbs cheaply, but on their own they do not justify abandoning the
-  provider for the next candidate. The failover path instead classifies by
-  category — `:server`/`:transient` (and unclassifiable) errors move to the
-  next candidate, while 4xx client errors fail fast.
+  These statuses are transient request failures (408/409/425), rate limits
+  (429), or server failures (5xx). This status-only set cannot override
+  permanent provider-body evidence. Providers with an error body must use
+  `LemonAi.Providers.RetryHelper.retryable_http_error?/2`.
   """
   @spec transport_retry_statuses() :: [pos_integer()]
   def transport_retry_statuses, do: @transport_retry_statuses
@@ -533,19 +667,25 @@ defmodule LemonAi.Error do
     cond do
       context_length_error_string?(status, message) -> :context_length
       auth_message?(message) or status in [401, 403] -> :auth
+      quota_exhausted_message?(message) -> :rate_limit
+      client_message?(message) -> :client
       provider_rate_limit_message?(message) or status == 429 -> :rate_limit
-      provider_transient_message?(message) or transient_message?(message) -> :transient
+      provider_transient_message?(message) -> :transient
       is_integer(status) -> classify_status(status)
+      server_message?(message) -> :server
+      transient_message?(message) -> :transient
       true -> :unknown
     end
   end
 
   defp status_from_message(message) do
-    case Regex.run(~r/(?:HTTP|status)[ :]+(\d{3})\b/i, message) do
+    case Regex.run(~r/(?:HTTP(?:\/\d(?:\.\d)?)?|status|code)[ :]+(\d{3})\b/i, message) do
       [_, code] -> String.to_integer(code)
       nil -> nil
     end
   end
+
+  defp auth_message?(message) when not is_binary(message), do: false
 
   defp auth_message?(message) do
     downcased = String.downcase(message)
@@ -557,38 +697,44 @@ defmodule LemonAi.Error do
       String.contains?(downcased, "invalid x-api-key") or
       String.contains?(downcased, "api key not valid") or
       String.contains?(downcased, "permission denied") or
+      String.contains?(downcased, "authentication_error") or
       String.contains?(downcased, "forbidden")
   end
 
   defp transient_message?(message) do
     downcased = String.downcase(message)
 
-    String.contains?(downcased, "timeout") or
-      String.contains?(downcased, "timed out") or
-      String.contains?(downcased, "econnrefused") or
-      String.contains?(downcased, "econnreset") or
-      String.contains?(downcased, "connection refused") or
-      String.contains?(downcased, "connection reset") or
-      String.contains?(downcased, "connection closed") or
-      String.contains?(downcased, "nxdomain") or
-      String.contains?(downcased, "502") or
-      String.contains?(downcased, "503") or
-      String.contains?(downcased, "504")
+    Regex.match?(
+      ~r/timeout|timed out|econnrefused|econnreset|enetdown|enetunreach|enetwork_unreachable|ehostunreach|nxdomain|connection[ _]?(?:refused|reset|closed|error)|(?:transporterror|connection failed).*reason:\s*:(?:closed|econnreset|timeout)\b|network[ _]?error|fetch failed|upstream[ _]?connect|other[ _]?side[ _]?closed|socket hang up|socket connection was closed|bad[ _]record[ _]mac|temporarily unavailable|stream error.*received from peer/i,
+      downcased
+    )
   end
 
   defp classify_error(status, body, provider_message) do
     cond do
-      context_length_error?({:http_error, status, body}) ->
+      context_length_error_string?(status, provider_message) ->
         :context_length
 
-      status in [401, 403] ->
+      status in [401, 403] or auth_message?(provider_message) ->
         :auth
+
+      quota_exhausted_message?(provider_message) ->
+        :rate_limit
+
+      client_message?(provider_message) ->
+        :client
 
       status == 429 or provider_rate_limit_message?(provider_message) ->
         :rate_limit
 
-      provider_rate_limit_body?(body) ->
+      do_provider_rate_limit_body?(body) ->
         :rate_limit
+
+      status in [408, 409, 425] ->
+        :transient
+
+      status == 0 and is_binary(provider_message) and transient_message?(provider_message) ->
+        :transient
 
       provider_transient_message?(provider_message) ->
         :transient
@@ -602,6 +748,7 @@ defmodule LemonAi.Error do
     cond do
       status == 429 -> :rate_limit
       status in [401, 403] -> :auth
+      status in [408, 409, 425] -> :transient
       status >= 400 and status < 500 -> :client
       status in [502, 503, 504, 529] -> :transient
       status >= 500 -> :server
@@ -609,27 +756,82 @@ defmodule LemonAi.Error do
     end
   end
 
-  defp retryable_status?(status) do
-    status in [429, 502, 503, 504, 520, 521, 522, 523, 524, 529]
+  defp retryable_category?(category), do: category in [:rate_limit, :transient, :server]
+
+  defp quota_exhausted_error?(%Req.TransportError{}), do: false
+
+  defp quota_exhausted_error?(exception) when is_exception(exception),
+    do: quota_exhausted_message?(Exception.message(exception))
+
+  defp quota_exhausted_error?(message), do: quota_exhausted_message?(message)
+
+  defp quota_exhausted_message?(message) when is_binary(message) do
+    transient_interval? =
+      Regex.match?(~r/per[ _](?:second|minute)|requests?\/min|tokens?\/min/i, message)
+
+    dashscope_throttle? =
+      String.contains?(message, "#token-limit") and
+        String.contains?(String.downcase(message), "you exceeded your current quota")
+
+    not dashscope_throttle? and
+      (Regex.match?(
+         ~r/insufficient_quota|quota_exhausted|usage_limit_reached|usage_not_included|insufficient_g1_credits_balance|spend(?:ing)?[ _-]limit|monthly spend|(?:insufficient|not enough|out of|run out of|exceed.{0,40}available)[ _]credits?|credits?.{0,40}(?:exhausted|depleted)|insufficient[ _]balance|quota will reset|exhausted your capacity|hit your .*usage limit|(?:额度|配额)已?(?:用|耗)(?:完|尽)|余额不足/i,
+         message
+       ) or
+         (not transient_interval? and
+            Regex.match?(
+              ~r/account(?:'s)?.{0,80}rate.?limit|rate.?limit.{0,80}account|(?:subscription|plan|membership).{0,80}(?:quota|cap|rate.?limit)|quota (?:exhausted|depleted)|exceeded your current quota/i,
+              message
+            )))
   end
 
-  defp retryable_category?(category), do: category in [:rate_limit, :transient]
+  defp quota_exhausted_message?(_), do: false
+
+  defp server_message?(message) do
+    Regex.match?(~r/internal[ _](?:server[ _])?error|server[ _]error/i, message)
+  end
+
+  defp client_message?(message) when is_binary(message) do
+    Regex.match?(
+      ~r/invalid[ _]request|bad request|validation[ _]error|invalid tool (?:schema|arguments)|model_not_supported|model_not_available_for_integrator|payload too large|request_too_large/i,
+      message
+    )
+  end
+
+  defp client_message?(_), do: false
+
+  # Some wire formats carry a generic type/message but the decisive code or
+  # Google ErrorInfo reason lives elsewhere. Keep that marker in terminal text,
+  # which has no structured status/body in the common AssistantMessage API.
+  defp preserve_error_marker(message, body) do
+    marker = find_error_marker(body)
+
+    if marker && not (is_binary(message) and String.contains?(message, marker)) do
+      if is_binary(message) and message != "", do: "#{marker}: #{message}", else: marker
+    else
+      message
+    end
+  end
+
+  defp find_error_marker(body) when is_map(body) do
+    Enum.find_value(["code", "type", "reason"], fn key ->
+      value = Map.get(body, key)
+
+      if is_binary(value) and
+           (quota_exhausted_message?(value) or context_length_error_string?(nil, value) or
+              auth_message?(value)),
+         do: value
+    end) || Enum.find_value(Map.values(body), &find_error_marker/1)
+  end
+
+  defp find_error_marker(body) when is_list(body), do: Enum.find_value(body, &find_error_marker/1)
+  defp find_error_marker(_), do: nil
 
   defp provider_rate_limit_message?(message) when is_binary(message) do
-    downcased = String.downcase(message)
-
-    String.contains?(downcased, "rate limit") or
-      String.contains?(downcased, "rate_limit") or
-      String.contains?(downcased, "too many requests")
+    Regex.match?(~r/rate.?limit|too many requests|throttl|resource.?exhausted/i, message)
   end
 
   defp provider_rate_limit_message?(_), do: false
-
-  defp provider_rate_limit_body?(body) do
-    body
-    |> normalize_error_body()
-    |> do_provider_rate_limit_body?()
-  end
 
   defp do_provider_rate_limit_body?(%{"error" => error}) when is_map(error) do
     rate_limit_field?(error["type"]) or
@@ -978,12 +1180,7 @@ defmodule LemonAi.Error do
   end
 
   defp get_retry_after(headers_map) do
-    Enum.find_value(["retry-after", "retry-after-ms", "x-ms-retry-after-ms"], fn key ->
-      case Map.get(headers_map, key) do
-        nil -> nil
-        value -> parse_retry_after(key, value)
-      end
-    end)
+    LemonAi.Providers.RetryHelper.retry_after_ms(headers_map)
   end
 
   defp parse_integer(value) when is_binary(value) do
@@ -1055,31 +1252,6 @@ defmodule LemonAi.Error do
       |> round()
     end
   end
-
-  defp parse_retry_after("retry-after", value) when is_binary(value) do
-    value = String.trim(value)
-
-    case Float.parse(value) do
-      {seconds, ""} when seconds >= 0 -> trunc(seconds) * 1000
-      _ -> parse_retry_after_http_date(value)
-    end
-  end
-
-  defp parse_retry_after("retry-after", value) when is_integer(value), do: value * 1000
-
-  defp parse_retry_after(key, value)
-       when key in ["retry-after-ms", "x-ms-retry-after-ms"] and is_binary(value) do
-    case Integer.parse(value) do
-      {milliseconds, _} -> milliseconds
-      :error -> nil
-    end
-  end
-
-  defp parse_retry_after(key, value)
-       when key in ["retry-after-ms", "x-ms-retry-after-ms"] and is_integer(value),
-       do: value
-
-  defp parse_retry_after(_, _), do: nil
 
   defp merge_body_rate_limit_info(info, body) do
     retry_after = info.retry_after || extract_body_retry_after(body)
@@ -1157,64 +1329,6 @@ defmodule LemonAi.Error do
     |> parse_reset_duration_ms()
   end
 
-  defp parse_retry_after_http_date(value) do
-    with {{year, month, day}, {hour, minute, second}} <- convert_http_date(value),
-         {:ok, naive} <- NaiveDateTime.new(year, month, day, hour, minute, second),
-         {:ok, datetime} <- DateTime.from_naive(naive, "Etc/UTC") do
-      diff = DateTime.diff(datetime, DateTime.utc_now(), :millisecond)
-      if diff > 0, do: diff, else: nil
-    else
-      _ -> nil
-    end
-  end
-
-  defp convert_http_date(value) do
-    case Regex.run(
-           ~r/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun),\s+(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})\s+(\d{2}):(\d{2}):(\d{2})\s+GMT$/i,
-           value
-         ) do
-      [_, day, month, year, hour, minute, second] ->
-        with {:ok, month} <- http_month(month),
-             {:ok, year} <- parse_http_date_int(year),
-             {:ok, day} <- parse_http_date_int(day),
-             {:ok, hour} <- parse_http_date_int(hour),
-             {:ok, minute} <- parse_http_date_int(minute),
-             {:ok, second} <- parse_http_date_int(second) do
-          {{year, month, day}, {hour, minute, second}}
-        else
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp parse_http_date_int(value) do
-    case Integer.parse(value) do
-      {int, ""} -> {:ok, int}
-      _ -> :error
-    end
-  end
-
-  defp http_month(value) do
-    case String.downcase(value) do
-      "jan" -> {:ok, 1}
-      "feb" -> {:ok, 2}
-      "mar" -> {:ok, 3}
-      "apr" -> {:ok, 4}
-      "may" -> {:ok, 5}
-      "jun" -> {:ok, 6}
-      "jul" -> {:ok, 7}
-      "aug" -> {:ok, 8}
-      "sep" -> {:ok, 9}
-      "oct" -> {:ok, 10}
-      "nov" -> {:ok, 11}
-      "dec" -> {:ok, 12}
-      _ -> :error
-    end
-  end
-
   # ============================================================================
   # Context Length Error Helpers
   # ============================================================================
@@ -1229,38 +1343,20 @@ defmodule LemonAi.Error do
 
   defp context_length_error_code?(_), do: false
 
-  defp context_length_error_message?(status, body) when status in [400, 413, 422] do
-    message = extract_message_text(body) || ""
-    downcased = String.downcase(message)
-
-    String.contains?(downcased, "context length") or
-      String.contains?(downcased, "maximum context") or
-      String.contains?(downcased, "token limit") or
-      String.contains?(downcased, "too many tokens") or
-      String.contains?(downcased, "exceeds maximum")
+  defp context_length_error_message?(status, body) do
+    message = extract_provider_message(body) |> preserve_error_marker(body)
+    context_length_error_string?(status, message)
   end
-
-  defp context_length_error_message?(_, _), do: false
 
   defp context_length_error_string?(status, body) when is_binary(body) do
     downcased = String.downcase(body)
 
-    String.contains?(downcased, "context_length_exceeded") or
-      String.contains?(downcased, "context length") or
-      (status in [400, 413, 422] and
-         (String.contains?(downcased, "maximum context") or
-            String.contains?(downcased, "token limit")))
+    Regex.match?(
+      ~r/context[_ ]length[_ ]exceeded|max_tokens_exceeded|token_limit_exceeded|model_context_window_exceeded|context length|prompt is too long|input is too long for requested model|exceeds (?:the |available )?context (?:window|size)|input token count.*exceeds the maximum|maximum prompt length is \d+|reduce the length of the messages|requested tokens?.*exceed.*context|context (?:window|size).*(?:exceeded|overflow|too small)|greater than the context length|exceeded model token limit|too many tokens|token limit exceeded|exceeds the limit of \d+ tokens/i,
+      downcased
+    ) or
+      (status in [400, 413, 422] and String.contains?(downcased, "maximum context"))
   end
 
   defp context_length_error_string?(_, _), do: false
-
-  defp extract_message_text(%{"error" => %{"message" => message}}) when is_binary(message) do
-    message
-  end
-
-  defp extract_message_text(%{"message" => message}) when is_binary(message) do
-    message
-  end
-
-  defp extract_message_text(_), do: nil
 end

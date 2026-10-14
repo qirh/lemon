@@ -2,7 +2,7 @@ defmodule LemonCore.ChatStateTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.ChatState
-  alias LemonCore.{ChatScope, Store}
+  alias LemonCore.{ChatScope, ChatStateStore}
 
   setup do
     :ok
@@ -196,17 +196,6 @@ defmodule LemonCore.ChatStateTest do
   end
 
   describe "struct enforcement validation" do
-    test "ChatState is a struct (not a plain map)" do
-      state = ChatState.new()
-      assert is_struct(state)
-      assert is_struct(state, ChatState)
-    end
-
-    test "struct has __struct__ key" do
-      state = ChatState.new()
-      assert state.__struct__ == ChatState
-    end
-
     test "pattern matching works with struct" do
       state = ChatState.new(%{last_engine: "test"})
       assert %ChatState{last_engine: "test"} = state
@@ -423,24 +412,6 @@ defmodule LemonCore.ChatStateTest do
       end
     end
 
-    test "Map.fetch/2 returns error for undefined fields" do
-      state = ChatState.new()
-      assert Map.fetch(state, :nonexistent_field) == :error
-    end
-
-    test "Map.fetch!/2 raises for undefined fields" do
-      state = ChatState.new()
-
-      assert_raise KeyError, fn ->
-        Map.fetch!(state, :nonexistent_field)
-      end
-    end
-
-    test "Map.get/3 returns default for undefined fields" do
-      state = ChatState.new()
-      assert Map.get(state, :nonexistent_field, "default_value") == "default_value"
-    end
-
     test "Map.has_key?/2 returns false for undefined fields" do
       state = ChatState.new()
       refute Map.has_key?(state, :nonexistent_field)
@@ -477,24 +448,12 @@ defmodule LemonCore.ChatStateTest do
       end
     end
 
-    test "new/1 with non-map argument raises FunctionClauseError" do
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new("not a map")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new([:list, :of, :values])
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new(123)
-      end
-    end
-
-    test "new/1 with keyword list raises FunctionClauseError" do
-      # Keyword lists are not maps
-      assert_raise FunctionClauseError, fn ->
-        ChatState.new(last_engine: "test")
+    @tag invalid_attrs: ["not a map", [:list, :of, :values], 123, [last_engine: "test"]]
+    test "new/1 rejects non-map attributes", %{invalid_attrs: invalid_attrs} do
+      for attrs <- invalid_attrs do
+        assert_raise FunctionClauseError, fn ->
+          ChatState.new(attrs)
+        end
       end
     end
   end
@@ -513,23 +472,9 @@ defmodule LemonCore.ChatStateTest do
 
       refute state1 == state2
     end
-
-    test "struct is not equal to equivalent map" do
-      state = ChatState.new(%{last_engine: "test", last_resume_token: nil, updated_at: nil})
-      map = %{last_engine: "test", last_resume_token: nil, updated_at: nil}
-
-      refute state == map
-    end
-
-    test "default structs are equal" do
-      state1 = ChatState.new()
-      state2 = ChatState.new()
-
-      assert state1 == state2
-    end
   end
 
-  describe "Store ChatState round-trip" do
+  describe "ChatStateStore round-trip" do
     test "stores and retrieves ChatState" do
       scope = %ChatScope{transport: :demo, chat_id: 12_345}
 
@@ -539,14 +484,10 @@ defmodule LemonCore.ChatStateTest do
         updated_at: System.system_time(:millisecond)
       }
 
-      # Store the chat state
-      Store.put_chat_state(scope, original)
-
-      # Give the async cast time to complete
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope, original)
 
       # Retrieve and verify
-      retrieved = Store.get_chat_state(scope)
+      retrieved = ChatStateStore.get(scope)
 
       # The Store may return either the struct or a map depending on backend
       case retrieved do
@@ -565,7 +506,7 @@ defmodule LemonCore.ChatStateTest do
     test "returns nil for missing chat state" do
       scope = %ChatScope{transport: :demo, chat_id: 99_999}
 
-      assert Store.get_chat_state(scope) == nil
+      assert ChatStateStore.get(scope) == nil
     end
 
     test "overwrites existing chat state" do
@@ -574,12 +515,10 @@ defmodule LemonCore.ChatStateTest do
       first = %ChatState{last_engine: "first", last_resume_token: "token1", updated_at: 1000}
       second = %ChatState{last_engine: "second", last_resume_token: "token2", updated_at: 2000}
 
-      Store.put_chat_state(scope, first)
-      Process.sleep(50)
-      Store.put_chat_state(scope, second)
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope, first)
+      :ok = ChatStateStore.put(scope, second)
 
-      retrieved = Store.get_chat_state(scope)
+      retrieved = ChatStateStore.get(scope)
 
       case retrieved do
         %ChatState{} = chat_state ->
@@ -599,12 +538,11 @@ defmodule LemonCore.ChatStateTest do
       state1 = %ChatState{last_engine: "engine1", last_resume_token: "t1", updated_at: 1000}
       state2 = %ChatState{last_engine: "engine2", last_resume_token: "t2", updated_at: 2000}
 
-      Store.put_chat_state(scope1, state1)
-      Store.put_chat_state(scope2, state2)
-      Process.sleep(50)
+      :ok = ChatStateStore.put(scope1, state1)
+      :ok = ChatStateStore.put(scope2, state2)
 
-      retrieved1 = Store.get_chat_state(scope1)
-      retrieved2 = Store.get_chat_state(scope2)
+      retrieved1 = ChatStateStore.get(scope1)
+      retrieved2 = ChatStateStore.get(scope2)
 
       # Get last_engine from either struct or map
       get_engine = fn

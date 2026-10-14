@@ -12,8 +12,6 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   `CodingAgent.Session.CompactionLifecycle.State`.
   """
 
-  require Logger
-
   alias CodingAgent.Session.CompactionManager
 
   defmodule State do
@@ -28,21 +26,21 @@ defmodule CodingAgent.Session.CompactionLifecycle do
             signature: CodingAgent.Session.CompactionManager.session_signature() | nil,
             task_pid: pid() | nil,
             task_monitor_ref: reference() | nil,
-            task_timeout_ref: reference() | nil
+            task_timeout_ref: reference() | nil,
+            pending_prompt: tuple() | nil
           }
 
     defstruct in_progress: false,
               signature: nil,
               task_pid: nil,
               task_monitor_ref: nil,
-              task_timeout_ref: nil
+              task_timeout_ref: nil,
+              pending_prompt: nil
   end
 
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
-          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
-          required(:ui_set_working_message) => (state, String.t() | nil -> :ok),
-          required(:ui_notify) => (state, String.t(), atom() -> :ok)
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok)
         }
 
   @spec apply_result(map(), {:ok, map()} | {:error, term()}, String.t() | nil, callbacks(map())) ::
@@ -53,47 +51,69 @@ defmodule CodingAgent.Session.CompactionLifecycle do
       result,
       custom_summary,
       callbacks.restore_messages_from_session,
-      callbacks.broadcast_event,
-      callbacks.ui_set_working_message,
-      callbacks.ui_notify
+      callbacks.broadcast_event
     )
   end
 
-  @spec cancel_for_new_prompt(map(), callbacks(map())) :: map()
-  def cancel_for_new_prompt(%{auto_compaction: %State{in_progress: false}} = state, _callbacks),
-    do: state
+  @spec cancel_for_new_prompt(map()) :: map()
+  def cancel_for_new_prompt(%{auto_compaction: %State{in_progress: false}} = state), do: state
 
-  def cancel_for_new_prompt(state, callbacks) do
-    state =
-      state
-      |> CompactionManager.maybe_kill_background_task(
-        state.auto_compaction.task_pid,
-        :superseded_by_prompt
-      )
-      |> CompactionManager.clear_auto_compaction_state()
+  def cancel_for_new_prompt(state) do
+    state = if state.pending_prompt_timer_ref, do: resume_pending_prompt(state), else: state
 
-    callbacks.ui_set_working_message.(state, nil)
+    state
+    |> CompactionManager.maybe_kill_background_task(
+      state.auto_compaction.task_pid,
+      :superseded_by_prompt
+    )
+    |> CompactionManager.clear_auto_compaction_state()
+  end
+
+  @doc false
+  def before_prompt(state, message, system_prompt) do
+    state = maybe_trigger(state, self(), {message, system_prompt})
+
+    if not state.auto_compaction.in_progress do
+      send(self(), {:dispatch_prompt, message, system_prompt})
+    end
+
     state
   end
 
-  @spec maybe_trigger(map(), pid(), callbacks(map())) :: map()
-  def maybe_trigger(
-        %{auto_compaction: %State{in_progress: true}} = state,
-        _session_pid,
-        _callbacks
-      ),
-      do: state
+  @doc false
+  def resume_pending_prompt(state) do
+    case state.auto_compaction.pending_prompt do
+      {message, system_prompt} -> send(self(), {:dispatch_prompt, message, system_prompt})
+      nil -> :ok
+    end
 
-  def maybe_trigger(state, session_pid, callbacks) do
+    state
+  end
+
+  @spec maybe_trigger(map(), pid()) :: map()
+  def maybe_trigger(state, session_pid), do: maybe_trigger(state, session_pid, nil)
+
+  defp maybe_trigger(
+         %{auto_compaction: %State{in_progress: true}} = state,
+         _session_pid,
+         _prompt
+       ),
+       do: state
+
+  defp maybe_trigger(state, session_pid, pending_prompt) do
     agent_state = LemonAgent.Agent.get_state(state.agent)
-    context_messages = agent_state.messages || []
 
-    context_tokens =
-      CodingAgent.Compaction.estimate_request_context_tokens(
-        context_messages,
-        Map.get(agent_state, :system_prompt),
-        Map.get(agent_state, :tools, [])
-      )
+    context_messages =
+      (agent_state.messages || []) ++
+        case pending_prompt do
+          {message, _system_prompt} -> [message]
+          nil -> []
+        end
+
+    context_budget =
+      CodingAgent.Session.ContextBudget.measure(state, agent_state, context_messages)
+
+    context_tokens = context_budget.tokens
 
     context_message_count = length(context_messages)
     context_window = state.model.context_window
@@ -113,10 +133,13 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     if should_compact_by_tokens or should_compact_by_message_limit do
       signature = CompactionManager.session_signature(state)
       session_manager = state.session_manager
-      model = state.model
-      compaction_opts = CompactionManager.normalize_compaction_opts(state, [])
+      compaction_opts = CompactionManager.normalize_compaction_opts(state, force: true)
+      model = Keyword.fetch!(compaction_opts, :model)
 
-      callbacks.ui_set_working_message.(state, "Compacting context...")
+      CodingAgent.Session.Notifier.broadcast_event(
+        state,
+        {:compaction_start, %{reason: :threshold}}
+      )
 
       case CompactionManager.start_tracked_background_task(
              fn ->
@@ -140,14 +163,10 @@ defmodule CodingAgent.Session.CompactionLifecycle do
                 signature: signature,
                 task_pid: task_meta.pid,
                 task_monitor_ref: task_meta.monitor_ref,
-                task_timeout_ref: task_meta.timeout_ref
+                task_timeout_ref: task_meta.timeout_ref,
+                pending_prompt: pending_prompt
               }
           }
-
-        {:error, reason} ->
-          Logger.warning("Auto compaction task failed to start: #{inspect(reason)}")
-          callbacks.ui_set_working_message.(state, nil)
-          state
       end
     else
       state
@@ -164,16 +183,11 @@ defmodule CodingAgent.Session.CompactionLifecycle do
         state
 
       signature != CompactionManager.session_signature(state) ->
-        state = CompactionManager.clear_auto_compaction_state(state)
-
-        if not state.is_streaming do
-          callbacks.ui_set_working_message.(state, nil)
-        end
-
-        state
+        state |> resume_pending_prompt() |> CompactionManager.clear_auto_compaction_state()
 
       true ->
-        state = CompactionManager.clear_auto_compaction_state(state)
+        state =
+          state |> resume_pending_prompt() |> CompactionManager.clear_auto_compaction_state()
 
         case apply_result(state, result, nil, callbacks) do
           {:ok, new_state} -> new_state
@@ -182,8 +196,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
     end
   end
 
-  @spec handle_timeout(map(), reference(), callbacks(map())) :: {:handled, map()} | :stale
-  def handle_timeout(state, monitor_ref, callbacks) do
+  @spec handle_timeout(map(), reference()) :: {:handled, map()} | :stale
+  def handle_timeout(state, monitor_ref) do
     if state.auto_compaction.task_monitor_ref == monitor_ref do
       state =
         state
@@ -191,11 +205,8 @@ defmodule CodingAgent.Session.CompactionLifecycle do
           state.auto_compaction.task_pid,
           :auto_compaction_timeout
         )
+        |> resume_pending_prompt()
         |> CompactionManager.clear_auto_compaction_state()
-
-      if not state.is_streaming do
-        callbacks.ui_set_working_message.(state, nil)
-      end
 
       {:handled, state}
     else

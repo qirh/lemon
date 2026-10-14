@@ -7,23 +7,23 @@ usage: scripts/verify_source_install [--project-dir PATH] [--skip-compile] [--sk
 
 Verifies the supported source-install path:
   - checks Elixir and Erlang/OTP toolchain availability
-  - checks source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update
+  - checks the unified command registry help lists every launcher and CLI command
   - checks locked dependency resolution
   - checks source-wrapper setup readiness is required before fixture onboarding,
-    then satisfied by a locally stored fixture credential and default model
+    then satisfied by a locally stored fixture credential and default model,
+    and that `setup --if-required` is then a no-op
   - checks source-wrapper non-interactive setup runtime dispatch
-  - checks source-wrapper promoted channel readiness
+  - checks source-wrapper channel configuration status
   - checks source-wrapper config validation
   - checks source-wrapper media diagnostics
   - checks source-wrapper model catalog listing
   - checks source-wrapper provider readiness listing
   - checks source-wrapper model policy listing
-  - checks source-wrapper proof artifact listing
-  - checks source-wrapper readiness summary
   - checks source-wrapper secrets status
   - checks source-wrapper skill listing
   - checks source-wrapper usage diagnostics
-  - checks stage-1 local update dry-run dispatch
+  - checks source-checkout `update plan` fails closed before mutation
+  - checks `version` and the read-only Hermes migration audit
   - runs source-wrapper doctor JSON diagnostics and support-bundle generation unless --skip-doctor is set
 EOF
   exit 2
@@ -99,23 +99,6 @@ require_command() {
 require_command elixir
 require_command mix
 
-help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
-./bin/lemon --help >"$help_output"
-for subcommand in setup model gateway channels config doctor web send media models providers blueprints policy proofs readiness secrets skill usage update; do
-  if ! grep -q "./bin/lemon $subcommand" "$help_output"; then
-    fail "source wrapper help did not advertise ./bin/lemon $subcommand"
-  fi
-done
-rm -f "$help_output"
-ok "source-wrapper help advertises setup/model/gateway/channels/config/doctor/web/send/media/models/providers/blueprints/policy/proofs/readiness/secrets/skill/usage/update"
-
-web_help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-web-help.XXXXXX")"
-./bin/lemon web --help >"$web_help_output"
-grep -q 'Usage: ./bin/lemon web \[--no-open\]' "$web_help_output" ||
-  fail "source wrapper web help did not document --no-open"
-rm -f "$web_help_output"
-ok "source-wrapper web command documents browser and no-open launch modes"
-
 elixir -e '
 required = Version.parse!("1.19.5")
 current = Version.parse!(System.version())
@@ -160,12 +143,13 @@ media_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-media.XXXXXX")"
 models_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-models.XXXXXX")"
 providers_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-providers.XXXXXX")"
 policy_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-policy.XXXXXX")"
-proofs_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-proofs.XXXXXX")"
-readiness_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-readiness.XXXXXX")"
 secrets_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-secrets.XXXXXX")"
 skill_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-skill.XXXXXX")"
 usage_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-usage.XXXXXX")"
 update_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-update.XXXXXX")"
+help_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-help.XXXXXX")"
+migrate_output="$(mktemp "${TMPDIR:-/tmp}/lemon-source-install-migrate.XXXXXX")"
+hermes_home="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install-hermes.XXXXXX")"
 cleanup_setup_output() {
   rm -rf "$onboarding_home"
   rm -rf "$onboarding_project"
@@ -178,12 +162,13 @@ cleanup_setup_output() {
   rm -f "$models_output"
   rm -f "$providers_output"
   rm -f "$policy_output"
-  rm -f "$proofs_output"
-  rm -f "$readiness_output"
   rm -f "$secrets_output"
   rm -f "$skill_output"
   rm -f "$usage_output"
   rm -f "$update_output"
+  rm -f "$help_output"
+  rm -f "$migrate_output"
+  rm -rf "$hermes_home"
 }
 preserve_toolchain() {
   if [ -n "$toolchain_asdf_data_dir" ]; then
@@ -255,6 +240,8 @@ run_onboarding_durable() {
   ) >"$output" 2>&1
 }
 
+# Doctor verifies the onboarded credential, so it reads the same durable store
+# the fixture onboarding wrote (test mode's ETS store would be empty).
 run_onboarding_split_output() {
   local output="$1" error_output="$2"
   shift 2
@@ -264,15 +251,13 @@ run_onboarding_split_output() {
     clear_provider_credentials
     preserve_toolchain
 
-
-
     HOME="$onboarding_home" \
       XDG_CONFIG_HOME="$onboarding_home/.config" \
       XDG_DATA_HOME="$onboarding_home/.local/share" \
       XDG_CACHE_HOME="$onboarding_home/.cache" \
       LEMON_STORE_PATH="$onboarding_home/.lemon/store" \
       LEMON_SECRETS_MASTER_KEY="$onboarding_master_key" \
-      MIX_ENV=test \
+      MIX_ENV=dev \
       "$ROOT/bin/lemon" "$@"
   ) >"$output" 2>"$error_output"
 }
@@ -332,7 +317,14 @@ grep -q "OpenAI onboarding complete." "$onboarding_output" ||
   fail "fixture provider onboarding did not complete"
 
 assert_setup_required false
-
+run_onboarding_durable "$onboarding_output" setup --if-required || {
+  cat "$onboarding_output" >&2
+  fail "setup --if-required failed on a configured fixture"
+}
+if grep -q "Setup is required" "$onboarding_output"; then
+  fail "setup --if-required re-ran setup on a configured fixture"
+fi
+ok "setup --if-required is a no-op once setup is complete"
 
 run_onboarding_help setup --help
 grep -qi "setup" "$onboarding_output" ||
@@ -348,6 +340,22 @@ grep -qi "gateway" "$onboarding_output" ||
 
 ok "installed-style onboarding commands are discoverable without provider credentials"
 
+run_onboarding "$help_output" --help
+for command in tui web start run daemon stop restart status setup model gateway doctor \
+  config secrets channels providers blueprints profile backup context sessions learn update \
+  completion migrate node version send media models policy skill usage; do
+  grep -Eq "^  $command( |$)" "$help_output" ||
+    fail "source help did not list $command"
+done
+if grep -Eq "^  (remote|eval|rpc) " "$help_output"; then
+  fail "source help advertised a packaged-release-only command"
+fi
+ok "source-wrapper help lists the unified command registry"
+
+run_onboarding_help web --help
+grep -Fq 'Usage: lemon web [--no-open]' "$onboarding_output" ||
+  fail "source wrapper web help did not document --no-open"
+ok "launcher command help comes from the shared registry"
 
 run_onboarding "$setup_output" setup runtime --profile runtime_min --non-interactive
 grep -q "mix release lemon_runtime_min" "$setup_output" ||
@@ -356,14 +364,12 @@ ok "non-interactive setup runtime dispatch works"
 
 run_onboarding "$channels_output" channels --project-dir "$PROJECT_DIR"
 grep -q "Lemon Channels" "$channels_output" ||
-  fail "channels output did not include readiness heading"
-grep -q "Promoted platforms: telegram, discord" "$channels_output" ||
-  fail "channels output did not document promoted platforms"
-grep -q "Includes raw bot tokens: false" "$channels_output" ||
-  fail "channels output did not document bot token cleanup"
-grep -q "Includes raw proof details: false" "$channels_output" ||
-  fail "channels output did not document proof-detail cleanup"
-ok "source-wrapper promoted channel readiness works"
+  fail "channels output did not include channels heading"
+grep -q "^telegram: enabled=" "$channels_output" ||
+  fail "channels output did not report Telegram configuration"
+grep -q "^discord: enabled=" "$channels_output" ||
+  fail "channels output did not report Discord configuration"
+ok "source-wrapper channel configuration status works"
 
 run_onboarding "$config_output" config validate --project-dir "$PROJECT_DIR"
 grep -q "Configuration is valid" "$config_output" ||
@@ -373,8 +379,6 @@ ok "source-wrapper config validation works"
 run_onboarding "$media_output" media --project-dir "$PROJECT_DIR" --limit 1
 grep -q "Lemon Media" "$media_output" ||
   fail "media output did not include media heading"
-grep -q "Provider proofs:" "$media_output" ||
-  fail "media output did not include provider proof state"
 grep -q "Includes prompts: false" "$media_output" ||
   fail "media output did not document prompt cleanup"
 grep -q "Includes provider responses: false" "$media_output" ||
@@ -391,36 +395,12 @@ ok "source-wrapper model catalog listing works"
 run_onboarding "$providers_output" providers --provider anthropic --project-dir "$PROJECT_DIR"
 grep -q "Lemon Providers" "$providers_output" ||
   fail "providers output did not include readiness heading"
-grep -q "Includes raw API keys: false" "$providers_output" ||
-  fail "providers output did not document API key cleanup"
 ok "source-wrapper provider readiness listing works"
 
 run_onboarding "$policy_output" policy list
 grep -Eq "No model policies set\.|Model Policies:" "$policy_output" ||
   fail "policy list output did not report model policy state"
 ok "source-wrapper model policy listing works"
-
-run_onboarding "$proofs_output" proofs --project-dir "$PROJECT_DIR" --limit 1
-grep -q "Lemon Proofs" "$proofs_output" ||
-  fail "proofs output did not include proof heading"
-grep -q "Includes raw paths: false" "$proofs_output" ||
-  fail "proofs output did not document raw path cleanup"
-grep -q "Includes raw filenames: false" "$proofs_output" ||
-  fail "proofs output did not document raw filename cleanup"
-ok "source-wrapper proof artifact listing works"
-
-run_onboarding "$readiness_output" readiness --project-dir "$PROJECT_DIR" --limit 1
-grep -q "Lemon Readiness" "$readiness_output" ||
-  fail "readiness output did not include readiness heading"
-grep -q "Provider media:" "$readiness_output" ||
-  fail "readiness output did not include provider media state"
-grep -q "Proof gates:" "$readiness_output" ||
-  fail "readiness output did not include proof gate state"
-grep -q "Includes raw proof paths: false" "$readiness_output" ||
-  fail "readiness output did not document raw proof path cleanup"
-grep -q "Includes raw provider responses: false" "$readiness_output" ||
-  fail "readiness output did not document provider-response cleanup"
-ok "source-wrapper readiness summary works"
 
 run_onboarding "$secrets_output" secrets status
 grep -q "configured:" "$secrets_output" ||
@@ -443,12 +423,37 @@ grep -q "Includes credentials: false" "$usage_output" ||
   fail "usage output did not document credential cleanup"
 ok "source-wrapper usage diagnostics work"
 
-run_onboarding "$update_output" update --check --no-skill-sync --verbose
-grep -q "Version:" "$update_output" ||
-  fail "update check output did not include current version"
-grep -Fq 'Source checkout: this task does not download or apply updates (use `git pull`).' "$update_output" ||
-  fail "update check did not document the source-checkout update boundary"
-ok "stage-1 update dry-run dispatch works"
+if run_onboarding "$update_output" update plan; then
+  fail "source-checkout update plan unexpectedly succeeded"
+fi
+grep -q "Source checkouts cannot plan, apply, or roll back release artifacts" "$update_output" ||
+  fail "update plan did not document the source-checkout update boundary"
+ok "source-checkout update plan fails closed"
+
+run_onboarding "$update_output" version
+grep -Eq '^[0-9]+\.[0-9]+' "$update_output" ||
+  fail "version did not print a Lemon version"
+ok "version dispatch works: $(grep -E '^[0-9]+\.[0-9]+' "$update_output" | head -n 1)"
+
+run_onboarding "$migrate_output" migrate hermes audit --json \
+  --source "$hermes_home" --target "$onboarding_home/.lemon"
+python3 - "$migrate_output" <<'PY'
+import json
+import sys
+
+text = open(sys.argv[1], encoding="utf-8").read()
+start = text.find("{")
+if start < 0:
+    print("error migrate hermes audit did not emit JSON", file=sys.stderr)
+    raise SystemExit(1)
+
+report = json.loads(text[start:])
+if "summary" not in report or not isinstance(report.get("items"), list):
+    print("error migrate hermes audit JSON lacks summary/items", file=sys.stderr)
+    raise SystemExit(1)
+
+print("ok read-only Hermes migration audit works")
+PY
 
 if ! $SKIP_DOCTOR; then
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lemon-source-install.XXXXXX")"
@@ -485,8 +490,13 @@ overall = data.get("overall")
 failures = int(summary.get("fail", 0))
 
 if status != 0 or failures:
+    failed = [
+        check.get("name") or check.get("id")
+        for check in data.get("checks", [])
+        if isinstance(check, dict) and check.get("status") == "fail"
+    ]
     print(
-        f"error doctor reported failures: status={status} overall={overall} fail={failures}",
+        f"error doctor reported failures: status={status} overall={overall} fail={failures} checks={failed}",
         file=sys.stderr,
     )
     raise SystemExit(1)
@@ -498,7 +508,6 @@ print(
 PY
 
   python3 - "$bundle_path" <<'PY'
-import json
 import sys
 import zipfile
 
@@ -506,9 +515,6 @@ required = {
     "README.txt",
     "doctor_report.json",
     "channel_diagnostics.json",
-    "channel_readiness.json",
-    "readiness_summary.json",
-    "proof_diagnostics.json",
 }
 path = sys.argv[1]
 
@@ -527,61 +533,7 @@ if missing:
     )
     raise SystemExit(1)
 
-with zipfile.ZipFile(path) as archive:
-    readiness_summary = json.loads(archive.read("readiness_summary.json").decode("utf-8"))
-
-proof_gates = readiness_summary.get("proof_gates", {})
-proof_gate_summary = readiness_summary.get("proof_gate_summary", {})
-provider_media = proof_gates.get("providerMedia", {})
-required_gates = {
-    "discordDm",
-    "discordSlashClientClick",
-    "discordSlashRegistration",
-    "providerMedia",
-    "terminalBackends",
-}
-
-if provider_media.get("status") not in {"passed", "warning"}:
-    print(
-        "error readiness_summary.json missing providerMedia proof gate status",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-if proof_gate_summary.get("gateCount") != 5:
-    print(
-        "error readiness_summary.json proof_gate_summary gateCount is not 5",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-if not isinstance(proof_gate_summary.get("statuses"), dict):
-    print(
-        "error readiness_summary.json proof_gate_summary statuses is not an object",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-missing_gate_ids = sorted(required_gates - set(proof_gates))
-missing_status_ids = sorted(required_gates - set(proof_gate_summary["statuses"]))
-
-if missing_gate_ids:
-    print(
-        "error readiness_summary.json proof_gates missing gate ids: "
-        + ", ".join(missing_gate_ids),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-if missing_status_ids:
-    print(
-        "error readiness_summary.json proof_gate_summary statuses missing gate ids: "
-        + ", ".join(missing_status_ids),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-
-print("ok support bundle contains required redacted readiness diagnostics")
+print("ok support bundle contains required redacted diagnostics")
 PY
 fi
 

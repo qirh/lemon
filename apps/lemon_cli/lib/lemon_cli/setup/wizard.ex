@@ -15,10 +15,11 @@ defmodule LemonCli.Setup.Wizard do
 
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Scaffold, Verification}
-  alias LemonCore.Config.Modular
+  alias LemonCore.Config.{Automation, Modular, TomlPatch}
   alias LemonCore.Runtime.{Env, Profile}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
+  alias LemonCore.Update.ConfigMigrator
 
   @type io_callbacks :: %{
           required(:info) => (String.t() -> any()),
@@ -43,38 +44,47 @@ defmodule LemonCli.Setup.Wizard do
 
     # parse_head stops at the first non-flag argument (the subcommand name),
     # leaving subcommand-specific flags untouched so subcommand parsers get them.
-    {parsed, rest, _invalid} =
+    {parsed, rest, invalid} =
       OptionParser.parse_head(args,
-        switches: [
+        strict: [
           non_interactive: :boolean,
           config_path: :string,
           provider: :string,
-          skip_verify: :boolean
+          skip_verify: :boolean,
+          daily_brief: :string,
+          token: :string,
+          auth: :string,
+          codex_auth_path: :string,
+          model: :string
         ],
         aliases: [n: :non_interactive]
       )
 
-    case rest do
-      ["provider" | provider_args] ->
+    case {invalid, rest} do
+      {[_ | _], _} ->
+        io.error.("Unknown or invalid setup options. Run `#{usage_command} --help`.")
+        {:error, :invalid_arguments}
+
+      {[], ["provider" | provider_args]} ->
         Provider.run(provider_args, io, setup_verify_opts(opts))
 
-      ["runtime" | runtime_args] ->
+      {[], ["runtime" | runtime_args]} ->
         run_runtime(runtime_args, io, parsed)
 
-      ["gateway" | gateway_args] ->
+      {[], ["gateway" | gateway_args]} ->
         Gateway.run(gateway_args, io)
 
-      ["doctor" | doctor_args] ->
+      {[], ["doctor" | doctor_args]} ->
         case LemonCli.CLI.doctor(doctor_args) do
           0 -> :ok
           _ -> {:error, :doctor_failed}
         end
 
-      [] ->
+      {[], []} ->
         Runner.ensure_required_apps!()
         run_full([], io, Keyword.merge(opts, parsed))
 
-      [subcommand | _] ->
+      {[], [subcommand | _]} ->
         io.error.("Unknown subcommand: #{inspect(subcommand)}")
         io.info.("")
         io.info.("Usage: #{usage_command} [provider|runtime|gateway|doctor] [options]")
@@ -105,8 +115,10 @@ defmodule LemonCli.Setup.Wizard do
      An explicit `:provider` forces reconfiguration.
   5. Verify the resulting provider/model/credential (offline checks always;
      live check unless `:skip_verify`).
-  6. Offer to configure the runtime profile (optional).
-  7. Print a summary that only claims completion when nothing is pending.
+  6. Offer an opt-in daily brief (default off; `--daily-brief HH:MM` in
+     non-interactive mode).
+  7. Offer to configure the runtime profile (optional).
+  8. Print a summary that only claims completion when nothing is pending.
 
   ## Options
 
@@ -115,6 +127,7 @@ defmodule LemonCli.Setup.Wizard do
     * `:provider` - force provider onboarding even when one is usable
     * `:skip_verify` - skip the post-onboarding live provider check
     * `:verifier` - injectable live-check function (testing; no network)
+    * `:daily_brief` - `HH:MM` server-local time for the opt-in daily brief
   """
   @spec run_full([String.t()], io_callbacks(), keyword()) :: :ok | {:error, term()}
   def run_full(_args, io, opts \\ []) do
@@ -131,11 +144,18 @@ defmodule LemonCli.Setup.Wizard do
       end
 
     if result == :ok do
+      step_offer_daily_brief(config_path, io, non_interactive?, opts)
       step_offer_runtime(io, non_interactive?)
     end
 
-    print_summary(io, Verification.setup_state(config_path: config_path), result)
+    state = Verification.setup_state(config_path: config_path)
 
+    result =
+      if result == :ok and not LemonCore.Setup.Readiness.ready?(state),
+        do: {:error, :setup_incomplete},
+        else: result
+
+    print_summary(io, state, result)
     result
   end
 
@@ -242,6 +262,7 @@ defmodule LemonCli.Setup.Wizard do
 
     if File.exists?(expanded) do
       io.info.("Config: #{expanded} (already exists)")
+      migrate_deprecated_config(expanded, io)
       :ok
     else
       io.info.("Creating minimal config at #{expanded} ...")
@@ -258,6 +279,28 @@ defmodule LemonCli.Setup.Wizard do
           io.error.("Could not create config scaffold: #{inspect(reason)}")
           {:error, {:scaffold_failed, reason}}
       end
+    end
+  end
+
+  # A config written by an older Lemon (for example an `[agent]` table from a
+  # previous terminal client) is rewritten to the current schema, keeping a
+  # backup. Settings that cannot be moved automatically are reported, not fatal.
+  defp migrate_deprecated_config(path, io) do
+    with {:needs_migration, _issues} <- ConfigMigrator.check(path),
+         {:ok, %{backup: backup, changes: changes}} <- ConfigMigrator.migrate!(path) do
+      io.info.("Migrated deprecated config settings:")
+      Enum.each(changes, &io.info.("  #{&1}"))
+      io.info.("  Backup: #{backup}")
+    else
+      :ok ->
+        :ok
+
+      {:error, {:manual_steps_required, errors}} ->
+        io.error.("Config uses settings that need a manual edit:")
+        Enum.each(errors, &io.error.("  • #{&1}"))
+
+      {:error, reason} ->
+        io.error.("Could not migrate deprecated config settings: #{inspect(reason)}")
     end
   end
 
@@ -333,8 +376,14 @@ defmodule LemonCli.Setup.Wizard do
 
         if answer do
           provider_args =
-            ["--config-path", config_path] ++
-              if(forced, do: ["--provider", forced], else: [])
+            ["--config-path", config_path, "--set-default"] ++
+              if(forced, do: ["--provider", forced], else: []) ++
+              if(non_interactive?, do: ["--non-interactive"], else: []) ++
+              Enum.flat_map([:token, :auth, :model, :codex_auth_path], fn key ->
+                flag = key |> Atom.to_string() |> String.replace("_", "-")
+                if value = opts[key], do: ["--#{flag}", value], else: []
+              end) ++
+              if(Keyword.get(opts, :skip_verify, false), do: ["--skip-verify"], else: [])
 
           Provider.run(provider_args, io, setup_verify_opts(opts))
         else
@@ -350,6 +399,112 @@ defmodule LemonCli.Setup.Wizard do
     opts
     |> Keyword.take([:verifier, :skip_verify])
     |> Keyword.put(:live_verify, true)
+  end
+
+  # The daily brief is one heartbeat cron job that `LemonAutomation.Heartbeat`
+  # reconciles from `[automation] daily_brief` when the runtime boots, so setup
+  # only has to record the choice - the runtime does not need to be running.
+  defp step_offer_daily_brief(config_path, io, non_interactive?, opts) do
+    path = Path.expand(config_path)
+    content = read_config_content(path)
+
+    case existing_daily_brief(content) do
+      time when is_binary(time) ->
+        io.info.("")
+        io.info.("Daily brief: scheduled at #{time} (edit [automation] daily_brief to change).")
+
+      nil ->
+        case requested_daily_brief(io, non_interactive?, Keyword.get(opts, :daily_brief)) do
+          {:ok, time} -> write_daily_brief(path, content, time, io)
+          :skip -> :ok
+        end
+    end
+  end
+
+  defp requested_daily_brief(io, _non_interactive?, flag) when is_binary(flag) do
+    case normalize_brief_time(flag) do
+      {:ok, time} ->
+        {:ok, time}
+
+      :error ->
+        io.error.("Ignoring --daily-brief #{inspect(flag)}: expected HH:MM (24-hour).")
+        :skip
+    end
+  end
+
+  defp requested_daily_brief(_io, true, nil), do: :skip
+
+  defp requested_daily_brief(io, false, nil) do
+    io.info.("")
+
+    if prompt_yes_no?("Get a short daily brief on your phone each morning?", false, io) do
+      prompt_brief_time(io)
+    else
+      io.info.("Skipped. Add `daily_brief = \"08:00\"` under [automation] to enable it later.")
+      :skip
+    end
+  end
+
+  defp prompt_brief_time(io) do
+    case normalize_input(io.prompt.("Daily brief time (HH:MM, this machine's time) [08:00]: ")) do
+      "" ->
+        {:ok, "08:00"}
+
+      raw ->
+        case normalize_brief_time(raw) do
+          {:ok, time} ->
+            {:ok, time}
+
+          :error ->
+            io.error.("Expected a 24-hour time such as 07:30.")
+            prompt_brief_time(io)
+        end
+    end
+  end
+
+  defp normalize_brief_time(raw) do
+    case Automation.parse_time(raw) do
+      {:ok, {hour, minute}} ->
+        {:ok, "#{pad2(hour)}:#{pad2(minute)}"}
+
+      :error ->
+        :error
+    end
+  end
+
+  defp pad2(value), do: value |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  defp write_daily_brief(path, content, time, io) do
+    patched = TomlPatch.upsert_string(content, "automation", "daily_brief", time)
+
+    with :ok <- File.mkdir_p(Path.dirname(path)),
+         :ok <- File.write(path, patched) do
+      io.info.("Daily brief scheduled for #{time} every day (written to #{path}).")
+      io.info.("It starts when Lemon (re)starts and is sent to your paired Telegram chat;")
+      io.info.("run `lemon gateway setup telegram` if you have not paired one yet.")
+      :ok
+    else
+      {:error, reason} ->
+        io.error.("Could not write the daily brief to #{path}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  defp read_config_content(path) do
+    case File.read(path) do
+      {:ok, content} -> content
+      {:error, _reason} -> ""
+    end
+  end
+
+  defp existing_daily_brief(content) do
+    with {:ok, decoded} <- Toml.decode(content),
+         %{"automation" => %{"daily_brief" => time}} when is_binary(time) <- decoded,
+         {:ok, _} <- Automation.parse_time(time) do
+      String.trim(time)
+    else
+      _ -> nil
+    end
   end
 
   defp step_offer_runtime(io, non_interactive?) do
@@ -376,6 +531,7 @@ defmodule LemonCli.Setup.Wizard do
     case Verification.pending_steps(state) do
       [] when result == :ok ->
         io.info.("Setup complete. Next steps:")
+        io.info.("  lemon                        — start coding in this directory")
         io.info.("  lemon config validate        — verify configuration")
         io.info.("  lemon setup provider         — onboard another AI provider")
         io.info.("  lemon setup runtime          — change runtime profile / ports")
@@ -530,7 +686,7 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("To launch this profile:")
     io.info.("  MIX_ENV=prod mix release #{release_name(profile_name)}")
     io.info.("  # or in dev:")
-    io.info.("  bin/lemon")
+    io.info.("  ./bin/lemon start")
   end
 
   defp release_name(:runtime_min), do: "lemon_runtime_min"

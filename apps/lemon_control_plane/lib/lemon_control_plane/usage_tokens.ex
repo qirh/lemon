@@ -6,17 +6,19 @@ defmodule LemonControlPlane.UsageTokens do
   there, cache reads split across two keys — so this collapses the variants once, at the
   boundary, instead of asking each client to guess.
 
-  `contextTokens` is the number a context gauge wants: the input side of the last turn
-  *including* cached reads, which is how large the conversation actually was going into the
-  model. It deliberately excludes output. The arithmetic matches
-  `LemonRouter.RunProcess.CompactionTrigger.usage_input_tokens/1`, which is what the router
-  itself compacts against — a gauge that disagreed with the compactor would be worse than none.
+  An explicit `context_tokens` is authoritative: native sessions calculate the
+  latest-turn context separately from cumulative usage. Otherwise `contextTokens`
+  falls back to cache-inclusive input accounting, excluding output, as used by
+  `LemonRouter.RunProcess.CompactionTrigger.usage_input_tokens/1`. Cumulative
+  `total_tokens` is never substituted for current context.
+  Conversely, a cumulative total fallback includes reported cache counts and
+  output; it does not reuse an explicit latest-turn context measurement.
   """
 
   @input_keys [:input_tokens, :input, :prompt_tokens]
   @output_keys [:output_tokens, :output, :completion_tokens]
-  @cache_read_keys [:cached_input_tokens, :cache_read_input_tokens]
-  @cache_write_keys [:cache_creation_input_tokens, :cache_write_input_tokens]
+  @cache_read_keys [:cached_input_tokens, :cache_read_input_tokens, :cache_read]
+  @cache_write_keys [:cache_creation_input_tokens, :cache_write_input_tokens, :cache_write]
   @total_keys [:total_tokens, :total, :tokens]
 
   @doc """
@@ -30,18 +32,26 @@ defmodule LemonControlPlane.UsageTokens do
     cache_read = first_integer(usage, @cache_read_keys)
     cache_write = first_integer(usage, @cache_write_keys)
     total = first_integer(usage, @total_keys)
+    reported_context = first_integer(usage, [:context_tokens, :contextTokens])
+
+    cumulative_input =
+      if is_nil(total) or is_nil(reported_context),
+        do: context_tokens(usage, input, cache_read, cache_write)
+
     cost = cost_usd(usage)
 
-    context = context_tokens(usage, input, cache_read, cache_write)
+    context = reported_context || cumulative_input
 
     normalized = %{
       "inputTokens" => input,
       "outputTokens" => output,
       "cacheReadTokens" => cache_read,
       "cacheWriteTokens" => cache_write,
-      "totalTokens" => total || sum_or_nil([input, output]),
+      "totalTokens" => total || sum_or_nil([cumulative_input, output]),
       "contextTokens" => context,
-      "costUsd" => cost
+      "costUsd" => cost,
+      "turns" => first_integer(usage, [:turns]),
+      "tool_errors" => first_integer(usage, [:tool_errors])
     }
 
     if Enum.all?(Map.values(normalized), &is_nil/1), do: nil, else: normalized

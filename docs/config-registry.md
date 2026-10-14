@@ -95,22 +95,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
 | `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
 
-### Programmatic tool calling (`execute_code`)
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_EXECUTE_CODE_ENABLED` | boolean | `false` |  | `lemon_core` | Whether the execute_code programmatic tool-calling tool is enabled. |
-| `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS` | integer | `1800000` |  | `lemon_core` | Idle time after which a persistent execute_code kernel is reaped, in milliseconds. |
-| `LEMON_EXECUTE_CODE_KERNEL_MODE` | string | `per_call` |  | `lemon_core` | execute_code kernel mode (`per_call` or `session`); any other value resolves to `per_call` and never enables persistence. |
-| `LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS` | integer | `16` |  | `lemon_core` | Strict cap on simultaneous persistent execute_code kernels (idle-only LRU eviction). |
-| `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES` | integer | `50000` |  | `lemon_core` | Maximum script stdout bytes returned to the model (larger output is spilled to a file). |
-| `LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL` | integer | `8` |  | `lemon_core` | Maximum queued cells waiting behind the one active cell per persistent execute_code kernel. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_CALLS` | integer | `100` |  | `lemon_core` | Maximum tool RPC calls one execute_code script may make. |
-| `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES` | integer | `5242880` |  | `lemon_core` | Total byte budget for tool RPC results returned to one execute_code script. |
-| `LEMON_EXECUTE_CODE_PYTHON_PATH` | string | `` |  | `lemon_core` | Explicit python3 interpreter path for execute_code scripts (empty = find python3 on PATH). |
-| `LEMON_EXECUTE_CODE_TIMEOUT_MS` | integer | `120000` |  | `lemon_core` | End-to-end wall-clock cap for one execute_code run, including session queue wait, in milliseconds. |
-| `LEMON_EXECUTE_CODE_TOOLS` | list (comma-separated) | `[]` |  | `lemon_core` | Comma-separated subset of the execute_code RPC allowlist (read, grep, find, ls, webfetch) to expose; empty = full allowlist. |
-
 ### WASM tool runtime
 
 | Env Var | Type | Default | Secret | Apps | Description |
@@ -267,7 +251,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | boolean | `false` |  | `lemon_sim_ui` | Whether the public VendingBench launcher page is exposed. |
 | `LEMON_SIM_UI_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_sim_ui` | Phoenix secret_key_base; required with at least 64 bytes for a production Sim UI endpoint. |
 | `LEMON_SIM_UI_SUITE_ROOTS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Colon-separated extra suite root directories for LemonSimUi. |
-| `LEMON_WEB_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_web` | Bearer token required to access the LemonWeb HTTP API. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
 | `LEMON_WEB_URL_PORT` | integer | `443` |  | `lemon_web` | Public URL port for generated LemonWeb links. |
@@ -301,7 +284,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_BROWSER_DRIVER_PATH` | string | _(none)_ |  | `lemon_browser` | Path to the browser automation driver binary. |
 | `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | string | `local` |  | `lemon_browser` | Local/private backend selected by the hybrid browser router. |
 | `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | string | _(none)_ |  | `lemon_browser` | Explicit hosted backend selected by the hybrid router for public URLs. |
-| `LEMON_CUA_DRIVER_CMD` | string | _(none)_ |  | `lemon_browser` | Path or executable name for the cua-driver used by computer_use. |
 
 ### Coding-agent CLI runners
 
@@ -323,7 +305,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_AI_PROMPT_DIAGNOSTICS` | boolean | `false` |  | `ai` | Whether prompt diagnostics logging is enabled. |
 | `LEMON_AI_PROMPT_DIAGNOSTICS_LOG_LEVEL` | string | _(none)_ |  | `ai` | Log level used for prompt diagnostics output. |
 | `LEMON_AI_PROMPT_DIAGNOSTICS_TOP_N` | integer | _(none)_ |  | `ai` | Number of top prompt-diagnostics entries to report. |
-| `LEMON_ANTHROPIC_CLAUDE_PATH` | string | _(none)_ |  | `ai` | Override path to the `claude` executable used for Anthropic OAuth. |
 | `LEMON_KIMI_MAX_REQUEST_MESSAGES` | integer | _(none)_ |  | `ai` | Max message-history length sent per request to Kimi (history-limited provider). |
 | `PI_CACHE_RETENTION` | string | _(none)_ |  | `ai` | When set to "long", requests 24h prompt-cache retention from OpenAI-compatible providers. |
 
@@ -363,22 +344,11 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | string | _(none)_ | yes | `ai` | Google Gemini CLI OAuth client secret override. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | string | _(none)_ | yes | `ai` | Google Generative AI API key (primary name). |
 | `LEMON_GEMINI_PROJECT_ID` | string | _(none)_ |  | `ai`, `lemon_cli`, `lemon_core` | Lemon-specific override for the Gemini/Vertex project id, checked before the GOOGLE_CLOUD_* names. |
-| `MAGIC_EDEN_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | Magic Eden marketplace API key. |
 | `MISTRAL_API_KEY` | string | _(none)_ | yes | `ai` | Mistral API key. |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `ai` | OpenAI Codex OAuth client id override. |
 | `OPENCODE_API_KEY` | string | _(none)_ | yes | `ai` | OpenCode provider API key. |
-| `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
-| `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
-
-### lemon_tcg wallets
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `EVM_PRIVATE_KEY` | string | _(none)_ | yes | `lemon_tcg` | EVM wallet private key used to sign on-chain transactions. |
-| `SOLANA_KEYPAIR_FILE` | string | _(none)_ | yes | `lemon_tcg` | Path to a Solana keypair JSON file used to sign wallet transactions. |
-| `SOLANA_SECRET_KEY` | string | _(none)_ | yes | `lemon_tcg` | Base58/array-encoded Solana secret key used to sign wallet transactions. |
 
 ### lemon_evals live-model opt-in checks
 
@@ -401,21 +371,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
 | `LEMON_ARENA_POKER_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the poker arena. |
 | `LEMON_ARENA_POKER_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the poker arena. |
-| `LEMON_ARENA_SPACE_STATION_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the space_station arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SPACE_STATION_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the space_station arena. |
-| `LEMON_ARENA_STOCK_MARKET_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the stock_market arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_STOCK_MARKET_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the stock_market arena. |
-| `LEMON_ARENA_SURVIVOR_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the survivor arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SURVIVOR_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the survivor arena. |
 | `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
 | `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
 | `LEMON_ARENA_WEREWOLF_MAX_GAME_RECORDS`<br>_(alias: `WEREWOLF_ARENA_MAX_GAME_RECORDS`)_ | integer | `1000` |  | `lemon_sim_ui` | Rolling number of Werewolf league game records retained on disk and included in standings. |

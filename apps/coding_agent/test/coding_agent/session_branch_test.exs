@@ -109,6 +109,57 @@ defmodule CodingAgent.SessionBranchTest do
     end
   end
 
+  defp controlled_stream_fn(response, blocked_call) do
+    parent = self()
+    calls = :counters.new(1, [:atomics])
+
+    fn _model, _context, _options ->
+      :counters.add(calls, 1, 1)
+
+      if :counters.get(calls, 1) == blocked_call do
+        ref = make_ref()
+        send(parent, {:stream_waiting, self(), ref})
+
+        receive do
+          {:release_stream, ^ref} -> :ok
+        after
+          5000 -> raise "Timeout waiting to release test stream"
+        end
+      end
+
+      {:ok, response_to_event_stream(response)}
+    end
+  end
+
+  defp wait_for_agent_end(session) do
+    session_id = Session.get_state(session).session_manager.header.id
+    assert_receive {:session_event, ^session_id, {:agent_end, _messages}}, 5000
+    wait_for_streaming_complete(session)
+  end
+
+  # The provider can be reached before the session persists the prompt; tests
+  # that snapshot state mid-run wait for that entry so later changes are theirs.
+  defp await_prompt_persisted(session) do
+    session_id = Session.get_state(session).session_manager.header.id
+
+    assert_receive {:session_event, ^session_id, {:message_end, %LemonAi.Types.UserMessage{}}},
+                   5000
+  end
+
+  defp assert_messages_match_branch(session) do
+    state = Session.get_state(session)
+    context = SessionManager.build_session_context(state.session_manager)
+
+    expected =
+      Enum.map(context.messages, fn message ->
+        restored = CodingAgent.Session.MessageSerialization.deserialize_message(message)
+        {restored.role, restored.content}
+      end)
+
+    assert Enum.map(Session.get_messages(session), &{&1.role, &1.content}) == expected
+    assert Process.alive?(session)
+  end
+
   defp default_opts(overrides) do
     Keyword.merge(
       [
@@ -290,10 +341,8 @@ defmodule CodingAgent.SessionBranchTest do
 
       messages2 = Session.get_messages(session)
 
-      # Messages should be different between branches
-      # (same prefix from common ancestor, different branch content)
-      assert messages1 != []
-      assert messages2 != []
+      assert Enum.take(messages1, 2) == Enum.take(messages2, 2)
+      assert List.last(messages1).content != List.last(messages2).content
     end
 
     @tag :tmp_dir
@@ -304,7 +353,9 @@ defmodule CodingAgent.SessionBranchTest do
       sm =
         sm
         |> SessionManager.append_entry(SessionEntry.thinking_level_change(:high))
-        |> SessionManager.append_entry(SessionEntry.model_change(:anthropic, "claude-3-opus"))
+        |> SessionManager.append_entry(
+          SessionEntry.model_change(:anthropic, "claude-3-5-haiku-20241022")
+        )
         |> SessionManager.append_entry(SessionEntry.thinking_level_change(:medium))
 
       session_file = Path.join(tmp_dir, "metadata_only.jsonl")
@@ -315,6 +366,12 @@ defmodule CodingAgent.SessionBranchTest do
       # Should have no messages but valid state
       messages = Session.get_messages(session)
       assert messages == []
+      assert :ok = Session.navigate_tree(session, sm.leaf_id)
+      state = Session.get_state(session)
+      assert state.model.provider == :anthropic
+      assert state.model.id == "claude-3-5-haiku-20241022"
+      assert state.thinking_level == :medium
+      assert Session.get_messages(session) == []
 
       # Session should still be usable
       :ok = Session.prompt(session, "Hello!")
@@ -353,14 +410,11 @@ defmodule CodingAgent.SessionBranchTest do
 
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
-      # The orphan entry exists in entries
+      # The persisted active leaf still selects the valid chain, not the orphan.
       state = Session.get_state(session)
-      assert length(SessionManager.entries(state.session_manager)) == 5
-
-      # When starting, the session finds the orphan as "latest leaf" since it has no children
-      # So initially we're on the orphan branch with only 1 message
+      assert SessionManager.get_entry(state.session_manager, orphan.id) == orphan
       initial_messages = Session.get_messages(session)
-      assert length(initial_messages) == 1
+      assert length(initial_messages) == 4
 
       # But we can navigate to the valid chain's end and get all 4 messages
       :ok = Session.navigate_tree(session, last_valid_id)
@@ -370,7 +424,8 @@ defmodule CodingAgent.SessionBranchTest do
       # And navigating back to the orphan shows only the orphan (broken parent chain)
       :ok = Session.navigate_tree(session, orphan.id)
       orphan_messages = Session.get_messages(session)
-      assert length(orphan_messages) == 1
+      assert [%{role: :user, content: "Orphaned message"}] = orphan_messages
+      assert SessionManager.get_entry(Session.get_state(session).session_manager, last_valid_id)
     end
 
     @tag :tmp_dir
@@ -427,12 +482,12 @@ defmodule CodingAgent.SessionBranchTest do
     @tag :tmp_dir
     test "branch navigation preserves entry IDs", %{tmp_dir: tmp_dir} do
       sm = create_deep_session_manager(tmp_dir, 6)
-      original_ids = Enum.map(SessionManager.entries(sm), & &1.id)
 
       session_file = Path.join(tmp_dir, "preserve_ids.jsonl")
       :ok = SessionManager.save_to_file(session_file, sm)
 
       session = start_session(session_file: session_file, cwd: tmp_dir)
+      initial_entries = SessionManager.entries(Session.get_state(session).session_manager)
 
       # Navigate around
       mid_entry = Enum.at(SessionManager.entries(sm), 2)
@@ -441,10 +496,48 @@ defmodule CodingAgent.SessionBranchTest do
       last_entry = List.last(SessionManager.entries(sm))
       :ok = Session.navigate_tree(session, last_entry.id)
 
-      # Verify IDs are preserved
+      # Navigation changes the selected context without rewriting journal entries.
       state = Session.get_state(session)
-      current_ids = Enum.map(SessionManager.entries(state.session_manager), & &1.id)
-      assert current_ids == original_ids
+      assert SessionManager.entries(state.session_manager) == initial_entries
+      assert state.session_manager.leaf_id == last_entry.id
+      assert_messages_match_branch(session)
+    end
+
+    test "navigation retains the full matching custom model" do
+      model =
+        mock_model(
+          api: :openai_completions,
+          base_url: "https://custom-model.test/v1",
+          headers: %{"x-custom-model" => "branch-test"},
+          context_window: 32_000,
+          max_tokens: 2048
+        )
+
+      parent = self()
+
+      stream_fn = fn received_model, _context, _options ->
+        send(parent, {:requested_model, received_model})
+        {:ok, response_to_event_stream(assistant_message("Custom response"))}
+      end
+
+      session = start_session(model: model, stream_fn: stream_fn)
+      initial_leaf = Session.get_state(session).session_manager.leaf_id
+      :ok = Session.prompt(session, "Before navigation")
+      wait_for_streaming_complete(session)
+      assert_receive {:requested_model, ^model}
+      completed_leaf = Session.get_state(session).session_manager.leaf_id
+
+      for leaf <- [initial_leaf, completed_leaf] do
+        assert :ok = Session.navigate_tree(session, leaf)
+        state = Session.get_state(session)
+        assert state.model == model
+        assert LemonAgent.Agent.get_state(state.agent).model == model
+        assert_messages_match_branch(session)
+      end
+
+      :ok = Session.prompt(session, "After navigation")
+      wait_for_streaming_complete(session)
+      assert_receive {:requested_model, ^model}
     end
   end
 
@@ -465,52 +558,51 @@ defmodule CodingAgent.SessionBranchTest do
       # Get entry IDs
       entries = SessionManager.entries(state.session_manager)
 
-      if length(entries) >= 2 do
-        entry_ids = Enum.map(entries, & &1.id)
+      entry_ids = Enum.map(entries, & &1.id)
 
-        # Concurrent navigation attempts
-        tasks =
-          for id <- entry_ids do
-            Task.async(fn ->
-              Session.navigate_tree(session, id)
-            end)
-          end
+      # Concurrent navigation attempts are serialized while idle.
+      tasks =
+        for id <- entry_ids do
+          Task.async(fn ->
+            Session.navigate_tree(session, id)
+          end)
+        end
 
-        results = Task.await_many(tasks, 5000)
+      results = Task.await_many(tasks, 5000)
 
-        # All should succeed (serialized by GenServer)
-        Enum.each(results, fn result ->
-          assert result == :ok
-        end)
+      Enum.each(results, fn result ->
+        assert result == :ok
+      end)
 
-        # State should be consistent
-        final_state = Session.get_state(session)
-        assert final_state.session_manager.leaf_id in entry_ids
-      end
+      final_state = Session.get_state(session)
+      assert final_state.session_manager.leaf_id in entry_ids
+      assert_messages_match_branch(session)
     end
 
     test "concurrent prompts and navigation" do
-      slow_stream_fn = fn _model, _context, _options ->
-        Process.sleep(50)
-        {:ok, response_to_event_stream(assistant_message("Response"))}
-      end
+      stream_fn = controlled_stream_fn(assistant_message("Response"), 1)
+      session = start_session(stream_fn: stream_fn)
+      _unsub = Session.subscribe(session)
+      first_id = Session.get_state(session).session_manager.leaf_id
 
-      session = start_session(stream_fn: slow_stream_fn)
-
-      # Start a prompt
       :ok = Session.prompt(session, "Hello!")
+      assert_receive {:stream_waiting, provider, ref}, 5000
+      await_prompt_persisted(session)
 
-      # Try to navigate while streaming
-      state = Session.get_state(session)
+      before_navigation = Session.get_state(session).session_manager
+      messages_before = Session.get_messages(session)
 
-      if SessionManager.entries(state.session_manager) != [] do
-        first_id = hd(SessionManager.entries(state.session_manager)).id
-        # This should still work (navigation doesn't require non-streaming)
-        result = Session.navigate_tree(session, first_id)
-        assert result == :ok
-      end
+      assert {:error, :busy} = Session.navigate_tree(session, first_id)
+      assert Session.get_state(session).session_manager == before_navigation
+      assert Session.get_messages(session) == messages_before
+      assert Process.alive?(session)
 
-      wait_for_streaming_complete(session)
+      send(provider, {:release_stream, ref})
+      wait_for_agent_end(session)
+      assert_messages_match_branch(session)
+      assert :ok = Session.navigate_tree(session, first_id)
+      assert Session.get_messages(session) == []
+      assert_messages_match_branch(session)
     end
 
     test "concurrent steer and follow_up with branch operations" do
@@ -536,11 +628,13 @@ defmodule CodingAgent.SessionBranchTest do
 
         results = Task.await_many(tasks, 5000)
 
-        # All operations should succeed
-        Enum.each(results, fn result ->
-          assert result == :ok
-        end)
+        [steer1, follow1, navigation, steer2, follow2] = results
+        assert [steer1, follow1, steer2, follow2] == [:ok, :ok, :ok, :ok]
+        assert navigation in [:ok, {:error, :busy}]
       end
+
+      wait_for_streaming_complete(session)
+      assert_messages_match_branch(session)
     end
 
     test "rapid subscribe/unsubscribe during branch operations" do
@@ -572,7 +666,7 @@ defmodule CodingAgent.SessionBranchTest do
         entries = SessionManager.entries(state.session_manager)
 
         for entry <- entries do
-          Session.navigate_tree(session, entry.id)
+          :ok = Session.navigate_tree(session, entry.id)
         end
       end
 
@@ -584,6 +678,7 @@ defmodule CodingAgent.SessionBranchTest do
       # Session should still be healthy
       health = Session.health_check(session)
       assert health.status == :healthy
+      assert_messages_match_branch(session)
     end
 
     test "concurrent get_messages during navigation" do
@@ -597,6 +692,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       state = Session.get_state(session)
       entries = SessionManager.entries(state.session_manager)
+      original_messages = Session.get_messages(session)
 
       if length(entries) >= 2 do
         # Concurrent message reads and navigation
@@ -604,18 +700,20 @@ defmodule CodingAgent.SessionBranchTest do
           for _ <- 1..20 do
             Task.async(fn ->
               messages = Session.get_messages(session)
-              assert is_list(messages)
+              assert messages == Enum.take(original_messages, length(messages))
               :ok
             end)
           end
 
         # Navigate while reading
         for entry <- Enum.take(entries, 3) do
-          Session.navigate_tree(session, entry.id)
+          :ok = Session.navigate_tree(session, entry.id)
         end
 
         Task.await_many(tasks, 5000)
       end
+
+      assert_messages_match_branch(session)
     end
   end
 
@@ -805,7 +903,7 @@ defmodule CodingAgent.SessionBranchTest do
       :ok = Session.prompt(session, "Will error")
       assert_receive {:session_event, _id, {:error, _reason, _partial}}, 5000
 
-      Process.sleep(100)
+      wait_for_streaming_complete(session)
       state = Session.get_state(session)
       assert state.is_streaming == false
 
@@ -949,10 +1047,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       session = start_session(session_file: session_file, cwd: tmp_dir)
 
-      # Should be able to navigate to any point
-      state = Session.get_state(session)
-      total_entries = length(SessionManager.entries(state.session_manager))
-      assert total_entries >= 200
+      assert_messages_match_branch(session)
 
       # Navigate to original end
       original_end = Enum.at(SessionManager.entries(sm), 199)
@@ -981,7 +1076,7 @@ defmodule CodingAgent.SessionBranchTest do
 
       # All navigations should complete in reasonable time under full-suite load
       Enum.each(timings, fn time_us ->
-        assert time_us < 1_000_000, "Navigation took #{time_us}us, expected < 1000000us"
+        assert time_us < 15_000_000, "Navigation took #{time_us}us, expected < 15000000us"
       end)
     end
   end
@@ -992,34 +1087,34 @@ defmodule CodingAgent.SessionBranchTest do
 
   describe "branch switching mid-operation" do
     test "branch switch during prompt is safe" do
-      slow_stream_fn = fn _model, _context, _options ->
-        Process.sleep(100)
-        {:ok, response_to_event_stream(assistant_message("Slow response"))}
-      end
+      stream_fn = controlled_stream_fn(assistant_message("Slow response"), 2)
+      session = start_session(stream_fn: stream_fn)
 
-      session = start_session(stream_fn: slow_stream_fn)
-
-      # Add initial message
       :ok = Session.prompt(session, "First!")
       wait_for_streaming_complete(session)
+      first_messages = Session.get_messages(session)
+      first_entry_id = Session.get_state(session).session_manager.leaf_id
+      _unsub = Session.subscribe(session)
 
-      state = Session.get_state(session)
-      first_entry_id = hd(SessionManager.entries(state.session_manager)).id
-
-      # Start another prompt
       :ok = Session.prompt(session, "Second!")
+      assert_receive {:stream_waiting, provider, ref}, 5000
+      await_prompt_persisted(session)
+      before_navigation = Session.get_state(session).session_manager
+      messages_before = Session.get_messages(session)
 
-      # Navigate while streaming (should still work)
-      :ok = Session.navigate_tree(session, first_entry_id)
+      assert {:error, :busy} = Session.navigate_tree(session, first_entry_id)
+      assert Session.get_state(session).session_manager == before_navigation
+      assert Session.get_messages(session) == messages_before
 
-      wait_for_streaming_complete(session)
-
-      # Session should be in consistent state
-      final_state = Session.get_state(session)
-      assert final_state.is_streaming == false
+      send(provider, {:release_stream, ref})
+      wait_for_agent_end(session)
+      assert_messages_match_branch(session)
+      assert :ok = Session.navigate_tree(session, first_entry_id)
+      assert Session.get_messages(session) == first_messages
+      assert_messages_match_branch(session)
     end
 
-    test "branch switch clears steering queue appropriately" do
+    test "branch switch preserves queued steering messages" do
       session = start_session()
 
       :ok = Session.prompt(session, "Hello!")
@@ -1069,38 +1164,40 @@ defmodule CodingAgent.SessionBranchTest do
     end
 
     test "branch switch during steer message delivery" do
-      slow_stream_fn = fn _model, _context, _options ->
-        Process.sleep(50)
-        {:ok, response_to_event_stream(assistant_message("Response"))}
-      end
+      stream_fn = controlled_stream_fn(assistant_message("Response"), 3)
+      session = start_session(stream_fn: stream_fn)
 
-      session = start_session(stream_fn: slow_stream_fn)
-
-      # Build up some conversation
       :ok = Session.prompt(session, "Hello!")
       wait_for_streaming_complete(session)
+      first_id = Session.get_state(session).session_manager.leaf_id
+      first_messages = Session.get_messages(session)
 
       :ok = Session.prompt(session, "World!")
       wait_for_streaming_complete(session)
+      _unsub = Session.subscribe(session)
 
-      state = Session.get_state(session)
+      :ok = Session.prompt(session, "Prompt with steer coming")
+      assert_receive {:stream_waiting, provider, ref}, 5000
+      await_prompt_persisted(session)
+      :ok = Session.steer(session, "Interrupting steer!")
+      before_navigation = Session.get_state(session).session_manager
+      messages_before = Session.get_messages(session)
 
-      if length(SessionManager.entries(state.session_manager)) >= 2 do
-        first_id = hd(SessionManager.entries(state.session_manager)).id
+      assert {:error, :busy} = Session.navigate_tree(session, first_id)
+      assert Session.get_state(session).session_manager == before_navigation
+      assert Session.get_messages(session) == messages_before
 
-        # Start prompt with steer
-        :ok = Session.prompt(session, "Prompt with steer coming")
-        :ok = Session.steer(session, "Interrupting steer!")
+      send(provider, {:release_stream, ref})
+      wait_for_agent_end(session)
 
-        # Switch branch mid-stream
-        :ok = Session.navigate_tree(session, first_id)
+      assert Enum.any?(Session.get_messages(session), fn message ->
+               message.role == :user and message.content == "Interrupting steer!"
+             end)
 
-        wait_for_streaming_complete(session)
-
-        # Should be in consistent state
-        health = Session.health_check(session)
-        assert health.status == :healthy
-      end
+      assert_messages_match_branch(session)
+      assert :ok = Session.navigate_tree(session, first_id)
+      assert Session.get_messages(session) == first_messages
+      assert_messages_match_branch(session)
     end
 
     test "multiple rapid branch switches" do
@@ -1126,14 +1223,7 @@ defmodule CodingAgent.SessionBranchTest do
       health = Session.health_check(session)
       assert health.status == :healthy
 
-      # Messages should be consistent with final position
-      final_state = Session.get_state(session)
-      messages = Session.get_messages(session)
-
-      expected_count =
-        Enum.find_index(entries, &(&1.id == final_state.session_manager.leaf_id)) + 1
-
-      assert length(messages) == expected_count
+      assert_messages_match_branch(session)
     end
 
     test "branch switch preserves event subscribers" do
@@ -1141,7 +1231,7 @@ defmodule CodingAgent.SessionBranchTest do
       _unsub = Session.subscribe(session)
 
       :ok = Session.prompt(session, "Hello!")
-      wait_for_streaming_complete(session)
+      wait_for_agent_end(session)
 
       state = Session.get_state(session)
 
@@ -1152,7 +1242,12 @@ defmodule CodingAgent.SessionBranchTest do
 
       # Should still receive events after branch switch
       :ok = Session.prompt(session, "After switch!")
-      assert_receive {:session_event, _id, _event}, 5000
+      wait_for_agent_end(session)
+
+      assert [%{role: :user, content: "After switch!"}, %{role: :assistant}] =
+               Session.get_messages(session)
+
+      assert_messages_match_branch(session)
     end
 
     test "branch switch during extension hook execution" do
@@ -1172,8 +1267,8 @@ defmodule CodingAgent.SessionBranchTest do
         first_id = hd(SessionManager.entries(state.session_manager)).id
         :ok = Session.navigate_tree(session, first_id)
 
-        # Should complete without error
-        assert :ok == :ok
+        assert Session.get_state(session).session_manager.leaf_id == first_id
+        assert_messages_match_branch(session)
       end
     end
   end
@@ -1253,14 +1348,20 @@ defmodule CodingAgent.SessionBranchTest do
     test "empty session navigation" do
       session = start_session()
 
-      # No entries yet
+      # Initial metadata is journaled without adding conversation messages.
       state = Session.get_state(session)
-      assert SessionManager.entries(state.session_manager) == []
-      assert state.session_manager.leaf_id == nil
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.model.model_id == state.model.id
+      assert to_string(context.model.provider) == to_string(state.model.provider)
+      assert context.thinking_level == state.thinking_level
+      assert Session.get_messages(session) == []
 
       # Navigation to any ID should fail
       result = Session.navigate_tree(session, "any-id")
       assert result == {:error, :entry_not_found}
+      assert Session.get_state(session).session_manager == state.session_manager
+      assert :ok = Session.navigate_tree(session, state.session_manager.leaf_id)
+      assert Session.get_messages(session) == []
     end
 
     test "branch operations with stream mode subscribers" do

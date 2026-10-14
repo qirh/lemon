@@ -45,7 +45,14 @@ defmodule LemonCore.Secrets.KeyProvider do
   @doc "Reads the encoded master key."
   @callback fetch(opts()) :: {:ok, String.t()} | {:error, term()}
 
-  @doc "Writes the encoded master key. Used by `LemonCore.Secrets.MasterKey.init/1`."
+  @doc """
+  Writes the encoded master key.
+
+  Used by `LemonCore.Secrets.MasterKey.init/1` and by key rotation
+  (`LemonCore.Secrets.KeyRotation`), which passes `force: true` to replace the
+  current key. A replacement must be atomic: a half-written key loses every
+  secret. Read-only providers (such as the environment variable) omit it.
+  """
   @callback put(String.t(), opts()) :: :ok | {:error, term()}
 
   @doc """
@@ -80,10 +87,7 @@ defmodule LemonCore.Secrets.KeyProvider do
       @impl true
       def on_invalid, do: :halt
 
-      @impl true
-      def put(_value, _opts), do: {:error, :unavailable}
-
-      defoverridable available?: 1, on_invalid: 0, put: 2
+      defoverridable available?: 1, on_invalid: 0
     end
   end
 

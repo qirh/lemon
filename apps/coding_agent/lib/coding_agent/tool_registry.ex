@@ -14,6 +14,7 @@ defmodule CodingAgent.ToolRegistry do
 
   alias LemonAgent.Types.AgentTool
   alias CodingAgent.Extensions
+  alias CodingAgent.MutationLock
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools
@@ -27,7 +28,7 @@ defmodule CodingAgent.ToolRegistry do
           :builtin
           | {:wasm, source_meta()}
           | {:extension, module()}
-          | {:mcp, server_name :: atom()}
+          | {:mcp, source_meta() | atom()}
 
   @type tool_tuple :: {String.t(), AgentTool.t(), tool_source()}
 
@@ -37,21 +38,26 @@ defmodule CodingAgent.ToolRegistry do
     {:read, Tools.Read},
     {:read_skill, Tools.ReadSkill},
     {:skill_manage, Tools.SkillManage},
-    {:memory_topic, LemonSkills.Tools.MemoryTopic},
-    {:memory, LemonSkills.Tools.Memory},
-    {:search_memory, LemonSkills.Tools.SearchMemory},
-    {:session_search, Tools.SessionSearch},
+    {:remember, LemonSkills.Tools.Remember},
+    {:recall, LemonSkills.Tools.Recall},
     {:checkpoint, Tools.Checkpoint},
     {:write, Tools.Write},
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},
     {:lsp_diagnostics, Tools.LspDiagnostics},
     {:bash, Tools.Bash},
+    {:bash_output, Tools.BashOutput},
+    {:kill_process, Tools.KillProcess},
     {:grep, Tools.Grep},
+    {:ast_grep, Tools.AstGrep},
     {:find, Tools.Find},
     {:ls, Tools.Ls},
     {:webfetch, Tools.WebFetch},
     {:websearch, Tools.WebSearch},
+    {:browser_tabs, Tools.BrowserTabs},
+    {:browser_tab_open, Tools.BrowserTabOpen},
+    {:browser_tab_activate, Tools.BrowserTabActivate},
+    {:browser_tab_close, Tools.BrowserTabClose},
     {:browser_navigate, Tools.BrowserNavigate},
     {:browser_snapshot, Tools.BrowserSnapshot},
     {:browser_get_content, Tools.BrowserGetContent},
@@ -79,18 +85,17 @@ defmodule CodingAgent.ToolRegistry do
     {:media_analyze_image, LemonSkills.Tools.MediaAnalyzeImage},
     {:media_generate_video, LemonSkills.Tools.MediaGenerateVideo},
     {:todo, Tools.Todo},
+    {:ask, Tools.Ask},
     {:kanban, LemonSkills.Tools.Kanban},
+    {:goal, LemonSkills.Tools.Goal},
     {:peer, LemonSkills.Tools.Peer},
     {:task, Tools.Task},
+    {:agent_message, Tools.Task.Messaging},
+    {:wait, Tools.Task.Wait},
     {:agent, Tools.Agent},
     {:parent_question, Tools.ParentQuestion},
     {:tool_auth, Tools.ToolAuth},
-    {:extensions_status, Tools.ExtensionsStatus},
-    {:hashline_edit, Tools.HashlineEdit},
-    # Appended last on purpose: `execute_code` is config-gated, so keeping it at
-    # the tail leaves the tool-order prefix identical whether or not it is
-    # enabled, which is what prompt caching needs.
-    {:execute_code, Tools.ExecuteCode}
+    {:extensions_status, Tools.ExtensionsStatus}
   ]
 
   @doc """
@@ -150,7 +155,8 @@ defmodule CodingAgent.ToolRegistry do
     |> filter_policy_blocked(Keyword.get(opts, :tool_policy))
     |> maybe_wrap_approval(
       Keyword.get(opts, :tool_policy),
-      Keyword.get(opts, :approval_context)
+      Keyword.get(opts, :approval_context) ||
+        Map.new(Keyword.take(opts, [:run_id, :session_id, :session_key, :approval_request_fun]))
     )
   end
 
@@ -218,15 +224,10 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   # Built-ins plus whatever satellite apps registered at boot (see
-  # `LemonAgent.ToolRegistry`). Built-ins win on name collisions. Satellite
-  # tools slot in BEFORE the config-gated `execute_code`: it must stay the
-  # absolute tail so toggling it changes nothing but the last entry — the
-  # prompt-cache prefix stability its @builtin_tools comment promises.
+  # `LemonAgent.ToolRegistry`), appended after the built-ins so the tool-order
+  # prefix stays stable for prompt caching. Built-ins win on name collisions.
   defp builtin_tools do
-    {gated, stable} = Enum.split_with(@builtin_tools, fn {name, _} -> name == :execute_code end)
-
-    stable ++
-      LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0))) ++ gated
+    @builtin_tools ++ LemonAgent.ToolRegistry.available(Enum.map(@builtin_tools, &elem(&1, 0)))
   end
 
   @doc """
@@ -311,6 +312,9 @@ defmodule CodingAgent.ToolRegistry do
 
   @doc """
   Get a report of tool name conflicts and extension load errors.
+
+  Counts describe the resolved, capability-available inventory. `builtin_count`
+  excludes unavailable optional tools, unlike the static `builtin_tool_names/0` list.
   """
   @spec tool_conflict_report(String.t(), tool_opts()) :: conflict_report()
   def tool_conflict_report(cwd, opts \\ []) do
@@ -365,16 +369,37 @@ defmodule CodingAgent.ToolRegistry do
 
   defp builtin_tool_tuples(cwd, opts) do
     builtin_tools()
-    # A disabled per-tool runtime capability must not reach the prompt at all --
-    # its schema costs tokens and offering a tool that always errors confuses
-    # the model. `builtin_tool_names/0` still reports the compile-time set.
-    |> Enum.reject(fn {name, _module} ->
-      name == :execute_code and not Tools.ExecuteCode.enabled?(cwd, opts)
+    |> Enum.filter(fn
+      {:ask, _module} -> Tools.Ask.available?(opts)
+      {:ast_grep, _module} -> match?({:ok, _}, Tools.AstGrep.availability(opts))
+      _tool -> true
     end)
     |> Enum.map(fn {name, module} ->
-      {Atom.to_string(name), module.tool(cwd, opts), :builtin}
+      name = Atom.to_string(name)
+      {name, module.tool(cwd, opts) |> maybe_serialize_mutation(name, cwd, opts), :builtin}
     end)
   end
+
+  # Mutating builtins run one at a time per session: the agent loop executes a
+  # batch of tool calls concurrently, and two writers interleaving on the
+  # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
+  # Read-only tools stay parallel. File tools additionally lock per path.
+  @mutating_builtins ~w(write edit patch ast_grep bash checkpoint)
+
+  defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
+       when name in @mutating_builtins do
+    key = {:session, Keyword.get(opts, :session_id) || Path.expand(cwd)}
+    execute = tool.execute
+
+    %{
+      tool
+      | execute: fn tool_call_id, params, signal, on_update ->
+          MutationLock.with_lock(key, fn -> execute.(tool_call_id, params, signal, on_update) end)
+        end
+    }
+  end
+
+  defp maybe_serialize_mutation(tool, _name, _cwd, _opts), do: tool
 
   defp mcp_tool_tuples(_cwd, _opts, false), do: []
 
@@ -390,21 +415,36 @@ defmodule CodingAgent.ToolRegistry do
         end)
 
       _ ->
-        discover_configured_mcp_tools(cwd)
+        discover_configured_mcp_tools(cwd) ++ discover_session_mcp_tools(opts)
     end
   end
 
   defp discover_configured_mcp_tools(cwd) do
     try do
-      LemonSkills.McpSource.discover_tools(cwd: cwd)
-      |> Enum.map(fn %AgentTool{} = tool ->
-        {tool.name, tool, {:mcp, :configured}}
-      end)
+      tools = LemonSkills.McpSource.discover_tools(cwd: cwd)
+      mcp_tuples_with_approval(tools, LemonSkills.McpSource.approval_policy())
     rescue
       _ -> []
     catch
       :exit, _ -> []
     end
+  end
+
+  defp discover_session_mcp_tools(opts) do
+    case Keyword.get(opts, :acp_mcp_session_id) do
+      id when is_binary(id) and id != "" ->
+        tools = LemonSkills.McpSession.tools(id)
+        mcp_tuples_with_approval(tools, LemonSkills.McpSession.approvals(id))
+
+      _ ->
+        []
+    end
+  end
+
+  defp mcp_tuples_with_approval(tools, approvals) do
+    Enum.map(tools, fn %AgentTool{} = tool ->
+      {tool.name, tool, {:mcp, %{approval: Map.get(approvals, tool.name, :always)}}}
+    end)
   end
 
   defp wrap_extension_tool(%AgentTool{} = tool, ext_module) do
@@ -752,6 +792,7 @@ defmodule CodingAgent.ToolRegistry do
     do:
       "wasm #{Map.get(meta, :path) || Map.get(meta, "path") || Map.get(meta, :name) || Map.get(meta, "name") || "unknown"}"
 
+  defp source_label({:mcp, meta}) when is_map(meta), do: "mcp configured"
   defp source_label({:mcp, server_name}), do: "mcp #{server_name}"
 
   defp source_label(_), do: "unknown"
@@ -796,14 +837,12 @@ defmodule CodingAgent.ToolRegistry do
     end)
   end
 
-  defp maybe_wrap_approval(tools, nil, _approval_context), do: tools
-  defp maybe_wrap_approval(tools, _tool_policy, nil), do: tools
-
   defp maybe_wrap_approval(tools, tool_policy, approval_context) do
     Enum.map(tools, fn {name, tool, source} = tuple ->
       requires_approval =
         ToolPolicy.requires_approval?(tool_policy, name) or
-          wasm_default_requires_approval?(tool_policy, name, source)
+          wasm_default_requires_approval?(tool_policy, name, source) or
+          mcp_requires_approval?(source)
 
       if requires_approval do
         {name, force_wrap_approval(tool, name, approval_context), elem(tuple, 2)}
@@ -812,6 +851,9 @@ defmodule CodingAgent.ToolRegistry do
       end
     end)
   end
+
+  defp mcp_requires_approval?({:mcp, %{approval: :always}}), do: true
+  defp mcp_requires_approval?(_source), do: false
 
   defp wasm_default_requires_approval?(tool_policy, tool_name, {:wasm, meta}) do
     WasmPolicy.requires_approval?(tool_policy, tool_name, meta)
@@ -827,7 +869,7 @@ defmodule CodingAgent.ToolRegistry do
         tool_name,
         params,
         fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        approval_context
+        Map.put(approval_context, :tool_call_id, tool_call_id)
       )
     end
 

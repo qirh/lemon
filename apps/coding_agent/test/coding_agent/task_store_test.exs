@@ -258,7 +258,12 @@ defmodule CodingAgent.TaskStoreTest do
           end)
         end)
 
-      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      workers =
+        for _ <- tasks do
+          assert_receive {:ready, pid}
+          pid
+        end
+
       Enum.each(workers, &send(&1, :append))
       Enum.each(tasks, &Task.await/1)
 
@@ -293,7 +298,12 @@ defmodule CodingAgent.TaskStoreTest do
           end)
         end)
 
-      workers = for _ <- tasks, do: assert_receive({:ready, pid}) && pid
+      workers =
+        for _ <- tasks do
+          assert_receive {:ready, pid}
+          pid
+        end
+
       Enum.each(workers, &send(&1, :go))
       assert Enum.all?(Task.await_many(tasks), &(&1 == :ok))
 

@@ -17,6 +17,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     :session_ref,
     :session_id,
     :sink_pid,
+    :sink_ref,
     :run_ref,
     :prompt,
     :cwd,
@@ -82,10 +83,28 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     @impl true
     def emit_completed(state, fields) do
+      fields = attach_context_budget(state, fields)
       event = Event.completed(fields)
+      # A queued auto-resume may start as soon as the gateway sees completion.
+      # Save and stop this session first so it loads the complete prior turn.
+      state = Presentation.finalize_session(state)
 
       emit_event(state, event)
-      Presentation.finalize_session(state)
+      state
+    end
+
+    defp attach_context_budget(state, fields) do
+      case CodingAgent.Session.context_budget(state.session) do
+        {:ok, budget} ->
+          Map.update(fields, :usage, %{context_budget: budget}, fn usage ->
+            Map.put(usage || %{}, :context_budget, budget)
+          end)
+
+        _ ->
+          fields
+      end
+    catch
+      :exit, _ -> fields
     end
 
     defp emit_event(state, event) do
@@ -98,7 +117,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def cancel(pid, reason \\ :user_requested) do
-    GenServer.cast(pid, {:cancel, reason})
+    GenServer.call(pid, {:cancel, reason})
   end
 
   def steer(pid, text) do
@@ -162,6 +181,8 @@ defmodule CodingAgent.Executor.SessionRunner do
       translator: translator
     }
 
+    state = %{state | sink_ref: Process.monitor(sink_pid)}
+
     meta = request.meta || %{}
     workspace_dir = profile_workspace(meta)
 
@@ -174,6 +195,15 @@ defmodule CodingAgent.Executor.SessionRunner do
         tool_policy: request.tool_policy,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
+        acp_client_terminal: get_in(meta, [:acp_client_terminal]),
+        acp_client_elicitation_form:
+          Map.get(
+            meta,
+            :acp_client_elicitation_form,
+            Map.get(meta, "acp_client_elicitation_form")
+          ),
+        acp_mcp_session_id:
+          get_in(meta, [:acp_mcp_session_id]) || get_in(meta, ["acp_mcp_session_id"]),
         acp_client_fs_read_text_file: get_in(meta, [:acp_client_fs_read_text_file]),
         acp_client_fs_write_text_file: get_in(meta, [:acp_client_fs_write_text_file]),
         stream_options: get_opt(run_opts, :stream_options),
@@ -258,13 +288,14 @@ defmodule CodingAgent.Executor.SessionRunner do
     end
   end
 
-  @impl true
-  def handle_cast({:cancel, reason}, state) do
+  def handle_call({:cancel, reason}, _from, state) do
+    translator = RunTranslator.mark_cancelled(state.translator, reason)
+
     if state.session do
       CodingAgent.Session.abort(state.session)
     end
 
-    {:noreply, %{state | translator: RunTranslator.handle_cancel(state.translator, reason)}}
+    {:reply, :ok, %{state | translator: translator}}
   end
 
   @impl true
@@ -272,7 +303,17 @@ defmodule CodingAgent.Executor.SessionRunner do
     {:noreply, %{state | translator: RunTranslator.handle_event(state.translator, event)}}
   end
 
-  def handle_info({:DOWN, _ref, :process, _pid, reason}, state) do
+  def handle_info(
+        {:DOWN, ref, :process, pid, _reason},
+        %{sink_ref: ref, sink_pid: pid} = state
+      ) do
+    {:stop, :normal, state}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, pid, reason},
+        %{session_ref: ref, session: pid} = state
+      ) do
     Logger.debug("Lemon SessionRunner: Session process down: #{inspect(reason)}")
 
     {:stop, :normal,
@@ -280,6 +321,16 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state) do
+    if is_pid(state.session) and Process.alive?(state.session) do
+      CodingAgent.Session.abort(state.session)
+      Presentation.finalize_session(state)
+    end
+
+    :ok
+  end
 
   defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
 
@@ -291,15 +342,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp extra_tools(%ExecutionRequest{} = request, opts) do
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
 
-    cron_tool =
-      LemonGateway.Tools.Cron.tool(
-        cwd,
-        session_key: request.session_key,
-        agent_id: request_agent_id(request)
-      )
-
     sms_tools = [
-      cron_tool,
       LemonGateway.Tools.SmsGetInboxNumber.tool(cwd),
       LemonGateway.Tools.SmsWaitForCode.tool(cwd, session_key: request.session_key),
       LemonGateway.Tools.SmsListMessages.tool(cwd, session_key: request.session_key),

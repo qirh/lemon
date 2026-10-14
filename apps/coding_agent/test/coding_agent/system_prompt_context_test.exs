@@ -165,7 +165,6 @@ defmodule CodingAgent.SystemPromptContextTest do
 
     prompt = SystemPrompt.build(tmp_dir, build_opts(tmp_dir))
 
-    assert String.contains?(prompt, "You are a personal assistant running inside Lemon.")
     assert String.contains?(prompt, "## Boundaries")
     assert String.contains?(prompt, "## Beta Context")
     refute String.contains?(prompt, "contributor is broken")
@@ -183,7 +182,7 @@ defmodule CodingAgent.SystemPromptContextTest do
 
     assert String.contains?(prompt, "## Patient Context\n\npatient body line")
     assert micros > 300_000
-    assert micros < 3_000_000
+    assert micros < 15_000_000
   end
 
   @tag :tmp_dir

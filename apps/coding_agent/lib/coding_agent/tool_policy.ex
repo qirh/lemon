@@ -6,7 +6,7 @@ defmodule CodingAgent.ToolPolicy do
   approval gates for dangerous operations, and NO_REPLY support.
 
   `:safe_mode` and `:subagent_restricted` deny all built-in file editors,
-  topic-memory mutation, and task delegation as well as the other operations
+  memory mutation (`remember`), and task delegation as well as the other operations
   listed in `@dangerous_tools`. Delegation must not bypass a parent's restricted
   surface by creating a child with a broader default toolset. These profiles
   are tool-name policies, not operating-system sandboxes or a guarantee about
@@ -36,27 +36,31 @@ defmodule CodingAgent.ToolPolicy do
           | :no_external
           | :custom
 
-  @read_tools ["read", "read_skill", "search_memory", "session_search", "grep", "find", "ls"]
+  @read_tools ["read", "read_skill", "recall", "grep", "find", "ls"]
 
   @minimal_core_tools [
     "read",
     "read_skill",
-    "search_memory",
     "skill_manage",
-    "memory_topic",
-    "memory",
+    "remember",
+    "recall",
     "checkpoint",
-    "session_search",
     "write",
     "edit",
     "patch",
+    "ast_grep",
     "bash",
-    "execute_code",
+    "bash_output",
+    "kill_process",
     "grep",
     "find",
     "ls",
     "webfetch",
     "websearch",
+    "browser_tabs",
+    "browser_tab_open",
+    "browser_tab_activate",
+    "browser_tab_close",
     "browser_navigate",
     "browser_snapshot",
     "browser_get_content",
@@ -77,8 +81,6 @@ defmodule CodingAgent.ToolPolicy do
     "browser_clear_state",
     "browser_screenshot",
     "browser_analyze",
-    "browser_exec",
-    "computer_use",
     "media_status",
     "media_generate_image",
     "media_generate_speech",
@@ -87,6 +89,8 @@ defmodule CodingAgent.ToolPolicy do
     "media_generate_video",
     "todo",
     "kanban",
+    "goal",
+    "cron",
     "task",
     "agent",
     "extensions_status"
@@ -95,6 +99,10 @@ defmodule CodingAgent.ToolPolicy do
   @external_tools [
     "webfetch",
     "websearch",
+    "browser_tabs",
+    "browser_tab_open",
+    "browser_tab_activate",
+    "browser_tab_close",
     "browser_navigate",
     "browser_snapshot",
     "browser_get_content",
@@ -115,8 +123,6 @@ defmodule CodingAgent.ToolPolicy do
     "browser_clear_state",
     "browser_screenshot",
     "browser_analyze",
-    "browser_exec",
-    "computer_use",
     "media_status",
     "media_generate_image",
     "media_generate_speech",
@@ -128,20 +134,21 @@ defmodule CodingAgent.ToolPolicy do
   @dangerous_tools [
     "write",
     "edit",
-    "hashline_edit",
     "patch",
+    "ast_grep",
     "checkpoint",
     "skill_manage",
-    "memory",
-    "memory_topic",
+    "remember",
     "bash",
-    # Bash-equivalent: the script runs with host permissions, and the RPC
-    # allowlist bounds the Lemon tool surface only, not the OS.
-    "execute_code",
-    "exec",
-    "process",
+    # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
+    # which execute project code.
+    "lsp_diagnostics",
+    "kill_process",
     "agent",
     "task",
+    "goal",
+    "kanban",
+    "cron",
     "browser_click",
     "browser_type",
     "browser_select_option",
@@ -153,8 +160,6 @@ defmodule CodingAgent.ToolPolicy do
     "browser_evaluate",
     "browser_screenshot",
     "browser_analyze",
-    "browser_exec",
-    "computer_use",
     "media_generate_image",
     "media_generate_speech",
     "media_transcribe_audio",
@@ -197,7 +202,7 @@ defmodule CodingAgent.ToolPolicy do
   def from_profile(:leaf_worker) do
     %{
       allow: :all,
-      deny: ["task", "agent"],
+      deny: ["task", "agent", "goal", "kanban", "cron"],
       blocked_tools: [],
       require_approval: [],
       approvals: %{},

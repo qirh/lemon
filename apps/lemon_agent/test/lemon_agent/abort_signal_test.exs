@@ -808,63 +808,35 @@ defmodule LemonAgent.AbortSignalTest do
   # ============================================================================
 
   describe "guard clauses and type validation" do
-    test "abort/1 only accepts references" do
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort("not a reference")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort(123)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort(:an_atom)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.abort(nil)
+    @tag invalid_signals: ["not a reference", 123, :an_atom, nil]
+    test "abort/1 only accepts references", %{invalid_signals: signals} do
+      for signal <- signals do
+        assert_raise FunctionClauseError, fn -> AbortSignal.abort(signal) end
       end
     end
 
-    test "aborted?/1 accepts reference or nil" do
+    @tag invalid_signals: ["not a reference", 123, :an_atom]
+    test "aborted?/1 accepts reference or nil", %{invalid_signals: signals} do
       ref = AbortSignal.new()
 
-      # These should work
-      assert is_boolean(AbortSignal.aborted?(ref))
-      assert is_boolean(AbortSignal.aborted?(nil))
+      refute AbortSignal.aborted?(ref)
+      refute AbortSignal.aborted?(nil)
 
-      # These should raise
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.aborted?("not a reference")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.aborted?(123)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.aborted?(:an_atom)
+      for signal <- signals do
+        assert_raise FunctionClauseError, fn -> AbortSignal.aborted?(signal) end
       end
     end
 
-    test "clear/1 accepts reference or nil" do
+    @tag invalid_signals: ["not a reference", 123, :an_atom]
+    test "clear/1 accepts reference or nil", %{invalid_signals: signals} do
       ref = AbortSignal.new()
 
       # These should work
       assert :ok = AbortSignal.clear(ref)
       assert :ok = AbortSignal.clear(nil)
 
-      # These should raise
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.clear("not a reference")
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.clear(123)
-      end
-
-      assert_raise FunctionClauseError, fn ->
-        AbortSignal.clear(:an_atom)
+      for signal <- signals do
+        assert_raise FunctionClauseError, fn -> AbortSignal.clear(signal) end
       end
     end
   end
@@ -876,11 +848,15 @@ defmodule LemonAgent.AbortSignalTest do
   describe "realistic usage patterns" do
     test "signal used to cancel a long-running task" do
       ref = AbortSignal.new()
+      parent = self()
 
-      # Simulate a task that checks abort signal periodically
+      # Simulate a task that checks abort signal periodically; it runs for up to
+      # ~10s, so only the abort can end it early
       task =
         Task.async(fn ->
-          Enum.reduce_while(1..100, 0, fn i, acc ->
+          Enum.reduce_while(1..1000, 0, fn i, acc ->
+            if i == 3, do: send(parent, :task_running)
+
             if AbortSignal.aborted?(ref) do
               {:halt, {:aborted_at, acc}}
             else
@@ -891,7 +867,7 @@ defmodule LemonAgent.AbortSignalTest do
         end)
 
       # Let it run for a bit
-      Process.sleep(50)
+      assert_receive :task_running, 5_000
 
       # Abort it
       AbortSignal.abort(ref)
@@ -906,11 +882,16 @@ defmodule LemonAgent.AbortSignalTest do
     test "multiple tasks sharing the same abort signal" do
       ref = AbortSignal.new()
 
-      # Start multiple tasks that check the same signal
+      parent = self()
+
+      # Start multiple tasks that check the same signal; each runs for up to
+      # ~10s, so only the abort can end it early
       tasks =
         for i <- 1..5 do
           Task.async(fn ->
-            Enum.reduce_while(1..50, 0, fn _, acc ->
+            Enum.reduce_while(1..1000, 0, fn n, acc ->
+              if n == 3, do: send(parent, {:task_running, i})
+
               if AbortSignal.aborted?(ref) do
                 {:halt, {:aborted, i, acc}}
               else
@@ -922,7 +903,7 @@ defmodule LemonAgent.AbortSignalTest do
         end
 
       # Let them run
-      Process.sleep(100)
+      for i <- 1..5, do: assert_receive({:task_running, ^i}, 5_000)
 
       # Abort all at once
       AbortSignal.abort(ref)

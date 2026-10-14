@@ -12,7 +12,7 @@ defmodule LemonAutomation.SkillCurator do
   @default_stale_after_days 30
   @default_archive_after_days 90
   @default_agent_id "default"
-  @curator_allowed_tools ["read_skill", "skill_manage", "search_memory", "memory_topic"]
+  @curator_allowed_tools ["read_skill", "skill_manage", "recall", "remember"]
 
   @doc """
   Run one curator pass and submit the review prompt when needed.
@@ -153,7 +153,9 @@ defmodule LemonAutomation.SkillCurator do
   end
 
   defp maybe_put_report_error(result, :ok), do: result
-  defp maybe_put_report_error(result, {:error, reason}), do: Map.put(result, :review_report_error, reason)
+
+  defp maybe_put_report_error(result, {:error, reason}),
+    do: Map.put(result, :review_report_error, reason)
 
   defp enabled?(cfg), do: Keyword.get(cfg, :enabled, true) == true
 

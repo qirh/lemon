@@ -41,7 +41,15 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       assert "todos" in tool.parameters["required"]
       assert tool.parameters["properties"]["todos"]["type"] == "array"
       item_schema = tool.parameters["properties"]["todos"]["items"]
-      assert item_schema["required"] == ["content", "status", "priority", "id"]
+      assert item_schema["required"] == ["content"]
+
+      assert item_schema["properties"]["status"]["enum"] == [
+               "pending",
+               "in_progress",
+               "completed"
+             ]
+
+      assert item_schema["properties"]["priority"]["enum"] == ["high", "medium", "low"]
     end
   end
 
@@ -179,11 +187,13 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
   end
 
   describe "execute/5 - missing fields" do
-    test "rejects todo missing id", %{session_id: session_id} do
+    test "generates an id when omitted", %{session_id: session_id} do
       todos = [%{"content" => "No id", "status" => "pending", "priority" => "high"}]
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "id must be a non-empty string"
+      assert %AgentToolResult{details: %{todos: [todo]}} = result
+      assert is_binary(todo["id"])
+      assert todo["id"] != ""
+      assert TodoStore.get(session_id) == [todo]
     end
 
     test "rejects todo missing content", %{session_id: session_id} do
@@ -193,18 +203,18 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       assert msg =~ "content must be a non-empty string"
     end
 
-    test "rejects todo missing status", %{session_id: session_id} do
+    test "defaults omitted status to pending", %{session_id: session_id} do
       todos = [%{"id" => "1", "content" => "No status", "priority" => "high"}]
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "status must be"
+      assert %AgentToolResult{details: %{todos: [todo]}} = result
+      assert todo["status"] == "pending"
     end
 
-    test "rejects todo missing priority", %{session_id: session_id} do
+    test "defaults omitted priority to medium", %{session_id: session_id} do
       todos = [%{"id" => "1", "content" => "No priority", "status" => "pending"}]
       result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "priority must be"
+      assert %AgentToolResult{details: %{todos: [todo]}} = result
+      assert todo["priority"] == "medium"
     end
   end
 

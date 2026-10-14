@@ -148,8 +148,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
     if is_integer(seq) and seq >= 0, do: seq, else: 0
   end
 
-  defp extract_seq(_), do: 0
-
   defp surface_for(%DeliveryIntent{} = intent) do
     meta = intent.meta || %{}
     surface = meta[:surface] || meta["surface"]

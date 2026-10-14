@@ -392,6 +392,15 @@ export class Theme {
 	}
 
 	/**
+	 * Foreground in an arbitrary hex color, downsampled to the terminal's color
+	 * level like the palette slots. For artwork (the banner logo) whose colors
+	 * are not semantic slots.
+	 */
+	hex(color: string, text: string): string {
+		return this.#chalk.hex(color)(text);
+	}
+
+	/**
 	 * Raw ANSI opening sequence for a slot — pi-natives' syntax highlighter takes
 	 * colors as escape strings rather than functions.
 	 */

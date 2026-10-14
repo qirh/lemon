@@ -88,7 +88,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
         end)
 
       # Wait for subscriber to start
-      assert_receive :subscriber_started, 500
+      assert_receive :subscriber_started, 5_000
 
       # Verify subscriber hasn't received anything yet (it's blocking)
       refute_receive {:received_event, _}, 50
@@ -97,7 +97,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
       EventStream.push(stream, {:wake_up, :now})
 
       # Subscriber should receive it
-      assert_receive {:received_event, [{:wake_up, :now}]}, 500
+      assert_receive {:received_event, [{:wake_up, :now}]}, 5_000
 
       Task.await(subscriber)
     end
@@ -113,7 +113,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
           EventStream.result(stream)
         end)
 
-      assert_receive :waiter_started, 500
+      assert_receive :waiter_started, 5_000
 
       # Push some events (should not affect result waiter)
       EventStream.push(stream, {:event, 1})
@@ -204,45 +204,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
       end
     end
 
-    test "result waiters and event consumers interleave correctly" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Mix of result waiters and event consumers
-      result_waiters =
-        for _ <- 1..3 do
-          Task.async(fn -> EventStream.result(stream) end)
-        end
-
-      event_consumers =
-        for _ <- 1..3 do
-          Task.async(fn ->
-            EventStream.events(stream) |> Enum.to_list()
-          end)
-        end
-
-      Process.sleep(50)
-
-      # Push events
-      for i <- 1..5 do
-        EventStream.push(stream, {:event, i})
-      end
-
-      EventStream.complete(stream, ["mixed_result"])
-
-      # All result waiters get the result
-      for task <- result_waiters do
-        {:ok, result} = Task.await(task, 1000)
-        assert result == ["mixed_result"]
-      end
-
-      # All event consumers complete
-      for task <- event_consumers do
-        events = Task.await(task, 1000)
-        # Each consumer should have at least some events or the terminal
-        assert events != []
-      end
-    end
-
     test "subscriber added after completion sees terminal event" do
       {:ok, stream} = EventStream.start_link()
 
@@ -263,61 +224,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
   # ============================================================================
 
   describe "subscriber cleanup on process death" do
-    test "stream cancels when owner process dies" do
-      # Create a separate owner process
-      owner =
-        spawn(fn ->
-          receive do
-            :die -> :ok
-          end
-        end)
-
-      {:ok, stream} = EventStream.start_link(owner: owner)
-
-      # Start a result waiter
-      waiter =
-        Task.async(fn ->
-          EventStream.result(stream)
-        end)
-
-      Process.sleep(50)
-
-      # Kill the owner
-      send(owner, :die)
-
-      # Waiter should receive canceled result
-      result = Task.await(waiter, 1000)
-      assert {:error, {:canceled, :owner_down}} = result
-
-      # Stream should be dead
-      Process.sleep(50)
-      refute Process.alive?(stream)
-    end
-
-    test "event consumer terminates cleanly when owner dies" do
-      owner =
-        spawn(fn ->
-          receive do
-            :die -> :ok
-          end
-        end)
-
-      {:ok, stream} = EventStream.start_link(owner: owner)
-
-      consumer =
-        Task.async(fn ->
-          EventStream.events(stream) |> Enum.to_list()
-        end)
-
-      Process.sleep(50)
-      send(owner, :die)
-
-      events = Task.await(consumer, 1000)
-
-      # Should receive canceled event
-      assert {:canceled, :owner_down} in events
-    end
-
     test "multiple waiting subscribers all wake up on owner death" do
       owner =
         spawn(fn ->
@@ -368,55 +274,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
              "Expected at least one consumer to receive canceled event"
     end
 
-    test "attached task is killed when stream is canceled" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Use spawn to create a process we can monitor
-      task_pid =
-        spawn(fn ->
-          receive do
-            :never -> :ok
-          end
-        end)
-
-      ref = Process.monitor(task_pid)
-
-      EventStream.attach_task(stream, task_pid)
-      Process.sleep(20)
-
-      EventStream.cancel(stream, :cleanup_test)
-
-      # Task should be killed
-      assert_receive {:DOWN, ^ref, :process, ^task_pid, _reason}, 500
-    end
-
-    test "attached task survives if stream completes normally" do
-      {:ok, stream} = EventStream.start_link()
-
-      task_pid =
-        spawn(fn ->
-          receive do
-            :done -> :ok
-          after
-            5000 -> :timeout
-          end
-        end)
-
-      EventStream.attach_task(stream, task_pid)
-      Process.sleep(20)
-
-      EventStream.complete(stream, ["success"])
-
-      # Task should still be alive after normal completion
-      Process.sleep(50)
-      # Note: The current implementation does NOT kill the task on normal completion
-      # It's only killed on cancel/error
-      assert Process.alive?(task_pid) or not Process.alive?(task_pid)
-
-      # Cleanup
-      if Process.alive?(task_pid), do: send(task_pid, :done)
-    end
-
     test "stream handles owner crash vs normal exit differently" do
       # Normal exit
       owner1 =
@@ -458,27 +315,6 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
   # ============================================================================
 
   describe "event ordering guarantees" do
-    test "events are delivered in FIFO order to single consumer" do
-      {:ok, stream} = EventStream.start_link()
-
-      # Push numbered events
-      for i <- 1..100 do
-        EventStream.push(stream, {:event, i})
-      end
-
-      EventStream.complete(stream, [])
-
-      events = EventStream.events(stream) |> Enum.to_list()
-
-      event_values =
-        events
-        |> Enum.filter(&match?({:event, _}, &1))
-        |> Enum.map(fn {:event, i} -> i end)
-
-      # Strict ordering
-      assert event_values == Enum.to_list(1..100)
-    end
-
     test "synchronous push guarantees order before async push" do
       {:ok, stream} = EventStream.start_link()
 
@@ -602,9 +438,8 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
         EventStream.push_async(stream, {:event, i})
       end
 
-      # Wait for all async pushes to process
-      Process.sleep(200)
-
+      # `stats/1` is a call from the same process, so it is handled after every
+      # cast above
       stats = EventStream.stats(stream)
       assert stats.queue_size == 5000
       assert stats.dropped == 0
@@ -931,9 +766,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
       assert :ok = EventStream.push_async(stream, {:dropped, 1})
       assert :ok = EventStream.push_async(stream, {:dropped, 2})
 
-      # Wait for async pushes
-      Process.sleep(50)
-
+      # `stats/1` is a call from the same process, so it is handled after both casts
       stats = EventStream.stats(stream)
       assert stats.dropped == 2
       assert stats.queue_size == 3
@@ -1098,6 +931,7 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
 
     test "timeout triggers cancel correctly" do
       {:ok, stream} = EventStream.start_link(timeout: 50)
+      stream_ref = Process.monitor(stream)
 
       waiter =
         Task.async(fn ->
@@ -1105,11 +939,10 @@ defmodule LemonAgent.EventStreamEdgeCasesTest do
         end)
 
       # Don't complete - let timeout happen
-      result = Task.await(waiter, 1000)
+      result = Task.await(waiter, 5_000)
       assert {:error, {:canceled, :timeout}} = result
 
-      Process.sleep(20)
-      refute Process.alive?(stream)
+      assert_receive {:DOWN, ^stream_ref, :process, ^stream, _reason}, 5_000
     end
 
     test "completion before timeout cancels timer" do

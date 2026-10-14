@@ -156,7 +156,6 @@ defmodule LemonCore.SessionMetadataStore do
   defp integer_or(_value, default), do: default
 
   defp read(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
-  defp read(_map, _key), do: nil
 
   defp fetch(map, key) do
     cond do

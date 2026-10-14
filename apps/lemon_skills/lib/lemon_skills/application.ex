@@ -12,11 +12,16 @@ defmodule LemonSkills.Application do
     # Back-fill lockfile provenance for any pre-existing installs.
     LemonSkills.Migrator.migrate()
     LemonSkills.Telemetry.attach_introspection_bridge()
+    # Automatic per-turn memory recall. Registered once at boot; the contributor
+    # itself skips turns when `[memory] auto_recall = false`.
+    LemonAgent.ContextRegistry.register(:memory_recall, LemonSkills.MemoryRecall)
 
     children = [
       LemonSkills.Registry,
       # MCP source for external tool discovery
-      {LemonSkills.McpSource, []}
+      {LemonSkills.McpSource, []},
+      {DynamicSupervisor, strategy: :one_for_one, name: LemonSkills.McpSession.Supervisor},
+      LemonSkills.McpSession
     ]
 
     opts = [strategy: :one_for_one, name: LemonSkills.Supervisor]

@@ -4,8 +4,8 @@ Lemon has two diagnostics paths:
 
 - `lsp_diagnostics`: the model-facing coding-agent tool for one-file
   diagnostics and post-edit baseline/delta checks.
-- supervised LSP sessions: BEAM-owned stdio language-server processes exposed
-  through the control plane for operator/editor-style integrations.
+- supervised LSP sessions: BEAM-owned stdio language-server processes managed
+  through the in-process `LemonLsp.ServerManager` API.
 
 Both paths are preview surfaces. They are designed to be supportable first:
 status and support bundles expose capabilities, counters, hashes, and install
@@ -65,20 +65,12 @@ The supervised stdio manager registers these language servers:
 Override env vars can point at either a command on `PATH` or an absolute local
 executable path. Public status redacts absolute paths to command basenames.
 
-## Control-Plane Methods
+## Supervised Session API
 
-Operator/editor surfaces can use:
-
-| Method | Purpose |
-| --- | --- |
-| `lsp.diagnostics.status` | Inspect redacted checker and language-server capability metadata. |
-| `lsp.server.start` | Start a supervised stdio language-server session. |
-| `lsp.server.initialize` | Send `initialize`, wait for the response, then send `initialized`. |
-| `lsp.document.open` | Send `textDocument/didOpen`. |
-| `lsp.document.change` | Send `textDocument/didChange` with full text content. |
-| `lsp.document.close` | Send `textDocument/didClose`. |
-| `lsp.server.request` | Send a JSON-RPC request and correlate the response by id. |
-| `lsp.server.stop` | Stop the supervised session. |
+The in-process session API is defined by
+[`LemonLsp.ServerManager`](../../apps/lemon_lsp/lib/lemon_lsp/server_manager.ex):
+start/initialize a session, open/change/close documents, send requests or
+notifications, and stop the session. It is not exposed as control-plane RPCs.
 
 Session status reports request/response counts, notification counts, open and
 known document counts, redacted document URI hashes, diagnostic batch counts,
@@ -100,157 +92,15 @@ The manager records both push diagnostics from
 `textDocument/diagnostic` responses. Public status keeps only URI hashes,
 diagnostic counts, severity counts, and timestamps.
 
-## Proof Lanes
+## Focused Test Coverage
 
-Focused LSP coverage:
-
-```bash
-mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs --seed 1
-```
-
-Broader preview lane:
+From the umbrella root:
 
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/lsp_diagnostics_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_servers_test.exs \
-  apps/lemon_lsp/test/lemon_lsp/lsp_server_manager_test.exs \
-  apps/lemon_core/test/lemon_core/doctor/lsp_diagnostics_test.exs \
-  apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
-  apps/lemon_core/test/lemon_core/application_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/methods/optional_parity_methods_extended_test.exs \
-  apps/lemon_control_plane/test/lemon_control_plane/protocol/schemas_test.exs \
-  apps/lemon_web/test/lemon_web_test.exs \
-  apps/coding_agent/test/coding_agent/tools/write_test.exs \
-  apps/coding_agent/test/coding_agent/tools/edit_test.exs \
-  apps/coding_agent/test/coding_agent/tools/patch_test.exs \
-  apps/coding_agent/test/coding_agent/tools_test.exs \
-  apps/coding_agent/test/coding_agent/tool_registry_test.exs \
-  apps/coding_agent/test/coding_agent_test.exs --seed 1
+  apps/lemon_lsp/test --seed 1
 ```
 
-The latest broader preview lane passed locally on 2026-05-16 with `404 tests,
-0 failures`.
-
-Real language-server smoke:
-
-```bash
-MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs
-```
-
-Use `--out /path/to/proof.json` to change the proof path and `--servers` to
-request a comma-separated server list. Add `--editor-flow` to exercise a
-longer editor-style loop: open a broken document, clear diagnostics, reintroduce
-the broken text, clear diagnostics again, and close the document.
-Add `--project-fixtures` or `--fixture-profile project` to use multi-file
-temporary project fixtures with root markers and companion files instead of the
-single-file compatibility fixtures. Add `--real-repo-fixtures` or
-`--fixture-profile real_repo` to copy selected real Lemon repository source
-files into isolated temporary projects before injecting and repairing syntax
-breakage.
-
-```bash
-MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --timeout-ms 90000 \
-  --project-fixtures \
-  --editor-flow
-```
-
-The default smoke still runs Pyright for backward compatibility. For each
-requested server, the smoke starts a real supervised stdio session, initializes
-it, writes a temporary fixture, opens a broken document, waits for
-`textDocument/publishDiagnostics`, changes the document to valid text, waits
-for the latest diagnostics to clear, then writes redacted proof JSON with
-command basenames, hashes, counters, clean-after-change flags, fixture file
-counts, root-marker counts, companion-file counts, proof scopes, per-server
-check names, and severity counts only.
-When the ElixirLS command is an absolute local launcher, set
-`LEMON_LSP_ELIXIR_LS_COMMAND` to that path; the manager still injects
-`ELS_MODE=language_server`.
-
-The project-fixture proof lane writes
-`.lemon/proofs/lsp-project-fixtures-latest.json`, which is included by
-support bundles, read-only `proofs.status`, and through the
-first-party `.lemon/proofs/*-latest.json` inventory.
-
-The real-repository fixture proof lane writes
-`.lemon/proofs/lsp-real-repo-fixtures-latest.json`. It covers all registered
-servers with isolated temporary projects: Lemon CLI Python, maintained Go and C
-repo fixtures, Lemon WASM runtime Rust, Lemon TUI TypeScript, and LemonCore
-Elixir source excerpts. Proof artifacts store only relative source labels,
-content hashes, counters, and cleanup flags.
-
-The latest local full-fleet run on 2026-05-16 used:
-
-```bash
-LEMON_LSP_ELIXIR_LS_COMMAND=/home/z80/.local/lib/elixir-ls/launch.sh \
-  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --timeout-ms 90000 \
-  --out tmp/lsp-server-smoke-full-fleet-refresh.json
-```
-
-It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
-`typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
-`failed_count: 0`, `clean_after_change: true` for every server, and redacted
-diagnostic counters only. A follow-up cleanup proof intentionally used the
-broken default `elixir-ls` wrapper on this host, produced `:request_timeout`,
-and left no `elixir-ls`, `language_server`, or language-server smoke processes
-running afterward. The latest `--editor-flow` full-fleet run also completed all
-six servers with `final_clean_after_second_change: true`, non-zero
-`reintroduced_diagnostic_count`, and `editor_flow_close_status: "closed"` for
-every server.
-
-The latest project-fixture full-fleet run on 2026-05-17 used:
-
-```bash
-LEMON_LSP_ELIXIR_LS_COMMAND=/home/z80/.local/lib/elixir-ls/launch.sh \
-  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --project-fixtures \
-  --editor-flow \
-  --timeout-ms 90000 \
-  --out .lemon/proofs/lsp-project-fixtures-latest.json
-```
-
-It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
-`typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
-`failed_count: 0`, `fixture_profile: "project"`, one safe proof scope
-`lsp_project_fixtures_smoke`, six per-server completed checks, non-zero
-reintroduced diagnostics for every server, final clean diagnostics, and
-document close status `"closed"` for every server.
-
-The latest real-repository fixture run on 2026-05-17 used:
-
-```bash
-LEMON_LSP_ELIXIR_LS_COMMAND=/home/z80/.local/lib/elixir-ls/launch.sh \
-  MIX_ENV=test mix run scripts/live_lsp_server_smoke.exs \
-  --servers pyright,gopls,clangd,rust_analyzer,typescript_language_server,elixir_ls \
-  --real-repo-fixtures \
-  --editor-flow \
-  --timeout-ms 90000 \
-  --out .lemon/proofs/lsp-real-repo-fixtures-latest.json
-```
-
-It completed `pyright`, `gopls`, `clangd`, `rust_analyzer`,
-`typescript_language_server`, and `elixir_ls` with `completed_count: 6`,
-`failed_count: 0`, `fixture_profile: "real_repo"`, safe proof scope
-`lsp_real_repo_fixtures_smoke`, and six completed editor-flow checks. The copied
-or maintained source fixtures included the pyright Python fixture
-(`source_hash: "209e9eb250c87516"`),
-`scripts/fixtures/lsp/real_repo/go/main.go`
-(`source_hash: "6c5dd41c620753d3"`),
-`scripts/fixtures/lsp/real_repo/clangd/main.c`
-(`source_hash: "c82451181bce5e23"`),
-`native/lemon-wasm-runtime/src/protocol.rs`
-(`source_hash: "905becfa4c9066e7"`),
-`clients/tui/src/ui/theme/theme.ts` (`source_hash: "8800a18b5b8e0f84"`), and
-`apps/lemon_core/lib/lemon_core/event.ex`
-(`source_hash: "10c89df1100a6ea9"`). Every server reported diagnostics for the
-injected breakage, cleared after repair, reintroduced diagnostics, cleared
-again, and closed the document. The proof cleanup flags stayed false for raw
-paths, file contents, diagnostics output, raw session ids, and server I/O.
+Exercise supervised server startup, framing, document diagnostics, timeout cleanup
+and wrapper-child termination. These are local checks, not proof that a particular
+language server is installed or correctly configured on an operator's machine.

@@ -13,7 +13,7 @@
  */
 
 import { METHOD } from "../protocol/methods.ts";
-import type { ApprovalRequestedEvent } from "../protocol/types.ts";
+import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../protocol/types.ts";
 import { asArray, humanTime, pickNumber, pickString } from "./format.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
@@ -122,6 +122,14 @@ async function resolve(
 		return;
 	}
 	const row = pending[index];
+	// A scoped approval would pre-approve plans nobody has read yet.
+	if (row.tool === PROPOSE_PLAN_TOOL && decision !== "approve_once" && decision !== "deny") {
+		ctx.ui.notice(
+			"a plan proposal is approved once (execute it now) or denied (refine it); scopes do not apply",
+			"warning",
+		);
+		return;
+	}
 	// The host owns the resolve when there is one: it dismisses the panel, writes
 	// the store and annotates the transcript record. Only a host without an
 	// approval controller (a bare command harness) falls back to the raw call.

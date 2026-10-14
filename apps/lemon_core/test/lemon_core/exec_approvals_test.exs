@@ -24,6 +24,16 @@ defmodule LemonCore.ExecApprovalsTest do
     :ok
   end
 
+  # Waits for a request running in another process to create its pending approval.
+  defp await_pending_approvals do
+    LemonCore.Testing.AsyncHelpers.assert_eventually(
+      fn -> Store.list(:exec_approvals_pending) != [] end,
+      timeout: 5_000
+    )
+
+    Store.list(:exec_approvals_pending)
+  end
+
   defp clear_approval_tables do
     [
       :exec_approvals_pending,
@@ -129,11 +139,10 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      # Give the request time to create the pending approval
-      Process.sleep(100)
+      # Wait for the request to create the pending approval
+      pending_list = await_pending_approvals()
 
       # Verify pending approval was created
-      pending_list = Store.list(:exec_approvals_pending)
       assert length(pending_list) == 1
 
       {_key, pending} = hd(pending_list)
@@ -145,7 +154,7 @@ defmodule LemonCore.ExecApprovalsTest do
       ExecApprovals.resolve(pending.id, :approve_once)
 
       # Wait for the result
-      assert {:ok, :approved, :approve_once} = Task.await(task, 1000)
+      assert {:ok, :approved, :approve_once} = Task.await(task, 5_000)
     end
 
     test "returns denied when approval is denied" do
@@ -162,16 +171,14 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      Process.sleep(100)
-
-      # Get the pending approval
-      pending_list = Store.list(:exec_approvals_pending)
+      # Get the pending approval once the request created it
+      pending_list = await_pending_approvals()
       {_key, pending} = hd(pending_list)
 
       # Deny the approval
       ExecApprovals.resolve(pending.id, :deny)
 
-      assert {:ok, :denied} = Task.await(task, 1000)
+      assert {:ok, :denied} = Task.await(task, 5_000)
     end
 
     test "records redacted approval lifecycle introspection events" do
@@ -191,12 +198,10 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      Process.sleep(100)
-
-      {_key, pending} = hd(Store.list(:exec_approvals_pending))
+      {_key, pending} = hd(await_pending_approvals())
       :ok = ExecApprovals.resolve(pending.id, :deny)
 
-      assert {:ok, :denied} = Task.await(task, 1000)
+      assert {:ok, :denied} = Task.await(task, 5_000)
 
       events = LemonCore.Introspection.list(run_id: run_id, limit: 10)
       requested = Enum.find(events, &(&1.event_type == :approval_requested))
@@ -409,6 +414,86 @@ defmodule LemonCore.ExecApprovalsTest do
 
     test "reports :not_pending for an approval that is not pending" do
       assert {:error, :not_pending} = ExecApprovals.resolve("non_existent_id", :approve_once)
+    end
+  end
+
+  describe "exact approval previews" do
+    test "changed preview and invalid decisions leave the live request pending" do
+      pending = %{
+        id: "approval_preview",
+        run_id: "run_preview",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "first"},
+        expires_at_ms: nil
+      }
+
+      :ok = ExecApprovalStore.put_pending(pending.id, pending)
+      changed = %{pending | action: %{command: "second"}}
+      :ok = ExecApprovalStore.put_pending(pending.id, changed)
+
+      assert {:error, :mismatch} =
+               ExecApprovals.resolve(pending.id, :approve_once, expected_pending: pending)
+
+      assert {:error, :invalid_decision} = ExecApprovals.resolve(pending.id, :yes)
+      assert {:ok, ^changed} = ExecApprovalStore.fetch_pending(pending.id)
+      assert :ok = ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
+
+      assert {:error, :not_pending} =
+               ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
+    end
+
+    test "an expired preview cannot install policy and wakes the waiter as timed out" do
+      LemonCore.Bus.subscribe("exec_approvals")
+
+      pending = %{
+        id: "approval_expired",
+        run_id: "run_expired",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "expired"},
+        expires_at_ms: LemonCore.Clock.now_ms() - 1
+      }
+
+      :ok = ExecApprovalStore.put_pending(pending.id, pending)
+
+      assert {:error, :expired} =
+               ExecApprovals.resolve(pending.id, :approve_global, expected_pending: pending)
+
+      assert {:ok, nil} = ExecApprovalStore.fetch_pending(pending.id)
+      assert ExecApprovalStore.get_global_policy("bash", hash_action(pending.action)) == nil
+
+      assert_receive %LemonCore.Event{
+        type: :approval_resolved,
+        payload: %{approval_id: "approval_expired", decision: :timeout}
+      }
+    end
+
+    test "a second request cannot replace an existing exact approval ID" do
+      pending = %{
+        id: "approval_duplicate",
+        run_id: "run_original",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "original"}
+      }
+
+      :ok = ExecApprovalStore.put_pending(pending.id, pending)
+
+      assert {:error, :already_pending} =
+               ExecApprovals.request(%{
+                 approval_id: pending.id,
+                 run_id: "run_replacement",
+                 session_key: "agent:test:main",
+                 tool: "bash",
+                 action: %{command: "replacement"},
+                 expires_in_ms: 10
+               })
+
+      assert {:ok, ^pending} = ExecApprovalStore.fetch_pending(pending.id)
     end
   end
 
@@ -736,7 +821,7 @@ defmodule LemonCore.ExecApprovalsTest do
 
     Enum.count(messages, fn
       {:"$gen_call", _from, {operation, :exec_approvals_pending, ^approval_id}}
-      when operation in [:generic_get, :generic_take] ->
+      when operation in [:generic_get, :generic_fetch, :generic_take] ->
         true
 
       _other ->

@@ -224,6 +224,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -264,6 +270,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -284,6 +295,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -304,6 +321,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -324,6 +347,9 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -344,6 +370,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -384,6 +415,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -404,6 +440,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -424,6 +466,10 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -444,6 +490,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -484,6 +536,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -504,6 +562,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -517,6 +580,32 @@
     "context_window": 400000,
     "max_tokens": 128000
   },
+  "gpt-5.3-chat-latest": {
+    "id": "gpt-5.3-chat-latest",
+    "name": "GPT-5.3 Chat",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 1.75,
+      "output": 14.0,
+      "cache_read": 0.175,
+      "cache_write": 0.0
+    },
+    "context_window": 128000,
+    "max_tokens": 16384
+  },
   "gpt-5.3-codex": {
     "id": "gpt-5.3-codex",
     "name": "GPT-5.3 Codex",
@@ -524,6 +613,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -544,6 +639,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -564,6 +665,12 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -577,6 +684,58 @@
     "context_window": 272000,
     "max_tokens": 128000
   },
+  "gpt-5.4-mini": {
+    "id": "gpt-5.4-mini",
+    "name": "GPT-5.4 Mini",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.75,
+      "output": 4.5,
+      "cache_read": 0.075,
+      "cache_write": 0.0
+    },
+    "context_window": 400000,
+    "max_tokens": 128000
+  },
+  "gpt-5.4-nano": {
+    "id": "gpt-5.4-nano",
+    "name": "GPT-5.4 Nano",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.2,
+      "output": 1.25,
+      "cache_read": 0.02,
+      "cache_write": 0.0
+    },
+    "context_window": 400000,
+    "max_tokens": 128000
+  },
   "gpt-5.4-pro": {
     "id": "gpt-5.4-pro",
     "name": "GPT-5.4 Pro",
@@ -584,6 +743,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "medium",
+      "high",
+      "xhigh"
+    ],
     "input": [
       "text",
       "image"
@@ -597,6 +761,241 @@
     "context_window": 1050000,
     "max_tokens": 128000
   },
+  "gpt-5.5": {
+    "id": "gpt-5.5",
+    "name": "GPT-5.5",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5.0,
+      "output": 30.0,
+      "cache_read": 0.5,
+      "cache_write": 0.0
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-5.6-luna": {
+    "id": "gpt-5.6-luna",
+    "name": "GPT-5.6 Luna",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.2,
+      "output": 1.2,
+      "cache_read": 0.02,
+      "cache_write": 0.25
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-5.6-sol": {
+    "id": "gpt-5.6-sol",
+    "name": "GPT-5.6 Sol",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 4.0,
+      "output": 20.0,
+      "cache_read": 0.5,
+      "cache_write": 6.25
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-5.6-terra": {
+    "id": "gpt-5.6-terra",
+    "name": "GPT-5.6 Terra",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 12.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-6-astra": {
+    "id": "gpt-6-astra",
+    "name": "GPT-6 Astra",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 1.0,
+      "cache_write": 12.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-6-luna": {
+    "id": "gpt-6-luna",
+    "name": "GPT-6 Luna",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.01,
+      "cache_write": 0.125
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-6-sol": {
+    "id": "gpt-6-sol",
+    "name": "GPT-6 Sol",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.2,
+      "cache_write": 2.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-6.1-sol": {
+    "id": "gpt-6.1-sol",
+    "name": "GPT-6.1 Sol",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_write": 2.5
+    },
+    "context_window": 1050000,
+    "max_tokens": 128000
+  },
+  "gpt-chat-latest": {
+    "id": "gpt-chat-latest",
+    "name": "GPT Chat Latest",
+    "api": "azure_openai_responses",
+    "provider": "azure_openai_responses",
+    "base_url": "null",
+    "reasoning": true,
+    "reasoning_efforts": [
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 5.0,
+      "output": 30.0,
+      "cache_read": 0.5,
+      "cache_write": 0.0
+    },
+    "context_window": 400000,
+    "max_tokens": 128000
+  },
   "o1": {
     "id": "o1",
     "name": "o1",
@@ -604,6 +1003,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -644,6 +1048,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"
@@ -684,6 +1093,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text"
     ],
@@ -723,6 +1137,11 @@
     "provider": "azure_openai_responses",
     "base_url": "null",
     "reasoning": true,
+    "reasoning_efforts": [
+      "low",
+      "medium",
+      "high"
+    ],
     "input": [
       "text",
       "image"

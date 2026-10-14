@@ -4,6 +4,13 @@ defmodule LemonNew.MixProject do
   @version "0.1.0"
   @source_url "https://github.com/z80dev/lemon"
 
+  # This file ships verbatim in the hex tarball, so it must not read anything
+  # outside its own directory. The templates the generator embeds at compile
+  # time live in `templates/`, inside the package.
+  #
+  # Installed either way as a local Mix archive: from a lemon checkout
+  # (`MIX_ENV=prod mix archive.build`) or, once published, from Hex
+  # (`mix archive.install hex lemon_new`).
   def project do
     [
       app: :lemon_new,
@@ -11,15 +18,9 @@ defmodule LemonNew.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      package: package(),
-      source_url: @source_url,
-      docs: docs(),
-      homepage_url: @source_url,
-      description: """
-      Lemon project generator. Scaffolds a BEAM agent project wired to the
-      lemon platform packages: an agent loop, one tool, one channel, and a
-      test suite that runs without an API key.
-      """
+      name: "lemon_new",
+      description: description(),
+      package: package()
     ]
   end
 
@@ -27,24 +28,24 @@ defmodule LemonNew.MixProject do
     [extra_applications: [:eex]]
   end
 
-  # Deliberately none. The installer is distributed as a mix archive, which
-  # cannot carry dependencies: anything listed here is simply unavailable at
-  # `mix lemon.new` time. Templates are compiled into the beam files.
-  defp deps, do: []
-
-  defp docs do
-    [
-      source_ref: "v#{@version}",
-      extras: ["README.md"]
-    ]
+  defp description do
+    "Project generator for the Lemon agent platform: `mix lemon.new` scaffolds " <>
+      "a supervised agent with a tool, a console channel and an offline test suite."
   end
 
   defp package do
     [
-      maintainers: ["z80"],
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib templates mix.exs README.md)
+      files: ~w(lib templates mix.exs README.md CHANGELOG.md LICENSE),
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/installer/CHANGELOG.md"
+      }
     ]
   end
+
+  # Deliberately none. The installer is distributed as a mix archive, which
+  # cannot carry dependencies: anything listed here is simply unavailable at
+  # `mix lemon.new` time. Templates are compiled into the beam files.
+  defp deps, do: []
 end

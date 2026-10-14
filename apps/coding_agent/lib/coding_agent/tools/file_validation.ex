@@ -2,11 +2,42 @@ defmodule CodingAgent.Tools.FileValidation do
   @moduledoc """
   Shared file access validation: type checking, error formatting, and write-access checks.
 
-  Used by Read, Write, Edit, Grep, Ls, Find, Patch, and HashlineEdit tools to
+  Used by Read, Write, Edit, Grep, Ls, Find, and Patch tools to
   eliminate duplicated File.stat dispatch logic.
   """
 
   @max_path_length 4096
+
+  @doc """
+  Rejects binary data before text matching or newline normalization.
+
+  Text mutation tools accept valid UTF-8 without NUL bytes. Rejection happens
+  before mutation, so binary files are never partially rewritten as text.
+  """
+  @spec check_text_content(binary(), String.t()) :: :ok | {:error, String.t()}
+  def check_text_content(content, label) when is_binary(content) do
+    if String.valid?(content) and not String.contains?(content, <<0>>) do
+      :ok
+    else
+      {:error, "#{label} contains binary data; text tools require valid UTF-8 without NUL bytes"}
+    end
+  end
+
+  @doc """
+  Adds complete before/after text for diff consumers only when both fit 16 KiB.
+  Larger or unreadable snapshots are omitted rather than truncated.
+  """
+  def put_text_snapshots(details, path, old_text, new_text) do
+    details = Map.put(details, :path, path)
+
+    if (is_binary(old_text) or is_binary(new_text)) and
+         (is_nil(old_text) or (is_binary(old_text) and byte_size(old_text) <= 16_384)) and
+         (is_nil(new_text) or (is_binary(new_text) and byte_size(new_text) <= 16_384)) do
+      details |> Map.put(:oldText, old_text) |> Map.put(:newText, new_text)
+    else
+      details
+    end
+  end
 
   @doc """
   Checks that `path` exists and is one of the `allowed_types`.
@@ -66,7 +97,7 @@ defmodule CodingAgent.Tools.FileValidation do
   Checks that `path` exists and is writable.
 
   Returns `:ok` if the file has write access, or `{:error, reason_atom}` matching
-  the contract expected by Edit and HashlineEdit tools.
+  the contract expected by the Edit tool.
   """
   @spec check_write_access(String.t()) :: :ok | {:error, atom()}
   def check_write_access(path) do

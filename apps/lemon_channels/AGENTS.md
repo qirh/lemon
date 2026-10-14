@@ -1,693 +1,80 @@
-# LemonChannels AGENTS.md
-
-Channel adapter application for external messaging platforms (Telegram, Discord, XMTP, WhatsApp, email).
-
-## Quick Orientation
-
-LemonChannels sits between external messaging platforms and Lemon's native execution pipeline. It has three jobs:
-
-1. **Inbound**: Receive messages from platforms, normalize them locally, and submit only canonical `LemonCore.RunRequest` structs to `LemonRouter` via `LemonCore.RouterBridge.submit_run/1`.
-2. **Semantic outbound rendering**: Accept router-owned `LemonCore.DeliveryIntent` values, render channel-specific UX, and keep platform presentation state inside `lemon_channels`.
-3. **Direct outbound delivery**: Accept `OutboundPayload` structs from adapter helpers and other low-level callers, chunk/dedupe/rate-limit them, and deliver to the target platform with retry.
-
-The app lives at `apps/lemon_channels/` in the umbrella. It depends on `lemon_core` for shared types and delegates config to `LemonCore.GatewayConfig`. It bridges to `lemon_router` at runtime without a compile-time dependency (via `LemonChannels.Runtime` and `LemonCore.RouterBridge`).
-
-### Key Entry Points
-
-- **Top-level API**: `LemonChannels.enqueue/1`, `LemonChannels.get_plugin/1`, `LemonChannels.list_plugins/0`
-- **Dispatcher**: `LemonChannels.Dispatcher.dispatch/1` -- router-facing semantic delivery entrypoint
-- **Presentation state**: `LemonChannels.PresentationState` -- channels-owned message-id and send-vs-edit state
-- **Outbox**: `LemonChannels.Outbox.enqueue/1` -- low-level payload queue used by renderers and adapter helpers
-- **Script send**: `LemonChannels.ScriptSend.run/2` and `mix lemon.send` -- shell/cron/CI notifications to Telegram or Discord through direct outbound adapters
-- **Registry**: `LemonChannels.Registry` -- register, lookup, and manage adapter lifecycle
-- **Application**: `LemonChannels.Application` -- supervision tree, `register_and_start_adapter/2`, `stop_adapter/1`
-
-## Purpose and Responsibilities
-
-LemonChannels provides:
-
-- **Channel Plugin System**: Pluggable adapters for messaging platforms via `LemonChannels.Plugin` behaviour
-- **Semantic Rendering**: Converts `LemonCore.DeliveryIntent` into channel-specific payloads and controls
-- **Presentation State**: Tracks message ids, pending creates, deferred edits, and related delivery state per route/run/surface
-- **Outbox Queue**: Reliable outbound message delivery with per-group FIFO ordering, retry, and concurrency
-- **Message Processing**: Chunking (sentence/word boundary splitting), deduplication (ETS, 1h TTL), rate limiting (token bucket)
-- **Inbound Normalization**: Converts raw channel data to `LemonCore.InboundMessage`
-
-## Architecture Overview
-
-```
-                    Inbound
-[Platform] → Transport → normalize_inbound() → RunRequestBuilder → RouterBridge.submit_run() → [LemonRouter]
-
-               Semantic Outbound
-[Router] → Dispatcher → Renderer → PresentationState → Outbox → deliver() → [Platform]
-
-                Direct Outbound
-[Caller] → Outbox → Chunker → Dedupe → RateLimiter → deliver() → [Platform]
-```
-
-The Outbox preserves delivery ordering per "delivery group" (channel + account + peer + thread),
-while allowing concurrency across independent groups. Chunked messages from the same payload
-share a group and are never delivered concurrently to prevent reordering.
-
-## Key Files and Purposes
-
-### Core Infrastructure
-
-| File | Module | What It Does |
-|------|--------|-------------|
-| `lib/lemon_channels.ex` | `LemonChannels` | Public API facade, delegates to Registry and Outbox |
-| `lib/lemon_channels/application.ex` | `LemonChannels.Application` | Supervision tree, adapter lifecycle (`register_and_start_adapter/2`, `start_adapter/2`, `stop_adapter/1`) |
-| `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint. Picks a channel renderer from `DeliveryIntent.route.channel_id`. After every dispatch (success or failure) it emits `[:lemon, :channels, :dispatch]` telemetry and broadcasts a typed `LemonCore.Events.ChannelDelivery` on the `"channels"` bus topic — the hook for tests and the control plane to observe exactly what lemon sent to a channel. Emission is post-result and rescue-wrapped, so it can never break a real send. |
-| `lib/lemon_channels/presentation_state.ex` | `LemonChannels.PresentationState` | Channels-owned presentation state: message ids, pending creates, pending edits, deferred/coalesced edits, deferred chunk sets for long Telegram/Discord replies, post-edit follow-up chunks, and surface tracking. Telegram and Discord overflow follow-up chunks should preserve the original reply target so long answers stay attached to the triggering prompt instead of jumping to the topic root, and final long-answer tails for an already-live message must wait for the winning edit ack before they are enqueued. If that ack wins the race before the tails or deferred final edit finish staging, `PresentationState` must flush those late-staged follow-ups or deferred chunks immediately instead of waiting for another ack that will never arrive. Supports moving a live message from one semantic surface to another so router coalescers can keep editing the same Telegram message across answer/status handoffs, including task-specific status surfaces such as `{:status_task, task_id}`. |
-| `lib/lemon_channels/command_catalog.ex` | `LemonChannels.CommandCatalog` | Portable JSON-safe slash-command presentation metadata for channel and interactive clients. Defines canonical names, aliases, descriptions, arguments, busy policies, and semantic capability ids without dispatching commands or taking conversation semantics from the router/session owners. |
-| `lib/lemon_channels/portable_command.ex` | `LemonChannels.PortableCommand` | Shared Telegram/Discord renderer and execution adapter for catalog commands. It calls router/core diagnostics and the registered agent-runtime provider, keeps prompts, transcript bodies, and arbitrary runtime errors out of channel output, and delegates `/bg` and `/btw` to their coding-agent owners. `/bg` returns the full durable id and provides list/status/result/cancel lifecycle commands scoped to the originating channel session; missing and foreign ids render the same not-found response. |
-| `lib/lemon_channels/plugin.ex` | `LemonChannels.Plugin` | Behaviour definition: `id/0`, `meta/0`, `child_spec/1`, `normalize_inbound/1`, `deliver/1`, `gateway_methods/0` |
-| `lib/lemon_channels/registry.ex` | `LemonChannels.Registry` | GenServer plugin registry, status tracking (running/stopped/connected) from DynamicSupervisor children |
-| `lib/lemon_channels/run_request_builder.ex` | `LemonChannels.RunRequestBuilder` | Converts adapter-normalized `InboundMessage` values into router-facing `LemonCore.RunRequest` structs. |
-| `lib/lemon_channels/submission_outcome.ex` | `LemonChannels.SubmissionOutcome` | Bounded classification of definite versus ambiguous router submission failures. Definite rejection permits transport redelivery; `:outcome_unknown` and malformed mutation acknowledgements retain dedupe protection. |
-| `lib/lemon_channels/adapters/email/webhook.ex` | `LemonChannels.Adapters.Email.Webhook` | Authenticated inbound email boundary. Reserves a hashed provider Message-ID and stable run reference before submission; accepted deliveries return 202, definite rejection releases the reservation and returns 503, and ambiguity returns a truthful non-retrying 200 receipt while retaining dedupe state. |
-| `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
-| `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
-| `lib/lemon_channels/script_send.ex` | `LemonChannels.ScriptSend` | Hermes-style script notification helper for Telegram/Discord. Parses `--to`, `--file`, `--attach`, `--subject`, stdin, default target env vars, known-target list output, and builds direct text or file `OutboundPayload` structs. |
-| `lib/lemon_channels/target_directory.ex` | `LemonChannels.TargetDirectory` | Channels-owned normalized directory of recently seen Telegram and Discord targets for router/control-plane discovery. |
-| `lib/lemon_channels/model_policy.ex` | `LemonChannels.ModelPolicy` | Channels-owned route-based model and thinking policy resolution for adapters. Persists through `LemonCore.Store` via `ModelPolicyStore` using the unchanged `:model_policies` table. |
-| `lib/lemon_channels/model_policy_store.ex` | `LemonChannels.ModelPolicyStore` | Typed wrapper for persisted route-based model policies. |
-| `lib/lemon_channels/port_bridge.ex` | `LemonChannels.PortBridge` | Shared GenServer callback implementation for line-delimited JSON Node bridge ports. XMTP and WhatsApp keep their public `PortServer` modules as the callback/process and logging identities while sharing lifecycle, parsing, restart, and reconnect behavior here. |
-| `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
-| `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
-| `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
-| `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
-| `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`; submission, cancel, and keepalive preserve explicit errors, while busy checks return `{:ok, boolean()} | {:error, term()}` without soft-success fallbacks |
-
-### Outbox Pipeline
-
-| File | Module | What It Does |
-|------|--------|-------------|
-| `lib/lemon_channels/outbox.ex` | `LemonChannels.Outbox` | GenServer delivery queue. Per-group FIFO, cross-group concurrency. Exponential backoff (1s, 2s, 4s), 3 max attempts, max queue 5000. |
-| `lib/lemon_channels/outbox/chunker.ex` | `Outbox.Chunker` | Splits at sentence/word boundaries. Respects per-channel `chunk_limit`. |
-| `lib/lemon_channels/outbox/dedupe.ex` | `Outbox.Dedupe` | ETS-based deduplication. 1-hour TTL, periodic cleanup. |
-| `lib/lemon_channels/outbox/rate_limiter.ex` | `Outbox.RateLimiter` | Token bucket (GenServer). Per channel/account, 30 msg/sec default, burst of 5. Exports `check/2`, `consume/2`, `status/2`. |
-
-### Telegram Adapter (most complex)
-
-**Adapter modules** (`lib/lemon_channels/adapters/telegram/`):
-
-| File | What It Does |
-|------|-------------|
-| `adapters/telegram.ex` | Plugin impl. id: `"telegram"`, chunk_limit: 4096, rate_limit: 30, full capability set. |
-| `adapters/telegram/supervisor.ex` | Starts AsyncSupervisor (Task.Supervisor) + Transport. |
-| `adapters/telegram/transport.ex` | Thin `getUpdates` GenServer shell. Owns lifecycle, polling, and timer receipt while delegating inbound normalization, authorization, buffering, and callback routing through local normalize/pipeline/action-runner helpers. |
-| `adapters/telegram/transport/normalize.ex` | Telegram-local normalization boundary for raw update and timer events into inbound context. |
-| `adapters/telegram/transport/pipeline.ex` | Telegram-local ingress coordinator for normalized events, authorization, dedupe, known-target refresh, buffer/media-group flush decisions, and action selection before transport-side execution. |
-| `adapters/telegram/transport/action_runner.ex` | Telegram-local executor for the small action vocabulary currently emitted by the pipeline; deeper Telegram UX logic still lives in transport helpers and command-specific modules. |
-| `adapters/telegram/transport/approval_request.ex` | Telegram approval-request message rendering and callback payload plumbing for exec approvals. |
-| `adapters/telegram/transport/callback_handler.ex` | Inline keyboard callback handling for approvals, model-picker flows, cancellation, and keepalive. Ambiguous mutations use check-status wording and retain the original controls; logs contain only bounded failure classes. |
-| `adapters/telegram/transport/chat_preferences.ex` | Trigger gating plus `/trigger`, `/thinking`, and `/cwd` command handling extracted from the transport shell. |
-| `adapters/telegram/transport/runtime_state.ex` | Transport-local state helper for adapter-owned runtime data. |
-| `adapters/telegram/transport/poller.ex` | Poll loop + update dispatch extracted from `Transport`. Owns getUpdates cadence, webhook-conflict recovery, and callback/inbound fanout. |
-| `adapters/telegram/transport/command_router.ex` | Command/message decision tree extracted from `Transport`. Keeps command routing out of the GenServer shell. |
-| `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/1`, `join_messages/1`. No side effects. |
-| `adapters/telegram/transport/file_operations.ex` | `/file put`/`get`, auto-put for document uploads, media group file handling. |
-| `adapters/telegram/transport/inbound_actions.ex` | Router submission path for normal inbound messages. Progress reactions are acceptance-only; definite rejection releases provisional dedupe for redelivery and ambiguous outcomes stay deduped with honest feedback. |
-| `adapters/telegram/transport/inbound_context.ex` | Typed normalized context shared across normalize/pipeline/action-runner stages. |
-| `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
-| `adapters/telegram/transport/memory_reflection.ex` | `/new` memory-reflection transcript assembly and submission. Submission errors remain explicit, ambiguous results are never retried, and logs contain only bounded failure classes. |
-| `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing, including timer replacement and merge semantics. |
-| `adapters/telegram/transport/model_picker.ex` | `/model` picker flow, provider/model pagination, and selection-state transitions. |
-| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, native resume index, and generation bookkeeping helpers. Its safe abort wrapper preserves definite and ambiguous mutation failures instead of turning them into `:ok`. Historical vendor entries remain readable but are quarantined from top-level selection. |
-| `adapters/telegram/transport/resume_selection.ex` | Native-only explicit resume parsing, recent native-session lookup, and resume formatting helpers. |
-| `adapters/telegram/transport/session_routing.ex` | Session-key derivation, message-id reply routing, and parallel-session bookkeeping. |
-| `adapters/telegram/transport/topic_command.ex` | `/topic` command handling extracted from the transport shell. |
-| `adapters/telegram/transport/update_processor.ex` | Authorization, deduplication, routing pipeline, known-target indexing via `LemonChannels.Telegram.KnownTargetStore` with 30s throttle, and native-only resume parsing. |
-| `adapters/telegram/transport/voice_handler.ex` | Voice-download and transcription orchestration before normal inbound routing. |
-| `adapters/telegram/renderer.ex` | Telegram semantic renderer for send-vs-edit behavior, truncation, presentation-state-aware delivery, and file-sensitive final idempotency. Same-text final replays are suppressed unless auto-send file metadata changes. |
-| `adapters/telegram/status_renderer.ex` | Telegram tool-status rendering and controls presentation. |
-| `adapters/telegram/file_batcher.ex` | Telegram-specific media/file batching for renderer-owned outbound UX. |
-| `adapters/telegram/inbound.ex` | Normalizes Telegram updates to InboundMessage. |
-| `adapters/telegram/outbound.ex` | Delivers via Bot API with retry for 429s and transient errors. |
-| `adapters/telegram/voice_transcriber.ex` | Telegram voice transcription. Supports provider-backed `openai_transcribe` plus deterministic no-credential `local_transcript` proof mode. |
-
-**Support modules** (`lib/lemon_channels/telegram/`):
-
-| File | What It Does |
-|------|-------------|
-| `telegram/api.ex` | Raw Bot API calls: send_message, edit_message_text, get_updates, send_document, send_photo, send_media_group, etc. |
-| `telegram/delivery.ex` | High-level enqueue helpers (`enqueue_send/3`, `enqueue_edit/3`) backed by Outbox. |
-| `telegram/fake_api.ex` | In-process fake of `telegram/api.ex` for hermetic transport tests: update queue with real getUpdates offset semantics, `simulate_message`/`simulate_callback_query` builders, outbound-call capture with `sent/0`/`await_send/2`. Select via `[gateway.telegram] api_mod = "LemonChannels.Telegram.FakeAPI"`. |
-| `telegram/formatter.ex` | Markdown to plain text + Telegram entities. Avoids MarkdownV2 escaping entirely. |
-| `telegram/known_target_store.ex` | Typed wrapper for Telegram known-target chat/topic metadata. |
-| `telegram/markdown.ex` | EarmarkParser AST renderer. Produces `{text, [entity]}` with correct UTF-16 offsets and renders markdown tables as pipe-delimited rows. |
-| `telegram/resume_index_store.ex` | Typed wrapper for Telegram message-id session and resume index tables; legacy vendor values remain readable but cannot resume a top-level run. |
-| `telegram/state_store.ex` | Typed wrapper for Telegram session/topic preference and generation state. |
-| `telegram/truncate.ex` | Truncates to 4096 chars while preserving native resume lines. |
-| `telegram/trigger_mode.ex` | Per-chat/topic `:all` vs `:mentions` trigger mode stored in ETS. |
-| `telegram/offset_store.ex` | Persists getUpdates offset via `LemonCore.Store`. |
-| `telegram/poller_lock.ex` | Global + file-based lock preventing duplicate pollers for the same account/token. |
-| `telegram/transport_shared.ex` | Shared dedupe helpers across transport modules. |
-
-Provider availability in the Telegram `/model` picker should match the real provider boundary. Do not alias plain Google AI Studio credentials to `google-vertex`; Vertex must only appear when actual Vertex credentials/config are present.
-
-### Discord Adapter
-
-| File | What It Does |
-|------|-------------|
-| `adapters/discord.ex` | Plugin impl. id: `"discord"`, chunk_limit: 2000, rate_limit: 5. |
-| `adapters/discord/supervisor.ex` | Starts Transport if bot_token configured. |
-| `adapters/discord/transport.ex` | Nostrum consumer. Slash commands, button interactions, acceptance-only progress reactions, provisional persisted inbound dedupe, and debounce buffering keyed by channel/thread/session so shared-channel users do not get merged into one run. Slash handlers must always return transport state, never an API response result. Failed cancel/keepalive component mutations must acknowledge ephemerally without replacing the source message or logging run IDs/raw reasons, so retry controls remain intact. |
-| `adapters/discord/inbound.ex` | Normalizes Discord message events to InboundMessage. Handles attachments. |
-| `adapters/discord/trigger_mode.ex` | Per-channel/thread `:all` vs `:mentions` trigger mode for free-response Discord routing. Thread-message events may arrive with only the thread id as `channel_id`; transport fallback must keep the stored `{thread, thread}` trigger key working for live free-response proof. |
-| `adapters/discord/renderer.ex` | Discord semantic renderer. Owns send-vs-edit behavior, status controls, thread-aware replies, long finalized text splitting at the safe 1,900-character Discord outbound size, final-answer duplicate suppression, and finalize-time auto-send files. Streaming snapshots stay single-message edits, while finalized overflow edits use `PresentationState` to edit the first chunk and enqueue ordered follow-ups. Final idempotency includes auto-send file metadata so newly attached files are not skipped by same-text replays. Generated-file auto-send must stay behind `[gateway.discord.files] enabled` plus `auto_send_generated_files` (or legacy `auto_send_generated_images`) and enforce configured count/size limits. |
-| `adapters/discord/status_renderer.ex` | Builds Discord button rows for cancel/keep-waiting UX. |
-| `adapters/discord/outbound.ex` | Delivers via `Nostrum.Api.Message` (create, edit, delete, reaction, multipart file upload). |
-
-### XMTP Adapter
-
-| File | What It Does |
-|------|-------------|
-| `adapters/xmtp.ex` | Plugin impl. id: `"xmtp"`, chunk_limit: 2000, thread support only. |
-| `adapters/xmtp/transport.ex` | GenServer. Message send/receive, `normalize_inbound_message/1`, `deliver/1`. It commits both Elixir and bridge dedupe only after router acceptance; definite rejection remains eligible for bridge redelivery, while an ambiguous outcome stays deduped. |
-| `adapters/xmtp/bridge.ex` | Communication with Node.js bridge (connect, poll, send_message, explicit inbound acknowledgement). |
-| `adapters/xmtp/port_server.ex` | Thin public GenServer wrapper that remains the XMTP process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
-
-### WhatsApp Adapter
-
-| File | What It Does |
-|------|-------------|
-| `adapters/whatsapp.ex` | Plugin impl. id: `"whatsapp"`, chunk_limit: 4096, with voice, image, file, reaction, and thread support. |
-| `adapters/whatsapp/supervisor.ex` | Starts the async supervisor and transport when a credentials path is configured. |
-| `adapters/whatsapp/transport.ex` | GenServer for message send/receive and bridge event handling. Inbound dedupe is provisional, typing starts only after router acceptance, and cancellation failure preserves buffered/session state while returning bounded feedback. |
-| `adapters/whatsapp/bridge.ex` | Communication with the Node.js bridge. |
-| `adapters/whatsapp/port_server.ex` | Thin public GenServer wrapper that remains the WhatsApp process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
-
-## Adapter Architecture
-
-### Plugin Behaviour
-
-All channel adapters implement `LemonChannels.Plugin`:
-
-```elixir
-defmodule MyAdapter do
-  @behaviour LemonChannels.Plugin
-
-  @impl true
-  def id, do: "my_adapter"
-
-  @impl true
-  def meta do
-    %{
-      label: "My Adapter",
-      capabilities: %{
-        chunk_limit: 4096,
-        rate_limit: 30,
-        edit_support: true,
-        delete_support: false,
-        voice_support: false,
-        image_support: false,
-        file_support: false,
-        reaction_support: false,
-        thread_support: false
-      },
-      docs: "https://example.com/docs"
-    }
-  end
-
-  @impl true
-  def child_spec(opts) do
-    %{id: __MODULE__, start: {MyAdapter.Supervisor, :start_link, [opts]}, type: :supervisor}
-  end
-
-  @impl true
-  def normalize_inbound(raw), do: {:ok, %LemonCore.InboundMessage{...}}
-
-  @impl true
-  def deliver(payload), do: {:ok, delivery_ref}
-
-  @impl true
-  def gateway_methods, do: []
-end
-```
-
-### Capability fields (all boolean unless noted)
-
-Defined in `LemonChannels.Capabilities`:
-- `edit_support`, `delete_support`, `voice_support`, `image_support`, `file_support`, `reaction_support`, `thread_support`
-- `chunk_limit` (integer, max chars per message)
-- `rate_limit` (integer or nil)
-
-### Adding a New Channel Adapter
-
-1. Create adapter module in `lib/lemon_channels/adapters/` implementing `LemonChannels.Plugin`
-2. Optionally create a supervisor and transport for inbound message handling
-3. Add the adapter module to `config :lemon_channels, :adapters` where it should start
-4. Add tests in `test/lemon_channels/adapters/`
-
-## Common Modification Patterns
-
-### Adding a new bot command (Telegram)
-
-1. Add command detection in `adapters/telegram/transport/commands.ex` (pure function, pattern match on message text)
-2. Add command handling in the Telegram pipeline/command-router helpers, not by expanding a monolithic `transport.ex` flow. Inbound behavior should stay in local transport helpers (`normalize`, `pipeline`, `action_runner`, `update_processor`) rather than in the GenServer shell.
-3. If the command needs async work, spawn via `Telegram.AsyncSupervisor`
-4. For system messages, use `Telegram.Delivery.enqueue_send/3` (preferred Outbox path) with direct `Telegram.API` fallback
-
-### Modifying message formatting (Telegram)
-
-- Plain text + entities: `telegram/formatter.ex` -- converts markdown to `{text, opts}` where opts may contain `%{entities: [...]}`
-- Markdown AST rendering: `telegram/markdown.ex` -- EarmarkParser-based, produces UTF-16 offset entities and preserves markdown table column boundaries
-- Truncation: `telegram/truncate.ex` -- preserves native resume lines at the end
-
-### Ownership boundary to preserve
-
-- Router owns prompt rewriting for pending compaction and any other conversation-text mutation.
-- `lemon_channels` owns platform UX and rendering only: truncation, send-vs-edit behavior, buttons, media batching, message-id tracking, and Telegram-specific indices.
-
-### Adding a new outbound payload kind
-
-1. Add the kind atom to `OutboundPayload` (in `outbound_payload.ex`)
-2. Add a constructor function
-3. Handle the new kind in each adapter's `deliver/1` or outbound module
-
-### Changing delivery behavior
-
-- Retry logic: `outbox.ex` -- look for `attempt_delivery`, `handle_delivery_result`, `schedule_retry`
-- Chunking: `outbox/chunker.ex` -- `chunk/2` splits at sentence/word boundaries
-- Rate limiting: `outbox/rate_limiter.ex` -- token bucket params
-- Deduplication: `outbox/dedupe.ex` -- TTL and cleanup interval
-
-### Adding a gateway method to an adapter
-
-1. Define the method in the adapter's `gateway_methods/0` return list
-2. Create or update the handler module (e.g., `Email.GatewayMethods`)
-3. Methods have a name, scope list (e.g., `[:agent]`), and handler module
-
-### Changing bindings and native resume handling
-
-- `binding_resolver.ex` delegates project, agent, cwd, and queue-mode lookup to `LemonCore.BindingResolver`; it does not resolve an executor.
-- Channel resume parsing is native-only. Historical vendor tokens stay readable in persisted state and indexes but are quarantined from automatic and explicit top-level resume selection.
-- Delegated tasks run as native in-process subagents; a task's subagent identity and resume metadata never select a channel or gateway top-level run.
-
-### Modifying the `/model` picker (Telegram)
-
-- The picker state machine should be driven through the Telegram-local pipeline/command helpers and persisted in the existing Telegram model/session state modules, not in ad-hoc inline `transport.ex` branches.
-- Provider/model lists auto-detect from runtime config + secrets/env credentials
-- Pagination handled inline with `<< Prev` / `Next >>` keyboard buttons
-- `This session` is session-scoped; `All future sessions` writes a chat-wide default even when selected from a forum topic
-- Selection messages are intercepted and not routed as normal inbound prompts
-- The model step should accept either the exact button label or plain text model ids like `gpt-5.4` / `provider:model_id`, so Telegram users and test harnesses do not have to echo the full display label
-- Reply-keyboard picker messages should go through `Telegram.Delivery.enqueue_send/3` so topic-scoped picker traffic gets normal Outbox retry and rate-limit handling instead of raw Bot API sends.
-- Picker catalog changes should be conservative and evidence-based: if a model is proven dead or consistently broken on the live transport path, filter it at the picker layer instead of letting Telegram users select it.
-
-### Modifying the `/new` command behavior (Telegram)
-
-- `/new` acknowledges immediately with `"Started a new session."` plus model/provider/cwd details
-- Session abort, cleanup, and optional memory reflection run in background tasks
-- Generation counter (`telegram_thread_generation`) is incremented to invalidate stale reply mappings
-- Memory reflection uses dedicated session key suffix (`:new_reflection`) with `queue_mode: :collect`
-- Memory-reflection submission is best-effort for the session transition, but its bridge result is preserved and safely logged; an ambiguous result must not be retried automatically
-
-## Outbox System Details
-
-### Enqueue a Message
-
-```elixir
-alias LemonChannels.{OutboundPayload, Outbox}
-
-payload = OutboundPayload.text(
-  "telegram",
-  "default",
-  %{kind: :dm, id: "123456", thread_id: nil},
-  "Hello, world!",
-  idempotency_key: "msg-123"
-)
-
-{:ok, ref} = Outbox.enqueue(payload)
-```
-
-### Script Notifications
-
-`mix lemon.send` and `./bin/lemon send` are the source-tree script notification commands for Telegram and Discord:
-
-```bash
-./bin/lemon send --to telegram:<chat_id> "deploy finished"
-echo "RAM 92%" | ./bin/lemon send --to telegram:<chat_id>
-./bin/lemon send --to telegram:<chat_id>:<thread_id> --subject "[CI]" --file report.txt
-./bin/lemon send --to discord:<channel_id> "deploy finished"
-./bin/lemon send --to discord:#ops "deploy finished"
-./bin/lemon send --account work --to discord:#ops "deploy finished"
-./bin/lemon send --to discord:#ops --thread deploys "deploy finished"
-./bin/lemon send --to discord:#ops --reply-to 123456789 "deploy finished"
-./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "artifacts ready"
-./bin/lemon send --dry-run --to discord:#ops --attach report.txt "validate only"
-./bin/lemon send --account work --list telegram
-```
-
-Keep this path intentionally narrow until there is proof for more platforms. Supported target forms are `telegram:<chat_id>[:thread_id]` and `discord:<channel_id>[:thread_id]`; platform-only targets resolve from `LEMON_TELEGRAM_DEFAULT_CHAT_ID`, `LEMON_DISCORD_DEFAULT_CHANNEL_ID`, and optional `*_DEFAULT_THREAD_ID` env vars first, then `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id` config fallbacks. Account defaults resolve from `LEMON_TELEGRAM_DEFAULT_ACCOUNT_ID`, `LEMON_DISCORD_DEFAULT_ACCOUNT_ID`, then `[gateway.telegram] default_account_id` and `[gateway.discord] default_account_id`; explicit `--account <id>` still wins. `--thread <id-or-name>` and `--topic <id-or-name>` set a thread/topic separately from `--to`; a thread in both places should fail closed with usage exit code `2`. `--reply-to <message-id>` sets `OutboundPayload.reply_to` and should stay a raw platform message id, not a Lemon run id. `--account <id>` selects the channel account for outbound payloads and scopes known-target listing/name resolution. List mode includes env/config defaults plus recent Telegram chats/topics from `LemonChannels.Telegram.KnownTargetStore` and Discord channels/threads from `LemonChannels.Discord.KnownTargetStore` as bounded `known_targets` metadata with `known_target_count`, `known_targets_truncated`, and exact reusable `aliases` for named targets. Telegram supports unique exact known-name resolution for `telegram:#chat`, `telegram:@username`, `telegram:#chat:topic-name`, and `telegram:<chat_id>:topic-name`; Discord supports unique exact known-name resolution for `discord:#channel`, `discord:#channel:thread-name`, and `discord:<channel_id>:thread-name`; missing or ambiguous names should keep failing with usage exit code `2`. `--dry-run` should validate target parsing, known-name/default resolution, body/caption resolution, and attachment metadata without requiring platform credentials or delivering. `--file` reads a text body rather than uploading an attachment. `--attach` uploads a local file through the existing Telegram/Discord file-delivery adapters and can be repeated up to 10 times, with positional text, `--file`, or stdin used as the caption.
-Use `--file -` to force stdin.
-`--json` returns bounded delivery metadata, including `dry_run`, `message_id`, `extra_message_ids`, `attachment_filename`, `attachment_filenames`, `attachment_count`, and `attachment_bytes` when available, without raw message text, raw attachment paths, or full platform responses. Batch Telegram file sends preserve the first delivered id as `message_id` and remaining ids as `extra_message_ids`.
-Exit code `0` is success/list/help, `1` is platform delivery failure, and `2` is usage, argument, or local config/input failure.
-
-### Delivery Group Key
-
-`{channel_id, account_id, peer.kind, peer.id, peer.thread_id}` -- FIFO within group, concurrent across groups.
-
-### Retry Details
-
-- Exponential backoff: 1s, 2s, 4s (3 max attempts)
-- 429 responses: parses `retry_after` from JSON `parameters.retry_after` or body text
-- Non-retryable: `:unknown_channel`, 4xx (except 429), worker exits
-- Max queue size: 5000
-
-### Stats
-
-```elixir
-Outbox.stats()
-# %{queue_length: 0, processing_count: 0, queue_depth: 0, max_queue_size: 5000, enqueued_total: 42}
-```
-
-## Telegram Adapter Details
-
-### Transport Commands
-
-| Command | Description |
-|---------|-------------|
-| `/new` | Start new session (immediate ack, async cleanup, generation increment) |
-| `/resume` | Resume a previous native session; historical vendor entries remain visible for history but cannot be resumed |
-| `/model` | Interactive provider/model picker via reply keyboard |
-| `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
-| `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
-| `/checkpoint` | Preview checkpoint status/events, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
-| `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
-| `/thinking` | Toggle extended thinking |
-| `/trigger` | Switch `:all` / `:mentions` mode |
-| `/cwd` | Set working directory |
-| `/file` | File put/get operations |
-| `/topic` | Topic management |
-| `/cancel` | Cancel current run |
-
-### Generation-Scoped Indexing
-
-Session/native-resume indices use generation-scoped keys:
-- `:telegram_msg_session` keys: `{account_id, chat_id, thread_id, generation, msg_id}`
-- `:telegram_msg_resume` keys: `{account_id, chat_id, thread_id, generation, msg_id}`; vendor values remain readable but are quarantined from top-level selection
-
-`/new` increments `:telegram_thread_generation` for `{account_id, chat_id, thread_id}` to invalidate stale mappings without full-table scans.
-
-### Known-Target Indexing
-
-`update_processor.ex` writes known targets through `LemonChannels.Telegram.KnownTargetStore` but throttles writes to a 30-second cadence per target (unless metadata changes) to avoid overloading the store during high-traffic chats.
-
-### Delivery Helpers
-
-```elixir
-alias LemonChannels.Telegram.Delivery
-
-Delivery.enqueue_send(chat_id, "Hello", thread_id: topic_id)
-
-# With delivery notification
-ref = make_ref()
-Delivery.enqueue_send(chat_id, "Hello", notify: {self(), ref})
-receive do
-  {:outbox_delivered, ^ref, result} -> result
-end
-```
-
-### Voice Transcription
-
-```elixir
-LemonChannels.Adapters.Telegram.VoiceTranscriber.transcribe(%{
-  audio_bytes: binary,
-  api_key: key,
-  base_url: "https://api.openai.com/v1",
-  model: "gpt-4o-mini-transcribe",
-  mime_type: "audio/ogg"
-})
-```
-
-### Formatter
-
-Renders markdown to plain text + Telegram entities (avoids MarkdownV2 escaping):
-
-```elixir
-{text, opts} = LemonChannels.Telegram.Formatter.prepare_for_telegram(markdown_string)
-# opts is nil or %{entities: [...]}
-```
-
-### TriggerMode
-
-```elixir
-scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}
-LemonChannels.Telegram.TriggerMode.set(scope, account_id, :mentions)
-
-%{mode: :mentions, source: :topic} = LemonChannels.Telegram.TriggerMode.resolve(account_id, chat_id, topic_id)
-```
-
-## XMTP Integration
-
-- Uses Node.js bridge process managed via Erlang Port
-- Bridge handles XMTP protocol; Elixir side manages lifecycle and normalization
-- XMTP and WhatsApp keep separate public `PortServer` callback/process identities, module-scoped warning logs, scripts, and event tags while delegating the identical port lifecycle to `LemonChannels.PortBridge`
-- Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`; `enable_xmtp: true` still gates the bridge process
-
-## Discord Adapter
-
-- Uses `nostrum` library (declared `runtime: false`)
-- Every application slash command must pass the same configured guild/channel
-  allowlists and `deny_unbound_channels` binding check as ordinary messages and
-  queue/steer commands before reading or mutating session state, cancelling a
-  run, reflecting memory, or invoking the agent runtime.
-- Slash commands include `/lemon`, `/session new`, `/session info`, and preview
-  `/goal status`/`set` with optional max-continuation budget/`pause`/`resume`/`continue`/loop controls including opt-in auto scheduling/`clear`
-- Preview `/kanban` slash commands expose board list/create/show/archive, task create/update/comment, and dispatcher start/status/stop with redacted responses.
-- Preview `/checkpoint` slash commands expose redacted status, redacted event history, redacted diff counts, and restore gated by a required `confirm` boolean. Checkpoint lifecycle events remain internal unless the user invokes the command.
-- Preview `/rollback` slash commands alias the same redacted checkpoint rollback flow for Hermes-style command parity.
-- Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`
-
-## Doctor Diagnostics
-
-`LemonChannels.Doctor.Diagnostics` (config diagnostics), `Doctor.Readiness`
-(launch-gate summary), `Doctor.Checks.Channels` (the doctor check) and
-`Doctor.ProofSpec` (the per-channel smoke-proof vocabulary) live here rather
-than in `lemon_core`, which must not name a chat platform. They reach the
-doctor framework through the reference runtime's registrations in
-`config/config.exs`: `:doctor_runtime` keys `channel_diagnostics:`,
-`channel_readiness:` and `channel_proofs:`, plus the `:doctor_checks` list.
-`ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
-or proof check name means editing `ProofSpec`, not core.
-
-Discord diagnostics also publish a redacted `compatibility_commands` map for
-the generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas.
-Keep those booleans derived from `SlashCommands.slash_commands/0`; the static
-names are release-readiness sentinels, not a second command registry.
-
-All of it must stay redacted. Discord DM, free-response, reconnect, slash
-registration, deterministic slash and real client-click gates use
-`Doctor.Diagnostics` plus sanitized `LemonCore.Doctor.ProofDiagnostics`
-status/reason kinds, never raw Discord IDs, message bodies, bot tokens or
-secret names. Free-response checks distinguish a missing local Message Content
-Intent declaration from proof artifacts that still report Message Content
-Intent or unmentioned-message delivery drift after declaration. Slash
-client-click checks preserve stable reason kinds for missing, invalid,
-non-promotable and stale proof artifacts, so doctor and support bundles can
-point operators at the exact wait-mode proof step.
-
-`mix lemon.channels` prints the same redacted readiness summary from the CLI.
-
-## Gateway Config Sections
-
-`LemonChannels.Adapters.{Telegram,Discord,Xmtp}.Config` each implement
-`LemonCore.Config.Gateway.Channel` and are registered under
-`config :lemon_core, :gateway_channels`. A module owns one `[gateway.<id>]`
-section and everything named after it: `resolve/1` for the sub-table,
-`enabled?/1` for the `enable_<id>` flag (including its `LEMON_GATEWAY_ENABLE_*`
-override), `validate/2` for the section's rules, and the matching declarations
-in `LemonChannels.Env`. `LemonCore.Config` flattens the results back onto the
-legacy gateway map, so readers keep using `gateway[:telegram]` and
-`gateway[:enable_telegram]`. Shared TOML coercions live in
-`LemonChannels.Adapters.ConfigHelpers`.
-
-Adding a platform means adding a `Config` module, registering it, and declaring
-its variables here — never editing `LemonCore.Config.Gateway`.
-
-## Binding Resolution
-
-```elixir
-scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}
-
-binding = LemonChannels.BindingResolver.resolve_binding(scope)
-agent   = LemonChannels.BindingResolver.resolve_agent_id(scope)
-cwd     = LemonChannels.BindingResolver.resolve_cwd(scope)
-mode    = LemonChannels.BindingResolver.resolve_queue_mode(scope)
-```
-
-Bindings from `GatewayConfig.get(:bindings)` retain project, agent, cwd, and queue-mode scope. They never select a top-level executor: channels always submit to the native executor. Projects come from `GatewayConfig.get(:projects)`.
-
-## Native Resume Handling
-
-Top-level channel resume parsing and selection accept only native `lemon` tokens. Historical vendor tokens in chat state or message indexes remain readable for history and rollback, but are quarantined from explicit and automatic top-level selection. Delegated tasks execute as native in-process subagents, whose identity and resume metadata are retained in task results without becoming a channel selector.
-
-## Runtime Bridge
-
-Router interaction without a compile-time dependency. Outcomes are returned
-unchanged; adapters own the user-facing unavailable policy:
-
-```elixir
-LemonChannels.Runtime.cancel_session(session_key)
-LemonChannels.Runtime.cancel_by_run_id(run_id)
-LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
-LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
-LemonChannels.Runtime.session_busy?(session_key)
-```
-
-## Registry API
-
-```elixir
-LemonChannels.Registry.register(MyAdapter)
-LemonChannels.Registry.unregister("my_adapter")
-LemonChannels.Registry.logout("telegram")  # stop + unregister
-
-LemonChannels.Registry.get_plugin("telegram")       # module | nil
-LemonChannels.Registry.get_meta("telegram")          # meta map | nil
-LemonChannels.Registry.get_capabilities("telegram")  # capabilities map | nil
-
-LemonChannels.Registry.list_plugins()  # [module()]
-LemonChannels.Registry.list()          # [{channel_id, info_map}]
-LemonChannels.Registry.status()        # %{configured: [...], connected: [...]}
-```
-
-## Application Lifecycle
-
-```elixir
-LemonChannels.Application.register_and_start_adapter(MyAdapter)
-LemonChannels.Application.register_and_start_adapter(MyAdapter, opts)
-LemonChannels.Application.start_adapter(MyAdapter)
-LemonChannels.Application.stop_adapter(MyAdapter)
-```
-
-Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor). Startup is driven by `config :lemon_channels, :adapters`; do not add hardcoded adapter gates to `LemonChannels.Application`.
-
-```elixir
-config :lemon_channels,
-  adapters: [
-    LemonChannels.Adapters.Telegram,
-    LemonChannels.Adapters.Discord,
-    LemonChannels.Adapters.Xmtp
-  ]
-```
-
-## GatewayConfig
-
-Gateway transport config comes only from the canonical TOML `[gateway]` section via `LemonCore.GatewayConfig`. There are no runtime `Application.get_env` transport overlays in production. Channel adapter module selection is the exception and belongs to `config :lemon_channels, :adapters`.
-
-In test mode (`config_test_mode`), a full-replacement app env layer is supported for test isolation.
-
-```elixir
-LemonChannels.GatewayConfig.get(:bindings, [])
-LemonChannels.GatewayConfig.get(:projects, %{})
-```
-
-Direct `Application.get_env(:lemon_channels, :telegram)`, `Application.get_env(:lemon_channels, :discord)`, `Application.get_env(:lemon_channels, :xmtp)`, and `Application.get_env(:lemon_channels, :gateway)` reads are forbidden in runtime modules. Use `LemonChannels.GatewayConfig` or `LemonCore.GatewayConfig` instead.
-
-## Common Tasks
-
-### Check Rate Limit Status
-
-```elixir
-LemonChannels.Outbox.RateLimiter.status("telegram", "default")
-# %{tokens: 28.5, rate: 30, burst: 5}
-
-LemonChannels.Outbox.RateLimiter.check("telegram", "default")
-# :ok | {:rate_limited, wait_ms}
-```
-
-### Manual Delivery (bypass queue, testing only)
-
-```elixir
-plugin = LemonChannels.Registry.get_plugin("telegram")
-plugin.deliver(payload)
-```
-
-## Testing Guidance
-
-### Run Tests
-
-```bash
-# All channel tests
-mix test apps/lemon_channels
-
-# Specific adapter tests
-mix test apps/lemon_channels/test/lemon_channels/adapters/telegram
-mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
-
-# Run a single test file
-mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.exs
-```
-
-### Key Test Files
-
-| Test File | Coverage |
-|-----------|----------|
-| `outbox_test.exs` | Queue, retry, delivery |
-| `outbox_architecture_test.exs` | Per-group ordering, concurrency |
-| `outbox_retry_behavior_test.exs` | Retry logic, non-retryable errors |
-| `outbox_rate_limiting_test.exs` | Rate limiter integration |
-| `outbox_chunking_test.exs` | Chunking via outbox |
-| `chunker_test.exs` | Chunker unit tests |
-| `dedupe_test.exs` | Idempotency |
-| `telegram/inbound_test.exs` | Inbound normalization |
-| `telegram/outbound_test.exs` | Outbound delivery |
-| `telegram/voice_transcription_test.exs` | Voice transcription |
-| `telegram/delivery_test.exs` | Delivery helpers |
-| `telegram/markdown_test.exs` | Markdown to entities |
-| `telegram/transport_*_test.exs` | Transport behaviors (cancel, offset, auth, dedupe, parallel) |
-| `telegram/transport_topic_test.exs` | `/topic` command |
-| `telegram/file_transfer_test.exs` | File handling |
-| `discord/inbound_test.exs` | Discord inbound normalization |
-| `capabilities_test.exs` | Includes X adapter capability lookup |
-| `xmtp/transport_test.exs` | XMTP transport |
-| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
-| `gateway_config_test.exs` | Config merging |
-| `application_test.exs` | App startup |
-
-### Test Patterns
-
-Mock adapter for testing:
-
-```elixir
-defmodule TestAdapter do
-  @behaviour LemonChannels.Plugin
-  def id, do: "test"
-  def meta, do: %{label: "Test", capabilities: %{chunk_limit: 100}}
-  def child_spec(_), do: %{id: __MODULE__, start: {Task, :start_link, [fn -> :ok end]}}
-  def normalize_inbound(_), do: {:ok, %LemonCore.InboundMessage{}}
-  def deliver(_), do: {:ok, :sent}
-  def gateway_methods, do: []
-end
-```
-
-### What to Test When Modifying
-
-- **New adapter**: Plugin behaviour compliance, deliver/normalize round-trip, child_spec starts cleanly
-- **Outbox changes**: Group ordering (`outbox_architecture_test`), retry behavior, chunking boundaries
-- **Telegram transport**: Use `transport_*_test.exs` files as patterns; most mock the Bot API via process state
-- **Formatter/Markdown**: `markdown_test.exs` has extensive entity offset verification
-- **Rate limiter**: Token consumption, burst allowance, reset timing
-
-## Connections to Other Apps
-
-| App | Relationship |
-|-----|-------------|
-| `lemon_core` | Shared types (`InboundMessage`, `ChatScope`, `Binding`), `Store`, `Secrets`, `RouterBridge`, `Dedupe.Ets`, `Telemetry`, `GatewayConfig`, `BindingResolver` |
-| `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). |
-| `agent_core` | Provides task infrastructure used by native in-process subagents; channels never hand it `OutboundPayload` structs directly. |
-| `coding_agent` | Provides the native top-level executor through the router; channels deliver its output. |
-| `lemon_control_plane` | Gateway methods contributed by adapters are exposed through the control plane. |
-
-## Dependencies
-
-- `lemon_core` -- Shared primitives (InboundMessage, Telemetry, Store, Dedupe.Ets, RouterBridge, Secrets)
-- `jason` -- JSON encoding
-- `earmark_parser` -- Markdown parsing (used by Telegram.Markdown)
-- `req` -- HTTP client
-- `nostrum` -- Discord library (runtime: false)
+# LemonChannels contributor guide
+
+Channels owns external messaging adapters, authorization/normalization, platform
+rendering and the delivery outbox. Router owns conversation semantics and prompt
+mutation; gateway owns execution slots. See [README](README.md) for adapter setup
+and script notifications.
+
+## App seams
+
+- Normalize inbound traffic into core contracts and submit through
+  `LemonCore.RouterBridge`. Preserve success, rejection and unknown-outcome
+  distinctions. Never acknowledge rejected work or automatically retry an
+  ambiguous mutation; busy-query failure is not idle.
+- Router emits `LemonCore.DeliveryIntent`. Channels owns `OutboundPayload`,
+  send/edit, chunking, buttons, media batching and platform message indices.
+- Resolve project/agent/cwd/queue bindings through `LemonCore.BindingResolver`.
+  Bindings never select an executor. Native `lemon` tokens alone resume top-level
+  work; old vendor tokens remain readable history but never select a runtime.
+- Use `TargetDirectory` as the cross-app target-discovery seam. Other apps should
+  not read Telegram/Discord known-target tables directly.
+- Adapters run under `AdapterSupervisor` from the configured adapter list. Do not
+  add hardcoded platform startup gates to the application supervisor.
+- Each platform config implements `LemonCore.Config.Gateway.Channel`, registers
+  under `:gateway_channels`, and owns its env declarations. Production transport
+  settings come from canonical TOML via `GatewayConfig`, not app-env overlays.
+  The full-replacement test config layer is for isolation only.
+
+## Authorization
+
+- Telegram authorization applies to messages and callback queries. A non-empty
+  `allowed_chat_ids` is authoritative; an empty allowlist is unpaired and drops
+  updates unless `allow_all_chats: true` is explicit. `/whoami` may answer before
+  auth; unpaired notices are throttled. Transcription runs only after auth.
+- Discord slash commands must pass the same guild/channel allowlists and
+  `deny_unbound_channels` checks as ordinary messages before any read, mutation,
+  cancellation, reflection or runtime call.
+- Group/supergroup/channel trigger mode defaults to mentions. Keep topic/thread
+  scope in auth, bindings, delivery and state keys.
+- Diagnostics and notification JSON expose bounded metadata, not credentials,
+  message bodies, attachment paths or raw platform responses.
+
+## Delivery and state
+
+- Outbox FIFO grouping includes channel, account, peer kind/id and thread.
+  Preserve order within a group while allowing independent groups to progress.
+- Retries are bounded and classify platform failures. Honor rate-limit hints;
+  do not turn unknown side-effect outcomes into indiscriminate duplicate sends.
+- Telegram markdown entity offsets are UTF-16, not bytes/graphemes. Truncation
+  must preserve native resume lines and table column boundaries.
+- Transport GenServers remain lifecycle shells; add behavior to existing local
+  normalization/pipeline/command/action helpers. Async Telegram work uses its
+  task supervisor. Picker/system traffic should use the delivery/outbox path.
+- `/model` scope is deliberate: session choices stay session-local, while
+  future-session defaults are chat-wide even when selected from a topic. Accept
+  exact labels and plain provider/model IDs; selections are not ordinary prompts.
+- `/new` increments `{account, chat, thread}` generation before new mappings.
+  Session/resume keys include generation and message ID, invalidating old replies
+  without full scans. Abort/cleanup/reflection is background work; reflection
+  ambiguity is logged safely and not retried automatically.
+- Known-target writes are throttled unless metadata changes. Use the app-owned
+  wrapper rather than bypassing its policy.
+- Generated media is opt-in, count/size bounded and cwd/symlink checked upstream.
+  Rendering must not expose host-only `MEDIA:` directive lines.
+- XMTP and WhatsApp retain separate process identities/scripts/event tags while
+  sharing `PortBridge` lifecycle mechanics. A stopped port must not leave its
+  child or stale reconnect state alive.
+
+## Operator paths and verification
+
+`lemon send` / `./bin/lemon send` support Telegram and Discord. Keep
+[script notification usage](README.md#script-notifications) authoritative for
+account/thread defaults, stdin, attachments, dry-run, JSON and exit codes.
+`mix lemon.channels` inspects redacted configuration; `lemon doctor` reports
+configuration health, not a stored live-proof gate.
+
+From the umbrella root: `mix test apps/lemon_channels/test`.
+Use local/fake platform APIs; exercise unauthorized callbacks/slash commands,
+thread isolation, outbox order, retry boundaries, Unicode entity offsets and
+restart cleanup. Tests changing global runtime apps restore their original
+running set and do not stop unrelated consumers.

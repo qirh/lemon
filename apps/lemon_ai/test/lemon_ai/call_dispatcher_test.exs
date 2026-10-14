@@ -33,8 +33,8 @@ defmodule LemonAi.CallDispatcherTest do
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
 
-      # Give time for the casts to be processed
-      Process.sleep(10)
+      # record_failure/1 is a cast; the dispatch below is ordered after both casts
+      # because they come from the same process.
 
       result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)
 
@@ -83,8 +83,10 @@ defmodule LemonAi.CallDispatcherTest do
       # Wait for the first request to acquire the slot
       assert_receive :slot_acquired, 1000
 
-      # Second request should be rejected due to max concurrency
-      result = CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end)
+      # With queueing disabled, a second request is rejected immediately
+      result =
+        CallDispatcher.dispatch(provider, fn -> {:ok, "should not run"} end, queue_timeout_ms: 0)
+
       assert {:error, :max_concurrency} = result
 
       # Release the first request
@@ -135,7 +137,7 @@ defmodule LemonAi.CallDispatcherTest do
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
 
       assert {:error, :max_concurrency} =
-               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end)
+               CallDispatcher.dispatch(provider, fn -> {:ok, "blocked"} end, queue_timeout_ms: 0)
 
       EventStream.complete(stream, %{stop_reason: :end_turn, content: []})
 
@@ -306,7 +308,7 @@ defmodule LemonAi.CallDispatcherTest do
       Application.put_env(
         :lemon_ai,
         CallDispatcher,
-        Keyword.put(previous_dispatcher_config, :stream_result_timeout_ms, 50)
+        Keyword.put(previous_dispatcher_config, :stream_result_timeout_ms, 500)
       )
 
       on_exit(fn ->
@@ -320,7 +322,7 @@ defmodule LemonAi.CallDispatcherTest do
 
       wait_until(fn -> CallDispatcher.get_active_requests(provider) == 1 end)
 
-      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end, 1_500)
+      wait_until(fn -> CallDispatcher.get_active_requests(provider) == 0 end, 5_000)
 
       assert {:ok, "after_timeout"} =
                CallDispatcher.dispatch(provider, fn -> {:ok, "after_timeout"} end)
@@ -339,6 +341,123 @@ defmodule LemonAi.CallDispatcherTest do
       # Set another value
       assert :ok = CallDispatcher.set_concurrency_cap(provider, 20)
       assert 20 = CallDispatcher.get_concurrency_cap(provider)
+    end
+  end
+
+  describe "concurrency queueing" do
+    setup %{provider: provider} do
+      start_supervised!(
+        {RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 100}
+      )
+
+      start_supervised!({CircuitBreaker, provider: provider, failure_threshold: 5})
+      CallDispatcher.set_concurrency_cap(provider, 1)
+      :ok
+    end
+
+    test "dispatch at the cap waits for a slot and runs once it frees", %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+
+      waiter =
+        Task.async(fn ->
+          CallDispatcher.dispatch(provider, fn -> report_ran(parent, :waiter) end)
+        end)
+
+      wait_until(fn -> queued_count(provider) == 1 end)
+      refute_receive {:ran, :waiter}, 100
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      assert_receive {:ran, :waiter}, 1_000
+      assert {:ok, :waiter} = Task.await(waiter)
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "queued dispatch returns max_concurrency when the wait times out without leaking a slot",
+         %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+      handler_id = "test-queued-#{inspect(make_ref())}"
+
+      :telemetry.attach(
+        handler_id,
+        [:lemon_ai, :dispatcher, :queued],
+        fn event, _measurements, metadata, _config ->
+          send(parent, {:telemetry, event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:error, :max_concurrency} =
+               CallDispatcher.dispatch(provider, fn -> report_ran(parent, :timed_out) end,
+                 queue_timeout_ms: 50
+               )
+
+      assert_receive {:telemetry, [:lemon_ai, :dispatcher, :queued], %{provider: ^provider}}
+      assert queued_count(provider) == 0
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      assert CallDispatcher.get_active_requests(provider) == 0
+      refute_received {:ran, :timed_out}
+    end
+
+    test "queued waiters are granted slots in arrival order", %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+
+      first = Task.async(fn -> dispatch_holding_slot(parent, provider, :first) end)
+      wait_until(fn -> queued_count(provider) == 1 end)
+
+      second = Task.async(fn -> dispatch_holding_slot(parent, provider, :second) end)
+      wait_until(fn -> queued_count(provider) == 2 end)
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      assert_receive {:slot_acquired, :first}, 1_000
+      refute_received {:slot_acquired, :second}
+      assert queued_count(provider) == 1
+
+      send(first.pid, :release)
+      assert {:ok, :first} = Task.await(first)
+
+      assert_receive {:slot_acquired, :second}, 1_000
+      send(second.pid, :release)
+      assert {:ok, :second} = Task.await(second)
+
+      assert CallDispatcher.get_active_requests(provider) == 0
+    end
+
+    test "queued waiter that dies before being granted does not leak a slot",
+         %{provider: provider} do
+      holder = hold_slot(provider, :holder)
+      parent = self()
+
+      waiter_pid =
+        spawn(fn ->
+          CallDispatcher.dispatch(provider, fn -> report_ran(parent, :dead_waiter) end)
+        end)
+
+      wait_until(fn -> queued_count(provider) == 1 end)
+      Process.exit(waiter_pid, :kill)
+
+      send(holder.pid, :release)
+      assert {:ok, :holder} = Task.await(holder)
+
+      wait_until(fn ->
+        CallDispatcher.get_active_requests(provider) == 0 and queued_count(provider) == 0
+      end)
+
+      refute_received {:ran, :dead_waiter}
+
+      assert {:ok, "free"} =
+               CallDispatcher.dispatch(provider, fn -> {:ok, "free"} end, queue_timeout_ms: 0)
     end
   end
 
@@ -365,8 +484,9 @@ defmodule LemonAi.CallDispatcherTest do
     end
 
     test "tokens refill over time", %{provider: provider} do
-      # Start with 1 token, refill rate of 100 per second
-      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 100, max_tokens: 5})
+      # 2 tokens per second (one every 500ms) leaves the empty-bucket assertion
+      # plenty of slack on a slow scheduler.
+      start_supervised!({RateLimiter, provider: provider, tokens_per_second: 2, max_tokens: 5})
 
       # Use the initial tokens
       for _ <- 1..5 do
@@ -376,11 +496,8 @@ defmodule LemonAi.CallDispatcherTest do
       # Should be empty
       assert {:error, :rate_limited} = RateLimiter.acquire(provider)
 
-      # Wait for tokens to refill (100/s = 1 token every 10ms)
-      Process.sleep(50)
-
-      # Should have tokens again
-      assert :ok = RateLimiter.acquire(provider)
+      # Should have tokens again once the bucket refills
+      wait_until(fn -> RateLimiter.acquire(provider) == :ok end, 5_000)
     end
   end
 
@@ -404,14 +521,12 @@ defmodule LemonAi.CallDispatcherTest do
       # Record failures
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       # Still closed (only 2 failures)
       refute CircuitBreaker.open?(provider)
 
       # Third failure should open the circuit
       CircuitBreaker.record_failure(provider)
-      Process.sleep(10)
 
       assert CircuitBreaker.open?(provider)
 
@@ -420,20 +535,17 @@ defmodule LemonAi.CallDispatcherTest do
     end
 
     test "transitions to half_open after timeout", %{provider: provider} do
-      # Use a short (but not too short) recovery timeout to avoid timing flakes
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 200)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for recovery timeout
-      Process.sleep(220)
+      # Move time past the recovery timeout
+      advance_clock.(200)
 
       # Should transition to half_open (not open)
       refute CircuitBreaker.open?(provider)
@@ -443,19 +555,17 @@ defmodule LemonAi.CallDispatcherTest do
     end
 
     test "closes after successful requests in half_open", %{provider: provider} do
-      start_supervised!(
-        {CircuitBreaker, provider: provider, failure_threshold: 2, recovery_timeout: 200}
-      )
+      advance_clock =
+        start_breaker_with_clock(provider, failure_threshold: 2, recovery_timeout: 200)
 
       # Open the circuit
       CircuitBreaker.record_failure(provider)
       CircuitBreaker.record_failure(provider)
-      Process.sleep(20)
 
       assert CircuitBreaker.open?(provider)
 
-      # Wait for half_open
-      Process.sleep(220)
+      # Move time past the recovery timeout
+      advance_clock.(200)
 
       refute CircuitBreaker.open?(provider)
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -463,13 +573,11 @@ defmodule LemonAi.CallDispatcherTest do
 
       # Record successful requests (need 2 for half_open_success_threshold)
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       {:ok, state} = CircuitBreaker.get_state(provider)
       assert state.circuit_state == :half_open
 
       CircuitBreaker.record_success(provider)
-      Process.sleep(10)
 
       # Should be closed now
       {:ok, state} = CircuitBreaker.get_state(provider)
@@ -477,7 +585,53 @@ defmodule LemonAi.CallDispatcherTest do
     end
   end
 
-  defp wait_until(fun, timeout_ms \\ 1_000, step_ms \\ 10) do
+  # Starts a circuit breaker on a manually advanced clock; returns a function
+  # that moves the clock forward by the given milliseconds.
+  defp start_breaker_with_clock(provider, opts) do
+    clock = :atomics.new(1, signed: true)
+
+    start_supervised!(
+      {CircuitBreaker,
+       opts
+       |> Keyword.put(:provider, provider)
+       |> Keyword.put(:monotonic_time, fn -> :atomics.get(clock, 1) end)}
+    )
+
+    fn milliseconds ->
+      # A call from the same process observes all earlier casts before time moves.
+      {:ok, _state} = CircuitBreaker.get_state(provider)
+      :atomics.add_get(clock, 1, milliseconds)
+    end
+  end
+
+  # Starts a task whose dispatch holds a slot until it receives `:release`.
+  defp hold_slot(provider, name) do
+    parent = self()
+    task = Task.async(fn -> dispatch_holding_slot(parent, provider, name) end)
+    assert_receive {:slot_acquired, ^name}, 1_000
+    task
+  end
+
+  defp dispatch_holding_slot(parent, provider, name) do
+    CallDispatcher.dispatch(provider, fn ->
+      send(parent, {:slot_acquired, name})
+
+      receive do
+        :release -> {:ok, name}
+      end
+    end)
+  end
+
+  defp report_ran(parent, name) do
+    send(parent, {:ran, name})
+    {:ok, name}
+  end
+
+  defp queued_count(provider) do
+    Map.get(CallDispatcher.get_state().queued, provider, 0)
+  end
+
+  defp wait_until(fun, timeout_ms \\ 5_000, step_ms \\ 10) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     if fun.() do

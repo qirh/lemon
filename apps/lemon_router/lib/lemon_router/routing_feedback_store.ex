@@ -505,7 +505,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
   defp safe_to_atom(str) when is_binary(str) do
     String.to_existing_atom(str)
   rescue
-    _ -> :unknown
+    ArgumentError -> :unknown
   end
 
   defp resolve_path(config) do
@@ -515,7 +515,7 @@ defmodule LemonRouter.RoutingFeedbackStore do
         |> Keyword.get(:backend_opts, [])
         |> Keyword.get(:path, "~/.lemon/store")
 
-    dir = Path.expand(raw)
+    dir = LemonCore.Paths.store_dir(raw)
     Path.join(dir, @filename)
   end
 

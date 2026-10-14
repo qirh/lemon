@@ -79,4 +79,35 @@ defmodule CodingAgent.Tools.Task.RunnerTest do
 
     assert {:error, "Task aborted"} = Task.await(task, 1_000)
   end
+
+  test "partial assistant text does not turn a provider failure into success" do
+    tmp_dir =
+      Path.join(System.tmp_dir!(), "task-runner-error-#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(tmp_dir)
+    on_exit(fn -> File.rm_rf(tmp_dir) end)
+
+    response = %LemonAi.Types.AssistantMessage{
+      content: [%LemonAi.Types.TextContent{text: "I started but did not finish"}],
+      stop_reason: :error,
+      error_message: "Invalid request",
+      usage: %LemonAi.Types.Usage{}
+    }
+
+    assert {:error, _reason} =
+             Runner.start_session_with_prompt(
+               [
+                 cwd: tmp_dir,
+                 model: Mocks.mock_model(),
+                 tools: [],
+                 stream_fn: Mocks.mock_stream_fn_single(response)
+               ],
+               "Do the work.",
+               "Partial failure",
+               nil,
+               nil,
+               nil,
+               task_session_timeout_ms: 1_000
+             )
+  end
 end

@@ -1813,9 +1813,12 @@ defmodule LemonSim.Examples.VendingBenchTest do
   end
 
   test "live arena soft day timeout preserves completed turns before auto-wait" do
+    # The soft budget must lapse inside the first step, while the runner's hard
+    # kill (twice the budget, at least 100ms) must stay far enough away that a
+    # slow scheduler cannot reach it first and discard the partial day.
     on_after_step = fn _turn, result ->
       if result.state.world.arena_agent_id == "alex" do
-        Process.sleep(5)
+        Process.sleep(350)
       end
     end
 
@@ -1826,7 +1829,7 @@ defmodule LemonSim.Examples.VendingBenchTest do
                seed: 1,
                arena_agents: 2,
                persist?: false,
-               arena_day_budget_ms: 1,
+               arena_day_budget_ms: 300,
                on_after_step: on_after_step,
                arena_agent_opts: [
                  live_agent_opts([
@@ -2449,48 +2452,6 @@ defmodule LemonSim.Examples.VendingBenchTest do
     assert state.world.status == "complete"
     assert File.read!(Path.join(artifact_dir, "events.jsonl")) =~ "action_rejected"
     assert File.read!(Path.join(artifact_dir, "actions.jsonl")) =~ "too many support-tool rounds"
-  end
-
-  test "checked-in replay fixture loads as a VendingBench replay" do
-    fixture_dir = Path.expand("../../../priv/fixtures/vending_bench/ci_replay", __DIR__)
-
-    assert {:ok, %{manifest: %{"schema_version" => "lemon_sim.run.v1"}}} =
-             LemonSim.Bench.Artifacts.Verifier.verify_run(fixture_dir)
-
-    assert {:ok, replay} = VendingBench.Replay.build(fixture_dir)
-
-    assert replay.sim_id == "vb_ci_fixture"
-    assert replay.status == "complete"
-    assert replay.day_number == 7
-    assert replay.event_count > 0
-    assert is_map(replay.supplier_messages)
-    assert is_map(replay.worker_history)
-    assert is_map(replay.operator_transcript)
-    assert is_list(replay.reminders)
-    assert is_list(replay.machine_fault_reports)
-    assert File.read!(Path.join(fixture_dir, "replay.html")) =~ "VendingBench Replay"
-  end
-
-  @tag :tmp_dir
-  test "legacy pre-manifest bundle verifies without usage artifact", %{tmp_dir: tmp_dir} do
-    # Legacy bundles (pre lemon_sim.run.v1) have final_world.json + scorecard.json
-    # but no manifest.json/hashes.json — the verifier must accept them via the
-    # explicit legacy path instead of hash verification.
-    artifact_dir = Path.join(tmp_dir, "vb_legacy_bundle")
-    File.mkdir_p!(artifact_dir)
-
-    File.write!(
-      Path.join(artifact_dir, "final_world.json"),
-      Jason.encode!(%{"day_number" => 3, "status" => "complete"})
-    )
-
-    File.write!(
-      Path.join(artifact_dir, "scorecard.json"),
-      Jason.encode!(%{"status" => "complete", "v1_net_worth_score" => 500.0})
-    )
-
-    assert {:ok, %{legacy: true, manifest: %{"schema_version" => "lemon_sim.run.legacy"}}} =
-             LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir)
   end
 
   defp fake_model(id) do

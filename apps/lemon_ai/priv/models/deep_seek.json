@@ -18,6 +18,31 @@
     "context_window": 64000,
     "max_tokens": 8192
   },
+  "deepseek-flash": {
+    "id": "deepseek-flash",
+    "name": "DeepSeek V4.1 Flash",
+    "api": "openai_completions",
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.006,
+      "cache_write": 0.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 384000,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "xhigh"
+    ]
+  },
   "deepseek-r1": {
     "id": "deepseek-r1",
     "name": "DeepSeek R1 (Alias)",
@@ -55,5 +80,54 @@
     },
     "context_window": 64000,
     "max_tokens": 8192
+  },
+  "deepseek-v4-flash": {
+    "id": "deepseek-v4-flash",
+    "name": "DeepSeek V4 Flash",
+    "api": "openai_completions",
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "reasoning": true,
+    "input": [
+      "text",
+      "image"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.006,
+      "cache_write": 0.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 393216,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "xhigh"
+    ]
+  },
+  "deepseek-v4-pro": {
+    "id": "deepseek-v4-pro",
+    "name": "DeepSeek V4 Pro",
+    "api": "openai_completions",
+    "provider": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "reasoning": true,
+    "input": [
+      "text"
+    ],
+    "cost": {
+      "input": 0.3,
+      "output": 1.2,
+      "cache_read": 0.006,
+      "cache_write": 0.0
+    },
+    "context_window": 1000000,
+    "max_tokens": 393216,
+    "reasoning_efforts": [
+      "low",
+      "high",
+      "xhigh"
+    ]
   }
 }

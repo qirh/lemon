@@ -1226,7 +1226,8 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             nil,
             nil,
             "/tmp",
-            []
+            session_key: "agent:main:main",
+            agent_id: "main"
           )
         end)
 

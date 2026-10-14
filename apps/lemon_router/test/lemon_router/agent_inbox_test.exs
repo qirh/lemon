@@ -74,7 +74,7 @@ defmodule LemonRouter.AgentInboxTest do
     assert {:ok, %{run_id: "run_inbox_stub", session_key: ^active_session, selector: :latest}} =
              AgentInbox.send(agent_id, "status update", session: :latest, source: :test_suite)
 
-    assert_receive {:submitted_request, request}, 500
+    assert_receive {:submitted_request, request}
     assert request.session_key == active_session
     assert request.origin == :channel
     assert request.queue_mode == :followup
@@ -103,7 +103,7 @@ defmodule LemonRouter.AgentInboxTest do
     assert {:ok, %{session_key: new_session_key, selector: :new}} =
              AgentInbox.send(agent_id, "fresh session please", session: :new)
 
-    assert_receive {:submitted_request, request}, 500
+    assert_receive {:submitted_request, request}
     assert request.session_key == new_session_key
     assert request.origin == :channel
     assert new_session_key != latest_session
@@ -139,7 +139,7 @@ defmodule LemonRouter.AgentInboxTest do
     assert {:ok, %{session_key: ^expected_main, selector: :latest}} =
              AgentInbox.send(agent_id, "boot")
 
-    assert_receive {:submitted_request, request}, 500
+    assert_receive {:submitted_request, request}
     assert request.session_key == expected_main
     assert request.origin == :control_plane
     assert request.queue_mode == :followup
@@ -163,7 +163,7 @@ defmodule LemonRouter.AgentInboxTest do
              thread_id: "55"
            } = SessionKey.parse(session_key)
 
-    assert_receive {:submitted_request, request}, 500
+    assert_receive {:submitted_request, request}
     assert request.origin == :channel
     assert request.queue_mode == :followup
     assert request.meta[:agent_inbox][:target] == "tg:-100200300/55"
@@ -179,7 +179,7 @@ defmodule LemonRouter.AgentInboxTest do
     assert {:ok, %{session_key: _session_key, fanout_count: 2}} =
              AgentInbox.send(agent_id, "notify", to: "tg:111", deliver_to: ["tg:222", "tg:333"])
 
-    assert_receive {:submitted_request, request}, 500
+    assert_receive {:submitted_request, request}
     assert request.queue_mode == :followup
 
     fanout_routes = request.meta[:fanout_routes]
@@ -197,7 +197,7 @@ defmodule LemonRouter.AgentInboxTest do
     assert {:ok, %{selector: :latest}} =
              AgentInbox.send(agent_id, "handle as collect", queue_mode: :collect)
 
-    assert_receive {:submitted_request, request}, 500
+    assert_receive {:submitted_request, request}
     assert request.queue_mode == :collect
     assert request.meta[:agent_inbox_message] == true
     assert request.meta[:agent_inbox_followup] == false

@@ -19,6 +19,14 @@ defmodule LemonGateway.ThreadWorker do
   @slot_request_timeout_ms 30_000
   @max_run_start_attempts 3
 
+  def child_spec(opts) do
+    %{
+      id: {__MODULE__, Keyword.fetch!(opts, :thread_key)},
+      start: {__MODULE__, :start_link, [opts]},
+      restart: :temporary
+    }
+  end
+
   def start_link(opts) do
     thread_key = Keyword.fetch!(opts, :thread_key)
     name = {:via, Registry, {LemonGateway.ThreadRegistry, thread_key}}
@@ -48,42 +56,49 @@ defmodule LemonGateway.ThreadWorker do
      Map.merge(state, %{
        requests: :queue.new(),
        current_run: nil,
+       current_request: nil,
        current_slot_ref: nil,
        run_mon_ref: nil,
        slot_pending: false,
        slot_requested_at: nil,
        slot_request_token: nil,
-       start_attempts: %{},
-       terminalized_run_ids: MapSet.new()
+       start_attempts: %{}
      })}
   end
 
   @impl true
   def handle_cast({:enqueue, %ExecutionRequest{} = request}, state) do
-    Logger.debug(
-      "ThreadWorker enqueue thread_key=#{inspect(state.thread_key)} run_id=#{inspect(request.run_id)} queue_len_before=#{queue_len_safe(state.requests)}"
-    )
+    {:noreply, enqueue_request(state, request)}
+  end
 
-    Introspection.record(
-      :thread_message_dispatched,
-      %{
-        thread_key: inspect(state.thread_key),
-        queue_len: queue_len_safe(state.requests)
-      },
-      run_id: request.run_id,
-      session_key: request.session_key,
-      engine: "lemon",
-      provenance: :direct
-    )
+  def handle_cast({:cancel_queued, run_id, reason}, state) do
+    {cancelled, kept} =
+      state.requests
+      |> :queue.to_list()
+      |> Enum.split_with(&(&1.run_id == run_id))
 
-    state = %{state | requests: :queue.in(request, state.requests)}
-    {:noreply, maybe_request_slot(state)}
+    state = %{state | requests: :queue.from_list(kept)}
+
+    state =
+      Enum.reduce(cancelled, state, fn request, acc ->
+        terminalize_request(acc, request, reason, :cancelled)
+      end)
+
+    if match?(%ExecutionRequest{run_id: ^run_id}, state.current_request) do
+      LemonGateway.Scheduler.cancel(state.current_run, reason)
+    end
+
+    if state.current_run == nil and :queue.is_empty(state.requests) do
+      if state.slot_pending, do: safe_cancel_slot_request(state.slot_request_token)
+      {:stop, :normal, clear_slot_request(state)}
+    else
+      {:noreply, state}
+    end
   end
 
   @impl true
   def handle_call({:enqueue, %ExecutionRequest{} = request}, _from, state) do
-    state = %{state | requests: :queue.in(request, state.requests)}
-    {:reply, :ok, maybe_request_slot(state)}
+    {:reply, :ok, enqueue_request(state, request)}
   end
 
   @impl true
@@ -107,7 +122,7 @@ defmodule LemonGateway.ThreadWorker do
           Process.demonitor(state.run_mon_ref, [:flush])
         end
 
-        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil}
+        %{state | current_run: nil, current_request: nil, current_slot_ref: nil, run_mon_ref: nil}
       else
         state
       end
@@ -132,7 +147,7 @@ defmodule LemonGateway.ThreadWorker do
       )
 
       state =
-        %{state | current_run: nil, current_slot_ref: nil, run_mon_ref: nil}
+        %{state | current_run: nil, current_request: nil, current_slot_ref: nil, run_mon_ref: nil}
         |> maybe_request_slot()
 
       if state.current_run == nil and :queue.is_empty(state.requests) do
@@ -167,6 +182,22 @@ defmodule LemonGateway.ThreadWorker do
 
     schedule_slot_timeout_check()
     {:noreply, state}
+  end
+
+  def handle_info({:slot_request_rejected, token, reason}, state) do
+    if state.slot_pending and state.slot_request_token == token do
+      {{:value, request}, rest} = :queue.out(state.requests)
+
+      state =
+        state
+        |> clear_slot_request()
+        |> Map.put(:requests, rest)
+        |> terminalize_request(request, reason, :run_start)
+
+      continue_or_stop(state)
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({:slot_request_expired, token}, state) do
@@ -206,6 +237,7 @@ defmodule LemonGateway.ThreadWorker do
                    state
                    | requests: rest,
                      current_run: run_pid,
+                     current_request: request,
                      current_slot_ref: slot_ref,
                      run_mon_ref: mon_ref,
                      slot_pending: false,
@@ -298,6 +330,44 @@ defmodule LemonGateway.ThreadWorker do
     end
   end
 
+  defp enqueue_request(state, request) do
+    cond do
+      match?(%ExecutionRequest{run_id: id} when id == request.run_id, state.current_request) or
+        Enum.any?(:queue.to_list(state.requests), &(&1.run_id == request.run_id)) or
+          already_terminal?(request.run_id) ->
+        state
+
+      :queue.len(state.requests) >= 128 ->
+        terminalize_request(state, request, :execution_queue_full, :run_start)
+
+      true ->
+        Logger.debug(
+          "ThreadWorker enqueue thread_key=#{inspect(state.thread_key)} run_id=#{inspect(request.run_id)} queue_len_before=#{queue_len_safe(state.requests)}"
+        )
+
+        Introspection.record(
+          :thread_message_dispatched,
+          %{thread_key: inspect(state.thread_key), queue_len: queue_len_safe(state.requests)},
+          run_id: request.run_id,
+          session_key: request.session_key,
+          engine: "lemon",
+          provenance: :direct
+        )
+
+        %{state | requests: :queue.in(request, state.requests)}
+        |> maybe_request_slot()
+    end
+  end
+
+  defp already_terminal?(run_id) do
+    case LemonCore.RunStore.fetch(run_id) do
+      {:ok, nil} -> false
+      {:ok, %{summary: nil}} -> false
+      {:ok, %{summary: summary}} when is_map(summary) -> true
+      _ -> exit(:run_state_unavailable)
+    end
+  end
+
   defp safe_release_slot(slot_ref) do
     try do
       LemonGateway.Scheduler.release_slot(slot_ref)
@@ -355,25 +425,45 @@ defmodule LemonGateway.ThreadWorker do
   end
 
   defp terminalize_start_failure(state, request, reason, attempts) do
-    if MapSet.member?(state.terminalized_run_ids, request.run_id) do
+    terminalize_request(
+      state,
+      request,
+      %{type: :run_start_failed, reason: safe_failure_reason(reason), attempts: attempts},
+      :run_start
+    )
+  end
+
+  defp terminalize_request(state, request, error, stage) do
+    if already_terminal?(request.run_id) do
       state
     else
-      safe_reason = safe_failure_reason(reason)
-
       completed =
         Event.completed(%{
           engine: "lemon",
           ok: false,
           answer: "",
-          error: %{
-            type: :run_start_failed,
-            reason: safe_reason,
-            attempts: attempts
-          },
+          error: error,
           run_id: request.run_id,
           session_key: request.session_key,
-          meta: %{synthetic: true, failure_stage: :run_start}
+          meta: %{synthetic: true, failure_stage: stage, cancelled: stage == :cancelled}
         })
+
+      :ok =
+        LemonCore.RunStore.finalize(request.run_id, %{
+          completed: completed,
+          session_key: request.session_key,
+          run_id: request.run_id,
+          prompt: request.prompt,
+          duration_ms: 0,
+          engine: "lemon",
+          meta: request.meta
+        })
+
+      LemonCore.Telemetry.emit(
+        [:lemon, :run, :stop],
+        %{duration_ms: 0, ok: false},
+        %{run_id: request.run_id, session_key: request.session_key, engine: "lemon"}
+      )
 
       Bus.broadcast(
         Bus.run_topic(request.run_id),
@@ -384,7 +474,7 @@ defmodule LemonGateway.ThreadWorker do
             run_id: request.run_id,
             session_key: request.session_key,
             synthetic: true,
-            failure_stage: :run_start
+            failure_stage: stage
           }
         )
       )
@@ -397,14 +487,14 @@ defmodule LemonGateway.ThreadWorker do
 
       Introspection.record(
         :run_start_failed,
-        %{reason: safe_reason, attempts: attempts},
+        %{reason: safe_failure_reason(error), failure_stage: stage},
         run_id: request.run_id,
         session_key: request.session_key,
         engine: "lemon",
         provenance: :direct
       )
 
-      %{state | terminalized_run_ids: MapSet.put(state.terminalized_run_ids, request.run_id)}
+      state
     end
   end
 

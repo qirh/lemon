@@ -31,7 +31,7 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
 
   @impl true
   def session_put(session_key, model) do
-    StateStore.put_session_model(session_key, model)
+    :ok = StateStore.put_session_model(session_key, model)
     :ok
   end
 
@@ -50,8 +50,6 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
       model when is_binary(model) and model != "" -> model
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   def legacy_model_fallback(_account_id, _chat_id, _thread_id), do: nil
@@ -66,8 +64,6 @@ defmodule LemonChannels.Adapters.Telegram.ModelPolicyAdapter do
       %{"thinking_level" => level} -> normalize_thinking_level(level)
       level -> normalize_thinking_level(level)
     end
-  rescue
-    _ -> nil
   end
 
   def legacy_thinking_fallback(_account_id, _chat_id, _thread_id), do: nil

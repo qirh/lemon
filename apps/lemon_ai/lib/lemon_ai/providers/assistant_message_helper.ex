@@ -26,4 +26,17 @@ defmodule LemonAi.Providers.AssistantMessageHelper do
       timestamp: System.system_time(:millisecond)
     }
   end
+
+  @doc "Preserve machine-readable provider failure metadata alongside display text."
+  def error_assistant_message(%AssistantMessage{} = output, reason, retry_after_ms \\ nil) do
+    details = LemonAi.Error.to_error_details(reason)
+
+    %{
+      output
+      | stop_reason: :error,
+        error_message: details.message,
+        error_details: details,
+        retry_after_ms: retry_after_ms
+    }
+  end
 end

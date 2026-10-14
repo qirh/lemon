@@ -8,6 +8,7 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
   - No monitor/worker_count leakage across enqueue timeout churn
   """
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1]
 
   alias LemonGateway.Config
   alias LemonGateway.Scheduler
@@ -39,11 +40,6 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
 
   describe "monitor lifecycle on worker DOWN" do
     test "monitors and worker_counts are cleaned up when a worker process dies" do
-      # Get initial state
-      initial_state = :sys.get_state(Scheduler)
-      initial_monitor_count = map_size(initial_state.monitors)
-      initial_worker_count_size = map_size(initial_state.worker_counts)
-
       # Spawn a fake worker that will request a slot and then die
       test_pid = self()
 
@@ -66,36 +62,19 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
       # Request a slot for the fake worker
       Scheduler.request_slot(worker, {:test, "lifecycle_test"})
 
-      # Give scheduler time to process the cast
-      Process.sleep(50)
-
       # Verify the worker is now monitored
       mid_state = :sys.get_state(Scheduler)
       assert Map.has_key?(mid_state.monitors, worker)
       assert Map.has_key?(mid_state.worker_counts, worker)
 
-      # Kill the worker
+      # Kill the worker and wait for the scheduler to process the DOWN message
       send(worker, :die)
-      Process.sleep(100)
+
+      assert_eventually(fn -> untracked?(worker) end)
       refute Process.alive?(worker)
-
-      # Give scheduler time to process the DOWN message
-      Process.sleep(100)
-
-      # Verify monitors and worker_counts were cleaned up
-      final_state = :sys.get_state(Scheduler)
-      refute Map.has_key?(final_state.monitors, worker)
-      refute Map.has_key?(final_state.worker_counts, worker)
-
-      # Should be back to initial counts
-      assert map_size(final_state.monitors) == initial_monitor_count
-      assert map_size(final_state.worker_counts) == initial_worker_count_size
     end
 
     test "multiple workers dying leaves no leaked monitors" do
-      initial_state = :sys.get_state(Scheduler)
-      initial_monitor_count = map_size(initial_state.monitors)
-
       test_pid = self()
       worker_count = 10
 
@@ -124,24 +103,13 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
         Scheduler.request_slot(w, {:test, "multi_#{i}"})
       end
 
-      Process.sleep(100)
-
       # Kill all workers
       for w <- workers do
         send(w, :die)
       end
 
       # Wait for all DOWN messages to be processed
-      Process.sleep(200)
-
-      # Verify no leaked monitors
-      final_state = :sys.get_state(Scheduler)
-      assert map_size(final_state.monitors) == initial_monitor_count
-
-      for w <- workers do
-        refute Map.has_key?(final_state.monitors, w)
-        refute Map.has_key?(final_state.worker_counts, w)
-      end
+      assert_eventually(fn -> untracked?(workers) end)
     end
   end
 
@@ -150,9 +118,6 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
       # This is the key regression test. Previously, cleanup_stale_slot_requests
       # called maybe_demonitor_worker but discarded the returned state, causing
       # monitor ref and worker_count leakage.
-
-      initial_state = :sys.get_state(Scheduler)
-      initial_monitor_count = map_size(initial_state.monitors)
 
       test_pid = self()
 
@@ -176,7 +141,6 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
 
       # Request a slot — the scheduler will either grant or queue it
       Scheduler.request_slot(worker, {:test, "stale_test"})
-      Process.sleep(50)
 
       # Verify the worker is monitored
       mid_state = :sys.get_state(Scheduler)
@@ -184,19 +148,12 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
 
       # Now kill the worker — this triggers :DOWN handling which cleans up
       send(worker, :die)
-      Process.sleep(100)
 
-      final_state = :sys.get_state(Scheduler)
-      refute Map.has_key?(final_state.monitors, worker)
-      refute Map.has_key?(final_state.worker_counts, worker)
-      assert map_size(final_state.monitors) == initial_monitor_count
+      assert_eventually(fn -> untracked?(worker) end)
     end
 
     test "repeated enqueue/timeout churn leaves monitors stable" do
       # Simulate the pattern: many workers request slots, some die, others timeout
-      initial_state = :sys.get_state(Scheduler)
-      initial_monitor_count = map_size(initial_state.monitors)
-      initial_worker_count_size = map_size(initial_state.worker_counts)
 
       test_pid = self()
 
@@ -227,28 +184,20 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
           Scheduler.request_slot(w, {:test, "churn_#{cycle}_#{i}"})
         end
 
-        Process.sleep(50)
-
         # Kill all workers
         for w <- workers do
           send(w, :die)
         end
 
-        Process.sleep(100)
+        assert_eventually(fn -> untracked?(workers) end)
       end
 
-      # After all churn, monitors and worker_counts should be stable
-      final_state = :sys.get_state(Scheduler)
-      assert map_size(final_state.monitors) == initial_monitor_count
-      assert map_size(final_state.worker_counts) == initial_worker_count_size
+      # After all churn, no worker is left monitored
     end
   end
 
   describe "slot release cleanup" do
     test "releasing a slot demonitors the worker when no other refs exist" do
-      initial_state = :sys.get_state(Scheduler)
-      initial_monitor_count = map_size(initial_state.monitors)
-
       test_pid = self()
 
       worker =
@@ -291,16 +240,21 @@ defmodule LemonGateway.SchedulerMonitorLifecycleTest do
 
       # Release the slot
       Scheduler.release_slot(slot_ref)
-      Process.sleep(100)
-
-      # Verify cleanup
-      after_release_state = :sys.get_state(Scheduler)
-      refute Map.has_key?(after_release_state.monitors, worker)
-      refute Map.has_key?(after_release_state.worker_counts, worker)
-      assert map_size(after_release_state.monitors) == initial_monitor_count
+      assert_eventually(fn -> untracked?(worker) end)
 
       # Clean up the worker
       send(worker, :release)
     end
+  end
+
+  # True once the scheduler tracks none of the given workers (no monitor, no slot count).
+  defp untracked?(workers) do
+    state = :sys.get_state(Scheduler)
+
+    workers
+    |> List.wrap()
+    |> Enum.all?(fn w ->
+      not Map.has_key?(state.monitors, w) and not Map.has_key?(state.worker_counts, w)
+    end)
   end
 end

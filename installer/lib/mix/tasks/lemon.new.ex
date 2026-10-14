@@ -30,16 +30,31 @@ defmodule Mix.Tasks.Lemon.New do
       dependency on `lemon_channels` and, for tests, `lemon_platform_test`.
     * `--memory` — additionally generate durable memory wiring on
       `lemon_memory` (adds a SQLite-backed dependency).
+    * `--hex` — depend on the published Hex packages (`lemon_core`, `lemon_ai`,
+      `lemon_agent`, and `lemon_memory` with `--memory`) as `~> 0.2`
+      requirements. Needs no checkout of the `lemon` repository. Cannot be
+      combined with `--channel`, `--lemon-path` or `--packages-path`:
+      `lemon_channels` is not a published package, so a `--channel` project
+      could not resolve. `mix deps.get` resolves once 0.2.0 is on hex.pm.
     * `--lemon-path` — path to a checkout of the `lemon` repository. The
-      platform packages are not on Hex yet, so the generated `mix.exs` uses path
-      dependencies pointing here. Defaults to `$LEMON_PATH`, then to the
-      checkout this installer was built from.
+      generated `mix.exs` uses path dependencies on the packages under its
+      `apps/`, with the matching Hex requirement commented beneath each.
+      Defaults to `$LEMON_PATH`, then to the checkout this installer was built
+      from. An installer that was not built from a checkout (one installed from
+      Hex) knows of none, and generates the `--hex` form instead.
+    * `--packages-path` — instead of a checkout, a directory holding the
+      published packages as unpacked Hex tarballs (`<dir>/lemon_core`,
+      `<dir>/lemon_ai`, …, as `mix hex.build --unpack` writes them). This is
+      how `scripts/verify_packages` proves a project builds from exactly what
+      ships. Cannot be combined with `--channel`: `lemon_channels` is not a
+      published package.
     * `--install` / `--no-install` — run `mix deps.get` in the new project.
       Defaults to asking.
 
   ## Examples
 
       mix lemon.new my_agent
+      mix lemon.new my_agent --hex --memory
       mix lemon.new my_agent --channel --memory
       mix lemon.new agents/support_bot --app support_bot --module SupportBot
   """
@@ -48,16 +63,24 @@ defmodule Mix.Tasks.Lemon.New do
 
   alias LemonNew.{Generator, Project}
 
-  # Where this installer was built from. Correct for the archive built out of a
-  # lemon checkout, which is the only way to get one until the packages publish.
-  @built_from Path.expand("../../../..", __DIR__)
+  # The lemon checkout this installer was built from, or nil. An archive built
+  # out of a checkout (`installer/` under it) has one; one built from the Hex
+  # package (`mix archive.install hex lemon_new`) is compiled somewhere that
+  # is not a checkout and falls back to --hex.
+  @built_from (
+                root = Path.expand("../../../..", __DIR__)
+
+                if File.exists?(Path.join(root, "apps/lemon_agent/mix.exs")), do: root
+              )
 
   @switches [
     app: :string,
     module: :string,
     channel: :boolean,
+    hex: :boolean,
     memory: :boolean,
     lemon_path: :string,
+    packages_path: :string,
     install: :boolean
   ]
 
@@ -83,8 +106,12 @@ defmodule Mix.Tasks.Lemon.New do
   end
 
   defp generate(base_path, opts) do
-    lemon_path = resolve_lemon_path(opts)
-    project = Project.new(base_path, Keyword.put(opts, :lemon_path, lemon_path))
+    project =
+      try do
+        Project.new(base_path, package_source(opts))
+      rescue
+        error in ArgumentError -> Mix.raise(Exception.message(error))
+      end
 
     Project.validate_app!(project.app)
     Project.validate_module!(project.app_module)
@@ -119,8 +146,55 @@ defmodule Mix.Tasks.Lemon.New do
     File.mkdir_p!(path)
   end
 
-  defp resolve_lemon_path(opts) do
-    path = opts[:lemon_path] || System.get_env("LEMON_PATH") || @built_from
+  # --hex and --packages-path are explicit and win over the checkout defaults;
+  # combinations with --lemon-path are rejected by Project.new/2. With none of
+  # them, a lemon checkout is used when one is known, else Hex.
+  defp package_source(opts) do
+    cond do
+      opts[:hex] ->
+        opts
+
+      opts[:packages_path] ->
+        Keyword.update!(opts, :packages_path, &resolve_packages_path/1)
+
+      path = lemon_path(opts) ->
+        Keyword.put(opts, :lemon_path, resolve_lemon_path(path))
+
+      opts[:channel] ->
+        Mix.raise("""
+        --channel needs a lemon checkout, and none is known: this installer was \
+        not built from one. lemon_channels is not published to Hex.
+
+        Pass --lemon-path (or set $LEMON_PATH) to a checkout of the lemon \
+        repository.
+        """)
+
+      true ->
+        Mix.shell().info("No lemon checkout found; depending on the Hex packages (--hex).")
+        Keyword.put(opts, :hex, true)
+    end
+  end
+
+  defp lemon_path(opts) do
+    Enum.find([opts[:lemon_path], System.get_env("LEMON_PATH"), @built_from], & &1)
+  end
+
+  defp resolve_packages_path(path) do
+    path = Path.expand(path)
+
+    unless File.exists?(Path.join(path, "lemon_agent/mix.exs")) do
+      Mix.shell().error("""
+      Warning: #{path} has no lemon_agent/mix.exs.
+
+      --packages-path expects one unpacked package per directory, as written by
+      `mix hex.build --unpack`. `mix deps.get` will fail until it points there.
+      """)
+    end
+
+    path
+  end
+
+  defp resolve_lemon_path(path) do
     path = Path.expand(path)
 
     unless File.exists?(Path.join(path, "apps/lemon_agent/mix.exs")) do
@@ -170,5 +244,12 @@ defmodule Mix.Tasks.Lemon.New do
 
     Guides live in the lemon repo under docs/getting-started/.
     """)
+
+    if project.source == :hex do
+      Mix.shell().info(
+        "The platform packages are Hex requirements (`~> 0.2`); `mix deps.get` " <>
+          "resolves them once 0.2.0 is on hex.pm.\n"
+      )
+    end
   end
 end

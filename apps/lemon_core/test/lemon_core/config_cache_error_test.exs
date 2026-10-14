@@ -145,10 +145,10 @@ defmodule LemonCore.ConfigCacheErrorTest do
       assert exception.message == message
     end
 
-    test "handles nil opts by using default message" do
-      # When nil is passed, Keyword.get on nil will fail
+    @tag invalid_opts: nil
+    test "rejects nil opts", %{invalid_opts: opts} do
       assert_raise FunctionClauseError, fn ->
-        ConfigCacheError.exception(nil)
+        ConfigCacheError.exception(opts)
       end
     end
   end

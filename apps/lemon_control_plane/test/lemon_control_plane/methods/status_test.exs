@@ -1,5 +1,6 @@
 defmodule LemonControlPlane.Methods.StatusTest do
-  use ExUnit.Case, async: true
+  # Stops lemon_channels in one test, so it cannot share the VM with async tests.
+  use ExUnit.Case, async: false
 
   alias LemonControlPlane.Methods.{Health, Status}
 
@@ -54,6 +55,15 @@ defmodule LemonControlPlane.Methods.StatusTest do
     assert result["summary"]["cleanup"]["includesChannelCredentials"] == false
     assert result["summary"]["cleanup"]["includesSkillSources"] == false
     assert result["summary"]["cleanup"]["includesSecretValues"] == false
+  end
+
+  test "a stopped channels app reports no channels instead of failing the request" do
+    :ok = Application.stop(:lemon_channels)
+    on_exit(fn -> {:ok, _} = Application.ensure_all_started(:lemon_channels) end)
+
+    assert {:ok, result} = Status.handle(%{}, %{})
+    assert result["channels"] == %{"configured" => [], "connected" => []}
+    assert result["summary"]["configuredChannelCount"] == 0
   end
 
   test "has correct method name and scopes" do

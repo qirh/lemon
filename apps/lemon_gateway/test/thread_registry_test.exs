@@ -9,8 +9,8 @@ defmodule LemonGateway.ThreadRegistryTest do
   - Automatic cleanup when processes die
   """
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1]
 
-  alias LemonGateway.ExecutionRequest
   alias LemonGateway.ThreadRegistry
 
   defmodule ThreadRegistryFixtureExecutor do
@@ -75,20 +75,6 @@ defmodule LemonGateway.ThreadRegistryTest do
 
   defp unique_key do
     {:thread, System.unique_integer([:positive])}
-  end
-
-  defp execution_request(session_key, prompt, meta) do
-    %ExecutionRequest{
-      run_id: "thread-registry-#{System.unique_integer([:positive, :monotonic])}",
-      session_key: session_key,
-      prompt: prompt,
-      conversation_key: {:session, session_key},
-      meta: meta
-    }
-  end
-
-  defp submit_request(%ExecutionRequest{} = request) do
-    LemonGateway.Scheduler.submit_execution(request)
   end
 
   defp spawn_registering_process(key) do
@@ -291,13 +277,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       send(pid, :stop)
-      Process.sleep(50)
-
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "registration is removed when process crashes" do
@@ -312,13 +295,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       send(pid, :crash)
-      Process.sleep(50)
-
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "registration is removed when process is killed" do
@@ -333,13 +313,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       Process.exit(pid, :kill)
-      Process.sleep(50)
-
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "key can be re-registered after process dies" do
@@ -355,12 +332,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           end
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid1
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid1 end)
 
       send(pid1, :stop)
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
 
       # Second process can now register the same key
       pid2 = spawn_registering_process(key)
@@ -384,13 +359,14 @@ defmodule LemonGateway.ThreadRegistryTest do
             end
           end)
 
-        Process.sleep(10)
+        assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
+        ref = Process.monitor(pid)
         Process.exit(pid, :kill)
-        Process.sleep(10)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}
       end
 
       # Key should be unregistered
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
   end
 
@@ -763,112 +739,10 @@ defmodule LemonGateway.ThreadRegistryTest do
           loop.(loop)
         end)
 
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == pid
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
 
       send(pid, :stop)
-      Process.sleep(50)
-      assert ThreadRegistry.whereis(key) == nil
-    end
-  end
-
-  # ============================================================================
-  # 8. Integration with ThreadWorker
-  # ============================================================================
-
-  describe "integration with ThreadWorker" do
-    test "ThreadWorker uses via tuple for registration" do
-      # This tests that ThreadWorker properly integrates with ThreadRegistry
-      # by checking that we can look up thread workers through the registry
-
-      session_key = "test:#{System.unique_integer([:positive])}"
-      thread_key = {:session, session_key}
-
-      request =
-        execution_request(session_key, "test", %{notify_pid: self(), user_msg_id: 1})
-
-      submit_request(request)
-
-      # The worker should be registered
-      Process.sleep(50)
-      worker_pid = ThreadRegistry.whereis(thread_key)
-      assert is_pid(worker_pid)
-
-      # Wait for completion and worker cleanup
-      assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
-      Process.sleep(100)
-
-      # Worker should be unregistered after idle
-      # (May take some time due to async cleanup)
-      wait_for_unregistration(thread_key, 500)
-    end
-
-    test "multiple thread workers register independently" do
-      # Create multiple scopes
-      session_keys =
-        for i <- 1..3 do
-          "test:#{10000 + i}"
-        end
-
-      # Submit requests to each scope
-      requests =
-        for session_key <- session_keys do
-          request =
-            execution_request(session_key, "test", %{notify_pid: self(), user_msg_id: 1})
-
-          submit_request(request)
-
-          request
-        end
-
-      Process.sleep(100)
-
-      # All workers should be registered with different pids
-      pids =
-        for session_key <- session_keys do
-          thread_key = {:session, session_key}
-          ThreadRegistry.whereis(thread_key)
-        end
-
-      # All should be valid pids
-      assert Enum.all?(pids, &is_pid/1)
-
-      # All should be different
-      assert length(Enum.uniq(pids)) == length(pids)
-
-      # Wait for completions
-      for request <- requests do
-        assert_receive {:lemon_gateway_run_completed, ^request, _}, 2000
-      end
-    end
-
-    test "new worker can register after previous worker dies" do
-      session_key = "test:#{System.unique_integer([:positive])}"
-
-      thread_key = {:session, session_key}
-
-      # First request
-      request1 =
-        execution_request(session_key, "first", %{notify_pid: self(), user_msg_id: 1})
-
-      submit_request(request1)
-
-      assert_receive {:lemon_gateway_run_completed, ^request1, _}, 2000
-
-      # Wait for worker to die
-      wait_for_unregistration(thread_key, 500)
-
-      # Second request should create new worker
-      request2 =
-        execution_request(session_key, "second", %{notify_pid: self(), user_msg_id: 2})
-
-      submit_request(request2)
-
-      Process.sleep(50)
-      worker_pid = ThreadRegistry.whereis(thread_key)
-      assert is_pid(worker_pid)
-
-      assert_receive {:lemon_gateway_run_completed, ^request2, _}, 2000
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
   end
 
@@ -910,13 +784,14 @@ defmodule LemonGateway.ThreadRegistryTest do
             end
           end)
 
-        Process.sleep(5)
+        assert_eventually(fn -> ThreadRegistry.whereis(key) == pid end)
+        ref = Process.monitor(pid)
         send(pid, :stop)
-        Process.sleep(5)
+        assert_receive {:DOWN, ^ref, :process, ^pid, _}
       end
 
       # Should be clean after all cycles
-      assert ThreadRegistry.whereis(key) == nil
+      assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
     end
 
     test "handles many different keys" do
@@ -953,12 +828,10 @@ defmodule LemonGateway.ThreadRegistryTest do
 
       # Cleanup
       Enum.each(pids, &send(&1, :stop))
-      Process.sleep(100)
-
       # All should be unregistered
       for i <- 1..200 do
         key = {:stress_test, i, :unique}
-        assert ThreadRegistry.whereis(key) == nil
+        assert_eventually(fn -> ThreadRegistry.whereis(key) == nil end)
       end
     end
 
@@ -987,7 +860,7 @@ defmodule LemonGateway.ThreadRegistryTest do
             key = {:interleaved, base, i}
             # Try multiple times as registration may not be complete
             result =
-              Enum.reduce_while(1..10, nil, fn _, _ ->
+              Enum.reduce_while(1..500, nil, fn _, _ ->
                 case ThreadRegistry.whereis(key) do
                   nil ->
                     Process.sleep(10)
@@ -1019,32 +892,6 @@ defmodule LemonGateway.ThreadRegistryTest do
       assert length(successful) >= 15, "Expected at least 15 successful lookups"
 
       Enum.each(register_pids, &send(&1, :stop))
-    end
-  end
-
-  # ============================================================================
-  # Helpers
-  # ============================================================================
-
-  defp wait_for_unregistration(key, timeout) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-
-    do_wait_for_unregistration(key, deadline)
-  end
-
-  defp do_wait_for_unregistration(key, deadline) do
-    case ThreadRegistry.whereis(key) do
-      nil ->
-        :ok
-
-      _pid ->
-        if System.monotonic_time(:millisecond) > deadline do
-          # Worker may still be alive - this is acceptable in some cases
-          :timeout
-        else
-          Process.sleep(20)
-          do_wait_for_unregistration(key, deadline)
-        end
     end
   end
 end

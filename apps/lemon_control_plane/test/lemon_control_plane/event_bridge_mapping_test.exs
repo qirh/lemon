@@ -17,7 +17,6 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       # System events
       assert "presence" in events
       assert "tick" in events
-      assert "talk.mode" in events
       assert "shutdown" in events
       assert "health" in events
       assert "heartbeat" in events
@@ -40,13 +39,6 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       assert "node.pair.resolved" in events
       assert "node.invoke.request" in events
       assert "node.invoke.completed" in events
-
-      # Device events
-      assert "device.pair.requested" in events
-      assert "device.pair.resolved" in events
-
-      # Voicewake events
-      assert "voicewake.changed" in events
 
       # Approval events
       assert "exec.approval.requested" in events
@@ -147,36 +139,6 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       assert invoke_completed.type == :node_invoke_completed
     end
 
-    test "maps device events" do
-      device_requested = %LemonCore.Event{
-        type: :device_pair_requested,
-        ts_ms: 1_234_567_890,
-        payload: %{pairing_id: "dpair-1", device_type: "mobile"},
-        meta: %{}
-      }
-
-      device_resolved = %LemonCore.Event{
-        type: :device_pair_resolved,
-        ts_ms: 1_234_567_890,
-        payload: %{pairing_id: "dpair-1", status: :approved},
-        meta: %{}
-      }
-
-      assert device_requested.type == :device_pair_requested
-      assert device_resolved.type == :device_pair_resolved
-    end
-
-    test "maps voicewake events" do
-      voicewake = %LemonCore.Event{
-        type: :voicewake_changed,
-        ts_ms: 1_234_567_890,
-        payload: %{enabled: true, keyword: "hey lemon"},
-        meta: %{}
-      }
-
-      assert voicewake.type == :voicewake_changed
-    end
-
     test "maps system events" do
       shutdown = %LemonCore.Event{
         type: :shutdown,
@@ -264,8 +226,6 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
         "presence",
         # :tick, :cron_tick
         "tick",
-        # :talk_mode_changed
-        "talk.mode",
         # :shutdown
         "shutdown",
         # :health_changed
@@ -302,20 +262,14 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
         "node.invoke.request",
         # :node_invoke_completed
         "node.invoke.completed",
-        # :device_pair_requested
-        "device.pair.requested",
-        # :device_pair_resolved
-        "device.pair.resolved",
-        # :voicewake_changed
-        "voicewake.changed",
         # :approval_requested
         "exec.approval.requested",
         # :approval_resolved
         "exec.approval.resolved",
         # :channel_delivery
         "channel.delivery",
-        # :custom_event
-        "custom"
+        # :omp_session
+        "omp.session"
       ]
 
       for event <- mapped_events do
@@ -326,69 +280,6 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
       for event <- supported do
         assert event in mapped_events,
                "Supported event #{event} should have documented mapping"
-      end
-    end
-  end
-
-  describe "custom event mapping" do
-    test "custom_event type structure is correct" do
-      event = %LemonCore.Event{
-        type: :custom_event,
-        ts_ms: 1_234_567_890,
-        payload: %{custom_event_type: "custom_my_event", data: "test"},
-        meta: %{original_event_type: "custom_my_event"}
-      }
-
-      assert event.type == :custom_event
-      assert event.payload[:custom_event_type] == "custom_my_event"
-    end
-
-    test "custom events preserve original type in payload" do
-      # When system-event sends a custom_* event, it becomes :custom_event
-      # but preserves the original type in the payload
-      event = %LemonCore.Event{
-        type: :custom_event,
-        ts_ms: System.system_time(:millisecond),
-        payload: %{
-          custom_event_type: "custom_user_action",
-          action: "clicked_button",
-          user_id: "user-123"
-        },
-        meta: %{
-          origin: :system_event,
-          original_event_type: "custom_user_action"
-        }
-      }
-
-      # The event should have the custom type info preserved
-      assert event.payload[:custom_event_type] == "custom_user_action"
-      assert event.meta[:original_event_type] == "custom_user_action"
-    end
-
-    test "multiple custom event types are handled correctly" do
-      # Different custom_* events all map to :custom_event
-      custom_types = [
-        "custom_analytics",
-        "custom_user_event",
-        "custom_workflow_step",
-        "custom_integration_webhook"
-      ]
-
-      for custom_type <- custom_types do
-        event = %LemonCore.Event{
-          type: :custom_event,
-          ts_ms: System.system_time(:millisecond),
-          payload: %{
-            custom_event_type: custom_type,
-            data: %{test: true}
-          },
-          meta: %{original_event_type: custom_type}
-        }
-
-        # All should be :custom_event internally
-        assert event.type == :custom_event
-        # But preserve the original type
-        assert event.payload[:custom_event_type] == custom_type
       end
     end
   end

@@ -144,7 +144,7 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
       {:error, reason} -> {:error, reason}
     end
   rescue
-    _ -> :ok
+    error -> {:error, {:discord_reaction_crashed, error}}
   end
 
   @doc "Send a message with components (buttons, select menus)."
@@ -390,12 +390,20 @@ defmodule LemonChannels.Adapters.Discord.Outbound do
     end
   end
 
-  defp peer_channel_id(%OutboundPayload{peer: %{thread_id: thread_id}})
-       when is_binary(thread_id) and thread_id != "",
-       do: normalize_id(thread_id)
+  defp peer_channel_id(%OutboundPayload{account_id: account, peer: peer}) do
+    config = GatewayConfig.get(:discord, %{})
+    configured = config[:account_id] || config["account_id"] || "default"
 
-  defp peer_channel_id(%OutboundPayload{peer: %{id: id}}), do: normalize_id(id)
-  defp peer_channel_id(_), do: {:error, :invalid_peer}
+    if is_binary(account) and account == configured do
+      case peer do
+        %{thread_id: thread} when is_binary(thread) and thread != "" -> normalize_id(thread)
+        %{id: id} -> normalize_id(id)
+        _ -> {:error, :invalid_peer}
+      end
+    else
+      {:error, :unknown_account}
+    end
+  end
 
   defp normalize_id(id) when is_integer(id), do: {:ok, id}
 

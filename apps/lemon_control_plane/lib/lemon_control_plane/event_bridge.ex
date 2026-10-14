@@ -15,9 +15,10 @@ defmodule LemonControlPlane.EventBridge do
   - `exec_approvals` - Approval request/resolution events
   - `cron` - Cron job events
   - `goals` - Durable goal lifecycle events
-  - `system` - System events (shutdown, health, tick, talk.mode)
+  - `system` - System events (shutdown, health, tick)
   - `nodes` - Node pairing events
   - `presence` - Presence events
+  - `omp` (`LemonOmp.bus_topic/0`) - omp delegate session snapshots
 
   ## Event Mapping
 
@@ -49,7 +50,6 @@ defmodule LemonControlPlane.EventBridge do
   | :cron_tick               | tick                      |
   | :tick                    | tick                      |
   | :presence_changed        | presence                  |
-  | :talk_mode_changed       | talk.mode                 |
   | :heartbeat               | heartbeat                 |
   | :heartbeat_alert         | heartbeat                 |
   | :metrics                 | metrics                   |
@@ -58,18 +58,15 @@ defmodule LemonControlPlane.EventBridge do
   | :node_pair_resolved      | node.pair.resolved        |
   | :node_invoke_request     | node.invoke.request       |
   | :node_invoke_completed   | node.invoke.completed     |
-  | :device_pair_requested   | device.pair.requested     |
-  | :device_pair_resolved    | device.pair.resolved      |
-  | :voicewake_changed       | voicewake.changed         |
   | :shutdown                | shutdown                  |
   | :health_changed          | health                    |
-  | :custom_event            | custom                    |
   | :task_started            | task.started              |
   | :task_completed          | task.completed            |
   | :task_error              | task.error                |
   | :task_timeout            | task.timeout              |
   | :task_aborted            | task.aborted              |
   | :run_graph_changed       | run.graph.changed         |
+  | :omp_session             | omp.session               |
   """
 
   use GenServer
@@ -133,7 +130,7 @@ defmodule LemonControlPlane.EventBridge do
     # No ad hoc startup needed here.
 
     # Subscribe to static topics
-    Enum.each(@bus_topics, &Bus.subscribe/1)
+    Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe/1)
 
     # Initialize state version counters
     state_versions = Map.new(@state_version_keys, fn key -> {key, 0} end)
@@ -208,93 +205,21 @@ defmodule LemonControlPlane.EventBridge do
 
   # Broadcast an event to all connected clients
   defp broadcast_event(event, state_version) do
-    case map_event(event) do
+    case project(event) do
       nil ->
         :ok
 
       {event_name, payload} ->
-        # Get all connected clients from presence
         clients =
           get_connected_clients()
-          |> filter_subscribed_clients(event_name, payload)
+          |> Enum.filter(fn {_conn_id, info} -> general_event_client?(info) end)
 
         dispatch_event(clients, event_name, payload, state_version)
     end
   end
 
-  defp filter_subscribed_clients(clients, event_name, payload) do
-    Enum.filter(clients, fn {_conn_id, info} ->
-      general_event_client?(info) and subscribed_to_event?(info, event_name, payload)
-    end)
-  end
-
   defp general_event_client?(%{role: role}) when role in [:node, "node"], do: false
   defp general_event_client?(_info), do: true
-
-  defp subscribed_to_event?(
-         %{subscription_mode: :custom, subscriptions: subscriptions},
-         event_name,
-         payload
-       ) do
-    subscriptions = subscriptions || MapSet.new()
-
-    MapSet.member?(subscriptions, "all") ||
-      event_topics(event_name, payload)
-      |> Enum.any?(&MapSet.member?(subscriptions, &1))
-  end
-
-  defp subscribed_to_event?(_info, _event_name, _payload), do: true
-
-  defp event_topics(event_name, payload) do
-    topic_for_event(event_name) ++ run_topics(payload) ++ session_topics(payload)
-  end
-
-  defp topic_for_event(event_name) when event_name in ["cron", "cron.job", "cron.audit"],
-    do: ["cron"]
-
-  defp topic_for_event("goal"), do: ["goals"]
-  defp topic_for_event("channel.delivery"), do: ["channels"]
-  defp topic_for_event("tick"), do: ["cron", "system"]
-  defp topic_for_event("presence"), do: ["presence"]
-  defp topic_for_event("health"), do: ["system"]
-  defp topic_for_event("shutdown"), do: ["system"]
-  defp topic_for_event("talk.mode"), do: ["system"]
-  defp topic_for_event("heartbeat"), do: ["system"]
-  defp topic_for_event("metrics"), do: ["system"]
-  defp topic_for_event("log"), do: ["system"]
-  defp topic_for_event("voicewake.changed"), do: ["system"]
-  defp topic_for_event("custom"), do: ["system"]
-
-  defp topic_for_event(event_name) when is_binary(event_name) do
-    cond do
-      String.starts_with?(event_name, "exec.approval.") -> ["exec_approvals"]
-      String.starts_with?(event_name, "node.") -> ["nodes"]
-      String.starts_with?(event_name, "device.") -> ["nodes"]
-      true -> []
-    end
-  end
-
-  defp topic_for_event(_), do: []
-
-  defp run_topics(payload) do
-    case get_event_field(payload, "runId") do
-      run_id when is_binary(run_id) and run_id != "" -> ["run:#{run_id}"]
-      _ -> []
-    end
-  end
-
-  defp session_topics(payload) do
-    case get_event_field(payload, "sessionKey") do
-      session_key when is_binary(session_key) and session_key != "" -> ["session:#{session_key}"]
-      _ -> []
-    end
-  end
-
-  defp get_event_field(payload, key) when is_map(payload) do
-    Map.get(payload, key) || Map.get(payload, Macro.underscore(key))
-  end
-
-  defp get_event_field(_payload, _key), do: nil
 
   defp dispatch_event(clients, event_name, payload, state_version) do
     payload_meta = %{event: event_name, recipients: length(clients)}
@@ -406,25 +331,32 @@ defmodule LemonControlPlane.EventBridge do
     _ -> []
   end
 
-  # Map bus events to WebSocket event names and payloads.
-  #
+  @doc """
+  Projects one Bus event to its operator wire event, `{event_name, payload}`,
+  or `nil` when the event has no operator projection.
+
+  This is the single projection used for WebSocket fanout; in-process operator
+  clients (the web UI) subscribe to the Bus themselves and call it so they see
+  exactly the bounded payloads a WebSocket client would.
+  """
+  @spec project(term()) :: {String.t(), map()} | nil
   # Registered platform payloads are coerced to their struct once, here, so that every clause
-  # below can pattern-match one: a struct passes through untouched and a legacy map — a
-  # hand-built test payload, or an event injected through `events.ingest` — becomes its
-  # struct. A payload too malformed to coerce stays a map, misses its typed clause and is
-  # reported by the catch-all, instead of being fanned out to clients as a frame of nils.
+  # below can pattern-match one: a struct passes through untouched and a legacy map — such
+  # as a hand-built test payload — becomes its struct. A payload too malformed to coerce
+  # stays a map, misses its typed clause and is reported by the catch-all, instead of being
+  # fanned out to clients as a frame of nils.
   #
   # `meta` is deliberately still a free map (see docs/platform/bus-events.md §4.1), so it is
   # read with `Access`; the payload never is.
-  defp map_event(%LemonCore.Event{type: type, payload: payload, meta: meta}) do
+  def project(%LemonCore.Event{type: type, payload: payload, meta: meta}) do
     map_event_type(type, Events.coerce(type, payload), meta || %{})
   end
 
-  defp map_event(%{type: type, payload: payload} = event) do
+  def project(%{type: type, payload: payload} = event) do
     map_event_type(type, Events.coerce(type, payload), Map.get(event, :meta) || %{})
   end
 
-  defp map_event(_), do: nil
+  def project(_), do: nil
 
   # Run events
   defp map_event_type(:run_started, %Events.RunStarted{} = payload, meta) do
@@ -462,6 +394,8 @@ defmodule LemonControlPlane.EventBridge do
        "runId" => meta[:run_id],
        "sessionKey" => meta[:session_key],
        "ok" => get_field(completed, :ok),
+       "cancelled" => get_field(get_field(completed, :meta) || %{}, :cancelled) == true,
+       "error" => LemonControlPlane.EventProjection.action_detail(get_field(completed, :error)),
        "answer" => truncate(get_field(completed, :answer), 500),
        "durationMs" => payload.duration_ms,
        "usage" => LemonControlPlane.UsageTokens.normalize(get_field(completed, :usage)),
@@ -493,7 +427,7 @@ defmodule LemonControlPlane.EventBridge do
          "id" => get_field(action, :id),
          "kind" => get_field(action, :kind),
          "title" => get_field(action, :title),
-         "detail" => get_field(action, :detail)
+         "detail" => operator_action_detail(get_field(action, :detail))
        },
        "phase" => payload.phase,
        "ok" => payload.ok,
@@ -690,15 +624,6 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
-  # Talk mode events
-  defp map_event_type(:talk_mode_changed, %Events.TalkModeChanged{} = payload, _meta) do
-    {"talk.mode",
-     %{
-       "sessionKey" => payload.session_key,
-       "mode" => to_string(payload.mode)
-     }}
-  end
-
   # Heartbeat events
   defp map_event_type(:heartbeat, payload, _meta) do
     {"heartbeat",
@@ -810,52 +735,6 @@ defmodule LemonControlPlane.EventBridge do
     {"health", payload}
   end
 
-  # Device pairing events
-  defp map_event_type(:device_pair_requested, payload, _meta) do
-    {"device.pair.requested",
-     %{
-       "pairingId" => payload[:pairing_id],
-       "deviceType" => payload[:device_type],
-       "deviceName" => payload[:device_name]
-     }}
-  end
-
-  defp map_event_type(:device_pair_resolved, payload, _meta) do
-    {"device.pair.resolved",
-     %{
-       "pairingId" => payload[:pairing_id],
-       "status" => to_string(payload[:status]),
-       "deviceType" => payload[:device_type],
-       "deviceName" => payload[:device_name]
-     }}
-  end
-
-  # Voicewake events
-  defp map_event_type(:voicewake_changed, payload, _meta) do
-    {"voicewake.changed",
-     %{
-       "enabled" => payload[:enabled],
-       "keyword" => payload[:keyword],
-       "backend" => payload[:backend]
-     }}
-  end
-
-  # Custom events (from system-event with custom_* types)
-  defp map_event_type(:custom_event, payload, meta) do
-    # Extract the original custom event type from meta or payload
-    custom_type = meta[:original_event_type] || payload[:custom_event_type] || "custom"
-
-    {"custom",
-     add_target_fields(
-       %{
-         "type" => custom_type,
-         "payload" => payload,
-         "timestampMs" => System.system_time(:millisecond)
-       },
-       meta
-     )}
-  end
-
   # Task lifecycle events
   defp map_event_type(:task_started, payload, meta) do
     {"task.started",
@@ -938,6 +817,13 @@ defmodule LemonControlPlane.EventBridge do
      }}
   end
 
+  # omp delegate snapshots are already bounded, JSON-safe wire maps (`LemonOmp`
+  # projects them); forward them unchanged.
+  defp map_event_type(:omp_session, %{"reason" => reason, "session" => session}, _meta)
+       when is_binary(reason) and is_map(session) do
+    {"omp.session", %{"reason" => reason, "session" => session}}
+  end
+
   # Catch-all for unmapped events.
   #
   # Dropping silently is intentional for app-internal and custom event types, but a type in
@@ -951,6 +837,51 @@ defmodule LemonControlPlane.EventBridge do
   defp map_event_type(type, payload, _meta) do
     if Events.registered?(type), do: warn_unmapped_once(type, payload)
     nil
+  end
+
+  # Prefer the operator copies over channel previews, then project only bounded
+  # visible data. In particular streaming partial results contain runtime structs.
+  defp operator_action_detail(detail) when is_map(detail) and not is_struct(detail) do
+    detail
+    |> promote_detail_field([:result_full, "result_full"], :result, "result")
+    |> promote_reasoning_full_text()
+    |> LemonControlPlane.EventProjection.action_detail()
+  end
+
+  defp operator_action_detail(detail), do: LemonControlPlane.EventProjection.action_detail(detail)
+
+  defp promote_reasoning_full_text(detail) do
+    case take_detail_field(detail, [:reasoning, "reasoning"]) do
+      {key, reasoning, _rest} when is_map(reasoning) and not is_struct(reasoning) ->
+        Map.put(
+          detail,
+          key,
+          promote_detail_field(reasoning, [:full_text, "full_text"], :text, "text")
+        )
+
+      _ ->
+        detail
+    end
+  end
+
+  defp promote_detail_field(map, source_keys, atom_target, string_target) do
+    case take_detail_field(map, source_keys) do
+      {source_key, value, rest} when is_binary(value) ->
+        target = if is_atom(source_key), do: atom_target, else: string_target
+        rest |> Map.delete(atom_target) |> Map.delete(string_target) |> Map.put(target, value)
+
+      {_source_key, _value, rest} ->
+        rest
+
+      nil ->
+        map
+    end
+  end
+
+  defp take_detail_field(map, keys) do
+    Enum.find_value(keys, fn key ->
+      if Map.has_key?(map, key), do: {key, Map.get(map, key), Map.delete(map, key)}
+    end)
   end
 
   defp warn_unmapped_once(type, payload) do

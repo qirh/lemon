@@ -213,6 +213,20 @@ defmodule LemonRouter.RunProcess do
   end
 
   @impl true
+  def handle_call(:get_metadata, _from, state) do
+    metadata = %{
+      session_key: state.session_key,
+      agent_id:
+        LemonCore.MapHelpers.get_key(state.execution_request.meta || %{}, :agent_id) ||
+          LemonCore.SessionKey.agent_id(state.session_key),
+      engine: "lemon",
+      started_at_ms: state.run_started_at_ms || state.start_ts_ms
+    }
+
+    {:reply, metadata, state}
+  end
+
+  @impl true
   def handle_info(:submit_to_gateway, state) do
     cond do
       state.gateway_submitted? or state.aborted or state.completed ->
@@ -464,8 +478,6 @@ defmodule LemonRouter.RunProcess do
           end
       end
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(:run_watchdog_confirmation_timeout, state) do
@@ -476,8 +488,6 @@ defmodule LemonRouter.RunProcess do
     else
       {:noreply, Watchdog.fail_run_for_idle_timeout(state)}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   # If the gateway run process dies without emitting a completion event, synthesize a failure
@@ -509,6 +519,7 @@ defmodule LemonRouter.RunProcess do
               Events.Completion.new(%{
                 ok: false,
                 error: {:gateway_run_down, reason},
+                meta: %{cancelled: state.aborted},
                 answer: ""
               }),
             duration_ms: nil
@@ -520,11 +531,9 @@ defmodule LemonRouter.RunProcess do
           }
         )
 
-      Bus.broadcast(Bus.run_topic(state.run_id), event)
+      LemonRouter.RunCompletion.publish(state.execution_request, event)
       {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info({:finalize_aborted_run, reason}, state) do
@@ -550,6 +559,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: reason,
+                  meta: %{cancelled: true},
                   answer: ""
                 }),
               duration_ms: nil
@@ -561,11 +571,9 @@ defmodule LemonRouter.RunProcess do
             }
           )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        LemonRouter.RunCompletion.publish(state.execution_request, event)
         {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(:ensure_gateway_bound, state) do
@@ -593,8 +601,6 @@ defmodule LemonRouter.RunProcess do
 
         {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(:finalize_missing_gateway_after_start, state) do
@@ -622,6 +628,7 @@ defmodule LemonRouter.RunProcess do
                 Events.Completion.new(%{
                   ok: false,
                   error: :gateway_run_missing_after_start,
+                  meta: %{cancelled: state.aborted},
                   answer: ""
                 }),
               duration_ms: nil
@@ -633,11 +640,9 @@ defmodule LemonRouter.RunProcess do
             }
           )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        LemonRouter.RunCompletion.publish(state.execution_request, event)
         {:noreply, state}
     end
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(_msg, state) do
@@ -758,15 +763,12 @@ defmodule LemonRouter.RunProcess do
   defp artifact_tracker(%{artifact_tracker: mod}) when is_atom(mod), do: mod
   defp artifact_tracker(_state), do: ArtifactTracker
 
+  # Trackers implement finalize_meta/2. Probing with function_exported?/3 was
+  # wrong: it is false until the module is loaded, so the first finalized run
+  # after boot silently dropped final-answer MEDIA directives.
   defp safe_finalize_meta(state, event) do
-    tracker = artifact_tracker(state)
     answer = CompactionTrigger.extract_completed_answer(event)
-
-    if function_exported?(tracker, :finalize_meta, 2) do
-      tracker.finalize_meta(state, answer)
-    else
-      tracker.finalize_meta(state)
-    end
+    artifact_tracker(state).finalize_meta(state, answer)
   rescue
     error ->
       Introspection.record(
@@ -846,8 +848,6 @@ defmodule LemonRouter.RunProcess do
     else
       _ -> state
     end
-  rescue
-    _ -> state
   end
 
   defp maybe_demonitor_gateway_run(%{gateway_run_ref: nil} = state), do: state
@@ -855,8 +855,6 @@ defmodule LemonRouter.RunProcess do
   defp maybe_demonitor_gateway_run(%{gateway_run_ref: ref} = state) do
     Process.demonitor(ref, [:flush])
     %{state | gateway_run_ref: nil, gateway_run_pid: nil}
-  rescue
-    _ -> %{state | gateway_run_ref: nil, gateway_run_pid: nil}
   end
 
   defp gateway_down_grace_ms(:normal), do: 200
@@ -881,8 +879,6 @@ defmodule LemonRouter.RunProcess do
     else
       :ok
     end
-  rescue
-    error -> {:error, {error.__struct__, Exception.message(error)}}
   catch
     :exit, reason -> {:error, {:exit, reason}}
   end
@@ -929,8 +925,6 @@ defmodule LemonRouter.RunProcess do
           _ -> false
         end
     end
-  rescue
-    _ -> false
   end
 
   defp runtime_available?(_), do: false
@@ -941,8 +935,6 @@ defmodule LemonRouter.RunProcess do
     else
       :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp cancel_runtime_run(_, _, _), do: :ok
@@ -951,8 +943,6 @@ defmodule LemonRouter.RunProcess do
     if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
       runtime.run_pid(run_id)
     end
-  rescue
-    _ -> nil
   end
 
   defp runtime_run_pid(_, _), do: nil
@@ -1046,6 +1036,7 @@ defmodule LemonRouter.RunProcess do
             Events.Completion.new(%{
               ok: false,
               error: error,
+              meta: %{cancelled: state.aborted},
               answer: ""
             }),
           duration_ms: LemonCore.Clock.now_ms() - state.start_ts_ms
@@ -1058,7 +1049,7 @@ defmodule LemonRouter.RunProcess do
         }
       )
 
-    Bus.broadcast(Bus.run_topic(state.run_id), event)
+    LemonRouter.RunCompletion.publish(state.execution_request, event)
 
     state
     |> cancel_gateway_submit_deadline()

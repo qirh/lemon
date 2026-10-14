@@ -9,7 +9,7 @@ defmodule LemonCore.StoreInstanceTest do
   import ExUnit.CaptureLog
 
   alias Exqlite.Sqlite3
-  alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, Store}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
   alias LemonCore.Store.SqliteBackend
@@ -92,22 +92,16 @@ defmodule LemonCore.StoreInstanceTest do
     test "chat state and its read cache are isolated", %{alpha: alpha, beta: beta} do
       scope = {:store_instance_test, :chat}
 
-      assert :ok = Store.put_chat_state(alpha, scope, %{msg: "alpha"})
+      assert :ok = ChatStateStore.put(alpha, scope, %{msg: "alpha"})
 
-      assert %{msg: "alpha"} = Store.get_chat_state(alpha, scope)
-      assert Store.get_chat_state(beta, scope) == nil
+      assert %{msg: "alpha"} = ChatStateStore.get(alpha, scope)
+      assert ChatStateStore.get(beta, scope) == nil
 
-      assert :ok = Store.delete_chat_state(alpha, scope)
-      assert Store.get_chat_state(alpha, scope) == nil
+      assert :ok = ChatStateStore.delete(alpha, scope)
+      assert ChatStateStore.get(alpha, scope) == nil
     end
 
-    test "progress mappings and runs are isolated", %{alpha: alpha, beta: beta} do
-      scope = {:store_instance_test, :progress}
-
-      assert :ok = Store.put_progress_mapping(alpha, scope, 42, "run_alpha")
-      assert Store.get_run_by_progress(alpha, scope, 42) == "run_alpha"
-      assert Store.get_run_by_progress(beta, scope, 42) == nil
-
+    test "runs are isolated", %{alpha: alpha, beta: beta} do
       assert :ok = Store.append_run_event(alpha, "run_alpha", %{type: :started})
       # Casts are async; wait for the write to land in the backend.
       assert :ok = Store.ping(alpha)
@@ -256,6 +250,31 @@ defmodule LemonCore.StoreInstanceTest do
 
       assert File.exists?(Path.join(tmp_dir, "run_history_run_history_instance_test.sqlite3"))
     end
+
+    @tag :tmp_dir
+    test "starts history beside an explicit primary SQLite file", %{tmp_dir: tmp_dir} do
+      primary_path = Path.join(tmp_dir, "primary.sqlite3")
+      {:ok, primary} = SqliteBackend.init(path: primary_path)
+      on_exit(fn -> SqliteBackend.close(primary) end)
+      name = :run_history_primary_file_test
+
+      start_supervised!(
+        Supervisor.child_spec({LemonCore.RunHistoryStore, name: name, path: primary_path},
+          id: name
+        )
+      )
+
+      :ok =
+        LemonCore.RunHistoryStore.put(name, "file-store-session", 1_000, "run_file", %{
+          summary: %{}
+        })
+
+      assert [{"run_file", %{summary: %{}}}] =
+               LemonCore.RunHistoryStore.get(name, "file-store-session", limit: 10)
+
+      assert File.exists?(Path.join(tmp_dir, "run_history_run_history_primary_file_test.sqlite3"))
+      refute File.dir?(primary_path)
+    end
   end
 
   describe "ConfigCache instances" do
@@ -345,9 +364,13 @@ defmodule LemonCore.StoreInstanceTest do
              "the default store must not be collateral damage from a caller's mistake"
     end
 
-    test "a store name where a session key belongs raises at the caller", %{store: store} do
+    @tag invalid_opts: "not-opts"
+    test "a store name where a session key belongs raises at the caller", %{
+      store: store,
+      invalid_opts: opts
+    } do
       assert_raise FunctionClauseError, fn ->
-        Store.get_run_history(store, "not-opts")
+        Store.get_run_history(store, opts)
       end
 
       assert_raise FunctionClauseError, fn ->

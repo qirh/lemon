@@ -7,6 +7,8 @@ defmodule LemonAgent.Loop.ToolCallsTest do
   alias LemonAgent.Test.Mocks
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentTool, AgentToolResult}
 
+  import LemonCore.Testing.AsyncHelpers
+
   alias LemonAi.Types.{
     StreamOptions,
     TextContent,
@@ -28,6 +30,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       transform_context: Keyword.get(opts, :transform_context, nil),
       get_api_key: Keyword.get(opts, :get_api_key, nil),
       get_steering_messages: Keyword.get(opts, :get_steering_messages, nil),
+      has_steering_messages: Keyword.get(opts, :has_steering_messages, nil),
       get_follow_up_messages: Keyword.get(opts, :get_follow_up_messages, nil),
       max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency, nil),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms, nil),
@@ -43,6 +46,27 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       content: text,
       timestamp: System.system_time(:millisecond)
     }
+  end
+
+  defp blocking_tool(parent, name, opts \\ []) do
+    LemonAgent.new_tool(
+      name: name,
+      description: "Waits for the test to release the invocation",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: name,
+      parallel_safe: Keyword.get(opts, :parallel_safe, false),
+      execute: fn id, _params, _signal, _on_update ->
+        send(parent, {:tool_started, id, self()})
+
+        receive do
+          :finish ->
+            %AgentToolResult{
+              content: [%TextContent{type: :text, text: "result #{id}"}],
+              details: nil
+            }
+        end
+      end
+    )
   end
 
   test "returns aborted tool_result messages with details when signal is pre-aborted" do
@@ -63,9 +87,15 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     context = simple_context(tools: [slow_tool])
     steering_message = user_message("follow steering")
+    steering_queue = start_supervised!({Agent, fn -> [steering_message] end})
 
     config =
-      simple_config(get_steering_messages: fn -> [steering_message] end)
+      simple_config(
+        has_steering_messages: fn -> Agent.get(steering_queue, &(&1 != [])) end,
+        get_steering_messages: fn ->
+          Agent.get_and_update(steering_queue, fn messages -> {messages, []} end)
+        end
+      )
 
     signal = AbortSignal.new()
     :ok = AbortSignal.abort(signal)
@@ -76,14 +106,17 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     {results, steering_messages, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
-    assert steering_messages == [steering_message]
+    assert steering_messages == []
+    assert Agent.get(steering_queue, & &1) == [steering_message]
     assert length(results) == 1
 
     [tool_result_message] = results
     assert tool_result_message.role == :tool_result
     assert tool_result_message.tool_call_id == "call_abort_test"
     assert tool_result_message.is_error == true
-    assert tool_result_message.details == %{error_type: :aborted}
+
+    assert %{error_type: :aborted, cancelled: true, started: false, outcome: :not_started} =
+             tool_result_message.details
 
     assert Enum.any?(tool_result_message.content, fn
              %TextContent{text: text} when is_binary(text) -> String.contains?(text, "aborted")
@@ -135,7 +168,18 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     }
 
     context = simple_context(tools: [slow_tool, queued_tool])
-    config = simple_config(max_tool_concurrency: 1)
+    steering_message = user_message("do not continue")
+    steering_queue = start_supervised!({Agent, fn -> [] end})
+
+    config =
+      simple_config(
+        max_tool_concurrency: 1,
+        has_steering_messages: fn -> Agent.get(steering_queue, &(&1 != [])) end,
+        get_steering_messages: fn ->
+          Agent.get_and_update(steering_queue, fn messages -> {messages, []} end)
+        end
+      )
+
     signal = AbortSignal.new()
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
@@ -150,10 +194,14 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       end)
 
     assert_receive {:slow_tool_started, "call_abort_pending"}, 5_000
+    Agent.update(steering_queue, fn _ -> [steering_message] end)
     :ok = AbortSignal.abort(signal)
 
-    {results, _steering_messages, updated_context, updated_new_messages} =
+    {results, steering_messages, updated_context, updated_new_messages} =
       Task.await(runner, 5_000)
+
+    assert steering_messages == []
+    assert Agent.get(steering_queue, & &1) == [steering_message]
 
     refute_received {:queued_tool_started, "call_abort_queued"}
 
@@ -163,7 +211,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
            ]
 
     assert Enum.all?(results, &(&1.is_error == true))
-    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
+    assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
 
     assert Enum.map(updated_context.messages, & &1.tool_call_id) == [
              "call_abort_pending",
@@ -239,6 +287,39 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     assert Enum.any?(events, &match?({:tool_execution_start, "call_tool_error", _, _}, &1))
     assert Enum.any?(events, &match?({:tool_execution_end, "call_tool_error", _, _, true}, &1))
+  end
+
+  test "a result flagged is_error is an error tool_result that keeps its details" do
+    denied_tool = %AgentTool{
+      name: "denied_tool",
+      description: "Reports an approval denial",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Denied",
+      execute: fn _id, _params, _signal, _on_update ->
+        %AgentToolResult{
+          content: [%TextContent{type: :text, text: "denied"}],
+          details: %{denied: true},
+          is_error: true
+        }
+      end
+    }
+
+    context = simple_context(tools: [denied_tool])
+    tool_call = Mocks.tool_call("denied_tool", %{}, id: "call_denied")
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {[tool_result_message], _steering, _context, _new_messages} =
+      ToolCalls.execute_and_collect_tools(
+        context,
+        [],
+        [tool_call],
+        simple_config([]),
+        AbortSignal.new(),
+        stream
+      )
+
+    assert tool_result_message.is_error == true
+    assert tool_result_message.details == %{denied: true}
   end
 
   test "emits error tool_result when tool task supervisor cannot start a task" do
@@ -424,7 +505,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     }
 
     context = simple_context(tools: [slow_tool])
-    config = simple_config(tool_timeout_ms: 50)
+    config = simple_config(tool_timeout_ms: 250)
     signal = AbortSignal.new()
     tool_call = Mocks.tool_call("timeout_tool", %{}, id: "call_tool_timeout")
     {:ok, stream} = EventStream.start_link(timeout: :infinity)
@@ -432,12 +513,12 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     {results, _steering_messages, updated_context, updated_new_messages} =
       ToolCalls.execute_and_collect_tools(context, [], [tool_call], config, signal, stream)
 
-    assert_receive {:timeout_tool_started, "call_tool_timeout"}, 1_000
+    assert_receive {:timeout_tool_started, "call_tool_timeout"}, 5_000
     assert [tool_result_message] = results
     assert tool_result_message.is_error == true
     assert tool_result_message.tool_call_id == "call_tool_timeout"
-    assert tool_result_message.details == %{error_type: :tool_task_timeout, timeout_ms: 50}
-    assert [%TextContent{text: "Tool task timed out after 50ms"}] = tool_result_message.content
+    assert tool_result_message.details == %{error_type: :tool_task_timeout, timeout_ms: 250}
+    assert [%TextContent{text: "Tool task timed out after 250ms"}] = tool_result_message.content
     assert List.last(updated_context.messages).tool_call_id == "call_tool_timeout"
     assert List.last(updated_new_messages).tool_call_id == "call_tool_timeout"
 
@@ -456,6 +537,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
       description: "tracks concurrent executions",
       parameters: %{"type" => "object", "properties" => %{}},
       label: "Controlled",
+      parallel_safe: true,
       execute: fn _id, _params, _signal, _on_update ->
         Agent.update(counter, fn %{current: current, max: max_seen} ->
           current = current + 1
@@ -501,6 +583,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
         "properties" => %{"delay_ms" => %{"type" => "integer"}}
       },
       label: "Ordered",
+      parallel_safe: true,
       execute: fn id, %{"delay_ms" => delay_ms}, _signal, _on_update ->
         Process.sleep(delay_ms)
 
@@ -576,7 +659,7 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     assert length(results) == 3
     assert Enum.all?(results, &(&1.is_error == true))
-    assert Enum.all?(results, &(&1.details == %{error_type: :aborted}))
+    assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
   end
 
   test "finds tool with whitespace-padded name via normalization" do
@@ -892,6 +975,359 @@ defmodule LemonAgent.Loop.ToolCallsTest do
     assert [%{is_error: false, tool_call_id: "call_schema_union"}] = results
   end
 
+  test "unsafe tools are sequential barriers between contiguous safe groups" do
+    supervisor = start_supervised!(Task.Supervisor)
+    read_tool = blocking_tool(self(), "read", parallel_safe: true)
+    mutate_tool = blocking_tool(self(), "mutate")
+    previous_message = user_message("existing conversation")
+    context = simple_context(tools: [read_tool, mutate_tool], messages: [previous_message])
+    config = simple_config(max_tool_concurrency: 2, tool_task_supervisor: supervisor)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    tool_calls = [
+      Mocks.tool_call("read", %{}, id: "read_1"),
+      Mocks.tool_call("read", %{}, id: "read_2"),
+      Mocks.tool_call("mutate", %{}, id: "mutate_1"),
+      Mocks.tool_call("read", %{}, id: "read_3"),
+      Mocks.tool_call("read", %{}, id: "read_4"),
+      Mocks.tool_call("mutate", %{}, id: "mutate_2"),
+      Mocks.tool_call("read", %{}, id: "read_5")
+    ]
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(
+          context,
+          [previous_message],
+          tool_calls,
+          config,
+          nil,
+          stream
+        )
+      end)
+
+    assert_receive {:tool_started, "read_1", read_1}, 1_000
+    assert_receive {:tool_started, "read_2", read_2}, 1_000
+    refute_receive {:tool_started, "mutate_1", _}, 50
+    send(read_2, :finish)
+    refute_receive {:tool_started, "mutate_1", _}, 50
+    send(read_1, :finish)
+
+    assert_receive {:tool_started, "mutate_1", mutate_1}, 1_000
+    refute_receive {:tool_started, "read_3", _}, 50
+    send(mutate_1, :finish)
+
+    assert_receive {:tool_started, "read_3", read_3}, 1_000
+    assert_receive {:tool_started, "read_4", read_4}, 1_000
+    send(read_3, :finish)
+    refute_receive {:tool_started, "mutate_2", _}, 50
+    send(read_4, :finish)
+
+    assert_receive {:tool_started, "mutate_2", mutate_2}, 1_000
+    refute_receive {:tool_started, "read_5", _}, 50
+    send(mutate_2, :finish)
+    assert_receive {:tool_started, "read_5", read_5}, 1_000
+    send(read_5, :finish)
+
+    {results, [], updated_context, updated_new_messages} = Task.await(runner, 5_000)
+    expected_ids = Enum.map(tool_calls, & &1.id)
+
+    assert Enum.all?(results, &(&1.is_error == false))
+    assert Enum.map(results, & &1.tool_call_id) == expected_ids
+    assert updated_context.messages == [previous_message | results]
+    assert updated_new_messages == [previous_message | results]
+
+    EventStream.complete(stream, [])
+
+    started_ids =
+      EventStream.events(stream)
+      |> Enum.flat_map(fn
+        {:tool_execution_start, id, _, _} -> [id]
+        _ -> []
+      end)
+
+    assert started_ids == expected_ids
+  end
+
+  test "opted-in safe reads overlap without exceeding the configured concurrency limit" do
+    supervisor = start_supervised!(Task.Supervisor)
+    tool = blocking_tool(self(), "read", parallel_safe: true)
+    context = simple_context(tools: [tool])
+    config = simple_config(max_tool_concurrency: 2, tool_task_supervisor: supervisor)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+    calls = for i <- 1..3, do: Mocks.tool_call("read", %{}, id: "safe_read_#{i}")
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(context, [], calls, config, nil, stream)
+      end)
+
+    assert_receive {:tool_started, "safe_read_1", first}, 1_000
+    assert_receive {:tool_started, "safe_read_2", second}, 1_000
+    assert Process.alive?(first)
+    assert Process.alive?(second)
+    refute_receive {:tool_started, "safe_read_3", _}, 50
+
+    send(second, :finish)
+    assert_receive {:tool_started, "safe_read_3", third}, 1_000
+    assert Process.alive?(first)
+    send(third, :finish)
+    send(first, :finish)
+
+    {results, [], _, _} = Task.await(runner, 5_000)
+    assert Enum.map(results, & &1.tool_call_id) == Enum.map(calls, & &1.id)
+    assert Enum.all?(results, &(&1.is_error == false))
+  end
+
+  test "steering queued by a sequential tool prevents the next mutating invocation" do
+    parent = self()
+    supervisor = start_supervised!(Task.Supervisor)
+    steering_message = user_message("leave the file unchanged")
+    steering_queue = start_supervised!({Agent, fn -> [] end})
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    first_tool = %AgentTool{
+      name: "inspect",
+      description: "Queues a correction before returning",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Inspect",
+      execute: fn _id, _params, _signal, _on_update ->
+        Agent.update(steering_queue, fn _ -> [steering_message] end)
+        %AgentToolResult{content: [%TextContent{text: "inspection complete"}]}
+      end
+    }
+
+    mutating_tool = %AgentTool{
+      name: "mutate",
+      description: "Must not apply the superseded mutation",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Mutate",
+      execute: fn _id, _params, _signal, _on_update ->
+        send(parent, :mutation_applied)
+        %AgentToolResult{content: [%TextContent{text: "mutated"}]}
+      end
+    }
+
+    config =
+      simple_config(
+        tool_task_supervisor: supervisor,
+        has_steering_messages: fn -> Agent.get(steering_queue, &(&1 != [])) end,
+        get_steering_messages: fn ->
+          EventStream.push(stream, {:turn_start})
+          Agent.get_and_update(steering_queue, fn messages -> {messages, []} end)
+        end
+      )
+
+    calls = [
+      Mocks.tool_call("inspect", %{}, id: "inspect_before_steering"),
+      Mocks.tool_call("mutate", %{}, id: "superseded_mutation")
+    ]
+
+    {results, steering, updated_context, updated_new_messages} =
+      ToolCalls.execute_and_collect_tools(
+        simple_context(tools: [first_tool, mutating_tool]),
+        [],
+        calls,
+        config,
+        nil,
+        stream
+      )
+
+    refute_received :mutation_applied
+    assert steering == [steering_message]
+    assert Agent.get(steering_queue, & &1) == []
+    assert [completed, skipped] = results
+    assert completed.is_error == false
+    assert skipped.tool_call_id == "superseded_mutation"
+    assert skipped.is_error == true
+    assert skipped.details == %{error_type: :skipped, reason: :steering}
+    assert updated_context.messages == results
+    assert updated_new_messages == results
+
+    EventStream.complete(stream, [])
+    events = EventStream.events(stream) |> Enum.to_list()
+    {before_drain, [{:turn_start} | _]} = Enum.split_while(events, &(&1 != {:turn_start}))
+
+    paired_ids =
+      Enum.flat_map(before_drain, fn
+        {:message_end, %{role: :tool_result, tool_call_id: id}} -> [id]
+        _ -> []
+      end)
+
+    assert paired_ids == Enum.map(calls, & &1.id)
+    refute Enum.any?(events, &match?({:tool_execution_start, "superseded_mutation", _, _}, &1))
+  end
+
+  test "steering is observed while safe tools wait without canceling started invocations" do
+    parent = self()
+    supervisor = start_supervised!(Task.Supervisor)
+    steering_message = user_message("use different reads next")
+    steering_queue = start_supervised!({Agent, fn -> [] end})
+    tool = blocking_tool(parent, "read", parallel_safe: true)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    config =
+      simple_config(
+        max_tool_concurrency: 2,
+        tool_task_supervisor: supervisor,
+        has_steering_messages: fn ->
+          queued? = Agent.get(steering_queue, &(&1 != []))
+          if queued?, do: send(parent, :steering_observed)
+          queued?
+        end,
+        get_steering_messages: fn ->
+          send(parent, :steering_drained)
+          Agent.get_and_update(steering_queue, fn messages -> {messages, []} end)
+        end
+      )
+
+    calls = for i <- 1..3, do: Mocks.tool_call("read", %{}, id: "steered_read_#{i}")
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(
+          simple_context(tools: [tool]),
+          [],
+          calls,
+          config,
+          nil,
+          stream
+        )
+      end)
+
+    assert_receive {:tool_started, "steered_read_1", first}, 1_000
+    assert_receive {:tool_started, "steered_read_2", second}, 1_000
+    Agent.update(steering_queue, fn _ -> [steering_message] end)
+    assert_receive :steering_observed, 1_000
+    assert Process.alive?(first)
+    assert Process.alive?(second)
+    refute_received :steering_drained
+    refute_received {:tool_started, "steered_read_3", _}
+
+    send(second, :finish)
+    send(first, :finish)
+    {results, steering, context, messages} = Task.await(runner, 5_000)
+
+    assert_receive :steering_drained
+    assert steering == [steering_message]
+    assert [first_result, second_result, skipped] = results
+    assert first_result.is_error == false
+    assert second_result.is_error == false
+    assert skipped.tool_call_id == "steered_read_3"
+    assert skipped.details == %{error_type: :skipped, reason: :steering}
+    assert context.messages == results
+    assert messages == results
+    refute_received {:tool_started, "steered_read_3", _}
+  end
+
+  test "aborting running tasks cancels every pending tool timeout" do
+    parent = self()
+    supervisor = start_supervised!(Task.Supervisor)
+    tool = blocking_tool(parent, "read", parallel_safe: true)
+    signal = AbortSignal.new()
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    config =
+      simple_config(
+        max_tool_concurrency: 2,
+        tool_timeout_ms: 500,
+        tool_task_supervisor: supervisor
+      )
+
+    calls = for i <- 1..2, do: Mocks.tool_call("read", %{}, id: "abort_timer_#{i}")
+
+    runner =
+      Task.async(fn ->
+        result =
+          ToolCalls.execute_and_collect_tools(
+            simple_context(tools: [tool]),
+            [],
+            calls,
+            config,
+            signal,
+            stream
+          )
+
+        send(parent, {:aborted_batch_finished, result})
+
+        receive do
+          {:tool_task_timeout, _ref} -> :timer_leaked
+        after
+          600 -> :timers_canceled
+        end
+      end)
+
+    assert_receive {:tool_started, "abort_timer_1", first}, 1_000
+    assert_receive {:tool_started, "abort_timer_2", second}, 1_000
+    first_monitor = Process.monitor(first)
+    second_monitor = Process.monitor(second)
+    AbortSignal.abort(signal)
+
+    assert_receive {:aborted_batch_finished, {results, [], _, _}}, 1_000
+    assert Enum.all?(results, &(&1.details.error_type == :aborted and &1.details.cancelled))
+    assert_receive {:DOWN, ^first_monitor, :process, ^first, _}, 1_000
+    assert_receive {:DOWN, ^second_monitor, :process, ^second, _}, 1_000
+    assert Task.await(runner, 5_000) == :timers_canceled
+  end
+
+  test "invalid and nonbinary tool names produce unknown-tool results without invoking a tool" do
+    parent = self()
+    supervisor = start_supervised!(Task.Supervisor)
+
+    tool = %AgentTool{
+      name: "existing_tool",
+      description: "Must not run for malformed names",
+      parameters: %{"type" => "object", "properties" => %{}},
+      label: "Existing",
+      execute: fn _id, _params, _signal, _on_update ->
+        send(parent, :unexpected_tool_execution)
+        %AgentToolResult{content: [%TextContent{text: "unexpected"}]}
+      end
+    }
+
+    names = [
+      nil,
+      :existing_tool,
+      42,
+      %{"name" => "existing_tool"},
+      ["existing_tool"],
+      <<255>>,
+      ""
+    ]
+
+    calls =
+      names
+      |> Enum.with_index()
+      |> Enum.map(fn {name, index} ->
+        Mocks.tool_call(name, %{}, id: "invalid_name_#{index}")
+      end)
+
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    {results, [], context, messages} =
+      ToolCalls.execute_and_collect_tools(
+        simple_context(tools: [tool]),
+        [],
+        calls,
+        simple_config(max_tool_concurrency: 1, tool_task_supervisor: supervisor),
+        nil,
+        stream
+      )
+
+    refute_received :unexpected_tool_execution
+    assert Enum.map(results, & &1.tool_call_id) == Enum.map(calls, & &1.id)
+    assert Enum.map(results, & &1.details.tool_name) == names
+    assert Enum.all?(results, &(&1.is_error and &1.details.error_type == :unknown_tool))
+
+    assert Enum.all?(results, fn result ->
+             [%TextContent{text: text}] = result.content
+             String.valid?(text)
+           end)
+
+    assert context.messages == results
+    assert messages == results
+  end
+
   test "normalize_tool_name/1 trims whitespace and normalizes Unicode" do
     # Basic trimming
     assert ToolCalls.normalize_tool_name("  read_file  ") == "read_file"
@@ -906,5 +1342,86 @@ defmodule LemonAgent.Loop.ToolCallsTest do
 
     # Already normalized passes through
     assert ToolCalls.normalize_tool_name("read_file") == "read_file"
+  end
+
+  test "abort lets cooperative tools finish resource cleanup before returning" do
+    parent = self()
+    signal = AbortSignal.new()
+    on_exit(fn -> AbortSignal.clear(signal) end)
+
+    wait_for_abort = fn wait_for_abort ->
+      if AbortSignal.aborted?(signal) do
+        send(parent, :abort_observed)
+
+        # Cleanup only finishes once the test says so (after the loop has begun
+        # draining aborted tools), instead of racing the loop's abort poll.
+        receive do
+          :finish_cleanup -> :ok
+        after
+          5_000 -> :ok
+        end
+
+        send(parent, {:resource_cleanup_finished, AbortSignal.aborted?(signal)})
+        {:error, "aborted after cleanup"}
+      else
+        Process.sleep(10)
+        wait_for_abort.(wait_for_abort)
+      end
+    end
+
+    tool =
+      LemonAgent.new_tool(
+        name: "external_work",
+        description: "Stops an external resource",
+        execute: fn _, _, _, _ ->
+          send(parent, {:external_tool_started, self()})
+          wait_for_abort.(wait_for_abort)
+        end
+      )
+
+    supervisor = start_supervised!(Task.Supervisor)
+    {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+    runner =
+      Task.async(fn ->
+        ToolCalls.execute_and_collect_tools(
+          simple_context(tools: [tool]),
+          [],
+          [Mocks.tool_call("external_work", %{}, id: "external")],
+          simple_config(tool_task_supervisor: supervisor),
+          signal,
+          stream
+        )
+      end)
+
+    assert_receive {:external_tool_started, worker}
+    monitor = Process.monitor(worker)
+    AbortSignal.abort(signal)
+    assert_receive :abort_observed, 5_000
+
+    # Wait until the loop has noticed the abort and is draining the tool
+    # (inside its bounded cleanup receive), then let the cleanup finish.
+    runner_pid = runner.pid
+
+    assert_eventually(
+      fn ->
+        match?(
+          {:current_function, {LemonAgent.Loop.ToolCalls, :await_tool_cleanup, _}},
+          Process.info(runner_pid, :current_function)
+        )
+      end,
+      timeout: 5_000,
+      interval: 1
+    )
+
+    send(worker, :finish_cleanup)
+    assert_receive {:resource_cleanup_finished, true}, 5_000
+
+    assert {[%{is_error: true, details: %{error_type: :tool_error, cancelled: true}}], [], _, _} =
+             Task.await(runner, 5_000)
+
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}, 5_000
+    assert Task.Supervisor.children(supervisor) == []
+    EventStream.complete(stream, [])
   end
 end

@@ -1,0 +1,65 @@
+name: Nightly
+
+# Slow or repetitive lanes that should not gate every pull request:
+#   - coverage: scripts/test coverage (ExUnit excluding integration with
+#     --cover, enforcing each app's test_coverage threshold)
+#   - determinism: repeats prompt/skill/overflow regression files to catch
+#     non-deterministic output, then runs the eval harness for 20 iterations
+
+on:
+  schedule:
+    # 04:17 UTC daily (off-peak, intentionally not on the hour)
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        uses: ./.github/actions/beam-setup
+        with:
+          family: test
+          bun: "true"
+
+      - name: scripts/test coverage
+        run: scripts/test coverage
+
+  determinism:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        uses: ./.github/actions/beam-setup
+        with:
+          family: test
+
+      - name: Deterministic regression loop
+        run: |
+          scripts/test path \
+            apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
+            apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
+            apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs \
+            apps/lemon_skills/test/lemon_skills/prompt_regression_test.exs \
+            --repeat-until-failure 5
+
+      - name: Eval harness (20 iterations)
+        run: scripts/test eval-fast
+        env:
+          LEMON_EVAL_ITERATIONS: "20"

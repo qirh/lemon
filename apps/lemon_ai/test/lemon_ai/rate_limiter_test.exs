@@ -8,6 +8,25 @@ defmodule LemonAi.RateLimiterTest do
     String.to_atom("#{base}_#{System.unique_integer([:positive])}")
   end
 
+  defp wait_until(message, fun, timeout_ms \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(message, fun, deadline)
+  end
+
+  defp do_wait_until(message, fun, deadline) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk(message)
+
+      true ->
+        Process.sleep(5)
+        do_wait_until(message, fun, deadline)
+    end
+  end
+
   describe "start_link/1" do
     test "starts with required provider option" do
       provider = unique_provider(:start_test)
@@ -79,7 +98,9 @@ defmodule LemonAi.RateLimiterTest do
 
     test "returns :rate_limited when bucket empty" do
       provider = unique_provider(:rate_limited)
-      {:ok, _pid} = RateLimiter.start_link(provider: provider, max_tokens: 2)
+
+      {:ok, _pid} =
+        RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 0)
 
       # Exhaust all tokens
       :ok = RateLimiter.acquire(provider)
@@ -160,9 +181,10 @@ defmodule LemonAi.RateLimiterTest do
   describe "token refilling" do
     test "tokens refill over time" do
       provider = unique_provider(:refill)
-      # High refill rate for faster test
+      # Slow refill (one token every 500ms) so the bucket cannot refill between
+      # exhausting it and reading the empty state, even on a slow scheduler.
       {:ok, _pid} =
-        RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 100)
+        RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 2)
 
       # Exhaust tokens
       for _ <- 1..10 do
@@ -172,11 +194,11 @@ defmodule LemonAi.RateLimiterTest do
       {:ok, state_empty} = RateLimiter.get_state(provider)
       assert state_empty.available_tokens < 5
 
-      # Wait for refill (100 tokens/sec = 10 tokens in 100ms)
-      Process.sleep(150)
-
-      {:ok, state_refilled} = RateLimiter.get_state(provider)
-      assert state_refilled.available_tokens > state_empty.available_tokens
+      # Wait for refill
+      wait_until("tokens never refilled", fn ->
+        {:ok, state_refilled} = RateLimiter.get_state(provider)
+        state_refilled.available_tokens > state_empty.available_tokens
+      end)
     end
 
     test "tokens do not exceed max_tokens" do
@@ -195,19 +217,17 @@ defmodule LemonAi.RateLimiterTest do
     test "refill after exhaustion allows new requests" do
       provider = unique_provider(:refill_allows)
 
+      # Slow refill (one token every 500ms) keeps the exhaustion assertion safe
       {:ok, _pid} =
-        RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 50)
+        RateLimiter.start_link(provider: provider, max_tokens: 2, tokens_per_second: 2)
 
       # Exhaust
       :ok = RateLimiter.acquire(provider)
       :ok = RateLimiter.acquire(provider)
       assert {:error, :rate_limited} = RateLimiter.acquire(provider)
 
-      # Wait for refill
-      Process.sleep(100)
-
-      # Should be able to acquire again
-      assert :ok = RateLimiter.acquire(provider)
+      # Should be able to acquire again once the bucket refills
+      wait_until("bucket never refilled", fn -> RateLimiter.acquire(provider) == :ok end)
     end
   end
 
@@ -379,6 +399,7 @@ defmodule LemonAi.RateLimiterTest do
 
     test "fractional token calculation" do
       provider = unique_provider(:fractional)
+      started_at = System.monotonic_time(:millisecond)
 
       {:ok, _pid} =
         RateLimiter.start_link(provider: provider, max_tokens: 10, tokens_per_second: 1)
@@ -388,17 +409,11 @@ defmodule LemonAi.RateLimiterTest do
         RateLimiter.acquire(provider)
       end
 
-      # Wait 500ms for 0.5 tokens (not enough for 1)
-      Process.sleep(500)
+      # A fractional token is not enough: nothing is granted until a full token
+      # (1s at 1 token/s) has accumulated since the bucket was created.
+      wait_until("bucket never refilled", fn -> RateLimiter.acquire(provider) == :ok end)
 
-      # Should still be rate limited (need 1 full token)
-      assert {:error, :rate_limited} = RateLimiter.acquire(provider)
-
-      # Wait another 600ms for total of 1.1 tokens
-      Process.sleep(600)
-
-      # Now should have enough
-      assert :ok = RateLimiter.acquire(provider)
+      assert System.monotonic_time(:millisecond) - started_at >= 1_000
     end
   end
 

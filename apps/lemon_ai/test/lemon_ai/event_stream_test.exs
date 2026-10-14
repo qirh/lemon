@@ -32,7 +32,14 @@ defmodule LemonAi.EventStreamOverflowTest do
     }
   end
 
-  defp wait_until(fun, timeout_ms \\ 500) do
+  # Waits until `stream` has exactly one waiter registered in `field`
+  # (`:result_waiters` or `:take_waiters`).
+  defp await_waiter(stream, field) do
+    assert wait_until(fn -> :queue.len(Map.fetch!(:sys.get_state(stream), field)) == 1 end),
+           "waiter did not register in #{field}"
+  end
+
+  defp wait_until(fun, timeout_ms \\ 5_000) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
 
     Stream.repeatedly(fn -> fun.() end)
@@ -323,16 +330,17 @@ defmodule LemonAi.EventStreamOverflowTest do
         EventStream.complete(stream, make_message(content: [%TextContent{text: "done"}]))
       end)
 
-      result = EventStream.result(stream, 500)
+      result = EventStream.result(stream, 5_000)
       assert {:ok, %AssistantMessage{}} = result
     end
 
     test "result/1 returns :stream_not_found for dead stream" do
       {:ok, stream} = EventStream.start_link()
+      stream_ref = Process.monitor(stream)
       EventStream.cancel(stream, :test)
 
       # Wait for stream to die
-      Process.sleep(50)
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
 
       result = EventStream.result(stream, 100)
       assert {:error, :stream_not_found} = result
@@ -416,9 +424,11 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert_receive {:task2_started, ^task2_pid}, 1000
 
       # Cancel stream - should only shutdown the currently attached task
+      task2_ref = Process.monitor(task2_pid)
       EventStream.cancel(stream, :test)
 
-      Process.sleep(100)
+      # Wait for the attached task to be shut down
+      assert_receive {:DOWN, ^task2_ref, :process, _, _}, 5_000
 
       # Task1 should still be alive (it was replaced)
       assert Process.alive?(task1_pid)
@@ -500,8 +510,8 @@ defmodule LemonAi.EventStreamOverflowTest do
 
       {:ok, task_pid} = Task.start(fn -> :done end)
       # Wait for task to die
-      Process.sleep(50)
-      refute Process.alive?(task_pid)
+      task_ref = Process.monitor(task_pid)
+      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
 
       # Attaching dead task should not crash the stream
       EventStream.attach_task(stream, task_pid)
@@ -544,14 +554,13 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert_receive {:task_started, ^task_pid}, 1000
 
       # Kill the owner
+      stream_ref = Process.monitor(stream)
+      task_ref = Process.monitor(task_pid)
       send(owner_pid, :die)
 
-      # Wait for cascade
-      Process.sleep(150)
-
-      # Both stream and task should be dead
-      refute Process.alive?(stream)
-      refute Process.alive?(task_pid)
+      # Both stream and task should die
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
+      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
     end
   end
 
@@ -577,15 +586,13 @@ defmodule LemonAi.EventStreamOverflowTest do
           1000 -> flunk("Did not receive stream")
         end
 
-      assert Process.alive?(stream)
+      stream_ref = Process.monitor(stream)
 
       # Kill owner
       send(owner, :die)
 
-      # Wait for DOWN message processing
-      Process.sleep(100)
-
-      refute Process.alive?(stream)
+      # The stream should terminate once it handles the owner's DOWN message
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
     end
 
     test "result waiters receive error on owner death" do
@@ -611,13 +618,13 @@ defmodule LemonAi.EventStreamOverflowTest do
           EventStream.result(stream, 5000)
         end)
 
-      # Give waiter time to register
-      Process.sleep(50)
+      # Wait for waiter to register
+      await_waiter(stream, :result_waiters)
 
       # Kill owner
       send(owner, :die)
 
-      result = Task.await(waiter, 1000)
+      result = Task.await(waiter, 5_000)
       assert {:error, {:canceled, :owner_down}} = result
     end
 
@@ -644,13 +651,13 @@ defmodule LemonAi.EventStreamOverflowTest do
           EventStream.events(stream) |> Enum.to_list()
         end)
 
-      # Give reader time to start waiting
-      Process.sleep(50)
+      # Wait for reader to start waiting
+      await_waiter(stream, :take_waiters)
 
       # Kill owner
       send(owner, :die)
 
-      events = Task.await(reader, 1000)
+      events = Task.await(reader, 5_000)
       assert Enum.any?(events, &match?({:canceled, :owner_down}, &1))
     end
 
@@ -693,12 +700,11 @@ defmodule LemonAi.EventStreamOverflowTest do
       assert_receive {:task_started, ^task_pid}, 1000
 
       # Kill owner
+      task_ref = Process.monitor(task_pid)
       send(owner, :die)
 
-      # Wait for cascade
-      Process.sleep(150)
-
-      refute Process.alive?(task_pid)
+      # The task is shut down by the cascade
+      assert_receive {:DOWN, ^task_ref, :process, _, _}, 5_000
     end
   end
 
@@ -825,19 +831,16 @@ defmodule LemonAi.EventStreamOverflowTest do
       # Push event before consumer starts
       EventStream.push(stream, {:text_delta, 0, "already_there", partial})
 
-      # Consumer should get event immediately
-      start_time = System.monotonic_time(:millisecond)
-
+      # Consumer should get event immediately: the event is already queued, so
+      # the consumer finishes without any further producer activity.
       consumer =
         Task.async(fn ->
           EventStream.events(stream) |> Enum.take(1)
         end)
 
-      events = Task.await(consumer, 1000)
-      elapsed = System.monotonic_time(:millisecond) - start_time
+      events = Task.await(consumer, 5_000)
 
       assert [{:text_delta, 0, "already_there", _}] = events
-      assert elapsed < 100
     end
   end
 
@@ -988,9 +991,10 @@ defmodule LemonAi.EventStreamOverflowTest do
   describe "edge cases and error handling" do
     test "push to canceled stream returns :canceled" do
       {:ok, stream} = EventStream.start_link()
+      stream_ref = Process.monitor(stream)
       EventStream.cancel(stream, :test)
 
-      Process.sleep(50)
+      assert_receive {:DOWN, ^stream_ref, :process, _, _}, 5_000
 
       result = EventStream.push(stream, {:text_delta, 0, "test", make_message()})
       assert {:error, :canceled} = result
@@ -1055,14 +1059,14 @@ defmodule LemonAi.EventStreamOverflowTest do
     end
 
     test "stream timeout cancels waiting result calls" do
-      {:ok, stream} = EventStream.start_link(timeout: 100)
+      {:ok, stream} = EventStream.start_link(timeout: 500)
 
       waiter =
         Task.async(fn ->
           EventStream.result(stream, 5000)
         end)
 
-      result = Task.await(waiter, 1000)
+      result = Task.await(waiter, 5_000)
       assert {:error, {:canceled, :timeout}} = result
     end
   end

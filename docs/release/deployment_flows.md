@@ -48,21 +48,22 @@ under `~/.lemon`:
 ~/.lemon/versions/current      symlink to the active version
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 ~/.lemon/{cookie,env}          generated once by the launcher, mode 600 from creation
-~/.lemon/run/                  pid, runtime-root, and mode-600 port-token records; directory mode 700
+~/.lemon/run/                  port-scoped pid/root records and mode-600 port tokens; directory mode 700
 ~/.lemon/store                 default store path for user installs
 ```
 
 `bin/lemon` inside every release is a launcher shim that picks the bundled
 profile and applies user-install defaults before delegating to
-`bin/<profile>`. It accepts `start`, `daemon`, `stop`, `restart`, `status`,
-`remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
-runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
-`secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
-redacted support bundle. The sim profile does not bundle the runtime CLI, but
-does support `doctor --bundle`. With no arguments the launcher starts the TUI
-in an interactive terminal, auto-starting the daemon; non-interactive
-invocation prints usage.
-
+`bin/<profile>`. Its lifecycle commands include `tui`, `web`, `start`,
+`daemon`, `stop`, `restart`, and `status`; release VM tools are `remote`,
+`eval`, and `rpc`. The full and minimal runtime profiles dispatch `setup`,
+`model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers`,
+`blueprints`, `profile`, `backup`, `context`, `sessions`, `learn`, `update`,
+`completion`, `migrate`, `node`, and `version` through the shared CLI.
+`doctor --bundle [path]` generates a redacted support bundle. The sim profile
+does not bundle the runtime CLI, but does support `doctor --bundle`. With no
+arguments the launcher opens the TUI in an interactive terminal; without a TTY
+it prints usage and exits.
 The launcher never builds Elixir source from user input. `doctor` argv is
 forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
 `#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
@@ -88,6 +89,11 @@ lemon doctor --json                 # ordinary runtime diagnostics
 lemon doctor --bundle               # redacted support bundle
 ```
 
+Doctor runs in a fresh client VM. When a separate healthy daemon is detected,
+it reports that the daemon's memory health was not checked rather than treating
+the client's inactive memory store as a daemon failure. Missing memory modules
+or native dependencies remain actionable warnings.
+
 Updating stages the checksum/size-authenticated runtime and matching TUI
 artifacts together for full/min profiles, then flips the symlink; the sim
 profile has no TUI artifact. Planning is non-mutating and apply needs its exact
@@ -105,6 +111,12 @@ to take effect. See [the update safety contract](../user-guide/updates.md).
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
 fixture release served from localhost, with no published release required.
+
+Installer `--verify` uses a temporary HOME, Store, agent directory, release
+pipe/log directory, isolated distributed node, and separate ephemeral control,
+web, sim, gateway-health, and router-health ports. It stops that node and removes
+the scratch state on success, failure, or interruption rather than booting a
+second scheduler against the operator's saved state.
 
 ### Publish
 
@@ -130,7 +142,7 @@ MIX_ENV=prod mix release lemon_runtime_min
 
 # Full local runtime (+ automation, skills, web UI, sim UI)
 MIX_ENV=prod mix sim_ui.assets.deploy
-MIX_ENV=prod mix phx.digest apps/lemon_web/priv/static -o apps/lemon_web/priv/static
+MIX_ENV=prod mix do --app lemon_web phx.digest
 MIX_ENV=prod mix release lemon_runtime_full
 
 # Public sim broadcast site (dashboard + spectator UI)
@@ -144,8 +156,10 @@ this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
 
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
-tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
-files with no pipeline, so it needs the digest step only. Skipping either one
+tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` commits its
+built `app.css` (Tailwind source in `apps/lemon_web/assets`, rebuilt by
+developers with `mix do --app lemon_web assets.build`), so it needs the digest
+step only. Skipping either one
 makes the release log "Could not warm up static assets" at boot and serve
 undigested assets.
 
@@ -153,12 +167,33 @@ Releases are written to `_build/prod/rel/<profile>/`. Release automation also
 builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
 artifacts total: three min, three full, two sim, and three TUI artifacts.
 
-Release automation packages the assembled release directory as a `.tar.gz`:
+Mix's `:tar` release step already produces the clean runtime archive. Publish
+that file directly rather than compressing the assembled directory again.
+With `--path DIR`, Mix puts the archive inside `DIR` instead; do not re-archive
+that directory, which would include the archive itself and any local smoke logs.
 
 ```bash
-tar -czf lemon-<version>-<channel>-<platform>-<profile>.tar.gz \
-  -C ./_build/prod/rel/<profile> .
+cp "_build/prod/<profile>-<version>.tar.gz" \
+  "lemon-<version>-<channel>-<platform>-<profile>.tar.gz"
 ```
+
+The TUI is a separate artifact, not a file produced by `mix release`. Build its
+native binary and matching addon before testing an interactive installation:
+
+```bash
+(cd clients/tui && bun install --frozen-lockfile && \
+  bun run build:binary --target darwin-arm64 --outdir dist)
+tar -czf "lemon-<version>-<channel>-darwin-arm64-lemon_tui.tar.gz" \
+  -C clients/tui/dist/darwin-arm64 tui
+```
+
+The installer combines the runtime and TUI artifacts from the same schema-2
+manifest. For a local smoke, serve the manifest and both archives under
+`releases/download/v<version>/` on a loopback HTTP server, then point
+`LEMON_INSTALL_BASE_URL` at that server and set `LEMON_VERSION=<version>`.
+Use an isolated HOME; `--skip-setup` defers login and `--verify` checks an
+isolated daemon boot. Plain HTTP is a local test seam, not a distribution
+transport.
 
 Platform tags are `linux-x86_64`, `linux-arm64`, and `darwin-arm64`; see
 `docs/release/versioning_and_channels.md`.
@@ -225,7 +260,7 @@ invite or placing the service in maintenance mode. Ask hosts to pause active
 matches, then inspect protected `/api/admin/metrics` until no room is `running`
 and hosted recovery reports `ok`. A graceful restart can resume running timers,
 but an offline backup must have no application writer. Hosted room records,
-reconnect-token hashes, RNG checkpoints, replay events, deadlines, and rematch
+reconnect-token hashes, game state (including its seeded RNG), replay events, deadlines, and rematch
 archives are stored inside the same SQLite backup below; raw host/player tokens
 exist only in browser cookies and are never part of a backup.
 
@@ -346,7 +381,7 @@ The source launcher creates a high-entropy process-scoped operator token when
 it boots a new local runtime, shares it only through the daemon and TUI process
 environments, and stops that owned runtime when the TUI exits.
 
-Persistent runtimes started by `./bin/lemon --daemon` or installed
+Persistent runtimes started by `./bin/lemon daemon` or installed
 `lemon daemon` create a port-scoped credential under `~/.lemon/run`. A later
 TUI loads that credential automatically only when it is a regular current-user
 file with mode 0600 and a valid 256-bit token. Explicit
@@ -357,31 +392,9 @@ loopback access.
 
 Runtime ownership is independent of token origin: every daemon started by
 `./bin/lemon-tui` is stopped when that client exits, including when the token
-was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
+was preconfigured. Start `./bin/lemon daemon` separately before attaching if
 the source runtime must remain persistent; already-running runtimes are never
 stopped by the TUI launcher.
-
-### Web client (`lemon-web`)
-
-```bash
-cd clients/lemon-web
-npm start
-```
-
-`npm start` runs the root `prestart` hook first, rebuilding the ignored shared
-and server entrypoints so this works from a clean checkout after dependencies
-are installed.
-
-This source command starts the Node debug bridge on `http://localhost:3939` by
-default. The packaged Phoenix Web endpoint remains `http://localhost:4080`.
-
-The separate browser monitoring client has no delegated browser-session login
-exchange today. It therefore does not receive the server's shared operator
-token and cannot connect to an authenticated control plane. Do not put that
-secret in a `VITE_*` variable or URL, and do not enable tokenless loopback
-behind a reverse proxy. Authenticated browser monitoring requires a future
-short-lived, scoped server-issued browser credential flow.
-
 
 ---
 
@@ -432,13 +445,17 @@ This static site deploys independently of Lemon runtime releases.
 ### Verify and publish
 
 ```bash
-python3 scripts/generate_docs_llms.py
 scripts/verify_docs_site
 ```
 
-The `Docs Site` workflow builds, audits tooling, and checks links. With repository
-variable `ENABLE_PAGES_DEPLOY=true` and GitHub Pages configured to use GitHub
-Actions, docs changes pushed to `main` deploy automatically. To redeploy manually:
+The verifier builds in an isolated temporary copy. Both `npm --prefix docs run
+build` and dev startup generate the ignored `llms.txt` and `llms-full.txt` assets
+from Markdown before VitePress copies them to the site root. Do not commit these
+files or require a clean-tree generated diff. Python 3 is required alongside Node.
+
+The `Docs Site` workflow runs the same npm build and recursive link-check commands.
+With repository variable `ENABLE_PAGES_DEPLOY=true` and GitHub Pages configured to
+use GitHub Actions, docs changes pushed to `main` deploy automatically. To redeploy:
 
 ```bash
 gh workflow run docs-site.yml --ref main -f deploy=true

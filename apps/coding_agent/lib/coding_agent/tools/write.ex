@@ -4,11 +4,23 @@ defmodule CodingAgent.Tools.Write do
 
   Writes content to a file, creating parent directories as needed.
   Creates the file if it doesn't exist, overwrites if it does.
+
+  Content must be valid UTF-8 without NUL bytes; use a binary-aware tool for
+  binary data. Local targets reject symlinks and special files by default.
+
+  `agent://<task-id-or-name>`, `agent://parent`, and `agent://all` send scoped
+  peer messages instead of writing files. Sender identity is session-bound.
+
+  Successful results include complete `oldText`/`newText` snapshots only when
+  both are at most 16 KiB and the prior contents are known (`nil` for a new local
+  file). Larger or unavailable snapshots are omitted, never truncated.
   """
 
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias CodingAgent.FileReadTracker
+  alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileValidation
@@ -31,7 +43,7 @@ defmodule CodingAgent.Tools.Write do
     %AgentTool{
       name: "write",
       description:
-        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed." <>
+        "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Creates parent directories as needed. An agent://<task-id-or-name>, agent://parent, or agent://all path sends a scoped peer message instead of touching the filesystem." <>
           if(format_default,
             do: " Can optionally format supported files after writing.",
             else: ""
@@ -93,6 +105,24 @@ defmodule CodingAgent.Tools.Write do
           cwd :: String.t(),
           opts :: keyword()
         ) :: AgentToolResult.t() | {:error, term()}
+  def execute(
+        _tool_call_id,
+        %{"path" => "agent://" <> _ = path} = params,
+        signal,
+        _on_update,
+        _cwd,
+        opts
+      ) do
+    if AbortSignal.aborted?(signal) do
+      {:error, :aborted}
+    else
+      case get_content(params) do
+        {:ok, content} -> CodingAgent.Tools.Task.Messaging.send(path, content, opts)
+        error -> error
+      end
+    end
+  end
+
   def execute(_tool_call_id, params, signal, _on_update, cwd, opts) do
     # Check for abort at start
     if AbortSignal.aborted?(signal) do
@@ -120,7 +150,10 @@ defmodule CodingAgent.Tools.Write do
   defp get_path(_), do: {:error, "missing required parameter: path"}
 
   defp get_content(%{"content" => content}) when is_binary(content) do
-    {:ok, content}
+    case FileValidation.check_text_content(content, "content") do
+      :ok -> {:ok, content}
+      error -> error
+    end
   end
 
   defp get_content(%{"content" => _}), do: {:error, "content must be a string"}
@@ -156,6 +189,16 @@ defmodule CodingAgent.Tools.Write do
   end
 
   defp write_file_with_acp(path, content, opts) do
+    old_text =
+      if ACPFileBridge.read_enabled?(opts) do
+        case ACPFileBridge.read_text_file(path, nil, nil, opts) do
+          {:ok, text} -> text
+          _ -> :unavailable
+        end
+      else
+        :unavailable
+      end
+
     case ACPFileBridge.write_text_file(path, content, opts) do
       :ok ->
         byte_count = byte_size(content)
@@ -167,7 +210,9 @@ defmodule CodingAgent.Tools.Write do
               text: success_message(path, byte_count, false)
             }
           ],
-          details: %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
+          details:
+            %{path: path, bytes_written: byte_count, formatted: false, acp_client: true}
+            |> FileValidation.put_text_snapshots(path, old_text, content)
         }
 
       {:error, reason} ->
@@ -178,6 +223,12 @@ defmodule CodingAgent.Tools.Write do
   defp write_file_local(path, content, signal, format?, diagnostics?, cwd, opts) do
     path = Path.expand(path)
 
+    MutationLock.with_lock(MutationLock.path_key(path), fn ->
+      write_file_local_locked(path, content, signal, format?, diagnostics?, cwd, opts)
+    end)
+  end
+
+  defp write_file_local_locked(path, content, signal, format?, diagnostics?, cwd, opts) do
     try do
       with :ok <-
              FileValidation.check_mutation_target(path, Keyword.put(opts, :mutation_root, cwd)),
@@ -188,6 +239,7 @@ defmodule CodingAgent.Tools.Write do
                path: path
              }) do
         baseline = LspDiagnostics.baseline(path, cwd, diagnostics?, opts)
+        old_text = read_bounded_snapshot(path)
 
         do_write_file(
           path,
@@ -198,7 +250,8 @@ defmodule CodingAgent.Tools.Write do
           baseline,
           cwd,
           opts,
-          checkpoint
+          checkpoint,
+          old_text
         )
       end
     rescue
@@ -219,7 +272,8 @@ defmodule CodingAgent.Tools.Write do
          baseline,
          cwd,
          opts,
-         checkpoint
+         checkpoint,
+         old_text
        ) do
     if AbortSignal.aborted?(signal) do
       {:error, :aborted}
@@ -233,6 +287,10 @@ defmodule CodingAgent.Tools.Write do
 
       byte_count = byte_size(content)
       {formatted, format_error} = maybe_format_file(path, format?, cwd, opts)
+
+      if formatted,
+        do: FileReadTracker.refresh(opts, [path]),
+        else: FileReadTracker.record(opts, path, content)
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(path, cwd, baseline, diagnostics?, opts)
@@ -253,9 +311,30 @@ defmodule CodingAgent.Tools.Write do
             formatted: formatted
           }
           |> CheckpointGuard.put_details(checkpoint)
+          |> FileValidation.put_text_snapshots(
+            path,
+            old_text,
+            if(formatted, do: read_bounded_snapshot(path), else: content)
+          )
           |> maybe_put_format_error(format_error)
           |> maybe_put_diagnostics(diagnostics)
       }
+    end
+  end
+
+  defp read_bounded_snapshot(path) do
+    case File.stat(path) do
+      {:error, :enoent} ->
+        nil
+
+      {:ok, %File.Stat{type: :regular, size: size}} when size <= 16_384 ->
+        case File.read(path) do
+          {:ok, text} -> text
+          _ -> :unavailable
+        end
+
+      _ ->
+        :unavailable
     end
   end
 

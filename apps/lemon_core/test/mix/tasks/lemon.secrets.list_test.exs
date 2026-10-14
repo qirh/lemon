@@ -55,18 +55,6 @@ defmodule Mix.Tasks.Lemon.Secrets.ListTest do
     {:ok, tmp_dir: tmp_dir, mock_home: mock_home}
   end
 
-  describe "module attributes" do
-    test "has proper @shortdoc" do
-      {:docs_v1, _, _, _, %{} = module_doc, _, _} = Code.fetch_docs(Mix.Tasks.Lemon.Secrets.List)
-      assert module_doc["en"] =~ "Lists stored secrets"
-    end
-
-    test "task module exists and has run/1 function" do
-      assert Code.ensure_loaded?(Mix.Tasks.Lemon.Secrets.List)
-      assert function_exported?(Mix.Tasks.Lemon.Secrets.List, :run, 1)
-    end
-  end
-
   describe "run/1 with empty secrets" do
     test "outputs 'No secrets configured' when no secrets exist" do
       output =

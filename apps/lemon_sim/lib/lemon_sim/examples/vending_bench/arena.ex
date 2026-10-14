@@ -694,7 +694,8 @@ defmodule LemonSim.Examples.VendingBench.Arena do
     |> get(:seed)
   end
 
-  def terminal?(%State{} = state), do: get(state.world, :status) in ["complete", "bankrupt"]
+  def terminal?(%State{} = state),
+    do: get(state.world, :status) in VendingBench.terminal_statuses()
 
   def tag_events(agent_id, events) do
     Enum.map(events, fn event ->

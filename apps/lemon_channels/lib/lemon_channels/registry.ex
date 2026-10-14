@@ -39,7 +39,10 @@ defmodule LemonChannels.Registry do
     GenServer.call(__MODULE__, {:get, plugin_id}, @call_timeout_ms)
   catch
     :exit, reason ->
-      Logger.warning("[Channels.Registry] get_plugin(#{inspect(plugin_id)}) failed: #{inspect(reason)}")
+      Logger.warning(
+        "[Channels.Registry] get_plugin(#{inspect(plugin_id)}) failed: #{inspect(reason)}"
+      )
+
       nil
   end
 
@@ -257,8 +260,8 @@ defmodule LemonChannels.Registry do
     children =
       try do
         DynamicSupervisor.which_children(LemonChannels.AdapterSupervisor)
-      rescue
-        _ -> []
+      catch
+        :exit, {:noproc, _} -> []
       end
 
     Enum.any?(children, fn
@@ -294,9 +297,5 @@ defmodule LemonChannels.Registry do
       pid when is_pid(pid) -> Process.alive?(pid)
       _ -> false
     end
-  rescue
-    _ -> false
   end
-
-  defp named_process_running?(_), do: false
 end

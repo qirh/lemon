@@ -10,6 +10,10 @@ defmodule LemonCore.SessionLifecycle do
   Session discovery ignores malformed legacy index rows so one damaged record
   cannot hide otherwise valid sessions from operator surfaces.
 
+  Historical tool phases expose `id` as the native tool-call identifier when
+  supplied and `action_id` as the logical event action identifier. All phases
+  remain available so operator surfaces can reconcile a single tool card.
+
   Pruning is intentionally guarded: previews are dry-run by default, archived
   sessions are the default (and safest) candidate set, pinned sessions are
   excluded unless explicitly requested, and execution requires the token from
@@ -17,7 +21,6 @@ defmodule LemonCore.SessionLifecycle do
   """
 
   alias LemonCore.{ChatStateStore, PolicyStore, RunStore, SessionMetadataStore}
-  alias LemonCore.Doctor.SupportBundle
 
   @default_limit 100
   @max_limit 500
@@ -33,7 +36,6 @@ defmodule LemonCore.SessionLifecycle do
   @stats_version 1
   @export_version 1
   @prune_version 1
-  @sensitive_key_fragments ~w(api_key apikey authorization bearer credential master_key oauth password private_key secret token wallet_key)
 
   @type session_row :: %{
           session_key: String.t(),
@@ -161,6 +163,57 @@ defmodule LemonCore.SessionLifecycle do
     end)
   end
 
+  @doc "Resolve a fork source's agent from its canonical key or durable session index."
+  @spec fork_agent_id(String.t()) :: {:ok, String.t()} | {:error, atom()}
+  def fork_agent_id(session_key) when is_binary(session_key) do
+    case LemonCore.SessionKey.agent_id(session_key) do
+      agent_id when is_binary(agent_id) and agent_id != "" ->
+        {:ok, agent_id}
+
+      _ ->
+        case get(session_key) do
+          %{agent_id: agent_id} when is_binary(agent_id) and agent_id != "" ->
+            if LemonCore.SessionKey.valid?(LemonCore.SessionKey.main(agent_id)),
+              do: {:ok, agent_id},
+              else: {:error, :invalid_session_key}
+
+          _ ->
+            {:error, :session_not_found}
+        end
+    end
+  rescue
+    _ -> {:error, :session_store_unavailable}
+  catch
+    :exit, _ -> {:error, :session_store_unavailable}
+  end
+
+  def fork_agent_id(_), do: {:error, :invalid_session_key}
+
+  @doc """
+  Register a newly forked native session in canonical discovery and metadata.
+
+  The native runtime owns the copied conversation and resume mapping. A fork
+  starts with zero runs of its own and independent, unnamed lifecycle metadata.
+  """
+  @spec register_fork(String.t(), String.t()) :: :ok | {:error, term()}
+  def register_fork(source_session_key, destination_session_key) do
+    with {:ok, agent_id} <- fork_agent_id(source_session_key),
+         true <- destination_session_key != source_session_key,
+         true <- LemonCore.SessionKey.agent_id(destination_session_key) == agent_id,
+         :ok <- RunStore.create_session_index(destination_session_key, agent_id, :control_plane),
+         {:ok, _} <-
+           SessionMetadataStore.patch(destination_session_key, %{
+             title: nil,
+             pinned: false,
+             archived: false
+           }) do
+      :ok
+    else
+      value when value in [nil, false, ""] -> {:error, :invalid_session_key}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Patch title, pin, or archive state for an existing durable session."
   @spec patch(String.t(), map()) :: {:ok, session_row()} | {:error, term()}
   def patch(session_key, attrs) when is_binary(session_key) and is_map(attrs) do
@@ -177,7 +230,13 @@ defmodule LemonCore.SessionLifecycle do
     end
   end
 
-  @doc "Return structured run history suitable for chat resume or inspection."
+  @doc """
+  Return structured run history suitable for chat resume or inspection.
+
+  Tool entries retain their stable `action_id` and newest-first event order.
+  Consumers reconstructing one card per invocation should group by run/action
+  identity and retain the latest phase; distinct calls may share the same title.
+  """
   @spec history(String.t(), keyword()) :: [map()]
   def history(session_key, opts \\ []) when is_binary(session_key) do
     limit =
@@ -188,10 +247,6 @@ defmodule LemonCore.SessionLifecycle do
     RunStore.history(session_key, limit: limit)
     |> Enum.map(fn {run_id, data} -> format_run(run_id, data, redact?) end)
     |> Enum.sort_by(&(&1.started_at_ms || 0), :asc)
-  rescue
-    _ -> []
-  catch
-    :exit, _ -> []
   end
 
   @doc "Build an always-redacted JSON or Markdown export with integrity metadata."
@@ -382,7 +437,7 @@ defmodule LemonCore.SessionLifecycle do
 
       [read(summary, :prompt), read(completed, :answer)]
       |> Enum.filter(&is_binary/1)
-      |> Enum.map_join("\n", &redact_text/1)
+      |> Enum.map_join("\n", &LemonCore.Redact.text(&1, strict: true))
       |> String.downcase()
       |> String.contains?(query)
     end)
@@ -445,7 +500,7 @@ defmodule LemonCore.SessionLifecycle do
 
   defp safe_dimension(value) do
     original = value |> stringify() |> String.trim()
-    redacted = redact_text(original)
+    redacted = LemonCore.Redact.text(original, strict: true)
 
     cond do
       original == "" ->
@@ -512,13 +567,24 @@ defmodule LemonCore.SessionLifecycle do
     |> Enum.take(200)
     |> Enum.map(fn event ->
       action = read(event, :action) || %{}
+      detail = read(action, :detail)
+      action_id = read(action, :id)
+      tool_call_id = read(detail, :tool_call_id) || action_id
+      redacted_action_id = maybe_redact(action_id, redact?)
+
+      tool_id =
+        if tool_call_id == action_id,
+          do: redacted_action_id,
+          else: maybe_redact(tool_call_id, redact?)
 
       %{
+        id: tool_id,
+        action_id: redacted_action_id,
         title: maybe_redact(read(action, :title), redact?),
         kind: stringify(read(action, :kind)),
         phase: stringify(read(event, :phase)),
         ok: read(event, :ok),
-        detail: sanitize_term(read(action, :detail), redact?),
+        detail: sanitize_term(detail, redact?),
         message: maybe_redact(read(event, :message), redact?)
       }
     end)
@@ -762,7 +828,7 @@ defmodule LemonCore.SessionLifecycle do
   defp sanitize_redacted(nil, _depth), do: nil
 
   defp sanitize_redacted(value, _depth) when is_binary(value),
-    do: value |> redact_text() |> truncate_export_text()
+    do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
 
   defp sanitize_redacted(value, _depth) when is_atom(value), do: Atom.to_string(value)
   defp sanitize_redacted(value, _depth) when is_number(value) or is_boolean(value), do: value
@@ -775,7 +841,7 @@ defmodule LemonCore.SessionLifecycle do
       key_string = to_string(key)
 
       safe =
-        if sensitive_key?(key_string),
+        if LemonCore.Redact.sensitive_key?(key_string),
           do: "[REDACTED]",
           else: sanitize_redacted(nested, depth + 1)
 
@@ -795,21 +861,18 @@ defmodule LemonCore.SessionLifecycle do
     do: value |> Tuple.to_list() |> sanitize_redacted(depth + 1)
 
   defp sanitize_redacted(value, _depth),
-    do: value |> inspect(limit: 100) |> redact_text() |> truncate_export_text()
-
-  defp sensitive_key?(key) do
-    normalized = String.downcase(key)
-    Enum.any?(@sensitive_key_fragments, &String.contains?(normalized, &1))
-  end
+    do:
+      value
+      |> inspect(limit: 100)
+      |> LemonCore.Redact.text(strict: true)
+      |> truncate_export_text()
 
   defp maybe_redact(value, false), do: value
 
   defp maybe_redact(value, true) when is_binary(value),
-    do: value |> redact_text() |> truncate_export_text()
+    do: value |> LemonCore.Redact.text(strict: true) |> truncate_export_text()
 
   defp maybe_redact(value, true), do: sanitize_term(value, true)
-
-  defp redact_text(text), do: SupportBundle.redact_text(text)
 
   defp stringify_keys(map), do: Map.new(map, fn {key, value} -> {to_string(key), value} end)
 

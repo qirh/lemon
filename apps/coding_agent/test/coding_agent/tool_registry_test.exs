@@ -117,8 +117,13 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "read" in names
       assert "read_skill" in names
       assert "skill_manage" in names
-      assert "memory_topic" in names
-      assert "memory" in names
+      assert "remember" in names
+      assert "recall" in names
+
+      for removed <- ~w(memory memory_topic search_memory session_search) do
+        refute removed in names, "#{removed} must no longer be registered"
+      end
+
       assert "write" in names
       assert "edit" in names
       assert "lsp_diagnostics" in names
@@ -126,6 +131,11 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "todo" in names
       assert "kanban" in names
       assert "peer" in names
+
+      for tab_tool <- ~w(browser_tabs browser_tab_open browser_tab_activate browser_tab_close) do
+        assert tab_tool in names, "#{tab_tool} is not offered to sessions"
+      end
+
       assert "grep" in names
       assert "media_status" in names
       assert "media_generate_image" in names
@@ -150,6 +160,31 @@ defmodule CodingAgent.ToolRegistryTest do
         assert is_binary(tool.name)
         assert is_binary(tool.description)
         assert is_function(tool.execute, 4)
+      end
+    end
+
+    test "built-in tool schemas are well-formed JSON object schemas", %{tmp_dir: tmp_dir} do
+      tools = ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+
+      for %{name: name, label: label, parameters: params} <- tools do
+        assert is_binary(label) and label != "", "#{name} has no label"
+        assert params["type"] == "object", "#{name} parameters are not an object schema"
+        assert is_map(params["properties"]), "#{name} parameters have no properties map"
+
+        for {prop, spec} <- params["properties"] do
+          assert Enum.any?(~w(type oneOf anyOf), &Map.has_key?(spec, &1)),
+                 "#{name}.#{prop} has no type/oneOf/anyOf"
+
+          assert Map.has_key?(spec, "description"), "#{name}.#{prop} has no description"
+        end
+
+        required = params["required"] || []
+        assert is_list(required), "#{name} required is not a list"
+
+        for prop <- required do
+          assert Map.has_key?(params["properties"], prop),
+                 "#{name} requires undeclared property #{prop}"
+        end
       end
     end
 
@@ -190,9 +225,8 @@ defmodule CodingAgent.ToolRegistryTest do
             allow: [
               "read_skill",
               "skill_manage",
-              "search_memory",
-              "session_search",
-              "memory_topic"
+              "remember",
+              "recall"
             ]
           }
         )
@@ -203,9 +237,8 @@ defmodule CodingAgent.ToolRegistryTest do
                Enum.sort([
                  "read_skill",
                  "skill_manage",
-                 "search_memory",
-                 "session_search",
-                 "memory_topic"
+                 "remember",
+                 "recall"
                ])
 
       refute "bash" in names
@@ -1017,7 +1050,12 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert report.conflicts == []
       assert report.shadowed_count == 0
-      assert report.builtin_count == length(disclosed_builtin_names())
+
+      assert report.builtin_count ==
+               length(
+                 ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+               )
+
       assert report.extension_count == 0
       assert report.total_tools == report.builtin_count
     end
@@ -1176,7 +1214,12 @@ defmodule CodingAgent.ToolRegistryTest do
       report = ToolRegistry.tool_conflict_report(tmp_dir)
 
       assert report.conflicts == []
-      assert report.builtin_count == length(disclosed_builtin_names())
+
+      assert report.builtin_count ==
+               length(
+                 ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
+               )
+
       assert report.extension_count == 1
       assert report.total_tools == report.builtin_count + report.extension_count
       assert report.shadowed_count == 0
@@ -1246,12 +1289,5 @@ defmodule CodingAgent.ToolRegistryTest do
 
       assert report.load_errors == []
     end
-  end
-
-  # `builtin_tool_names/0` reports the compile-time builtin set, which includes
-  # config-gated tools like `execute_code`. A resolved catalog only contains the
-  # ones actually enabled for the workspace, and `execute_code` is default-off.
-  defp disclosed_builtin_names do
-    Enum.reject(ToolRegistry.builtin_tool_names(), &(&1 == :execute_code))
   end
 end

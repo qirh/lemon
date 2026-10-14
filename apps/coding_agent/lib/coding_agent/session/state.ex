@@ -60,7 +60,12 @@ defmodule CodingAgent.Session.State do
   end
 
   def build_context_guardrail_opts(cwd, session_id, opts) when is_map(opts) do
-    Map.merge(default_context_guardrail_opts(cwd, session_id), opts)
+    default_context_guardrail_opts(cwd, session_id)
+    |> Map.merge(opts)
+    |> Map.update!(:spill_dir, fn
+      dir when is_binary(dir) -> Path.expand(dir, cwd)
+      other -> other
+    end)
   end
 
   def build_context_guardrail_opts(cwd, session_id, _other) do
@@ -240,7 +245,7 @@ defmodule CodingAgent.Session.State do
   defp default_context_guardrail_opts(cwd, session_id) do
     %{
       max_thinking_bytes: 65_536,
-      max_tool_result_images: 0,
+      max_tool_result_images: 3,
       spill_dir: Config.spill_dir(cwd, session_id)
     }
   end

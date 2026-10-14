@@ -27,12 +27,25 @@
  *     must never change again: they may already be in native scrollback.
  */
 
+import {
+	type NativeNode,
+	type NativeUiEvent,
+	rootToggleExpanded,
+} from "@oh-my-pi/pi-tui/native/node";
+import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ToolBlock } from "../../store/transcript-model.ts";
+import { toolLink } from "../../terminal/links.ts";
+import { nativeTool } from "../../terminal/native-tool.ts";
 import { getTheme, type Theme } from "../theme/theme.ts";
 import { buildToolView, type ToolCardState, type ToolView } from "../tool-view.ts";
-import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
+import {
+	AccordionComponent,
+	type AccordionState,
+	accordionSettings,
+	resolveAccordionState,
+} from "./accordion.ts";
 import { renderDiff } from "./diff.ts";
 
 /**
@@ -72,16 +85,16 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
- * The glyph a completed action gets. Subagents and reasoning read differently
- * from a plain tool call, so they are marked as such rather than sharing the
+ * The glyph a completed action gets. Subagents and notes read differently from
+ * a plain tool call, so they are marked as such rather than sharing the
  * generic check.
  */
 function completedGlyph(kind: string, theme: Theme): string {
 	if (theme.getSymbolPreset() === "ascii") {
-		return kind === "subagent" ? "@" : kind === "reasoning" || kind === "note" ? "*" : "v";
+		return kind === "subagent" ? "@" : kind === "note" ? "*" : "v";
 	}
 	if (kind === "subagent") return "◈";
-	if (kind === "reasoning" || kind === "note") return "✻";
+	if (kind === "note") return "✻";
 	return "✓";
 }
 
@@ -101,6 +114,10 @@ export function statusIcon(
 			return theme.fg("toolSuccess", completedGlyph(kind, theme));
 		case "error":
 			return theme.fg("toolError", errorGlyph(theme));
+		case "cancelled":
+			return theme.fg("dim", "-");
+		case "unknown":
+			return theme.fg("dim", "?");
 		default: {
 			const frames = theme.spinnerFrames;
 			const glyph =
@@ -131,19 +148,20 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#block: ToolBlock;
 	#view: ToolView;
 	#compact: boolean;
-	#startedAt: number;
-	/** Set once, at the first completed phase; freezes the elapsed reading. */
-	#completedAt: number | undefined;
 	#spinnerFrame: number | undefined;
 	#spinnerTimer: ReturnType<typeof setInterval> | undefined;
 
 	#version = 0;
+	/** The user opened this card; see {@link ToolCardComponent.expand}. */
+	#open = false;
 	/** Fingerprint of the header's inputs, for no-op detection in #applyView. */
 	#headerKey = "";
 	#cachedVersion = -1;
 	#cachedWidth = -1;
 	#cachedAccordion = -1;
 	#cached: readonly string[] = [];
+	#native: NativeNode | undefined;
+	#nativeVersion = -1;
 
 	constructor(block: ToolBlock, options: ToolCardOptions = {}) {
 		this.#block = block;
@@ -151,7 +169,6 @@ export class ToolCardComponent implements ToolBlockComponent {
 		this.#requestRender = options.requestRender;
 		this.#now = options.now ?? (() => Date.now());
 		this.#compact = options.compact ?? false;
-		this.#startedAt = block.at || this.#now();
 		this.#accordion = new AccordionComponent(
 			options.accordion ?? resolveAccordionState(this.#view.kind),
 			{ indent: 2 },
@@ -178,17 +195,22 @@ export class ToolCardComponent implements ToolBlockComponent {
 	 * them, but the guard is repeated here because this is the component that
 	 * would actually rewrite the bytes: a card that has reported finalized may
 	 * already be in native scrollback, where nothing can be rewritten. The test
-	 * is against this card's own recorded completion, not `block.phase` — the
+	 * is against this card's previous derived state, not `block.phase` — the
 	 * store hands back the same mutable block object, so reading the phase off
 	 * the argument would just re-read what the store already decided.
 	 */
 	update(block: ToolBlock): void {
-		if (this.#completedAt !== undefined && block.phase !== "completed") return;
+		if (
+			(this.#view.state === "success" ||
+				this.#view.state === "error" ||
+				this.#view.state === "cancelled" ||
+				this.#view.state === "unknown") &&
+			block.phase !== "completed"
+		) {
+			return;
+		}
 		this.#block = block;
 		this.#view = buildToolView(block);
-		if (block.phase === "completed" && this.#completedAt === undefined) {
-			this.#completedAt = this.#now();
-		}
 		this.#applyView();
 	}
 
@@ -204,13 +226,28 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	toggleAccordion(): AccordionState {
+		// A native card folded to its preview reads as collapsed, so the key opens it first.
+		if (isNativeRendering() && this.#accordion.state === "expanded" && this.#nativeCollapsed()) {
+			this.expand();
+			return "expanded";
+		}
 		const state = this.#accordion.toggle();
+		this.#open = state === "expanded";
 		this.#version++;
 		return state;
 	}
 
+	/** Apply a default or global accordion state; a native card folds back to its preview. */
 	setAccordionState(state: AccordionState): void {
 		this.#accordion.setState(state);
+		this.#open = false;
+		this.#version++;
+	}
+
+	/** Open the card at the user's request: expanded rows, and a native card out of its preview. */
+	expand(): void {
+		this.#accordion.setState("expanded");
+		this.#open = true;
 		this.#version++;
 	}
 
@@ -226,7 +263,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 	// -- FinalizableBlock ----------------------------------------------------
 
 	isTranscriptBlockFinalized(): boolean {
-		return this.#block.phase === "completed";
+		return this.#block.phase === "completed" || this.#block.historical === true;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -234,6 +271,39 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	// -- render --------------------------------------------------------------
+
+	/**
+	 * Native cards fold to their preview like omp's (the full body is one
+	 * disclosure away) unless the user opened this one or Ctrl+T expanded them all.
+	 */
+	#nativeCollapsed(): boolean {
+		if (this.#accordion.state !== "expanded") return true;
+		return !this.#open && accordionSettings.override !== "expanded";
+	}
+
+	describe(): NativeNode {
+		this.#syncAnimation();
+		const version = this.getTranscriptBlockVersion();
+		if (!this.#native || this.#nativeVersion !== version) {
+			this.#native = nativeTool(
+				this.#block,
+				this.#view,
+				this.#nativeCollapsed(),
+				this.#elapsedMs(),
+			);
+			this.#nativeVersion = version;
+		}
+		return this.#native;
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		// Nested disclosures (an agent, a checklist phase) keep their terminal-local state.
+		const open = rootToggleExpanded(event);
+		if (open === undefined) return;
+		if (open) this.expand();
+		else this.setAccordionState("collapsed");
+		this.#requestRender?.(this);
+	}
 
 	render(width: number): readonly string[] {
 		const accordionVersion = this.#accordion.version;
@@ -262,7 +332,10 @@ export class ToolCardComponent implements ToolBlockComponent {
 	shelfLine(width: number): string {
 		const theme = getTheme();
 		const icon = statusIcon(this.#view.state, this.#view.kind, theme, this.#spinnerFrame);
-		const title = theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title);
+		const title = toolLink(
+			theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title),
+			this.#block,
+		);
 		const summary = this.#view.summary;
 		const head = `${icon} ${title}`;
 		if (summary.length === 0) return truncateToWidth(head, width);
@@ -280,10 +353,19 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#header(width: number): string {
 		const theme = getTheme();
 		const icon = statusIcon(this.#view.state, this.#view.kind, theme, this.#spinnerFrame);
-		const title = theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title);
+		const title = toolLink(
+			theme.fg(this.#view.isError ? "toolError" : "toolTitle", this.#view.title),
+			this.#block,
+		);
 		const badge =
 			this.#view.kind && this.#view.kind !== "tool" ? theme.fg("dim", ` (${this.#view.kind})`) : "";
-		const left = `${icon} ${title}${badge}`;
+		const outcome =
+			this.#view.state === "cancelled"
+				? " [cancelled]"
+				: this.#view.state === "unknown"
+					? " [outcome unknown]"
+					: "";
+		const left = `${icon} ${title}${badge}${theme.fg("dim", outcome)}`;
 		const elapsed = this.#elapsedLabel();
 		if (elapsed.length === 0) return truncateToWidth(left, width);
 		const right = theme.fg("dim", elapsed);
@@ -293,11 +375,18 @@ export class ToolCardComponent implements ToolBlockComponent {
 		return `${left}${" ".repeat(gap)}${right}`;
 	}
 
+	#elapsedMs(): number | undefined {
+		if (this.#block.durationMs !== undefined) return this.#block.durationMs;
+		if (this.#block.historical || this.#view.state === "streaming") return undefined;
+		const end = this.#block.phase === "completed" ? this.#block.completedAt : this.#now();
+		if (end === undefined) return undefined;
+		const elapsed = end - this.#block.at;
+		return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined;
+	}
+
 	#elapsedLabel(): string {
-		if (this.#view.state === "streaming") return "";
-		const end = this.#completedAt ?? this.#now();
-		const elapsed = formatElapsed(end - this.#startedAt);
-		return elapsed;
+		const elapsed = this.#elapsedMs();
+		return elapsed === undefined ? "" : formatElapsed(elapsed);
 	}
 
 	/** Rebuild the body and re-evaluate whether the card should be animating. */
@@ -327,7 +416,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 		const before = this.#accordion.version;
 		this.#accordion.setLines(lines);
 		this.#accordion.setSummary(summary.length > 0 ? theme.fg("toolDetail", summary) : "");
-		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#completedAt ?? "-"}`;
+		const headerKey = `${this.#view.state}|${this.#view.kind}|${this.#view.title}|${this.#view.isError}|${this.#block.at}|${this.#block.completedAt ?? "-"}|${this.#block.durationMs ?? "-"}|${this.#block.historical ?? false}`;
 		if (headerKey !== this.#headerKey || this.#accordion.version !== before) {
 			this.#headerKey = headerKey;
 			this.#version++;
@@ -336,7 +425,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	#syncAnimation(): void {
-		const live = this.#block.phase !== "completed";
+		const live =
+			this.#block.phase !== "completed" && !this.#block.historical && !isNativeRendering();
 		if (live && this.#requestRender && this.#spinnerTimer === undefined) {
 			this.#spinnerFrame = sharedSpinnerFrame(getTheme().spinnerFrames.length, this.#now());
 			this.#spinnerTimer = setInterval(() => {

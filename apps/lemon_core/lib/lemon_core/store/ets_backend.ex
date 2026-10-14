@@ -58,6 +58,11 @@ defmodule LemonCore.Store.EtsBackend do
     {:ok, state}
   end
 
+  # Ephemeral by design: nothing outlives the process, so there is nothing to
+  # flush and no crash in which flushed data would survive.
+  @impl true
+  def sync(state), do: {:ok, state}
+
   @impl true
   def compare_and_delete_many(state, entries) do
     state = Enum.reduce(entries, state, fn {table, _key, _expected}, acc -> ensure_table(acc, table) end)

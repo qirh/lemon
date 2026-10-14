@@ -10,9 +10,6 @@ config :lemon_core, LemonCore.Store,
     ephemeral_tables: [:runs]
   ]
 
-# In dev, if no browser node is paired/online, allow browser.request to use the local driver.
-config :lemon_control_plane, :browser_local_fallback, true
-
 config :lemon_automation,
   goal_judge_runner: LemonAutomation.GoalJudge.RouterRunner
 
@@ -28,7 +25,7 @@ config :lemon_web, LemonWeb.Endpoint,
     "dev_secret_key_base_dev_secret_key_base_dev_secret_key_base_dev_secret_key_base",
   watchers: []
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 sim_ui_bind_ip =
   case :inet.parse_address(to_charlist(System.get_env("LEMON_SIM_UI_BIND_IP") || "127.0.0.1")) do
     {:ok, address} -> address

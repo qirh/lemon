@@ -53,4 +53,140 @@ defmodule LemonAi.Providers.RetryHelperTest do
                nil
     end
   end
+
+  describe "retry_after_ms/2" do
+    @now ~U[2026-09-27 12:00:00Z]
+
+    test "reads delta-seconds and HTTP-date retry-after exactly (no buffer)" do
+      assert RetryHelper.retry_after_ms(%{"retry-after" => ["7"]}, @now) == 7_000
+
+      assert RetryHelper.retry_after_ms(
+               %{"retry-after" => "Sun, 27 Sep 2026 12:00:30 GMT"},
+               @now
+             ) == 30_000
+    end
+
+    test "falls back to the latest exhausted anthropic rate-limit reset" do
+      headers = %{
+        "anthropic-ratelimit-requests-remaining" => "12",
+        "anthropic-ratelimit-requests-reset" => "2026-09-27T12:05:00Z",
+        "anthropic-ratelimit-input-tokens-remaining" => "0",
+        "anthropic-ratelimit-input-tokens-reset" => "2026-09-27T12:00:20Z",
+        "anthropic-ratelimit-output-tokens-remaining" => "0",
+        "anthropic-ratelimit-output-tokens-reset" => "2026-09-27T12:00:45Z"
+      }
+
+      assert RetryHelper.retry_after_ms(headers, @now) == 45_000
+    end
+
+    test "past or missing hints yield nil" do
+      past = %{"retry-after" => "Sun, 27 Sep 2026 11:00:00 GMT"}
+      assert RetryHelper.retry_after_ms(past, @now) == nil
+      assert RetryHelper.retry_after_ms(%{"x-request-id" => "abc"}, @now) == nil
+    end
+
+    test "invalid and expired preferred hints fall through instead of hiding valid delays" do
+      for retry_after <- ["invalid", "0", "-1", "Sun, 27 Sep 2026 11:00:00 GMT"] do
+        headers = %{"retry-after" => retry_after, "retry-after-ms" => ["1500.25"]}
+        assert RetryHelper.retry_after_ms(headers, @now) == 1501
+        assert LemonAi.Error.extract_rate_limit_info(headers).retry_after == 1501
+      end
+
+      headers = %{
+        "retry-after" => "invalid",
+        "retry-after-ms" => "-3",
+        "x-ms-retry-after-ms" => "bad",
+        "x-ratelimit-reset-after" => "2.5"
+      }
+
+      assert RetryHelper.retry_after_ms(headers, @now) == 2500
+      assert LemonAi.Error.extract_rate_limit_info(headers).retry_after == 2500
+    end
+
+    test "invalid headers still allow the exhausted Anthropic reset hint" do
+      headers = %{
+        "retry-after" => "not a date",
+        "anthropic-ratelimit-requests-remaining" => 0,
+        "anthropic-ratelimit-requests-reset" => "2026-09-27T12:00:30Z"
+      }
+
+      assert RetryHelper.retry_after_ms(headers, @now) == 30_000
+    end
+  end
+
+  describe "retry policy" do
+    @policy %{
+      max_attempts: 4,
+      base_delay_ms: 1_000,
+      max_delay_ms: 30_000,
+      max_retry_after_ms: 60_000
+    }
+
+    test "allows four attempts in total" do
+      assert Enum.map(0..3, &RetryHelper.retry_allowed?(&1, @policy)) == [true, true, true, false]
+    end
+
+    test "backoff doubles from ~1s with jitter and is capped" do
+      for _ <- 1..50 do
+        assert RetryHelper.backoff_delay_ms(0, @policy) in 501..1_000
+        assert RetryHelper.backoff_delay_ms(2, @policy) in 2_001..4_000
+        assert RetryHelper.backoff_delay_ms(10, @policy) in 15_001..30_000
+      end
+    end
+
+    test "server hints win over backoff, and waits beyond the cap give up" do
+      assert RetryHelper.http_retry_delay_ms(0, %{"retry-after" => "9"}, @policy) == 9_000
+      assert RetryHelper.http_retry_delay_ms(0, %{"retry-after" => "61"}, @policy) == :give_up
+      assert RetryHelper.http_retry_delay_ms(1, %{}, @policy) in 1_001..2_000
+    end
+  end
+
+  describe "public retry classification" do
+    test "status-only decisions agree with classification when no provider body is available" do
+      for status <- [400, 401, 403, 404, 408, 409, 425, 429] ++ Enum.to_list(500..599) do
+        retryable = LemonAi.Error.retryable?({:http_error, status, nil})
+        assert RetryHelper.retryable_http_status?(status) == retryable
+        assert RetryHelper.retryable_http_error?(status, nil) == retryable
+      end
+    end
+
+    test "HTTP body evidence overrides retryable status codes" do
+      for body <- [
+            %{"error" => %{"code" => "context_length_exceeded"}},
+            %{"error" => %{"type" => "invalid_request_error", "message" => "Bad request"}},
+            %{"error" => %{"code" => "invalid_api_key", "message" => "Try again later"}},
+            %{"error" => %{"code" => "insufficient_quota", "message" => "Try again later"}}
+          ],
+          status <- [429, 500, 503, 529] do
+        refute RetryHelper.retryable_http_error?(status, body)
+        refute RetryHelper.retryable_http_error?(status, Jason.encode!(body))
+      end
+    end
+
+    test "text retry classification uses the public permanent-error exclusions" do
+      for text <- [
+            "Invalid request: connection timeout must be positive",
+            "Authentication failed. Please try again later.",
+            "prompt is too long. Service temporarily unavailable.",
+            "Rate limit exceeded: usage_limit_reached",
+            "This request would exceed your account's monthly spend limit. Please try again later."
+          ] do
+        refute RetryHelper.retryable_error_text?(text)
+        refute LemonAi.Error.retryable?(text)
+      end
+
+      for text <- [
+            "Rate limit exceeded",
+            "Resource exhausted",
+            "Internal Server Error",
+            "Connection reset",
+            "other side closed",
+            "upstream connect error",
+            "HTTP/1.1 503"
+          ] do
+        assert RetryHelper.retryable_error_text?(text)
+        assert LemonAi.Error.retryable?(text)
+      end
+    end
+  end
 end

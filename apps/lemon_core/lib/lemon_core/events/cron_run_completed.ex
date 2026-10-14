@@ -1,6 +1,6 @@
 defmodule LemonCore.Events.CronRunCompleted do
   @moduledoc """
-  A cron job (or timer heartbeat) finished, successfully or not. Published on `cron`.
+  A cron job finished, successfully or not. Published on `cron`.
   """
 
   use LemonCore.Events.Payload,

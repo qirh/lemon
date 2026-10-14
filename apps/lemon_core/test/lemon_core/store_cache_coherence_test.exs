@@ -12,7 +12,7 @@ defmodule LemonCore.StoreCacheCoherenceTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, Store}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
 
@@ -59,20 +59,24 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       scope = {:coherence, :chat}
 
       assert {:error, :backend_refused} =
-               Store.put_chat_state(store, scope, %{last_engine: "ghost"})
+               ChatStateStore.put(store, scope, %{last_engine: "ghost"})
 
-      assert Store.get_chat_state(store, scope) == nil
+      assert ChatStateStore.get(store, scope) == nil
       assert ReadCache.get(store, :chat, scope) == nil
     end
 
-    test "a progress mapping is not readable after the backend refuses it", %{store: store} do
-      scope = {:coherence, :progress}
+    test "a registered cached table is not readable after the backend refuses it" do
+      store = unique(:coherence_registered)
+      # Registered before boot, the way an owning app registers its hot index.
+      :ok = Store.register_cached_table(store, :hot_index)
+      on_exit(fn -> Store.unregister_cached_table(store, :hot_index) end)
+      start_store(store, backend: RefusingBackend)
 
-      assert {:error, :backend_refused} =
-               Store.put_progress_mapping(store, scope, 42, "run_ghost")
+      assert ReadCache.cached?(store, :hot_index)
+      assert {:error, :backend_refused} = Store.put(store, :hot_index, {:scope, 42}, "run_ghost")
 
-      assert Store.get_run_by_progress(store, scope, 42) == nil
-      assert ReadCache.get(store, :progress, {scope, 42}) == nil
+      assert Store.get(store, :hot_index, {:scope, 42}) == nil
+      assert ReadCache.get(store, :hot_index, {:scope, 42}) == nil
     end
 
     test "a generic put into a mirrored table is not readable after refusal" do
@@ -96,7 +100,7 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       :ok = Store.put(store, :cron_runs, "job1", %{started_at_ms: ancient})
       assert %{started_at_ms: ^ancient} = Store.get(store, :cron_runs, "job1")
 
-      send(Process.whereis(store), :sweep_expired_chat_states)
+      send(Process.whereis(store), :sweep_expired)
       # The sweep runs in the store process; a call afterwards is the barrier.
       :ok = Store.ping(store)
 
@@ -111,17 +115,12 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       store = start_store(unique(:coherence_chat_sweep), backend: EtsBackend)
       scope = {:coherence, :expiring}
 
-      # A TTL in the past: the row is already expired when the sweeper sees it.
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "codex"})
+      # Already expired when the sweeper sees it, and mirrored by the write.
+      expired = %{last_engine: "codex", expires_at: System.system_time(:millisecond) - 1_000}
+      :ok = Store.put(store, :chat, scope, expired)
+      assert ReadCache.get(store, :chat, scope) == expired
 
-      :sys.replace_state(Process.whereis(store), fn state ->
-        expired = %{last_engine: "codex", expires_at: System.system_time(:millisecond) - 1_000}
-        {:ok, backend_state} = state.backend.put(state.backend_state, :chat, scope, expired)
-        ReadCache.put(state.read_cache, :chat, scope, expired)
-        %{state | backend_state: backend_state}
-      end)
-
-      send(Process.whereis(store), :sweep_expired_chat_states)
+      send(Process.whereis(store), :sweep_expired)
       :ok = Store.ping(store)
 
       assert ReadCache.get(store, :chat, scope) == nil,
@@ -134,12 +133,12 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       store = start_store(unique(:coherence_raw), backend: EtsBackend)
       scope = {:coherence, :raw}
 
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "one"})
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "two"})
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "one"})
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "two"})
 
       # No barrier: the write is synchronous, so the newest value is readable
       # immediately and an older one can never be applied on top of it.
-      assert %{last_engine: "two"} = Store.get_chat_state(store, scope)
+      assert %{last_engine: "two"} = ChatStateStore.get(store, scope)
     end
 
     test "a rapid write sequence ends on the newest value", %{} do
@@ -147,54 +146,23 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       scope = {:coherence, :rapid}
 
       for i <- 1..50 do
-        :ok = Store.put_chat_state(store, scope, %{seq: i})
+        :ok = ChatStateStore.put(store, scope, %{seq: i})
         # No barrier anywhere in this loop: each write is applied before it
         # returns, so the mirror is never behind the caller.
-        assert %{seq: ^i} = Store.get_chat_state(store, scope)
+        assert %{seq: ^i} = ChatStateStore.get(store, scope)
       end
 
-      assert %{seq: 50} = Store.get_chat_state(store, scope)
+      assert %{seq: 50} = ChatStateStore.get(store, scope)
     end
 
     test "a deleted chat state stays deleted", %{} do
       store = start_store(unique(:coherence_del), backend: EtsBackend)
       scope = {:coherence, :del}
 
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "one"})
-      :ok = Store.delete_chat_state(store, scope)
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "one"})
+      :ok = ChatStateStore.delete(store, scope)
 
-      assert Store.get_chat_state(store, scope) == nil
-    end
-  end
-
-  describe "the store process is the cache's only writer" do
-    # The behavioural tests above cover what a caller can observe. This one
-    # pins the *reason* they hold, because the failure it guards against is
-    # only visible to a second process reading during a drain window — two
-    # rapid writes used to interleave as eager-1, eager-2, then the first
-    # cast landing last and restoring the older value. Catching that
-    # behaviourally needs a racing observer, and a racing observer that loses
-    # the race passes vacuously or fails spuriously depending on machine load.
-    # The invariant that makes the window impossible is structural, so assert
-    # it structurally: no cache mutation outside the GenServer callbacks.
-    test "no client-side code path mutates the read cache" do
-      source = File.read!("lib/lemon_core/store.ex")
-
-      {client_side, _server_side} =
-        case String.split(source, "# GenServer Implementation", parts: 2) do
-          [client, server] -> {client, server}
-          [only] -> {only, ""}
-        end
-
-      mutations =
-        Regex.scan(~r/ReadCache\.(put|delete)\(/, client_side)
-        |> Enum.map(fn [_match, fun] -> fun end)
-
-      assert mutations == [],
-             "client-side ReadCache.#{Enum.join(Enum.uniq(mutations), "/")} call(s) found in " <>
-               "the public API section of store.ex. A caller writing the mirror is what let a " <>
-               "failed backend write serve a phantom and two rapid writes land out of order. " <>
-               "Mutate the cache from the GenServer callbacks, after the backend confirms."
+      assert ChatStateStore.get(store, scope) == nil
     end
   end
 

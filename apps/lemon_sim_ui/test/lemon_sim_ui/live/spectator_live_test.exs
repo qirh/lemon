@@ -79,95 +79,6 @@ defmodule LemonSimUi.SpectatorLiveTest do
     LemonSim.Kernel.Store.delete_state("test_spectator_vb")
   end
 
-  test "renders spectator view for tcg shop sim", %{conn: conn} do
-    state =
-      LemonSim.Examples.TcgShop.initial_state(
-        sim_id: "test_spectator_tcg",
-        max_days: 14,
-        seed: 11
-      )
-
-    LemonSim.Kernel.Store.put_state(state)
-
-    {:ok, _view, html} = live(conn, "/watch/test_spectator_tcg")
-    assert html =~ "test_spectator_tcg"
-    assert html =~ "TCG Shop"
-    assert html =~ "Local Game Store"
-    assert html =~ "Day 1/14"
-    refute html =~ "Abort Sim"
-    refute html =~ "RAW_STATE_DUMP"
-    refute html =~ "AGENT STRATEGY"
-    refute html =~ "DATA BANKS"
-
-    LemonSim.Kernel.Store.delete_state("test_spectator_tcg")
-  end
-
-  test "renders spectator view for space station sim", %{conn: conn} do
-    sim_id = "spc_test1"
-
-    state =
-      LemonSim.Examples.SpaceStation.initial_state(sim_id: sim_id, player_count: 5)
-      |> put_model_on_first_player("zai/glm-5")
-
-    LemonSim.Kernel.Store.put_state(state)
-
-    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
-    assert html =~ sim_id
-    assert html =~ "Space Station"
-    assert html =~ "/arena/space_station/leaderboard"
-    assert html =~ "glm-5"
-    refute html =~ "Abort Sim"
-    refute html =~ "RAW_STATE_DUMP"
-    refute html =~ "AGENT STRATEGY"
-    refute html =~ "DATA BANKS"
-
-    LemonSim.Kernel.Store.delete_state(sim_id)
-  end
-
-  test "renders spectator view for stock market sim", %{conn: conn} do
-    sim_id = "stk_test1"
-
-    state =
-      LemonSim.Examples.StockMarket.initial_state(sim_id: sim_id, player_count: 4)
-      |> put_model_on_first_player("zai/glm-5")
-
-    LemonSim.Kernel.Store.put_state(state)
-
-    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
-    assert html =~ sim_id
-    assert html =~ "Stock Market"
-    assert html =~ "/arena/stock_market/leaderboard"
-    assert html =~ "glm-5"
-    refute html =~ "Abort Sim"
-    refute html =~ "RAW_STATE_DUMP"
-    refute html =~ "AGENT STRATEGY"
-    refute html =~ "DATA BANKS"
-
-    LemonSim.Kernel.Store.delete_state(sim_id)
-  end
-
-  test "renders spectator view for survivor sim", %{conn: conn} do
-    sim_id = "srv_test1"
-
-    state =
-      LemonSim.Examples.Survivor.initial_state(sim_id: sim_id, player_count: 6)
-      |> put_model_on_first_player("zai/glm-5")
-
-    LemonSim.Kernel.Store.put_state(state)
-
-    {:ok, _view, html} = live(conn, "/watch/#{sim_id}")
-    assert html =~ sim_id
-    assert html =~ "Survivor"
-    assert html =~ "/arena/survivor/leaderboard"
-    assert html =~ "glm-5"
-    refute html =~ "Abort Sim"
-    refute html =~ "RAW_STATE_DUMP"
-    refute html =~ "AGENT STRATEGY"
-    refute html =~ "DATA BANKS"
-
-    LemonSim.Kernel.Store.delete_state(sim_id)
-  end
-
   test "renders spectator view for poker sim", %{conn: conn} do
     sim_id = "pkr_test1"
 
@@ -561,7 +472,7 @@ defmodule LemonSimUi.SpectatorLiveTest do
     refute html =~ "Nightfall"
   end
 
-  defp assert_eventually(fun, attempts \\ 30)
+  defp assert_eventually(fun, attempts \\ 150)
 
   defp assert_eventually(fun, attempts) when attempts > 0 do
     if fun.() do

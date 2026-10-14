@@ -250,7 +250,7 @@ defmodule LemonCore.Context do
   end
 
   defp source(reference, type, label, content, selected_items, omissions, metadata) do
-    {redacted, count} = redact(content)
+    {redacted, count} = LemonCore.Redact.text(content, count: true)
 
     {:ok,
      %{
@@ -422,31 +422,11 @@ defmodule LemonCore.Context do
   defp git_args("staged"), do: {["--cached", "--"], "staged"}
   defp git_args(selector), do: {[selector, "--"], selector}
 
-  defp redact(content) do
-    patterns = [
-      {~r/-----BEGIN [^-\n]*PRIVATE KEY-----.*?-----END [^-\n]*PRIVATE KEY-----/s,
-       "[REDACTED PRIVATE KEY]"},
-      {~r/(?i)\b(authorization\s*:\s*bearer)\s+[^\s]+/, "\\1 [REDACTED]"},
-      {~r/(?i)\b(api[_-]?key|access[_-]?token|password|secret|token)\b(\s*[:=]\s*)["']?[^\s,"'}]+/,
-       "\\1\\2[REDACTED]"}
-    ]
-
-    Enum.reduce(patterns, {content, 0}, fn {pattern, replacement}, {text, count} ->
-      matches = length(Regex.scan(pattern, text))
-      {Regex.replace(pattern, text, replacement), count + matches}
-    end)
-  end
-
   defp redact_reference(reference, "url") do
     case parse_reference(reference) do
       {:url, url} ->
-        case URI.parse(url) do
-          %URI{} = uri ->
-            "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
-
-          _ ->
-            "@url:[invalid]"
-        end
+        uri = URI.parse(url)
+        "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
 
       _ ->
         "@url:[invalid]"
@@ -495,13 +475,8 @@ defmodule LemonCore.Context do
     do: {:omit, %{reference: safe_omission_reference(reference), reason: reason}}
 
   defp safe_omission_reference("@url:" <> url) do
-    case URI.parse(url) do
-      %URI{} = uri ->
-        "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
-
-      _ ->
-        "@url:[invalid]"
-    end
+    uri = URI.parse(url)
+    "@url:" <> (%URI{uri | userinfo: nil, query: nil, fragment: nil} |> URI.to_string())
   end
 
   defp safe_omission_reference("@session:" <> key), do: "@session:sha256:#{short_hash(key)}"

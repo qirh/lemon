@@ -177,13 +177,13 @@ defmodule LemonRouter.Policy do
       nil -> %{}
       policy when is_map(policy) -> policy
     end
-  rescue
-    _ -> %{}
   end
 
-  # Load channel-specific restrictions
-  defp get_channel_policy(nil), do: %{}
+  # Tools that mutate files or execute code on the host. Group chats require
+  # an approval for each call because any member can prompt the agent.
+  @group_approval_tools ~w(bash write edit patch hashline_edit)
 
+  # Load channel-specific restrictions
   defp get_channel_policy(channel_context) do
     channel_id = channel_context[:channel_id]
     peer_kind = channel_context[:peer_kind]
@@ -195,36 +195,55 @@ defmodule LemonRouter.Policy do
         policy -> policy
       end
 
-    # Groups are typically more restricted than DMs
     group_policy =
       if peer_kind in [:group, :supergroup, :channel] do
-        %{
-          # Groups typically require more approval
-          approvals: %{
-            "bash" => :always,
-            "write" => :always,
-            "process" => :always
-          }
-        }
+        %{approvals: Map.new(@group_approval_tools, &{&1, :always})}
       else
         %{}
       end
 
     merge(channel_policy, group_policy)
-  rescue
-    _ -> %{}
   end
 
-  # Load session overrides from store
+  # Load session overrides from store. A session row (written by
+  # `sessions.patch`) holds routing settings beside the tool policy:
+  # `%{tool_policy: map, model: id, thinking_level: level}`. Only its
+  # `tool_policy` map is a tool policy; legacy rows that stored policy keys
+  # (approvals, blocked_tools, ...) at the top level keep working.
+  @session_routing_keys [
+    :tool_policy,
+    :model,
+    :thinking_level,
+    "tool_policy",
+    "model",
+    "thinking_level"
+  ]
+  @policy_keys ~w(approvals blocked_tools allowed_commands blocked_commands max_file_size sandbox profile allow deny require_approval no_reply)a
+
   defp get_session_policy(nil), do: %{}
 
   defp get_session_policy(session_key) do
     case LemonCore.PolicyStore.get_session(session_key) do
-      nil -> %{}
-      policy when is_map(policy) -> policy
+      policy when is_map(policy) ->
+        legacy = Map.drop(policy, @session_routing_keys)
+
+        case Map.get(policy, :tool_policy) || Map.get(policy, "tool_policy") do
+          tool_policy when is_map(tool_policy) -> merge(legacy, atomize_policy_keys(tool_policy))
+          _ -> legacy
+        end
+
+      _ ->
+        %{}
     end
-  rescue
-    _ -> %{}
+  end
+
+  # `sessions.patch` stores the wire map (string keys); policy readers expect
+  # the atom keys the agent/runtime policies use, so known keys are atomized.
+  defp atomize_policy_keys(policy) do
+    Map.new(policy, fn {key, value} ->
+      atom = Enum.find(@policy_keys, &(Atom.to_string(&1) == key))
+      {atom || key, value}
+    end)
   end
 
   # Load operator runtime overrides from store
@@ -233,7 +252,5 @@ defmodule LemonRouter.Policy do
       nil -> %{}
       policy when is_map(policy) -> policy
     end
-  rescue
-    _ -> %{}
   end
 end

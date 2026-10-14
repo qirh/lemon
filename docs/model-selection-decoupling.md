@@ -56,7 +56,6 @@ affect a product run's executor.
 ### 4) API/tool surface updates
 
 - `agent` control-plane method accepts `model`.
-- `agent.inbox.send` accepts `model`.
 - `CodingAgent.Tools.Agent` accepts `model` and forwards it through
   `RunRequest.model`.
 - `CodingAgent.Tools.Task` accepts `model` and `thinking_level` for

@@ -46,9 +46,7 @@ path: `OPENAI_API_KEY`, `[providers.openai] api_key`, `api_key_secret`, or the
 default Lemon secret. Provider base URLs can come from `[providers.openai]
 base_url` or `OPENAI_BASE_URL`; otherwise Lemon uses `https://api.openai.com/v1`.
 Vertex Imagen jobs resolve `providers.google_vertex` project, location, and
-service-account JSON through Lemon runtime config/secrets. The live image proof
-can be run with `--provider vertex_imagen`, defaulting to
-`imagen-4.0-generate-001` in `us-central1`.
+service-account JSON through Lemon runtime config/secrets.
 
 `maxRetries` retries bounded transient provider failures such as 429 and 5xx
 responses. Non-transient provider errors are recorded as failed media jobs with
@@ -225,11 +223,8 @@ Public surfaces return:
 - redacted `media_job` metadata
 
 Public surfaces do not return raw prompts, raw provider responses, raw generated
-bytes, API keys, or channel message bodies. Support bundles and `media.status`
-reuse the same redacted metadata. Provider proof readiness is grouped by launch
-lane, so alternate providers such as `vertex_imagen`, `google_tts`, and
-`deepgram_transcribe` can satisfy the image, TTS, and STT lanes while exposing
-copy-ready per-provider rerun commands.
+bytes, API keys, or channel message bodies. Support bundles and the `media_status`
+tool reuse the same redacted metadata.
 
 Transcription and image-analysis outputs are treated as untrusted external
 content even when they come from deterministic local preview workers. The
@@ -247,190 +242,19 @@ explicit `auto_send_files` entry when the file exists under the run working
 directory. The directive line is removed from the channel text before
 Telegram/Discord rendering.
 
-## Proof Lanes
+## Focused Test Coverage
 
-Focused deterministic media tool lane:
+From the umbrella root:
 
 ```bash
-mix test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
+mix test apps/lemon_media/test apps/lemon_skills/test/lemon_skills/tools/media_status_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_generate_image_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_generate_speech_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_transcribe_audio_test.exs \
   apps/lemon_skills/test/lemon_skills/tools/media_analyze_image_test.exs \
-  apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs \
-  apps/coding_agent/test/coding_agent/tools_test.exs \
-  apps/coding_agent/test/coding_agent/tool_registry_test.exs \
-  apps/coding_agent/test/coding_agent/tool_policy_test.exs \
-  apps/coding_agent/test/coding_agent_test.exs \
-  apps/lemon_channels/test/lemon_channels/adapters/discord/renderer_test.exs \
-  apps/lemon_channels/test/lemon_channels/adapters/telegram/renderer_test.exs --seed 1
+  apps/lemon_skills/test/lemon_skills/tools/media_generate_video_test.exs --seed 1
 ```
 
-The latest lane passed locally on 2026-05-16 with `256 tests, 0 failures`.
-
-Deterministic local media proof lane:
-
-```bash
-MIX_ENV=test mix run scripts/live_media_image_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_speech_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_transcription_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_vision_smoke.exs --local
-MIX_ENV=test mix run scripts/live_media_video_smoke.exs --local
-```
-
-The local smoke mode exercises the same supervised media worker boundary without
-credentials or provider quota. It writes separate redacted artifacts under
-`.lemon/proofs/`:
-
-- `media-image-local-smoke-latest.json` for `local_svg`
-- `media-speech-local-smoke-latest.json` for `local_wav`
-- `media-transcription-local-smoke-latest.json` for `local_transcript`
-- `media-vision-local-smoke-latest.json` for `local_vision`
-- `media-video-local-smoke-latest.json` for `local_mp4`
-
-Those artifacts use `proof_scope: media_local` and
-`lemon.media_*_local_smoke` proof objects. They are regression proof for the
-deterministic BEAM media path only. They do not satisfy `media.provider_live`,
-the release audit provider-backed gate, or any claim that image, TTS, STT,
-vision, or video provider parity is complete.
-
-Opt-in live provider proof:
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_image_smoke.exs \
-    --proof-path .lemon/proofs/media-image-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_speech_smoke.exs \
-    --proof-path .lemon/proofs/media-speech-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_transcription_smoke.exs \
-    --proof-path .lemon/proofs/media-transcription-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_vision_smoke.exs \
-    --proof-path .lemon/proofs/media-vision-smoke-latest.json \
-    --model openrouter:openai/gpt-4o-mini
-```
-
-```bash
-LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1 \
-  MIX_ENV=test mix run scripts/live_media_video_smoke.exs \
-    --proof-path .lemon/proofs/media-video-smoke-latest.json \
-    --api-key-env OPENAI_API_KEY
-```
-
-The smokes resolve OpenAI credentials through the same runtime path as the
-tools by default. They accept `--proof-path PATH` for the redacted proof artifact,
-keep `--out PATH` as a backward-compatible alias, and also accept
-`--api-key-env ENV_NAME`, `--api-key-secret SECRET_NAME`, and `--base-url URL`
-for one-off live proof without editing Lemon config or exporting raw keys;
-those override values are passed directly into the tool runtime and are not
-written to the proof JSON. The smokes write redacted proof JSON under
-`.lemon/proofs/` with stable
-`lemon.media_*_smoke` proof objects, `media_provider` proof scope, and
-per-provider check names. `mix lemon.doctor` consumes those artifacts as
-`media.provider_live`, while `media.channel_delivery` is tracked separately
-from Telegram/Discord generated-media, generated-audio, and final-answer
-`MEDIA:<path>` delivery proofs. The provider smokes fail only on
-provider execution errors. Doctor remediation maps safe `reason_kind` labels to
-bounded operator hints for permission-denied, billing/quota, payment-required,
-request-shape, and generic provider HTTP failures without exposing raw provider
-responses. When an incomplete multi-provider lane has a safe failed/skipped
-provider id in the redacted proof, doctor remediation includes the matching
-`--provider` flag, such as `--provider vertex_imagen`,
-`--provider google_tts`, or `--provider vertex_veo`, so reruns target the
-actual blocked lane instead of the default. The vision smoke passed on
-2026-05-16 through
-OpenRouter `openai/gpt-4o-mini` and wrote `tmp/media-vision-live-proof.json`
-with `completed_count: 1` and `failed_count: 0`. Without
-`LEMON_TEST_ALLOW_LIVE_CREDENTIALS=1`, or without a resolvable credential for
-the configured provider from config or `--api-key-env`, they write skipped
-proofs with `failed_count: 0` and `reason_kind: credential_preflight_skipped`.
-Support bundles include the same redacted provider-live lane summary in
-`media_diagnostics.json`, including target-provider rerun commands for failed
-or skipped multi-provider lanes while omitting raw prompts, provider responses,
-artifact bytes, API keys, and secret names.
-
-Opt-in live channel delivery proof:
-
-```bash
-uv run scripts/live_telegram_matrix.py --skip-dm --skip-topic \
-  --topic-generated-media-delivery \
-  --generated-media-topic-id 35 \
-  --timeout 180 \
-  --result-path tmp/telegram-generated-media-proof.json
-```
-
-```bash
-uv run scripts/live_telegram_matrix.py --skip-dm --skip-topic \
-  --topic-generated-audio-delivery \
-  --generated-audio-topic-id 35 \
-  --timeout 120 \
-  --result-path tmp/telegram-generated-audio-proof.json \
-  --proof-path .lemon/proofs/telegram-generated-audio-latest.json
-```
-
-```bash
-uv run scripts/live_discord_matrix.py \
-  --channel-id 1475727417372049419 \
-  --bot-token-index 0 \
-  --sender-bot-token-index -1 \
-  --wait-generated-media-delivery \
-  --reset-session-between-checks \
-  --timeout 180 \
-  --result-path tmp/discord-generated-media-proof.json
-```
-
-```bash
-uv run scripts/live_discord_matrix.py \
-  --channel-id 1475727417372049419 \
-  --bot-token-index 0 \
-  --sender-bot-token-index 1 \
-  --wait-generated-audio-delivery \
-  --reset-session-between-checks \
-  --timeout 120 \
-  --result-path tmp/discord-generated-audio-proof.json \
-  --proof-path .lemon/proofs/discord-generated-audio-latest.json
-```
-
-The generated-media probes ask the channel agent to run `media_generate_image`
-with `provider local_svg` and `sendToChannel: true`, then verify that the
-generated SVG arrives through the normal Telegram/Discord attachment path. The
-generated-audio probes use `media_generate_speech` with `provider local_wav`
-and `sendToChannel: true`, then verify that the generated WAV arrives through
-the normal Telegram/Discord attachment path. They require the channel file
-settings to opt into generated files with `auto_send_generated_files` or the
-legacy `auto_send_generated_images` alias.
-
-The Telegram generated-SVG proof passed on 2026-05-16 in forum topic `35`; SVG
-outputs are uploaded as documents because Telegram rejects SVG photo
-processing. The Telegram generated-audio proof passed on 2026-05-17 in topic
-`35`, with `telegram_has_document: true` and `marker_seen: true` in the
-sanitized proof artifact.
-
-The Discord proof passed on 2026-05-16 in channel `1475727417372049419` after
-`gateway.discord.files` was preserved through core config normalization and
-parsed by the gateway. The proof delivered the generated SVG through the normal
-Discord attachment path. The Discord generated-audio proof passed on
-2026-05-17 in the same channel with one generated WAV attachment; the renderer
-regression fixed in this slice keeps generated-file auto-send working when the
-final answer edits an existing Discord presentation message.
-
-## Remaining Preview Gaps
-
-- successful live image-provider proof under usable OpenAI or Vertex quota
-- successful live speech-provider proof under usable OpenAI, ElevenLabs, or
-  Google TTS quota
-- successful live video-provider proof under usable OpenAI or Vertex Veo quota
+Provider credentials and real channel delivery require separate opt-in operator
+checks. See [testing](../testing.md) for the supported manual smoke lanes; no
+stored live-proof artifact is required by the runtime.

@@ -58,24 +58,6 @@ defmodule LemonCore.Config.AgentTest do
       assert config.extensions.auto_load_default_paths == false
     end
 
-    test "uses settings from config map" do
-      settings = %{
-        "agent" => %{
-          "default_provider" => "openai",
-          "default_model" => "gpt-4o",
-          "default_thinking_level" => "high",
-          "theme" => "ocean"
-        }
-      }
-
-      config = Agent.resolve(settings)
-
-      assert config.default_provider == "openai"
-      assert config.default_model == "gpt-4o"
-      assert config.default_thinking_level == "high"
-      assert config.theme == "ocean"
-    end
-
     test "supports defaults and runtime aliases" do
       settings = %{
         "defaults" => %{
@@ -103,12 +85,12 @@ defmodule LemonCore.Config.AgentTest do
       System.put_env("LEMON_THEME", "dark")
 
       settings = %{
-        "agent" => %{
-          "default_provider" => "openai",
-          "default_model" => "gpt-4o",
-          "default_thinking_level" => "high",
-          "theme" => "ocean"
-        }
+        "defaults" => %{
+          "provider" => "openai",
+          "model" => "gpt-4o",
+          "thinking_level" => "high"
+        },
+        "runtime" => %{"theme" => "ocean"}
       }
 
       config = Agent.resolve(settings)
@@ -324,7 +306,7 @@ defmodule LemonCore.Config.AgentTest do
 
     test "uses compaction settings from config" do
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "compaction" => %{
             "enabled" => false,
             "reserve_tokens" => 8192,
@@ -346,7 +328,7 @@ defmodule LemonCore.Config.AgentTest do
       System.put_env("LEMON_COMPACTION_KEEP_RECENT_TOKENS", "10000")
 
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "compaction" => %{
             "enabled" => true,
             "reserve_tokens" => 16_384,
@@ -374,7 +356,7 @@ defmodule LemonCore.Config.AgentTest do
 
     test "uses retry settings from config" do
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "retry" => %{
             "enabled" => false,
             "max_retries" => 5,
@@ -403,6 +385,19 @@ defmodule LemonCore.Config.AgentTest do
     end
   end
 
+  describe "max_tool_turns configuration" do
+    test "is unlimited unless a positive cap is configured" do
+      assert Agent.resolve(%{}).max_tool_turns == :infinity
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => 0}}).max_tool_turns == :infinity
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => -3}}).max_tool_turns == :infinity
+    end
+
+    test "accepts a positive cap from [runtime]" do
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => 200}}).max_tool_turns == 200
+      assert Agent.resolve(%{"runtime" => %{"max_tool_turns" => "80"}}).max_tool_turns == 80
+    end
+  end
+
   describe "shell configuration" do
     test "uses default shell settings (nil)" do
       config = Agent.resolve(%{})
@@ -413,7 +408,7 @@ defmodule LemonCore.Config.AgentTest do
 
     test "uses shell settings from config" do
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "shell" => %{
             "path" => "/bin/zsh",
             "command_prefix" => "prefix"
@@ -432,7 +427,7 @@ defmodule LemonCore.Config.AgentTest do
       System.put_env("LEMON_SHELL_COMMAND_PREFIX", "sudo")
 
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "shell" => %{
             "path" => "/bin/zsh",
             "command_prefix" => "prefix"
@@ -456,7 +451,7 @@ defmodule LemonCore.Config.AgentTest do
 
     test "uses extension_paths from config" do
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "extension_paths" => ["./ext1", "./ext2"]
         }
       }
@@ -470,7 +465,7 @@ defmodule LemonCore.Config.AgentTest do
       System.put_env("LEMON_EXTENSION_PATHS", "/path/one,/path/two")
 
       settings = %{
-        "agent" => %{
+        "runtime" => %{
           "extension_paths" => ["./ext1"]
         }
       }
@@ -481,6 +476,11 @@ defmodule LemonCore.Config.AgentTest do
     end
 
     test "default extension directories require explicit trust" do
+      # The defaults must hold regardless of ambient host/earlier-test env
+      # (on_exit in setup restores the original environment).
+      System.delete_env("LEMON_EXTENSIONS_ENABLED")
+      System.delete_env("LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS")
+
       config = Agent.resolve(%{})
 
       assert config.extensions.enabled == true

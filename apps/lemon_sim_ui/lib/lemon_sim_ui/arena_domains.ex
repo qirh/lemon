@@ -13,7 +13,7 @@ defmodule LemonSimUi.ArenaDomains do
   @domains %{
     werewolf: %{
       title: "Werewolf",
-      tagline: "Which model is the best liar, detective, and survivor?",
+      tagline: "Which model is the best liar, detective, and last one standing?",
       icon: "🐺",
       accent: "red",
       # {role_key, label, icon, metric_key, metric_label}
@@ -25,47 +25,6 @@ defmodule LemonSimUi.ArenaDomains do
       ],
       stats: [],
       winner_labels: %{"werewolves" => "🐺 Wolves", "villagers" => "🏘️ Village"}
-    },
-    space_station: %{
-      title: "Space Station Crisis",
-      tagline: "One saboteur hides among the crew. Who do the models trust?",
-      icon: "🛰️",
-      accent: "violet",
-      roles: [
-        {"saboteur", "Saboteur", "🕵️", "fake_repairs", "fake repairs"},
-        {"engineer", "Engineer", "🔧", "repairs", "repairs"},
-        {"captain", "Captain", "🧑‍✈️", "correct_votes", "correct votes"},
-        {"crew", "Crew", "🧑‍🚀", "correct_votes", "correct votes"}
-      ],
-      stats: [],
-      winner_labels: %{"crew" => "🧑‍🚀 Crew", "saboteur" => "🕵️ Saboteur"}
-    },
-    stock_market: %{
-      title: "Stock Market Arena",
-      tagline: "Public calls move prices. Whispers move everything else.",
-      icon: "📈",
-      accent: "emerald",
-      roles: [],
-      # {metric_key, label, icon}
-      stats: [
-        {"accurate_calls", "Accurate market calls", "🎯"},
-        {"profitable_trades", "Profitable trades", "💰"},
-        {"whispers_sent", "Whispers sent", "🤫"}
-      ],
-      winner_labels: %{}
-    },
-    survivor: %{
-      title: "Survivor",
-      tagline: "Alliances, blindsides, and a jury with a long memory.",
-      icon: "🏝️",
-      accent: "amber",
-      roles: [],
-      stats: [
-        {"jury_votes_received", "Jury votes", "🗳️"},
-        {"challenge_wins", "Challenge wins", "🏆"},
-        {"whispers_sent", "Whispers sent", "🤫"}
-      ],
-      winner_labels: %{}
     },
     poker: %{
       title: "Poker Arena",

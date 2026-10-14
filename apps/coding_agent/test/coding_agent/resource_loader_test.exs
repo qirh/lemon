@@ -8,6 +8,8 @@ defmodule CodingAgent.ResourceLoaderTest do
 
   setup %{tmp_dir: tmp_dir} do
     previous_harness_dir_env = System.get_env("LEMON_HARNESS_SKILLS_DIR")
+    previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "global-agent"))
     previous_harness_dir = Application.get_env(:lemon_skills, :harness_global_skills_dir)
     harness_dir = Path.join(tmp_dir, "harness-skills")
 
@@ -15,6 +17,7 @@ defmodule CodingAgent.ResourceLoaderTest do
 
     on_exit(fn ->
       restore_env("LEMON_HARNESS_SKILLS_DIR", previous_harness_dir_env)
+      restore_env("LEMON_AGENT_DIR", previous_agent_dir)
       restore_app_env(:lemon_skills, :harness_global_skills_dir, previous_harness_dir)
     end)
 
@@ -72,10 +75,78 @@ defmodule CodingAgent.ResourceLoaderTest do
       File.write!(Path.join(tmp_dir, "CLAUDE.md"), "Parent config")
       File.write!(Path.join(subdir, "CLAUDE.md"), "Child config")
 
+      files = ResourceLoader.load_instructions_list(subdir)
+      paths = Enum.map(files, & &1.path)
+
+      assert Enum.find_index(paths, &(&1 == Path.join(tmp_dir, "CLAUDE.md"))) <
+               Enum.find_index(paths, &(&1 == Path.join(subdir, "CLAUDE.md")))
+
       result = ResourceLoader.load_instructions(subdir)
-      # Both should be included
-      assert result =~ "Child config"
-      assert result =~ "Parent config"
+      {parent_offset, _} = :binary.match(result, "Parent config")
+      {child_offset, _} = :binary.match(result, "Child config")
+      assert parent_offset < child_offset
+    end
+
+    test "renders global then ancestors then cwd, retaining each config root", %{tmp_dir: tmp_dir} do
+      global = System.get_env("LEMON_AGENT_DIR")
+      cwd = Path.join(tmp_dir, "ancestor/local")
+
+      paths = [
+        Path.join(global, "AGENTS.md"),
+        Path.join(tmp_dir, "AGENTS.md"),
+        Path.join(tmp_dir, ".claude/CLAUDE.md"),
+        Path.join(tmp_dir, ".lemon/AGENTS.md"),
+        Path.join(tmp_dir, "ancestor/AGENTS.md"),
+        Path.join(cwd, "CLAUDE.md"),
+        Path.join(cwd, ".claude/AGENTS.md"),
+        Path.join(cwd, ".lemon/CLAUDE.md")
+      ]
+
+      Enum.each(Enum.with_index(paths), fn {path, index} ->
+        File.mkdir_p!(Path.dirname(path))
+        File.write!(path, "directive-#{index}")
+      end)
+
+      loaded = ResourceLoader.load_instructions_list(cwd)
+      assert Enum.map(Enum.filter(loaded, &(&1.path in paths)), & &1.path) == paths
+
+      rendered = ResourceLoader.load_instructions(cwd)
+
+      offsets =
+        Enum.map(paths, fn path -> elem(:binary.match(rendered, "<!-- From: #{path} -->"), 0) end)
+
+      assert offsets == Enum.sort(offsets)
+    end
+
+    test "loads a physical file only once through global, local and symlink paths", %{
+      tmp_dir: tmp_dir
+    } do
+      global = System.get_env("LEMON_AGENT_DIR")
+      File.mkdir_p!(global)
+      File.write!(Path.join(global, "AGENTS.md"), "unique-physical-directive")
+      File.ln_s!(Path.join(global, "AGENTS.md"), Path.join(tmp_dir, "CLAUDE.md"))
+      File.mkdir_p!(Path.join(tmp_dir, ".lemon"))
+      File.ln!(Path.join(global, "AGENTS.md"), Path.join(tmp_dir, ".lemon/AGENTS.md"))
+      File.write!(Path.join(tmp_dir, "AGENTS.md"), "intermediate-local-directive")
+
+      # cwd == global also encounters the global path through its ancestor chain.
+      files = ResourceLoader.load_instructions_list(global)
+      assert Enum.count(files, &(&1.content == "unique-physical-directive")) == 1
+
+      rendered = ResourceLoader.load_instructions(tmp_dir)
+      assert length(:binary.matches(rendered, "unique-physical-directive")) == 1
+      local_files = ResourceLoader.load_instructions_list(tmp_dir)
+
+      aliases =
+        Enum.filter(
+          local_files,
+          &(&1.content in ["unique-physical-directive", "intermediate-local-directive"])
+        )
+
+      assert Enum.map(aliases, & &1.path) == [
+               Path.join(tmp_dir, "AGENTS.md"),
+               Path.join(tmp_dir, ".lemon/AGENTS.md")
+             ]
     end
   end
 
@@ -87,7 +158,7 @@ defmodule CodingAgent.ResourceLoaderTest do
       assert is_list(result)
       assert result != []
 
-      file = Enum.find(result, &(&1.path =~ "CLAUDE.md"))
+      file = Enum.find(result, &(&1.path == Path.join(tmp_dir, "CLAUDE.md")))
       assert file != nil
       assert file.content == "Test content"
     end

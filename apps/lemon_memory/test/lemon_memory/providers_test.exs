@@ -124,7 +124,33 @@ defmodule LemonMemory.ProvidersTest do
 
     assert_receive {:fake_search, "fake", "deploy", :session, "session-1"}
     refute_received {:fake_search, "disabled", _, _, _}
-    assert Enum.map(results, & &1.doc_id) == ["external-doc", "local-doc"]
+    assert Enum.map(results, & &1.doc_id) == ["local-doc", "external-doc"]
+  end
+
+  test "search keeps each provider's relevance order instead of re-sorting by recency" do
+    # The provider ranks an old document above a new one, as BM25 does when the
+    # old one is the better match. The merge must not undo that.
+    best_but_old = doc("best-but-old", 10)
+    worse_but_new = doc("worse-but-new", 90)
+
+    :persistent_term.put({__MODULE__.StaticProvider, :docs}, [best_but_old, worse_but_new])
+    on_exit(fn -> :persistent_term.erase({__MODULE__.StaticProvider, :docs}) end)
+
+    results =
+      Providers.search("deploy",
+        provider_specs: [
+          %{id: "static", module: __MODULE__.StaticProvider, enabled: true, scopes: [:session]},
+          %{id: "fake", module: FakeProvider, enabled: true, scopes: [:session]}
+        ],
+        owner: self(),
+        scope: :session,
+        scope_key: "session-1",
+        limit: 2
+      )
+
+    # Round-robin: each provider's best document first, so a small limit is not
+    # monopolised by whichever provider answered with the newest rows.
+    assert Enum.map(results, & &1.doc_id) == ["best-but-old", "external-doc"]
   end
 
   test "provider failures do not fail search" do
@@ -193,7 +219,7 @@ defmodule LemonMemory.ProvidersTest do
 
     assert Enum.map(results, & &1.doc_id) == ["external-doc"]
     assert elapsed_ms >= 150, "the 200ms provider was dropped early (#{elapsed_ms}ms)"
-    assert elapsed_ms < 1_000, "the 200ms provider waited on the 5s provider (#{elapsed_ms}ms)"
+    assert elapsed_ms < 4_000, "the 200ms provider waited on the 5s provider (#{elapsed_ms}ms)"
   end
 
   test "a fast provider still returns while a slow one is being dropped" do

@@ -15,14 +15,29 @@ defmodule LemonCli.CommandRegistry.Metadata do
     end
   end
 
-  defmacro launcher(name, summary, subcommand_names \\ []) do
+  defmacro lifecycle(name, usage, summary, launchers, details \\ []) do
     quote do
       %{
         name: unquote(name),
         summary: unquote(summary),
-        usage: nil,
+        usage: unquote(usage),
         options: [],
-        subcommands: subcommands(unquote(subcommand_names))
+        subcommands: [],
+        details: unquote(details),
+        launchers: unquote(launchers)
+      }
+    end
+  end
+
+  defmacro runtime(name, handler, summary, usage, options, commands \\ []) do
+    quote do
+      %{
+        name: unquote(name),
+        summary: unquote(summary),
+        usage: unquote(usage),
+        options: unquote(options),
+        subcommands: unquote(commands),
+        handler: unquote(handler)
       }
     end
   end
@@ -30,17 +45,80 @@ end
 
 defmodule LemonCli.CommandRegistry do
   @moduledoc """
-  Canonical metadata for the Mix-free Lemon command families.
+  The single command registry shared by the source (`./bin/lemon`) and
+  packaged (`lemon`) launchers.
 
-  Dispatch, top-level help, command help, and shell completion generation all
-  consume this registry. Launcher-only commands are kept in separate source
-  and release sets so completion never advertises a command unavailable in the
-  launcher that generated it.
+  Two kinds of command live here:
+
+    * CLI families (`commands/0`) are dispatched by `LemonCli.CLI` through
+      Mix-free runtime modules in both launchers.
+    * Lifecycle commands (`lifecycle_commands/1`) are handled by the launcher
+      shell itself because they locate, start, stop, or attach to the runtime.
+
+  Dispatch, top-level help, command help, and shell completion all consume
+  this registry, filtered by `launcher/0`, so neither launcher ever advertises
+  a command it cannot run.
   """
 
   import LemonCli.CommandRegistry.Metadata
 
   @commands [
+    %{
+      name: "acp",
+      summary: "Serve ACP over stdio using the local runtime",
+      usage: "lemon acp",
+      subcommands: [],
+      options: []
+    },
+    %{
+      name: "tern",
+      summary: "Install Lemon's Tern palette plugin and ACP agent",
+      usage: "lemon tern install [--config-dir PATH]",
+      subcommands: [
+        %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
+      ],
+      options: [
+        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
+      ]
+    },
+    %{
+      name: "run",
+      summary: "Run a prompt non-interactively (-p, --print)",
+      usage: "lemon run [PROMPT] [--output text|json|stream-json] [options]",
+      subcommands: [],
+      options: [
+        option("--output FORMAT", ["--output"], "text, json, or stream-json"),
+        option("--model MODEL", ["--model"], "Provider:model override"),
+        option("--cwd PATH", ["--cwd"], "Working directory"),
+        option("--session KEY", ["--session"], "Resume a session"),
+        option("--continue", ["--continue"], "Continue the latest CLI session"),
+        option(
+          "--approval-policy deny|allow",
+          ["--approval-policy"],
+          "Deny or allow approval requests"
+        ),
+        option("--allowed-tools LIST", ["--allowed-tools"], "Comma-separated tool allowlist"),
+        option("--denied-tools LIST", ["--denied-tools"], "Comma-separated tool denylist")
+      ]
+    },
+    %{
+      name: "acp",
+      summary: "Serve ACP over stdio using the local runtime",
+      usage: "lemon acp",
+      subcommands: [],
+      options: []
+    },
+    %{
+      name: "tern",
+      summary: "Install Lemon's Tern palette plugin and ACP agent",
+      usage: "lemon tern install [--config-dir PATH]",
+      subcommands: [
+        %{name: "install", summary: "Install the palette plugin and register `tern acp lemon`"}
+      ],
+      options: [
+        option("--config-dir PATH", ["--config-dir"], "Tern configuration directory")
+      ]
+    },
     %{
       name: "setup",
       summary: "Run first-time setup and configuration",
@@ -54,7 +132,29 @@ defmodule LemonCli.CommandRegistry do
       options: [
         option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts"),
         option("--config-path PATH", ["--config-path"], "Config file to read or write"),
-        option("--skip-verify", ["--skip-verify"], "Defer live provider verification")
+        option("--skip-verify", ["--skip-verify"], "Defer live provider verification"),
+        option(
+          "--provider NAME",
+          ["--provider"],
+          "Provider to sign in to (openai-codex for ChatGPT)"
+        ),
+        option("--token TOKEN", ["--token"], "Credential for non-interactive provider setup"),
+        option(
+          "--auth oauth|api_key|codex-cli",
+          ["--auth"],
+          "Authentication mode (import is opt-in)"
+        ),
+        option(
+          "--codex-auth-path PATH",
+          ["--codex-auth-path"],
+          "Auth file for --auth codex-cli only"
+        ),
+        option("--model MODEL", ["--model"], "Model to make the default after onboarding"),
+        option(
+          "--if-required",
+          ["--if-required"],
+          "Exit immediately unless setup is still required"
+        )
       ]
     },
     %{
@@ -65,14 +165,27 @@ defmodule LemonCli.CommandRegistry do
       options: [
         option("--provider NAME", ["--provider"], "Provider id"),
         option("--token TOKEN", ["--token"], "Provider credential"),
-        option("--auth oauth|api_key", ["--auth"], "Authentication mode"),
+        option(
+          "--auth oauth|api_key|codex-cli",
+          ["--auth"],
+          "Authentication mode (import is opt-in)"
+        ),
+        option(
+          "--codex-auth-path PATH",
+          ["--codex-auth-path"],
+          "Auth file for --auth codex-cli only"
+        ),
+        option("--non-interactive", ["--non-interactive"], "Require --token or --auth codex-cli"),
         option("--secret-name NAME", ["--secret-name"], "Encrypted secret name"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
-        option("--config-path PATH", ["--config-path"], "Config file to update")
+        option("--config-path PATH", ["--config-path"], "Config file to update"),
+        option("--status", ["--status"], "Show the provider's sign-in and credential status"),
+        option("--logout", ["--logout"], "Delete the stored OAuth login and its config")
       ],
       details: [
-        "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml."
+        "Without a provider, Lemon displays an interactive picker. Credentials are stored in the encrypted secrets store and referenced from config.toml.",
+        "`lemon model anthropic` signs in with a Claude Pro/Max subscription in the browser; `--status` and `--logout` need a provider."
       ]
     },
     %{
@@ -82,7 +195,13 @@ defmodule LemonCli.CommandRegistry do
       subcommands: [%{name: "setup", summary: "Configure Telegram or Discord"}],
       options: [
         option("--transport NAME, -t NAME", ["--transport", "-t"], "Gateway adapter"),
-        option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts")
+        option("--non-interactive, -n", ["--non-interactive", "-n"], "Skip prompts"),
+        option("--token TOKEN", ["--token"], "Bot token to store in encrypted secrets"),
+        option("--chat-id ID", ["--chat-id"], "Telegram chat to allow (repeatable)"),
+        option("--pair-timeout SECONDS", ["--pair-timeout"], "Telegram /start pairing wait")
+      ],
+      details: [
+        "Telegram setup pairs the bot with your chat: send /start to the bot when prompted, or pass --chat-id. An unpaired bot ignores every chat."
       ]
     },
     %{
@@ -100,11 +219,15 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "config",
-      summary: "Validate or show configuration",
-      usage: "lemon config [validate|show] [options]",
+      summary: "Validate, show or migrate configuration",
+      usage: "lemon config [validate|show|migrate] [options]",
       subcommands: [
         %{name: "validate", summary: "Validate the resolved configuration"},
-        %{name: "show", summary: "Show the resolved configuration summary"}
+        %{name: "show", summary: "Show the resolved configuration summary"},
+        %{
+          name: "migrate",
+          summary: "Rewrite deprecated sections in global and project config (keeps a backup)"
+        }
       ],
       options: [
         option("--verbose, -v", ["--verbose", "-v"], "Verbose output"),
@@ -113,6 +236,41 @@ defmodule LemonCli.CommandRegistry do
           ["--project-dir", "-p"],
           "Project directory for project config"
         )
+      ]
+    },
+    %{
+      name: "mcp",
+      summary: "Manage and test named MCP servers",
+      usage:
+        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list|remove NAME|test NAME [options]",
+      subcommands: subcommands(~w(add list remove test)),
+      options: [
+        option(
+          "--global",
+          ["--global"],
+          "Use the global agent MCP file instead of project config"
+        ),
+        option("--cwd PATH", ["--cwd"], "Project root (default: current directory)"),
+        option("--stdio COMMAND", ["--stdio"], "Executable; pass its arguments after --"),
+        option("--http URL", ["--http"], "Streamable HTTP MCP endpoint"),
+        option("--env KEY=VALUE", ["--env"], "Stdio environment entry (repeatable)"),
+        option("--header KEY=VALUE", ["--header"], "HTTP header (repeatable)"),
+        option(
+          "--approval always|never",
+          ["--approval"],
+          "Server approval default (add: always)"
+        ),
+        option(
+          "--tool-approval TOOL=always|never",
+          ["--tool-approval"],
+          "Exact remote tool override (repeatable)"
+        ),
+        option(
+          "--replace",
+          ["--replace"],
+          "Replace a unique existing name, preserving extensions"
+        ),
+        option("--json", ["--json"], "Emit redacted JSON")
       ]
     },
     %{
@@ -127,6 +285,7 @@ defmodule LemonCli.CommandRegistry do
         %{name: "delete", summary: "Delete one secret"},
         %{name: "check", summary: "Check configured credential sources"},
         %{name: "import-env", summary: "Import selected environment credentials"},
+        %{name: "rotate-key", summary: "Preview or apply a master-key rotation"},
         %{name: "sources", summary: "Inspect or test external secret sources"}
       ],
       options: [
@@ -135,19 +294,23 @@ defmodule LemonCli.CommandRegistry do
         option("--expires-at N", ["--expires-at"], "Expiry timestamp for set"),
         option("--dry-run", ["--dry-run"], "Preview environment imports"),
         option("--force", ["--force"], "Confirm the selected replacement operation"),
+        option("--confirm TOKEN", ["--confirm"], "Exact rotate-key preview token"),
         option("--project-dir PATH", ["--project-dir"], "Project directory for source config"),
         option("--source-id ID", ["--source-id"], "Test one external source"),
         option("--json", ["--json"], "Emit redacted source readiness JSON")
+      ],
+      details: [
+        "rotate-key previews by default and changes nothing. Applying requires the exact preview token, refuses while a Lemon runtime is running, and re-encrypts every stored secret under a new master key written to the Keychain entry or key file that supplied the current one."
       ]
     },
     %{
       name: "channels",
-      summary: "Inspect channel launch readiness",
+      summary: "Inspect channel configuration",
       usage: "lemon channels [options]",
       subcommands: [],
       options: [
-        option("--project-dir PATH", ["--project-dir"], "Project root to scan"),
-        option("--json", ["--json"], "Emit redacted readiness JSON")
+        option("--project-dir PATH", ["--project-dir"], "Project root to read config from"),
+        option("--json", ["--json"], "Emit redacted channel diagnostics JSON")
       ]
     },
     %{
@@ -246,7 +409,7 @@ defmodule LemonCli.CommandRegistry do
       usage: "lemon sessions <command> [options]",
       subcommands:
         subcommands(
-          ~w(list search stats show history title pin unpin archive restore export prune delete)
+          ~w(list search stats show history context title pin unpin archive restore export prune delete)
         ),
       options: [
         option("--json", ["--json"], "Emit one redacted JSON document"),
@@ -257,6 +420,7 @@ defmodule LemonCli.CommandRegistry do
         option("--pinned | --unpinned", ["--pinned", "--unpinned"], "Filter pin state"),
         option("--archived | --active", ["--archived", "--active"], "Filter archive state"),
         option("--format json|markdown", ["--format"], "Redacted export format"),
+        option("--cwd DIR", ["--cwd"], "Project directory for context (default: current)"),
         option("--clear", ["--clear"], "Clear a session title"),
         option("--output PATH", ["--output"], "Write export content to a private file"),
         option("--force", ["--force"], "Replace an existing regular export file"),
@@ -266,7 +430,38 @@ defmodule LemonCli.CommandRegistry do
         option("--confirm TOKEN", ["--confirm"], "Exact preview or delete confirmation")
       ],
       details: [
-        "Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key."
+        "Stats returns exact aggregate counts with bounded, redacted agent and origin dimensions. History and exports are always redacted. Prune previews by default and executes only with the exact token from an unchanged candidate set. Delete requires the exact session key.",
+        "Context shows a native session's context-window usage by category (system prompt, tools, skills, context files, memory, messages, free space); splits are estimates scaled to the provider-reported total."
+      ]
+    },
+    %{
+      name: "omp",
+      summary: "Start, watch, and steer omp coding-agent sessions",
+      usage: "lemon omp <command> [args] [options]",
+      subcommands: [
+        %{name: "status", summary: "Show whether omp is installed and live-session counts"},
+        %{name: "list", summary: "List live omp sessions (--all includes ended ones)"},
+        %{name: "show", summary: "Summarize one session: show ID"},
+        %{name: "discover", summary: "List omp's stored sessions for a workspace"},
+        %{name: "start", summary: "Start omp on a prompt: start [options] PROMPT..."},
+        %{name: "send", summary: "Steer or follow up: send ID [--follow-up] MESSAGE..."},
+        %{name: "cancel", summary: "Abort the running turn; the session stays open"},
+        %{name: "close", summary: "End the omp process; it stays resumable"},
+        %{name: "resume", summary: "Reopen a stored session: resume OMP-ID [PROMPT...]"},
+        %{name: "watch", summary: "Follow a session until its turn settles"}
+      ],
+      options: [
+        option("--cwd PATH", ["--cwd"], "Workspace for start, resume, discover (default: .)"),
+        option("--model MODEL", ["--model"], "omp model for start or resume"),
+        option("--thinking LEVEL", ["--thinking"], "omp thinking level for start or resume"),
+        option("--follow-up", ["--follow-up"], "Queue a send after the running turn"),
+        option("--all", ["--all"], "Include ended sessions in list"),
+        option("--limit N", ["--limit"], "Bound list or discover rows (max 100)"),
+        option("--json", ["--json"], "Emit JSON")
+      ],
+      details: [
+        "omp runs inside the Lemon runtime, which starts first when needed. Without a subcommand, lemon omp lists live sessions. Text from omp is untrusted and printed with control characters removed.",
+        "Leaving watch (including Ctrl-C) never cancels the omp turn. A send or cancel reported as not retry-safe may already have taken effect; check `lemon omp show ID` before retrying."
       ]
     },
     %{
@@ -312,36 +507,199 @@ defmodule LemonCli.CommandRegistry do
       subcommands: subcommands(~w(bash zsh fish)),
       options: [],
       details: [
-        "The generated script matches the source or packaged launcher that produced it. Source and release-only commands are never mixed."
+        "The generated script matches the invoking launcher. Release VM tools (remote, eval, rpc) are only advertised by packaged installs."
       ]
-    }
+    },
+    %{
+      name: "migrate",
+      summary: "Import user data from a Hermes home",
+      usage: "lemon migrate hermes [audit] [options]",
+      subcommands: [
+        %{name: "hermes", summary: "Preview, then import a Hermes home into Lemon"},
+        %{name: "audit", summary: "Read-only compatibility audit (`migrate hermes audit`)"}
+      ],
+      options: [
+        option("--source PATH", ["--source"], "Hermes home (default: ~/.hermes)"),
+        option("--target PATH", ["--target"], "Lemon home (default: ~/.lemon)"),
+        option("--workspace-dir PATH", ["--workspace-dir"], "Assistant workspace override"),
+        option("--preset user-data|full", ["--preset"], "Import scope (default: user-data)"),
+        option("--migrate-secrets", ["--migrate-secrets"], "Import allowlisted secrets"),
+        option("--skill-conflict skip|rename", ["--skill-conflict"], "Existing skill policy"),
+        option("--dry-run", ["--dry-run"], "Preview without writing"),
+        option("--yes", ["--yes"], "Apply without prompting"),
+        option("--overwrite", ["--overwrite"], "Replace conflicting target files"),
+        option("--no-backup", ["--no-backup"], "Skip the pre-migration zip backup"),
+        option("--json", ["--json"], "Emit the audit as JSON")
+      ],
+      details: [
+        "Migration always previews first and refuses conflicts unless --overwrite is set. Without --yes it asks before writing. Secret values are never printed or written to reports."
+      ]
+    },
+    %{
+      name: "node",
+      summary: "Join a controller as a named execution node",
+      usage: "lemon node join --name NAME --controller wss://HOST/ws [options]",
+      subcommands: [%{name: "join", summary: "Pair with or reconnect to a controller"}],
+      options: [
+        option("--name NAME", ["--name"], "Unique execution node name"),
+        option("--controller URL", ["--controller"], "Controller control-plane WebSocket"),
+        option("--pair", ["--pair"], "Pair and store a controller-issued node token"),
+        option("--node-id ID", ["--node-id"], "Durable controller node ID"),
+        option("--repair", ["--repair"], "Operator-authorized legacy credential repair"),
+        option(
+          "--allow-insecure-controller",
+          ["--allow-insecure-controller"],
+          "Allow non-loopback ws://"
+        ),
+        option("--cwd PATH", ["--cwd"], "Default local working directory")
+      ]
+    },
+    %{
+      name: "version",
+      summary: "Print the Lemon version (--version includes build identity)",
+      usage: "lemon version [--verbose]",
+      subcommands: [],
+      options: [option("--verbose", ["--verbose"], "Show source/release, commit, and channel")]
+    },
+    runtime(
+      "send",
+      LemonChannels.ScriptSend.CLI,
+      "Send a Telegram or Discord notification",
+      "lemon send --to TARGET [options] [message]",
+      [
+        option("--to TARGET", ["--to"], "Telegram or Discord target"),
+        option("--account NAME", ["--account"], "Channel account"),
+        option("--subject TEXT", ["--subject"], "Message subject"),
+        option("--file PATH", ["--file"], "Read body from a file, or - for stdin"),
+        option("--attach PATH", ["--attach"], "Attach a local file (repeatable)"),
+        option("--thread ID, --topic ID", ["--thread", "--topic"], "Thread or topic"),
+        option("--reply-to ID", ["--reply-to"], "Reply to a platform message"),
+        option("--list [PLATFORM]", ["--list"], "List known targets"),
+        option("--dry-run", ["--dry-run"], "Validate without sending"),
+        option("--quiet", ["--quiet"], "Suppress normal output"),
+        option("--json", ["--json"], "Emit JSON")
+      ]
+    ),
+    runtime(
+      "media",
+      LemonMedia.CLI,
+      "Inspect media generation diagnostics",
+      "lemon media [options]",
+      [
+        option("--project-dir PATH", ["--project-dir"], "Project root"),
+        option("--limit N", ["--limit"], "Recent jobs to show"),
+        option("--json", ["--json"], "Emit redacted JSON")
+      ]
+    ),
+    runtime(
+      "models",
+      LemonAi.Models.CLI,
+      "List the model catalog",
+      "lemon models [options]",
+      [
+        option("--provider NAME", ["--provider", "-p"], "Filter by provider"),
+        option("--vision", ["--vision"], "Only image-capable models"),
+        option("--thinking", ["--thinking"], "Only reasoning-capable models"),
+        option("--limit N", ["--limit", "-l"], "Maximum rows"),
+        option("--json", ["--json"], "Emit catalog and summary JSON")
+      ]
+    ),
+    runtime(
+      "policy",
+      LemonChannels.ModelPolicy.CLI,
+      "Manage model policies",
+      "lemon policy <list|set|get|clear> [channel] [options]",
+      [
+        option("--account ID", ["--account", "-a"], "Channel account"),
+        option("--peer ID", ["--peer", "-p"], "Peer or chat"),
+        option("--thread ID", ["--thread", "-t"], "Thread or topic"),
+        option("--model MODEL", ["--model", "-m"], "Model override"),
+        option("--thinking LEVEL", ["--thinking"], "Thinking override"),
+        option("--reason TEXT", ["--reason", "-r"], "Policy metadata reason"),
+        option("--all", ["--all"], "Clear all policies for the channel")
+      ],
+      subcommands(~w(list set get clear))
+    ),
+    runtime(
+      "skill",
+      LemonSkills.CLI,
+      "Manage installed skills",
+      "lemon skill <command> [args]",
+      [
+        option("--cwd=PATH", ["--cwd"], "Project workspace"),
+        option("--local", ["--local"], "Install only in the project"),
+        option("--global", ["--global"], "Use global skills"),
+        option("--force", ["--force"], "Confirm overwrite or removal"),
+        option("--no-online", ["--no-online"], "Search only installed skills"),
+        option("--active", ["--active"], "Browse only active skills"),
+        option("--not-ready", ["--not-ready"], "Browse skills missing dependencies"),
+        option("--all", ["--all"], "Include hidden skills when browsing")
+      ],
+      subcommands(
+        ~w(list browse search discover hermes install update remove inspect check info draft curator)
+      )
+    ),
+    runtime(
+      "usage",
+      LemonCore.Usage.CLI,
+      "Inspect usage diagnostics",
+      "lemon usage [--json]",
+      [option("--json", ["--json"], "Emit redacted usage JSON")]
+    )
   ]
 
-  @source_launcher_commands [
-    launcher("web", "Open the local Web UI"),
-    launcher("send", "Send a channel notification"),
-    launcher("node", "Manage named execution nodes", ["join"]),
-    launcher("media", "Inspect media capabilities"),
-    launcher("models", "List available models"),
-    launcher("policy", "Manage model policy"),
-    launcher("proofs", "Inspect proof artifacts"),
-    launcher("readiness", "Inspect launch readiness"),
-    launcher("skill", "Manage skills"),
-    launcher("usage", "Inspect usage diagnostics")
-  ]
+  @both_launchers [:source, :release]
 
-  @release_launcher_commands [
-    launcher("tui", "Launch the terminal UI"),
-    launcher("web", "Open the local Web UI"),
-    launcher("start", "Run the release in the foreground"),
-    launcher("daemon", "Run the release in the background"),
-    launcher("stop", "Stop the running daemon"),
-    launcher("restart", "Restart the running daemon"),
-    launcher("status", "Report daemon health"),
-    launcher("remote", "Attach a remote IEx shell"),
-    launcher("eval", "Evaluate code in a fresh release VM"),
-    launcher("rpc", "Evaluate code on the running node"),
-    launcher("version", "Print the installed Lemon version")
+  @runtime_options_detail "Source checkouts accept --debug, --port N, --web-port N, --sim-port N, --name NAME@HOST or --sname NAME, --cookie COOKIE, and --no-distribution. Packaged installs read LEMON_CONTROL_PLANE_PORT, LEMON_WEB_PORT, and LEMON_SIM_UI_PORT. A healthy runtime already answering on the control-plane port is reused instead of starting a second node."
+
+  @lifecycle_commands [
+    lifecycle(
+      "tui",
+      "lemon tui [tui args]",
+      "Open the terminal UI, starting the runtime if needed",
+      @both_launchers,
+      [
+        "`lemon` with no command in an interactive terminal does the same. Before starting a runtime for the first time, unfinished setup runs interactively (`lemon setup --if-required`)."
+      ]
+    ),
+    lifecycle(
+      "web",
+      "lemon web [--no-open]",
+      "Open the local Web UI, starting the runtime if needed",
+      @both_launchers,
+      [
+        "Set LEMON_WEB_PORT to use a port other than 4080; --no-open only prints the URL. Packaged installs need the lemon_runtime_full profile."
+      ]
+    ),
+    lifecycle(
+      "start",
+      "lemon start [runtime options]",
+      "Run the runtime in the foreground",
+      @both_launchers,
+      [@runtime_options_detail]
+    ),
+    lifecycle(
+      "daemon",
+      "lemon daemon [runtime options]",
+      "Run the runtime in the background and wait until it is healthy",
+      @both_launchers,
+      [@runtime_options_detail]
+    ),
+    lifecycle("stop", "lemon stop", "Stop the background runtime", @both_launchers, [
+      "Select the daemon with LEMON_CONTROL_PLANE_PORT; source checkouts also accept --port N and verify the recorded process start identity before signalling it."
+    ]),
+    lifecycle(
+      "restart",
+      "lemon restart [runtime options]",
+      "Restart the background runtime",
+      @both_launchers
+    ),
+    lifecycle("status", "lemon status", "Report runtime pid and health", @both_launchers, [
+      "Select the daemon with LEMON_CONTROL_PLANE_PORT; source checkouts also accept --port N."
+    ]),
+    lifecycle("remote", "lemon remote", "Attach a remote IEx shell to the runtime", [:release]),
+    lifecycle("eval", "lemon eval EXPR", "Evaluate EXPR in a fresh release VM", [:release]),
+    lifecycle("rpc", "lemon rpc EXPR", "Evaluate EXPR on the running runtime", [:release])
   ]
 
   @spec commands() :: [map()]
@@ -353,39 +711,59 @@ defmodule LemonCli.CommandRegistry do
   @spec command?(String.t()) :: boolean()
   def command?(name) when is_binary(name), do: name in names()
 
+  @doc "Whether `name` is a lifecycle command handled by the launcher shell."
+  @spec lifecycle?(String.t()) :: boolean()
+  def lifecycle?(name) when is_binary(name),
+    do: Enum.any?(@lifecycle_commands, &(&1.name == name))
+
   @spec fetch(String.t()) :: {:ok, map()} | :error
   def fetch(name) when is_binary(name) do
-    case Enum.find(@commands, &(&1.name == name)) do
+    case Enum.find(@commands ++ @lifecycle_commands, &(&1.name == name)) do
       nil -> :error
       command -> {:ok, command}
     end
   end
 
-  @spec launcher_commands(:source | :release) :: [map()]
-  def launcher_commands(:source), do: @source_launcher_commands
-  def launcher_commands(:release), do: @release_launcher_commands
+  @doc "The launcher that invoked the CLI, as exported by `bin/lemon`."
+  @spec launcher() :: :source | :release
+  def launcher do
+    case System.get_env("LEMON_CLI_LAUNCHER") do
+      "source" -> :source
+      _other -> :release
+    end
+  end
+
+  @spec available?(map(), :source | :release) :: boolean()
+  def available?(command, launcher),
+    do: launcher in Map.get(command, :launchers, @both_launchers)
+
+  @spec lifecycle_commands(:source | :release) :: [map()]
+  def lifecycle_commands(launcher),
+    do: Enum.filter(@lifecycle_commands, &available?(&1, launcher))
 
   @spec completion_commands(:source | :release) :: [map()]
   def completion_commands(launcher) do
-    (@commands ++ launcher_commands(launcher))
-    |> Enum.uniq_by(& &1.name)
+    (@commands ++ @lifecycle_commands)
+    |> Enum.filter(&available?(&1, launcher))
     |> Enum.sort_by(& &1.name)
   end
 
   @spec help() :: String.t()
-  def help do
-    command_lines =
-      @commands
-      |> Enum.map(fn command ->
-        "  #{String.pad_trailing(command.name, 12)} #{command.summary}"
-      end)
-      |> Enum.join("\n")
+  def help, do: overview(launcher())
 
+  @spec overview(:source | :release) :: String.t()
+  def overview(launcher) do
     """
     Usage: lemon <command> [options]
 
+    With no command in an interactive terminal, lemon opens the TUI and starts
+    the runtime first when needed.
+
+    Runtime:
+    #{summary_lines(lifecycle_commands(launcher))}
+
     Commands:
-    #{command_lines}
+    #{summary_lines(Enum.filter(@commands, &available?(&1, launcher)))}
 
     Run `lemon <command> --help` for command options.
     """
@@ -397,6 +775,12 @@ defmodule LemonCli.CommandRegistry do
       {:ok, command} -> render_help(command)
       :error -> help()
     end
+  end
+
+  defp summary_lines(commands) do
+    Enum.map_join(commands, "\n", fn command ->
+      "  #{String.pad_trailing(command.name, 12)} #{command.summary}"
+    end)
   end
 
   defp render_help(command) do

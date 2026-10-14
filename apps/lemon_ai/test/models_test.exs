@@ -10,7 +10,7 @@ defmodule LemonAi.ModelsLegacyTest do
 
       assert %Model{} = model
       assert model.id == "claude-sonnet-4-20250514"
-      assert model.name == "Claude Sonnet 4"
+      assert model.name == "Claude 4 Sonnet"
       assert model.api == :anthropic_messages
       assert model.provider == :anthropic
       assert model.base_url == "https://api.anthropic.com"
@@ -33,36 +33,30 @@ defmodule LemonAi.ModelsLegacyTest do
     end
 
     test "returns openai-codex model by id (Codex subscription provider)" do
-      model = Models.get_model(:"openai-codex", "gpt-5.2")
+      model = Models.get_model(:"openai-codex", "gpt-6-sol")
 
       assert %Model{} = model
-      assert model.id == "gpt-5.2"
+      assert model.id == "gpt-6-sol"
       assert model.api == :openai_codex_responses
       assert model.provider == :"openai-codex"
       assert model.base_url == "https://chatgpt.com"
       assert %ModelCost{} = model.cost
-      assert model.cost.input == 0.0
+      assert model.cost.input == 2
     end
 
     test "returns oauth-only openai-codex model ids" do
-      spark = Models.get_model(:"openai-codex", "gpt-5.3-codex-spark")
-      mini = Models.get_model(:"openai-codex", "codex-mini-latest")
-      gpt55 = Models.get_model(:"openai-codex", "gpt-5.5")
+      for id <- ["gpt-6-astra", "gpt-6.1-sol"] do
+        model = Models.get_model(:"openai-codex", id)
 
-      assert %Model{} = spark
-      assert spark.api == :openai_codex_responses
-      assert spark.provider == :"openai-codex"
-      assert spark.base_url == "https://chatgpt.com"
+        assert %Model{} = model
+        assert model.api == :openai_codex_responses
+        assert model.provider == :"openai-codex"
+        assert model.base_url == "https://chatgpt.com"
+      end
 
-      assert %Model{} = mini
-      assert mini.api == :openai_codex_responses
-      assert mini.provider == :"openai-codex"
-      assert mini.base_url == "https://chatgpt.com"
-
-      assert %Model{} = gpt55
-      assert gpt55.api == :openai_codex_responses
-      assert gpt55.provider == :"openai-codex"
-      assert gpt55.base_url == "https://chatgpt.com"
+      for retired <- ["gpt-5.3-codex-spark", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5"] do
+        assert Models.get_model(:"openai-codex", retired) == nil
+      end
     end
 
     test "returns google model by id" do
@@ -154,8 +148,9 @@ defmodule LemonAi.ModelsLegacyTest do
       assert is_list(models)
       assert models != []
       assert Enum.all?(models, &match?(%Model{provider: :"openai-codex"}, &1))
-      assert Enum.any?(models, &(&1.id == "gpt-5.3-codex-spark"))
-      assert Enum.any?(models, &(&1.id == "codex-mini-latest"))
+      assert Enum.any?(models, &(&1.id == "gpt-6.1-sol"))
+      assert Enum.any?(models, &(&1.id == "gpt-6-astra"))
+      refute Enum.any?(models, &(&1.id == "codex-mini-latest"))
     end
 
     test "returns all google models" do
@@ -185,7 +180,6 @@ defmodule LemonAi.ModelsLegacyTest do
       models = Models.get_models(:kimi_coding)
 
       assert is_list(models)
-      assert length(models) == 2
       assert Enum.all?(models, &match?(%Model{provider: :kimi_coding}, &1))
     end
   end
@@ -385,7 +379,7 @@ defmodule LemonAi.ModelsLegacyTest do
       assert %ModelCost{} = model.cost
       assert model.cost.input == 1.25
       assert model.cost.output == 10.0
-      assert model.cost.cache_read == 0.31
+      assert model.cost.cache_read == 0.125
       assert model.cost.cache_write == 0.0
     end
 
@@ -421,8 +415,8 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.cost.output == 15.0
       assert model.cost.cache_read == 0.3
       assert model.cost.cache_write == 3.75
-      assert model.context_window == 200_000
-      assert model.max_tokens == 64_000
+      assert model.context_window == 1_000_000
+      assert model.max_tokens == 128_000
       assert model.reasoning == true
     end
 
@@ -433,22 +427,9 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.cost.output == 25.0
       assert model.cost.cache_read == 0.5
       assert model.cost.cache_write == 6.25
-      assert model.context_window == 200_000
+      assert model.context_window == 1_000_000
       assert model.max_tokens == 128_000
       assert model.reasoning == true
-    end
-
-    test "claude opus 4.6 thinking has correct specs" do
-      model = Models.get_model(:anthropic, "claude-opus-4-6-thinking")
-
-      assert model.cost.input == 5.0
-      assert model.cost.output == 25.0
-      assert model.cost.cache_read == 0.5
-      assert model.cost.cache_write == 6.25
-      assert model.context_window == 200_000
-      assert model.max_tokens == 128_000
-      assert model.reasoning == true
-      assert model.name == "Claude Opus 4.6 (Thinking)"
     end
 
     test "gemini 3.1 pro preview has correct specs" do
@@ -471,7 +452,7 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.context_window == 1_048_576
       assert model.max_tokens == 65_536
       assert model.reasoning == true
-      assert model.name == "Gemini 3.1 Pro Preview (Custom Tools)"
+      assert model.name == "Gemini 3.1 Pro Preview Custom Tools"
     end
 
     test "gemini 3 flash has correct specs" do
@@ -520,8 +501,8 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.cost.output == 12.0
       assert model.cost.cache_read == 0.2
       assert model.cost.cache_write == 0.0
-      assert model.context_window == 1_000_000
-      assert model.max_tokens == 64_000
+      assert model.context_window == 1_048_576
+      assert model.max_tokens == 65_536
       assert model.reasoning == true
       assert model.name == "Gemini 3 Pro Preview"
     end
@@ -529,13 +510,93 @@ defmodule LemonAi.ModelsLegacyTest do
     test "gpt 5.4 mini has correct specs" do
       model = Models.get_model(:openai, "gpt-5.4-mini")
 
-      assert model.cost.input == 0.4
-      assert model.cost.output == 3.2
-      assert model.cost.cache_read == 0.04
+      assert model.cost.input == 0.75
+      assert model.cost.output == 4.5
+      assert model.cost.cache_read == 0.075
       assert model.cost.cache_write == 0.0
       assert model.context_window == 400_000
       assert model.max_tokens == 128_000
       assert model.reasoning == true
+    end
+  end
+
+  describe "2026 frontier catalog entries" do
+    # {provider, id, {input, output, cache_read, cache_write}, context_window, max_tokens}
+    @frontier [
+      {:anthropic, "claude-opus-5-5", {4.0, 20.0, 0.2, 5.0}, 1_000_000, 128_000},
+      {:anthropic, "claude-opus-5", {5.0, 25.0, 0.5, 6.25}, 1_000_000, 128_000},
+      {:anthropic, "claude-opus-4-8", {5.0, 25.0, 0.5, 6.25}, 1_000_000, 128_000},
+      {:anthropic, "claude-opus-4-7", {5.0, 25.0, 0.5, 6.25}, 1_000_000, 128_000},
+      {:anthropic, "claude-sonnet-5", {2.0, 10.0, 0.2, 2.5}, 1_000_000, 128_000},
+      {:anthropic, "claude-fable-5-1", {10.0, 50.0, 1.0, 12.5}, 1_000_000, 128_000},
+      {:openai, "gpt-5.5", {5.0, 30.0, 0.5, 0.0}, 1_050_000, 128_000},
+      {:openai, "gpt-5.5-pro", {30.0, 180.0, 0.0, 0.0}, 1_050_000, 128_000},
+      {:"openai-codex", "gpt-6-astra", {10.0, 50.0, 1.0, 0.0}, 272_000, 128_000},
+      {:anthropic, "claude-mythos-5", {10.0, 50.0, 1.0, 12.5}, 1_000_000, 128_000}
+    ]
+
+    test "new models carry documented pricing and limits" do
+      for {provider, id, {input, output, cache_read, cache_write}, context, max_tokens} <-
+            @frontier do
+        model = Models.get_model(provider, id)
+        assert %Model{id: ^id, reasoning: true} = model
+
+        assert model.cost == %ModelCost{
+                 input: input,
+                 output: output,
+                 cache_read: cache_read,
+                 cache_write: cache_write
+               }
+
+        assert model.context_window == context, "#{id} context_window"
+        assert model.max_tokens == max_tokens, "#{id} max_tokens"
+        assert :image in model.input
+      end
+    end
+
+    test "Claude 4.6+ models declare adaptive thinking; older Claude models do not" do
+      for id <- ~w(claude-opus-5-5 claude-opus-5 claude-opus-4-8 claude-opus-4-7
+                   claude-opus-4-6 claude-sonnet-5 claude-sonnet-4-6 claude-fable-5-1) do
+        model = Models.get_model(:anthropic, id)
+        assert model.adaptive_thinking, "#{id} should use adaptive thinking"
+        assert Models.supports_xhigh(model) == (id != "claude-sonnet-4-6")
+      end
+
+      for id <- ~w(claude-sonnet-4-5 claude-opus-4-5 claude-haiku-4-5) do
+        model = Models.get_model(:anthropic, id)
+        refute model.adaptive_thinking, "#{id} uses manual thinking budgets"
+        refute Models.supports_xhigh(model)
+      end
+    end
+
+    test "direct gpt-5.5 declares its reasoning efforts" do
+      model = Models.get_model(:openai, "gpt-5.5")
+      assert model.reasoning_efforts == [:low, :medium, :high, :xhigh]
+      assert model.api == :openai_responses
+    end
+
+    test "the retired duplicate-id pseudo model is gone" do
+      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") == nil
+    end
+  end
+
+  describe "reasoning_effort_for/2" do
+    test "keeps declared levels, clamps down to the nearest declared level, else up to the lowest" do
+      model = %Model{reasoning: true, reasoning_efforts: [:low, :medium, :high]}
+
+      assert Models.reasoning_effort_for(model, :medium) == :medium
+      assert Models.reasoning_effort_for(model, :xhigh) == :high
+      assert Models.reasoning_effort_for(model, :minimal) == :low
+
+      pro = %Model{reasoning: true, reasoning_efforts: [:high]}
+      assert Models.reasoning_effort_for(pro, :low) == :high
+    end
+
+    test "passes levels through when the model declares none, and nil stays nil" do
+      model = %Model{reasoning: true}
+      assert Models.reasoning_effort_for(model, :xhigh) == :xhigh
+      assert Models.reasoning_effort_for(model, nil) == nil
+      assert Models.reasoning_effort_for(%Model{reasoning_efforts: [:high]}, nil) == nil
     end
   end
 
@@ -565,7 +626,6 @@ defmodule LemonAi.ModelsLegacyTest do
       assert Models.get_model(:anthropic, "claude-haiku-4-5-20251001") != nil
       assert Models.get_model(:anthropic, "claude-sonnet-4-6") != nil
       assert Models.get_model(:anthropic, "claude-opus-4-6") != nil
-      assert Models.get_model(:anthropic, "claude-opus-4-6-thinking") != nil
     end
 
     test "openai flagship models" do
@@ -977,14 +1037,13 @@ defmodule LemonAi.ModelsLegacyTest do
       assert model.max_tokens == 32_768
     end
 
-    test "kimi provider includes all 3 models" do
+    test "kimi provider includes the K2 models" do
       models = Models.get_models(:kimi)
       ids = Enum.map(models, & &1.id)
 
       assert "kimi-for-coding" in ids
       assert "k2p5" in ids
       assert "kimi-k2-thinking" in ids
-      assert length(models) == 3
     end
   end
 
@@ -1028,8 +1087,6 @@ defmodule LemonAi.ModelsLegacyTest do
       models = Models.get_models(:amazon_bedrock)
 
       assert is_list(models)
-      # Synced from Pi catalog: currently 83 Bedrock models
-      assert length(models) == 83
       assert Enum.all?(models, &match?(%Model{provider: :amazon_bedrock}, &1))
     end
 
@@ -1112,7 +1169,7 @@ defmodule LemonAi.ModelsLegacyTest do
       assert Models.supports_xhigh(model) == true
     end
 
-    test "returns false for Claude Sonnet models" do
+    test "returns false for manual-budget Claude models" do
       model = Models.get_model(:anthropic, "claude-sonnet-4-20250514")
       assert model != nil
       assert Models.supports_xhigh(model) == false

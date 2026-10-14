@@ -83,8 +83,8 @@ defmodule LemonCore.Paths do
   @doc """
   A path inside a project's state directory.
 
-      iex> LemonCore.Paths.project_path("/srv/app", ["proofs"])
-      "/srv/app/.lemon/proofs"
+      iex> LemonCore.Paths.project_path("/srv/app", ["extensions"])
+      "/srv/app/.lemon/extensions"
   """
   @spec project_path(Path.t(), [String.t()] | String.t(), opts()) :: String.t()
   def project_path(cwd, segments, opts \\ []) do
@@ -126,6 +126,30 @@ defmodule LemonCore.Paths do
   @spec project_config(Path.t(), opts()) :: String.t()
   def project_config(cwd, opts \\ []) do
     project_path(cwd, config_file_name(opts), opts)
+  end
+
+  @doc """
+  Directory shared by the primary store and its companion SQLite databases.
+
+  Store paths may identify a directory or an explicit `.db`, `.sqlite`, or
+  `.sqlite3` file. Companion databases live beside an explicit file, not inside
+  it. Existing directories and paths ending in `/` remain directories even
+  when their names have a database extension.
+  """
+  @spec store_dir(Path.t()) :: Path.t()
+  def store_dir(path) do
+    expanded = Path.expand(path)
+
+    cond do
+      File.dir?(expanded) or String.ends_with?(path, "/") ->
+        expanded
+
+      String.downcase(Path.extname(expanded)) in [".db", ".sqlite", ".sqlite3"] ->
+        Path.dirname(expanded)
+
+      true ->
+        expanded
+    end
   end
 
   defp setting(opts, key, default) do

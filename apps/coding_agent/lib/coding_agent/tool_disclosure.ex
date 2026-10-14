@@ -671,6 +671,7 @@ defmodule CodingAgent.ToolDisclosure do
 
   defp source_label(:builtin), do: "builtin"
   defp source_label(:extra), do: "extra"
+  defp source_label({:mcp, meta}) when is_map(meta), do: "mcp:configured"
   defp source_label({:mcp, server}), do: "mcp:#{server}"
   defp source_label({:extension, module}), do: "extension:#{inspect(module)}"
   defp source_label({:wasm, _meta}), do: "wasm"
@@ -754,8 +755,6 @@ defmodule CodingAgent.ToolDisclosure do
       _ -> {:error, "Parameter 'args' must be a JSON object"}
     end
   end
-
-  defp invoke_args(_), do: {:ok, %{}}
 
   defp reject_bridge(name) when name in @bridge_names,
     do: {:error, "tool_search and tool_invoke cannot be invoked through tool_invoke"}

@@ -51,6 +51,9 @@ You can generate the whole thing:
 mix lemon.new my_agent --channel
 ```
 
+`--channel` needs a lemon checkout (`--lemon-path`): `lemon_channels` is not
+published to Hex, so the generator refuses it together with `--hex`.
+
 or add it to an existing project by following the rest of this guide.
 
 ### 1. Add the dependencies
@@ -59,12 +62,14 @@ In `mix.exs`:
 
 ```elixir
 {:lemon_channels, path: "/path/to/lemon/apps/lemon_channels"},
-# {:lemon_channels, "~> 0.1"},
 
 {:lemon_platform_test,
  path: "/path/to/lemon/apps/lemon_platform_test", only: :test, runtime: false},
-# {:lemon_platform_test, "~> 0.1", only: :test, runtime: false}
+# {:lemon_platform_test, "~> 0.2", only: :test, runtime: false}
 ```
+
+`lemon_channels` is not published to Hex — it is part of Lemon's reference
+runtime — so a channel project always builds against a lemon checkout.
 
 `lemon_platform_test` is the contract-test kit. It is test-only and it is not
 optional in spirit — the compliance suite is how you find out that your adapter
@@ -146,7 +151,7 @@ In `lib/my_agent/application.ex`, after the supervisor starts:
 
 That call is the whole integration story. The platform has no compile-time
 knowledge of your module; a channel living in its own repository, depending on
-`lemon_channels` from Hex, registers exactly the same way.
+`lemon_channels` from a lemon checkout, registers exactly the same way.
 
 ## The four rules that are not in the signatures
 

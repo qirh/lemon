@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
 
   alias LemonCore.Introspection
 

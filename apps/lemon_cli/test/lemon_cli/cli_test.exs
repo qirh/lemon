@@ -23,6 +23,8 @@ defmodule LemonCli.CLITest do
     original_openai_api_key = System.get_env("OPENAI_API_KEY")
     original_default_provider = System.get_env("LEMON_DEFAULT_PROVIDER")
     original_default_model = System.get_env("LEMON_DEFAULT_MODEL")
+    original_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    Application.put_env(:lemon_core, LemonCore.Secrets, key_providers: [:env, :file])
 
     System.put_env("HOME", home)
     System.put_env("LEMON_SECRETS_MASTER_KEY", :crypto.strong_rand_bytes(32) |> Base.encode64())
@@ -33,6 +35,10 @@ defmodule LemonCli.CLITest do
     clear_secrets_table()
 
     on_exit(fn ->
+      if original_secrets_config,
+        do: Application.put_env(:lemon_core, LemonCore.Secrets, original_secrets_config),
+        else: Application.delete_env(:lemon_core, LemonCore.Secrets)
+
       if original_home, do: System.put_env("HOME", original_home), else: System.delete_env("HOME")
 
       if original_master_key,
@@ -91,6 +97,94 @@ defmodule LemonCli.CLITest do
     assert get_in(config, ["defaults", "model"]) == "openai:gpt-5"
   end
 
+  test "explicit CLI import stores encrypted OAuth without HTTP or source writes", %{
+    tmp_dir: tmp_dir
+  } do
+    previous_defaults = Req.default_options()
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+    Req.Test.stub(__MODULE__, fn _ -> flunk("CLI import must not call HTTP") end)
+    codex_home = System.get_env("CODEX_HOME")
+    System.delete_env("CODEX_HOME")
+
+    on_exit(fn ->
+      Req.default_options(previous_defaults)
+      Req.Test.set_req_test_to_private(%{})
+      restore_env("CODEX_HOME", codex_home)
+    end)
+
+    claims = %{
+      "exp" => System.system_time(:second) + 3_600,
+      "https://api.openai.com/auth" => %{"chatgpt_account_id" => "cli-import-account"}
+    }
+
+    token = "header." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> ".signature"
+
+    source =
+      Jason.encode!(%{
+        "auth_mode" => "chatgpt",
+        "tokens" => %{
+          "access_token" => token,
+          "refresh_token" => "cli-import-refresh",
+          "account_id" => "cli-import-account",
+          "id_token" => token
+        }
+      })
+
+    auth_path = Path.join([System.fetch_env!("HOME"), ".codex", "auth.json"])
+    File.mkdir_p!(Path.dirname(auth_path))
+    File.write!(auth_path, source)
+
+    for auth <- ["codex-cli", "codex_cli"] do
+      config_path = Path.join(tmp_dir, "#{auth}.toml")
+
+      File.write!(config_path, """
+      [providers.openai-codex]
+      auth_source = "api_key"
+      api_key_secret = "old-secret"
+      """)
+
+      path_args = if auth == "codex_cli", do: ["--codex-auth-path", auth_path], else: []
+
+      output =
+        capture_io(fn ->
+          assert CLI.run(
+                   [
+                     "model",
+                     "--provider",
+                     "openai-codex",
+                     "--auth",
+                     auth,
+                     "--non-interactive",
+                     "--config-path",
+                     config_path
+                   ] ++ path_args
+                 ) == 0
+        end)
+
+      assert output =~ "OpenAI Codex onboarding complete."
+      refute output =~ "cli-import-refresh"
+
+      assert {:ok, stored} =
+               Secrets.get("llm_openai_codex_api_key", prefer_env: false, env_fallback: false)
+
+      assert {:ok, secret} = LemonAi.Auth.OpenAICodexOAuth.decode_secret(stored)
+      assert secret["refresh_token"] == "cli-import-refresh"
+      assert secret["access_token"] == token
+      records = LemonCore.Store.list(Secrets.table()) |> inspect()
+      refute records =~ "cli-import-refresh"
+      refute records =~ token
+      assert records =~ "ciphertext"
+      assert {:ok, config} = Toml.decode_file(config_path)
+      provider = config["providers"]["openai-codex"]
+      assert provider["auth_source"] == "oauth"
+      assert provider["oauth_secret"] == "llm_openai_codex_api_key"
+      refute Map.has_key?(provider, "api_key_secret")
+      refute File.read!(config_path) =~ "cli-import-refresh"
+      assert File.read!(auth_path) == source
+    end
+  end
+
   test "reports unknown commands as a user-facing usage error" do
     error =
       capture_io(:stderr, fn ->
@@ -134,6 +228,35 @@ defmodule LemonCli.CLITest do
     assert error =~ "Usage: lemon doctor [options]"
   end
 
+  test "config migrate rewrites a legacy [agent] config and is idempotent", %{tmp_dir: tmp_dir} do
+    config_path = Path.join([tmp_dir, "home", ".lemon", "config.toml"])
+    File.mkdir_p!(Path.dirname(config_path))
+    legacy = "[agent]\ndefault_provider = \"openai\"\ndefault_model = \"openai:gpt-5.1\"\n"
+    File.write!(config_path, legacy)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["config", "migrate", "--project-dir", tmp_dir]) == 0
+      end)
+
+    assert output =~ "Migrated #{config_path}"
+    assert output =~ "agent.default_provider → defaults.provider"
+    assert [backup] = Path.wildcard(config_path <> ".bak-*")
+    assert File.read!(backup) == legacy
+
+    assert Toml.decode_file!(config_path) == %{
+             "defaults" => %{"provider" => "openai", "model" => "openai:gpt-5.1"}
+           }
+
+    again =
+      capture_io(fn ->
+        assert CLI.run(["config", "migrate", "--project-dir", tmp_dir]) == 0
+      end)
+
+    assert again =~ "already uses the current schema"
+    assert [^backup] = Path.wildcard(config_path <> ".bak-*")
+  end
+
   test "rejects unknown config options with config usage on stderr" do
     error =
       capture_io(:stderr, fn ->
@@ -141,7 +264,7 @@ defmodule LemonCli.CLITest do
       end)
 
     assert error =~ "Invalid options:"
-    assert error =~ "Usage: lemon config [validate|show] [options]"
+    assert error =~ "Usage: lemon config [validate|show|migrate] [options]"
     assert error =~ "--project-dir, -p PATH"
   end
 
@@ -152,7 +275,7 @@ defmodule LemonCli.CLITest do
       end)
 
     assert error =~ "Unsupported arguments: \"show\" \"unexpected\""
-    assert error =~ "Usage: lemon config [validate|show] [options]"
+    assert error =~ "Usage: lemon config [validate|show|migrate] [options]"
   end
 
   test "packaged secrets check uses the shared ordered catalog" do
@@ -188,6 +311,61 @@ defmodule LemonCli.CLITest do
     end)
   end
 
+  test "secrets rotate-key previews, refuses a wrong token, then rotates the key file",
+       %{tmp_dir: tmp_dir} do
+    # The key comes from the private key file under the isolated HOME, never
+    # the developer's Keychain or a running runtime.
+    System.delete_env("LEMON_SECRETS_MASTER_KEY")
+    # Stub the directory flush so the key-file path also runs on macOS, which
+    # has no synchronous one (that refusal is covered in KeyRotationTest).
+    Application.put_env(:lemon_core, LemonCore.Secrets,
+      key_providers: [:env, :file],
+      directory_sync: fn _dir -> :ok end
+    )
+
+    key_file = Path.join([tmp_dir, "home", ".lemon", "secrets_master_key"])
+    assert {:ok, %{source: :file}} = LemonCore.Secrets.MasterKey.init(target: :file)
+    original_key = File.read!(key_file)
+    original_port = System.get_env("LEMON_CONTROL_PLANE_PORT")
+    System.put_env("LEMON_CONTROL_PLANE_PORT", Integer.to_string(closed_port()))
+
+    try do
+      assert {:ok, _} = Secrets.set("ROTATE_ME", "rotate-value")
+
+      preview = capture_io(fn -> assert CLI.run(["secrets", "rotate-key"]) == 0 end)
+      assert preview =~ "secrets to re-encrypt: 1"
+      assert preview =~ "key source: file (#{key_file})"
+      [_, token] = Regex.run(~r/confirmation token: ([0-9a-f]{64})/, preview)
+
+      mismatch =
+        capture_io(:stderr, fn ->
+          assert CLI.run(["secrets", "rotate-key", "--confirm", String.duplicate("0", 64)]) == 1
+        end)
+
+      assert mismatch =~ "does not match"
+      assert File.read!(key_file) == original_key
+
+      applied =
+        capture_io(fn -> assert CLI.run(["secrets", "rotate-key", "--confirm", token]) == 0 end)
+
+      assert applied =~ "1 secrets re-encrypted"
+      refute File.read!(key_file) == original_key
+      assert {:ok, "rotate-value"} = Secrets.get("ROTATE_ME")
+      refute preview <> applied <> mismatch =~ "rotate-value"
+    after
+      restore_env("LEMON_CONTROL_PLANE_PORT", original_port)
+    end
+  end
+
+  test "secrets rotate-key rejects unexpected arguments" do
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["secrets", "rotate-key", "extra"]) == 2
+      end)
+
+    assert error =~ "Usage: lemon secrets rotate-key [--confirm <token>]"
+  end
+
   describe "setup_required?/0" do
     test "requires setup when no configuration exists" do
       assert CLI.setup_required?()
@@ -212,6 +390,58 @@ defmodule LemonCli.CLITest do
       assert {:ok, _metadata} = Secrets.set(secret_name, "test-provider-credential")
 
       refute CLI.setup_required?()
+    end
+
+    test "setup --if-required is a no-op once setup is complete" do
+      secret_name = "if_required_ready_credential"
+      write_openai_config(secret_name)
+      assert {:ok, _metadata} = Secrets.set(secret_name, "test-provider-credential")
+
+      output = capture_io(fn -> assert CLI.run(["setup", "--if-required"]) == 0 end)
+
+      refute output =~ "Setup is required"
+      refute output =~ "Welcome to Lemon setup!"
+    end
+  end
+
+  describe "launcher-aware dispatch" do
+    setup do
+      previous = System.get_env("LEMON_CLI_LAUNCHER")
+
+      on_exit(fn -> restore_env("LEMON_CLI_LAUNCHER", previous) end)
+    end
+
+    test "packaged runtime commands return usage errors through the CLI boundary" do
+      System.put_env("LEMON_CLI_LAUNCHER", "release")
+
+      capture_io(:stderr, fn ->
+        assert CLI.run(["models", "--limit", "-1"]) == 2
+        assert CLI.run(["usage", "--unexpected"]) == 2
+      end)
+    end
+
+    test "source checkouts refuse release-VM commands" do
+      System.put_env("LEMON_CLI_LAUNCHER", "source")
+
+      error = capture_io(:stderr, fn -> assert CLI.run(["eval", "1 + 1"]) == 2 end)
+
+      assert error =~ "`lemon eval` is available only in a packaged install."
+    end
+
+    test "lifecycle commands belong to the launcher script, but their help is shared" do
+      System.put_env("LEMON_CLI_LAUNCHER", "release")
+
+      error = capture_io(:stderr, fn -> assert CLI.run(["daemon"]) == 2 end)
+      assert error =~ "`lemon daemon` is handled by the lemon launcher script."
+
+      help = capture_io(fn -> assert CLI.run(["help", "daemon"]) == 0 end)
+      assert help =~ "Usage: lemon daemon [runtime options]"
+    end
+
+    test "version prints the current Lemon version" do
+      output = capture_io(fn -> assert CLI.run(["version"]) == 0 end)
+
+      assert output == LemonCore.Update.Version.current() <> "\n"
     end
   end
 
@@ -248,6 +478,14 @@ defmodule LemonCli.CLITest do
     after
       Enum.each(snapshot, fn {name, value} -> restore_env(name, value) end)
     end
+  end
+
+  # A port with no listener, so the runtime health probe reports "not running".
+  defp closed_port do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    port
   end
 
   defp clear_secrets_table do

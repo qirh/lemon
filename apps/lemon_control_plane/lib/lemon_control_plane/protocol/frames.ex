@@ -246,7 +246,6 @@ defmodule LemonControlPlane.Protocol.Frames do
       "presence",
       # System events
       "tick",
-      "talk.mode",
       "shutdown",
       "health",
       "heartbeat",
@@ -268,18 +267,13 @@ defmodule LemonControlPlane.Protocol.Frames do
       "node.pair.resolved",
       "node.invoke.request",
       "node.invoke.completed",
-      # Device events
-      "device.pair.requested",
-      "device.pair.resolved",
-      # Voicewake events
-      "voicewake.changed",
       # Approval events
       "exec.approval.requested",
       "exec.approval.resolved",
       # Channel delivery events
       "channel.delivery",
-      # Custom events (from system-event with custom_* types)
-      "custom"
+      # omp delegate session snapshots
+      "omp.session"
     ]
   end
 end

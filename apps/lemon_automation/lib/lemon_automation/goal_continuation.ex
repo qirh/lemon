@@ -19,8 +19,10 @@ defmodule LemonAutomation.GoalContinuation do
          :ok <- budget_available?(goal, opts),
          run_id = Keyword.get(opts, :run_id, LemonCore.Id.run_id()),
          params = build_params(goal, run_id, opts),
+         :ok <- LemonAutomation.RunNotifications.bind_goal(goal, params),
          {:ok, submitted_run_id, completion} <- submit(params, opts),
-         {:ok, updated} <- GoalStore.record_continuation(session_key, submitted_run_id) do
+         {:ok, updated} <-
+           GoalStore.record_continuation(session_key, submitted_run_id, completion: completion) do
       {:ok, %{run_id: submitted_run_id, goal: updated, params: params, completion: completion}}
     end
   end
@@ -36,6 +38,8 @@ defmodule LemonAutomation.GoalContinuation do
       prompt: build_prompt(goal),
       agent_id: goal.agent_id || "default",
       queue_mode: Keyword.get(opts, :queue_mode, :followup),
+      cwd: Map.get(goal, :cwd),
+      tool_policy: %{blocked_tools: ["goal"]},
       meta:
         %{
           goal_id: goal.id,
@@ -107,16 +111,32 @@ defmodule LemonAutomation.GoalContinuation do
         timeout_ms: Keyword.get(opts, :wait_timeout_ms, 300_000),
         wait_opts: Keyword.get(opts, :wait_opts, []),
         on_submitting: Keyword.get(opts, :on_submitting),
-        on_submitted: Keyword.get(opts, :on_submitted),
+        on_submitted: fn run_id ->
+          GoalStore.record_continuation(params.session_key, run_id)
+
+          if callback = Keyword.get(opts, :on_submitted), do: callback.(run_id)
+        end,
         on_terminal: Keyword.get(opts, :on_terminal)
       )
 
     case result do
-      {:ok, run_id, output} -> {:ok, run_id, {:ok, output}}
-      {:error, {:run_failed, run_id, reason}} -> {:ok, run_id, {:error, reason}}
-      {:error, {:timeout, run_id}} -> {:ok, run_id, :timeout}
-      {:error, {:submit_failed, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
+      {:ok, run_id, output} ->
+        {:ok, run_id, {:ok, output}}
+
+      {:error, {:run_failed, run_id, reason}} ->
+        {:ok, run_id, {:error, reason}}
+
+      {:error, {:timeout, run_id}} ->
+        {:error, {:completion_outcome_unknown, run_id}}
+
+      {:error, {:unexpected_run_id, run_id, _other_id}} ->
+        {:error, {:submission_outcome_unknown, run_id}}
+
+      {:error, {:submit_failed, reason}} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -125,14 +145,25 @@ defmodule LemonAutomation.GoalContinuation do
 
     try do
       case router_mod.submit(params) do
-        {:ok, run_id} when is_binary(run_id) -> {:ok, run_id, :not_awaited}
-        {:error, reason} -> {:error, reason}
-        other -> {:error, {:unexpected_submit_result, other}}
+        {:ok, run_id} when is_binary(run_id) and run_id != "" and run_id == params.run_id ->
+          {:ok, run_id, :not_awaited}
+
+        {:ok, _other_id} ->
+          {:error, {:submission_outcome_unknown, params.run_id}}
+
+        {:error, :outcome_unknown} ->
+          {:error, {:submission_outcome_unknown, params.run_id}}
+
+        {:error, reason} ->
+          {:error, reason}
+
+        _other ->
+          {:error, {:submission_outcome_unknown, params.run_id}}
       end
     rescue
-      error -> {:error, error}
+      _error -> {:error, {:submission_outcome_unknown, params.run_id}}
     catch
-      :exit, reason -> {:error, {:exit, reason}}
+      :exit, _reason -> {:error, {:submission_outcome_unknown, params.run_id}}
     end
   end
 

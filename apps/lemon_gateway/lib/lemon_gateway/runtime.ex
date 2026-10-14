@@ -13,7 +13,7 @@ defmodule LemonGateway.Runtime do
 
   @doc "Submits a core execution command to the scheduler."
   @impl true
-  @spec submit_execution(ExecutionCommand.t()) :: :ok
+  @spec submit_execution(ExecutionCommand.t()) :: :ok | {:error, :invalid_run_id}
   def submit_execution(%ExecutionCommand{} = command) do
     command
     |> ExecutionCommand.ensure_conversation_key()
@@ -24,7 +24,7 @@ defmodule LemonGateway.Runtime do
   @doc "Cancels a run identified by its progress message ID within a scope."
   @spec cancel_by_progress_msg(term(), integer()) :: :ok
   def cancel_by_progress_msg(scope, progress_msg_id) do
-    case LemonCore.ProgressStore.get_run(scope, progress_msg_id) do
+    case LemonGateway.ProgressStore.get_run(scope, progress_msg_id) do
       nil -> :ok
       run_id when is_binary(run_id) -> cancel_by_run_id(run_id, :user_requested)
       _other -> :ok
@@ -35,6 +35,8 @@ defmodule LemonGateway.Runtime do
   @impl true
   @spec cancel_by_run_id(binary(), term()) :: :ok
   def cancel_by_run_id(run_id, reason \\ :user_requested) when is_binary(run_id) do
+    LemonGateway.Scheduler.cancel_execution(run_id, reason)
+
     case run_pid(run_id) do
       run_pid when is_pid(run_pid) ->
         LemonGateway.Scheduler.cancel(run_pid, reason)

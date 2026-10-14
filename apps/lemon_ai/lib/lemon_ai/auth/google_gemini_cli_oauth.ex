@@ -261,11 +261,8 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]),
          project_id when is_binary(project_id) and project_id != "" <-
-           project_id_from_secret(refreshed_secret) do
-      if changed? do
-        persist_secret(secret_name, refreshed_secret, opts)
-      end
-
+           project_id_from_secret(refreshed_secret),
+         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
       {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
     else
       :not_oauth -> :ignore
@@ -408,23 +405,20 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
                  {:ok, tier_id} <- pick_onboard_tier_id(payload["allowedTiers"]),
                  :ok <- ensure_project_allowed_for_tier(tier_id, configured_project_id),
                  {:ok, managed_project_id} <-
-                   onboard_user(access_token_from_secret(secret), tier_id, configured_project_id),
-                 effective_project_id <- managed_project_id || configured_project_id,
-                 project when is_binary(project) and project != "" <- effective_project_id do
+                   onboard_user(access_token_from_secret(secret), tier_id, configured_project_id) do
               updated =
                 secret
-                |> put_project_fields(configured_project_id, managed_project_id, project)
+                |> put_project_fields(
+                  configured_project_id,
+                  managed_project_id,
+                  managed_project_id
+                )
 
               {:ok, updated, project_fields_changed?(secret, updated)}
-            else
-              nil -> {:error, project_required_message()}
-              {:error, reason} -> {:error, reason}
             end
         end
     end
   end
-
-  defp apply_project_payload(_, _), do: {:error, :invalid_code_assist_payload}
 
   defp load_code_assist(access_token, project_id)
        when is_binary(access_token) and access_token != "" do
@@ -528,8 +522,6 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
 
   defp wait_for_operation(_, payload) when is_map(payload), do: {:ok, payload}
 
-  defp wait_for_operation(_, _), do: {:error, :invalid_onboard_response}
-
   defp build_oauth_secret(token_data, email, redirect_uri, configured_project_id) do
     now = System.system_time(:millisecond)
 
@@ -601,24 +593,22 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
 
   defp fetch_user_email(_), do: {:ok, nil}
 
+  # A refreshed secret that was not stored is a failure, not a success.
   defp persist_secret(secret_name, secret, opts) do
     encoded = encode_secret(secret)
 
     case Keyword.get(opts, :persist_secret) do
       callback when is_function(callback, 2) ->
-        callback.(secret_name, encoded)
-        :ok
+        case callback.(secret_name, encoded) do
+          {:error, _} -> {:error, :oauth_secret_persistence_failed}
+          _ -> :ok
+        end
 
       _ ->
         :ok
     end
   rescue
-    reason ->
-      Logger.debug(
-        "Failed to persist refreshed Google Gemini CLI OAuth secret #{secret_name}: #{inspect(reason)}"
-      )
-
-      :ok
+    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   defp post_form(url, body) when is_map(body) do

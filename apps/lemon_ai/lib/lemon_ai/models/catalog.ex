@@ -17,6 +17,12 @@ defmodule LemonAi.Models.Catalog do
   compile-time shape. Editing a model or its price is editing the JSON file;
   `mix lemon.models` lists what is currently defined.
 
+  The optional `adaptive_thinking` (boolean, default `false`) and
+  `reasoning_efforts` (array of `"minimal" | "low" | "medium" | "high" |
+  "xhigh"`, default `[]`) fields are explicit reasoning capability flags; see
+  `LemonAi.Types.Model`. Providers must gate thinking/effort request shapes on
+  these flags, never on model-id substrings.
+
   The optional `compat` field is either `null` (the same as omitting overrides)
   or an object with a fixed schema. Compatibility field names normalize to the
   atom keys consumed by providers; enum values and routing object keys remain
@@ -72,7 +78,17 @@ defmodule LemonAi.Models.Catalog do
 
   @inputs %{"image" => :image, "text" => :text}
 
+  # Ascending; `reasoning_efforts` entries are stored in this order.
+  @reasoning_efforts [
+    {"minimal", :minimal},
+    {"low", :low},
+    {"medium", :medium},
+    {"high", :high},
+    {"xhigh", :xhigh}
+  ]
+
   @compat_boolean_fields %{
+    "anthropic_thinking_display" => :anthropic_thinking_display,
     "supports_store" => :supports_store,
     "supports_developer_role" => :supports_developer_role,
     "supports_reasoning_effort" => :supports_reasoning_effort,
@@ -134,9 +150,12 @@ defmodule LemonAi.Models.Catalog do
       provider: normalize_atom!(:provider, Map.fetch!(entry, "provider"), @providers),
       base_url: fetch_string!(entry, "base_url"),
       reasoning: fetch_boolean!(entry, "reasoning"),
+      adaptive_thinking: optional_boolean!(entry, "adaptive_thinking", false),
+      reasoning_efforts: to_reasoning_efforts(Map.get(entry, "reasoning_efforts", [])),
       input: to_input(Map.fetch!(entry, "input")),
       cost: to_cost(Map.fetch!(entry, "cost")),
       context_window: fetch_non_neg_integer!(entry, "context_window"),
+      service_tier_cost: to_service_tier_cost(Map.get(entry, "service_tier_cost", %{})),
       max_tokens: fetch_non_neg_integer!(entry, "max_tokens"),
       headers: optional_map!(entry, "headers", %{}),
       compat: entry |> optional_map!("compat", nil) |> to_compat()
@@ -161,18 +180,58 @@ defmodule LemonAi.Models.Catalog do
       input: fetch_non_neg_number!(cost, "input", "cost.input"),
       output: fetch_non_neg_number!(cost, "output", "cost.output"),
       cache_read: fetch_non_neg_number!(cost, "cache_read", "cost.cache_read"),
-      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.cache_write")
+      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.cache_write"),
+      long_context: to_long_context(Map.get(cost, "long_context"))
     }
   end
 
   defp to_cost(other),
     do: raise(ArgumentError, "expected cost to be an object, got: #{inspect(other)}")
 
+  defp to_service_tier_cost(%{} = tiers) do
+    Map.new(tiers, fn
+      {tier, multiplier}
+      when tier in ["flex", "priority"] and is_number(multiplier) and multiplier > 0 ->
+        {tier, multiplier}
+
+      entry ->
+        raise ArgumentError, "invalid service_tier_cost entry: #{inspect(entry)}"
+    end)
+  end
+
+  defp to_service_tier_cost(other),
+    do: raise(ArgumentError, "expected service_tier_cost to be an object, got: #{inspect(other)}")
+
+  defp to_long_context(nil), do: nil
+
+  defp to_long_context(%{} = cost) do
+    %{
+      input_threshold: fetch_non_neg_integer!(cost, "input_threshold"),
+      input: fetch_non_neg_number!(cost, "input", "cost.long_context.input"),
+      output: fetch_non_neg_number!(cost, "output", "cost.long_context.output"),
+      cache_read: fetch_non_neg_number!(cost, "cache_read", "cost.long_context.cache_read"),
+      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.long_context.cache_write")
+    }
+  end
+
+  defp to_long_context(other),
+    do: raise(ArgumentError, "expected cost.long_context to be an object, got: #{inspect(other)}")
+
   defp to_input(input) when is_list(input),
     do: Enum.map(input, &normalize_atom!(:input, &1, @inputs))
 
   defp to_input(other),
     do: raise(ArgumentError, "expected input to be an array, got: #{inspect(other)}")
+
+  defp to_reasoning_efforts(efforts) when is_list(efforts) do
+    allowed = Map.new(@reasoning_efforts)
+    declared = Enum.map(efforts, &normalize_atom!(:reasoning_efforts, &1, allowed))
+
+    for {_name, level} <- @reasoning_efforts, level in declared, do: level
+  end
+
+  defp to_reasoning_efforts(other),
+    do: raise(ArgumentError, "expected reasoning_efforts to be an array, got: #{inspect(other)}")
 
   defp fetch_string!(entry, field) do
     case Map.fetch!(entry, field) do
@@ -183,6 +242,13 @@ defmodule LemonAi.Models.Catalog do
 
   defp fetch_boolean!(entry, field) do
     case Map.fetch!(entry, field) do
+      value when is_boolean(value) -> value
+      value -> raise ArgumentError, "expected #{field} to be a boolean, got: #{inspect(value)}"
+    end
+  end
+
+  defp optional_boolean!(entry, field, default) do
+    case Map.get(entry, field, default) do
       value when is_boolean(value) -> value
       value -> raise ArgumentError, "expected #{field} to be a boolean, got: #{inspect(value)}"
     end

@@ -25,22 +25,6 @@ describe("readFormatter", () => {
 			expect(result.summary).toContain("index.ts");
 		});
 
-		it("should show shortened path using file_path field", () => {
-			const result = readFormatter.formatArgs({ file_path: "/home/user/project/src/app.tsx" });
-
-			expect(result.summary).toBeTruthy();
-			expect(result.summary).toContain("app.tsx");
-		});
-
-		it("should prefer path over file_path when both present", () => {
-			const result = readFormatter.formatArgs({
-				path: "/path/from/path.ts",
-				file_path: "/path/from/file_path.ts",
-			});
-
-			expect(result.summary).toContain("path.ts");
-		});
-
 		it("should show offset when provided", () => {
 			const result = readFormatter.formatArgs({
 				path: "/test/file.ts",
@@ -165,9 +149,9 @@ describe("readFormatter", () => {
 				{ offset: 99 },
 			);
 
-			// Line numbers should start from 100 (offset + 1)
-			expect(result.details[0]).toMatch(/100\|/);
-			expect(result.details[1]).toMatch(/101\|/);
+			// Native read offsets are 1-based.
+			expect(result.details[0]).toMatch(/99\|/);
+			expect(result.details[1]).toMatch(/100\|/);
 		});
 
 		it("should handle plain string result", () => {
@@ -312,7 +296,7 @@ describe("readFormatter", () => {
 			const lines = Array.from({ length: 100 }, (_, i) => `Line ${i + 1}`);
 			const result = readFormatter.formatResult(
 				{ content: [{ type: "text", text: lines.join("\n") }] },
-				{ offset: 99 },
+				{ offset: 100 },
 			);
 
 			// Line numbers 100-108 should be padded to 3 digits
@@ -452,4 +436,16 @@ import { Component } from './Component';
 			expect(result.summary).toMatch(/KB/);
 		});
 	});
+});
+
+it("preserves native source numbers exactly once, including a ranged read", () => {
+	const result = readFormatter.formatResult(
+		{
+			content: [{ type: "text", text: "17: alpha\n18: beta" }],
+			details: { path: "/repo/file.ts", start_line: 17, lines_shown: 2, total_lines: 90 },
+		},
+		{ path: "/repo/file.ts", offset: 17, limit: 2 },
+	);
+	expect(result.details).toEqual(["17: alpha", "18: beta"]);
+	expect(result.summary).toContain("2 lines");
 });

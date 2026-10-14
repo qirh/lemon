@@ -3,7 +3,7 @@ defmodule LemonControlPlane.Auth.TokenStore do
   Stores and validates session tokens issued by connect.challenge.
 
   Tokens are stored with an expiration time and associated identity.
-  This provides secure authentication for nodes and devices that have
+  This provides secure authentication for nodes that have
   completed the challenge flow.
 
   ## Token Lifecycle
@@ -143,7 +143,7 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
   def revoke(_), do: :ok
 
-  @doc "Revokes every token for one durable node or device identity."
+  @doc "Revokes every token for one durable node identity."
   @spec revoke_identity(String.t(), String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
   def revoke_identity(type, identity_id)
       when is_binary(type) and is_binary(identity_id) and identity_id != "" do
@@ -239,6 +239,35 @@ defmodule LemonControlPlane.Auth.TokenStore do
   end
 
   def current_node_generation(_node_id), do: nil
+
+  @doc """
+  Reports a durable node's current session credential state without exposing
+  any token: `:active`, `:expired`, `:revoked` (head invalidated by
+  `revoke_identity/2`), or `:none` (never issued a generation-tracked session).
+  """
+  @spec node_session_state(String.t()) :: :active | :expired | :revoked | :none
+  def node_session_state(node_id) when is_binary(node_id) and node_id != "" do
+    case Store.get(@head_namespace, head_key("node", node_id)) do
+      nil ->
+        :none
+
+      head ->
+        case head_token(head) do
+          token when is_binary(token) ->
+            info = Store.get(@store_namespace, token)
+            expires_at = if is_map(info), do: get_field(info, :expires_at_ms)
+
+            if is_integer(expires_at) and System.system_time(:millisecond) < expires_at,
+              do: :active,
+              else: :expired
+
+          _ ->
+            :revoked
+        end
+    end
+  end
+
+  def node_session_state(_node_id), do: :none
 
   defp do_replace_node_session(_token, _identity, _node_id, _opts, 0),
     do: {:error, :concurrent_session_rotation}
@@ -353,9 +382,6 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
   defp stored_identity_id(identity, "node") when is_map(identity),
     do: get_field(identity, :nodeId) || get_field(identity, :node_id)
-
-  defp stored_identity_id(identity, "device") when is_map(identity),
-    do: get_field(identity, :deviceId) || get_field(identity, :device_id)
 
   defp stored_identity_id(_identity, _type), do: nil
 

@@ -12,20 +12,20 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   - Requires ChatGPT JWT token (not standard API key)
   - Extracts account ID from JWT token
   - Has different rate limiting and quota behavior
-  - Supports text verbosity control
-  - Uses slightly different event mapping
+  - Supports reasoning summaries, prompt caching and service tiers
+  - Omits sampling parameters and output caps rejected by the Codex endpoint
 
   ## Configuration
 
-  The provider requires a ChatGPT JWT token, which can be obtained from
-  the ChatGPT web interface. Set it via:
-  - `OPENAI_CODEX_API_KEY` environment variable
-  - `api_key` option in StreamOptions
+  Pass the ChatGPT OAuth access token via `api_key` in `StreamOptions`, or set
+  `OPENAI_CODEX_API_KEY` / `CHATGPT_TOKEN`. Lemon's runtime resolves configured
+  encrypted credentials before invoking the provider; this module neither reads
+  the secret store nor refreshes credentials.
 
   ## Usage
 
       model = %Model{
-        id: "gpt-5.2",
+        id: "gpt-6-sol",
         api: :openai_codex_responses,
         provider: :"openai-codex",
         reasoning: true
@@ -49,10 +49,9 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   alias LemonAi.EventStream
   alias LemonAi.Providers.OpenAIResponsesShared
+  alias LemonAi.Providers.RetryHelper
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
-
-  require Logger
 
   # ============================================================================
   # Configuration
@@ -60,8 +59,9 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   @codex_url "https://chatgpt.com/backend-api/codex/responses"
   @jwt_claim_path "https://api.openai.com/auth"
-  @max_retries 3
-  @base_delay_ms 1000
+  @affinity_headers ["session_id", "conversation_id", "x-client-request-id"]
+  @client_version "0.159.0"
+  @controlled_headers ["version" | @affinity_headers]
 
   # Providers that use OpenAI-style tool call IDs
   @tool_call_providers MapSet.new([:openai, :"openai-codex", :opencode])
@@ -97,6 +97,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
   end
 
   defp do_stream(stream, model, context, opts) do
+    opts = %{opts | session_id: OpenAIResponsesShared.normalize_prompt_cache_key(opts.session_id)}
     output = init_assistant_message(model, api_override: :openai_codex_responses)
 
     try do
@@ -111,32 +112,57 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
       # Build request
       body = build_request_body(model, context, opts)
+
+      if is_function(opts.on_payload, 2) do
+        opts.on_payload.(body, %{
+          provider: :"openai-codex",
+          model: model.id,
+          session_id: opts.session_id
+        })
+      end
+
       headers = build_headers(model, opts, account_id, api_key)
 
       EventStream.push_async(stream, {:start, output})
 
       # Make streaming request with retries
-      case stream_with_retries(body, headers, @max_retries) do
+      case stream_with_retries(
+             responses_url(model.base_url),
+             body,
+             headers,
+             RetryHelper.policy(),
+             0
+           ) do
         {:ok, event_stream} ->
           # Map codex events to standard OpenAI Responses events
-          mapped_events = map_codex_events(event_stream)
+          mapped_events = event_stream |> observe_usage(model, opts) |> map_codex_events()
 
-          case OpenAIResponsesShared.process_stream(mapped_events, output, stream, model) do
+          case OpenAIResponsesShared.process_stream(mapped_events, output, stream, model, %{
+                 service_tier: Map.get(opts.thinking_budgets || %{}, :service_tier),
+                 apply_service_tier_pricing: fn usage, tier ->
+                   OpenAIResponsesShared.apply_service_tier_pricing(
+                     usage,
+                     tier,
+                     model.service_tier_cost
+                   )
+                 end
+               }) do
             {:ok, final_output} ->
               EventStream.complete(stream, final_output)
 
             {:error, reason} ->
-              output = %{output | stop_reason: :error, error_message: reason}
+              output = error_assistant_message(output, reason)
               EventStream.error(stream, output)
           end
 
-        {:error, reason} ->
-          output = %{output | stop_reason: :error, error_message: reason}
+        {:error, reason, retry_after_ms} ->
+          output = error_assistant_message(output, reason, retry_after_ms)
+
           EventStream.error(stream, output)
       end
     rescue
       e ->
-        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        output = error_assistant_message(output, e)
         EventStream.error(stream, output)
     end
   end
@@ -165,18 +191,14 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
       "parallel_tool_calls" => true
     }
 
-    # Add temperature if specified
-    body =
-      if opts.temperature do
-        Map.put(body, "temperature", opts.temperature)
-      else
-        body
-      end
-
     # Add tools if present
     body =
       if context.tools && context.tools != [] do
-        Map.put(body, "tools", OpenAIResponsesShared.convert_tools(context.tools, %{strict: nil}))
+        Map.put(
+          body,
+          "tools",
+          OpenAIResponsesShared.convert_tools(context.tools, %{strict: false})
+        )
       else
         body
       end
@@ -184,13 +206,26 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     # Add reasoning configuration
     body =
       if opts.reasoning do
-        effort = clamp_reasoning_effort(model.id, opts.reasoning)
+        effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
         summary = Map.get(opts.thinking_budgets || %{}, :summary, "auto")
 
         Map.put(body, "reasoning", %{
           "effort" => Atom.to_string(effort),
           "summary" => summary
         })
+      else
+        body
+      end
+
+    body =
+      case Map.get(opts.thinking_budgets || %{}, :service_tier) do
+        nil -> body
+        tier -> Map.put(body, "service_tier", tier)
+      end
+
+    body =
+      if opts.tool_choice do
+        Map.put(body, "tool_choice", opts.tool_choice)
       else
         body
       end
@@ -208,52 +243,38 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
   defp normalize_instructions(_), do: @default_instructions
 
-  defp clamp_reasoning_effort(model_id, effort) do
-    # Extract base model ID
-    id =
-      if String.contains?(model_id, "/") do
-        model_id |> String.split("/") |> List.last()
-      else
-        model_id
-      end
-
-    cond do
-      String.starts_with?(id, "gpt-5.2") && effort == :minimal -> :low
-      id == "gpt-5.1" && effort == :xhigh -> :high
-      id == "gpt-5.1-codex-mini" -> if effort in [:high, :xhigh], do: :high, else: :medium
-      true -> effort
-    end
-  end
-
   defp build_headers(model, opts, account_id, token) do
     # Get OS info for user agent
     {os_name, os_version} = get_os_info()
     arch = :erlang.system_info(:system_architecture) |> to_string()
-    user_agent = "pi (#{os_name} #{os_version}; #{arch})"
+    user_agent = "pi/#{@client_version} (#{os_name} #{os_version}; #{arch})"
 
     base_headers = %{
       "Authorization" => "Bearer #{token}",
       "chatgpt-account-id" => account_id,
       "OpenAI-Beta" => "responses=experimental",
       "originator" => "pi",
+      "version" => @client_version,
       "User-Agent" => user_agent,
       "Accept" => "text/event-stream",
       "Content-Type" => "application/json"
     }
 
-    # Add model headers
-    headers = Map.merge(base_headers, model.headers || %{})
-
-    # Add session ID if present
     headers =
-      if opts.session_id do
-        Map.put(headers, "session_id", opts.session_id)
-      else
-        headers
-      end
+      base_headers
+      |> Map.merge(model.headers || %{})
+      |> Map.merge(opts.headers || %{})
+      |> Map.reject(fn {key, _} -> String.downcase(to_string(key)) in @controlled_headers end)
+      |> Map.put("version", @client_version)
 
-    # Add user-provided headers
-    Map.merge(headers, opts.headers || %{})
+    # The wire cache key and routing identity must agree across every turn.
+    Enum.reduce(@affinity_headers, headers, fn key, headers ->
+      if opts.session_id do
+        Map.put(headers, key, opts.session_id)
+      else
+        Map.delete(headers, key)
+      end
+    end)
   end
 
   defp get_os_info do
@@ -304,10 +325,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
 
     [_header, payload, _signature] = parts
 
-    # Decode base64 payload (add padding if needed)
-    padded = pad_base64(payload)
-
-    case Base.decode64(padded) do
+    case Base.url_decode64(payload, padding: false) do
       {:ok, decoded} ->
         case Jason.decode(decoded) do
           {:ok, claims} ->
@@ -325,79 +343,77 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     end
   end
 
-  defp pad_base64(str) do
-    case rem(String.length(str), 4) do
-      0 -> str
-      2 -> str <> "=="
-      3 -> str <> "="
-      _ -> str
-    end
-  end
-
   # ============================================================================
   # HTTP Streaming with Retries
   # ============================================================================
 
-  defp stream_with_retries(body, headers, retries_left) do
-    headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
+  defp responses_url(base_url)
+       when base_url in [nil, "", "https://chatgpt.com", "https://chatgpt.com/"],
+       do: @codex_url
 
-    case Req.post(@codex_url,
-           json: body,
-           headers: headers_list,
-           into: :self,
-           receive_timeout: 300_000
-         ) do
-      {:ok, %Req.Response{status: status}} when status in 200..299 ->
-        {:ok, receive_sse_events()}
+  defp responses_url(base_url) do
+    base_url = String.trim_trailing(base_url, "/")
 
-      {:ok, %Req.Response{status: status, body: error_body}} when retries_left > 0 ->
-        error_text = normalize_error_body(error_body)
-
-        if retryable_error?(status, error_text) do
-          delay = retry_delay_with_jitter(@base_delay_ms, @max_retries - retries_left)
-          Process.sleep(delay)
-          stream_with_retries(body, headers, retries_left - 1)
-        else
-          {:error, parse_error_response(status, error_text)}
-        end
-
-      {:ok, %Req.Response{status: status, body: error_body}} ->
-        error_text = normalize_error_body(error_body)
-        {:error, parse_error_response(status, error_text)}
-
-      {:error, reason} when retries_left > 0 ->
-        error_msg = inspect(reason)
-
-        if not String.contains?(error_msg, "usage limit") do
-          delay = retry_delay_with_jitter(@base_delay_ms, @max_retries - retries_left)
-          Process.sleep(delay)
-          stream_with_retries(body, headers, retries_left - 1)
-        else
-          {:error, error_msg}
-        end
-
-      {:error, reason} ->
-        {:error, "Request failed: #{inspect(reason)}"}
+    cond do
+      String.ends_with?(base_url, "/codex/responses") -> base_url
+      String.ends_with?(base_url, "/codex") -> base_url <> "/responses"
+      true -> base_url <> "/codex/responses"
     end
   end
 
-  defp retry_delay_with_jitter(base_ms, attempt) do
-    LemonAi.Providers.RetryHelper.exponential_backoff_with_jitter(base_ms, attempt)
-  end
+  defp stream_with_retries(url, body, headers, policy, attempt) do
+    headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
+    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
 
-  defp retryable_error?(status, error_text) do
-    LemonAi.Providers.RetryHelper.retryable_http_status?(status, [429, 500, 502, 503, 504]) ||
-      LemonAi.Providers.RetryHelper.retryable_error_text?(error_text)
+    case Req.post(url,
+           json: body,
+           headers: headers_list,
+           into: :self,
+           retry: false,
+           receive_timeout: 300_000
+         ) do
+      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        {:ok, SSEParser.events(response)}
+
+      {:ok, %Req.Response{status: status, body: error_body, headers: response_headers}} ->
+        error_text = normalize_error_body(error_body)
+
+        retry_delay =
+          if retry_allowed? and RetryHelper.retryable_http_error?(status, error_text) do
+            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
+          else
+            :give_up
+          end
+
+        case retry_delay do
+          :give_up ->
+            {:error, parse_error_response(status, error_text),
+             RetryHelper.retry_after_ms(response_headers)}
+
+          delay_ms ->
+            RetryHelper.sleep(delay_ms)
+            stream_with_retries(url, body, headers, policy, attempt + 1)
+        end
+
+      {:error, reason} ->
+        cond do
+          retry_allowed? and RetryHelper.retryable_transport_error?(reason) ->
+            RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+            stream_with_retries(url, body, headers, policy, attempt + 1)
+
+          true ->
+            {:error, reason, nil}
+        end
+    end
   end
 
   defp parse_error_response(status, raw) do
     case Jason.decode(raw) do
-      {:ok, %{"error" => error}} ->
+      {:ok, %{"error" => error}} when is_map(error) ->
         code = error["code"] || error["type"] || ""
 
         friendly_message =
-          if Regex.match?(~r/usage_limit_reached|usage_not_included|rate_limit_exceeded/i, code) ||
-               status == 429 do
+          if Regex.match?(~r/usage_limit_reached|usage_not_included/i, code) do
             plan =
               if error["plan_type"],
                 do: " (#{String.downcase(error["plan_type"])} plan)",
@@ -414,12 +430,12 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
                 ""
               end
 
-            "You have hit your ChatGPT usage limit#{plan}.#{when_str}"
+            "HTTP #{status}: #{code}: You have hit your ChatGPT usage limit#{plan}.#{when_str}"
           else
             nil
           end
 
-        friendly_message || error["message"] || "HTTP #{status}: #{raw}"
+        friendly_message || "HTTP #{status}: #{code}: #{error["message"] || raw}"
 
       _ ->
         "HTTP #{status}: #{raw}"
@@ -452,67 +468,32 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
     end
   end
 
-  defp receive_sse_events do
-    Stream.resource(
-      fn -> %{buffer: ""} end,
-      fn state ->
-        receive do
-          message ->
-            case normalize_sse_message(message) do
-              {:data, chunk} ->
-                {events, new_buffer} = SSEParser.parse_sse_chunk(state.buffer <> chunk)
-                {events, %{state | buffer: new_buffer}}
-
-              :done ->
-                {:halt, state}
-
-              {:error, reason} ->
-                throw({:stream_error, reason})
-
-              :ignore ->
-                {[], state}
-            end
-        after
-          300_000 ->
-            {:halt, state}
-        end
-      end,
-      fn _state -> :ok end
-    )
-  end
-
-  # Req's `into: :self` streaming can deliver messages in a few shapes depending on adapters/versions.
-  defp normalize_sse_message(message) do
-    case message do
-      {:data, data} when is_binary(data) ->
-        {:data, data}
-
-      {_, {:data, data}} when is_binary(data) ->
-        {:data, data}
-
-      {:done, _} ->
-        :done
-
-      {_, :done} ->
-        :done
-
-      {_, {:done, _}} ->
-        :done
-
-      {:error, reason} ->
-        {:error, reason}
-
-      {_, {:error, reason}} ->
-        {:error, reason}
-
-      _ ->
-        :ignore
-    end
-  end
-
   # ============================================================================
   # Event Mapping
   # ============================================================================
+
+  defp observe_usage(events, model, opts) do
+    if is_function(opts.on_usage, 2) do
+      metadata = %{provider: :"openai-codex", model: model.id, session_id: opts.session_id}
+
+      Stream.transform(events, false, fn
+        %{"type" => type, "response" => %{"usage" => usage}} = event, false
+        when type in [
+               "response.completed",
+               "response.incomplete",
+               "response.done",
+               "response.failed"
+             ] and is_map(usage) ->
+          opts.on_usage.(usage, metadata)
+          {[event], true}
+
+        event, seen ->
+          {[event], seen}
+      end)
+    else
+      events
+    end
+  end
 
   defp map_codex_events(events) do
     Stream.flat_map(events, fn event ->

@@ -6,17 +6,38 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+_No unreleased changes._
+
+## [0.2.0] - 2026-10-13
+
 First release. `lemon_memory` is a new package, carved out of `lemon_core`,
 where durable memory had been eight modules with no boundary of their own.
 
+### Fixed
+
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained, and requires
+  `lemon_core` as `~> 0.2`.
+
 ### Added
 
+- Automatic local recall now carries agent-scoped, BM25-ranked conversation
+  matches and the session workspace's USER.md facts in a bounded 2 KiB volatile
+  block. It needs no model call; `[memory] auto_recall = false` disables it.
 - `LemonMemory.Store.put_sync/1,2` for explicit review/confirm workflows that
   must know SQLite accepted a document before reporting success;
   create-if-absent `put_new_sync/1,2`, exact `get_document/1,2`, and exact
   `delete_document/1,2` prevent stale reviewers from overwriting rows and make
   their provenance-bearing records inspectable/removable. Also added
   `LemonMemory.Safety.redact/1` for a shared durable-boundary replacement pass.
+- `LemonMemory.Doctor.Checks.Memory`, the `memory.session_search` doctor
+  check, moved here from `lemon_core` (`LemonCore.Doctor.Checks.Memory`).
+  Register it with `config :lemon_core, :doctor_checks, [LemonMemory.Doctor.Checks.Memory]`;
+  it reads `LemonMemory.Store` directly instead of the `:doctor_runtime`
+  `:memory_store` key. `LemonMemory.Store.database_path/0` returns the SQLite
+  file the configured default store opens.
 
 - `LemonMemory.Store` — SQLite-backed document store with full-text search over
   an agent's past work. Queries are sanitised before they reach FTS5, so agent-
@@ -33,8 +54,9 @@ where durable memory had been eight modules with no boundary of their own.
   of failing it.
 - `LemonMemory.Document` as the single record shape every provider reads and
   writes; `LemonMemory.Safety` for redaction and size limits before persistence;
-  `LemonMemory.SessionSearch` for scoped search; `LemonMemory.TaskFingerprint`
-  for recognising repeated work.
+  `LemonMemory.Query` for OR-joined lexical search terms; `LemonMemory.Recall`
+  for bounded local conversation recall; and `LemonMemory.SessionSearch` for
+  the scoped conversation search API.
 - `LemonMemory.Document.new/1` builds a document from fields directly (for
   callers driving `LemonAgent` themselves), applying the same 2,000-byte summary
   truncation and required-field validation as `from_run/4`. Building the struct

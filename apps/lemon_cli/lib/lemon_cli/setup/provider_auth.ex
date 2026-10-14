@@ -1,0 +1,238 @@
+defmodule LemonCli.Setup.ProviderAuth do
+  @moduledoc """
+  `lemon model PROVIDER --status` and `--logout` for providers that sign in
+  with OAuth.
+
+  Status reports the configured auth source, the stored login (account,
+  access-token expiry, estimated re-login date) and whether the provider's
+  credentials resolve. Resolving may refresh an access token that is close to
+  expiry, exactly as a model request would. Credential values are never shown.
+
+  Logout deletes the stored OAuth login secret and removes the provider's
+  `auth_source = "oauth"` and `oauth_secret` config entries, so API-key
+  resolution applies again. It does not revoke the grant at the provider and
+  leaves external logins (Claude Code, Codex CLI) and environment tokens alone.
+  """
+
+  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
+  alias LemonCli.Onboarding.Provider
+  alias LemonCli.Onboarding.Runner
+  alias LemonCore.Config.TomlPatch
+  alias LemonCore.Secrets
+
+  @spec status(Provider.t(), String.t(), map()) :: :ok
+  def status(%Provider{} = spec, config_path, io) do
+    ensure_oauth_provider!(spec)
+    config = read_config(config_path)
+    provider_cfg = get_in(config, ["providers", spec.id]) || %{}
+    auth_source = normalize(provider_cfg["auth_source"])
+    secret_name = oauth_secret_name(spec, provider_cfg)
+
+    io.info.("#{spec.display_name} authentication")
+    io.info.("  Config: #{Path.expand(config_path)}")
+    io.info.("  Auth source: #{auth_source_label(auth_source)}")
+
+    login_lines(spec, secret_name)
+    |> Enum.each(&io.info.("  " <> &1))
+
+    api_key_env_lines(spec, auth_source)
+    |> Enum.each(&io.info.("  " <> &1))
+
+    ready? =
+      Credentials.provider_has_credentials?(spec.id, Map.get(config, "providers", %{}))
+
+    io.info.("  Credentials usable: #{if ready?, do: "yes", else: "no"}")
+    :ok
+  end
+
+  @spec logout(Provider.t(), String.t(), map()) :: :ok
+  def logout(%Provider{} = spec, config_path, io) do
+    ensure_oauth_provider!(spec)
+    expanded = Path.expand(config_path)
+    content = read_config_content(expanded)
+    provider_cfg = get_in(decode!(content, expanded), ["providers", spec.id]) || %{}
+    secret_name = oauth_secret_name(spec, provider_cfg)
+
+    case stored_login(spec, secret_name) do
+      {:ok, _secret} ->
+        :ok = Secrets.delete(secret_name)
+        io.info.("Deleted the stored #{spec.display_name} login (secret #{secret_name}).")
+
+      :not_oauth ->
+        io.info.("Secret #{secret_name} does not hold an OAuth login; left unchanged.")
+
+      :missing ->
+        io.info.("No stored #{spec.display_name} login in secret #{secret_name}.")
+    end
+
+    if normalize(provider_cfg["auth_source"]) == "oauth" or
+         is_binary(provider_cfg["oauth_secret"]) do
+      updated =
+        content
+        |> TomlPatch.delete_key(spec.provider_table, "auth_source")
+        |> TomlPatch.delete_key(spec.provider_table, "oauth_secret")
+
+      # Refuse to write a patch that no longer parses.
+      _ = decode!(updated, expanded)
+      File.write!(expanded, updated)
+      io.info.("Removed OAuth settings from [#{spec.provider_table}] in #{expanded}.")
+    end
+
+    io.info.(
+      "Lemon no longer uses this login. Run `lemon model #{spec.id}` to sign in again " <>
+        "or to configure an API key."
+    )
+
+    :ok
+  end
+
+  defp ensure_oauth_provider!(%Provider{} = spec) do
+    unless :oauth in spec.auth_modes and spec.oauth_module do
+      Runner.fail!("#{spec.display_name} does not use an OAuth login.")
+    end
+  end
+
+  defp oauth_secret_name(%Provider{} = spec, provider_cfg) do
+    normalize(provider_cfg["oauth_secret"]) ||
+      get_in(spec.default_secret_name_by_mode || %{}, [:oauth]) ||
+      spec.default_secret_name
+  end
+
+  defp stored_login(%Provider{oauth_module: module}, secret_name) do
+    case Secrets.get(secret_name) do
+      {:ok, value} ->
+        case module.decode_secret(value) do
+          {:ok, secret} -> {:ok, secret}
+          _ -> :not_oauth
+        end
+
+      {:error, _} ->
+        :missing
+    end
+  end
+
+  defp login_lines(%Provider{} = spec, secret_name) do
+    case stored_login(spec, secret_name) do
+      {:ok, secret} ->
+        info = describe(spec.oauth_module, secret)
+        now = System.system_time(:millisecond)
+
+        [
+          "Stored login: #{secret_name} (#{kind_label(info.kind)}#{account_label(info)})"
+          | Enum.reject(
+              [
+                expiry_line(info, now),
+                if(is_integer(info[:reauth_by_ms]),
+                  do:
+                    "Sign in again by: #{format_date(info.reauth_by_ms)} " <>
+                      "(the provider ends a login about 30 days after sign-in)"
+                )
+              ],
+              &is_nil/1
+            )
+        ]
+
+      :not_oauth ->
+        ["Stored login: none (#{secret_name} holds a non-OAuth value)"]
+
+      :missing ->
+        ["Stored login: none (#{secret_name} is not set)"]
+    end
+  end
+
+  defp describe(module, secret) do
+    if function_exported?(module, :describe_secret, 1) do
+      module.describe_secret(secret)
+    else
+      %{
+        kind: if(secret["refresh_token"], do: :refreshable, else: :static_token),
+        expires_at_ms: secret["expires_at_ms"]
+      }
+    end
+  end
+
+  defp expiry_line(%{expires_at_ms: expires_at_ms, kind: kind}, now)
+       when is_integer(expires_at_ms) do
+    suffix = if kind == :refreshable, do: "; refreshed automatically", else: ""
+
+    if expires_at_ms > now do
+      "Access token: expires in #{format_duration(expires_at_ms - now)}#{suffix}"
+    else
+      "Access token: expired #{format_duration(now - expires_at_ms)} ago#{suffix}"
+    end
+  end
+
+  defp expiry_line(_info, _now), do: nil
+
+  defp api_key_env_lines(%Provider{} = spec, auth_source) do
+    spec.id
+    |> ProviderNames.env_vars()
+    |> Enum.filter(&present?(System.get_env(&1)))
+    |> Enum.map(fn env_var ->
+      if auth_source == "oauth",
+        do: "#{env_var}: set, ignored while auth_source = \"oauth\"",
+        else: "#{env_var}: set, used for API-key authentication"
+    end)
+  end
+
+  defp auth_source_label("oauth"), do: "oauth (subscription login)"
+  defp auth_source_label("api_key"), do: "api_key"
+  defp auth_source_label(nil), do: "not set (API key)"
+  defp auth_source_label(other), do: "#{other} (invalid)"
+
+  defp kind_label(:refreshable), do: "refreshable login"
+  defp kind_label(_), do: "static token, no refresh"
+
+  defp account_label(%{account_email: email, organization_name: org})
+       when is_binary(email) and is_binary(org),
+       do: ", #{email}, #{org}"
+
+  defp account_label(%{account_email: email}) when is_binary(email), do: ", #{email}"
+  defp account_label(_), do: ""
+
+  defp format_duration(ms) do
+    minutes = div(ms, 60_000)
+
+    cond do
+      minutes < 1 -> "less than a minute"
+      minutes < 60 -> "#{minutes}m"
+      minutes < 48 * 60 -> "#{div(minutes, 60)}h #{rem(minutes, 60)}m"
+      true -> "#{div(minutes, 24 * 60)} days"
+    end
+  end
+
+  defp format_date(ms) do
+    ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_date() |> Date.to_iso8601()
+  end
+
+  defp read_config(path) do
+    expanded = Path.expand(path)
+    expanded |> read_config_content() |> decode!(expanded)
+  end
+
+  defp read_config_content(expanded) do
+    case File.read(expanded) do
+      {:ok, content} -> content
+      {:error, :enoent} -> ""
+      {:error, reason} -> Runner.fail!("Failed to read #{expanded}: #{inspect(reason)}")
+    end
+  end
+
+  defp decode!(content, path) do
+    case Toml.decode(content) do
+      {:ok, decoded} -> decoded
+      {:error, reason} -> Runner.fail!("Config file #{path} is not valid TOML: #{inspect(reason)}")
+    end
+  end
+
+  defp normalize(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize(_), do: nil
+
+  defp present?(value), do: normalize(value) != nil
+end

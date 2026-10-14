@@ -549,9 +549,7 @@ const KNOWN_EVENTS = new Set<string>([
 	"exec.approval.requested",
 	"exec.approval.resolved",
 	"channel.delivery",
-	"talk.mode",
-	"voicewake.changed",
-	"custom",
+	"omp.session",
 ]);
 
 function isKnownEvent(name: string): boolean {

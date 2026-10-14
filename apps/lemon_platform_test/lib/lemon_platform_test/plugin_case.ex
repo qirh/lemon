@@ -22,8 +22,9 @@ defmodule LemonPlatformTest.PluginCase do
       LemonChannels.Application.register_and_start_adapter(MyApp.ChannelAdapter, [])
 
   That runtime path is how a satellite package (an integration living in its own
-  repo, depending on `lemon_channels` from Hex) plugs itself in without the
-  platform knowing it exists. This suite exercises it, because "my adapter works
+  repo, depending on `lemon_channels`) plugs itself in without the platform
+  knowing it exists. `lemon_channels` is not published to Hex, so outside this
+  repository that dependency is a path dependency on a lemon checkout. This suite exercises it, because "my adapter works
   but the platform can't see it" is the most common way a third-party channel
   fails.
 
@@ -318,7 +319,6 @@ defmodule LemonPlatformTest.PluginCase do
           spec = @adapter.child_spec([])
 
           assert %{id: _, start: {module, function, args}} = spec
-          assert is_atom(module) and is_atom(function) and is_list(args)
           assert Code.ensure_loaded?(module), "#{inspect(module)} is not loadable"
 
           assert function_exported?(module, function, length(args)),

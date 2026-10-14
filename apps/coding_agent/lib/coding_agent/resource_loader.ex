@@ -10,13 +10,14 @@ defmodule CodingAgent.ResourceLoader do
   ## Instruction Files
 
   Instruction files (CLAUDE.md, AGENTS.md) provide context and guidelines
-  for the coding agent. They are loaded in order from most specific
-  (project-local) to most general (global), allowing for hierarchical
-  configuration.
+  for the coding agent. Global instructions are rendered first, followed by
+  ancestors from filesystem root to cwd. Directory instructions apply to that
+  directory's subtree; more specific instructions override broader ones.
+  Each physical file is loaded once, including symlink or hard-link aliases.
 
   ## Resource Priorities
 
-  When loading resources, the following priority order is used:
+  For prompts, themes and skills, the following priority order is used:
   1. Project-local files (`.claude/`, `.lemon/`, or root)
   2. Parent directories walking up to filesystem root
   3. Home directory files (`~/.claude/`, `~/.lemon/agent/`)
@@ -46,13 +47,12 @@ defmodule CodingAgent.ResourceLoader do
   @doc """
   Load CLAUDE.md and similar instruction files.
 
-  Searches for instruction files in:
-  1. The cwd and its `.claude/` and `.lemon/` subdirectories
-  2. All parent directories up to the filesystem root
-  3. Home directory locations (`~/.claude/`, `~/.lemon/agent/`)
+  Searches global home locations (`~/.claude/`, `~/.lemon/`,
+  `~/.lemon/agent/`) first, then ancestors from filesystem root to cwd.
+  Each ancestor includes its root and `.claude/` and `.lemon/` instruction files.
 
-  Files are returned in order from most specific to most general,
-  with their content combined.
+  Files are combined from general to specific, with source and scope headers
+  and an explicit scoped-precedence rule. Duplicate physical files appear once.
 
   ## Parameters
 
@@ -67,16 +67,32 @@ defmodule CodingAgent.ResourceLoader do
 
       instructions = CodingAgent.ResourceLoader.load_instructions("/home/user/project")
       # Returns combined content with headers like:
-      # <!-- From: /home/user/project/CLAUDE.md -->
-      # ... file content ...
-      # <!-- From: ~/.claude/CLAUDE.md -->
+      # <!-- From: /home/user/.claude/CLAUDE.md -->
       # ... global content ...
+      # <!-- From: /home/user/project/CLAUDE.md -->
+      # ... project content ...
   """
   @spec load_instructions(String.t()) :: String.t()
   def load_instructions(cwd) do
     cwd
+    |> instruction_sections()
+    |> Enum.map_join("\n\n", & &1.text)
+  end
+
+  @doc """
+  The pieces `load_instructions/1` joins with blank lines, each labelled for
+  context-usage accounting: the precedence header (category `:system_prompt`)
+  followed by one `:context_files` section per instruction file. Labels carry
+  only the file name and a coarse scope (`global`, `project`, `parent`), never
+  the absolute path.
+  """
+  @spec instruction_sections(String.t()) :: [
+          %{category: atom(), label: String.t(), text: String.t()}
+        ]
+  def instruction_sections(cwd) do
+    cwd
     |> find_instruction_files()
-    |> load_and_combine_files()
+    |> combined_sections(Path.expand(cwd))
   end
 
   @doc """
@@ -91,7 +107,8 @@ defmodule CodingAgent.ResourceLoader do
 
   ## Returns
 
-  A list of maps with `:path` and `:content` keys.
+  A list of maps with `:path` and `:content` keys, in the same global-first,
+  ancestor-root-to-cwd order as `load_instructions/1`, deduplicated by file identity.
 
   ## Examples
 
@@ -124,7 +141,9 @@ defmodule CodingAgent.ResourceLoader do
 
   ## Returns
 
-  A string containing the combined content of all found AGENTS.md files.
+  A string containing all found AGENTS.md files, global first and then
+  ancestors from root to cwd, with the same scope and deduplication semantics
+  as `load_instructions/1`.
 
   ## Examples
 
@@ -134,7 +153,8 @@ defmodule CodingAgent.ResourceLoader do
   def load_agents(cwd) do
     cwd
     |> find_specific_files(["AGENTS.md"])
-    |> load_and_combine_files()
+    |> combined_sections(Path.expand(cwd))
+    |> Enum.map_join("\n\n", & &1.text)
   end
 
   # ============================================================================
@@ -400,15 +420,32 @@ defmodule CodingAgent.ResourceLoader do
     local_files = find_in_directory_tree(cwd, filenames)
     home_files = find_in_home_directories(filenames)
 
-    (local_files ++ home_files) |> Enum.uniq()
+    {files, _seen} = deduplicate_files(home_files ++ local_files)
+    files
   end
 
-  # Find files in directory tree from cwd to root
+  # Keep the most specific spelling of a physical file, not an earlier global
+  # alias that would change its precedence relative to other local guides.
+  defp deduplicate_files([]), do: {[], MapSet.new()}
+
+  defp deduplicate_files([path | rest]) do
+    {files, seen} = deduplicate_files(rest)
+    identity = file_identity(path)
+
+    if MapSet.member?(seen, identity) do
+      {files, seen}
+    else
+      {[path | files], MapSet.put(seen, identity)}
+    end
+  end
+
+  # Find files in directory tree from root to cwd
   @spec find_in_directory_tree(String.t(), [String.t()]) :: [String.t()]
   defp find_in_directory_tree(cwd, filenames) do
     cwd
     |> Path.expand()
     |> walk_to_root()
+    |> Enum.reverse()
     |> Enum.flat_map(fn dir ->
       find_in_directory(dir, filenames)
     end)
@@ -440,20 +477,43 @@ defmodule CodingAgent.ResourceLoader do
   # Find files in home directory locations
   @spec find_in_home_directories([String.t()]) :: [String.t()]
   defp find_in_home_directories(filenames) do
-    home = System.user_home!()
-
-    home_dirs = [
-      Path.join(home, ".claude"),
-      Path.join(home, ".lemon"),
-      Config.agent_dir()
-    ]
-
-    home_dirs
+    global_instruction_dirs()
     |> Enum.flat_map(fn dir ->
       filenames
       |> Enum.map(&Path.join(dir, &1))
       |> Enum.filter(&File.regular?/1)
     end)
+  end
+
+  defp global_instruction_dirs do
+    home = System.user_home!()
+
+    [
+      Path.join(home, ".claude"),
+      Path.join(home, ".lemon"),
+      Path.expand(Config.agent_dir())
+    ]
+  end
+
+  defp file_identity(path) do
+    case File.stat(path) do
+      {:ok, %{inode: inode, major_device: major, minor_device: minor}} when inode != 0 ->
+        {major, minor, inode}
+
+      _ ->
+        Path.expand(path)
+    end
+  end
+
+  defp instruction_scope(path, global_dirs) do
+    dir = Path.dirname(path)
+
+    if dir in global_dirs do
+      "global"
+    else
+      scope = if Path.basename(dir) in @config_subdirs, do: Path.dirname(dir), else: dir
+      "#{scope} (this directory and its descendants)"
+    end
   end
 
   # Walk from a directory up to the filesystem root
@@ -474,21 +534,59 @@ defmodule CodingAgent.ResourceLoader do
     end
   end
 
-  # Load files and combine their content with headers
-  @spec load_and_combine_files([String.t()]) :: String.t()
-  defp load_and_combine_files(paths) do
-    paths
-    |> Enum.map(fn path ->
-      content = read_file_safe(path)
+  # Load files and split them into the header plus one labelled section per
+  # file; joining the texts with blank lines gives the combined instructions.
+  defp combined_sections(paths, cwd) do
+    global_dirs = global_instruction_dirs()
 
-      if content != "" do
-        "<!-- From: #{path} -->\n#{content}"
-      else
-        ""
-      end
-    end)
-    |> Enum.reject(&(&1 == ""))
-    |> Enum.join("\n\n")
+    files =
+      Enum.flat_map(paths, fn path ->
+        case read_file_safe(path) do
+          "" ->
+            []
+
+          content ->
+            [
+              %{
+                category: :context_files,
+                label: "#{Path.basename(path)} (#{scope_label(path, global_dirs, cwd)})",
+                text:
+                  "<!-- From: #{path} -->\nScope: #{instruction_scope(path, global_dirs)}\n\n#{content}"
+              }
+            ]
+        end
+      end)
+
+    case files do
+      [] ->
+        []
+
+      _ ->
+        [
+          %{
+            category: :system_prompt,
+            label: "Repository instruction rules",
+            text:
+              "## Repository instructions\n" <>
+                "Global instructions apply generally. Directory instructions apply only within " <>
+                "their stated subtree. More specific directory instructions override conflicting " <>
+                "broader instructions; read applicable descendant guides before editing there. " <>
+                "Sources are ordered global first, then ancestors from root to working directory."
+          }
+          | files
+        ]
+    end
+  end
+
+  defp scope_label(path, global_dirs, cwd) do
+    dir = Path.dirname(path)
+    scope = if Path.basename(dir) in @config_subdirs, do: Path.dirname(dir), else: dir
+
+    cond do
+      dir in global_dirs -> "global"
+      scope == cwd -> "project"
+      true -> "parent"
+    end
   end
 
   # Safely read a file, returning empty string on error

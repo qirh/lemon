@@ -7,6 +7,10 @@ defmodule LemonControlPlane.Methods.ChatHistory do
 
   @behaviour LemonControlPlane.Method
 
+  alias LemonCore.AgentRuntime
+  alias LemonControlPlane.Methods.NativeSessions
+  alias LemonControlPlane.EventProjection
+
   @default_limit 50
   @max_limit 200
   @preview_bytes 500
@@ -28,16 +32,229 @@ defmodule LemonControlPlane.Methods.ChatHistory do
     if is_nil(session_key) or session_key == "" do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      history = get_chat_history(session_key, limit, before_id, include_full_text)
-
-      {:ok,
-       %{
-         "sessionKey" => session_key,
-         "messages" => history,
-         "summary" => summary(history, limit, before_id, include_full_text)
-       }}
+      with {:ok, history} <- history(params, session_key, limit, before_id, include_full_text) do
+        {:ok,
+         %{
+           "sessionKey" => session_key,
+           "messages" => history,
+           "summary" => summary(history, limit, before_id, include_full_text)
+         }}
+      end
     end
   end
+
+  defp history(params, session_key, limit, before_id, full_text) do
+    if Map.has_key?(params, "cwd") do
+      with {:ok, _key, cwd} <- NativeSessions.target(params) do
+        case AgentRuntime.call(:session_history, [session_key, cwd], {:error, :unavailable}) do
+          {:ok, entries} when is_list(entries) ->
+            entries =
+              LemonControlPlane.ACP.History.reconcile_answers(
+                entries,
+                LemonCore.RunStore.history(session_key, limit: 200)
+              )
+
+            messages = native_messages(entries, full_text)
+
+            page =
+              if before_id in [nil, ""],
+                do: Enum.take(messages, -limit),
+                else: messages |> apply_before_id(before_id) |> Enum.take(limit)
+
+            {:ok, page}
+
+          {:error, reason}
+          when reason in [:session_not_found, :unsupported_session, :unavailable] ->
+            {:ok, get_chat_history(session_key, limit, before_id, full_text)}
+
+          {:error, reason} ->
+            NativeSessions.failure(reason)
+
+          _ ->
+            NativeSessions.failure(:invalid_response)
+        end
+      end
+    else
+      {:ok, get_chat_history(session_key, limit, before_id, full_text)}
+    end
+  end
+
+  defp native_messages(entries, full_text) do
+    {rows, _calls} =
+      Enum.reduce(entries, {[], %{}}, fn entry, {rows, calls} ->
+        {new_rows, calls} =
+          Enum.map_reduce(native_message(entry, full_text), calls, fn row, calls ->
+            id = row["toolCallId"]
+
+            cond do
+              row["role"] == "tool_use" ->
+                {row, Map.put(calls, id, row)}
+
+              row["role"] == "tool_result" ->
+                call = Map.get(calls, id, %{})
+
+                row =
+                  row
+                  |> Map.put_new("arguments", call["arguments"])
+                  |> Map.put_new("title", call["title"] || row["toolName"])
+
+                {row, Map.delete(calls, id)}
+
+              true ->
+                {row, calls}
+            end
+          end)
+
+        {Enum.reverse(new_rows, rows), calls}
+      end)
+
+    Enum.reverse(rows)
+  end
+
+  defp native_message(%{type: :message, id: id, message: message} = entry, full_text)
+       when is_map(message) do
+    role = field(message, :role)
+    timestamp = field(message, :timestamp) || Map.get(entry, :timestamp)
+    content = field(message, :content)
+
+    case role do
+      role when role in ["user", :user] ->
+        [text_row(id, "user", native_text(content), timestamp, full_text, true)]
+
+      role when role in ["assistant", :assistant] ->
+        text = native_text(content)
+        stop = field(message, :stop_reason)
+
+        text_rows =
+          if text == "",
+            do: [],
+            else: [
+              text_row(id, "assistant", text, timestamp, full_text, stop not in ["error", :error])
+            ]
+
+        calls =
+          content
+          |> List.wrap()
+          |> Enum.with_index()
+          |> Enum.flat_map(fn {block, index} ->
+            if field(block, :type) in [:tool_call, "tool_call"] and is_binary(field(block, :id)) do
+              args = tool_arguments(field(block, :arguments))
+              name = field(block, :name)
+
+              [
+                %{
+                  "id" => "#{id}:tool:#{index}",
+                  "role" => "tool_use",
+                  "content" => "",
+                  "timestampMs" => timestamp,
+                  "toolCallId" => field(block, :id),
+                  "toolName" => name,
+                  "title" => tool_title(name, args),
+                  "arguments" => args,
+                  "phase" => "started",
+                  "ok" => nil,
+                  "cancelled" => false,
+                  "durationMs" => nil,
+                  "details" => %{}
+                }
+              ]
+            else
+              []
+            end
+          end)
+
+        text_rows ++ calls
+
+      role when role in ["tool_result", :tool_result] ->
+        projected =
+          EventProjection.tool_result(%{
+            content: field(message, :content),
+            details: field(message, :details),
+            is_error: field(message, :is_error),
+            trust: field(message, :trust)
+          })
+
+        details = projected["details"] || %{}
+        text = native_text(projected["content"])
+
+        [
+          text_row(
+            id,
+            "tool_result",
+            text,
+            timestamp,
+            full_text,
+            field(message, :is_error) != true
+          )
+          |> Map.merge(%{
+            "toolCallId" => field(message, :tool_call_id),
+            "toolName" => field(message, :tool_name),
+            "phase" => "completed",
+            "details" => details,
+            "cancelled" => details["cancelled"] == true,
+            "durationMs" => duration(details)
+          })
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp native_message(_, _), do: []
+
+  defp text_row(id, role, content, timestamp, full_text, ok) do
+    %{
+      "id" => id,
+      "role" => role,
+      "content" => maybe_preview(content, full_text),
+      "timestampMs" => timestamp,
+      "ok" => ok,
+      "truncated" => truncated?(content, full_text)
+    }
+  end
+
+  defp tool_arguments(value) when is_binary(value) do
+    case Jason.decode(value) do
+      {:ok, args} when is_map(args) -> tool_arguments(args)
+      _ -> %{}
+    end
+  end
+
+  defp tool_arguments(value) when is_map(value) do
+    projected = EventProjection.action_detail(%{args: value})
+    if is_map(projected), do: Map.get(projected, :args, %{}), else: %{}
+  end
+
+  defp tool_arguments(_value), do: %{}
+
+  defp tool_title(name, args) do
+    name = if is_binary(name), do: name, else: "tool"
+    subject = field(args, :command) || field(args, :path) || field(args, :query)
+    if is_binary(subject), do: "#{name}: #{String.slice(subject, 0, 500)}", else: name
+  end
+
+  defp duration(details) do
+    value = field(details, :execution_duration_ms) || field(details, :duration_ms)
+    if is_number(value) and value >= 0, do: value
+  end
+
+  defp field(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  defp field(_value, _key), do: nil
+
+  defp native_text(content) when is_binary(content), do: content
+
+  defp native_text(content) when is_list(content) do
+    content
+    |> Enum.flat_map(fn
+      %{"type" => "text", "text" => text} when is_binary(text) -> [text]
+      %{type: :text, text: text} when is_binary(text) -> [text]
+      _ -> []
+    end)
+    |> Enum.join("\n")
+  end
+
+  defp native_text(_), do: ""
 
   defp get_chat_history(session_key, limit, before_id, include_full_text) do
     runs = LemonCore.RunStore.history(session_key, limit: limit * 2)
@@ -98,7 +315,99 @@ defmodule LemonControlPlane.Methods.ChatHistory do
         messages
       end
 
-    Enum.reverse(messages)
+    {prompts, answers} = messages |> Enum.reverse() |> Enum.split_while(&(&1["role"] == "user"))
+    prompts ++ stored_tools(run_id, data, completed, timestamp, include_full_text) ++ answers
+  end
+
+  defp stored_tools(run_id, data, completed, timestamp, full_text) do
+    {order, tools} =
+      (field(data, :events) || [])
+      |> Enum.reverse()
+      |> Enum.reduce({[], %{}}, fn event, {order, tools} ->
+        payload = field(event, :payload) || event
+        action = field(payload, :action)
+        detail = field(action, :detail) || %{}
+        id = field(detail, :tool_call_id) || field(action, :id)
+
+        if is_binary(id) and field(action, :kind) not in [:approval, "approval"] do
+          previous = Map.get(tools, id, %{detail: %{}})
+          detail = Map.merge(previous.detail, detail)
+
+          tool = %{
+            action: action,
+            detail: detail,
+            phase: field(payload, :phase),
+            ok: field(payload, :ok),
+            message: field(payload, :message)
+          }
+
+          order = if Map.has_key?(tools, id), do: order, else: [id | order]
+          {order, Map.put(tools, id, tool)}
+        else
+          {order, tools}
+        end
+      end)
+
+    Enum.reverse(order)
+    |> Enum.map(fn id ->
+      tool = Map.fetch!(tools, id)
+      terminal? = tool.phase in [:completed, "completed"]
+      partial = field(tool.detail, :partial_result)
+      result_text = field(tool.detail, :result_full) || field(tool.detail, :result)
+
+      result =
+        if is_binary(result_text) and terminal? do
+          %{
+            content: [%{type: :text, text: result_text}],
+            details: field(tool.detail, :details) || %{}
+          }
+        else
+          partial || %{content: [], details: field(tool.detail, :details) || %{}}
+        end
+
+      projected = EventProjection.tool_result(result)
+      details = projected["details"] || %{}
+
+      cancelled =
+        details["cancelled"] == true or
+          (not terminal? and
+             field(completed, :error) in [
+               :acp_cancel,
+               :user_requested,
+               :assistant_aborted,
+               "acp_cancel",
+               "user_requested",
+               "assistant_aborted"
+             ])
+
+      details =
+        if not terminal? and cancelled,
+          do: Map.merge(details, %{"cancelled" => true, "outcome" => "unknown"}),
+          else: details
+
+      content = native_text(projected["content"])
+      name = field(tool.detail, :name) || field(tool.action, :kind)
+      args = tool_arguments(field(tool.detail, :args))
+
+      text_row(
+        "#{run_id}:tool:#{id}",
+        if(terminal? or cancelled, do: "tool_result", else: "tool_use"),
+        content,
+        timestamp,
+        full_text,
+        if(terminal?, do: tool.ok, else: if(cancelled, do: false))
+      )
+      |> Map.merge(%{
+        "toolCallId" => id,
+        "toolName" => name,
+        "title" => field(tool.action, :title) || tool_title(name, args),
+        "arguments" => args,
+        "details" => details,
+        "phase" => if(terminal? or cancelled, do: "completed", else: "started"),
+        "cancelled" => cancelled,
+        "durationMs" => duration(details)
+      })
+    end)
   end
 
   defp get_prompt_from_events(nil), do: nil
@@ -158,7 +467,7 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   defp maybe_preview(text, true), do: text
 
   defp maybe_preview(text, false) when is_binary(text) do
-    text = redact_text(text)
+    text = LemonCore.Redact.text(text)
 
     if byte_size(text) > @preview_bytes do
       String.slice(text, 0, @preview_bytes) <> "..."
@@ -168,20 +477,6 @@ defmodule LemonControlPlane.Methods.ChatHistory do
   end
 
   defp maybe_preview(text, false), do: text
-
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
 
   defp truncated?(text, true) when is_binary(text), do: false
   defp truncated?(text, false) when is_binary(text), do: byte_size(text) > @preview_bytes

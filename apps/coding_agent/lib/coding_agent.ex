@@ -32,12 +32,11 @@ defmodule CodingAgent do
   - `CodingAgent.Session` - Main GenServer orchestrating the agent
   - `CodingAgent.SessionManager` - JSONL persistence with tree structure
   - `CodingAgent.Messages` - Message types and LLM conversion
-  - `CodingAgent.Tools` - Tool registry (read, write, edit, bash)
+  - `CodingAgent.ToolRegistry` - Built-in, WASM, extension, and MCP tool resolution
   - `CodingAgent.BashExecutor` - Streaming shell execution
   - `CodingAgent.Compaction` - Context compaction and summarization
   - `CodingAgent.Config` - Path and environment configuration
   - `CodingAgent.SettingsManager` - Canonical settings adapter (TOML)
-  - `CodingAgent.UI` - Pluggable UI abstraction
   """
 
   @doc """
@@ -90,22 +89,6 @@ defmodule CodingAgent do
   """
   @spec lookup_session(String.t()) :: {:ok, pid()} | :error
   defdelegate lookup_session(session_id), to: CodingAgent.SessionRegistry, as: :lookup
-
-  @doc """
-  Get the default coding tools for a working directory.
-
-  ## Examples
-
-      tools = CodingAgent.coding_tools("/path/to/project")
-  """
-  @spec coding_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
-  defdelegate coding_tools(cwd, opts \\ []), to: CodingAgent.Tools
-
-  @doc """
-  Get read-only tools for exploration.
-  """
-  @spec read_only_tools(String.t(), keyword()) :: [LemonAgent.Types.AgentTool.t()]
-  defdelegate read_only_tools(cwd, opts \\ []), to: CodingAgent.Tools
 
   @doc """
   Load settings for a working directory.

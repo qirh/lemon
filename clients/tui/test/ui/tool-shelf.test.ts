@@ -8,6 +8,7 @@ import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { fixtureBlock, fixtureByName } from "../../src/dev/fixtures/tool-fixtures.ts";
 import { SessionStore } from "../../src/store/session-store.ts";
 import { resetBlockIds } from "../../src/store/transcript-model.ts";
+import { accordionSettings } from "../../src/ui/components/accordion.ts";
 import {
 	planToolShelves,
 	SHELF_MERGE_THRESHOLD,
@@ -26,6 +27,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	accordionSettings.reset();
 	resetTheme();
 	invalidateThemeAdapters();
 });
@@ -35,7 +37,7 @@ function shelfWith(entries: Array<[string, ToolCardState]>): ToolShelfComponent 
 	for (const [name, state] of entries) {
 		const fixture = fixtureByName(name);
 		if (!fixture) throw new Error(`no fixture ${name}`);
-		shelf.add(fixtureBlock(fixture, state, { at: NOW - 2400 }));
+		shelf.add(fixtureBlock(fixture, state, { at: NOW - 2400, completedAt: NOW }));
 	}
 	return shelf;
 }
@@ -86,8 +88,8 @@ describe("merging", () => {
 		expect(lines.length).toBe(3);
 		const text = renderPlain(lines);
 		expect(text).toContain("read:");
-		expect(text).toContain("grep: upsertTool");
-		expect(text).toContain("find: *.test.ts");
+		expect(text).toContain("grep: `upsertTool`");
+		expect(text).toContain("find: `*.test.ts`");
 	});
 
 	test("merging starts exactly at the threshold", () => {
@@ -96,7 +98,7 @@ describe("merging", () => {
 		expect(shelf.cards[0]?.compact).toBe(false);
 		const grep = fixtureByName("grep");
 		if (!grep) throw new Error("no grep fixture");
-		shelf.add(fixtureBlock(grep, "success", { at: NOW - 2400 }));
+		shelf.add(fixtureBlock(grep, "success", { at: NOW - 2400, completedAt: NOW }));
 		expect(shelf.cards[0]?.compact).toBe(true);
 		expect(shelf.cards[1]?.compact).toBe(true);
 	});
@@ -116,7 +118,7 @@ describe("merging", () => {
 		const read = fixtureByName("read");
 		if (!read) throw new Error("missing fixture");
 		const shelf = new ToolShelfComponent({ now: () => NOW });
-		shelf.add(fixtureBlock(read, "success", { at: NOW - 2400 }));
+		shelf.add(fixtureBlock(read, "success", { at: NOW - 2400, completedAt: NOW }));
 
 		// The live path upserts the same block through its phases, so the card is
 		// updated in place rather than replaced.
@@ -146,6 +148,55 @@ describe("merging", () => {
 	});
 });
 
+describe("the expand key", () => {
+	test("opens a merged line into a full expanded card, and folds it back", () => {
+		const shelf = shelfWith([
+			["read", "success"],
+			["bash", "success"],
+		]);
+		const bash = shelf.cards[1];
+		if (!bash) throw new Error("no bash card");
+		expect(bash.compact).toBe(true);
+		const merged = shelf.render(120).length;
+
+		expect(shelf.toggle(bash.block.id)).toBe("expanded");
+		expect(bash.compact).toBe(false);
+		expect(shelf.render(120).length).toBeGreaterThan(merged);
+		expect(renderPlain(shelf.render(120))).toContain("drwxr-xr-x");
+
+		expect(shelf.toggle(bash.block.id)).toBe("collapsed");
+		expect(bash.compact).toBe(true);
+		expect(shelf.render(120).length).toBe(merged);
+	});
+
+	test("toggles a lone full card between expanded and collapsed", () => {
+		const shelf = shelfWith([["bash", "success"]]);
+		const id = shelf.cards[0]?.block.id ?? "";
+		expect(shelf.toggle(id)).toBe("collapsed");
+		expect(shelf.render(120).length).toBe(2);
+		expect(shelf.toggle(id)).toBe("expanded");
+		expect(shelf.render(120).length).toBeGreaterThan(2);
+	});
+
+	test("an expanded global override opens every merged line", () => {
+		const shelf = shelfWith([
+			["read", "success"],
+			["grep", "success"],
+		]);
+		accordionSettings.setOverride("expanded");
+		shelf.applyAccordionOverride();
+		expect(shelf.cards.every((card) => !card.compact)).toBe(true);
+
+		accordionSettings.setOverride(undefined);
+		shelf.applyAccordionOverride();
+		expect(shelf.cards.every((card) => card.compact)).toBe(true);
+	});
+
+	test("an unknown block id is a no-op", () => {
+		expect(shelfWith([["bash", "success"]]).toggle("nope")).toBeUndefined();
+	});
+});
+
 describe("sealing", () => {
 	test("an open shelf is unfinalized and pins the live region", () => {
 		const shelf = shelfWith([
@@ -155,16 +206,12 @@ describe("sealing", () => {
 		// Both entries are done, but the shelf can still take another and re-shape,
 		// so its rows must stay off the tape.
 		expect(shelf.isTranscriptBlockFinalized()).toBe(false);
-		expect(shelf.isNativeScrollbackLiveRegionPinned()).toBe(true);
-		expect(shelf.isDisplaceableBlock()).toBe(true);
 	});
 
 	test("sealing finalizes it, unpins the region and refuses new entries", () => {
 		const shelf = shelfWith([["read", "success"]]);
 		shelf.seal();
 		expect(shelf.isTranscriptBlockFinalized()).toBe(true);
-		expect(shelf.isNativeScrollbackLiveRegionPinned()).toBe(false);
-		expect(shelf.isDisplaceableBlock()).toBe(false);
 		expect(shelf.open).toBe(false);
 
 		const grep = fixtureByName("grep");

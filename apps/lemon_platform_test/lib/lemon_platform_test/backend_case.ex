@@ -66,13 +66,16 @@ defmodule LemonPlatformTest.BackendCase do
 
   ### Optional callbacks degrade predictably
 
-  `compare_and_delete_many/2`, `list_recent/3`, and `ping/1` are optional. If
-  you export them they must honour their contracts: multi-delete validates
-  every exact snapshot before deleting in caller-provided order,
-  `list_recent/3` returns at most `limit` real entries of that table, and
-  `ping/1` answers without disturbing data. If you do not export them the store
-  falls back to its serialized validate/delete path, falls back to `list/2`, or
-  reports the backend as unpingable, respectively.
+  `compare_and_delete_many/2`, `compare_and_swap/5`, `list_recent/3`, `ping/1`,
+  and `sync/1` are optional. If you export them they must honour their
+  contracts: multi-delete validates every exact snapshot before deleting in
+  caller-provided order, compare-and-swap writes only over an exact match (a
+  missing key matching `nil`), `list_recent/3` returns at most `limit` real
+  entries of that table, and `ping/1` and `sync/1` answer without disturbing
+  data. If you do not export them the store falls back to its serialized
+  validate/delete or compare/write path, falls back to `list/2`, reports the
+  backend as unpingable, or answers `sync/1` with `:sync_unsupported`,
+  respectively.
 
   ## Minimal implementation
 
@@ -184,13 +187,8 @@ defmodule LemonPlatformTest.BackendCase do
       setup context do
         opts = LemonPlatformTest.resolve(@backend_opts_spec, context)
 
-        case @backend.init(opts) do
-          {:ok, state} ->
-            {:ok, state: state, backend_opts: opts}
-
-          other ->
-            flunk("#{inspect(@backend)}.init/1 must return {:ok, state}, got: #{inspect(other)}")
-        end
+        assert {:ok, state} = @backend.init(opts)
+        {:ok, state: state, backend_opts: opts}
       end
 
       # Reads have to return usable state too, so the state-threading test
@@ -449,6 +447,57 @@ defmodule LemonPlatformTest.BackendCase do
             {:ok, state} = @backend.put(state, @alpha, "k", "v")
 
             assert {:ok, state} = apply(@backend, :ping, [state])
+            assert {:ok, "v", _state} = @backend.get(state, @alpha, "k")
+          end
+        end
+
+        test "compare_and_swap/5, when exported, writes only over an exact match", %{
+          state: state
+        } do
+          if function_exported?(@backend, :compare_and_swap, 5) do
+            {:ok, state} = @backend.put(state, @alpha, "cas", %{version: 1})
+
+            assert {:error, :mismatch, state} =
+                     apply(@backend, :compare_and_swap, [
+                       state,
+                       @alpha,
+                       "cas",
+                       %{version: 0},
+                       %{version: 2}
+                     ])
+
+            assert {:ok, %{version: 1}, state} = @backend.get(state, @alpha, "cas")
+
+            assert {:ok, state} =
+                     apply(@backend, :compare_and_swap, [
+                       state,
+                       @alpha,
+                       "cas",
+                       %{version: 1},
+                       %{version: 2}
+                     ])
+
+            assert {:ok, %{version: 2}, state} = @backend.get(state, @alpha, "cas")
+
+            assert {:ok, state} =
+                     apply(@backend, :compare_and_swap, [state, @alpha, "new", nil, :created])
+
+            assert {:ok, :created, _state} = @backend.get(state, @alpha, "new")
+          end
+        end
+
+        test "sync/1, when exported, answers without disturbing the data", %{state: state} do
+          if function_exported?(@backend, :sync, 1) do
+            {:ok, state} = @backend.put(state, @alpha, "k", "v")
+
+            # `{:error, _}` is a legitimate answer where durability cannot be
+            # confirmed on this host; either way the data must be untouched.
+            state =
+              case apply(@backend, :sync, [state]) do
+                {:ok, state} -> state
+                {:error, _reason} -> state
+              end
+
             assert {:ok, "v", _state} = @backend.get(state, @alpha, "k")
           end
         end

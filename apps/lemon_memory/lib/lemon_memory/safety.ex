@@ -1,24 +1,19 @@
 defmodule LemonMemory.Safety do
   @moduledoc """
   Shared safety checks for durable memory documents.
+
+  Credential matching is shared with `LemonCore.Redact`. Operator previews add
+  URL/path, standalone Basic authorization, and secret-name omission on top.
   """
 
   alias LemonMemory.Document
-
-  @secret_patterns [
-    ~r/\b(password|passwd|secret|token|api[-_]?key|access[-_]?key|auth[-_]?token)\s*[:=]\s*\S+/i,
-    ~r/\bsk-[a-zA-Z0-9_-]{20,}/,
-    ~r/\bAKIA[A-Z0-9]{16}\b/,
-    ~r/-----BEGIN\s+(?:[A-Z0-9]+\s+)*PRIVATE\s+KEY-----/,
-    ~r/\beyJ[a-zA-Z0-9+\/_-]{30,}/
-  ]
 
   @doc """
   Returns true when text contains common secret-looking material.
   """
   @spec contains_secret?(term()) :: boolean()
   def contains_secret?(text) when is_binary(text) do
-    Enum.any?(@secret_patterns, &Regex.match?(&1, text))
+    LemonCore.Redact.text(text) != text
   end
 
   def contains_secret?(_), do: false
@@ -32,12 +27,8 @@ defmodule LemonMemory.Safety do
   names: source-learning callers must not reveal secret names either.
   """
   @spec redact(term()) :: {String.t(), non_neg_integer()}
-  def redact(text) when is_binary(text) do
-    Enum.reduce(@secret_patterns, {text, 0}, fn pattern, {current, count} ->
-      matches = Regex.scan(pattern, current) |> length()
-      {Regex.replace(pattern, current, "[REDACTED]"), count + matches}
-    end)
-  end
+  def redact(text) when is_binary(text),
+    do: LemonCore.Redact.text(text, drop_keys: true, count: true)
 
   def redact(_), do: {"", 0}
 
@@ -46,7 +37,7 @@ defmodule LemonMemory.Safety do
     ~r/\bmailto:[^\s<>"']+/iu,
     ~r/(?<![\w.-])\/(?:[^\s\/<>"']+\/)*[^\s\/<>"']+/u,
     ~r/\b[A-Za-z]:\\[^\s<>"']+/u,
-    ~r/\b(?:bearer|basic)\s+[A-Za-z0-9._~+\/=:-]{8,}\b/iu,
+    ~r/\bbasic\s+[A-Za-z0-9._~+\/=:-]{8,}\b/iu,
     ~r/\b[A-Z][A-Z0-9_]{1,63}(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|CREDENTIALS)\b/u
   ]
 

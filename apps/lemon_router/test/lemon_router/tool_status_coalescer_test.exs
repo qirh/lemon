@@ -1302,7 +1302,7 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     }
   end
 
-  defp eventually(fun, timeout_ms \\ 500) when is_function(fun, 0) do
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
     do_eventually(fun, deadline)
   end

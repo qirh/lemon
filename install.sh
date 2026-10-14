@@ -28,8 +28,9 @@ GLIBC_MIN_MINOR=39
 
 FORCE=0
 VERIFY=0
-MODIFY_PATH=0
+MODIFY_PATH=1
 SKIP_SETUP=0
+RESOLVE_VERSION=0
 
 
 BASE_URL="${LEMON_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
@@ -43,17 +44,23 @@ Lemon installer
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-  sh install.sh [--force] [--verify] [--modify-path] [--skip-setup] [--help]
+  sh install.sh [--force] [--verify] [--no-modify-path] [--skip-setup] [--help]
+  sh install.sh --resolve-version
 
 Options:
   --force         Reinstall even if the target version is already present.
   --verify        Boot the installed runtime on ephemeral ports, poll /healthz,
                   then stop it. Fails the install if the smoke check fails.
-  --modify-path   Append the PATH export to your shell rc file. Without it the
-                  installer only prints the line for you to add.
+  --no-modify-path
+                  Do not add ~/.lemon/bin to PATH in your shell rc file; only
+                  print the line for you to add. (--modify-path, the default,
+                  is still accepted.)
   --skip-setup    Do not start the interactive provider setup wizard after
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
+  --resolve-version
+                  Print the version this run would install, then exit without
+                  installing anything.
   --help          Show this help.
 
 Prerequisites:
@@ -102,7 +109,9 @@ while [ "$#" -gt 0 ]; do
     --force) FORCE=1 ;;
     --verify) VERIFY=1 ;;
     --modify-path) MODIFY_PATH=1 ;;
+    --no-modify-path) MODIFY_PATH=0 ;;
     --skip-setup) SKIP_SETUP=1 ;;
+    --resolve-version) RESOLVE_VERSION=1 ;;
     -h|--help)
       usage
       exit 0
@@ -236,10 +245,15 @@ fi
 
 fetch() {
   # fetch <url> <destination>
+  # --resolve-version fetches only the manifest: errors, but no progress meter.
+  quiet=""
+  if [ "$RESOLVE_VERSION" = "1" ]; then
+    quiet="-sS"
+  fi
   if [ "$INSECURE_BASE" = "1" ]; then
-    curl -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl ${quiet:+"$quiet"} -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
   else
-    curl -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl ${quiet:+"$quiet"} -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
   fi
 }
 
@@ -481,8 +495,12 @@ path_hint() {
         printf '\n# added by the lemon installer\n'
         printf '%s\n' "$path_line"
       } >>"$rc_file"
-      info "Added $BIN_DIR to PATH in $rc_file (open a new shell to pick it up)."
+      info "Added $BIN_DIR to PATH in $rc_file."
     fi
+    info "New shells will find lemon. For this shell, run:"
+    info ""
+    info "    $path_line"
+    info ""
     return 0
   fi
 
@@ -492,7 +510,7 @@ path_hint() {
   info "    $path_line"
   info ""
   if [ -n "$rc_file" ]; then
-    info "Re-run with --modify-path to append that line to $rc_file automatically."
+    info "Re-run without --no-modify-path to append that line to $rc_file automatically."
   fi
 }
 
@@ -504,16 +522,33 @@ print(sock.getsockname()[1])
 sock.close()'
 }
 
-verify_boot() {
+verify_boot() (
   control_port="$(free_port)"
   web_port="$(free_port)"
   sim_port="$(free_port)"
+  gateway_health_port="$(free_port)"
+  router_health_port="$(free_port)"
+  verify_node="lemon_install_verify_$$_$control_port"
+  verify_home="$(mktemp -d "$TMP_DIR/verify.XXXXXX")"
+  # A smoke boot must not share the operator's Store, agents, daemon identity,
+  # process records, or release pipe/log directory.
+  export HOME="$verify_home" LEMON_STORE_PATH="$verify_home/.lemon/store"
+  export LEMON_AGENT_DIR="$verify_home/.lemon/agent" LEMON_DOTENV_DIR="$verify_home"
+  export RELEASE_TMP="$verify_home/runtime" RELEASE_NODE="$verify_node"
+  export LEMON_CONTROL_PLANE_PORT="$control_port"
+  trap '"$BIN_DIR/lemon" stop >/dev/null 2>&1 || true; rm -rf "$verify_home"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  cd "$verify_home"
 
   info "Verifying: booting the runtime on port $control_port ..."
 
   if ! LEMON_CONTROL_PLANE_PORT="$control_port" \
     LEMON_WEB_PORT="$web_port" \
     LEMON_SIM_UI_PORT="$sim_port" \
+    LEMON_GATEWAY_HEALTH_PORT="$gateway_health_port" \
+    LEMON_ROUTER_HEALTH_PORT="$router_health_port" \
+    RELEASE_NODE="$verify_node" \
     "$BIN_DIR/lemon" daemon; then
     die "the installed runtime failed to start. Files are in $VERSIONS_DIR."
   fi
@@ -529,7 +564,6 @@ verify_boot() {
     sleep 2
   done
 
-  LEMON_CONTROL_PLANE_PORT="$control_port" "$BIN_DIR/lemon" stop >/dev/null 2>&1 || true
 
   if [ "$healthy" != "1" ]; then
 
@@ -537,7 +571,7 @@ verify_boot() {
   fi
 
   info "ok runtime booted and answered /healthz"
-}
+)
 setup_handoff() {
   if [ "$PROFILE" = "sim_broadcast_platform" ]; then
     info "Setup is not available for the sim profile."
@@ -558,7 +592,9 @@ setup_handoff() {
 
 # ----------------------------------------------------------------- install ---
 
-info "Installing Lemon ($PROFILE, $PLATFORM, channel $CHANNEL)"
+if [ "$RESOLVE_VERSION" != "1" ]; then
+  info "Installing Lemon ($PROFILE, $PLATFORM, channel $CHANNEL)"
+fi
 
 manifest_file="$TMP_DIR/manifest.json"
 if ! fetch "$MANIFEST_URL" "$manifest_file"; then
@@ -571,6 +607,12 @@ artifact_line=""
 if ! artifact_line="$(select_artifact "$manifest_file" "$PROFILE")"; then
   rm -f "$manifest_file"
   exit 1
+fi
+
+if [ "$RESOLVE_VERSION" = "1" ]; then
+  rm -f "$manifest_file"
+  printf '%s\n' "$artifact_line" | cut -f4
+  exit 0
 fi
 
 # The TUI is a second, optional artifact in the same manifest: a separate

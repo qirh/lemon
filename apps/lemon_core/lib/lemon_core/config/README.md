@@ -107,6 +107,19 @@ file = "./logs/lemon.log"
 level = "debug"
 ```
 
+### Config.Memory
+
+The `[memory]` section controls automatic recall:
+
+- `auto_recall` - Boolean, defaults to `true`; attaches a bounded **Relevant memory**
+  block to user messages. Set to `false` to disable it. Automatic recall is also
+  disabled when `[features] session_search = "off"`.
+
+```toml
+[memory]
+auto_recall = true
+```
+
 ## Module Documentation
 
 ### Config.Helpers
@@ -127,16 +140,19 @@ Environment variable parsing utilities:
 
 Agent behavior configuration:
 
-Preferred source sections:
+Source sections:
 - `[defaults]` for model/provider/thinking defaults
 - `[runtime]` for compaction/retry/shell/tools/extensions/theme
-- Legacy `[agent]` remains supported as an alias
+- A deprecated `[agent]` table still loads, with a warning: `LegacyAgentMigration`
+  maps it onto `[defaults]`, `[runtime]` and `[tui]` (theme) before resolution,
+  and `lemon config migrate` (or `lemon setup`) rewrites the file
 
 - `default_provider` - Default LLM provider
 - `default_model` - Default model identifier
 - `default_thinking_level` - Thinking level (low/medium/high)
 - `compaction` - Context compaction settings
-- `retry` - Retry behavior
+- `retry` - Session retry of transient provider failures (`enabled`, `max_retries`, `base_delay_ms`)
+- `max_tool_turns` - Optional per-prompt cap on tool-using turns; unset or `0` resolves to `:infinity`
 - `shell` - Shell configuration
 - `extension_paths` - Explicitly trusted extension directories
 - `extensions.enabled` - Global switch for extension code execution

@@ -153,7 +153,7 @@ defmodule LemonAutomation.CronManagerRetryTest do
     assert Enum.sort(attempts) == [0, 1]
   end
 
-  test "stale recovery uses normal terminal policy once and reconstructs retry", %{job: job} do
+  test "stale recovery retains ownership and retries only after durable failure", %{job: job} do
     manager = private_manager_name()
     start_supervised!({CronManager, name: manager})
 
@@ -173,7 +173,7 @@ defmodule LemonAutomation.CronManagerRetryTest do
         retry_attempt: 0,
         retry_root_id: root_id
       })
-      |> CronRun.start("router_stale")
+      |> CronRun.start("router_#{root_id}")
       |> Map.put(:started_at_ms, LemonCore.Clock.now_ms() - 1_000)
 
     CronStore.put_run(stale)
@@ -187,6 +187,23 @@ defmodule LemonAutomation.CronManagerRetryTest do
              is_pid(pid) and pid != old_pid
            end)
 
+    assert await(fn ->
+             match?(
+               %CronRun{status: :running, meta: %{outcome_unknown: true}},
+               CronStore.get_run(root_id)
+             )
+           end)
+
+    refute_receive {:cron_submit, _, _, _, :retry, _}, 100
+    assert CronStore.pending_retries() |> Enum.all?(&(&1.id != root_id))
+
+    :ok =
+      LemonCore.RunStore.finalize(stale.run_id, %{
+        session_key: job.session_key,
+        completed: %{ok: false, error: "confirmed coding failure"}
+      })
+
+    GenServer.cast(manager, :tick)
     assert_receive %LemonCore.Event{type: :run_completed, meta: %{cron_run_id: ^root_id}}, 5_000
 
     assert_receive {:cron_submit, _pid, _job_id, retry_run_id, :retry, retry_meta}, 5_000
@@ -194,13 +211,15 @@ defmodule LemonAutomation.CronManagerRetryTest do
     assert retry_meta.retry_root_id == root_id
 
     send(manager, {:run_complete, root_id, {:ok, "late"}})
-    Process.sleep(50)
+    # A synchronous call returns only after the manager handled the late completion message.
+    _ = :sys.get_state(manager)
 
-    assert CronStore.get_run(root_id).status == :timeout
-    assert length(CronStore.list_audit_events(run_id: root_id, action: :stale_run_recovered)) == 1
+    assert CronStore.get_run(root_id).status == :failed
+    assert length(CronStore.list_audit_events(run_id: root_id, action: :run_reconciled)) == 1
     refute_receive {:cron_submit, _pid, _job_id, ^retry_run_id, :retry, _meta}, 300
 
     LemonCore.Bus.unsubscribe(LemonCore.Bus.session_topic(job.session_key))
+    LemonCore.Store.delete(:runs, stale.run_id)
   end
 
   defp replace_job_state(job, manager \\ CronManager) do
@@ -219,7 +238,7 @@ defmodule LemonAutomation.CronManagerRetryTest do
     Map.get(run.meta || %{}, key) || Map.get(run.meta || %{}, Atom.to_string(key))
   end
 
-  defp await(fun, attempts \\ 100)
+  defp await(fun, attempts \\ 500)
   defp await(_fun, 0), do: false
 
   defp await(fun, attempts) do

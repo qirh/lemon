@@ -35,15 +35,20 @@ defmodule LemonCore.Config.Modular do
   - `LemonCore.Config.Logging` - Log file and rotation settings
   - `LemonCore.Config.TUI` - Terminal UI theme and debug
   - `LemonCore.Config.Providers` - LLM provider configurations
+  - `LemonCore.Config.Memory` - Memory behaviour (`[memory]`)
+  - `LemonCore.Config.Automation` - Opt-in proactive automation (daily brief)
 
   See `LemonCore.Config` for the legacy configuration interface.
   """
 
   alias LemonCore.Config.{
     Agent,
+    Automation,
     Features,
     Gateway,
+    LegacyAgentMigration,
     Logging,
+    Memory,
     Providers,
     Secrets,
     Tools,
@@ -60,7 +65,11 @@ defmodule LemonCore.Config.Modular do
     :tui,
     :providers,
     :secrets,
-    :features
+    :features,
+    :memory,
+    :automation,
+    budgets: %{},
+    model_roles: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -70,8 +79,12 @@ defmodule LemonCore.Config.Modular do
           logging: Logging.t(),
           tui: TUI.t(),
           providers: Providers.t(),
+          model_roles: %{optional(String.t()) => String.t()},
+          budgets: map(),
           secrets: Secrets.t(),
-          features: Features.t()
+          features: Features.t(),
+          memory: Memory.t(),
+          automation: Automation.t()
         }
 
   @doc """
@@ -95,10 +108,18 @@ defmodule LemonCore.Config.Modular do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     validate? = Keyword.get(opts, :validate, false)
 
-    # Load, reject removed settings, and resolve.
+    # Load, map the legacy `[agent]` alias, reject removed settings, and resolve.
     settings = load_merged_settings(project_dir)
+    warn_deprecated(settings)
+    settings = LegacyAgentMigration.migrate_settings(settings)
     check_deprecated_sections!(settings)
     config = resolve_settings(settings)
+    check_model_roles!(config.model_roles)
+
+    case Validator.validate_budgets(config.budgets) do
+      :ok -> :ok
+      {:error, errors} -> raise ValidationError, message: "Invalid budgets", errors: errors
+    end
 
     # Validate if requested
     if validate? do
@@ -178,10 +199,13 @@ defmodule LemonCore.Config.Modular do
 
   Comment-preserving editors use this before replacing a TOML file: they can
   validate the exact merged candidate without first making it visible at the
-  canonical global or project path.
+  canonical global or project path. A legacy `[agent]` table is read as its
+  canonical sections, exactly as `load/1` does; see `deprecation_warnings/1`.
   """
   @spec validate_settings(map()) :: {:ok, t()} | {:error, [String.t()]}
   def validate_settings(settings) when is_map(settings) do
+    settings = LegacyAgentMigration.migrate_settings(settings)
+
     # Return removed-setting errors alongside resolved-config validation errors.
     removed_setting_errors =
       case Validator.validate_deprecated_sections(settings) do
@@ -204,6 +228,22 @@ defmodule LemonCore.Config.Modular do
   end
 
   @doc """
+  Non-fatal warnings for legacy settings in the merged global and project
+  config, such as an `[agent]` table that still loads as an alias.
+
+  ## Options
+
+    * `:project_dir` - Project directory to load config from (default: current directory)
+  """
+  @spec deprecation_warnings(keyword()) :: [String.t()]
+  def deprecation_warnings(opts \\ []) do
+    opts
+    |> Keyword.get(:project_dir, File.cwd!())
+    |> load_merged_settings()
+    |> Validator.deprecation_warnings()
+  end
+
+  @doc """
   Returns the path to the global config file.
   """
   @spec global_path() :: String.t()
@@ -219,8 +259,9 @@ defmodule LemonCore.Config.Modular do
   Checks for removed TOML sections and engine-routing settings, raising
   `ValidationError` when found.
 
-  Removed settings include legacy agent/tool sections and engine-routing
-  configuration, including `[runtime.cli]`.
+  Removed settings include `[agents.<id>]`, `[tools.*]` and engine-routing
+  configuration, including `[runtime.cli]`. Map a legacy `[agent]` table with
+  `LemonCore.Config.LegacyAgentMigration.migrate_settings/1` first.
   """
   @spec check_deprecated_sections!(map()) :: :ok
   def check_deprecated_sections!(settings) when is_map(settings) do
@@ -230,6 +271,27 @@ defmodule LemonCore.Config.Modular do
 
       {:error, errors} ->
         raise ValidationError, message: "Configuration uses removed settings", errors: errors
+    end
+  end
+
+  defp warn_deprecated(settings) do
+    case Validator.deprecation_warnings(settings) do
+      [] ->
+        :ok
+
+      warnings ->
+        require Logger
+        Enum.each(warnings, &Logger.warning("Lemon config: #{&1}"))
+    end
+  end
+
+  defp check_model_roles!(roles) do
+    case Validator.validate_model_roles(roles) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        raise ValidationError, message: "Invalid model roles", errors: errors
     end
   end
 
@@ -244,10 +306,24 @@ defmodule LemonCore.Config.Modular do
       logging: Logging.resolve(settings),
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings),
+      model_roles: Map.get(settings, "model_roles", %{}),
+      budgets: resolve_budgets(Map.get(settings, "budgets", %{})),
       secrets: Secrets.resolve(settings),
-      features: Features.resolve(settings)
+      features: Features.resolve(settings),
+      memory: Memory.resolve(settings),
+      automation: Automation.resolve(settings)
     }
   end
+
+  @doc false
+  def resolve_budgets(budgets) when is_map(budgets) do
+    Map.new(
+      [:max_run_tokens, :max_run_cost_usd, :max_session_tokens, :max_session_cost_usd],
+      fn key -> {key, Map.get(budgets, Atom.to_string(key), Map.get(budgets, key))} end
+    )
+  end
+
+  def resolve_budgets(budgets), do: budgets
 
   # Normalizes canonical `runtime.tools` into the internal top-level `tools`
   # shape consumed by the modular Tools resolver.

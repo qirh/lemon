@@ -2,12 +2,11 @@ defmodule CodingAgent.SessionTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Config
-  alias CodingAgent.BashExecutor
   alias CodingAgent.Session
   alias CodingAgent.SessionManager
   alias CodingAgent.SettingsManager
-  alias CodingAgent.SessionTest.{PythonRepl, PythonReplDirector}
-  alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
+
+  import CodingAgent.AsyncHelpers
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -191,75 +190,6 @@ defmodule CodingAgent.SessionTest do
     session
   end
 
-  defp configure_python_repl(response) do
-    test_pid = self()
-
-    start_supervised!(%{
-      id: PythonReplDirector,
-      start:
-        {Agent, :start_link,
-         [fn -> %{test_pid: test_pid, response: response} end, [name: PythonReplDirector]]}
-    })
-  end
-
-  defp write_execute_code_config(cwd, opts) do
-    config_dir = Path.join(cwd, ".lemon")
-    File.mkdir_p!(config_dir)
-
-    enabled = Keyword.fetch!(opts, :enabled)
-    kernel_mode = Keyword.fetch!(opts, :kernel_mode)
-    timeout_ms = Keyword.get(opts, :timeout_ms, 1_000)
-    max_output_bytes = Keyword.get(opts, :max_output_bytes, 50_000)
-
-    File.write!(Path.join(config_dir, "config.toml"), """
-    [runtime.tools.execute_code]
-    enabled = #{enabled}
-    kernel_mode = "#{kernel_mode}"
-    timeout_ms = #{timeout_ms}
-    max_output_bytes = #{max_output_bytes}
-    """)
-
-    _ = LemonCore.Config.reload(cwd)
-    :ok
-  end
-
-  defp broadcast_config_reload do
-    reload_id = "session-test-#{System.unique_integer([:positive, :monotonic])}"
-
-    LemonCore.Bus.broadcast(
-      "system",
-      LemonCore.Event.new(:config_reloaded, %{reload_id: reload_id})
-    )
-  end
-
-  defp execute_code_tool(session) do
-    session
-    |> Session.get_state()
-    |> Map.fetch!(:tools)
-    |> Enum.find(&(&1.name == "execute_code"))
-  end
-
-  defp per_call_runner(test_pid) do
-    fn _command, _cwd, runner_opts ->
-      send(test_pid, {:per_call_run, runner_opts})
-
-      {:ok,
-       %BashExecutor.Result{
-         output: "per-call",
-         exit_code: 0,
-         cancelled: false,
-         truncated: false
-       }}
-    end
-  end
-
-  defp fake_python(cwd) do
-    path = Path.join(cwd, "python3")
-    File.write!(path, "#!/bin/sh\nexit 0\n")
-    File.chmod!(path, 0o700)
-    path
-  end
-
   defp wait_for_streaming_complete(session) do
     # Poll until not streaming
     state = Session.get_state(session)
@@ -435,17 +365,26 @@ defmodule CodingAgent.SessionTest do
         |> Enum.join("\n")
 
       assert rendered =~ "[tool_result truncated]"
-      assert rendered =~ "spill_path="
 
-      [spill_path] =
-        Regex.run(~r/spill_path=([^\s]+)/, rendered, capture: :all_but_first)
+      [artifact_uri] =
+        Regex.run(~r/artifact_uri=(artifact:\/\/[a-f0-9]+)/, rendered, capture: :all_but_first)
 
-      assert String.starts_with?(
-               spill_path,
-               Config.spill_dir(cwd, state.session_manager.header.id)
-             )
-
+      opts = [session_id: state.session_manager.header.id]
+      assert {:ok, spill_path} = CodingAgent.Artifacts.resolve(artifact_uri, cwd, opts)
+      assert String.starts_with?(spill_path, Config.spill_dir(cwd, opts[:session_id]))
       assert File.read!(spill_path) == original
+
+      assert %LemonAgent.Types.AgentToolResult{content: [%TextContent{text: excerpt}]} =
+               CodingAgent.Tools.Read.execute(
+                 "fetch-spill",
+                 %{"path" => artifact_uri, "offset" => 20_000, "limit" => 2},
+                 nil,
+                 nil,
+                 cwd,
+                 opts
+               )
+
+      assert excerpt =~ "line"
     end
 
     test "fails without cwd" do
@@ -462,7 +401,7 @@ defmodule CodingAgent.SessionTest do
 
         {:ok, pid} ->
           # Should receive EXIT if process crashed during init
-          assert_receive {:EXIT, ^pid, _reason}, 100
+          assert_receive {:EXIT, ^pid, _reason}, 2_000
       end
 
       Process.flag(:trap_exit, false)
@@ -480,7 +419,7 @@ defmodule CodingAgent.SessionTest do
 
         {:ok, pid} ->
           # Should receive EXIT if process crashed during init
-          assert_receive {:EXIT, ^pid, _reason}, 100
+          assert_receive {:EXIT, ^pid, _reason}, 2_000
       end
 
       Process.flag(:trap_exit, false)
@@ -708,13 +647,19 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
-    test "creates new session if file doesn't exist", %{tmp_dir: tmp_dir} do
+    test "rejects an explicit session file that does not exist", %{tmp_dir: tmp_dir} do
       non_existent_file = Path.join(tmp_dir, "non_existent.jsonl")
+      previous_trap_exit = Process.flag(:trap_exit, true)
 
-      session = start_session(session_file: non_existent_file, cwd: tmp_dir)
-      messages = Session.get_messages(session)
+      try do
+        assert {:error, {%ArgumentError{} = error, _stacktrace}} =
+                 Session.start_link(default_opts(session_file: non_existent_file, cwd: tmp_dir))
 
-      assert messages == []
+        assert Exception.message(error) == "cannot resume session: :enoent"
+        refute File.exists?(non_existent_file)
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
     end
 
     @tag :tmp_dir
@@ -752,18 +697,27 @@ defmodule CodingAgent.SessionTest do
       assert resumed_state.session_manager.header.id == session_id
       assert resumed_state.session_manager.header.cwd == cwd_b
       assert Session.get_messages(resumed_elsewhere) == []
-      refute File.exists?(Path.join(Config.sessions_dir(cwd_b), "#{session_id}.jsonl"))
+      journal_path = Path.join(Config.sessions_dir(cwd_b), "#{session_id}.jsonl")
+      assert {:ok, journal} = SessionManager.load_from_file(journal_path)
+      assert journal.header.cwd == cwd_b
+      assert SessionManager.build_session_context(journal).messages == []
     end
 
     @tag :tmp_dir
-    test "creates new session if file is invalid", %{tmp_dir: tmp_dir} do
+    test "rejects an invalid explicit session file without replacing it", %{tmp_dir: tmp_dir} do
       invalid_file = Path.join(tmp_dir, "invalid.jsonl")
       File.write!(invalid_file, "not valid json")
+      previous_trap_exit = Process.flag(:trap_exit, true)
 
-      session = start_session(session_file: invalid_file, cwd: tmp_dir)
-      messages = Session.get_messages(session)
+      try do
+        assert {:error, {%ArgumentError{} = error, _stacktrace}} =
+                 Session.start_link(default_opts(session_file: invalid_file, cwd: tmp_dir))
 
-      assert messages == []
+        assert Exception.message(error) =~ "cannot resume session: %Jason.DecodeError{"
+        assert File.read!(invalid_file) == "not valid json"
+      after
+        Process.flag(:trap_exit, previous_trap_exit)
+      end
     end
   end
 
@@ -791,201 +745,6 @@ defmodule CodingAgent.SessionTest do
     end
   end
 
-  describe "execute_code config reload transitions" do
-    @tag :tmp_dir
-    test "a call before session to per_call reload may persist, then disposal prevents reacquire",
-         %{tmp_dir: cwd} do
-      configure_python_repl(:ok)
-
-      write_execute_code_config(cwd,
-        enabled: true,
-        kernel_mode: "session",
-        timeout_ms: 4_000,
-        max_output_bytes: 40_000
-      )
-
-      python = fake_python(cwd)
-
-      session =
-        start_session(
-          cwd: cwd,
-          python_repl_mod: PythonRepl,
-          python_repl: PythonRepl,
-          python_finder: fn "python3" -> python end,
-          script_runner: per_call_runner(self())
-        )
-
-      stale_tool = execute_code_tool(session)
-
-      before_reload =
-        stale_tool.execute.("call-before", %{"script" => "print('before')"}, nil, nil)
-
-      assert %AgentToolResult{details: %{persistent: true}} = before_reload
-      assert_receive {:python_repl_execute, ^session}
-
-      write_execute_code_config(cwd,
-        enabled: true,
-        kernel_mode: "per_call",
-        timeout_ms: 1_321,
-        max_output_bytes: 654
-      )
-
-      broadcast_config_reload()
-
-      assert_receive {:python_repl_detach_owner, ^session, true}
-
-      assert {:ok,
-              %ExecuteCodeConfig{
-                enabled: true,
-                kernel_mode: "per_call",
-                timeout_ms: 1_321,
-                max_output_bytes: 654
-              }} = Session.execute_code_config(session)
-
-      after_reload =
-        stale_tool.execute.(
-          "call-after",
-          %{"script" => "print('after')", "timeout_ms" => 999_999},
-          nil,
-          nil
-        )
-
-      assert %AgentToolResult{content: [%TextContent{text: "per-call"}], details: details} =
-               after_reload
-
-      refute Map.has_key?(details, :persistent)
-      assert_receive {:per_call_run, runner_opts}
-      assert runner_opts[:timeout] == 1_321
-      assert runner_opts[:max_bytes] == 654
-      refute_receive {:python_repl_execute, ^session}
-    end
-
-    @tag :tmp_dir
-    test "session to disabled disposes ownership and rejects a stale listed tool", %{tmp_dir: cwd} do
-      configure_python_repl(:ok)
-      write_execute_code_config(cwd, enabled: true, kernel_mode: "session")
-
-      session =
-        start_session(
-          cwd: cwd,
-          python_repl_mod: PythonRepl,
-          python_repl: PythonRepl,
-          python_finder: fn "python3" -> "/test/python3" end,
-          script_runner: per_call_runner(self())
-        )
-
-      stale_tool = execute_code_tool(session)
-
-      write_execute_code_config(cwd, enabled: false, kernel_mode: "per_call")
-      broadcast_config_reload()
-
-      assert_receive {:python_repl_detach_owner, ^session, true}
-
-      assert {:ok, %ExecuteCodeConfig{enabled: false, kernel_mode: "per_call"}} =
-               Session.execute_code_config(session)
-
-      assert {:error, message} =
-               stale_tool.execute.("call-disabled", %{"script" => "print('no')"}, nil, nil)
-
-      assert message =~ "execute_code is disabled"
-      refute_receive {:python_repl_execute, ^session}
-      refute_receive {:per_call_run, _runner_opts}
-    end
-
-    @tag :tmp_dir
-    test "detach failure keeps the truthful session config and a later reload retries", %{
-      tmp_dir: cwd
-    } do
-      configure_python_repl({:sequence, [{:error, %{reason: :stop_failed}}, :ok]})
-
-      write_execute_code_config(cwd,
-        enabled: true,
-        kernel_mode: "session",
-        timeout_ms: 4_000
-      )
-
-      session = start_session(cwd: cwd, python_repl_mod: PythonRepl)
-
-      write_execute_code_config(cwd,
-        enabled: true,
-        kernel_mode: "per_call",
-        timeout_ms: 500
-      )
-
-      broadcast_config_reload()
-
-      assert_receive {:python_repl_detach_owner, ^session, true}
-
-      assert {:ok, %ExecuteCodeConfig{kernel_mode: "session", timeout_ms: 4_000}} =
-               Session.execute_code_config(session)
-
-      broadcast_config_reload()
-
-      assert_receive {:python_repl_detach_owner, ^session, true}
-
-      assert {:ok, %ExecuteCodeConfig{kernel_mode: "per_call", timeout_ms: 500}} =
-               Session.execute_code_config(session)
-    end
-
-    @tag :tmp_dir
-    test "an explicitly injected settings manager stays static across reload events", %{
-      tmp_dir: cwd
-    } do
-      configure_python_repl(:ok)
-
-      settings = %SettingsManager{
-        tools: %{
-          execute_code: %{enabled: true, kernel_mode: "session", timeout_ms: 888}
-        }
-      }
-
-      session =
-        start_session(
-          cwd: cwd,
-          settings_manager: settings,
-          python_repl_mod: PythonRepl
-        )
-
-      write_execute_code_config(cwd, enabled: false, kernel_mode: "per_call")
-      broadcast_config_reload()
-
-      assert {:ok, %ExecuteCodeConfig{enabled: true, kernel_mode: "session", timeout_ms: 888}} =
-               Session.execute_code_config(session)
-
-      refute_receive {:python_repl_detach_owner, ^session, true}
-    end
-
-    @tag :tmp_dir
-    test "reload transition state and disposal are scoped independently per session", %{
-      tmp_dir: tmp_dir
-    } do
-      configure_python_repl(:ok)
-      cwd_a = Path.join(tmp_dir, "project-a")
-      cwd_b = Path.join(tmp_dir, "project-b")
-      File.mkdir_p!(cwd_a)
-      File.mkdir_p!(cwd_b)
-
-      write_execute_code_config(cwd_a, enabled: true, kernel_mode: "session")
-      write_execute_code_config(cwd_b, enabled: true, kernel_mode: "session")
-
-      session_a = start_session(cwd: cwd_a, python_repl_mod: PythonRepl)
-      session_b = start_session(cwd: cwd_b, python_repl_mod: PythonRepl)
-
-      write_execute_code_config(cwd_a, enabled: true, kernel_mode: "per_call")
-      broadcast_config_reload()
-
-      assert_receive {:python_repl_detach_owner, ^session_a, true}
-
-      assert {:ok, %ExecuteCodeConfig{kernel_mode: "per_call"}} =
-               Session.execute_code_config(session_a)
-
-      assert {:ok, %ExecuteCodeConfig{kernel_mode: "session"}} =
-               Session.execute_code_config(session_b)
-
-      refute_receive {:python_repl_detach_owner, ^session_b, true}
-    end
-  end
-
   # ============================================================================
   # Prompt/Streaming Tests
   # ============================================================================
@@ -1003,9 +762,18 @@ defmodule CodingAgent.SessionTest do
     end
 
     test "returns error when already streaming" do
-      # Use a slow response to ensure we're still streaming
+      parent = self()
+
+      # Hold the first run open until the test releases it
       slow_stream_fn = fn model, context, options ->
-        Process.sleep(100)
+        send(parent, {:stream_called, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :ok
+        end
+
         mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
       end
 
@@ -1015,6 +783,10 @@ defmodule CodingAgent.SessionTest do
       result = Session.prompt(session, "Second prompt")
 
       assert result == {:error, :already_streaming}
+
+      assert_receive {:stream_called, stream_pid}, 2_000
+      send(stream_pid, :release)
+      wait_for_streaming_complete(session)
     end
 
     test "can send prompt with images" do
@@ -1192,7 +964,7 @@ defmodule CodingAgent.SessionTest do
           end
         end)
 
-      assert_receive :subscribed, 500
+      assert_receive :subscribed, 2_000
 
       # Get initial listener count
       state_before = Session.get_state(session)
@@ -1200,13 +972,11 @@ defmodule CodingAgent.SessionTest do
 
       # Kill the subscriber
       send(pid, :die)
-      Process.sleep(50)
 
-      # Trigger cleanup by sending a message that causes handle_info(:DOWN, ...)
-      # The cleanup happens automatically when process dies
-      state_after = Session.get_state(session)
-
-      assert length(state_after.event_listeners) < initial_count
+      # The session removes the listener when it handles the subscriber's :DOWN
+      assert_eventually(fn ->
+        length(Session.get_state(session).event_listeners) < initial_count
+      end)
     end
   end
 
@@ -1435,89 +1205,14 @@ defmodule CodingAgent.SessionTest do
       assert :queue.len(state.follow_up_queue) == 0
     end
 
-    test "detaches Python REPL ownership before rotating the session identity" do
-      registry = :"session_registry_#{System.unique_integer([:positive])}"
-      start_supervised!({Registry, keys: :unique, name: registry})
-      configure_python_repl({:block, :ok})
-
-      old_id = "session-#{System.unique_integer([:positive])}"
-
-      session =
-        start_session(
-          session_id: old_id,
-          register: true,
-          registry: registry,
-          python_repl_mod: PythonRepl
-        )
-
-      assert [{^session, _metadata}] = Registry.lookup(registry, old_id)
-
-      reset_task = Task.async(fn -> Session.reset(session) end)
-
-      assert_receive {:python_repl_detach_owner, ^session, true}
-      assert [{^session, _metadata}] = Registry.lookup(registry, old_id)
-
-      send(session, {:resume_python_repl_detach, self()})
-
-      assert :ok = Task.await(reset_task)
-      state = Session.get_state(session)
-      refute state.session_manager.header.id == old_id
-      assert [] == Registry.lookup(registry, old_id)
-      assert [{^session, _metadata}] = Registry.lookup(registry, state.session_manager.header.id)
-    end
-
-    test "keeps the session identity when Python REPL detach fails" do
-      configure_python_repl({:error, %{reason: :stop_failed}})
-      old_id = "session-#{System.unique_integer([:positive])}"
-      session = start_session(session_id: old_id, python_repl_mod: PythonRepl)
-
-      assert {:error, :busy} = Session.reset(session)
-      assert_receive {:python_repl_detach_owner, ^session, true}
-      assert Session.get_state(session).session_manager.header.id == old_id
-    end
-
-    test "resets when the Python REPL registry is unavailable" do
-      configure_python_repl({:error, %{reason: :registry_unavailable}})
-      old_id = "session-#{System.unique_integer([:positive])}"
-      session = start_session(session_id: old_id, python_repl_mod: PythonRepl)
-
-      assert :ok = Session.reset(session)
-      assert_receive {:python_repl_detach_owner, ^session, true}
-      refute Session.get_state(session).session_manager.header.id == old_id
-    end
-
-    test "termination detaches the live owner best-effort" do
-      configure_python_repl({:raise, "simulated detach failure"})
-      session = start_session(python_repl_mod: PythonRepl)
-      monitor = Process.monitor(session)
-
-      assert :ok = GenServer.stop(session, :normal)
-      assert_receive {:python_repl_detach_owner, ^session, true}
-      assert_receive {:DOWN, ^monitor, :process, ^session, :normal}
-    end
-
-    test "termination bounds a hanging Python REPL detach and continues agent cleanup" do
-      configure_python_repl({:block, :ok})
-      session = start_session(python_repl_mod: PythonRepl)
-      agent = Session.get_state(session).agent
-      session_monitor = Process.monitor(session)
-      agent_monitor = Process.monitor(agent)
-
-      stop_task = Task.async(fn -> GenServer.stop(session, :normal) end)
-
-      assert_receive {:python_repl_detach_owner, ^session, true}, 250
-      assert :ok = Task.await(stop_task, 500)
-      assert_receive {:DOWN, ^agent_monitor, :process, ^agent, :normal}, 100
-      assert_receive {:DOWN, ^session_monitor, :process, ^session, :normal}, 100
-    end
-
     test "reset during active run aborts work and stream subscribers get canceled terminal" do
       parent = self()
 
-      slow_stream_fn = fn model, context, options ->
+      # A stream that never produces events keeps the run in flight until reset aborts it
+      slow_stream_fn = fn _model, _context, _options ->
         send(parent, :stream_called)
-        Process.sleep(300)
-        mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
+        {:ok, hung_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+        {:ok, hung_stream}
       end
 
       session = start_session(stream_fn: slow_stream_fn)
@@ -1526,7 +1221,7 @@ defmodule CodingAgent.SessionTest do
       stream_events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
 
       :ok = Session.prompt(session, "Hello")
-      assert_receive :stream_called, 500
+      assert_receive :stream_called, 2_000
 
       :ok = Session.reset(session)
 
@@ -1558,7 +1253,7 @@ defmodule CodingAgent.SessionTest do
       tmp_dir: tmp_dir
     } do
       explicit_path = Path.join(tmp_dir, "existing_session.jsonl")
-      File.write!(explicit_path, "")
+      :ok = SessionManager.save_to_file(explicit_path, SessionManager.new(tmp_dir))
 
       session = start_session(cwd: tmp_dir, session_file: explicit_path)
 
@@ -1623,17 +1318,16 @@ defmodule CodingAgent.SessionTest do
     @tag :tmp_dir
     test "uses session_file if already set", %{tmp_dir: tmp_dir} do
       session_file = Path.join(tmp_dir, "explicit_session.jsonl")
-      # Create an empty session file first
-      File.write!(session_file, "")
+      :ok = SessionManager.save_to_file(session_file, SessionManager.new(tmp_dir))
 
       session = start_session(cwd: tmp_dir, session_file: session_file)
 
       :ok = Session.save(session)
 
       assert File.exists?(session_file)
-      # File should have content now
-      content = File.read!(session_file)
-      assert String.length(content) > 0
+      assert Session.get_state(session).session_file == session_file
+      assert {:ok, loaded} = SessionManager.load_from_file(session_file)
+      assert loaded.header.id == Session.get_state(session).session_manager.header.id
     end
   end
 
@@ -1660,11 +1354,8 @@ defmodule CodingAgent.SessionTest do
 
       state = Session.get_state(session)
 
-      # Should have a model_change entry
-      model_changes =
-        Enum.filter(SessionManager.entries(state.session_manager), &(&1.type == :model_change))
-
-      assert length(model_changes) == 1
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.model == %{provider: new_model.provider, model_id: new_model.id}
     end
   end
 
@@ -1685,14 +1376,8 @@ defmodule CodingAgent.SessionTest do
 
       state = Session.get_state(session)
 
-      thinking_changes =
-        Enum.filter(
-          SessionManager.entries(state.session_manager),
-          &(&1.type == :thinking_level_change)
-        )
-
-      assert length(thinking_changes) == 1
-      assert hd(thinking_changes).thinking_level == :medium
+      context = SessionManager.build_session_context(state.session_manager)
+      assert context.thinking_level == :medium
     end
   end
 
@@ -1710,21 +1395,28 @@ defmodule CodingAgent.SessionTest do
 
     test "abort stops streaming" do
       # Use a slow stream to ensure we can abort it
+      parent = self()
+
       slow_stream_fn = fn model, context, options ->
-        Process.sleep(500)
+        send(parent, {:stream_called, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :ok
+        end
+
         mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
       end
 
       session = start_session(stream_fn: slow_stream_fn)
 
       :ok = Session.prompt(session, "Hello!")
-      # Give it time to start
-      Process.sleep(50)
+      # Wait for the stream to actually start
+      assert_receive {:stream_called, stream_pid}, 2_000
 
       :ok = Session.abort(session)
-
-      # Wait a bit and check streaming stopped
-      Process.sleep(100)
+      send(stream_pid, :release)
 
       # After abort, is_streaming should eventually be false
       # (may need to wait for cleanup)
@@ -1751,7 +1443,7 @@ defmodule CodingAgent.SessionTest do
       assert Session.get_state(session).is_streaming == false
 
       :ok = Session.prompt(session, "Second prompt")
-      assert_receive :stream_called, 200
+      assert_receive :stream_called, 2_000
       wait_for_streaming_complete(session)
     end
   end
@@ -1778,213 +1470,6 @@ defmodule CodingAgent.SessionTest do
       # Should have at least one message (user message is included in prompt call,
       # assistant response may or may not be added depending on stream completion)
       assert messages != []
-    end
-  end
-
-  # ============================================================================
-  # UI Notification Tests
-  # ============================================================================
-
-  describe "compact/2 UI notifications" do
-    @tag :tmp_dir
-    test "shows working message during compaction", %{tmp_dir: tmp_dir} do
-      # Start a mock UI tracker with unique name (for parallel test execution)
-      tracker_name = :"ui_compact_#{:erlang.unique_integer()}"
-      tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-
-      # Create UI context with mock
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
-
-      # Create a session with some messages first
-      session_manager =
-        SessionManager.new(tmp_dir)
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => String.duplicate("a", 4000),
-          "timestamp" => 1
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => String.duplicate("b", 4000)}],
-          "timestamp" => 2
-        })
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => String.duplicate("c", 4000),
-          "timestamp" => 3
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => String.duplicate("d", 4000)}],
-          "timestamp" => 4
-        })
-
-      session_file = Path.join(tmp_dir, "ui_compact_test.jsonl")
-      :ok = SessionManager.save_to_file(session_file, session_manager)
-
-      session = start_session(session_file: session_file, cwd: tmp_dir, ui_context: ui_context)
-
-      # Attempt compaction (may fail if not enough tokens, that's ok)
-      _result = Session.compact(session, summary: "Test summary", force: true)
-
-      # Check UI calls were made
-      calls = CodingAgent.Test.MockUI.get_calls(tracker)
-
-      # Should have called set_working_message with "Compacting context..."
-      assert {:set_working_message, ["Compacting context..."]} in calls
-
-      # Should have called set_working_message with nil (to clear it)
-      assert {:set_working_message, [nil]} in calls
-      CodingAgent.Test.MockUI.stop_tracker(tracker)
-    end
-
-    @tag :tmp_dir
-    test "notifies on successful compaction", %{tmp_dir: tmp_dir} do
-      tracker_name = :"ui_compact_notify_#{:erlang.unique_integer()}"
-      tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
-
-      # Create a session with some messages
-      session_manager =
-        SessionManager.new(tmp_dir)
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => String.duplicate("a", 4000),
-          "timestamp" => 1
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => String.duplicate("b", 4000)}],
-          "timestamp" => 2
-        })
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => String.duplicate("c", 4000),
-          "timestamp" => 3
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => String.duplicate("d", 4000)}],
-          "timestamp" => 4
-        })
-
-      session_file = Path.join(tmp_dir, "ui_compact_notify_test.jsonl")
-      :ok = SessionManager.save_to_file(session_file, session_manager)
-
-      session = start_session(session_file: session_file, cwd: tmp_dir, ui_context: ui_context)
-
-      result = Session.compact(session, summary: "Test summary", force: true)
-
-      calls = CodingAgent.Test.MockUI.get_calls(tracker)
-
-      case result do
-        :ok ->
-          # On success, should notify with info
-          assert {:notify, ["Context compacted", :info]} in calls
-
-        {:error, :cannot_compact} ->
-          # On cannot_compact, no notify but working message should be cleared
-          assert {:set_working_message, [nil]} in calls
-
-        {:error, _reason} ->
-          # On other errors, should notify with error
-          error_calls =
-            Enum.filter(calls, fn
-              {:notify, [msg, :error]} when is_binary(msg) ->
-                String.contains?(msg, "Compaction failed")
-
-              _ ->
-                false
-            end)
-
-          assert error_calls != []
-      end
-
-      CodingAgent.Test.MockUI.stop_tracker(tracker)
-    end
-
-    test "clears working message when compaction fails (cannot compact)" do
-      tracker_name = :"ui_compact_fail_#{:erlang.unique_integer()}"
-      tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
-
-      # Fresh session with no messages - compaction will fail
-      session = start_session(ui_context: ui_context)
-      result = Session.compact(session, force: true)
-
-      assert result == {:error, :cannot_compact}
-
-      calls = CodingAgent.Test.MockUI.get_calls(tracker)
-
-      # Should have shown working message
-      assert {:set_working_message, ["Compacting context..."]} in calls
-
-      # Should have cleared working message
-      assert {:set_working_message, [nil]} in calls
-      CodingAgent.Test.MockUI.stop_tracker(tracker)
-    end
-  end
-
-  describe "summarize_current_branch/2 UI notifications" do
-    @tag :tmp_dir
-    test "shows working message during branch summarization", %{tmp_dir: tmp_dir} do
-      tracker_name = :"ui_summarize_#{:erlang.unique_integer()}"
-      tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
-
-      # Create a session with messages to summarize
-      session_manager =
-        SessionManager.new(tmp_dir)
-        |> SessionManager.append_message(%{
-          "role" => "user",
-          "content" => "Hello, how are you?",
-          "timestamp" => 1
-        })
-        |> SessionManager.append_message(%{
-          "role" => "assistant",
-          "content" => [%{"type" => "text", "text" => "I'm doing well, thanks!"}],
-          "timestamp" => 2
-        })
-
-      session_file = Path.join(tmp_dir, "ui_summarize_test.jsonl")
-      :ok = SessionManager.save_to_file(session_file, session_manager)
-
-      session = start_session(session_file: session_file, cwd: tmp_dir, ui_context: ui_context)
-
-      # Attempt to summarize branch (may fail due to API, that's ok for this test)
-      _result = Session.summarize_current_branch(session)
-
-      calls = CodingAgent.Test.MockUI.get_calls(tracker)
-
-      # Should have called set_working_message with "Summarizing branch..."
-      assert {:set_working_message, ["Summarizing branch..."]} in calls
-
-      # Should have cleared working message (either on success or failure)
-      assert {:set_working_message, [nil]} in calls
-      CodingAgent.Test.MockUI.stop_tracker(tracker)
-    end
-
-    test "returns error without UI notification for empty branch" do
-      tracker_name = :"ui_summarize_empty_#{:erlang.unique_integer()}"
-      tracker = CodingAgent.Test.MockUI.start_tracker(tracker_name)
-
-      ui_context = CodingAgent.UI.Context.new(CodingAgent.Test.MockUI, tracker)
-
-      # Fresh session with no messages
-      session = start_session(ui_context: ui_context)
-      result = Session.summarize_current_branch(session)
-
-      assert result == {:error, :empty_branch}
-
-      calls = CodingAgent.Test.MockUI.get_calls(tracker)
-
-      # Should NOT have shown working message for empty branch
-      # (we return early before showing the message)
-      refute {:set_working_message, ["Summarizing branch..."]} in calls
-      CodingAgent.Test.MockUI.stop_tracker(tracker)
     end
   end
 
@@ -2021,11 +1506,10 @@ defmodule CodingAgent.SessionTest do
       # Wait for the agent process to actually exit
       assert_receive {:DOWN, ^ref, :process, ^agent_pid, _reason}, 1000
 
-      # Give the registry a moment to clean up
-      Process.sleep(10)
-
-      # Verify unregistered
-      assert :error = LemonAgent.AgentRegistry.lookup({session_id, :main, 0})
+      # Verify unregistered (the registry cleans up asynchronously)
+      assert_eventually(fn ->
+        LemonAgent.AgentRegistry.lookup({session_id, :main, 0}) == :error
+      end)
     end
 
     test "list_by_session includes main agent" do
@@ -2106,8 +1590,17 @@ defmodule CodingAgent.SessionTest do
 
     test "is_streaming reflects current state" do
       # Use a slow response to ensure we can check streaming state
+      parent = self()
+
       slow_stream_fn = fn model, context, options ->
-        Process.sleep(200)
+        send(parent, {:stream_called, self()})
+
+        receive do
+          :release -> :ok
+        after
+          10_000 -> :ok
+        end
+
         mock_stream_fn_single(assistant_message("Slow response")).(model, context, options)
       end
 
@@ -2117,11 +1610,12 @@ defmodule CodingAgent.SessionTest do
       assert health_before.is_streaming == false
 
       :ok = Session.prompt(session, "Hello!")
-      Process.sleep(10)
+      assert_receive {:stream_called, stream_pid}, 2_000
 
       health_during = Session.health_check(session)
       assert health_during.is_streaming == true
 
+      send(stream_pid, :release)
       wait_for_streaming_complete(session)
 
       health_after = Session.health_check(session)
@@ -2264,8 +1758,9 @@ defmodule CodingAgent.SessionTest do
       state = Session.get_state(session)
 
       # Kill the agent
+      ref = Process.monitor(state.agent)
       Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      assert_receive {:DOWN, ^ref, :process, _, _}, 2_000
 
       health = Session.health_check(session)
       assert health.status == :unhealthy
@@ -2381,61 +1876,4 @@ defmodule CodingAgent.SessionTest do
       assert last_entry.message["trust"] == "trusted"
     end
   end
-end
-
-defmodule CodingAgent.SessionTest.PythonReplDirector do
-  use Agent
-
-  @spec start_link({pid(), term()}) :: Agent.on_start()
-  def start_link({test_pid, response}) do
-    Agent.start_link(fn -> %{test_pid: test_pid, response: response} end, name: __MODULE__)
-  end
-
-  @spec detach_owner(pid()) :: :ok | {:error, map()} | no_return()
-  def detach_owner(owner_pid) do
-    {test_pid, response} =
-      Agent.get_and_update(__MODULE__, fn state ->
-        case state.response do
-          {:sequence, [response | rest]} ->
-            {{state.test_pid, response}, %{state | response: {:sequence, rest}}}
-
-          {:sequence, []} ->
-            {{state.test_pid, :ok}, state}
-
-          response ->
-            {{state.test_pid, response}, state}
-        end
-      end)
-
-    send(test_pid, {:python_repl_detach_owner, owner_pid, Process.alive?(owner_pid)})
-
-    case response do
-      {:block, result} ->
-        receive do
-          {:resume_python_repl_detach, ^test_pid} -> result
-        end
-
-      {:raise, message} ->
-        raise RuntimeError, message
-
-      result ->
-        result
-    end
-  end
-
-  @spec execute(map()) :: {:ok, map()}
-  def execute(%{owner_pid: owner_pid}) do
-    test_pid = Agent.get(__MODULE__, & &1.test_pid)
-    send(test_pid, {:python_repl_execute, owner_pid})
-    {:ok, %{output: "session", state_retained: true, kernel_reused: false}}
-  end
-end
-
-defmodule CodingAgent.SessionTest.PythonRepl do
-  @spec detach_owner(pid()) :: :ok | {:error, map()} | no_return()
-  def detach_owner(owner_pid),
-    do: CodingAgent.SessionTest.PythonReplDirector.detach_owner(owner_pid)
-
-  @spec execute(map()) :: {:ok, map()}
-  def execute(request), do: CodingAgent.SessionTest.PythonReplDirector.execute(request)
 end

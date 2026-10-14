@@ -12,7 +12,7 @@ defmodule LemonRouter.DeliveryRouteResolver do
 
     cond do
       parsed.kind == :channel_peer and is_binary(parsed.channel_id) and parsed.channel_id != "" and
-          parsed.peer_kind in [:dm, :group, :channel] and is_binary(parsed.peer_id) and
+        parsed.peer_kind in [:dm, :group, :channel] and is_binary(parsed.peer_id) and
           parsed.peer_id != "" ->
         {:ok,
          %DeliveryRoute{
@@ -29,8 +29,6 @@ defmodule LemonRouter.DeliveryRouteResolver do
       true ->
         :error
     end
-  rescue
-    _ -> :error
   end
 
   def resolve(_session_key, fallback_channel_id, meta) when is_binary(fallback_channel_id) do
@@ -40,25 +38,29 @@ defmodule LemonRouter.DeliveryRouteResolver do
   def resolve(_session_key, _fallback_channel_id, _meta), do: :error
 
   defp from_meta(channel_id, meta) when is_map(meta) do
-    peer = meta[:peer] || meta["peer"] || %{}
+    case meta[:peer] || meta["peer"] || %{} do
+      peer when is_map(peer) or is_list(peer) ->
+        peer_kind = normalize_peer_kind(peer[:kind] || peer["kind"])
+        peer_id = peer[:id] || peer["id"]
 
-    peer_kind = normalize_peer_kind(peer[:kind] || peer["kind"])
-    peer_id = peer[:id] || peer["id"]
+        if peer_kind in [:dm, :group, :channel] and is_binary(peer_id) and peer_id != "" do
+          {:ok,
+           %DeliveryRoute{
+             channel_id: channel_id,
+             account_id: (meta[:account_id] || meta["account_id"] || "default") |> to_string(),
+             peer_kind: peer_kind,
+             peer_id: peer_id,
+             thread_id: peer[:thread_id] || peer["thread_id"]
+           }}
+        else
+          :error
+        end
 
-    if peer_kind in [:dm, :group, :channel] and is_binary(peer_id) and peer_id != "" do
-      {:ok,
-       %DeliveryRoute{
-         channel_id: channel_id,
-         account_id: (meta[:account_id] || meta["account_id"] || "default") |> to_string(),
-         peer_kind: peer_kind,
-         peer_id: peer_id,
-         thread_id: peer[:thread_id] || peer["thread_id"]
-       }}
-    else
-      :error
+      _ ->
+        :error
     end
   rescue
-    _ -> :error
+    _ in [ArgumentError, Protocol.UndefinedError] -> :error
   end
 
   defp from_meta(_channel_id, _meta), do: :error

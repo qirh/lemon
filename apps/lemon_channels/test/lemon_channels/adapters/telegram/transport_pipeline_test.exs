@@ -20,6 +20,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     state = %{
       account_id: "default",
       allowed_chat_ids: nil,
+      allow_all_chats: true,
       deny_unbound_chats: false,
       buffers: %{},
       media_groups: %{}
@@ -120,6 +121,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportPipelineTest do
     state = %{
       account_id: "default",
       allowed_chat_ids: [99],
+      allow_all_chats: false,
       deny_unbound_chats: false,
       buffers: %{},
       media_groups: %{}

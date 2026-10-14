@@ -1,10 +1,10 @@
 # LemonMCP
 
-MCP (Model Context Protocol) client and server bridge for the Lemon codebase.
+MCP (Model Context Protocol) client library for the Lemon codebase.
 
 ## Overview
 
-LemonMCP provides both client and server implementations for the Model Context Protocol (MCP), an open protocol that enables seamless integration between LLM applications and external data sources and tools. On the server side, it exposes CodingAgent tools over MCP so external clients can use them.
+LemonMCP implements the client side of the Model Context Protocol (MCP), an open protocol that enables seamless integration between LLM applications and external data sources and tools. It connects Lemon to external MCP servers over stdio, Streamable HTTP, and legacy HTTP+SSE; `LemonSkills.McpSource` uses it to expose those servers' tools, resources, and prompts to agents.
 
 This library targets MCP protocol version **"2024-11-05"**.
 
@@ -22,11 +22,10 @@ end
 
 ## Dependencies
 
-- `coding_agent` (in_umbrella) - Tools exposed via MCP server
-- `agent_core` (in_umbrella) - Agent runtime support
+- `lemon_core` (in_umbrella) - Request ID generation (`LemonCore.Id`) and the `:inets`/`:ssl` runtime used by the HTTP clients
+- `lemon_skills` (in_umbrella) - Hosts `LemonSkills.McpSource`, whose suite lives in this app's tests
 - `jason` - JSON encoding/decoding
-- `bandit` / `plug` - HTTP transport server
-- `uuid` - Request ID generation
+- `bandit` / `plug` (test only) - Local HTTP and SSE MCP server fixtures for the client tests
 
 ## Modules
 
@@ -34,34 +33,19 @@ end
 - `LemonMCP.Protocol` - MCP message types and JSON-RPC handling
 - `LemonMCP.Client` - GenServer client for managing stdio MCP connections, including optional `sampling/createMessage` callback or policy handling
 - `LemonMCP.Sampling` - Redacted policy wrapper for reviewed model-backed stdio sampling callbacks
-- `LemonMCP.Server` - MCP server process
-- `LemonMCP.Server.Handler` - Server request handler
-- `LemonMCP.ToolAdapter` - Adapter that exposes CodingAgent tools over MCP
 - `LemonMCP.Transport.Stdio` - Stdio transport for MCP servers
-- `LemonMCP.Transport.HTTP` - Streamable HTTP JSON-RPC transport whose internal one-for-all supervisor owns the MCP server and Bandit listener as one lifecycle
 - `LemonMCP.Client.HTTP` - Streamable HTTP client for external MCP servers, including JSON responses, per-request SSE responses, session/protocol headers, OAuth protected-resource / authorization-server metadata discovery, optional OAuth client-credentials token acquisition with form-post or HTTP Basic client authentication, refresh-token grant retry when a token response supplies a refresh token, authorization-code PKCE callback/token exchange for public clients, injectable token-cache load/save hooks, and one-shot bearer reacquisition after later 401 challenges
 - `LemonMCP.Client.SSE` - legacy HTTP+SSE client for external MCP servers
 
 `lemon_mcp` is a library application: it has no application callback and starts
-no processes by default. Callers start and supervise the client, server, and
-transport processes they use. Lemon's minimal and full OTP releases include the
+no processes by default. Callers start and supervise the client and transport
+processes they use. Lemon's minimal and full OTP releases include the
 library with `:load`, which makes these modules available to dynamic consumers
 such as `LemonSkills.McpSource` without adding a no-op supervisor.
 Release smoke builds both profiles and evaluates this contract inside each
 packaged release. The artifact boot verifier repeats it against each min/full
 release tarball, including loaded-but-not-started application state and the
 absence of an application callback.
-
-Starting `LemonMCP.Transport.HTTP` returns its unnamed transport supervisor.
-That supervisor owns a node-local registry member, the protocol
-`LemonMCP.Server`, and Bandit listener with a `:one_for_all` strategy, so all
-children are replaced as a group and no stale or orphaned server survives a
-transport restart. Serialized registry updates retain concurrent starts;
-normal shutdown unregisters immediately, while later reads and registrations
-prune members left by abnormal shutdown. `get_server_pid/0` resolves the current
-node's latest child instead of caching a child PID across restarts and falls
-back to an older live transport when the latest stops. Pass the supervisor returned by
-`start_link/1` to `get_server_pid/1` when multiple transports are running.
 
 ## Usage
 
@@ -73,6 +57,12 @@ back to an older live transport when the latest stops. Pass the supervisor retur
   args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/files"]
 )
 ```
+
+Stdio clients accept `cwd: "/path/to/project"` and string-pair `env` overrides.
+The consuming host owns reconnection: subprocess exit terminates the transport
+and fails pending client requests. Protocol buffering is capped at 8 MiB.
+Never replay a timed-out tool invocation automatically; the remote operation may
+already have taken effect.
 
 `sampling/createMessage` is disabled by default. Prefer a `sampling_policy`
 when requests should pass through redacted review and local limits before a
@@ -226,13 +216,6 @@ Long-running interactive authorization providers should pass a GenServer
 ### Error Handling
 
 - `JSONRPCError` - JSON-RPC 2.0 error responses with standard error codes
-
-The server validates that lifecycle/tool params are maps, that required string fields are present, and that tool `arguments` are maps when provided.
-
-`LemonMCP.ToolAdapter` distinguishes between:
-
-- tool-declared failures, which return MCP tool results with `isError: true`
-- adapter/tool crashes, which surface as server/transport errors instead of successful tool responses
 
 ## Client State Machine
 

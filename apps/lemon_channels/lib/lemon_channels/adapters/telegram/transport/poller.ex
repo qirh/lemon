@@ -5,7 +5,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
 
   require Logger
 
-  alias LemonChannels.Adapters.Telegram.Transport.{ActionRunner, Normalize, Pipeline}
+  alias LemonChannels.Adapters.Telegram.Transport.{
+    ActionRunner,
+    Normalize,
+    Pipeline,
+    UpdateProcessor
+  }
+
   alias LemonChannels.Telegram.PollerLock
 
   @webhook_clear_retry_ms 5 * 60 * 1000
@@ -19,7 +25,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
                                      {:ok, map()} | {:error, term()} | {:skip, map()}),
           process_media_group: (map(), map() -> any()),
           persist_offset: (map(), integer() -> any()),
+          reply_whoami: (map(), map() -> any()),
           send_approval_request: (map(), map() -> any()),
+          send_unpaired_notice: (map(), map() -> any()),
           start_async_task: (map(), (-> any()) -> any()),
           submit_buffer: (map(), map() -> map())
         }
@@ -52,10 +60,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
       other ->
         maybe_log_poll_error(state, other)
     end
-  rescue
-    e ->
-      Logger.warning("Telegram poll error: #{inspect(e)}")
-      state
   end
 
   defp handle_updates(state, updates, callbacks) do
@@ -80,20 +84,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
           {:error, _reason} ->
             state
         end
-      {:error, _reason} -> state
+
+      {:error, _reason} ->
+        state
     end
+  rescue
+    error ->
+      # Isolate one update, not the entire fetched batch. Retain its provisional
+      # dedupe marker: an action may have mutated before raising.
+      Logger.error("Telegram update failed: #{inspect(error.__struct__)}")
+      state
   end
 
+  # Transcription costs money and replies in-chat, so it only runs for chats
+  # that pass authorization; everything else reaches the pipeline untouched
+  # and is dropped there.
   defp maybe_transcribe_event(state, %{kind: :message, inbound: inbound} = normalized, callbacks) do
-    case callbacks.maybe_transcribe_voice.(state, inbound) do
-      {:ok, inbound} ->
-        {:ok, %{normalized | inbound: inbound, text: inbound.message.text}}
+    if UpdateProcessor.authorized_inbound?(state, inbound) do
+      case callbacks.maybe_transcribe_voice.(state, inbound) do
+        {:ok, inbound} ->
+          {:ok, %{normalized | inbound: inbound, text: inbound.message.text}}
 
-      {:skip, new_state} ->
-        {:skip, new_state}
+        {:skip, new_state} ->
+          {:skip, new_state}
 
-      {:error, reason} ->
-        {:error, reason}
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:ok, normalized}
     end
   end
 
@@ -133,8 +152,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
     end
 
     %{state | last_poll_error: reason, last_poll_error_log_ts: now}
-  rescue
-    _ -> state
   end
 
   defp maybe_attempt_webhook_clear(state, {:http_error, 409, _body}) do
@@ -182,8 +199,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Poller do
         {:error, {:exit, reason}}
     end
   end
-
-  defp max_update_id([], current_offset), do: current_offset - 1
 
   defp max_update_id(updates, fallback),
     do: Enum.reduce(updates, fallback, &max(&1["update_id"] || fallback, &2))

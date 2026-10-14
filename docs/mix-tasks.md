@@ -56,7 +56,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.new NAME` | Scaffold a new Lemon agent project. Ships in the `installer/` archive, **not** the umbrella — install it with `mix archive.install` before use. Flags: `--channel`, `--memory`, `--install`. |
+| `mix lemon.new NAME` | Scaffold a new Lemon agent project. Ships in the `installer/` archive, **not** the umbrella — install it with `mix archive.install` before use. Flags: `--hex` (Hex requirements, no checkout; not with `--channel`), `--channel`, `--memory`, `--lemon-path`, `--packages-path`, `--install`. |
 | `mix lemon.setup` | Idempotent first-run setup: derives config/secrets/provider state, creates only missing config and secrets state, skips an already usable provider, and verifies a newly configured provider unless `--skip-verify` defers its live check. This is the contributor alternative to `lemon setup` / `./bin/lemon setup`. |
 | `mix lemon.onboard` | Top-level interactive provider onboarding. Contributor alternative to `lemon model` / `./bin/lemon model`. |
 | `mix lemon.onboard.anthropic` | Interactive onboarding for the Anthropic provider. |
@@ -67,8 +67,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
 | `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
-| `mix lemon.hermes.audit` | Audit Hermes data compatibility without writing files. |
-| `mix lemon.hermes.migrate` | Migrate compatible Hermes data into Lemon. |
+| Hermes migration Mix tasks | Deleted; use `lemon migrate hermes` from a release or `./bin/lemon migrate hermes` from a source checkout. |
 
 ## Secrets
 
@@ -88,35 +87,31 @@ initializes a missing master key itself and does not replace an existing one.
 | `mix lemon.secrets.import_env` | Import env-based secrets into the encrypted store. |
 | `mix lemon.voice.secrets` | Interactively set voice API secrets. |
 
-## Diagnostics & readiness
+## Diagnostics
 
 Read-only, redacted health and configuration reports. Safe to run anywhere.
 
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.doctor` | Run Lemon diagnostics and report health. |
-| `mix lemon.readiness` | Compact redacted launch-readiness summary. |
 | `mix lemon.config` | Validate and inspect Lemon configuration (`--validate`, etc.). |
-| `mix lemon.channels` | Show redacted Telegram and Discord launch readiness. |
+| `mix lemon.channels` | Inspect channel configuration. |
 | `mix lemon.usage` | Show redacted usage, cost, token, and quota diagnostics. |
-| `mix lemon.proofs` | Show redacted local proof artifact status. |
-| `mix lemon.media` | Show redacted generated-media and provider-proof readiness. |
+| `mix lemon.media` | Show redacted generated-media job status. |
 | `mix lemon.models` | List known Lemon AI models (`--provider`, `--vision`, `--thinking`, `--json`). |
 | `mix lemon.introspection` | Query agent introspection events. |
 | `mix lemon.feedback` | Inspect historical routing feedback stats. |
 
 ## Quality & CI
 
-The checks that run in `mix lemon.quality` on every push, plus adjacent guards.
+`mix lemon.quality` runs in CI (`scripts/test quality`) on every PR and push to main; the rest are adjacent guards.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.quality` | Run docs and architecture quality checks (`--root`, `--validate-config`). |
-| `mix lemon.ratchet` | Measure architecture-debt ratchets (`--update` lowers baselines, `--root`). |
+| `mix lemon.quality` | Run the docs link, architecture docs, `deps/0` policy, and duplicate test module checks (`--root`, `--validate-config`). |
 | `mix lemon.architecture.docs` | Generate architecture boundary docs from policy. |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test module names. |
 | `mix lemon.extension.validate` | Validate Lemon extension package manifests. |
-| `mix lemon.cleanup` | Scan or prune stale docs/agent-loop run artifacts. |
 | `mix lemon.eval` | Run the coding-quality eval harness. |
 
 ## Data, stores & messaging
@@ -145,7 +140,7 @@ Durable state and outbound notifications.
 
 ## Sim & arena
 
-`lemon_sim` contributes **26** tasks. They fall into four sub-groups.
+`lemon_sim` contributes **10** tasks. They fall into four sub-groups.
 
 ### Scenario runners (self-play)
 
@@ -153,10 +148,7 @@ Each runs one scenario's self-play example. All share the common flags
 `--seed`, `--max-turns`, `--offline-strategy`, `--no-persist`, and `--sim-id`
 (run `mix help lemon.sim.<scenario>` for scenario-specific options).
 
-`auction`, `courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`,
-`legislature`, `murder_mystery`, `pandemic`, `poker`, `skirmish`,
-`space_station`, `startup_incubator`, `stock_market`, `supply_chain`,
-`survivor`, `tcg_shop`, `tic_tac_toe`, `vending_bench`, `werewolf` (19).
+`poker`, `tic_tac_toe`, `vending_bench`, `werewolf` (4).
 
 ```bash
 mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
@@ -171,11 +163,8 @@ mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_
 | `mix lemon.sim.vending_bench_replay DIR` | Build a static HTML replay browser from a VendingBench artifact directory (not a video). |
 
 `mix lemon.sim.replay` handles every video scenario through one task, backed by
-each scenario's shared `VideoGenerator`. Scenarios: `skirmish`, `auction`,
-`courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`, `legislature`,
-`murder_mystery`, `pandemic`, `poker`, `space_station`, `startup_incubator`,
-`stock_market`, `supply_chain`, `survivor`, `werewolf`. A single positional
-argument is treated as a `skirmish` log for backwards compatibility.
+each scenario's shared `VideoGenerator`. Scenarios: `poker`, `werewolf`. Both
+the scenario and the log path are required.
 
 ```bash
 mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
@@ -183,14 +172,14 @@ mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
 ```
 
 VendingBench keeps a separate task because its replay is a static HTML browser,
-not a video. `tic_tac_toe` and `tcg_shop` have no replay renderer.
+not a video. `tic_tac_toe` has no replay renderer.
 
 ### Scoring & verification
 
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle. |
+| `mix lemon.sim.verify PATH` | Verify a run artifact bundle: hashes, event replay (VendingBench, Werewolf, Poker), and scorecard recompute. Exits non-zero on failure. |
 
 ```bash
 mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
@@ -207,13 +196,13 @@ mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
 
 ## Not a mix task
 
-`scripts/release_package` is a shell **script**, not a `mix` task — invoke it
-directly (`scripts/release_package <package>`). It is not listed by
+`scripts/release_package` and `scripts/verify_packages` are shell **scripts**,
+not Mix tasks. Invoke `scripts/release_package PACKAGE VERSION` directly; see
+[standalone packages](release/hex-packages.md). They are not listed by
 `mix lemon.help`.
 
 `./bin/lemon node join` is also a source wrapper, not a Mix task. It starts a
-long-lived native coding execution worker and therefore has no `mix
-lemon.node.*` entry:
+long-lived native coding execution worker and has no corresponding Mix task.
 
 ```bash
 LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
@@ -248,12 +237,9 @@ near-identical thin wrappers over each scenario's shared `VideoGenerator`
 covers them all. `vending_bench_replay` stayed separate (it builds a static HTML
 browser, not a video). Net: 15 tasks removed with no loss of capability.
 
-**Deliberately not done — scenario runners.** The 19 `mix lemon.sim.<scenario>`
-runners look consolidatable but are not: each has a distinct switch set and calls
-distinct example-module entrypoints (e.g. `werewolf` does multi-model per-seat
-assignment via `--models`/`--player-count`; `vending_bench` has `--preset` and
-offline strategies; `tic_tac_toe` has `--offline-strategy`). A single
-`mix lemon.sim <scenario>` would either be a leaky mega-task branching on
-scenario, or a dispatcher that still keeps all 19 modules — both worse than 19
-focused tasks. `vending_bench` is also called directly by CI
-(`scripts/ci_sim_bench.sh`, `scripts/generate_sim_demo_bundles.sh`). Left as-is.
+**Scenario runners remain separate.** The four retained runners have distinct
+switch sets and example entrypoints: `werewolf` supports per-seat models,
+`vending_bench` has benchmark presets, and `tic_tac_toe` exposes kernel-level
+offline strategies. A shared dispatcher would not remove those differences.
+VendingBench is also called directly by `scripts/ci_sim_bench.sh` and
+`scripts/generate_sim_demo_bundles.sh`.

@@ -13,6 +13,8 @@
  */
 
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { EMPTY_NODE, kbd, node, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import type { QueueItem } from "../../store/queue-store.ts";
@@ -43,6 +45,9 @@ export class QueuePanelComponent implements Component {
 	#cachedRows: readonly string[] | undefined;
 	#cachedWidth = -1;
 	#cachedKey = "";
+	#native:
+		| { items: readonly QueueItem[]; focused: boolean; selected: number; node: NativeNode }
+		| undefined;
 
 	constructor(options: QueuePanelOptions) {
 		this.#options = options;
@@ -124,6 +129,100 @@ export class QueuePanelComponent implements Component {
 		return rows;
 	}
 
+	/**
+	 * omp's queue (`omp.queue`): one pill per waiting prompt (`omp.queue.item`,
+	 * the text on one line), the total as a count badge on the first pill, and
+	 * an Edit control (`omp.queue.edit`) that pulls that prompt back into the
+	 * editor exactly like Enter in the focused panel. Prompts already handed to
+	 * the offline transport have no Edit; they are not ours to change.
+	 */
+	describe(): NativeNode {
+		const items = this.#items;
+		if (items.length === 0) return EMPTY_NODE;
+		const cached = this.#native;
+		if (
+			cached?.items === items &&
+			cached.focused === this.focused &&
+			cached.selected === this.#selected
+		) {
+			return cached.node;
+		}
+		const pills = items.map((item, index) => {
+			const children: NativeNode[] = [
+				node("icon", { name: "corner-down-right" }, undefined, "icon"),
+				node(
+					"text",
+					{ text: oneLine(item.text), wrap: "none", truncate: "end", grow: 1 },
+					undefined,
+					"text",
+				),
+			];
+			if (item.attachments?.length) {
+				const count = item.attachments.length;
+				children.push(
+					node("badge", { text: `${count} image${count === 1 ? "" : "s"}` }, undefined, "images"),
+				);
+			}
+			if (item.state !== "queued-local") {
+				children.push(
+					node(
+						"badge",
+						{
+							text: item.state === "waiting-connection" ? "offline" : "review before retry",
+							tone: "warning",
+						},
+						undefined,
+						"state",
+					),
+				);
+			}
+			if (index === 0 && items.length > 1) {
+				children.push(
+					node("badge", { text: `${items.length}`, role: "omp.queue.count" }, undefined, "count"),
+				);
+			}
+			if (item.state !== "waiting-connection") {
+				children.push(
+					node(
+						"row",
+						{
+							role: "omp.queue.edit",
+							gap: "xs",
+							align: "center",
+							title: "Edit  ctrl+q",
+							actions: { click: "queue.edit" },
+						},
+						[kbd("ctrl+q"), text("Edit")],
+						"edit",
+					),
+				);
+			}
+			const selected = this.focused && index === this.#selected;
+			return node(
+				"row",
+				{
+					role: "omp.queue.item",
+					align: "center",
+					gap: "sm",
+					...(selected ? { tone: "accent" } : {}),
+				},
+				children,
+				item.id,
+			);
+		});
+		const described = node("col", { role: "omp.queue", gap: "xs" }, pills);
+		this.#native = { items, focused: this.focused, selected: this.#selected, node: described };
+		return described;
+	}
+
+	/** A pill's Edit: the item's own Enter path. */
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "action" || event.act !== "queue.edit") return;
+		const id = event.key.slice(0, event.key.indexOf("/"));
+		const item = this.#items.find((candidate) => candidate.id === id);
+		if (item) this.#options.onEdit(item);
+	}
+
 	// -- internals -----------------------------------------------------------
 
 	#move(direction: -1 | 1): void {
@@ -139,7 +238,11 @@ export class QueuePanelComponent implements Component {
 			this.focused ? "f" : "-",
 			this.#selected,
 			this.#items.length,
-			this.#items.map((item) => `${item.id}:${item.state}:${item.text.length}`).join(","),
+			this.#items
+				.map(
+					(item) => `${item.id}:${item.state}:${item.text.length}:${item.attachments?.length ?? 0}`,
+				)
+				.join(","),
 		].join("|");
 	}
 
@@ -157,13 +260,19 @@ export class QueuePanelComponent implements Component {
 		for (let index = start; index < end; index++) {
 			const item = this.#items[index]!;
 			const marker = this.focused && index === this.#selected ? theme.cursor : " ";
-			const offline = item.state === "waiting-connection" ? "(offline) " : "";
-			const line = clamp(`${marker} ${index + 1}. ${offline}${oneLine(item.text)}`);
+			const state =
+				item.state === "waiting-connection"
+					? "(offline) "
+					: item.state === "needs-review"
+						? "(review before retry) "
+						: "";
+			const media = item.attachments?.length ? ` [${item.attachments.length} image(s)]` : "";
+			const line = clamp(`${marker} ${index + 1}. ${state}${oneLine(item.text)}${media}`);
 			const selected = this.focused && index === this.#selected;
 			rows.push(
 				selected
 					? theme.fg("accent", line)
-					: theme.fg(item.state === "waiting-connection" ? "warning" : "muted", line),
+					: theme.fg(item.state === "queued-local" ? "muted" : "warning", line),
 			);
 		}
 		const hidden = this.#items.length - (end - start);

@@ -89,44 +89,18 @@ defmodule LemonAgent.LoopAbortTest do
     test "abort signal stops stream mid-response and sets stop_reason to :aborted" do
       context = simple_context()
       parent = self()
+      response = Mocks.assistant_message("Partial response being streamed...")
 
-      # Create a slow streaming function that checks for abort
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      # The producer streams a couple of chunks, then stalls until released
+      config =
+        simple_config(stream_fn: Mocks.blocking_stream_fn(response, parent, chunks: 2))
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Partial response being streamed...")
-          LemonAi.EventStream.push(stream, {:start, response})
-
-          # Simulate slow streaming
-          for i <- 1..10 do
-            send(parent, {:streaming_chunk, i})
-            Process.sleep(50)
-
-            LemonAi.EventStream.push(
-              stream,
-              {:text_delta, 0, "chunk #{i}", response}
-            )
-          end
-
-          LemonAi.EventStream.push(stream, {:done, :stop, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
       signal = AbortSignal.new()
 
       stream = Loop.agent_loop([user_message("Start streaming")], context, config, signal, nil)
 
       # Wait for streaming to begin then abort
-      receive do
-        {:streaming_chunk, 2} -> :ok
-      after
-        1000 -> flunk("Streaming did not start")
-      end
+      assert_receive {:stream_blocked, _producer}, 5_000
 
       AbortSignal.abort(signal)
 
@@ -174,6 +148,7 @@ defmodule LemonAgent.LoopAbortTest do
 
     test "abort during multi-chunk stream preserves partial content in message" do
       context = simple_context()
+      parent = self()
 
       stream_fn = fn _model, _context, _options ->
         {:ok, stream} = LemonAi.EventStream.start_link()
@@ -194,11 +169,20 @@ defmodule LemonAgent.LoopAbortTest do
 
           LemonAi.EventStream.push(stream, {:start, partial})
 
-          # Use longer delays to ensure abort is detected between chunks
+          # Stream a few chunks, then stall until released (the abort must end the run)
           for i <- 1..10 do
-            Process.sleep(50)
             updated = %{partial | content: [%TextContent{type: :text, text: "Hello World #{i}"}]}
             LemonAi.EventStream.push(stream, {:text_delta, 0, " #{i}", updated})
+
+            if i == 2 do
+              send(parent, :stream_blocked)
+
+              receive do
+                :release_stream -> :ok
+              after
+                10_000 -> :ok
+              end
+            end
           end
 
           # This should not be reached due to abort
@@ -216,10 +200,8 @@ defmodule LemonAgent.LoopAbortTest do
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
       # Abort during streaming (after a few chunks)
-      Task.start(fn ->
-        Process.sleep(100)
-        AbortSignal.abort(signal)
-      end)
+      assert_receive :stream_blocked, 5_000
+      AbortSignal.abort(signal)
 
       {events, result} = collect_events_and_result(stream)
       assert {:error, {:canceled, :assistant_aborted}} = result
@@ -238,30 +220,15 @@ defmodule LemonAgent.LoopAbortTest do
     test "abort emits correct event sequence: message_start, message_end with aborted message" do
       context = simple_context()
 
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
-
-        Task.start(fn ->
-          response = Mocks.assistant_message("Streaming...")
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(100)
-          LemonAi.EventStream.push(stream, {:done, :stop, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
+      response = Mocks.assistant_message("Streaming...")
+      config = simple_config(stream_fn: Mocks.blocking_stream_fn(response, self()))
       signal = AbortSignal.new()
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
-      # Abort quickly
-      Task.start(fn ->
-        Process.sleep(20)
-        AbortSignal.abort(signal)
-      end)
+      # Abort once the assistant stream is in flight
+      assert_receive {:stream_blocked, _producer}, 5_000
+      AbortSignal.abort(signal)
 
       events = EventStream.events(stream) |> Enum.to_list()
 
@@ -341,15 +308,18 @@ defmodule LemonAgent.LoopAbortTest do
     end
 
     test "tool that ignores abort signal still gets terminated by supervisor" do
+      parent = self()
+
       # Tool that does NOT check abort signal - uses a very long delay
       ignoring_tool = %AgentTool{
         name: "ignoring_tool",
         description: "A tool that ignores abort signal",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Ignoring",
-        execute: fn _id, _params, _signal, _on_update ->
+        execute: fn id, _params, _signal, _on_update ->
+          send(parent, {:ignoring_tool_started, id})
           # Sleep without checking abort - use a very long delay
-          Process.sleep(2000)
+          Process.sleep(30_000)
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Finished ignoring"}],
@@ -370,19 +340,14 @@ defmodule LemonAgent.LoopAbortTest do
 
       stream = Loop.agent_loop([user_message("Run ignoring tool")], context, config, signal, nil)
 
-      # Abort shortly after tool starts
-      Task.start(fn ->
-        Process.sleep(50)
-        AbortSignal.abort(signal)
-      end)
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
 
-      # This should complete much faster than 2000ms due to abort termination
-      start_time = System.monotonic_time(:millisecond)
-      events = EventStream.events(stream) |> Enum.to_list()
-      elapsed = System.monotonic_time(:millisecond) - start_time
+      # Abort once the tool is running
+      assert_receive {:ignoring_tool_started, "call_ignore"}, 5_000
+      AbortSignal.abort(signal)
 
-      # Should complete much faster than the 2000ms sleep
-      assert elapsed < 1750
+      # The tool sleeps for 30s; the run must end long before that
+      events = Task.await(events_task, 20_000)
 
       # Aborted runs should not report normal completion
       refute Enum.any?(events, &match?({:agent_end, _}, &1))
@@ -449,8 +414,8 @@ defmodule LemonAgent.LoopAbortTest do
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Abortable",
         execute: fn id, _params, _signal, _on_update ->
-          send(parent, {:abortable_tool_started, id})
-          Process.sleep(300)
+          send(parent, {:abortable_tool_started, id, self()})
+          Process.sleep(5_000)
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Complete"}],
@@ -471,7 +436,8 @@ defmodule LemonAgent.LoopAbortTest do
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
-      assert_receive {:abortable_tool_started, "call_abort"}, 5_000
+      assert_receive {:abortable_tool_started, "call_abort", worker}, 5_000
+      worker_monitor = Process.monitor(worker)
       :ok = AbortSignal.abort(signal)
 
       events = EventStream.events(stream) |> Enum.to_list()
@@ -481,10 +447,15 @@ defmodule LemonAgent.LoopAbortTest do
 
       {:tool_execution_end, _id, _name, result, is_error} = tool_end
 
-      # Should be marked as error with aborted message
+      # A worker that cannot finish within the cleanup grace is terminated,
+      # not reported as a successful result or an implicitly rolled-back mutation.
       assert is_error == true
-      assert %AgentToolResult{content: content} = result
-      assert Enum.any?(content, fn c -> String.contains?(c.text || "", "abort") end)
+      assert %AgentToolResult{} = result
+      assert result.details.cancelled == true
+      assert result.details.started == true
+      assert result.details.outcome == :unknown
+      refute Enum.any?(result.content, &(&1.text == "Complete"))
+      assert_receive {:DOWN, ^worker_monitor, :process, ^worker, _}, 1_000
     end
   end
 
@@ -500,6 +471,7 @@ defmodule LemonAgent.LoopAbortTest do
         description: "Completes instantly",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Instant",
+        parallel_safe: true,
         execute: fn _id, _params, _signal, _on_update ->
           # No delay - instant completion
           %AgentToolResult{
@@ -514,6 +486,7 @@ defmodule LemonAgent.LoopAbortTest do
         description: "Takes a very long time",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Slow",
+        parallel_safe: true,
         execute: fn _id, _params, _signal, _on_update ->
           # Very long delay to ensure abort happens
           Process.sleep(2000)
@@ -581,15 +554,18 @@ defmodule LemonAgent.LoopAbortTest do
     end
 
     test "abort terminates all pending tool tasks" do
+      parent = self()
+
       # Multiple slow tools
-      make_slow_tool = fn name, delay ->
+      make_slow_tool = fn name ->
         %AgentTool{
           name: name,
           description: "Slow tool #{name}",
           parameters: %{"type" => "object", "properties" => %{}},
           label: name,
-          execute: fn _id, _params, _signal, _on_update ->
-            Process.sleep(delay)
+          execute: fn id, _params, _signal, _on_update ->
+            send(parent, {:slow_tool_started, id})
+            Process.sleep(30_000)
 
             %AgentToolResult{
               content: [%TextContent{type: :text, text: "#{name} done"}],
@@ -600,9 +576,9 @@ defmodule LemonAgent.LoopAbortTest do
       end
 
       tools = [
-        make_slow_tool.("tool_a", 500),
-        make_slow_tool.("tool_b", 500),
-        make_slow_tool.("tool_c", 500)
+        make_slow_tool.("tool_a"),
+        make_slow_tool.("tool_b"),
+        make_slow_tool.("tool_c")
       ]
 
       context = simple_context(tools: tools)
@@ -622,18 +598,14 @@ defmodule LemonAgent.LoopAbortTest do
 
       stream = Loop.agent_loop([user_message("Run all")], context, config, signal, nil)
 
-      # Abort early
-      Task.start(fn ->
-        Process.sleep(50)
-        AbortSignal.abort(signal)
-      end)
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
 
-      start_time = System.monotonic_time(:millisecond)
-      events = EventStream.events(stream) |> Enum.to_list()
-      elapsed = System.monotonic_time(:millisecond) - start_time
+      # Abort once the first tool is running; the tools sleep for 30s each, so the
+      # run can only end promptly because pending tool tasks are terminated
+      assert_receive {:slow_tool_started, _id}, 5_000
+      AbortSignal.abort(signal)
 
-      # Should complete before waiting for all pending tools under scheduler load.
-      assert elapsed < 1000
+      events = Task.await(events_task, 20_000)
 
       tool_ends = Enum.filter(events, &match?({:tool_execution_end, _, _, _, _}, &1))
       assert length(tool_ends) <= 3
@@ -749,43 +721,21 @@ defmodule LemonAgent.LoopAbortTest do
     test "abort signal is checked between streaming iterations in consume loop" do
       context = simple_context()
 
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      response = Mocks.assistant_message("Response")
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Response")
-          LemonAi.EventStream.push(stream, {:start, response})
+      # A few chunks, then the producer stalls; only the abort check can end the run
+      config =
+        simple_config(stream_fn: Mocks.blocking_stream_fn(response, self(), chunks: 3))
 
-          # Simulate slow streaming with multiple chunks
-          for i <- 1..10 do
-            Process.sleep(30)
-            LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
-          end
-
-          LemonAi.EventStream.push(stream, {:done, :stop, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
       signal = AbortSignal.new()
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
       # Abort during streaming (abort is checked per event consumed)
-      Task.start(fn ->
-        Process.sleep(100)
-        AbortSignal.abort(signal)
-      end)
+      assert_receive {:stream_blocked, _producer}, 5_000
+      AbortSignal.abort(signal)
 
-      start_time = System.monotonic_time(:millisecond)
       {events, result} = collect_events_and_result(stream)
-      elapsed = System.monotonic_time(:millisecond) - start_time
-
-      # Should complete promptly under full-suite scheduler load.
-      assert elapsed < 1000
       assert {:error, {:canceled, :assistant_aborted}} = result
 
       # Should have been aborted
@@ -802,13 +752,16 @@ defmodule LemonAgent.LoopAbortTest do
     end
 
     test "abort signal is checked in parallel tool collect loop every 100ms" do
+      parent = self()
+
       slow_tool = %AgentTool{
         name: "very_slow_tool",
         description: "Takes a long time",
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Very Slow",
-        execute: fn _id, _params, _signal, _on_update ->
-          Process.sleep(2000)
+        execute: fn id, _params, _signal, _on_update ->
+          send(parent, {:very_slow_tool_started, id})
+          Process.sleep(30_000)
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "Done"}],
@@ -829,18 +782,14 @@ defmodule LemonAgent.LoopAbortTest do
 
       stream = Loop.agent_loop([user_message("Run slow")], context, config, signal, nil)
 
-      # Abort after ~150ms (should be detected on next 100ms check)
-      Task.start(fn ->
-        Process.sleep(150)
-        AbortSignal.abort(signal)
-      end)
+      events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
 
-      start_time = System.monotonic_time(:millisecond)
-      _events = EventStream.events(stream) |> Enum.to_list()
-      elapsed = System.monotonic_time(:millisecond) - start_time
+      # Abort once the tool is running; it sleeps for 30s, so the run can only
+      # end promptly because the collect loop notices the abort
+      assert_receive {:very_slow_tool_started, "call_vs"}, 5_000
+      AbortSignal.abort(signal)
 
-      # Should complete well before the 2s tool sleep under full-suite scheduler load.
-      assert elapsed < 1000
+      _events = Task.await(events_task, 20_000)
     end
 
     test "abort after turn completes but before next turn starts" do
@@ -1264,37 +1213,19 @@ defmodule LemonAgent.LoopAbortTest do
     test "abort signal state at check time determines abort behavior" do
       context = simple_context()
 
-      # Create a stream function that produces events slowly
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      response = Mocks.assistant_message("Response")
 
-        Task.start(fn ->
-          response = Mocks.assistant_message("Response")
-          LemonAi.EventStream.push(stream, {:start, response})
-          # Slow streaming to give abort time to be detected
-          for i <- 1..5 do
-            Process.sleep(40)
-            LemonAi.EventStream.push(stream, {:text_delta, 0, "chunk #{i}", response})
-          end
-
-          LemonAi.EventStream.push(stream, {:done, :stop, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
+      # Produces a few chunks, then stalls until released
+      config =
+        simple_config(stream_fn: Mocks.blocking_stream_fn(response, self(), chunks: 2))
 
       signal = AbortSignal.new()
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
-      # Abort during streaming (after some chunks have been processed)
-      Task.start(fn ->
-        Process.sleep(80)
-        AbortSignal.abort(signal)
-      end)
+      # Abort during streaming (after some chunks have been pushed)
+      assert_receive {:stream_blocked, _producer}, 5_000
+      AbortSignal.abort(signal)
 
       {events, result} = collect_events_and_result(stream)
       assert {:error, {:canceled, :assistant_aborted}} = result
@@ -1314,39 +1245,33 @@ defmodule LemonAgent.LoopAbortTest do
     test "multiple loops can use different abort signals independently" do
       context = simple_context()
 
-      make_slow_response = fn delay, text ->
-        fn _model, _context, _options ->
-          {:ok, stream} = LemonAi.EventStream.start_link()
-
-          Task.start(fn ->
-            Process.sleep(delay)
-            response = Mocks.assistant_message(text)
-            LemonAi.EventStream.push(stream, {:start, response})
-            LemonAi.EventStream.push(stream, {:done, :stop, response})
-            LemonAi.EventStream.complete(stream, response)
-          end)
-
-          {:ok, stream}
-        end
-      end
-
       signal1 = AbortSignal.new()
       signal2 = AbortSignal.new()
 
-      config1 = simple_config(stream_fn: make_slow_response.(200, "Response 1"))
-      config2 = simple_config(stream_fn: make_slow_response.(200, "Response 2"))
+      config1 =
+        simple_config(
+          stream_fn:
+            Mocks.blocking_stream_fn(Mocks.assistant_message("Response 1"), self(), tag: :stream1)
+        )
+
+      config2 =
+        simple_config(
+          stream_fn:
+            Mocks.blocking_stream_fn(Mocks.assistant_message("Response 2"), self(), tag: :stream2)
+        )
 
       stream1 = Loop.agent_loop([user_message("Test 1")], context, config1, signal1, nil)
       stream2 = Loop.agent_loop([user_message("Test 2")], context, config2, signal2, nil)
 
-      # Abort only stream1
-      Task.start(fn ->
-        Process.sleep(50)
-        AbortSignal.abort(signal1)
-      end)
+      assert_receive {:stream1, _producer1}, 5_000
+      assert_receive {:stream2, producer2}, 5_000
+
+      # Abort only stream1; stream2 keeps running until its producer is released
+      AbortSignal.abort(signal1)
 
       events1_task = Task.async(fn -> EventStream.events(stream1) |> Enum.to_list() end)
       result1 = EventStream.result(stream1)
+      send(producer2, :release_stream)
       result2 = EventStream.result(stream2)
 
       events1 = Task.await(events1_task, 5000)
@@ -1368,29 +1293,16 @@ defmodule LemonAgent.LoopAbortTest do
       context = simple_context(tools: [])
       response = Mocks.assistant_message("Response without tools")
 
-      stream_fn = fn _model, _context, _options ->
-        {:ok, stream} = LemonAi.EventStream.start_link()
+      # The producer has emitted nothing yet when the abort arrives
+      config =
+        simple_config(stream_fn: Mocks.blocking_stream_fn(response, self(), before_start: true))
 
-        Task.start(fn ->
-          Process.sleep(100)
-          LemonAi.EventStream.push(stream, {:start, response})
-          Process.sleep(100)
-          LemonAi.EventStream.push(stream, {:done, :stop, response})
-          LemonAi.EventStream.complete(stream, response)
-        end)
-
-        {:ok, stream}
-      end
-
-      config = simple_config(stream_fn: stream_fn)
       signal = AbortSignal.new()
 
       stream = Loop.agent_loop([user_message("Test")], context, config, signal, nil)
 
-      Task.start(fn ->
-        Process.sleep(50)
-        AbortSignal.abort(signal)
-      end)
+      assert_receive {:stream_blocked, _producer}, 5_000
+      AbortSignal.abort(signal)
 
       {events, result} = collect_events_and_result(stream)
       assert {:error, {:canceled, :assistant_aborted}} = result

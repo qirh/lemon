@@ -100,8 +100,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         end
       end
     end
-  rescue
-    _ -> state
   end
 
   def maybe_handle_model_picker_input(state, inbound, text) do
@@ -134,8 +132,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
             end
         end
     end
-  rescue
-    _ -> {state, false}
   end
 
   defp safe_handle_model_picker_input(state, inbound, key, picker, trimmed) do
@@ -175,8 +171,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       [{key, picker}] -> {key, picker}
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp consume_invalid_model_picker_input(state, inbound, key, picker) do
@@ -248,8 +242,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     end
 
     {state, true}
-  rescue
-    _ -> {state, false}
   end
 
   defp handle_model_picker_input(state, inbound, key, picker, input) do
@@ -694,8 +686,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
     else
       nil
     end
-  rescue
-    _ -> nil
   end
 
   defp normalize_sender_id(id) when is_integer(id), do: Integer.to_string(id)
@@ -742,16 +732,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
         :ok ->
           :ok
 
-        {:error, _reason} ->
-          _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-          :ok
+        {:error, reason} when reason in [:channels_outbox_unavailable, :queue_full] ->
+          state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+
+        {:error, _} = error ->
+          error
       end
     else
-      _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-      :ok
+      state.api_mod.send_message(state.token, chat_id, text, opts, nil)
     end
-  rescue
-    _ -> :ok
   end
 
   defp use_outbox_delivery?(state) do
@@ -996,17 +985,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ModelPicker do
       :ok ->
         :ok
 
-      {:error, _reason} ->
+      {:error, reason} when reason in [:channels_outbox_unavailable, :queue_full] ->
         opts =
           %{}
           |> maybe_put("reply_to_message_id", reply_to_message_id)
           |> maybe_put("message_thread_id", thread_id)
 
-        _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
-        :ok
+        state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+
+      {:error, _} = error ->
+        error
     end
-  rescue
-    _ -> :ok
   end
 
   defp callback_model_provider_markup(providers, page) when is_list(providers) do

@@ -113,6 +113,33 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   def maybe_index_known_target(state, _), do: state
 
   @doc """
+  Chat-level authorization shared by messages and callback queries.
+
+  A non-empty `allowed_chat_ids` list is authoritative. With no allowlist the
+  bot is unpaired and fails closed (`{:drop, :unpaired}`) unless the operator
+  explicitly opted into `allow_all_chats`.
+  """
+  @spec chat_authorization(map(), integer()) :: :ok | {:drop, :unpaired | :chat_not_allowed}
+  def chat_authorization(state, chat_id) when is_map(state) and is_integer(chat_id) do
+    case Map.get(state, :allowed_chat_ids) do
+      [_ | _] = allowed ->
+        if chat_id in allowed, do: :ok, else: {:drop, :chat_not_allowed}
+
+      _ ->
+        if Map.get(state, :allow_all_chats) == true, do: :ok, else: {:drop, :unpaired}
+    end
+  end
+
+  @doc """
+  Whether an inbound message passes the transport authorization guards.
+
+  Used before any paid or side-effecting pre-processing (voice transcription)
+  so unauthorized chats cannot trigger work.
+  """
+  @spec authorized_inbound?(map(), map()) :: boolean()
+  def authorized_inbound?(state, inbound), do: authorized_inbound_reason(state, inbound) == :ok
+
+  @doc """
   Authorization guard for Telegram callback queries.
   """
   @spec authorized_callback_query?(map(), map()) :: boolean()
@@ -124,7 +151,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
       not is_integer(chat_id) ->
         false
 
-      not allowed_chat?(state.allowed_chat_ids, chat_id) ->
+      chat_authorization(state, chat_id) != :ok ->
         false
 
       state.deny_unbound_chats ->
@@ -199,8 +226,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
       get_in(message, ["reply_to_message", "forum_topic_edited", "name"])
   end
 
-  defp extract_topic_name_from_message(_), do: nil
-
   defp chat_display_name(%{"type" => "private"} = chat) do
     [chat["first_name"], chat["last_name"]]
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
@@ -214,8 +239,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   defp chat_display_name(chat) when is_map(chat) do
     chat["title"] || chat["username"]
   end
-
-  defp chat_display_name(_), do: nil
 
   defp coalesce_text(value, existing, key) do
     normalize_blank(value) || normalize_blank(map_get(existing, key))
@@ -231,8 +254,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
     else
       inbound
     end
-  rescue
-    _ -> inbound
   end
 
   defp extract_reply_to_text(update) when is_map(update) do
@@ -255,8 +276,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
       not is_integer(chat_id) ->
         {:drop, :no_chat_id}
 
-      not allowed_chat?(state.allowed_chat_ids, chat_id) ->
-        {:drop, :chat_not_allowed}
+      (reason = chat_authorization(state, chat_id)) != :ok ->
+        reason
 
       state.deny_unbound_chats ->
         scope = inbound_scope(inbound, chat_id)
@@ -289,9 +310,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.UpdateProcessor do
   rescue
     _ -> false
   end
-
-  defp allowed_chat?(nil, _chat_id), do: true
-  defp allowed_chat?(list, chat_id) when is_list(list), do: chat_id in list
 
   defp enrich_for_router(inbound, state) do
     {chat_id, topic_id} = extract_chat_ids(inbound)

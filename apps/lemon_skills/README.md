@@ -19,17 +19,11 @@ Skill registry, discovery, installation, audit, and lifecycle management for the
 
 LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, static security audit, optional LLM-backed audit review, status checking, and relevance-based retrieval.
 
-`lemon_skills` is one of the packages that make up the [Lemon](https://github.com/z80dev/lemon)
-agent platform. It depends on `lemon_core`, `lemon_agent`, `lemon_ai`,
-`lemon_memory` and `lemon_media`.
+`lemon_skills` is an app in the [Lemon](https://github.com/z80dev/lemon) umbrella,
+not a Hex package; it ships as part of the reference runtime. It depends on
+`lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
-## Installation
-
-```elixir
-def deps do
-  [{:lemon_skills, "~> 0.1"}]
-end
-```
+## Usage
 
 Start the application (it is an OTP application with its own supervision tree)
 and the skill registry is available through the `LemonSkills` facade:
@@ -118,15 +112,15 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Audit.Engine` | `lib/lemon_skills/audit/engine.ex` | Static security audit and verdict aggregation |
 | `LemonSkills.Audit.LlmReviewer` | `lib/lemon_skills/audit/llm_reviewer.ex` | Optional model-backed review for suspicious or malicious skill content |
 | `LemonSkills.Config` | `lib/lemon_skills/config.ex` | Directory paths, config load/save, ancestor `.agents/skills` discovery, git root detection |
+| `LemonSkills.Doctor.Checks.Skills` | `lib/lemon_skills/doctor/checks/skills.ex` | `lemon doctor` check for the global skills directory, registered via `config :lemon_core, :doctor_checks` |
 | `LemonSkills.BuiltinSeeder` | `lib/lemon_skills/builtin_seeder.ex` | Copies bundled skills from priv/ to user config dir on startup |
 | `LemonSkills.Discovery` | `lib/lemon_skills/discovery.ex` | Online skill discovery from GitHub (topic search) and registry URL probing |
 | `LemonSkills.HttpClient` | `lib/lemon_skills/http_client.ex` | HTTP client behaviour for dependency injection |
 | `LemonSkills.HttpClient.Httpc` | `lib/lemon_skills/http_client/httpc.ex` | Default HTTP client using Erlang `:httpc` |
 | `LemonSkills.Tools.ReadSkill` | `lib/lemon_skills/tools/read_skill.ex` | Agent tool for fetching skill content and metadata |
 | `LemonSkills.Tools.SkillManage` | `lib/lemon_skills/tools/skill_manage.ex` | Agent tool for creating, editing, patching, deleting, and auditing local skills |
-| `LemonSkills.Tools.Memory` | `lib/lemon_skills/tools/memory.ex` | Agent tool for compact assistant-home USER.md/MEMORY.md notes |
-| `LemonSkills.Tools.MemoryTopic` | `lib/lemon_skills/tools/memory_topic.ex` | Agent tool for durable topic memory scaffolding |
-| `LemonSkills.Tools.SearchMemory` | `lib/lemon_skills/tools/search_memory.ex` | Agent tool for scoped prior-run memory search |
+| `LemonSkills.Tools.Remember` | `lib/lemon_skills/tools/remember.ex` | Agent tool for compact assistant-home USER.md/MEMORY.md notes |
+| `LemonSkills.Tools.Recall` | `lib/lemon_skills/tools/recall.ex` | Agent tool for scoped search across past conversations and memory notes |
 | `LemonSkills.Tools.MediaStatus` | `lib/lemon_skills/tools/media_status.ex` | Agent tool for redacted media job status |
 | `LemonSkills.Tools.MediaGenerateImage` | `lib/lemon_skills/tools/media_generate_image.ex` | Agent tool for managed image generation artifacts |
 | `LemonSkills.Tools.MediaGenerateSpeech` | `lib/lemon_skills/tools/media_generate_speech.ex` | Agent tool for managed speech generation artifacts |
@@ -480,10 +474,11 @@ verdict rejects.
 LemonSkills.Tools.SkillManage.tool(cwd: "/project/path")
 ```
 
-### memory, memory_topic, search_memory
+### remember and recall
 
-Assistant-home notes (`USER.md`/`MEMORY.md`), durable topic memory, and scoped
-search over prior runs. These are backed by `lemon_memory`.
+`remember` updates compact assistant-home notes (`USER.md`/`MEMORY.md`).
+`recall` searches past conversations and longer workspace notes. These use
+`lemon_memory`.
 
 ### kanban
 
@@ -584,7 +579,7 @@ Project configuration is deep-merged on top of global configuration.
 | `lemon_core` | umbrella | Shared primitives; `LemonCore.ExecApprovals` for approval gating, `LemonCore.Secrets` for secret resolution |
 | `lemon_agent` | umbrella | Agent types (`AgentTool`, `AgentToolResult`) used by tool definitions |
 | `lemon_ai` | umbrella | AI types (`TextContent`) used in tool results; the model call behind the optional LLM audit |
-| `lemon_memory` | umbrella | Durable memory behind the memory, memory_topic and search_memory tools |
+| `lemon_memory` | umbrella | Durable memory behind the `remember` and `recall` tools |
 | `lemon_media` | umbrella | Media job records and artifacts behind the media tools |
 | `jason` | hex | JSON encoding/decoding for `skills.json` configuration files |
 | `phoenix_pubsub` | hex | Broadcasts skill and media lifecycle events on `LemonCore.PubSub` |

@@ -13,6 +13,7 @@ import {
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { renderPlain } from "../helpers/memory-terminal.ts";
+import { waitFor } from "../helpers/wait.ts";
 
 const teardown: Array<() => void> = [];
 
@@ -35,6 +36,17 @@ const row = (overrides: Partial<SessionRow> = {}): SessionRow => ({
 	archived: false,
 	...overrides,
 });
+
+/** A TSP terminal that draws the `picker` kind. */
+const NATIVE = {
+	cols: 80,
+	dark: true,
+	reduceMotion: true,
+	supports: () => true,
+	feature: () => false,
+};
+
+const action = (act: string) => ({ type: "action" as const, key: "", act, mods: [] });
 
 interface SwitcherHarness {
 	switcher: SessionSwitcher;
@@ -59,7 +71,11 @@ async function bootSwitcher(
 	const server = await FakeControlPlane.start();
 	teardown.push(() => server.stop());
 	server.respondWith("sessions.active.list", { sessions: options.active ?? [] });
-	server.respondWith("sessions.list", { sessions: options.stored ?? [] });
+	server.onMethod("sessions.list", (params: { query?: string }) => ({
+		sessions: (options.stored ?? []).filter(
+			(row) => !params.query || String(row.sessionKey).includes(params.query),
+		),
+	}));
 
 	const client = new ControlPlaneClient({
 		url: server.url,
@@ -94,6 +110,7 @@ async function bootSwitcher(
 		notice: () => {},
 		now: () => options.now ?? Date.now(),
 	});
+	teardown.push(() => switcher.close());
 
 	return {
 		switcher,
@@ -199,6 +216,11 @@ describe("SessionSwitcher", () => {
 		await harness.switcher.open();
 
 		harness.overlay().handleInput("review");
+		// Exercise the actual debounce and WebSocket response, not a guessed delay.
+		await waitFor(() => harness.overlay().items.length === 1, { what: "server session search" });
+		expect(harness.server.requestsFor("sessions.list").at(-1)?.params).toMatchObject({
+			query: "review",
+		});
 
 		expect(harness.overlay().items.map((item) => item.value)).toEqual(["review-branch"]);
 		expect(harness.rendered()).not.toContain("tui-beta");
@@ -212,6 +234,9 @@ describe("SessionSwitcher", () => {
 		await harness.switcher.open();
 
 		harness.overlay().handleInput("tui-b");
+		await waitFor(() => harness.overlay().selected?.value === "tui-b", {
+			what: "search selection",
+		});
 		harness.overlay().handleInput("\r");
 
 		expect(harness.switched).toEqual(["tui-b"]);
@@ -268,6 +293,9 @@ describe("SessionSwitcher", () => {
 		await harness.switcher.open();
 
 		harness.overlay().handleInput("tui-b");
+		await waitFor(() => harness.overlay().selected?.value === "tui-b", {
+			what: "search selection",
+		});
 		harness.overlay().handleInput("\x17");
 
 		expect(harness.closed).toEqual(["tui-b"]);
@@ -324,4 +352,60 @@ describe("SessionSwitcher", () => {
 		expect(renderPlain(overlay.render(80))).not.toBe(before);
 		expect(harness.switched).toEqual([]);
 	});
+
+	test("on a native sheet, a row double-click switches and the buttons run the keys", async () => {
+		const harness = await bootSwitcher({
+			sessionKey: "tui-a",
+			stored: [{ sessionKey: "tui-b", updatedAtMs: 99 }],
+		});
+		await harness.switcher.open();
+		const overlay = harness.overlay();
+		const sheet = overlay.describe(NATIVE);
+		expect(sheet?.k).toBe("picker");
+		expect(sheet?.p).toMatchObject({ current: ["tui-a"], order: ["tui-b", "tui-a"] });
+
+		overlay.handleNativeEvent(action("new"));
+		expect(harness.switcher.promptMode).toBe(true);
+		// The prompt owns the pointer as it owns the keyboard.
+		overlay.handleNativeEvent({ type: "activate", key: "", item: "tui-b" });
+		expect(harness.switched).toEqual([]);
+		overlay.handleNativeEvent(action("close"));
+		expect(harness.switcher.promptMode).toBe(false);
+
+		overlay.handleNativeEvent({ type: "activate", key: "", item: "tui-b" });
+		await waitFor(() => harness.switched.length > 0, { what: "the switch" });
+		expect(harness.switched).toEqual(["tui-b"]);
+	});
+
+	test("the native Close session button asks the host to close the selected session", async () => {
+		const harness = await bootSwitcher({ sessionKey: "tui-a" });
+		await harness.switcher.open();
+		harness.overlay().handleNativeEvent(action("close-session"));
+		expect(harness.closed).toEqual(["tui-a"]);
+	});
+});
+
+test("server content matches are not removed by a second local metadata filter", async () => {
+	const harness = await bootSwitcher();
+	await harness.switcher.open();
+	harness.server.respondWith("sessions.list", {
+		sessions: [{ sessionKey: "older-session", title: "Parser review" }],
+	});
+	harness.overlay().handleInput("needle-in-message-history");
+	expect(harness.overlay().items).toHaveLength(0);
+	await waitFor(() => harness.overlay().items.length === 1, { what: "content search result" });
+	expect(harness.overlay().items[0].value).toBe("older-session");
+	harness.overlay().handleInput("\r");
+	expect(harness.store.session("older-session").title).toBe("Parser review");
+});
+
+test("failed server search cannot leave an old row selectable under a new query", async () => {
+	const harness = await bootSwitcher({ stored: [{ sessionKey: "old-session" }] });
+	await harness.switcher.open();
+	harness.server.failWith("sessions.list", "UNAVAILABLE", "search unavailable");
+	harness.overlay().handleInput("new");
+	await waitFor(() => harness.rendered().includes("search failed"), { what: "search failure" });
+	harness.overlay().handleInput("\r");
+	expect(harness.switched).toEqual([]);
+	expect(harness.overlay().items).toHaveLength(0);
 });

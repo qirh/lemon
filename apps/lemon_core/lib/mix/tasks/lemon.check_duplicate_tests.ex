@@ -15,7 +15,8 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
                 ])
 
   @moduledoc """
-  Scans test files for duplicate `defmodule` names.
+  Scans test files for duplicate literal module declarations, resolving nested
+  names against their enclosing module and respecting absolute `Elixir` names.
 
   Usage:
     mix lemon.check_duplicate_tests
@@ -57,22 +58,45 @@ defmodule Mix.Tasks.Lemon.CheckDuplicateTests do
   defp module_occurrences(root, file) do
     with {:ok, source} <- File.read(file),
          {:ok, ast} <- Code.string_to_quoted(source) do
-      {_ast, modules} =
-        Macro.prewalk(ast, [], fn
-          {:defmodule, _meta, [{:__aliases__, _alias_meta, parts}, [do: _body]]} = node, acc ->
-            module_name = Enum.map_join(parts, ".", &Atom.to_string/1)
-            path = Path.relative_to(file, root)
-            {node, [{module_name, path} | acc]}
-
-          node, acc ->
-            {node, acc}
-        end)
-
-      modules
+      collect_modules(ast, [], Path.relative_to(file, root), [])
     else
       _ -> []
     end
   end
+
+  defp collect_modules({:defmodule, _, [name, [do: body]]}, namespace, path, modules) do
+    case module_parts(name, namespace) do
+      nil ->
+        modules
+
+      parts ->
+        collect_modules(body, parts, path, [{Enum.join(parts, "."), path} | modules])
+    end
+  end
+
+  defp collect_modules({_form, _metadata, args}, namespace, path, modules) when is_list(args),
+    do: collect_modules(args, namespace, path, modules)
+
+  defp collect_modules({_key, value}, namespace, path, modules),
+    do: collect_modules(value, namespace, path, modules)
+
+  defp collect_modules(nodes, namespace, path, modules) when is_list(nodes),
+    do: Enum.reduce(nodes, modules, &collect_modules(&1, namespace, path, &2))
+
+  defp collect_modules(_node, _namespace, _path, modules), do: modules
+
+  defp module_parts({:__aliases__, _, [:"Elixir" | parts]}, _namespace), do: parts
+
+  defp module_parts({:__aliases__, _, [{:__MODULE__, _, _} | parts]}, namespace),
+    do: namespace ++ parts
+
+  defp module_parts({:__aliases__, _, parts}, namespace), do: namespace ++ parts
+  defp module_parts({:__MODULE__, _, _}, namespace), do: namespace
+
+  defp module_parts(name, _namespace) when is_atom(name),
+    do: name |> Atom.to_string() |> String.trim_leading("Elixir.") |> String.split(".")
+
+  defp module_parts(_dynamic, _namespace), do: nil
 
   defp test_files(root) do
     root

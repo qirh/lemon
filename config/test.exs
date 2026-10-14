@@ -1,8 +1,14 @@
 import Config
 
 # Keep Logger defaults in tests: several test suites assert on `:info`/`:warning`
-# messages via `ExUnit.CaptureLog`. If you need quieter output, prefer per-test
-# `capture_log/2` or configure console formatting in CI.
+# messages via `ExUnit.CaptureLog`. Every app's test_helper starts ExUnit with
+# `capture_log: true`, so log output is only printed for failing tests.
+
+# ExUnit's default `assert_receive` timeout is 100ms, shorter than scheduler
+# latency on loaded CI runners. A bare `assert_receive` returns as soon as the
+# message arrives, so the larger bound only lengthens genuine failures.
+# `refute_receive` keeps its own default.
+config :ex_unit, assert_receive_timeout: 1_000
 
 # Isolate on-disk poller locks per `mix test` OS process. This prevents cross-process
 # test interference if multiple `mix test` commands run concurrently on the same host.
@@ -13,6 +19,20 @@ System.put_env(
     "lemon_locks_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
   )
 )
+
+# Tests must never read or write the developer's real ~/.lemon. LemonCore.Paths
+# resolves config.toml, secrets and state from $HOME, and every umbrella app
+# (including LemonCore's config load) boots before any test_helper runs, so a
+# personal config could otherwise fail or skew the whole suite. Tests that need
+# a specific home still set HOME themselves and restore this one afterwards.
+lemon_test_home =
+  Path.join(
+    System.get_env("LEMON_TEST_TMPDIR") || System.tmp_dir!(),
+    "lemon_home_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+  )
+
+File.mkdir_p!(lemon_test_home)
+System.put_env("HOME", lemon_test_home)
 
 # Tests must not depend on or mutate a developer's persistent state on disk.
 config :lemon_core, LemonCore.Store,
@@ -97,6 +117,31 @@ config :lemon_automation, :skill_curator, enabled: false
 # from generating drafts (and touching the memory store) during unrelated suites.
 config :lemon_automation, :synthesis_runner, enabled: false
 
+# The daily brief job is reconciled from the developer's config.toml at boot;
+# `LemonAutomation.HeartbeatTest` exercises the sync explicitly instead.
+config :lemon_automation, daily_brief_sync: false
+
+# The omp delegate must never launch a developer's real `omp` or read their
+# `~/.omp`. `:executable` falls back to PATH when unset, so pin it to a path
+# that cannot exist; suites that need a binary point it at
+# `apps/lemon_omp/test/support/fake_omp` and restore it. `LEMON_OMP_*` exported
+# in the shell outranks app env, so drop it for this VM. Short timeouts keep
+# the failure paths fast.
+config :lemon_omp,
+  executable: Path.join(System.tmp_dir!(), "lemon_omp_test_no_such_dir/omp"),
+  agent_dir:
+    Path.join(
+      System.tmp_dir!(),
+      "lemon_omp_agent_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+    ),
+  ready_timeout_ms: 5_000,
+  command_timeout_ms: 2_000
+
+Enum.each(
+  ~w(LEMON_OMP_BIN LEMON_OMP_MAX_SESSIONS LEMON_OMP_IDLE_TIMEOUT_MS),
+  &System.delete_env/1
+)
+
 # Prevent unit tests from starting real/interactive transports based on a developer's
 # local TOML config. Individual test suites can override these as needed and restart
 # the application under test.
@@ -124,10 +169,7 @@ config :lemon_gateway, :executor, CodingAgent.Executor
 
 config :lemon_gateway, :telegram, nil
 
-# Keep browser.request parity tests node-only; don't try to auto-fallback to the local driver in tests.
-config :lemon_control_plane, :browser_local_fallback, false
-
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4092],
   secret_key_base:

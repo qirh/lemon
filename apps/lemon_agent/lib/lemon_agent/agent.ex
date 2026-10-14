@@ -44,7 +44,7 @@ defmodule LemonAgent.Agent do
   use GenServer
   require Logger
 
-  alias LemonAgent.AbortSignal
+  alias LemonAgent.{AbortSignal, Budget}
   alias LemonAgent.Types
   alias LemonAgent.Types.{AgentLoopConfig, AgentState}
   alias LemonAi.Types.StreamOptions
@@ -92,6 +92,10 @@ defmodule LemonAgent.Agent do
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
           max_tool_turns: pos_integer() | :infinity | nil,
+          max_tool_concurrency: pos_integer() | :infinity | nil,
+          max_retries: non_neg_integer(),
+          retry_base_delay_ms: non_neg_integer(),
+          retry_max_delay_ms: non_neg_integer(),
           tool_timeout_ms: pos_integer() | :infinity | nil,
           queue_call_timeout: timeout(),
           waiters: list(waiter())
@@ -108,7 +112,13 @@ defmodule LemonAgent.Agent do
           get_api_key: get_api_key_fn(),
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
+          budget_limits: map(),
+          budget_usage: Budget.usage(),
           max_tool_turns: pos_integer() | :infinity | nil,
+          max_tool_concurrency: pos_integer() | :infinity | nil,
+          max_retries: non_neg_integer(),
+          retry_base_delay_ms: non_neg_integer(),
+          retry_max_delay_ms: non_neg_integer(),
           tool_timeout_ms: pos_integer() | :infinity | nil,
           queue_call_timeout: timeout(),
           name: GenServer.name()
@@ -133,7 +143,14 @@ defmodule LemonAgent.Agent do
   - `:get_api_key` - Function to dynamically resolve API keys
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
-  - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback
+  - `:budget_limits` - Cumulative run/session token and estimated-dollar caps (nil = unlimited)
+  - `:budget_usage` - Initial cumulative session totals, independent of message history
+  - `:max_tool_turns` - Max assistant tool-use turns before terminal fallback, or `:infinity`
+    (default: 25; `CodingAgent.Session` passes `:infinity` unless `[runtime] max_tool_turns` is set)
+  - `:max_tool_concurrency` - Maximum overlapping calls for tools marked `parallel_safe`
+  - `:max_retries` - Transient provider retries per response (default: 3; 0 disables)
+  - `:retry_base_delay_ms` - Initial exponential retry delay (default: 2,000ms)
+  - `:retry_max_delay_ms` - Backoff cap (default: 30,000ms; explicit retry-after honored up to 120s)
   - `:tool_timeout_ms` - Optional per-tool task timeout in milliseconds
   - `:queue_call_timeout` - Timeout for loop queue polling GenServer calls (`:infinity` or ms, default: 30 minutes)
   - `:name` - Optional GenServer name
@@ -497,6 +514,12 @@ defmodule LemonAgent.Agent do
       thinking_level: Map.get(initial_state_opts, :thinking_level, :off),
       tools: Map.get(initial_state_opts, :tools, []),
       messages: Map.get(initial_state_opts, :messages, []),
+      budget_limits:
+        Keyword.get(opts, :budget_limits, Map.get(initial_state_opts, :budget_limits, %{})),
+      budget_usage:
+        Budget.normalize_usage(
+          Keyword.get(opts, :budget_usage, Map.get(initial_state_opts, :budget_usage))
+        ),
       is_streaming: false,
       stream_message: nil,
       pending_tool_calls: MapSet.new(),
@@ -527,6 +550,10 @@ defmodule LemonAgent.Agent do
       thinking_budgets: Keyword.get(opts, :thinking_budgets, %{}),
       stream_options: stream_options,
       max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
+      max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency),
+      max_retries: Keyword.get(opts, :max_retries, 3),
+      retry_base_delay_ms: Keyword.get(opts, :retry_base_delay_ms, 2_000),
+      retry_max_delay_ms: Keyword.get(opts, :retry_max_delay_ms, 30_000),
       tool_timeout_ms: Keyword.get(opts, :tool_timeout_ms),
       queue_call_timeout: queue_call_timeout,
       waiters: []
@@ -690,7 +717,7 @@ defmodule LemonAgent.Agent do
 
   # Handle steering/follow-up message requests from the loop task
   def handle_call({:get_steering_messages, abort_ref}, _from, state) do
-    if state.abort_ref == abort_ref or match?({:aborted, ^abort_ref}, state.abort_ref) do
+    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
       {messages, new_queue} = consume_queue(state.steering_queue, state.steering_mode)
       {:reply, messages, %{state | steering_queue: new_queue}}
     else
@@ -698,8 +725,12 @@ defmodule LemonAgent.Agent do
     end
   end
 
+  def handle_call({:has_steering_messages, abort_ref}, _from, state) do
+    {:reply, state.abort_ref == abort_ref and state.steering_queue != [], state}
+  end
+
   def handle_call({:get_follow_up_messages, abort_ref}, from, state) do
-    if state.abort_ref == abort_ref or match?({:aborted, ^abort_ref}, state.abort_ref) do
+    if state.abort_ref == abort_ref and not AbortSignal.aborted?(abort_ref) do
       if state.follow_up_queue != [] do
         {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
         {:reply, messages, %{state | follow_up_queue: new_queue}}
@@ -852,10 +883,6 @@ defmodule LemonAgent.Agent do
     {:noreply, state}
   end
 
-  defp abort_ref_matches?(state_abort_ref, abort_ref) do
-    state_abort_ref == abort_ref or state_abort_ref == {:aborted, abort_ref}
-  end
-
   defp queued_message(message, opts) do
     case Keyword.get(opts, :system_prompt) do
       prompt when is_binary(prompt) and prompt != "" -> %{message: message, system_prompt: prompt}
@@ -892,7 +919,9 @@ defmodule LemonAgent.Agent do
       state.agent_state
       | is_streaming: true,
         stream_message: nil,
-        error: nil
+        error: nil,
+        run_usage:
+          if(is_nil(messages), do: state.agent_state.run_usage, else: %{tokens: 0, cost_usd: 0.0})
     }
 
     # Build context for the loop
@@ -903,7 +932,7 @@ defmodule LemonAgent.Agent do
     }
 
     # Build config for the loop
-    config = build_loop_config(state, abort_ref, agent_pid)
+    config = build_loop_config(%{state | agent_state: new_agent_state}, abort_ref, agent_pid)
 
     # Emit introspection event for loop start
     model_id =
@@ -949,13 +978,29 @@ defmodule LemonAgent.Agent do
       convert_to_llm: state.convert_to_llm,
       transform_context: state.transform_context,
       get_api_key: state.get_api_key,
+      budget_limits: state.agent_state.budget_limits,
+      budget_usage: state.agent_state.budget_usage,
+      budget:
+        if Budget.enabled?(state.agent_state.budget_limits) do
+          %{
+            Budget.new(state.agent_state.budget_limits, state.agent_state.budget_usage)
+            | run_usage: state.agent_state.run_usage
+          }
+        end,
       get_steering_messages: fn ->
         GenServer.call(agent_pid, {:get_steering_messages, abort_ref}, queue_call_timeout)
+      end,
+      has_steering_messages: fn ->
+        GenServer.call(agent_pid, {:has_steering_messages, abort_ref}, queue_call_timeout)
       end,
       get_follow_up_messages: fn ->
         GenServer.call(agent_pid, {:get_follow_up_messages, abort_ref}, queue_call_timeout)
       end,
       max_tool_turns: state.max_tool_turns,
+      max_tool_concurrency: state.max_tool_concurrency,
+      max_retries: state.max_retries,
+      retry_base_delay_ms: state.retry_base_delay_ms,
+      retry_max_delay_ms: state.retry_max_delay_ms,
       tool_timeout_ms: state.tool_timeout_ms,
       stream_options: stream_options,
       stream_fn: state.stream_fn
@@ -1168,9 +1213,23 @@ defmodule LemonAgent.Agent do
     %{state | agent_state: new_agent_state}
   end
 
+  defp handle_agent_event(
+         {:usage_budget_updated, %{run_usage: run_usage, session_usage: session_usage}},
+         state
+       ) do
+    %{
+      state
+      | agent_state: %{state.agent_state | run_usage: run_usage, budget_usage: session_usage}
+    }
+  end
+
   defp handle_agent_event({:error, reason, _partial_state}, state) do
     new_agent_state = %{state.agent_state | error: normalize_error_reason(reason)}
     %{state | agent_state: new_agent_state}
+  end
+
+  defp handle_agent_event({:provider_retry, _details}, state) do
+    %{state | agent_state: %{state.agent_state | stream_message: nil, error: nil}}
   end
 
   defp handle_agent_event(_event, state), do: state
@@ -1297,7 +1356,7 @@ defmodule LemonAgent.Agent do
 
     case state.follow_up_poll do
       %{from: from, abort_ref: poll_abort_ref} = poll ->
-        if abort_ref_matches?(state.abort_ref, poll_abort_ref) do
+        if state.abort_ref == poll_abort_ref and not AbortSignal.aborted?(poll_abort_ref) do
           if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
           {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
           GenServer.reply(from, messages)
@@ -1322,6 +1381,7 @@ defmodule LemonAgent.Agent do
     {queue, []}
   end
 
+  defp normalize_error_reason({:budget_exceeded, %{message: message}}), do: message
   defp normalize_error_reason(reason) when is_binary(reason), do: reason
   defp normalize_error_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp normalize_error_reason(reason), do: inspect(reason)

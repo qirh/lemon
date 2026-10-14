@@ -56,8 +56,6 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
 
-  require Logger
-
   # ============================================================================
   # Configuration
   # ============================================================================
@@ -284,7 +282,7 @@ defmodule LemonAi.Providers.AzureOpenAIResponses do
 
   defp add_reasoning_config(params, model, opts, _messages) do
     if model.reasoning do
-      reasoning_effort = opts.reasoning || :medium
+      reasoning_effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning || :medium)
       reasoning_summary = Map.get(opts.thinking_budgets || %{}, :summary, "auto")
 
       if reasoning_effort do

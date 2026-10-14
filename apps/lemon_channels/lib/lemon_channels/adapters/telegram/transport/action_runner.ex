@@ -15,6 +15,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ActionRunner do
           optional(:process_media_group) => (map(), map() -> any()),
           optional(:send_approval_request) => (map(), map() -> any()),
           optional(:maybe_log_drop) => (map(), map(), term() -> any()),
+          optional(:reply_whoami) => (map(), map() -> any()),
+          optional(:send_unpaired_notice) => (map(), map() -> any()),
           optional(:start_async_task) => (map(), (-> any()) -> any())
         }
 
@@ -58,6 +60,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ActionRunner do
 
   defp run_action({:log_drop, inbound, reason}, state, callbacks) do
     _ = callbacks.maybe_log_drop.(state, inbound, reason)
+    state
+  end
+
+  defp run_action({:reply_whoami, inbound}, state, callbacks) do
+    _ = callbacks.reply_whoami.(state, inbound)
+    state
+  end
+
+  defp run_action({:send_unpaired_notice, inbound}, state, callbacks) do
+    _ = callbacks.send_unpaired_notice.(state, inbound)
     state
   end
 

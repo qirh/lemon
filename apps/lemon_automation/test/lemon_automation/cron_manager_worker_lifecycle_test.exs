@@ -18,6 +18,27 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
     end
   end
 
+  defmodule AcceptedRouter do
+    def submit(params) do
+      send(:persistent_term.get({CrashingSubmitter, :test_pid}), {:router_submitted, params})
+      {:ok, params.run_id}
+    end
+  end
+
+  defmodule TimeoutWaiter do
+    def wait_already_subscribed(_id, _timeout, _opts), do: :timeout
+  end
+
+  defmodule TimeoutSubmitter do
+    def submit(job, run, opts) do
+      LemonAutomation.RunSubmitter.submit(
+        job,
+        run,
+        Keyword.merge(opts, router_mod: AcceptedRouter, waiter_mod: TimeoutWaiter)
+      )
+    end
+  end
+
   setup do
     previous_submitter = Application.get_env(:lemon_automation, :cron_run_submitter)
     previous_preflight = Application.get_env(:lemon_automation, :cron_preflight_mod)
@@ -59,17 +80,22 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
     {:ok, job: job}
   end
 
-  test "submitter crash is terminalized immediately from the monitor", %{job: job} do
+  test "submitter crash retains router ownership for reconciliation", %{job: job} do
     assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
     assert_receive {:submitter_started, job_id, ^run_id}, 1_000
     assert job_id == job.id
 
     assert eventually(fn ->
-             match?(%CronRun{status: :failed}, CronStore.get_run(run_id))
+             match?(
+               %CronRun{status: :running, meta: %{outcome_unknown: true}},
+               CronStore.get_run(run_id)
+             )
            end)
 
     run = CronStore.get_run(run_id)
-    assert run.error =~ "submitter_boom"
+    assert run.error == "completion_outcome_unknown"
+    assert is_binary(run.run_id)
+    assert {:error, :outcome_unknown} = CronManager.run_now(job.id)
     assert Process.alive?(Process.whereis(CronManager))
 
     assert Enum.any?(CronStore.list_audit_events(run_id: run_id), fn event ->
@@ -95,7 +121,38 @@ defmodule LemonAutomation.CronManagerWorkerLifecycleTest do
            end)
   end
 
-  defp eventually(fun, attempts \\ 100)
+  test "accepted coding timeout cannot schedule duplicate retries and keeps its session link", %{
+    job: job
+  } do
+    Application.put_env(:lemon_automation, :cron_run_submitter, TimeoutSubmitter)
+
+    {:ok, job} =
+      CronManager.update(job.id, %{cwd: System.tmp_dir!(), max_retries: 2, retry_backoff_ms: 0})
+
+    due_job = %{job | next_run_at_ms: LemonCore.Clock.now_ms() - 1}
+    CronStore.put_job(due_job)
+    :sys.replace_state(CronManager, &put_in(&1.jobs[job.id], due_job))
+    CronManager.tick()
+
+    assert_receive {:router_submitted, params}, 1_000
+    assert params.cwd == Path.expand(System.tmp_dir!())
+    cron_id = params.meta.cron_run_id
+
+    assert eventually(fn ->
+             match?(%CronRun{meta: %{outcome_unknown: true}}, CronStore.get_run(cron_id))
+           end)
+
+    persisted = CronStore.get_run(cron_id)
+    assert persisted.run_id == params.run_id
+    assert persisted.meta.router_session_key == params.session_key
+    assert persisted.meta.retry_attempt == 0
+    assert is_nil(persisted.meta[:retry_due_at_ms])
+    CronManager.tick()
+    refute_receive {:router_submitted, _}, 100
+    assert length(CronStore.list_runs(job.id)) == 1
+  end
+
+  defp eventually(fun, attempts \\ 500)
   defp eventually(_fun, 0), do: false
 
   defp eventually(fun, attempts) do

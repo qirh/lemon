@@ -1,7 +1,7 @@
 # Contributing to Lemon
 
 Thank you for your interest in contributing. Lemon is a BEAM-native platform for
-building agents, and the parts that are easiest to extend — channels, engines,
+building agents, and the parts that are easiest to extend — channels, tools,
 storage, memory — are the parts we most want contributions to. This guide gets
 you from a clone to a merged extension.
 
@@ -15,18 +15,13 @@ If you only read one section, read [Your first contribution](#your-first-contrib
 
 ## Prerequisites
 
-- **Elixir 1.19 / OTP 28.** The umbrella dev build requires Elixir `~> 1.19` (pinned to
-  1.19.5 / OTP 28.5 in `.tool-versions`, same as CI). The published packages declare a lower
-  `~> 1.15` floor for *consumers*, but building this repo needs 1.19 — 15 of the umbrella apps
-  require it, so an older Elixir will fail at compile.
-- **A version manager** (`asdf` or `mise`) is the easy way to get that toolchain; the Quick Start
-  assumes one is installed. Or install Elixir 1.19.5 / OTP 28 directly.
+- **Elixir 1.19.5+ / OTP 28.5+.** The source toolchain is pinned in
+  `.tool-versions`, as in CI. Package release prerequisites are documented
+  separately in the [package release instructions](docs/release/hex-packages.md).
+- **A version manager** (`asdf` or `mise`) can install the pinned toolchain.
 - **A C toolchain** (`cc`/`gcc` + `make`). The SQLite-backed store compiles `exqlite`'s native
   NIF from C source, so `mix compile` needs a working compiler — `build-essential` on Debian/Ubuntu,
   `base-devel` on Arch, Xcode command-line tools on macOS.
-
-A clean checkout to a green `mix lemon.doctor` is about 2-3 minutes on a warm Hex cache (a
-first-ever `mix deps.get` downloads ~73 packages, so budget a little more cold).
 
 ## Quick Start
 
@@ -45,11 +40,12 @@ Full setup: [`docs/user-guide/setup.md`](docs/user-guide/setup.md)
 ```bash
 scripts/test fast                 # compile with warnings as errors + ExUnit excluding integration
 scripts/test path apps/lemon_core/test
-scripts/test quality              # lint + architecture boundaries + doc freshness
+scripts/test quality              # format, credo, skip guard, docs links, architecture boundaries
 ```
 
-`scripts/test quality` runs the same `mix lemon.quality` lane CI runs, and it is
-the gate most PRs need to pass. See [`docs/testing.md`](docs/testing.md) for the
+CI (`.github/workflows/ci.yml`) runs `scripts/test quality`, `scripts/test fast`,
+and `scripts/test clients` on every PR and push to main, so the same commands pass
+locally and in CI. See [`docs/testing.md`](docs/testing.md) for the
 canonical local test lanes and how they map to CI.
 
 ## Your first contribution
@@ -67,6 +63,10 @@ repo or in your own. Here is the whole on-ramp:
    mix archive.install lemon_new-0.1.0.ez
    mix lemon.new my_agent
    ```
+
+   (`mix lemon.new my_agent --hex` depends on the published Hex packages
+   instead of this checkout; it cannot be combined with `--channel`, and
+   resolves once 0.2.0 is on hex.pm.)
 
 2. **Follow the guide.** [Add a channel](docs/getting-started/add-a-channel.md)
    walks from the console loop the generator gives you to a registered
@@ -87,10 +87,11 @@ shaped to receive.
 
 ## Extension points
 
-Every extension point is a behaviour with a published compliance suite in the
-`lemon_platform_test` kit. Implement the behaviour, then run the matching case
-against your module — the suite is the specification in executable form, so a
-green run is most of what a reviewer needs.
+Extension behaviours have matching compliance suites in the
+`lemon_platform_test` kit. Implement the behaviour, then exercise its documented
+invariants with the matching case. The kit's five-package release set is at
+0.2.0 in this repository but is not yet published; `PluginCase` also requires
+the in-repository `lemon_channels`. See [package status](docs/platform-split.md).
 
 | You want to add | Implement | Compliance suite | Guide |
 |-----------------|-----------|------------------|-------|
@@ -157,7 +158,7 @@ Use `LemonCore.Config.Features.enabled?/2` — not `System.get_env`.
 
 ## Skills and Generated Artifacts
 
-- Skills live in `~/.lemon/agent/skills/` or `<project>/.lemon/skills/`
+- Skills use the directories described in [the skills guide](docs/user-guide/skills.md).
 - Auto-generated skill drafts must go through human review before promotion
 - Do not commit skill draft files or personal `~/.lemon/` content
 
@@ -166,12 +167,12 @@ Use `LemonCore.Config.Features.enabled?/2` — not `System.get_env`.
 - Branch from `main`; branch name: `<type>/<short-description>`
 - PRs require approval from the CODEOWNERS of affected files
 - Cross-cutting changes (`mix.exs`, shared schemas) require `@z80` sign-off
-- `mix lemon.quality` must be green (lint + architecture boundaries + doc freshness)
-- Register any new docs files under `docs/` in `docs/catalog.exs`
-- **Changed a published package's `lib/`?** Add an entry to that package's
-  `CHANGELOG.md` in the same PR — the change is visible to third parties who
-  installed it from Hex. A CI job annotates PRs that miss this (advisory, per
-  `docs/platform-split.md` §4.4); it does not block the merge, but reviewers do.
+- `scripts/test quality` must be green (lint + docs links + architecture boundaries)
+- **Changed a package target's public behavior?** (`lemon_ai`, `lemon_core`,
+  `lemon_agent`, `lemon_memory`, `lemon_platform_test`.) Update that package's
+  changelog and the canonical documentation describing the change. Root/app
+  guides need changes only when their operational invariants change, not as
+  additional copies of every API or user-guide update.
 
 The [pull request template](.github/pull_request_template.md) has the full
 checklist.

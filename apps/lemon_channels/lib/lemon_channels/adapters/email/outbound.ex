@@ -308,13 +308,7 @@ defmodule LemonChannels.Adapters.Email.Outbound do
   defp put_attachments(mail, []), do: mail
 
   defp put_attachments(mail, paths) do
-    Enum.reduce(paths, mail, fn path, acc ->
-      try do
-        Mail.put_attachment(acc, path)
-      rescue
-        _ -> acc
-      end
-    end)
+    Enum.reduce(paths, mail, fn path, acc -> Mail.put_attachment(acc, path) end)
   end
 
   defp send_message(envelope, message) when is_binary(message) do
@@ -360,8 +354,6 @@ defmodule LemonChannels.Adapters.Email.Outbound do
     |> Config.first_defined([[:outbound, :timeout], :smtp_timeout])
     |> int_value(@default_delivery_timeout_ms)
   end
-
-  defp delivery_timeout(_cfg), do: @default_delivery_timeout_ms
 
   # ---------------------------------------------------------------------------
   # HTML rendering

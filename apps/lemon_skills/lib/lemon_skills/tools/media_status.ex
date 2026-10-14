@@ -2,8 +2,7 @@ defmodule LemonSkills.Tools.MediaStatus do
   @moduledoc """
   Read-only media job status for model-facing agent loops.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. Requires no external credentials; it reads
+  Wired into CodingAgent.ToolRegistry's builtin tool list. Requires no external credentials; it reads
   local LemonMedia job state and worker supervisor state.
   """
 

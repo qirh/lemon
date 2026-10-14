@@ -103,7 +103,8 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: env_fallback) do
       {:ok, value, _source} ->
         case OAuthSecretResolver.resolve_api_key_from_secret(secret_name, value,
-               persist_secret: &persist_oauth_secret/2
+               persist_secret: &persist_oauth_secret/2,
+               reload_secret: &reload_secret(&1, env_fallback: env_fallback)
              ) do
           {:ok, resolved_api_key} ->
             resolved_api_key
@@ -112,8 +113,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
             non_empty_binary(value)
 
           {:error, reason} ->
-            Logger.debug("Failed to resolve OAuth secret #{secret_name}: #{inspect(reason)}")
-            non_empty_binary(value)
+            # The value is a recognised OAuth payload that could not be used
+            # (refresh or persistence failed); it is not an API key.
+            Logger.warning(
+              "Failed to resolve OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
+            )
+
+            nil
         end
 
       _ ->
@@ -466,6 +472,9 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end
   end
 
+  # A configured or stored Lemon login fails closed: when it exists but cannot
+  # produce a token (rejected refresh, persistence failure), resolution returns
+  # no credential instead of switching to ambient Claude Code tokens.
   defp resolve_anthropic_oauth_key(provider_cfg) do
     secret_name =
       first_non_empty_binary([
@@ -481,15 +490,16 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
     cond do
       present_value?(secret_name) ->
-        resolve_anthropic_oauth_secret(secret_name)
+        case resolve_anthropic_oauth_secret(secret_name) do
+          {:ok, api_key} -> api_key
+          _ -> nil
+        end
 
       present_value?(default_secret_name) ->
         case resolve_anthropic_oauth_secret(default_secret_name) do
-          value when is_binary(value) and value != "" ->
-            value
-
-          _ ->
-            resolve_anthropic_access_token()
+          {:ok, api_key} -> api_key
+          :error -> nil
+          _missing_or_not_oauth -> resolve_anthropic_access_token()
         end
 
       true ->
@@ -501,28 +511,45 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} ->
         case LemonAi.Auth.AnthropicOAuth.resolve_api_key_from_secret(secret_name, value,
-               persist_secret: &persist_anthropic_secret/2
+               persist_secret: &persist_anthropic_secret/2,
+               reload_secret: &reload_secret(&1, env_fallback: false)
              ) do
           {:ok, resolved_api_key} ->
-            resolved_api_key
+            {:ok, resolved_api_key}
 
           :ignore ->
             Logger.warning(
               "Anthropic OAuth secret #{secret_name} is not a recognized Anthropic OAuth payload"
             )
 
-            nil
+            :not_oauth
+
+          {:error, :reauth_required} ->
+            Logger.warning(
+              "Anthropic rejected the Claude login refresh in #{secret_name}; " <>
+                "run `lemon model anthropic` to sign in again"
+            )
+
+            :error
 
           {:error, reason} ->
             Logger.warning(
-              "Failed to resolve Anthropic OAuth secret #{secret_name}: #{inspect(reason)}"
+              "Failed to resolve Anthropic OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
             )
 
-            nil
+            :error
         end
 
       _ ->
-        nil
+        :missing
+    end
+  end
+
+  # Lets an OAuth helper re-read a secret under its refresh lock.
+  defp reload_secret(secret_name, opts) do
+    case resolve_secret_value(secret_name, prefer_env: false, env_fallback: opts[:env_fallback]) do
+      {:ok, value, _source} -> {:ok, value}
+      _ -> :error
     end
   end
 
@@ -554,8 +581,6 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end
   end
 
-  defp resolve_raw_secret_api_key(_), do: nil
-
   defp resolve_anthropic_raw_secret_api_key(secret_name) when is_binary(secret_name) do
     case resolve_secret_value(secret_name, prefer_env: false, env_fallback: false) do
       {:ok, value, _source} when is_binary(value) and value != "" ->
@@ -580,8 +605,6 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         nil
     end
   end
-
-  defp resolve_anthropic_raw_secret_api_key(_), do: nil
 
   defp resolve_openai_codex_onboarding_access_token(secret_name, secret_value)
        when is_binary(secret_name) and is_binary(secret_value) do
@@ -748,19 +771,13 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     end)
   end
 
-  defp env_first(_), do: nil
-
   defp first_non_empty_binary(list) when is_list(list) do
     Enum.find(list, &present_value?/1)
   end
 
-  defp first_non_empty_binary(_), do: nil
-
   defp non_empty_binary(value) when is_binary(value) do
     if String.trim(value) == "", do: nil, else: value
   end
-
-  defp non_empty_binary(_), do: nil
 
   defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
   defp present_value?(_), do: false
@@ -784,18 +801,25 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       )
   end
 
+  # Persistence results are returned, not swallowed: a refreshed OAuth secret
+  # that was not stored (for example `{:error, :secrets_locked}` during a key
+  # rotation) must fail the resolution rather than strand a rotated refresh
+  # token.
   defp persist_oauth_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "ai_oauth")
-    :ok
   end
 
   defp persist_openai_codex_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "openai_codex_oauth")
-    :ok
   end
 
   defp persist_anthropic_secret(secret_name, encoded_secret) do
     Secrets.set(secret_name, encoded_secret, provider: "anthropic_oauth")
-    :ok
   end
+
+  # Error terms from OAuth helpers can carry provider response bodies; log only
+  # their leading tag.
+  defp safe_reason(reason) when is_atom(reason), do: reason
+  defp safe_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
+  defp safe_reason(_reason), do: :unknown
 end

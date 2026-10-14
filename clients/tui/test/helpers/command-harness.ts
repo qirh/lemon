@@ -15,7 +15,7 @@ import { createCommandRegistry } from "../../src/commands/index.ts";
 import { FakeControlPlane, type FakeControlPlaneOptions } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
-import type { ChatHistoryMessage } from "../../src/protocol/types.ts";
+import type { ChatHistoryMessage, SessionsContextResult } from "../../src/protocol/types.ts";
 import type { SubmissionMode } from "../../src/store/app-store.ts";
 import { AppStore } from "../../src/store/app-store.ts";
 import type { NoticeLevel } from "../../src/store/transcript-model.ts";
@@ -42,6 +42,7 @@ export class RecordingHost implements CommandHost {
 	readonly forgottenProfiles: Array<{ profileId: string; sessionKey: string }> = [];
 	readonly createdSessions: Array<{ sessionKey?: string; prompt?: string }> = [];
 	readonly forgottenSessions: string[] = [];
+	readonly contextPanels: SessionsContextResult[] = [];
 
 	notice(text: string, level: NoticeLevel = "info"): void {
 		this.notices.push({ text, level });
@@ -115,6 +116,10 @@ export class RecordingHost implements CommandHost {
 
 	forgetDeletedSession(sessionKey: string): void {
 		this.forgottenSessions.push(sessionKey);
+	}
+
+	openContextPanel(usage: SessionsContextResult): void {
+		this.contextPanels.push(usage);
 	}
 
 	/** Every notice body joined, for `toContain` assertions. */

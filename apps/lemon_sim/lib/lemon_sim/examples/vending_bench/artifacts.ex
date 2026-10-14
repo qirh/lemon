@@ -1,13 +1,44 @@
 defmodule LemonSim.Examples.VendingBench.Artifacts do
   @moduledoc false
 
+  @behaviour LemonSim.Bench.Artifacts.Replay
+
   alias LemonSim.Bench.Artifacts.Bundle
-  alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Performance, Replay}
+  alias LemonSim.Bench.Artifacts.Replay, as: BenchReplay
+  alias LemonSim.Examples.VendingBench
+  alias LemonSim.Examples.VendingBench.{ArtifactRegistry, Performance, Replay, Updater}
   alias LemonSim.LLM.Usage
 
   @default_artifact_root "apps/lemon_sim/priv/game_logs/vending_bench"
   @sim_version "2.0.0"
   @deterministic_artifact_timestamp "1970-01-01T00:00:00Z"
+  # Run-identity labels stamped before the first turn and never touched by
+  # the updater; replay copies them from final_world.json.
+  @runtime_identity_fields [:operator_model, :physical_worker_model, :runtime_models]
+
+  @impl BenchReplay
+  def replay_updater, do: Updater
+
+  @impl BenchReplay
+  def replay_initial_state(
+        %{"sim_id" => sim_id, "seed" => seed, "max_days" => max_days},
+        final_world
+      )
+      when is_binary(sim_id) and is_integer(seed) and is_integer(max_days) do
+    state = VendingBench.initial_state(sim_id: sim_id, seed: seed, max_days: max_days)
+
+    world =
+      Enum.reduce(@runtime_identity_fields, state.world, fn key, world ->
+        Map.put(world, key, Map.get(final_world, Atom.to_string(key)))
+      end)
+
+    {:ok, %{state | world: world}}
+  end
+
+  def replay_initial_state(_config, _final_world), do: {:error, :invalid_replay_config}
+
+  @impl BenchReplay
+  def replay_finalize(state), do: state
 
   def write_run_artifacts(state, events, actions, opts) do
     artifact_dir =
@@ -75,6 +106,16 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
       paths.report => report
     }
 
+    contents =
+      case BenchReplay.recording_from_opts(opts) do
+        %{batches: batches} ->
+          inputs_path = Path.join(artifact_dir, "inputs.jsonl")
+          Map.put(contents, inputs_path, BenchReplay.inputs_jsonl(batches))
+
+        nil ->
+          contents
+      end
+
     Bundle.write_contents!(contents)
 
     {:ok, _replay_paths} =
@@ -116,21 +157,17 @@ defmodule LemonSim.Examples.VendingBench.Artifacts do
   end
 
   defp tool_schema_artifact(state, opts) do
-    case LemonSim.Examples.VendingBench.ActionSpace.tools(state, opts) do
-      {:ok, tools} ->
-        tools
-        |> Enum.map(fn tool ->
-          %{
-            name: tool.name,
-            description: tool.description,
-            parameters: tool.parameters
-          }
-        end)
-        |> Enum.sort_by(& &1.name)
+    {:ok, tools} = LemonSim.Examples.VendingBench.ActionSpace.tools(state, opts)
 
-      _ ->
-        []
-    end
+    tools
+    |> Enum.map(fn tool ->
+      %{
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters
+      }
+    end)
+    |> Enum.sort_by(& &1.name)
   end
 
   defp config_artifact(state, opts, tool_schemas, prompts) do

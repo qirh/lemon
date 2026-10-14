@@ -7,7 +7,7 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.AgentRuntime
+  alias LemonCore.AgentRuntime
 
   @default_limit 100
   @max_limit 200
@@ -271,13 +271,9 @@ defmodule LemonControlPlane.Methods.TasksActiveList do
     |> Enum.find_value(&extract_reasoning_from_term/1)
   end
 
-  defp latest_reasoning(_events), do: nil
-
   defp reasoning_count(events) when is_list(events) do
     Enum.count(events, &(extract_reasoning_from_term(&1) != nil))
   end
-
-  defp reasoning_count(_events), do: 0
 
   defp extract_reasoning_from_term(%{__struct__: _} = struct) do
     struct

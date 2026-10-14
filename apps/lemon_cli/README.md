@@ -1,11 +1,9 @@
 # Lemon CLI
 
-`lemon_cli` is the user-facing command boundary for packaged Lemon releases.
-`LemonCli.CLI.main/1` is the one process-halting boundary: it receives the
-forwarded argument vector from the release launcher and turns dispatch results
-into exit codes. Its non-halting `run/1` and command handlers are shared by
-tests and source-checkout Mix adapters, so release commands do not depend on
-Mix at runtime.
+`lemon_cli` is the user-facing command boundary for source and packaged Lemon.
+`LemonCli.CLI.main/1` receives the forwarded argument vector from either
+launcher and turns dispatch results into exit codes. Its non-halting `run/1`
+and Mix-free runtime command handlers are shared by both installation paths.
 
 The runtime CLI is included in `lemon_runtime_min` and `lemon_runtime_full`
 artifacts. The `sim_broadcast_platform` artifact intentionally does not bundle
@@ -28,48 +26,93 @@ user-visible rules:
 
 Use the same command nouns in an installed release and a source checkout.
 Installed releases use `lemon`; a checkout uses the matching `./bin/lemon`
-wrapper. Direct Mix tasks remain contributor-level alternatives, not the
-recommended commands for users of a packaged release.
+wrapper. The command table shows launcher commands separately from commands
+dispatched by `LemonCli.CLI`.
 
-Packaged and Mix `secrets check` / `secrets import-env` commands read the same
-ordered environment-secret names from `LemonCore.Secrets.EnvCatalog`, keeping
-release and source-checkout behavior aligned.
+Packaged and source `secrets check` / `secrets import-env` commands read the
+same ordered environment-secret names from `LemonCore.Secrets.EnvCatalog`.
 
 External 1Password, Bitwarden Secrets Manager, and command sources remain
 read-only fallbacks behind the encrypted Lemon store. Their source and packaged
 diagnostics share `lemon secrets sources status|test`; both surfaces report
 only readiness, stable provenance, counts, byte counts, and error kinds.
 
-| Purpose | Installed release | Source checkout | Contributor Mix adapter |
-| --- | --- | --- | --- |
-| First-time setup | `lemon setup` | `./bin/lemon setup` | `mix lemon.setup` |
-| Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` | `mix lemon.onboard anthropic` |
-| Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` | `mix lemon.setup gateway` |
-| Diagnostics | `lemon doctor` | `./bin/lemon doctor` | `mix lemon.doctor` |
-| Open the local Web UI | `lemon web` | `./bin/lemon web` | Start the full runtime directly |
-| Validate/show config | `lemon config validate` | `./bin/lemon config validate` | `mix lemon.config validate` |
-| Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` | `mix lemon.secrets.status` |
-| Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` | Use the same Mix-free command boundary |
-| Inspect channel readiness | `lemon channels` | `./bin/lemon channels` | `mix lemon.channels` |
-| Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` | `mix lemon.providers` (read-only) |
-| Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` | Use the same control-plane command boundary |
-| Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` | Call `LemonCli.CLI.run/1` from contributor tooling |
-| Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` | Use the same packaged command boundary |
-| Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` | Call `LemonCore.Context` from IEx/tests |
-| Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` | Call `LemonCore.SessionLifecycle` from IEx/tests |
-| Review/confirm learning from bounded sources | `lemon learn '@file:guide.md'` | `./bin/lemon learn '@file:guide.md'` | Call `LemonSkills.Learn.review/2` from IEx/tests |
-| Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) | `mix lemon.update` remains source maintenance |
-| Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` | Call `LemonCli.CompletionCommand.render/2` from IEx/tests |
+| Purpose | Installed release | Source checkout |
+| --- | --- | --- |
+| Start TUI (interactive no-argument launch) | `lemon` | `./bin/lemon` |
+| Foreground runtime | `lemon start` | `./bin/lemon start` |
+| Non-interactive coding | `lemon -p "prompt"` or `lemon run` | `./bin/lemon -p "prompt"` or `./bin/lemon run` |
+| ACP over stdio | `lemon acp` | `./bin/lemon acp` |
+| Register native Tern integration | `lemon tern install` | `./bin/lemon tern install` |
+| Background runtime | `lemon daemon` | `./bin/lemon daemon` |
+| First-time setup | `lemon setup` | `./bin/lemon setup` |
+| Configure a model provider | `lemon model --provider anthropic` | `./bin/lemon model --provider anthropic` |
+| Configure Telegram or Discord | `lemon gateway setup` | `./bin/lemon gateway setup` |
+| Diagnostics | `lemon doctor` | `./bin/lemon doctor` |
+| Open the local Web UI | `lemon web` | `./bin/lemon web` |
+| Validate/show config | `lemon config validate` | `./bin/lemon config validate` |
+| Manage encrypted secrets | `lemon secrets status` | `./bin/lemon secrets status` |
+| Inspect/test external secret sources | `lemon secrets sources status` | `./bin/lemon secrets sources test` |
+| Rotate the secrets master key | `lemon secrets rotate-key` | `./bin/lemon secrets rotate-key` |
+| Inspect channel configuration | `lemon channels` | `./bin/lemon channels` |
+| Inspect/edit provider routing | `lemon providers status|fallback|pool` | `./bin/lemon providers status|fallback|pool` |
+| Review/activate cataloged blueprints | `lemon blueprints daily-note --profile operator` | `./bin/lemon blueprints daily-note --profile operator` |
+| Back up or restore durable user state | `lemon backup create` | `./bin/lemon backup create` |
+| Manage specialist profiles | `lemon profile list` | `./bin/lemon profile list` |
+| Preview/resolve bounded context | `lemon context preview|resolve ...` | `./bin/lemon context preview|resolve ...` |
+| Manage durable sessions | `lemon sessions list` | `./bin/lemon sessions list` |
+| Review/confirm learning from bounded sources | `lemon learn '@file:guide.md'` | `./bin/lemon learn '@file:guide.md'` |
+| Migrate Hermes data | `lemon migrate hermes audit` | `./bin/lemon migrate hermes audit` |
+| Join a named execution node | `lemon node join ...` | `./bin/lemon node join ...` |
+| Print version | `lemon version` | `./bin/lemon version` |
+| Safely update a managed release | `lemon update plan|apply|history|rollback` | `./bin/lemon update check|history` (binary mutation fails closed) |
+| Generate shell completion | `lemon completion zsh` | `./bin/lemon completion zsh` |
+| Send channel notifications | `lemon send --to telegram:123 "hello"` | `./bin/lemon send --to telegram:123 "hello"` |
+| Inspect media, models, policies, skills, and usage | `lemon media`, `models`, `policy`, `skill`, `usage` | `./bin/lemon media`, `models`, `policy`, `skill`, `usage` |
+
+Blueprint and profile-chat commands start the local runtime through the
+launcher when it is not already healthy, in both source checkouts and packaged
+releases.
+
+`mix lemon.update` remains a source-maintenance task for config migration and
+bundled-skill sync; it is not reachable as `./bin/lemon update`.
+The removed Hermes-specific Mix tasks are deleted; use the unified migration
+CLI above.
 
 ## Command registry and completion
 
-`LemonCli.CommandRegistry` is the single source for Mix-free runtime-family
-dispatch, top-level help, command help, and shell completion metadata. It
-contains setup, model, gateway, doctor, config, secrets (including external
-source diagnostics), channels, providers, blueprints, profile, backup, context,
-sessions, update, and completion. Launcher-only
-metadata is separated into source and release sets so generated scripts never
-advertise commands the current launcher cannot run.
+`LemonCli.CommandRegistry` is the single registry for CLI dispatch, top-level
+and command help, and shell completion metadata. Every CLI family is available
+in source and packaged runtimes, including `send`, `media`, `models`, `policy`,
+`skill`, and `usage`. These commands use Mix-free modules in their owning apps;
+their existing Mix tasks are thin source-development adapters.
+
+Lifecycle commands are registry entries too (for help and completion), but the
+launcher shell executes them: `tui`, `web`, `start`, `daemon`, `stop`,
+`restart`, and `status` work in both launchers; `remote`, `eval`, and `rpc` are
+release-only. Reaching a lifecycle command inside `LemonCli.CLI` is a usage
+error. Both launchers export `LEMON_CLI_LAUNCHER` (`source` or `release`) for
+availability filtering and `LEMON_LAUNCHER` (their own path) so
+`LemonCli.LocalRuntime` can run `$LEMON_LAUNCHER daemon` when a command needs
+the runtime.
+
+Source startup probes the local daemon before compiling, never installs or
+updates dependencies, and compiles only once on a cold interactive launch.
+Install source dependencies explicitly with `mix deps.get` before launching.
+An already healthy daemon is reused without a Mix or distributed-node boot.
+
+Source runtime state is private and port-scoped:
+`~/.lemon/run/lemon-PORT.pid`, `lemon-PORT.log`, and `lemon-PORT.lock`.
+`LEMON_RUNTIME_PID_FILE` and `LEMON_RUNTIME_LOG_FILE` can override the first two.
+Concurrent starts serialize on the lock; abandoned locks with a dead recorded
+owner are reclaimed. An empty lock is not automatically deleted: inspect it
+and remove it only after confirming there is no startup in progress.
+An occupied non-Lemon control port fails immediately with a port-selection fix.
+An alive but unhealthy managed runtime requires inspection of its log and an
+explicit stop, rather than starting another daemon. Stop verifies the process
+start identity in the pid record before sending a signal, so stale/reused PIDs
+cannot terminate an unrelated process. Select the same
+`LEMON_CONTROL_PLANE_PORT` for start, stop, restart, and status.
 
 ## Safe managed-release updates
 
@@ -96,9 +139,8 @@ installation examples.
 `lemon blueprints` is a Mix-free client for the authenticated local control
 plane. It accepts only catalog IDs below the canonical `~/.lemon/bundles`
 boundary; arbitrary roots, paths, archives, scripts, command jobs, environment
-overrides, and secret values are not CLI inputs. A source checkout needs its
-unified runtime running first (`./bin/lemon --daemon`); the packaged launcher
-starts its daemon when necessary.
+overrides, and secret values are not CLI inputs. Both launchers start the local
+runtime when it is not already healthy.
 
 ```bash
 lemon blueprints                         # bounded catalog list
@@ -230,12 +272,10 @@ and redaction counts. There is no CLI switch to include secrets.
 
 Lifecycle commands run in the release CLI's fresh, non-booted VM. Canonical
 chat is different: it must outlive that one-shot process, so the CLI connects
-to the authenticated loopback control plane and calls `profile.chat`. The
-packaged launcher starts the daemon when needed; source users start
-`./bin/lemon --daemon` before `./bin/lemon profile chat`. The request sends only
-the profile ID, prompt, queue mode, and optional model override—working
-directory and execution node are resolved again from the profile by the
-long-running runtime.
+to the authenticated loopback control plane and calls `profile.chat`. Both
+launchers start the daemon when needed. The request sends only the profile ID,
+prompt, queue mode, and optional model override—working directory and execution
+node are resolved again from the profile by the long-running runtime.
 
 The direct in-VM submission path assigns a run ID before calling the router. If
 acceptance cannot be confirmed, `profile chat` prints that safe run reference,
@@ -285,11 +325,33 @@ key only when it is absent, skips a provider that is already usable, and
 re-derives state before reporting the final result. It never replaces an
 existing config or secrets master key.
 
+The full wizard makes the onboarded provider/model the default automatically;
+accepting prompts no longer stores a credential while leaving coding unusable.
+Choose **OpenAI Codex → Sign in with ChatGPT** for a ChatGPT subscription, or run
+`lemon setup --provider chatgpt` directly. OAuth remains interactive. For scripts,
+`lemon setup --non-interactive --provider openai --token "$OPENAI_API_KEY" --model gpt-5 --skip-verify`
+creates config/secrets, stores the credential, and sets defaults without asking
+questions. Omit `--skip-verify` to verify online. Incomplete setup exits nonzero;
+rerunning an already configured setup preserves credentials and does not sign
+in again.
+
+`lemon doctor` fails when the selected default has a missing/mismatched model or
+an unreadable credential, rather than accepting the mere presence of a secret
+reference. It reports offline credential usability, not an unperformed API
+login check. An occupied control-plane port that does not return Lemon's health
+body is a failure with an explicit stop/change-port remedy.
+
 When setup onboards a provider, it always performs offline configuration checks
 and performs the provider's live credential check by default. Use
 `lemon setup --skip-verify` or `lemon setup provider --skip-verify` only to
 defer that live check when offline; a failed verification is not reported as a
 completed setup.
+
+After a usable provider, setup offers an opt-in daily brief (default off). It
+writes `[automation] daily_brief = "HH:MM"` (server-local time) to the global
+config; the runtime reconciles the brief job at its next boot. Non-interactive
+runs skip the question unless `--daily-brief HH:MM` is passed. An existing
+`daily_brief` is only reported, never replaced.
 
 The derived state lives in `LemonCore.Setup.Readiness`, so the setup wizard,
 first-run TUI gate, and Web UI agree on exactly what is missing. The browser is
@@ -312,8 +374,11 @@ and secrets may not exist yet or when live provider verification is required.
 `lemon gateway setup` provides interactive and non-interactive adapters for
 both supported messaging gateways:
 
-- `telegram` stores a Telegram bot token in encrypted secrets and verifies it
-  with the Telegram Bot API.
+- `telegram` stores a Telegram bot token in encrypted secrets, verifies it with
+  `getMe`, pairs the owner's chat (send `/start` to the bot; setup polls
+  `getUpdates` for up to `--pair-timeout` seconds, default 120), and writes
+  `enable_telegram`, `bot_token_secret`, and `allowed_chat_ids` to
+  `[gateway.telegram]`. Non-interactive runs require `--chat-id` (repeatable).
 - `discord` stores a Discord bot token in encrypted secrets, enables Discord,
   writes its secret reference and a default/allowed channel scope to
   `[gateway.discord]`, and verifies the token with Discord's bot identity API.
@@ -326,6 +391,10 @@ lemon gateway setup
 lemon gateway setup telegram
 lemon gateway setup discord
 
+# Scripted Telegram pairing without waiting for /start.
+lemon gateway setup telegram --non-interactive \
+  --token "$TELEGRAM_BOT_TOKEN" --chat-id 12345678
+
 # Source checkout: use the matching wrapper.
 ./bin/lemon gateway setup discord --non-interactive \
   --token "$DISCORD_BOT_TOKEN" \
@@ -333,7 +402,8 @@ lemon gateway setup discord
   --allowed-channel-id 234567890123456789
 ```
 
-The Discord token is persisted as `discord_bot_token` by default and only its
+The Telegram token is persisted as `telegram_bot_token` by default. The
+Discord token is persisted as `discord_bot_token` by default and only its
 secret key is written to TOML. Pass `--secret-key <name>` to use another key,
 `--allowed-guild-id <id>` to restrict by guild as well, or `--skip-smoke` when
 the Discord API identity check cannot be reached.
@@ -347,13 +417,15 @@ choose another option, or enter `q` to cancel. The same selector is used for
 providers, authentication methods, models, and confirmation prompts, so setup
 does not switch the terminal between cooked and raw modes.
 
-Anthropic provider auth supports API keys or Claude subscription OAuth. Raw API
-keys live in `llm_anthropic_api_key_raw` and should be referenced by
-`providers.anthropic.api_key_secret`. OAuth-backed Claude Max usage keeps using
-`llm_anthropic_api_key` plus `providers.anthropic.auth_source = "oauth"` /
-`providers.anthropic.oauth_secret`, and Lemon prefers refreshable Claude Code
-credentials from `~/.claude/.credentials.json` over a stale static
-`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_TOKEN`.
+Anthropic provider auth supports API keys or a Claude Pro/Max subscription
+login. Raw API keys live in `llm_anthropic_api_key_raw` and are referenced by
+`providers.anthropic.api_key_secret`. Browser sign-in (`lemon model anthropic`)
+stores a refreshable login in `llm_anthropic_api_key`, referenced by
+`providers.anthropic.auth_source = "oauth"` and `oauth_secret`. It listens on
+`http://localhost:53692/callback`; when that port is busy it uses Anthropic's
+hosted code page and asks for the pasted `code#state`. `lemon model PROVIDER
+--status` and `--logout` (implemented by `LemonCli.Setup.ProviderAuth`) show
+and remove OAuth logins. See the [CLI guide](../../docs/user-guide/cli.md).
 
 OpenAI Codex browser sign-in starts a temporary loopback HTTP listener before
 opening the authorization URL. The listener binds the redirect URI's port
@@ -366,15 +438,15 @@ falls back to accepting the callback URL or authorization code manually.
 # Installed release
 lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
 lemon model --provider gemini --project-id your-gcp-project
-lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+lemon model --provider openai-codex --token <token> --set-default --model gpt-6.1-sol
 lemon model --provider github-copilot --enterprise-domain company.ghe.com
 
 # Source checkout
 ./bin/lemon model --provider antigravity --token <token> --set-default --model gemini-3-pro-high
 ./bin/lemon model --provider gemini --project-id your-gcp-project
-./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-5.2
+./bin/lemon model --provider openai-codex --token <token> --set-default --model gpt-6.1-sol
 ./bin/lemon model --provider github-copilot --enterprise-domain company.ghe.com
 
 # Contributors can invoke the underlying Mix task directly.
-mix lemon.onboard codex --token <token> --set-default --model gpt-5.2
+mix lemon.onboard codex --token <token> --set-default --model gpt-6.1-sol
 ```

@@ -72,6 +72,25 @@ session, run, or raw error data and never retries an ambiguous submit.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
 
+Delivery workers are temporary supervised tasks. Adapter exceptions, malformed
+adapter results, worker exits, and explicitly unknown outcomes report a terminal
+failure to the notifier, release the delivery group, and do not replay the
+external write. A later message in that group can still proceed; unrelated
+groups are unaffected. Platform rejections remain explicit errors, and known
+transient failures such as rate limits still use the configured retry policy.
+
+An enqueue acknowledgement means queued, not delivered. A timeout may occur
+after the queue accepted the write, so Telegram's direct-send fallback runs only
+when the Outbox is unavailable or definitely rejected a full queue. WhatsApp
+command acknowledgement timeouts are likewise outcome-unknown rather than
+safe-to-retry failures.
+
+Telegram isolates unexpected failures per fetched update, retaining provisional
+dedupe and advancing through the remaining batch rather than replaying earlier
+side effects. Internal routing, rendering, and state-write failures are not
+converted into successful deliveries or permissive authorization decisions.
+Pairing, binding, group/admin, and file-access checks remain fail-closed.
+
 **Script send**: `LemonChannels.ScriptSend` gives shell scripts, cron jobs, and CI a Hermes-style notification path for the promoted Telegram and Discord platforms. It builds direct text or file `OutboundPayload` structs and calls the platform outbound adapter directly without starting inbound transports.
 
 **Command discovery**: `LemonChannels.CommandCatalog` is the portable,
@@ -251,6 +270,36 @@ LemonChannels.get_plugin("telegram")   # Registry.get_plugin/1
 LemonChannels.list_plugins()            # Registry.list_plugins/0
 LemonChannels.enqueue(payload)          # Outbox.enqueue/1
 ```
+
+### Automation Supervision
+
+Goals, kanban workers and prompt cron jobs can be supervised from Telegram or
+Discord while their coding sessions run elsewhere. Automation binds each run to
+its exact session and target before submission. Approval requests and successful
+resolution edits go through Outbox, as do completion/failure notices.
+
+Remote buttons offer only **Approve once** and **Deny**. They carry the full
+approval ID plus a fingerprint of the authoritative pending snapshot. Callback
+authorization preserves account/chat/topic, re-fetches the request, rejects
+expiry and atomically consumes that exact snapshot. A rejected, stale, replayed,
+foreign or unavailable decision never says “Recorded” or removes the controls.
+Telegram and Discord outbound adapters reject accounts other than the configured
+account instead of silently using the default bot/client.
+
+`LemonChannels.Supervision.notify/2` persists a bounded redacted notice before
+admission. Its `:ok` means queued or previously delivered, not a new platform
+receipt. `status/1` accepts `{kind, task_id, run_id, status}` and exposes only
+delivery metadata (`pending`, `submitting`, `queued`, `delivered`, `failed`,
+`unknown`, `rejected`), never bodies or platform responses. Duplicate identities
+are not resent. Definite admission failures get at most three attempts; Outbox
+owns platform retries. Ambiguous admissions, lost receipts and interrupted
+in-flight sends become `unknown`, never blindly replayed.
+
+Pending notices admitted while the worker is down survive its restart. Use a
+persistent Core Store backend for VM-restart durability. An unavailable durable
+store is an explicit error, not a successful notification or approval.
+See [automation remote supervision](../lemon_automation/README.md#remote-supervision)
+for target selection and CLI/TUI controls.
 
 ### Script Notifications
 
@@ -434,13 +483,17 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
 | `/media` | Preview generated-media job status with redacted type/status/artifact counts and cleanup policy |
+| `/remind <when> <what>` | Schedule a reminder in server-local time, e.g. `/remind in 20m check oven`, `/remind 9am stand-up`, `/remind every weekday 8:30 daily brief`; the cron job's result is delivered back to this chat/topic |
+| `/reminders` | List this chat's enabled reminders (id, schedule, next run) |
+| `/unremind <id>` | Cancel one of this chat's reminders |
 
 The Telegram picker should only surface models that are healthy enough for the
 current transport UX. Known-bad variants may remain in provider registries for
 manual use, but the picker should filter them out and prefer task-capable
 Google preview variants over dead or weaker direct IDs.
 | `/thinking` | Toggle extended thinking |
-| `/trigger` | Switch between `:all` and `:mentions` mode |
+| `/trigger` | Switch between `:all` and `:mentions` mode (groups default to `:mentions`) |
+| `/whoami` | Show the chat and user ids (works before pairing) |
 | `/cwd` | Set working directory |
 | `/file` | File put/get operations |
 | `/topic` | Topic management |
@@ -484,7 +537,10 @@ Avoids fragile MarkdownV2 escaping -- renders markdown to plain text with Telegr
 
 #### TriggerMode
 
-Controls whether the bot responds to all messages or only mentions in a chat/topic:
+Controls whether the bot responds to all messages or only mentions in a chat/topic.
+Groups default to `:mentions`. The bot only accepts chats in `allowed_chat_ids`; an
+empty allowlist leaves it unpaired (every chat ignored) unless `allow_all_chats = true`.
+Run `lemon gateway setup telegram` to pair:
 
 ```elixir
 scope = %LemonCore.ChatScope{transport: :telegram, chat_id: 123, topic_id: 456}

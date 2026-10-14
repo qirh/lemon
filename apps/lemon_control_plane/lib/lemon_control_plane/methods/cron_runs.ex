@@ -97,8 +97,8 @@ defmodule LemonControlPlane.Methods.CronRuns do
          introspection_limit
        ) do
     router_run_id = run.run_id
-    output = redact_text(run.output)
-    error = redact_text(run.error)
+    output = LemonCore.Redact.text(run.output)
+    error = LemonCore.Redact.text(run.error)
 
     base =
       %{
@@ -262,12 +262,6 @@ defmodule LemonControlPlane.Methods.CronRuns do
     :exit, _ -> []
   end
 
-  defp get_meta_value(meta, key) when is_map(meta) and is_atom(key) do
-    Map.get(meta, key) || Map.get(meta, Atom.to_string(key))
-  rescue
-    _ -> nil
-  end
-
   defp get_meta_value(meta, key) when is_map(meta) and is_binary(key) do
     Map.get(meta, key) ||
       case safe_to_existing_atom(key) do
@@ -348,7 +342,11 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp serialize_term(value, depth) when is_map(value) do
     Enum.reduce(value, %{}, fn {k, v}, acc ->
       key = key_to_string(k)
-      value = if sensitive_key?(key), do: %{"redacted" => true, "kind" => "secret"}, else: v
+
+      value =
+        if LemonCore.Redact.sensitive_key?(key),
+          do: %{"redacted" => true, "kind" => "secret"},
+          else: v
 
       Map.put(acc, key, serialize_term(value, depth + 1))
     end)
@@ -364,36 +362,9 @@ defmodule LemonControlPlane.Methods.CronRuns do
   defp serialize_term(value, _depth) when is_atom(value), do: Atom.to_string(value)
 
   defp serialize_term(value, _depth) when is_binary(value),
-    do: inspect(redact_text(value), limit: 200)
+    do: inspect(LemonCore.Redact.text(value), limit: 200)
 
   defp serialize_term(value, _depth), do: inspect(value, limit: 200)
-
-  defp redact_text(nil), do: nil
-
-  defp redact_text(text) when is_binary(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
-
-  defp redact_text(value), do: value
-
-  defp sensitive_key?(key) do
-    normalized = key |> to_string() |> String.downcase()
-
-    Enum.any?(
-      ["api_key", "apikey", "secret", "token", "password", "private_key", "credential"],
-      &String.contains?(normalized, &1)
-    )
-  end
 
   defp key_to_string(key) when is_binary(key), do: key
   defp key_to_string(key) when is_atom(key), do: Atom.to_string(key)

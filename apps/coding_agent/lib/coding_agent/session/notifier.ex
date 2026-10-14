@@ -1,36 +1,6 @@
 defmodule CodingAgent.Session.Notifier do
   @moduledoc false
 
-  alias CodingAgent.UI.Context, as: UIContext
-
-  @spec ui_set_working_message(map(), String.t() | nil) :: :ok
-  def ui_set_working_message(state, message) do
-    case state.ui_context do
-      %UIContext{} = ui -> UIContext.set_working_message(ui, message)
-      _ -> :ok
-    end
-  end
-
-  @spec ui_notify(map(), String.t(), CodingAgent.UI.notify_type()) :: :ok
-  def ui_notify(state, message, type) do
-    case state.ui_context do
-      %UIContext{} = ui -> UIContext.notify(ui, message, type)
-      _ -> :ok
-    end
-  end
-
-  @spec maybe_register_ui_tracker(term()) :: :ok | term()
-  def maybe_register_ui_tracker(%UIContext{module: mod, state: tracker})
-      when not is_nil(tracker) do
-    if function_exported?(mod, :register_tracker, 1) do
-      mod.register_tracker(tracker)
-    else
-      :ok
-    end
-  end
-
-  def maybe_register_ui_tracker(_), do: :ok
-
   @spec subscribe_stream(map(), pid(), keyword()) :: {:ok, pid(), map()}
   def subscribe_stream(state, pid, opts) do
     max_queue = Keyword.get(opts, :max_queue, 1000)

@@ -17,6 +17,8 @@ defmodule LemonAgent.AgentQueueTest do
   alias LemonAgent.Agent, as: CoreAgent
   alias LemonAgent.Test.Mocks
 
+  import LemonCore.Testing.AsyncHelpers
+
   # ============================================================================
   # Setup Helpers
   # ============================================================================
@@ -49,6 +51,37 @@ defmodule LemonAgent.AgentQueueTest do
 
       {:ok, stream}
     end
+  end
+
+  # Like `delayed_stream_fn/2`, but the stream only completes once the test sends
+  # `:release_stream` to the worker announced as `{:stream_worker, pid}`, so the
+  # run stays in flight for exactly as long as the test needs.
+  defp gated_stream_fn(response) do
+    parent = self()
+
+    fn _model, _context, _options ->
+      {:ok, stream} = LemonAi.EventStream.start_link()
+
+      {:ok, worker} =
+        Task.start(fn ->
+          LemonAi.EventStream.push(stream, {:start, response})
+
+          receive do
+            :release_stream -> :ok
+          end
+
+          LemonAi.EventStream.push(stream, {:done, response.stop_reason, response})
+          LemonAi.EventStream.complete(stream, response)
+        end)
+
+      send(parent, {:stream_worker, worker})
+      {:ok, stream}
+    end
+  end
+
+  defp await_stream_worker do
+    assert_receive {:stream_worker, worker}, 5_000
+    worker
   end
 
   # ============================================================================
@@ -297,26 +330,23 @@ defmodule LemonAgent.AgentQueueTest do
     test "wait_for_idle returns :ok immediately when not streaming" do
       {:ok, agent} = start_agent()
 
-      start_time = System.monotonic_time(:millisecond)
-      result = CoreAgent.wait_for_idle(agent, timeout: 5000)
-      elapsed = System.monotonic_time(:millisecond) - start_time
-
-      assert result == :ok
-      # Should return almost immediately (< 100ms)
-      assert elapsed < 100
+      # Nothing is streaming, so this returns right away instead of waiting
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "wait_for_idle with timeout returns {:error, :timeout}" do
       response = Mocks.assistant_message("Slow response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 500))
+      {:ok, agent} = start_agent(stream_fn: gated_stream_fn(response))
 
       :ok = CoreAgent.prompt(agent, "Slow request")
+      worker = await_stream_worker()
 
       result = CoreAgent.wait_for_idle(agent, timeout: 50)
       assert result == {:error, :timeout}
 
       # Clean up - wait for actual completion
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      send(worker, :release_stream)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "wait_for_idle with infinity timeout waits indefinitely" do
@@ -370,9 +400,10 @@ defmodule LemonAgent.AgentQueueTest do
 
     test "waiter timeout cancellation works correctly" do
       response = Mocks.assistant_message("Response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 300))
+      {:ok, agent} = start_agent(stream_fn: gated_stream_fn(response))
 
       :ok = CoreAgent.prompt(agent, "Request")
+      worker = await_stream_worker()
 
       # Start a wait that will timeout
       task =
@@ -380,20 +411,17 @@ defmodule LemonAgent.AgentQueueTest do
           CoreAgent.wait_for_idle(agent, timeout: 50)
         end)
 
-      result = Task.await(task, 1000)
+      result = Task.await(task, 5000)
       assert result == {:error, :timeout}
 
-      # The waiter should have been removed from the waiters list
-      # after timeout and cleanup
-      Process.sleep(50)
-      internal_state = :sys.get_state(agent)
-
-      # After cleanup, there should be no waiters from that task
-      # (the agent may still be running)
-      assert is_list(internal_state.waiters)
+      # The waiter should be removed from the waiters list after timeout and
+      # cleanup, even though the agent is still running
+      assert_eventually(fn -> :sys.get_state(agent).waiters == [] end, timeout: 5_000)
+      assert :sys.get_state(agent).running_task != nil
 
       # Wait for actual completion
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      send(worker, :release_stream)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "wait_for_idle accepts integer timeout directly" do
@@ -483,8 +511,8 @@ defmodule LemonAgent.AgentQueueTest do
       # Abort should work even with hung task
       :ok = CoreAgent.abort(agent)
 
-      # Give some time for abort to process
-      Process.sleep(100)
+      # Flush the mailbox so the abort has been processed
+      _ = :sys.get_state(agent)
 
       # Agent should still be alive
       assert Process.alive?(agent)
@@ -497,12 +525,12 @@ defmodule LemonAgent.AgentQueueTest do
       :ok = CoreAgent.prompt(agent, "Request")
 
       # Send multiple concurrent aborts
-      for _ <- 1..10 do
-        spawn(fn -> CoreAgent.abort(agent) end)
-      end
+      1..10
+      |> Enum.map(fn _ -> Task.async(fn -> CoreAgent.abort(agent) end) end)
+      |> Task.await_many(5_000)
 
-      # Agent should handle this gracefully
-      Process.sleep(100)
+      # Agent should handle this gracefully (flush mailbox so all aborts ran)
+      _ = :sys.get_state(agent)
       assert Process.alive?(agent)
 
       # Wait for completion
@@ -534,12 +562,14 @@ defmodule LemonAgent.AgentQueueTest do
   describe "concurrent prompt submissions" do
     test "second prompt while streaming returns error" do
       response = Mocks.assistant_message("First response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 200))
+      {:ok, agent} = start_agent(stream_fn: gated_stream_fn(response))
 
       assert :ok = CoreAgent.prompt(agent, "First prompt")
+      worker = await_stream_worker()
       assert {:error, :already_streaming} = CoreAgent.prompt(agent, "Second prompt")
 
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      send(worker, :release_stream)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "prompt after completion succeeds" do
@@ -562,9 +592,10 @@ defmodule LemonAgent.AgentQueueTest do
 
     test "rapid prompt attempts during streaming all return error" do
       response = Mocks.assistant_message("Response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 300))
+      {:ok, agent} = start_agent(stream_fn: gated_stream_fn(response))
 
       :ok = CoreAgent.prompt(agent, "Initial")
+      worker = await_stream_worker()
 
       # Try multiple rapid prompts
       results =
@@ -575,29 +606,33 @@ defmodule LemonAgent.AgentQueueTest do
       # All should fail
       assert Enum.all?(results, &(&1 == {:error, :already_streaming}))
 
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      send(worker, :release_stream)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "continue during streaming returns error" do
       response = Mocks.assistant_message("Response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 200))
+      {:ok, agent} = start_agent(stream_fn: gated_stream_fn(response))
 
       # Set up a message so continue could work
       CoreAgent.replace_messages(agent, [Mocks.user_message("Setup")])
 
       :ok = CoreAgent.prompt(agent, "Prompt")
+      worker = await_stream_worker()
       assert {:error, :already_streaming} = CoreAgent.continue(agent)
 
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      send(worker, :release_stream)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
     end
 
     test "prompt from different processes during streaming" do
       response = Mocks.assistant_message("Response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 200))
+      {:ok, agent} = start_agent(stream_fn: gated_stream_fn(response))
 
       parent = self()
 
       :ok = CoreAgent.prompt(agent, "Main prompt")
+      worker = await_stream_worker()
 
       # Try prompting from different processes
       pids =
@@ -610,10 +645,11 @@ defmodule LemonAgent.AgentQueueTest do
 
       # All should fail
       for i <- 1..3 do
-        assert_receive {:prompt_result, ^i, {:error, :already_streaming}}, 1000
+        assert_receive {:prompt_result, ^i, {:error, :already_streaming}}, 5000
       end
 
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      send(worker, :release_stream)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 5000)
 
       # Verify processes are done
       Enum.each(pids, fn pid ->
@@ -896,28 +932,31 @@ defmodule LemonAgent.AgentQueueTest do
       assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
     end
 
-    test "abort clears abort_ref but preserves queued messages" do
-      response = Mocks.assistant_message("Response")
-      {:ok, agent} = start_agent(stream_fn: delayed_stream_fn(response, 300))
+    test "abort interrupts an idle model and preserves queued messages" do
+      parent = self()
 
-      :ok = CoreAgent.steer(agent, Mocks.user_message("Queued steer"))
-      :ok = CoreAgent.follow_up(agent, Mocks.user_message("Queued follow"))
+      stream_fn = fn _model, _context, _options ->
+        {:ok, stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+        LemonAi.EventStream.push(stream, {:start, Mocks.assistant_message("partial")})
+        send(parent, :stream_started)
+        {:ok, stream}
+      end
 
+      {:ok, agent} = start_agent(stream_fn: stream_fn)
       :ok = CoreAgent.prompt(agent, "Will abort")
-
-      # Abort mid-stream
-      Process.sleep(50)
+      assert_receive :stream_started
+      steering = Mocks.user_message("Queued steer")
+      follow_up = Mocks.user_message("Queued follow")
+      :ok = CoreAgent.steer(agent, steering)
+      :ok = CoreAgent.follow_up(agent, follow_up)
       :ok = CoreAgent.abort(agent)
-
-      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 2000)
+      assert :ok = CoreAgent.wait_for_idle(agent, timeout: 1_000)
 
       internal_state = :sys.get_state(agent)
-      # Abort ref should be cleared
       assert internal_state.abort_ref == nil
-      # Queued messages should still be there (abort doesn't clear queues)
-      # Note: depending on implementation, queues may or may not be preserved
-      assert is_list(internal_state.steering_queue)
-      assert is_list(internal_state.follow_up_queue)
+      assert internal_state.steering_queue == [steering]
+      assert internal_state.follow_up_queue == [follow_up]
+      assert internal_state.agent_state.pending_tool_calls == MapSet.new()
     end
   end
 
@@ -937,17 +976,14 @@ defmodule LemonAgent.AgentQueueTest do
     test "queue operations are cast (non-blocking)" do
       {:ok, agent} = start_agent()
 
-      # These should return immediately
-      start_time = System.monotonic_time(:millisecond)
+      # Casts must return even while the agent cannot process messages
+      :ok = :sys.suspend(agent)
 
       for i <- 1..100 do
         :ok = CoreAgent.steer(agent, Mocks.user_message("Msg #{i}"))
       end
 
-      elapsed = System.monotonic_time(:millisecond) - start_time
-
-      # Should be very fast since casts are non-blocking
-      assert elapsed < 100
+      :ok = :sys.resume(agent)
     end
 
     test "queue operations while not streaming" do

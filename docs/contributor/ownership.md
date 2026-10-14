@@ -12,7 +12,7 @@ when adding new files.
 | **skills** | `@lemon/skills` | `lemon_skills` app and all skill-related tooling |
 | **agent** | `@lemon/agent` | `coding_agent`, `agent_core`, `ai` apps |
 | **memory** | `@lemon/memory` | Stores, session search, routing feedback, outcome models |
-| **client** | `@lemon/client` | `clients/tui`, `clients/lemon-web`, `clients/lemon-browser-node` |
+| **client** | `@lemon/client` | `clients/tui`, `clients/lemon-browser-node` |
 | **release** | `@lemon/release` | `scripts/`, `.github/workflows/` |
 | **docs** | `@lemon/docs` | Everything under `docs/` |
 
@@ -34,8 +34,7 @@ when adding new files.
 /apps/lemon_core/lib/lemon_core/store.ex    memory
 /apps/lemon_core/lib/lemon_core/run_store.ex     memory
 /apps/lemon_core/lib/lemon_core/run_history_store.ex  memory
-/apps/lemon_core/lib/lemon_core/memory*     memory
-/apps/lemon_core/lib/lemon_core/session_search*  memory
+/apps/lemon_memory/**                         memory
 /apps/lemon_core/lib/lemon_core/outcome*    memory
 /apps/lemon_core/lib/lemon_core/routing_feedback*  memory
 /apps/lemon_skills/**                       skills
@@ -85,9 +84,7 @@ Concretely:
 - If a file is legitimately cross-cutting, add it explicitly with all
   required owners listed on one line.
 
-## Docs freshness
+## Docs ownership
 
-All files listed in `docs/catalog.exs` use `owner: "@z80"` until a
-broader docs-ownership process is established.  When a docs contributor
-assumes ownership of a file, update both `catalog.exs` and
-`CODEOWNERS` together in a single PR.
+Docs ownership is recorded only in `CODEOWNERS`. When a docs contributor
+assumes ownership of a file, add it there.

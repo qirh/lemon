@@ -4,100 +4,68 @@
 
 # Lemon
 
-### Your agents. Your machine. Your move.
+A self-hosted AI assistant for your terminal, browser, Telegram and Discord.<br>
+Native agents, durable conversations and local tools on Elixir/OTP.
 
-A self-hosted AI assistant that codes, remembers, and gets work done.<br>
-Use it from your terminal, browser, or chat. Powered by Elixir and the BEAM.
-
-[**Get started**](#get-started) · [**Documentation**](https://z80dev.github.io/lemon/) · [**Try a demo**](docs/demo.md) · [**Releases**](https://github.com/z80dev/lemon/releases)
-
-[![Quality](https://github.com/z80dev/lemon/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/quality.yml)
-[![Simulation Bench](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-f5cf47)](LICENSE)
+[Documentation](https://z80dev.github.io/lemon/) · [Releases](https://github.com/z80dev/lemon/releases) · [LemonSim demo](#try-lemonsim-without-api-keys)
 
 </div>
 
-## An assistant you can make your own
+Lemon brings model providers, coding tools, memory, skills and scheduled work into
+one runtime you control. Native subagents share the same execution stack; named
+execution nodes can place work on another machine. Local-first does **not** mean
+local-only: configured model providers and integrations receive the data needed
+for their requests. Review the [safety model](docs/security/safety.md).
 
-Bring your preferred models. Give each specialist its own workspace. Keep conversations and memory on your machine, and reach your agents wherever you work. Lemon brings the tools, interfaces, and runtime together in one open-source system.
+The repository also retains **LemonSim**: deterministic, event-sourced simulation
+worlds for watching agents and evaluating model behavior. Its kernel and Phoenix
+control room live beside the assistant, not in a separate product repository.
 
-| Make it useful | Make it yours |
-| --- | --- |
-| **Work across interfaces.** Chat in the terminal or browser, then connect Telegram or Discord. [Choose an interface →](docs/user-guide/setup.md) | **Choose your models.** Use Anthropic, OpenAI, Google, or other supported providers through one runtime. [Configure providers →](docs/config.md) |
-| **Put agents to work.** Edit code, use browser and LSP tools, connect MCP servers, and delegate to native subagents. [Explore the tools →](apps/coding_agent/README.md) | **Build a team of specialists.** Give profiles stable chats, separate workspaces, skills, and optional model or execution-node assignments. [Meet profiles →](docs/user-guide/profiles.md) |
-| **Pick up where you left off.** Resume durable sessions, search local memory, and turn repeatable work into skills and automation. [Explore skills →](docs/user-guide/skills.md) | **Stay in control.** Manage local configuration and encrypted secrets, inspect runtime health, and create verified backups. [Operate Lemon →](docs/user-guide/backups.md) |
+Lemon is **pre-1.0**. See [supported platforms](docs/install.md),
+[current capabilities](docs/compare.md) and [support boundaries](docs/support.md).
 
-Lemon is **pre-1.0 and actively evolving**. Start with the [supported platforms](docs/install.md) and [current capabilities](docs/compare.md) to see what is available today.
+## Start coding in five minutes
 
-## Get started
-
-### 1. Install
-
-Run this in an interactive terminal on a [supported macOS or Linux system](docs/install.md):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-```
-
-The installer verifies the release checksum and opens setup to choose your provider, authentication, and default model. No Elixir installation is needed for prebuilt releases.
-
-### 2. Check your setup
+In an interactive terminal opened in your repository (macOS or Linux):
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh -s -- --skip-setup
 export PATH="$HOME/.lemon/bin:$PATH"
-lemon doctor
+lemon setup
+lemon tui
 ```
 
-If you skipped the setup wizard, run `lemon setup` first. For help with installation or provider configuration, follow the [quickstart](docs/getting-started/quickstart.md) or [troubleshooting guide](docs/support.md).
+Setup supports **OpenAI Codex → Sign in with ChatGPT**, explicit import of an
+existing Codex CLI login, and other providers/API keys. Accept an available default
+model and skip optional automation for now. Prebuilt releases include the runtime
+and TUI; no Elixir installation is needed.
 
-### 3. Start a conversation
+Start `lemon` **from your repository**, then ask:
 
-```bash
-lemon
-```
+> Read the repository instructions. Find how to run the tests. Add the test
+> command to README if missing, run the focused tests, and show the diff.
 
-Send your first message. Use `/help` to explore commands and `/sessions` to return to previous conversations.
+Review the change and test output. The daemon is reused on subsequent launches.
+The [coding quickstart](docs/getting-started/quickstart.md) walks through the real
+workflow, recovery, and these next steps:
 
-Prefer a browser? The full release includes a local Web UI:
-
-```bash
-lemon web
-```
-
-**Next:** [Connect Telegram or Discord](docs/user-guide/setup.md) · [Create a specialist profile](docs/user-guide/profiles.md) · [Explore the CLI](docs/user-guide/cli.md)
-
-## Built for more than one conversation
-
-Lemon runs agents as supervised Elixir/OTP processes. Conversations can execute concurrently, workers have a supervision boundary, and durable sessions preserve history across individual requests. Native subagents share the same execution stack; named execution nodes let you place work on another machine.
-
-That architecture also powers **LemonSim**: event-sourced arenas for studying how models plan, cooperate, compete, and recover. Try a deterministic offline game without provider API keys:
-
-```bash
-# From a source checkout with dependencies installed
-mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
-```
-
-[Why the BEAM?](docs/why-beam-for-agents.md) · [Architecture overview](docs/architecture/overview.md) · [LemonSim guide](apps/lemon_sim/README.md) · [Run benchmarks](docs/benchmarks/quickstart.md)
-
-## Find your next step
-
-| I want to… | Start here |
+| Work your way | Start here |
 | --- | --- |
-| Get from installation to a working chat | [Quickstart](docs/getting-started/quickstart.md) |
-| Build an agent with the platform | [Build your first agent](docs/getting-started/build-your-first-agent.md) |
-| Configure providers, models, or secrets | [Configuration reference](docs/config.md) |
-| Use sessions, profiles, and command-line tools | [CLI reference](docs/user-guide/cli.md) · [TUI reference](clients/tui/README.md) |
-| Connect independent agents | [Persistent A2A conversations](docs/user-guide/a2a-peers.md) |
-| Send channel notifications from scripts | [Script notifications](apps/lemon_channels/README.md#script-notifications) |
-| Update or move an installation | [Safe updates](docs/user-guide/updates.md) · [Backup and restore](docs/user-guide/backups.md) |
-| Diagnose a problem | [Support](docs/support.md) · [Report an issue](https://github.com/z80dev/lemon/issues) |
-| Explore everything | [Documentation index](docs/README.md) · [Machine-readable docs](https://z80dev.github.io/lemon/llms.txt) |
+| Script a coding session | `lemon -p "Explain this repository; do not edit files." --output json` |
+| Use Lemon in Tern | Type `lemon` in a Tern pane; `lemon tern install` adds palette actions and `tern acp lemon` chat |
+| Delegate parallel work | Ask for `scout` and `reviewer` task children; both personas are read-only |
+| Revisit an earlier prompt | `/rewind` previews and confirms a history change; files stay untouched by default |
+| Connect MCP tools | `lemon mcp list`, then [add and test a trusted server](docs/skills.md#manage-named-mcp-servers) |
+| Track durable work | Ask for a goal or kanban board, then inspect **Automation** with `lemon web --no-open` |
 
-## Build with us
+See [setup](docs/user-guide/setup.md), the [CLI guide](docs/user-guide/cli.md),
+and the [web guide](docs/user-guide/web.md) for the complete command and
+configuration reference.
 
-Lemon is an Elixir umbrella with reusable AI, agent, memory, and routing libraries; a personal assistant runtime; and simulation products. See the [architecture guide](docs/architecture/overview.md) for the package map and [architecture boundaries](docs/architecture_boundaries.md) for dependency rules.
+## Develop from source
 
-For source development, use Erlang/OTP 28.5+, Elixir 1.19.5+, and Bun 1.3.14+ for the TUI. Web client development also uses Node.js 24 LTS+.
+Use Erlang/OTP 28.5+, Elixir 1.19.5+, and Bun 1.3.14+ for the TUI. Node.js 24 LTS+
+is used by the docs and browser client.
 
 ```bash
 git clone https://github.com/z80dev/lemon.git
@@ -107,20 +75,47 @@ mix deps.get
 mix compile
 ./bin/lemon setup
 ./bin/lemon doctor
-./bin/lemon-tui
+./bin/lemon
 ```
 
-Run checks from the repository root:
+Run checks from the repository root with `scripts/test fast` and
+`scripts/test quality`; [testing](docs/testing.md) describes the other lanes.
+
+## Try LemonSim without API keys
+
+From a source checkout with dependencies installed:
 
 ```bash
-scripts/test fast       # Compile with warnings as errors; run the fast suite
-scripts/test quality    # Check code quality, documentation, and architecture
+mix sim_ui.assets.setup
+mix sim_ui.assets.build
+mix lemon.sim.demo --seed 42
 ```
 
-[Contributing](CONTRIBUTING.md) · [Agent guide](AGENTS.md) · [Testing](docs/testing.md) · [Security policy](SECURITY.md) · [Changelog](CHANGELOG.md)
+Open the spectator URL printed by the command. It runs deterministic heuristic
+Werewolf seats, not an LLM, and keeps serving until you stop it with Ctrl+C twice.
+No provider credentials or model configuration are needed. If the UI port is
+already occupied, set `LEMON_SIM_UI_PORT` or call
+`LemonSimUi.Demo.start_werewolf()` inside the existing node.
 
-## Acknowledgments
+For model-backed arenas, offline benchmark bundles and replay verification, see
+[LemonSim](apps/lemon_sim/README.md), [the control room](apps/lemon_sim_ui/README.md)
+and [benchmark quickstart](docs/benchmarks/quickstart.md).
 
-Inspired by [pi](https://github.com/badlogic/pi-mono), with architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi), [takopi](https://github.com/banteg/takopi), OpenClaw, and Ironclaw. The skill library was bootstrapped from [Hermes Agent](https://github.com/NousResearch/hermes-agent). Built with [Elixir](https://elixir-lang.org/) on the Erlang BEAM; the TUI uses [@oh-my-pi/pi-tui](https://www.npmjs.com/package/@oh-my-pi/pi-tui).
+## Go deeper
 
+- [Profiles](docs/user-guide/profiles.md), [memory](docs/user-guide/memory.md),
+  [skills](docs/user-guide/skills.md) and [automation](docs/user-guide/reminders-and-heartbeats.md)
+- [Backups](docs/user-guide/backups.md), [safe updates](docs/user-guide/updates.md)
+  and [configuration](docs/config.md)
+- [Architecture](docs/architecture/overview.md), [dependency boundaries](docs/architecture_boundaries.md)
+  and [package publication status](docs/platform-split.md) — five package targets;
+  repository 0.2.0 is not yet published
+- [Documentation index](docs/README.md) and [machine-readable docs](https://z80dev.github.io/lemon/llms.txt)
+- [Contributing](CONTRIBUTING.md), [agent guide](AGENTS.md), [security](SECURITY.md)
+  and [changelog](CHANGELOG.md)
+
+Inspired by [pi](https://github.com/badlogic/pi-mono),
+[Oh-My-Pi](https://github.com/can1357/oh-my-pi), [takopi](https://github.com/banteg/takopi),
+OpenClaw and Ironclaw. The skill library was bootstrapped from
+[Hermes Agent](https://github.com/NousResearch/hermes-agent).
 [MIT licensed](LICENSE). Named after a very good cat.

@@ -16,9 +16,11 @@ defmodule LemonChannels.OutboxRateLimitingTest do
     case Process.whereis(RateLimiter) do
       nil ->
         {:ok, pid} = RateLimiter.start_link([])
+
         on_exit(fn ->
           if Process.alive?(pid), do: GenServer.stop(pid)
         end)
+
         {:ok, rate_limiter_pid: pid}
 
       pid ->
@@ -106,6 +108,7 @@ defmodule LemonChannels.OutboxRateLimitingTest do
         :ok ->
           # Tokens may have refilled - this is acceptable
           assert true
+
         {:rate_limited, wait_ms} ->
           assert is_integer(wait_ms)
           assert wait_ms > 0
@@ -124,8 +127,7 @@ defmodule LemonChannels.OutboxRateLimitingTest do
       # Record a send
       :ok = RateLimiter.record(channel, account)
 
-      # Give time for async cast to process
-      Process.sleep(10)
+      # The cast is handled before the following status call from the same process
 
       status2 = RateLimiter.status(channel, account)
       assert status2.tokens < initial_tokens
@@ -181,15 +183,17 @@ defmodule LemonChannels.OutboxRateLimitingTest do
       account = "account-1"
 
       # Rapidly consume tokens
-      results = for _ <- 1..20 do
-        RateLimiter.consume(channel, account)
-      end
+      results =
+        for _ <- 1..20 do
+          RateLimiter.consume(channel, account)
+        end
 
       # At least some should be rate limited
-      rate_limited_count = Enum.count(results, fn
-        {:rate_limited, _} -> true
-        _ -> false
-      end)
+      rate_limited_count =
+        Enum.count(results, fn
+          {:rate_limited, _} -> true
+          _ -> false
+        end)
 
       # With default burst of 5 and 20 rapid calls, we should see rate limiting
       # (unless the refill rate is very high)

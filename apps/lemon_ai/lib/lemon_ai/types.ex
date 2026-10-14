@@ -87,6 +87,8 @@ defmodule LemonAi.Types do
             usage: LemonAi.Types.Usage.t(),
             stop_reason: stop_reason(),
             error_message: String.t() | nil,
+            error_details: LemonAi.Error.parsed_error() | nil,
+            retry_after_ms: non_neg_integer() | nil,
             timestamp: integer()
           }
     @type stop_reason :: :stop | :length | :tool_use | :error | :aborted | :redirected
@@ -99,6 +101,8 @@ defmodule LemonAi.Types do
               usage: nil,
               stop_reason: nil,
               error_message: nil,
+              error_details: nil,
+              retry_after_ms: nil,
               timestamp: 0
   end
 
@@ -143,16 +147,26 @@ defmodule LemonAi.Types do
   end
 
   defmodule Usage do
-    @moduledoc "Token usage and cost for a response"
+    @moduledoc """
+    Token usage and cost for a response. `cache_write_long` is the hourly
+    Anthropic cache-write subset of `cache_write`, not an additional token count.
+    """
     @type t :: %__MODULE__{
             input: non_neg_integer(),
             output: non_neg_integer(),
             cache_read: non_neg_integer(),
             cache_write: non_neg_integer(),
+            cache_write_long: non_neg_integer(),
             total_tokens: non_neg_integer(),
             cost: Cost.t()
           }
-    defstruct input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: %Cost{}
+    defstruct input: 0,
+              output: 0,
+              cache_read: 0,
+              cache_write: 0,
+              cache_write_long: 0,
+              total_tokens: 0,
+              cost: %Cost{}
   end
 
   # ============================================================================
@@ -231,19 +245,41 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule ModelCost do
-    @moduledoc "Cost per million tokens for a model"
+    @moduledoc """
+    Per-million-token prices. Optional `long_context` supplies `input_threshold`
+    and replacement input/output/cache prices when total input (including cache)
+    exceeds the threshold.
+    """
     @type t :: %__MODULE__{
             input: float(),
             output: float(),
             cache_read: float(),
-            cache_write: float()
+            cache_write: float(),
+            long_context: map() | nil
           }
-    defstruct input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0
+    defstruct input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0, long_context: nil
   end
 
   defmodule Model do
-    @moduledoc "Model definition with capabilities and pricing"
+    @moduledoc """
+    Model definition with capabilities and pricing.
+
+    Reasoning capability flags:
+
+      * `reasoning` - the model accepts a reasoning/thinking request at all.
+      * `adaptive_thinking` - Anthropic Messages models that take
+        `thinking: %{type: "adaptive"}` plus `output_config.effort` instead of a
+        manual `budget_tokens` thinking budget (manual budgets are rejected on
+        Claude Opus 4.7 and later).
+      * `reasoning_efforts` - the Lemon reasoning levels the model accepts
+        natively, in ascending order. An empty list means undeclared: levels
+        pass through unchanged. See `LemonAi.Models.reasoning_effort_for/2`.
+
+    `service_tier_cost` maps `"flex"` / `"priority"` to billing multipliers;
+    absent entries retain base prices for that surface.
+    """
     @type input_type :: :text | :image
+    @type reasoning_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
             id: String.t(),
             name: String.t(),
@@ -251,9 +287,12 @@ defmodule LemonAi.Types do
             provider: atom() | String.t(),
             base_url: String.t(),
             reasoning: boolean(),
+            adaptive_thinking: boolean(),
+            reasoning_efforts: [reasoning_level()],
             input: [input_type()],
             cost: ModelCost.t(),
             context_window: non_neg_integer(),
+            service_tier_cost: %{optional(String.t()) => number()},
             max_tokens: non_neg_integer(),
             headers: map(),
             compat: map() | nil
@@ -264,9 +303,12 @@ defmodule LemonAi.Types do
               provider: nil,
               base_url: "",
               reasoning: false,
+              adaptive_thinking: false,
+              reasoning_efforts: [],
               input: [:text],
               cost: %ModelCost{},
               context_window: 0,
+              service_tier_cost: %{},
               max_tokens: 0,
               headers: %{},
               compat: nil
@@ -277,7 +319,16 @@ defmodule LemonAi.Types do
   # ============================================================================
 
   defmodule StreamOptions do
-    @moduledoc "Options for streaming requests"
+    @moduledoc """
+    Options for streaming requests.
+
+    `on_payload` is an opt-in Codex request observer, called with the finalized
+    JSON-safe body and provider/model/session metadata before HTTP submission.
+    `on_usage` observes terminal Codex usage before normalization. Both callbacks
+    run in the provider worker; their return values are ignored and observer
+    errors fail the stream. Bodies can contain private conversation content;
+    observers must keep them in memory and persist only safe measurements.
+    """
     @type thinking_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
             temperature: float() | nil,
@@ -294,7 +345,9 @@ defmodule LemonAi.Types do
             location: String.t() | nil,
             access_token: String.t() | nil,
             service_account_json: String.t() | nil,
-            provider_options: map()
+            provider_options: map(),
+            on_payload: (map(), map() -> term()) | nil,
+            on_usage: (map(), map() -> term()) | nil
           }
     defstruct temperature: nil,
               max_tokens: nil,
@@ -310,6 +363,8 @@ defmodule LemonAi.Types do
               location: nil,
               access_token: nil,
               service_account_json: nil,
-              provider_options: %{}
+              provider_options: %{},
+              on_payload: nil,
+              on_usage: nil
   end
 end

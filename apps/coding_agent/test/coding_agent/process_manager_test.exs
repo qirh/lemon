@@ -4,6 +4,32 @@ defmodule CodingAgent.ProcessManagerTest do
   alias CodingAgent.ProcessManager
   alias CodingAgent.ProcessStore
 
+  import CodingAgent.AsyncHelpers
+
+  @finished [:completed, :error, :killed]
+
+  defp await_record(process_id) do
+    assert_eventually(fn -> match?({:ok, _, _}, ProcessStore.get(process_id)) end,
+      message: "process #{process_id} was never stored"
+    )
+  end
+
+  defp await_status(process_id, statuses) do
+    assert_eventually(
+      fn ->
+        case ProcessStore.get(process_id) do
+          {:ok, %{status: status}, _} -> status in statuses
+          _ -> false
+        end
+      end,
+      timeout: 5_000,
+      message: "process #{process_id} never reached #{inspect(statuses)}"
+    )
+  end
+
+  defp await_running(process_id), do: await_status(process_id, [:running])
+  defp await_finished(process_id), do: await_status(process_id, @finished)
+
   setup do
     # Clear all processes before each test
     try do
@@ -35,8 +61,7 @@ defmodule CodingAgent.ProcessManagerTest do
       assert {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
       assert is_binary(process_id)
 
-      # Wait for process to be created
-      Process.sleep(100)
+      await_record(process_id)
 
       # Process should be in store
       assert {:ok, record, _} = ProcessStore.get(process_id)
@@ -73,8 +98,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "supports custom cwd" do
       assert {:ok, process_id} = ProcessManager.exec(command: "sleep 60", cwd: "/tmp")
 
-      # Wait for process to be created
-      Process.sleep(100)
+      await_record(process_id)
 
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.cwd == "/tmp"
@@ -90,8 +114,7 @@ defmodule CodingAgent.ProcessManagerTest do
                  env: %{"TEST_VAR" => "test_value"}
                )
 
-      # Wait for process to be created
-      Process.sleep(100)
+      await_record(process_id)
 
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.env == %{"TEST_VAR" => "test_value"}
@@ -136,8 +159,7 @@ defmodule CodingAgent.ProcessManagerTest do
 
       assert is_binary(process_id)
 
-      # Wait for process to be created
-      Process.sleep(100)
+      await_running(process_id)
 
       # Should be running
       assert {:ok, record, _} = ProcessStore.get(process_id)
@@ -152,8 +174,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "returns process status and logs" do
       {:ok, process_id} = ProcessManager.exec(command: "echo test")
 
-      # Wait for completion
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessManager.poll(process_id)
       assert result.process_id == process_id
@@ -172,8 +193,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "supports line count limit" do
       {:ok, process_id} = ProcessManager.exec(command: "seq 1 20")
 
-      # Wait for completion
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, result} = ProcessManager.poll(process_id, lines: 5)
       assert length(result.logs) <= 5
@@ -185,8 +205,8 @@ defmodule CodingAgent.ProcessManagerTest do
       {:ok, id1} = ProcessManager.exec(command: "sleep 60")
       {:ok, id2} = ProcessManager.exec(command: "sleep 60")
 
-      # Wait for processes to be created
-      Process.sleep(100)
+      await_record(id1)
+      await_record(id2)
 
       processes = ProcessManager.list()
       ids = Enum.map(processes, fn {id, _} -> id end)
@@ -202,8 +222,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "filters by status" do
       {:ok, id} = ProcessManager.exec(command: "sleep 60")
 
-      # Wait for process to be created
-      Process.sleep(100)
+      await_running(id)
 
       running = ProcessManager.list(status: :running)
       assert {id, _} = List.keyfind(running, id, 0)
@@ -217,8 +236,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "returns log lines for a process" do
       {:ok, process_id} = ProcessManager.exec(command: "echo line1 && echo line2")
 
-      # Wait for completion
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert {:ok, logs} = ProcessManager.logs(process_id)
       assert is_list(logs)
@@ -238,8 +256,7 @@ defmodule CodingAgent.ProcessManagerTest do
       # Start a process that reads from stdin
       {:ok, process_id} = ProcessManager.exec(command: "cat")
 
-      # Give it time to start
-      Process.sleep(100)
+      await_running(process_id)
 
       assert :ok = ProcessManager.write(process_id, "hello\n")
 
@@ -258,13 +275,11 @@ defmodule CodingAgent.ProcessManagerTest do
     test "kills a running process with sigterm" do
       {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
 
-      # Give it time to start
-      Process.sleep(100)
+      await_running(process_id)
 
       assert :ok = ProcessManager.kill(process_id, :sigterm)
 
-      # Wait for kill to take effect
-      Process.sleep(300)
+      await_status(process_id, [:killed])
 
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.status == :killed
@@ -273,13 +288,11 @@ defmodule CodingAgent.ProcessManagerTest do
     test "kills a running process with sigkill" do
       {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
 
-      # Give it time to start
-      Process.sleep(100)
+      await_running(process_id)
 
       assert :ok = ProcessManager.kill(process_id, :sigkill)
 
-      # Wait for kill to take effect
-      Process.sleep(300)
+      await_status(process_id, [:killed, :error])
 
       assert {:ok, record, _} = ProcessStore.get(process_id)
       assert record.status in [:killed, :error]
@@ -315,7 +328,7 @@ defmodule CodingAgent.ProcessManagerTest do
       assert metadata.restarted_from == process_id
       assert metadata.restart_generation == 1
 
-      Process.sleep(300)
+      await_finished(new_process_id)
 
       assert {:ok, restarted} = ProcessManager.poll(new_process_id)
       assert restarted.restarted_from == process_id
@@ -331,7 +344,7 @@ defmodule CodingAgent.ProcessManagerTest do
         _ = ProcessManager.kill(process_id, :sigkill)
       end)
 
-      Process.sleep(100)
+      await_running(process_id)
       assert ProcessManager.restart(process_id) == {:error, :process_running}
     end
   end
@@ -340,8 +353,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "removes a process from the store" do
       {:ok, process_id} = ProcessManager.exec(command: "echo test")
 
-      # Wait for completion
-      Process.sleep(300)
+      await_finished(process_id)
 
       assert :ok = ProcessManager.clear(process_id)
       assert {:error, :not_found} = ProcessStore.get(process_id)
@@ -352,8 +364,7 @@ defmodule CodingAgent.ProcessManagerTest do
     test "removes old completed processes" do
       {:ok, process_id} = ProcessManager.exec(command: "echo test")
 
-      # Wait for completion
-      Process.sleep(300)
+      await_finished(process_id)
 
       # Manually age the process
       {:ok, record, logs} = ProcessStore.get(process_id)
@@ -410,8 +421,7 @@ defmodule CodingAgent.ProcessManagerTest do
       # Start a long-running process
       {:ok, process_id} = ProcessManager.exec(command: "sleep 60")
 
-      # Wait for process to start
-      Process.sleep(100)
+      await_running(process_id)
 
       # Poll to check it's running
       assert {:ok, result} = ProcessManager.poll(process_id)
@@ -426,7 +436,7 @@ defmodule CodingAgent.ProcessManagerTest do
       assert :ok = ProcessManager.kill(process_id, :sigterm)
 
       # Wait and verify it's killed
-      Process.sleep(300)
+      await_status(process_id, [:killed])
       assert {:ok, result} = ProcessManager.poll(process_id)
       assert result.status == :killed
     end

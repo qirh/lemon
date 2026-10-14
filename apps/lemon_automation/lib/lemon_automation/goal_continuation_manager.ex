@@ -3,7 +3,7 @@ defmodule LemonAutomation.GoalContinuationManager do
 
   use GenServer
 
-  alias LemonAutomation.GoalContinuation
+  alias LemonAutomation.GoalLoopManager
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -13,7 +13,7 @@ defmodule LemonAutomation.GoalContinuationManager do
     GenServer.call(
       __MODULE__,
       {:continue_once, session_key, opts},
-      Keyword.get(opts, :timeout, 30_000)
+      GoalLoopManager.call_timeout(Keyword.put(opts, :await_completion, true)) + 1_000
     )
   end
 
@@ -24,7 +24,7 @@ defmodule LemonAutomation.GoalContinuationManager do
   def handle_call({:continue_once, session_key, opts}, from, state) do
     task =
       Task.Supervisor.async_nolink(LemonAutomation.TaskSupervisor, fn ->
-        GoalContinuation.continue_once(session_key, opts)
+        GoalLoopManager.run_once(session_key, Keyword.put(opts, :verdict, :continue))
       end)
 
     {:noreply, put_in(state.calls[task.ref], from)}

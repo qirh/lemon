@@ -11,6 +11,10 @@ defmodule CodingAgent.ToolExecutor do
   failures are not included in tool results or logs. The failure boundary
   covers only the approval request, not the approved tool's execution.
 
+  Denials, approval timeouts, and approval failures return an
+  `AgentToolResult` with `is_error: true`, so the model sees an error tool
+  result rather than a successful one.
+
   ## Usage
 
       # Wrap a tool with approval enforcement
@@ -105,6 +109,7 @@ defmodule CodingAgent.ToolExecutor do
            tool_name,
            args,
            timeout_ms,
+           context[:tool_call_id],
            approval_request_fun
          ) do
       {:ok, :approved, scope} when scope in @approval_scopes ->
@@ -140,18 +145,28 @@ defmodule CodingAgent.ToolExecutor do
         tool.name,
         params,
         fn -> original_execute.(tool_call_id, params, signal, on_update) end,
-        context
+        Map.put(context, :tool_call_id, tool_call_id)
       )
     end
 
     %{tool | execute: wrapped_execute}
   end
 
-  defp request_approval(run_id, session_id, session_key, tool_name, args, timeout_ms, request_fun) do
+  defp request_approval(
+         run_id,
+         session_id,
+         session_key,
+         tool_name,
+         args,
+         timeout_ms,
+         tool_call_id,
+         request_fun
+       ) do
     request_fun.(%{
       run_id: run_id,
       session_id: session_id,
       session_key: session_key,
+      tool_call_id: tool_call_id,
       tool: tool_name,
       action: args,
       rationale: "Tool execution: #{tool_name}",
@@ -181,7 +196,8 @@ defmodule CodingAgent.ToolExecutor do
       details: %{
         denied: true,
         reason: :approval_denied
-      }
+      },
+      is_error: true
     }
   end
 
@@ -202,7 +218,8 @@ defmodule CodingAgent.ToolExecutor do
         timeout: true,
         timeout_ms: timeout_ms,
         reason: :approval_timeout
-      }
+      },
+      is_error: true
     }
   end
 
@@ -219,7 +236,8 @@ defmodule CodingAgent.ToolExecutor do
       details: %{
         approval_error: reason,
         reason: :approval_error
-      }
+      },
+      is_error: true
     }
   end
 end

@@ -7,9 +7,12 @@ defmodule LemonRouter.SessionTransitions do
   alias LemonRouter.{QueueEffect, SessionState, Submission}
 
   @followup_debounce_ms 500
+  @max_pending_submissions 128
+  @max_pending_prompt_bytes 1_048_576
+  @max_pending_image_bytes 16_777_216
 
   @spec submit(SessionState.t(), Submission.t(), integer()) ::
-          {:ok, SessionState.t(), [QueueEffect.t()]}
+          {:ok, SessionState.t(), [QueueEffect.t()]} | {:error, :session_queue_full}
   def submit(%SessionState{} = state, %Submission{} = submission, now_ms) do
     if retained_run_id?(state, submission.run_id) do
       # A caller can lose the acknowledgement after this coordinator accepted
@@ -19,14 +22,83 @@ defmodule LemonRouter.SessionTransitions do
     else
       submission = normalize_queue_mode(submission)
       requested_mode = submission.queue_mode
+      submission = maybe_queue_image_submission(submission)
       submission = maybe_promote_auto_followup(submission, state)
 
-      {state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
-      effects = maybe_request_start_next(state, effects)
+      {next_state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
 
-      {:ok, state, effects}
+      if backlog_within_limits?(next_state) do
+        {:ok, next_state, maybe_request_start_next(next_state, effects)}
+      else
+        {:error, :session_queue_full}
+      end
     end
   end
+
+  defp backlog_within_limits?(state) do
+    case count_pending(state.queue, {0, 0, 0}) do
+      {:ok, totals} ->
+        Enum.reduce_while(state.pending_steers, {:ok, totals}, fn {_run_id, entries},
+                                                                  {:ok, totals} ->
+          case count_pending_steers(entries, totals) do
+            {:ok, totals} -> {:cont, {:ok, totals}}
+            :over_limit -> {:halt, :over_limit}
+          end
+        end) != :over_limit
+
+      :over_limit ->
+        false
+    end
+  end
+
+  defp count_pending([], totals), do: {:ok, totals}
+
+  defp count_pending([submission | rest], totals) do
+    case count_pending_submission(submission, totals) do
+      {:ok, totals} -> count_pending(rest, totals)
+      :over_limit -> :over_limit
+    end
+  end
+
+  defp count_pending_steers([], totals), do: {:ok, totals}
+
+  defp count_pending_steers([{submission, _fallback_mode} | rest], totals) do
+    case count_pending_submission(submission, totals) do
+      {:ok, totals} -> count_pending_steers(rest, totals)
+      :over_limit -> :over_limit
+    end
+  end
+
+  defp count_pending_submission(submission, {count, prompt_bytes, image_bytes}) do
+    request = submission.execution_request
+    count = count + 1
+    prompt_bytes = prompt_bytes + byte_size(request.prompt || "")
+
+    if count <= @max_pending_submissions and prompt_bytes <= @max_pending_prompt_bytes do
+      case count_image_bytes(request.images, image_bytes) do
+        {:ok, image_bytes} -> {:ok, {count, prompt_bytes, image_bytes}}
+        :over_limit -> :over_limit
+      end
+    else
+      :over_limit
+    end
+  end
+
+  defp count_image_bytes([image | rest], bytes) do
+    bytes = bytes + image_data_bytes(image)
+
+    if bytes <= @max_pending_image_bytes do
+      count_image_bytes(rest, bytes)
+    else
+      :over_limit
+    end
+  end
+
+  defp count_image_bytes(_images, bytes), do: {:ok, bytes}
+
+  defp image_data_bytes(%{data: data}) when is_binary(data), do: byte_size(data)
+  defp image_data_bytes(%{"data" => data}) when is_binary(data), do: byte_size(data)
+  defp image_data_bytes(_image), do: 0
 
   defp retained_run_id?(%SessionState{} = state, run_id)
        when is_binary(run_id) and run_id != "" do
@@ -302,8 +374,9 @@ defmodule LemonRouter.SessionTransitions do
 
   defp maybe_promote_auto_followup(%{queue_mode: :followup, meta: meta} = submission, state)
        when not is_nil(state.active) do
-    if truthy?(MapHelpers.get_key(meta || %{}, :task_auto_followup)) or
-         truthy?(MapHelpers.get_key(meta || %{}, :delegated_auto_followup)) do
+    if not image_submission?(submission) and
+         (truthy?(MapHelpers.get_key(meta || %{}, :task_auto_followup)) or
+            truthy?(MapHelpers.get_key(meta || %{}, :delegated_auto_followup))) do
       %{submission | queue_mode: :steer}
     else
       submission
@@ -311,6 +384,22 @@ defmodule LemonRouter.SessionTransitions do
   end
 
   defp maybe_promote_auto_followup(submission, _state), do: submission
+
+  # Gateway steering carries text only. Images must retain their own queued run.
+  defp maybe_queue_image_submission(submission)
+       when submission.queue_mode in [:steer, :steer_backlog, :redirect] do
+    if image_submission?(submission) do
+      fallback_mode = if submission.queue_mode == :steer_backlog, do: :collect, else: :followup
+      %{submission | queue_mode: fallback_mode}
+    else
+      submission
+    end
+  end
+
+  defp maybe_queue_image_submission(submission), do: submission
+
+  defp image_submission?(%{execution_request: %{images: [_image | _rest]}}), do: true
+  defp image_submission?(_submission), do: false
 
   defp normalize_queue_mode(submission) do
     %{submission | queue_mode: normalize_queue_mode_value(submission.queue_mode)}
@@ -326,7 +415,7 @@ defmodule LemonRouter.SessionTransitions do
 
   defp maybe_merge_followup(queue, submission, last_followup_at_ms, now_ms) do
     cond do
-      async_followup_submission?(submission) ->
+      image_submission?(submission) or async_followup_submission?(submission) ->
         :no_merge
 
       is_nil(last_followup_at_ms) ->
@@ -344,7 +433,7 @@ defmodule LemonRouter.SessionTransitions do
             :no_merge
 
           {%{queue_mode: :followup} = previous, rest} ->
-            if async_followup_submission?(previous) do
+            if image_submission?(previous) or async_followup_submission?(previous) do
               :no_merge
             else
               {:merged, rest ++ [merge_followup_submission(previous, submission)]}
@@ -630,8 +719,6 @@ defmodule LemonRouter.SessionTransitions do
         nil
     end
   end
-
-  defp extract_async_followup(_meta), do: nil
 
   defp truthy?(true), do: true
   defp truthy?("true"), do: true

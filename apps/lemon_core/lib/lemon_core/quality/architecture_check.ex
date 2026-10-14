@@ -6,6 +6,9 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   - each app's direct `in_umbrella: true` dependencies exactly match policy
   - stale dependency permissions are removed when a `mix.exs` edge disappears
   - each app's source files reference only dependency or explicit exception namespaces
+
+  Dependency extraction handles both two-element dependency literals and quoted
+  tuples with explicit versions and options.
   """
 
   alias LemonCore.Quality.ArchitecturePolicy
@@ -41,7 +44,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_agent: ["LemonAgent"],
     lemon_ai: ["LemonAi"],
     coding_agent: ["CodingAgent"],
-    coding_agent_ui: ["CodingAgent.UI", "CodingAgentUi"],
     lemon_automation: ["LemonAutomation"],
     lemon_browser: ["LemonBrowser"],
     lemon_channels: ["LemonChannels"],
@@ -54,24 +56,15 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_lsp: ["LemonLsp"],
     lemon_media: ["LemonMedia"],
     lemon_mcp: ["LemonMCP"],
+    lemon_omp: ["LemonOmp"],
     lemon_platform_test: ["LemonPlatformTest"],
     lemon_router: ["LemonRouter"],
     lemon_skills: ["LemonSkills"],
     lemon_web: ["LemonWeb"],
-    # lemon-sim product block — delete with the lemon-sim repo extraction
-    # (docs/platform-split.md Phase 5). Namespace strings only: this table is a
-    # lint inventory of the apps in *this* repo, not a dependency.
+    # lemon-sim product block (docs/platform-split.md). Namespace strings only:
+    # this table is a lint inventory of the apps in *this* repo, not a dependency.
     lemon_sim: ["LemonSim"],
-    lemon_sim_ui: ["LemonSimUi"],
-    lemon_tcg: ["LemonTcg"]
-  }
-
-  @exact_module_owners %{
-    "CodingAgent.UI" => :coding_agent,
-    "CodingAgent.UI.Context" => :coding_agent,
-    "CodingAgent.UI.RPC" => :coding_agent_ui,
-    "CodingAgent.UI.Headless" => :coding_agent_ui,
-    "CodingAgent.UI.DebugRPC" => :coding_agent_ui
+    lemon_sim_ui: ["LemonSimUi"]
   }
 
   @namespace_prefix_owners @app_namespaces
@@ -152,9 +145,9 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   @doc """
   Reads the direct umbrella dependency graph declared by `apps/*/mix.exs`.
 
-  Dependency lists may be returned directly or wrapped by a helper such as
-  `Lemon.HexPackage.deps/1`; the parser walks the complete `deps/0` body so both
-  forms produce the same graph.
+  Dependency lists may be returned directly or wrapped by a helper such as the
+  published packages' `lemon_deps/1`; the parser walks the complete `deps/0`
+  body so both forms produce the same graph.
   """
   @spec actual_direct_deps(String.t()) :: %{optional(atom()) => [atom()]}
   def actual_direct_deps(root) do
@@ -211,12 +204,14 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     if keyword_true?(opts, :in_umbrella), do: [dep], else: []
   end
 
-  defp extract_umbrella_dep_atom({dep, _version, opts}) when is_atom(dep) and is_list(opts) do
-    if keyword_true?(opts, :in_umbrella), do: [dep], else: []
-  end
-
+  # Quoted tuples are themselves three-element AST nodes; match them before
+  # treating a three-element tuple as a dependency literal.
   defp extract_umbrella_dep_atom({:{}, _meta, [dep | tuple_elements]}) when is_atom(dep) do
     if umbrella_dependency_tuple?(tuple_elements), do: [dep], else: []
+  end
+
+  defp extract_umbrella_dep_atom({dep, _version, opts}) when is_atom(dep) and is_list(opts) do
+    if keyword_true?(opts, :in_umbrella), do: [dep], else: []
   end
 
   defp extract_umbrella_dep_atom(_entry), do: []
@@ -444,19 +439,13 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   end
 
   defp owner_for_module(full_name) when is_binary(full_name) do
-    case Map.get(@exact_module_owners, full_name) do
-      nil ->
-        @namespace_prefix_owners
-        |> Enum.find(fn {prefix, _owner} ->
-          full_name == prefix || String.starts_with?(full_name, prefix <> ".")
-        end)
-        |> case do
-          nil -> nil
-          {_prefix, owner} -> owner
-        end
-
-      owner ->
-        owner
+    @namespace_prefix_owners
+    |> Enum.find(fn {prefix, _owner} ->
+      full_name == prefix || String.starts_with?(full_name, prefix <> ".")
+    end)
+    |> case do
+      nil -> nil
+      {_prefix, owner} -> owner
     end
   end
 

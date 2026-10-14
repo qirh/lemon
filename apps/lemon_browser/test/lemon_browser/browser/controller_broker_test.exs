@@ -3,9 +3,19 @@ defmodule LemonBrowser.ControllerBrokerTest do
 
   alias LemonBrowser.ControllerBroker
 
-  setup do
+  # Tickets and heartbeats expire on a wall clock, so a short TTL turns a slow
+  # scheduler into a spurious expiry. Only the test that needs a stale heartbeat
+  # opts into a short one.
+  setup context do
     name = Module.concat(__MODULE__, "Broker#{System.unique_integer([:positive])}")
-    start_supervised!({ControllerBroker, name: name, ticket_ttl_ms: 50, heartbeat_ttl_ms: 50})
+
+    start_supervised!(
+      {ControllerBroker,
+       name: name,
+       ticket_ttl_ms: 30_000,
+       heartbeat_ttl_ms: Map.get(context, :heartbeat_ttl_ms, 30_000)}
+    )
+
     %{server: name}
   end
 
@@ -153,7 +163,27 @@ defmodule LemonBrowser.ControllerBrokerTest do
   end
 
   test "timeout and controller death resolve pending callers", %{server: server} do
-    controller = spawn(fn -> receive do: (:stop -> :ok) end)
+    test_pid = self()
+
+    controller =
+      spawn(fn ->
+        controller_loop = fn loop ->
+          receive do
+            :stop ->
+              :ok
+
+            {:browser_controller_command, command} ->
+              send(test_pid, {:controller_received, command})
+              loop.(loop)
+
+            _other ->
+              loop.(loop)
+          end
+        end
+
+        controller_loop.(controller_loop)
+      end)
+
     register_controller(server, controller, capabilities: ["tabs"])
 
     assert {:error, :browser_controller_timeout} =
@@ -165,23 +195,27 @@ defmodule LemonBrowser.ControllerBrokerTest do
                server: server
              )
 
+    assert_receive {:controller_received, _timed_out_command}
+
     task =
       Task.async(fn ->
         ControllerBroker.request(
           %{controller_id: "controller-1"},
           "browser.tabs",
           %{},
-          500,
+          5_000,
           server: server
         )
       end)
 
-    Process.sleep(5)
+    # The controller has the command, so the request is pending in the broker.
+    assert_receive {:controller_received, _pending_command}
     send(controller, :stop)
     assert Task.await(task) == {:error, :controller_disconnected}
     assert ControllerBroker.status(server: server).controller_count == 0
   end
 
+  @tag heartbeat_ttl_ms: 500
   test "timeouts notify the controller and stale heartbeats fail closed", %{server: server} do
     register_controller(server, self(), capabilities: ["tabs"])
 
@@ -204,7 +238,7 @@ defmodule LemonBrowser.ControllerBrokerTest do
     assert request_id == command["requestId"]
     assert Task.await(task) == {:error, :browser_controller_timeout}
 
-    Process.sleep(55)
+    Process.sleep(550)
 
     assert {:error, :browser_controller_not_found} =
              ControllerBroker.request(

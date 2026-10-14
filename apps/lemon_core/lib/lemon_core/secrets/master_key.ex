@@ -28,7 +28,7 @@ defmodule LemonCore.Secrets.MasterKey do
       config :lemon_core, LemonCore.Secrets, allow_legacy_raw_keys: true
 
   which logs a deprecation warning on first use. Re-encrypting under a proper
-  key is the real fix; see the "Key rotation" section of `LemonCore.Secrets`.
+  key is the real fix: `lemon secrets rotate-key` (`LemonCore.Secrets.KeyRotation`).
   """
 
   require Logger
@@ -57,7 +57,8 @@ defmodule LemonCore.Secrets.MasterKey do
   unavailable and the key lands in the configured key file (`0600`). Pass
   `target: :file` (or any provider name) to force one, and `force: true` to
   replace an existing key file — note that doing so makes every secret already
-  encrypted under the old key unreadable.
+  encrypted under the old key unreadable; `LemonCore.Secrets.KeyRotation`
+  changes a key in use without losing secrets.
   """
   @spec init(keyword()) :: {:ok, map()} | {:error, atom() | tuple()}
   def init(opts \\ []) do
@@ -73,7 +74,7 @@ defmodule LemonCore.Secrets.MasterKey do
     providers = KeyProvider.order(opts)
     keychain = find_provider(providers, :keychain)
 
-    keychain_result = keychain && fetch_key(keychain, opts)
+    keychain_result = keychain && fetch_from(keychain, opts)
 
     source =
       case resolve(opts) do
@@ -106,6 +107,23 @@ defmodule LemonCore.Secrets.MasterKey do
     |> Base.encode64()
   end
 
+  @doc """
+  Reads and decodes the key held by one provider module, ignoring the rest of
+  the chain. Key rotation uses it to confirm what the provider it wrote now
+  holds, independently of which provider `resolve/1` happens to answer from.
+  """
+  @spec fetch_from(module(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def fetch_from(provider, opts) do
+    if KeyProvider.available?(provider, opts) do
+      case provider.fetch(opts) do
+        {:ok, encoded} -> decode_master_key(encoded, opts)
+        {:error, _reason} = error -> error
+      end
+    else
+      {:error, :unavailable}
+    end
+  end
+
   defp resolve_chain([], _opts, acc) do
     cond do
       acc.invalid -> {:error, acc.invalid}
@@ -115,7 +133,7 @@ defmodule LemonCore.Secrets.MasterKey do
   end
 
   defp resolve_chain([provider | rest], opts, acc) do
-    case fetch_key(provider, opts) do
+    case fetch_from(provider, opts) do
       {:ok, key} ->
         {:ok, key, KeyProvider.name(provider)}
 
@@ -130,17 +148,6 @@ defmodule LemonCore.Secrets.MasterKey do
 
       {:error, reason} ->
         resolve_chain(rest, opts, %{acc | failure: acc.failure || wrap_error(provider, reason)})
-    end
-  end
-
-  defp fetch_key(provider, opts) do
-    if KeyProvider.available?(provider, opts) do
-      case provider.fetch(opts) do
-        {:ok, encoded} -> decode_master_key(encoded, opts)
-        {:error, _reason} = error -> error
-      end
-    else
-      {:error, :unavailable}
     end
   end
 
@@ -234,8 +241,8 @@ defmodule LemonCore.Secrets.MasterKey do
       warn_once(:legacy_raw_key, """
       Lemon secrets master key is a raw string, not base64-encoded 32-byte key \
       material. It is used verbatim as key material, with no password \
-      stretching. Generate a real key with `mix lemon.secrets.init` (or \
-      `openssl rand -base64 32`), re-import your secrets under it, and drop \
+      stretching. Rotate to a generated key with `lemon secrets rotate-key` \
+      (or `mix lemon.secrets.rotate_key`), then drop \
       `allow_legacy_raw_keys` from your config.\
       """)
 

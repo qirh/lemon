@@ -70,6 +70,8 @@ defmodule LemonControlPlane.SessionStatsWireE2ETest do
       System.cmd(
         bun,
         [
+          # Run against the lockfile-pinned clients/tui install, never auto-install.
+          "--no-install",
           script,
           "ws://127.0.0.1:#{port}/ws",
           @operator_token,
@@ -100,7 +102,7 @@ defmodule LemonControlPlane.SessionStatsWireE2ETest do
   defp restore_env(key, nil), do: Application.delete_env(:lemon_control_plane, key)
   defp restore_env(key, value), do: Application.put_env(:lemon_control_plane, key, value)
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 300)
   defp eventually(_fun, 0), do: false
 
   defp eventually(fun, attempts) do

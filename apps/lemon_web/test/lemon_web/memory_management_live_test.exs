@@ -6,23 +6,23 @@ defmodule LemonWeb.MemoryManagementLiveTest do
   import ExUnit.CaptureLog
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
+  import LemonWeb.Test.OperatorAuth
 
   alias LemonMemory.{Document, Lifecycle, Store}
 
   @moduletag :tmp_dir
 
-  setup %{tmp_dir: tmp_dir} do
+  setup :configure_operator_token
+
+  setup %{tmp_dir: tmp_dir, token: token} do
     marker = "PLANTED_MEMORY_#{System.unique_integer([:positive, :monotonic])}"
-    token = "memory-web-token-#{marker}"
     store = String.to_atom("memory_web_#{System.unique_integer([:positive])}")
     start_supervised!({Store, name: store, path: tmp_dir})
 
     previous =
-      Map.new([:access_token, :memory_lifecycle_fun], fn key ->
+      Map.new([:memory_lifecycle_fun], fn key ->
         {key, Application.get_env(:lemon_web, key)}
       end)
-
-    Application.put_env(:lemon_web, :access_token, token)
 
     Application.put_env(:lemon_web, :memory_lifecycle_fun, fn action, args ->
       apply(Lifecycle, action, args ++ [[server: store]])
@@ -73,37 +73,27 @@ defmodule LemonWeb.MemoryManagementLiveTest do
     {:ok, learned: learned, marker: marker, run: run, store: store, token: token}
   end
 
-  test "route fails closed, strips query token, and is discoverable", ctx do
-    Application.delete_env(:lemon_web, :access_token)
-
-    assert get(build_conn(), "/manage/memory") |> response(503) ==
-             "Management access token is not configured"
-
-    Application.put_env(:lemon_web, :access_token, ctx.token)
-    assert get(build_conn(), "/manage/memory?token=wrong") |> response(401) == "Unauthorized"
-
+  test "route requires operator login, drops query tokens and is in the rail", ctx do
     {conn, log} =
-      with_log(fn -> get(build_conn(), "/manage/memory?kind=learned&token=#{ctx.token}") end)
+      with_log(fn -> get(build_conn(), "/memory?kind=learned&token=#{ctx.token}") end)
 
-    assert redirected_to(conn, 302) == "/manage/memory?kind=learned"
-    refute response(conn, 302) =~ ctx.token
+    location = redirected_to(conn, 302)
+    assert URI.decode_query(URI.parse(location).query) == %{"return_to" => "/memory?kind=learned"}
+    refute location =~ ctx.token
     refute log =~ ctx.token
 
-    html = conn |> recycle() |> get("/manage/memory?kind=learned") |> html_response(200)
-    assert html =~ "Durable memory"
+    html = authenticated_conn(ctx.token) |> get("/memory?kind=learned") |> html_response(200)
+    assert html =~ "Memory"
+    assert html =~ ~s(href="/memory")
+    refute html =~ ctx.token
     refute_sensitive(html, ctx)
 
-    sessions_html =
-      get(build_conn(), "/manage?token=#{ctx.token}")
-      |> recycle()
-      |> get("/manage")
-      |> html_response(200)
-
-    assert sessions_html =~ ~s(href="/manage/memory")
+    clear_operator_token()
+    assert get(build_conn(), "/memory") |> response(503) =~ "operator token"
   end
 
   test "search and inspection render bounded learned provenance without sensitive content", ctx do
-    {:ok, view, html} = live(authenticated_conn(ctx.token), "/manage/memory")
+    {:ok, view, html} = live(authenticated_conn(ctx.token), "/memory")
     assert html =~ "Reviewed learning"
     assert html =~ "Run memory"
     refute_sensitive(html, ctx)
@@ -146,7 +136,7 @@ defmodule LemonWeb.MemoryManagementLiveTest do
   end
 
   test "wrong and stale confirmations preserve drafts and records; exact digest deletes", ctx do
-    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/manage/memory")
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/memory")
 
     render_change(view, "search", %{
       "filters" => %{
@@ -203,7 +193,7 @@ defmodule LemonWeb.MemoryManagementLiveTest do
   end
 
   test "forged identifiers and arbitrary backend failures stay bounded and sanitized", ctx do
-    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/manage/memory")
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/memory")
 
     forged = render_click(view, "inspect", %{"id" => "../memory.sqlite3"})
     assert forged =~ "temporarily unavailable"
@@ -215,22 +205,20 @@ defmodule LemonWeb.MemoryManagementLiveTest do
 
     {rendered, log} =
       with_log(fn ->
-        {:ok, failed_view, html} = live(authenticated_conn(ctx.token), "/manage/memory")
+        {:ok, failed_view, html} = live(authenticated_conn(ctx.token), "/memory")
         {html, formatted_live_view_state(failed_view)}
       end)
 
     assert {html, state} = rendered
     assert html =~ "temporarily unavailable"
+    assert html =~ "Memory unavailable"
+    refute html =~ "No memory records match"
     refute_sensitive(html, ctx)
     refute_sensitive(state, ctx)
     refute_sensitive(log, ctx)
   end
 
-  defp authenticated_conn(token) do
-    conn = get(build_conn(), "/manage/memory?token=#{token}")
-    assert redirected_to(conn, 302) == "/manage/memory"
-    conn |> recycle() |> get("/manage/memory")
-  end
+  defp authenticated_conn(token), do: log_in(build_conn(), token)
 
   defp confirmation_digest(html) do
     [digest] =

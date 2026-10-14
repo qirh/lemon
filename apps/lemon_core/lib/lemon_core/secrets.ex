@@ -18,25 +18,23 @@ defmodule LemonCore.Secrets do
 
   ## Key rotation
 
-  Rotation is **not supported yet**: there is no re-encryption path, so
-  replacing the master key makes every stored secret undecryptable. Tracked as
-  item 1.5 in `docs/platform-split.md`.
+  `LemonCore.Secrets.KeyRotation` replaces the master key and re-encrypts
+  every stored secret under it (`lemon secrets rotate-key`, or
+  `mix lemon.secrets.rotate_key`). It previews first and applies only with the
+  preview's confirmation token, refuses to touch anything when a stored secret
+  does not decrypt with the current key, refuses while a Lemon runtime is
+  running, and keeps every secret decryptable by whichever key is loaded next,
+  even if it is interrupted. `set/3` and rotation share `LemonCore.Secrets.Lock`,
+  so a write never lands under a key being retired. Only the encrypted store
+  is rotated; external sources and environment fallback are untouched.
 
-  The workaround is export/import — with the *old* key still in place, read the
-  plaintext values out, swap the key, then write them back:
-
-      {:ok, entries} = LemonCore.Secrets.list()
-      exported = Map.new(entries, &{&1.name, elem(LemonCore.Secrets.get(&1.name), 1)})
-      # rotate the key (e.g. mix lemon.secrets.init --force), then:
-      Enum.each(exported, fn {name, value} -> LemonCore.Secrets.set(name, value) end)
-
-  Keep the exported values in memory (or a `0600` file you delete afterwards),
-  never in shell history or logs.
+  Replacing the key by other means (`mix lemon.secrets.init --force`, editing
+  the key file or Keychain entry) still makes every stored secret undecryptable.
   """
 
   alias LemonCore.Clock
   alias LemonCore.MapHelpers
-  alias LemonCore.Secrets.{Crypto, External, MasterKey}
+  alias LemonCore.Secrets.{Crypto, External, KeyRotation, Lock, MasterKey}
   alias LemonCore.Store
 
   @table :secrets_v1
@@ -65,14 +63,30 @@ defmodule LemonCore.Secrets do
   @spec default_owner() :: owner()
   def default_owner, do: @default_owner
 
+  @doc """
+  Encrypts `value` under the current master key and stores it.
+
+  Holds `LemonCore.Secrets.Lock` from resolving the key until the record is
+  stored, so a write never lands under a key a concurrent rotation is
+  retiring. Returns `{:error, :secrets_locked}` if a live holder keeps the
+  lock for longer than the wait, or `{:error, {:secrets_lock_held, host}}`
+  for a lease from another host; callers must report either, not succeed.
+  """
   @spec set(name(), String.t(), keyword()) ::
           {:ok, secret_metadata()} | {:error, error_reason()}
   def set(name, value, opts \\ [])
 
   def set(name, value, opts) when is_binary(value) do
     with {:ok, name} <- normalize_name(name),
-         {:ok, owner} <- normalize_owner(opts),
-         {:ok, master_key, _source} <- MasterKey.resolve(opts),
+         {:ok, owner} <- normalize_owner(opts) do
+      Lock.with_write_lock(fn -> store_secret(owner, name, value, opts) end)
+    end
+  end
+
+  def set(_, _, _), do: {:error, :invalid_secret_value}
+
+  defp store_secret(owner, name, value, opts) do
+    with {:ok, master_key, _source} <- MasterKey.resolve(opts),
          {:ok, encrypted} <- Crypto.encrypt(value, master_key) do
       now = Clock.now_ms()
       existing = Store.get(@table, {owner, name}) || %{}
@@ -93,16 +107,8 @@ defmodule LemonCore.Secrets do
       :ok = Store.put(@table, {owner, name}, record)
       emit_secret_event(owner, name, :set)
       {:ok, metadata(owner, name, record)}
-    else
-      {:error, :missing_master_key} -> {:error, :missing_master_key}
-      {:error, :invalid_master_key} -> {:error, :invalid_master_key}
-      {:error, :invalid_secret_name} -> {:error, :invalid_secret_name}
-      {:error, :invalid_owner} -> {:error, :invalid_owner}
-      {:error, reason} -> {:error, reason}
     end
   end
-
-  def set(_, _, _), do: {:error, :invalid_secret_value}
 
   @spec get(name(), keyword()) :: {:ok, String.t()} | {:error, error_reason()}
   def get(name, opts \\ []) do
@@ -110,7 +116,7 @@ defmodule LemonCore.Secrets do
          {:ok, owner} <- normalize_owner(opts),
          {:ok, entry} <- fetch_active_entry(owner, name),
          {:ok, master_key, _source} <- MasterKey.resolve(opts),
-         {:ok, plaintext} <- Crypto.decrypt(entry, master_key) do
+         {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
       touch_entry(owner, name, entry)
       {:ok, plaintext}
     else
@@ -271,7 +277,7 @@ defmodule LemonCore.Secrets do
       |> Store.list()
       |> Enum.reduce([], fn
         {{record_owner, name}, entry}, acc when record_owner == owner ->
-          if expired?(entry) do
+          if expired_entry?(entry) do
             :ok = Store.delete(@table, {record_owner, name})
             acc
           else
@@ -359,7 +365,7 @@ defmodule LemonCore.Secrets do
         {:error, :not_found}
 
       entry ->
-        if expired?(entry) do
+        if expired_entry?(entry) do
           :ok = Store.delete(@table, {owner, name})
           {:error, :expired}
         else
@@ -368,6 +374,9 @@ defmodule LemonCore.Secrets do
     end
   end
 
+  # Compare-and-swap so a read never writes back a record that changed after it
+  # was fetched (a concurrent `set/3`, or a key rotation staging ciphertext).
+  # Usage metadata is best effort: losing a race only skips the count.
   defp touch_entry(owner, name, entry) do
     now = Clock.now_ms()
 
@@ -376,7 +385,8 @@ defmodule LemonCore.Secrets do
       |> put_field(:usage_count, (get_field(entry, :usage_count) || 0) + 1)
       |> put_field(:last_used_at, now)
 
-    :ok = Store.put(@table, {owner, name}, updated)
+    _ = Store.compare_and_swap(@table, {owner, name}, entry, updated)
+    :ok
   end
 
   defp metadata(owner, name, entry) do
@@ -393,7 +403,9 @@ defmodule LemonCore.Secrets do
     }
   end
 
-  defp expired?(entry) do
+  @doc false
+  @spec expired_entry?(map()) :: boolean()
+  def expired_entry?(entry) do
     expires_at = get_field(entry, :expires_at)
 
     is_integer(expires_at) and expires_at > 0 and expires_at <= Clock.now_ms()

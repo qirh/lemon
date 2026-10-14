@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+#
+# lemonup - switch the `lemon` on PATH between installed releases and a source checkout.
+#
+# ~/.lemon/bin/lemon is the one command users run. The installer points it at
+# ../versions/current/bin/lemon; lemonup keeps that shape for releases and moves
+# only versions/current, the same pointer `lemon update` flips. Selecting `local`
+# points ~/.lemon/bin/lemon at a checkout's bin/lemon instead, which runs from
+# source (compiling on demand) with the same ~/.lemon config, secrets and store.
+#
+#   lemonup list                  installed releases and the local checkout
+#   lemonup current               the active selection
+#   lemonup use <version>         activate an installed release
+#   lemonup use local [checkout]  run from source (default: this checkout)
+#   lemonup install [version]     download a release (default: latest stable) and activate it
+#   lemonup update                install the latest stable release if needed and activate it
+#   lemonup uninstall <version>   delete an inactive installed release
+#
+# Release and source launchers keep incompatible daemon records, so a runtime
+# answering on the control port is stopped by the launcher that started it,
+# and the newly selected launcher starts it again after the switch.
+
+set -euo pipefail
+
+info() { printf '\033[0;32m[lemonup]\033[0m %s\n' "$1"; }
+error() { printf '\033[0;31m[lemonup]\033[0m %s\n' "$1" >&2; }
+die() { error "$1"; exit 1; }
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd -P)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+CHECKOUT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd -P)"
+
+LEMON_HOME_DIR="$HOME/.lemon"
+BIN_DIR="$LEMON_HOME_DIR/bin"
+VERSIONS_DIR="$LEMON_HOME_DIR/versions"
+LAUNCHER="$BIN_DIR/lemon"
+RELEASE_LINK="../versions/current/bin/lemon"
+PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
+[[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid LEMON_CONTROL_PLANE_PORT: $PORT"
+
+usage() {
+  cat <<'EOF'
+lemonup - switch between Lemon versions
+
+Usage:
+  lemonup list                  Installed releases and the local checkout; * marks the active one
+  lemonup current               Print the active selection
+  lemonup use <version>         Activate an installed release
+  lemonup use local [checkout]  Run from a source checkout (default: the checkout holding lemonup)
+  lemonup install [version]     Install a release (default: latest stable) and activate it
+  lemonup update                Install the latest stable release if needed and activate it
+  lemonup uninstall <version>   Delete an installed release that is not active
+
+A runtime answering on the control port (LEMON_CONTROL_PLANE_PORT, default 4040)
+is stopped before a switch and started again with the new selection.
+EOF
+}
+
+# Same rule as LemonCore.Update.Plan.safe_version?/1: a single path component.
+valid_version() { [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z._~-]{0,63}$ ]] && [ "$1" != current ]; }
+
+# A source checkout is a Lemon umbrella with an executable source launcher.
+checkout_root() {
+  local root
+  root="$(cd "$1" 2>/dev/null && pwd -P)" || return 1
+  [ -x "$root/bin/lemon" ] && [ -f "$root/mix.exs" ] && [ -d "$root/apps/lemon_cli" ] || return 1
+  printf '%s\n' "$root"
+}
+
+# Prints "release <version>", "local <checkout>", "none", or "unmanaged <link>".
+# Ownership is read from the link's shape alone, with no marker file: the
+# installer's relative release link, or an absolute link to a checkout's
+# bin/lemon. Links written by earlier versions of this script have the same shape.
+active() {
+  local link version
+  if [ ! -L "$LAUNCHER" ]; then
+    if [ -e "$LAUNCHER" ]; then printf 'unmanaged %s\n' "$LAUNCHER"; else printf 'none\n'; fi
+    return
+  fi
+  link="$(readlink "$LAUNCHER")"
+  if [ "$link" = "$RELEASE_LINK" ]; then
+    version="$(readlink "$VERSIONS_DIR/current" 2>/dev/null || true)"
+    if valid_version "$version"; then printf 'release %s\n' "$version"; else printf 'none\n'; fi
+  elif [[ "$link" == /*/bin/lemon ]] && checkout_root "${link%/bin/lemon}" >/dev/null; then
+    printf 'local %s\n' "$(checkout_root "${link%/bin/lemon}")"
+  else
+    printf 'unmanaged %s\n' "$link"
+  fi
+}
+
+describe_checkout() {
+  local ref dirty=""
+  ref="$(git -C "$1" rev-parse --abbrev-ref HEAD 2>/dev/null || true)@$(git -C "$1" rev-parse --short HEAD 2>/dev/null || true)"
+  [ -z "$(git -C "$1" status --porcelain --untracked-files=no 2>/dev/null)" ] || dirty=", modified"
+  printf '%s (%s%s)\n' "$1" "$ref" "$dirty"
+}
+
+# rename(2) through python3 like install.sh: `mv` onto a symlink to a
+# directory moves into the directory instead of replacing the link.
+atomic_symlink() {
+  local target="$1" link="$2" tmp
+  tmp="$(dirname "$link")/.$(basename "$link").lemonup.$$"
+  rm -f "$tmp"
+  ln -s "$target" "$tmp"
+  python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$tmp" "$link" || {
+    rm -f "$tmp"
+    die "could not replace $link"
+  }
+}
+
+runtime_listening() { (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; }
+
+RESTART=0
+# Stop a runtime on the control port with the launcher that owns its record.
+pause_runtime() {
+  runtime_listening || return 0
+  [ -x "$LAUNCHER" ] || die "port $PORT is in use but $LAUNCHER is missing; stop that runtime first"
+  info "stopping the runtime on port $PORT before switching"
+  "$LAUNCHER" stop || die "the active launcher could not stop the runtime on port $PORT; stop it yourself, then retry"
+  RESTART=1
+}
+
+resume_runtime() {
+  [ "$RESTART" = 1 ] || return 0
+  info "starting the runtime with the new selection"
+  "$LAUNCHER" daemon || die "the runtime did not start; run 'lemon daemon' and check 'lemon doctor'"
+}
+
+cmd_list() {
+  local state version mark found=0 entry
+  local -a names=()
+  state="$(active)"
+  for entry in "$VERSIONS_DIR"/*; do
+    version="$(basename "$entry")"
+    if valid_version "$version" && [ -x "$entry/bin/lemon" ]; then names+=("$version"); fi
+  done
+  if [ "${#names[@]}" -gt 0 ]; then
+    while IFS= read -r version; do
+      mark=" "
+      [ "$state" != "release $version" ] || mark="*"
+      printf '%s %s\n' "$mark" "$version"
+      found=1
+    done < <(printf '%s\n' "${names[@]}" | sort -t. -k1,1n -k2,2n -k3,3n)
+  fi
+  [ "$found" = 1 ] || printf '  (no installed releases)\n'
+  if [[ "$state" == local\ * ]]; then
+    printf '* local  %s\n' "$(describe_checkout "${state#local }")"
+  fi
+  if [ "$state" != "local $CHECKOUT" ] && checkout_root "$CHECKOUT" >/dev/null; then
+    printf '  local  %s\n' "$(describe_checkout "$CHECKOUT")"
+  fi
+  [[ "$state" != unmanaged\ * ]] || printf '! %s is not managed by lemonup (%s)\n' "$LAUNCHER" "${state#unmanaged }"
+}
+
+cmd_current() {
+  local state
+  state="$(active)"
+  case "$state" in
+    release\ *) printf '%s\n' "${state#release }" ;;
+    local\ *) printf 'local %s\n' "$(describe_checkout "${state#local }")" ;;
+    none) printf 'none\n'; return 1 ;;
+    *) printf '%s is not managed by lemonup (%s)\n' "$LAUNCHER" "${state#unmanaged }"; return 1 ;;
+  esac
+}
+
+require_managed() {
+  local state
+  state="$(active)"
+  [[ "$state" != unmanaged\ * ]] ||
+    die "$LAUNCHER is not an installer or lemonup link (${state#unmanaged }); move it aside first"
+}
+
+cmd_use() {
+  local target="${1:-}" root
+  [ -n "$target" ] || die "usage: lemonup use <version> | lemonup use local [checkout]"
+  require_managed
+  if [ "$target" = local ]; then
+    [ "$#" -le 2 ] || die "usage: lemonup use local [checkout]"
+    root="$(checkout_root "${2:-$CHECKOUT}")" || die "not a Lemon source checkout: ${2:-$CHECKOUT}"
+    if [ "$(active)" = "local $root" ]; then
+      info "already using local $root"
+      return 0
+    fi
+    pause_runtime
+    mkdir -p "$BIN_DIR"
+    atomic_symlink "$root/bin/lemon" "$LAUNCHER"
+    info "using local $(describe_checkout "$root")"
+  else
+    [ "$#" -eq 1 ] || die "usage: lemonup use <version>"
+    valid_version "$target" || die "invalid version: $target"
+    [ -x "$VERSIONS_DIR/$target/bin/lemon" ] ||
+      die "$target is not installed; run 'lemonup install $target' or see 'lemonup list'"
+    if [ "$(active)" = "release $target" ]; then
+      info "already using $target"
+      return 0
+    fi
+    pause_runtime
+    atomic_symlink "$target" "$VERSIONS_DIR/current"
+    [ "$(readlink "$LAUNCHER" 2>/dev/null || true)" = "$RELEASE_LINK" ] || atomic_symlink "$RELEASE_LINK" "$LAUNCHER"
+    info "using $target"
+  fi
+  resume_runtime
+}
+
+require_installer() {
+  [ -f "$CHECKOUT/install.sh" ] || die "install.sh not found next to lemonup in $CHECKOUT"
+}
+
+cmd_install() {
+  [ "$#" -le 1 ] || die "usage: lemonup install [version]"
+  [ -z "${1:-}" ] || valid_version "$1" || die "invalid version: $1"
+  require_installer
+  require_managed
+  pause_runtime
+  local status=0
+  # The installer verifies, extracts and flips versions/current + bin/lemon itself.
+  if [ -n "${1:-}" ]; then
+    LEMON_VERSION="$1" sh "$CHECKOUT/install.sh" --skip-setup --no-modify-path || status=$?
+  else
+    env -u LEMON_VERSION sh "$CHECKOUT/install.sh" --skip-setup --no-modify-path || status=$?
+  fi
+  # Whatever is active now (new release, or the old one after a failed install)
+  # gets the runtime back.
+  resume_runtime
+  return "$status"
+}
+
+# "Latest" is whatever the installer itself would install unpinned, so update
+# and install share one manifest lookup and one download path. The resolved
+# version is then pinned, so a release published mid-update cannot slip in.
+cmd_update() {
+  local latest
+  [ "$#" -eq 0 ] || die "usage: lemonup update"
+  require_installer
+  require_managed
+  unset LEMON_VERSION LEMON_CHANNEL
+  latest="$(sh "$CHECKOUT/install.sh" --resolve-version)" || die "could not resolve the latest stable release"
+  valid_version "$latest" || die "the release manifest names an invalid version: $latest"
+  if [ "$(active)" = "release $latest" ]; then
+    info "already using the latest stable release, $latest"
+  elif [ -x "$VERSIONS_DIR/$latest/bin/lemon" ]; then
+    info "latest stable release $latest is already installed"
+    cmd_use "$latest"
+  else
+    info "installing the latest stable release, $latest"
+    cmd_install "$latest"
+  fi
+}
+
+cmd_uninstall() {
+  local version="${1:-}"
+  [ "$#" -eq 1 ] || die "usage: lemonup uninstall <version>"
+  valid_version "$version" || die "invalid version: $version"
+  [ -d "$VERSIONS_DIR/$version" ] || die "$version is not installed"
+  [ "$(readlink "$VERSIONS_DIR/current" 2>/dev/null || true)" != "$version" ] ||
+    die "$version is versions/current; 'lemonup use' another release first"
+  rm -rf -- "${VERSIONS_DIR:?}/$version"
+  info "removed $version"
+}
+
+case "${1:-}" in
+  list|ls) shift; [ "$#" -eq 0 ] || die "usage: lemonup list"; cmd_list ;;
+  current) shift; [ "$#" -eq 0 ] || die "usage: lemonup current"; cmd_current ;;
+  use) shift; cmd_use "$@" ;;
+  install) shift; cmd_install "$@" ;;
+  update) shift; cmd_update "$@" ;;
+  uninstall|rm) shift; cmd_uninstall "$@" ;;
+  ""|-h|--help|help) usage ;;
+  *) error "unknown command: $1"; usage >&2; exit 2 ;;
+esac

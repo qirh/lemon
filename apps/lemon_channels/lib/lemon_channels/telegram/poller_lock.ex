@@ -85,7 +85,7 @@ defmodule LemonChannels.Telegram.PollerLock do
       {:ok, io} ->
         # Keep it simple: lock is the presence of this file. We still write metadata so we can
         # clean up stale locks after crashes.
-        os_pid = System.pid() || ""
+        os_pid = System.pid()
         node = to_string(node())
         erl_pid = inspect(self())
         ts = System.system_time(:millisecond)
@@ -119,7 +119,7 @@ defmodule LemonChannels.Telegram.PollerLock do
   end
 
   defp lock_owned_by_self?(content) when is_binary(content) do
-    os_pid = System.pid() || ""
+    os_pid = System.pid()
     node_s = to_string(node())
     erl_pid = inspect(self())
 
@@ -139,7 +139,7 @@ defmodule LemonChannels.Telegram.PollerLock do
         lock_ts_ms = extract_ts_ms(content)
         stale_by_mtime? = stale_file?(path)
 
-        current_os_pid = System.pid() || ""
+        current_os_pid = System.pid()
         current_node_s = to_string(node())
 
         # If the lock was created by *this* OS process/node but the owning Erlang pid no longer
@@ -185,7 +185,7 @@ defmodule LemonChannels.Telegram.PollerLock do
     # One retry: if we win the race, we'll acquire; otherwise we report locked.
     case File.open(path, [:write, :exclusive]) do
       {:ok, io} ->
-        os_pid = System.pid() || ""
+        os_pid = System.pid()
         node = to_string(node())
         erl_pid = inspect(self())
         ts = System.system_time(:millisecond)
@@ -217,7 +217,7 @@ defmodule LemonChannels.Telegram.PollerLock do
       _ -> false
     end
   rescue
-    _ -> false
+    ArgumentError -> false
   end
 
   defp erl_pid_alive_on_this_node?(_), do: false
@@ -263,10 +263,10 @@ defmodule LemonChannels.Telegram.PollerLock do
         now_s = :calendar.datetime_to_gregorian_seconds(:calendar.local_time())
         mtime_s = :calendar.datetime_to_gregorian_seconds(mtime)
         max(0, now_s - mtime_s) * 1_000 > stale_ms
-      _ -> false
+
+      _ ->
+        false
     end
-  rescue
-    _ -> false
   end
 
   defp stale_after_ms do
@@ -294,8 +294,6 @@ defmodule LemonChannels.Telegram.PollerLock do
         nil
     end
   end
-
-  defp extract_ts_ms(_), do: nil
 
   defp os_pid_started_after_lock?(pid, lock_ts_ms)
        when is_binary(pid) and is_integer(lock_ts_ms) do

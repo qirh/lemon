@@ -24,13 +24,13 @@ defmodule Mix.Tasks.Lemon.Memory do
   Lemon maintains two separate stores:
 
   - **memory.sqlite3** — compact, normalized summaries of finalized runs.
-    Used for `search_memory` retrieval, cross-session context, and routing
+    Used for `recall` retrieval, cross-session context, and routing
     feedback (M6). Managed by `LemonMemory.Store`. This is what this
     task manages.
 
   - **run_history.sqlite3** — full run data (messages, events, tool calls).
     Used for session replay and compaction. Managed by
-    `LemonCore.RunHistoryStore`. Use `mix lemon.cleanup` to prune old runs.
+    `LemonCore.RunHistoryStore`.
 
   Erasing memory documents does not affect run history, and vice versa.
   """

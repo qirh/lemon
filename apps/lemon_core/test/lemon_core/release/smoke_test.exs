@@ -18,10 +18,9 @@ defmodule LemonCore.Release.SmokeTest do
 
   use ExUnit.Case, async: false
 
-  alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime, Skills}
+  alias LemonCore.Doctor.Checks.{Config, NodeTools, Runtime}
   alias LemonCore.Doctor.{Check, Report}
   alias LemonCore.Runtime.{Env, Health, Profile}
-  alias LemonCore.Update.Version
 
   # ──────────────────────────────────────────────────────────────────────────
   # Release configuration unit tests (always run)
@@ -58,19 +57,10 @@ defmodule LemonCore.Release.SmokeTest do
   end
 
   describe "runtime modules" do
-    test "Boot module is accessible" do
-      assert Code.ensure_loaded?(LemonCore.Runtime.Boot)
-    end
-
     test "Env module resolves without crashing" do
       env = Env.resolve()
       assert is_integer(env.control_port) and env.control_port > 0
       assert is_integer(env.web_port) and env.web_port > 0
-    end
-
-    test "Version module reports a current version string" do
-      v = Version.current()
-      assert is_binary(v) and byte_size(v) > 0
     end
   end
 
@@ -87,11 +77,7 @@ defmodule LemonCore.Release.SmokeTest do
     end
 
     test "doctor report aggregation works end-to-end" do
-      all_checks =
-        Config.run() ++
-          Runtime.run() ++
-          NodeTools.run() ++
-          Skills.run()
+      all_checks = Config.run() ++ Runtime.run() ++ NodeTools.run()
 
       report = Report.from_checks(all_checks)
       assert is_boolean(Report.ok?(report))

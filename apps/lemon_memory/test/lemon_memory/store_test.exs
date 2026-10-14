@@ -32,6 +32,30 @@ defmodule LemonMemory.StoreTest do
     %{store_pid: pid, dir: dir}
   end
 
+  test "starts memory beside an explicit primary SQLite file", %{dir: dir} do
+    primary_path = Path.join(dir, "primary.sqlite3")
+    {:ok, primary} = LemonCore.Store.SqliteBackend.init(path: primary_path)
+    on_exit(fn -> LemonCore.Store.SqliteBackend.close(primary) end)
+    name = :memory_primary_file_test
+
+    {:ok, store} =
+      start_supervised(Supervisor.child_spec({Store, name: name, path: primary_path}, id: name))
+
+    doc =
+      Document.new(
+        session_key: "file-store-session",
+        agent_id: "file-store-agent",
+        prompt_summary: "feature",
+        answer_summary: "implemented"
+      )
+
+    assert :ok = Store.put_sync(store, doc)
+    assert {:ok, persisted} = Store.get_document(store, doc.doc_id)
+    assert persisted.doc_id == doc.doc_id
+    assert File.exists?(Path.join(dir, "memory.sqlite3"))
+    refute File.dir?(primary_path)
+  end
+
   test "put_sync returns only after the document is queryable", %{store_pid: store} do
     doc =
       Document.new(
@@ -352,6 +376,74 @@ defmodule LemonMemory.StoreTest do
     assert results == []
   end
 
+  describe "lexical recall" do
+    setup %{store_pid: pid} do
+      session = "agent:lexical_#{System.unique_integer([:positive])}:main"
+
+      put = fn prompt, answer ->
+        doc = make_doc(session_key: session, prompt: prompt, answer: answer)
+        :ok = Store.put_sync(pid, doc)
+        doc
+      end
+
+      %{session: session, put: put}
+    end
+
+    test "a paraphrase sharing one keyword finds the document", %{
+      store_pid: pid,
+      session: session,
+      put: put
+    } do
+      doc = put.("My sister's name is Priya.", "Noted, your sister is Priya.")
+
+      # Only "priya" is shared; the old AND-join also required "call" and "sibling".
+      results =
+        Store.search(pid, "what should I call my sibling Priya?",
+          scope: :session,
+          scope_key: session,
+          limit: 5
+        )
+
+      assert Enum.map(results, & &1.doc_id) == [doc.doc_id]
+    end
+
+    test "longer terms match as prefixes", %{store_pid: pid, session: session, put: put} do
+      doc = put.("How did the deployment go?", "The deployment finished cleanly.")
+
+      results = Store.search(pid, "deploy", scope: :session, scope_key: session, limit: 5)
+
+      assert Enum.map(results, & &1.doc_id) == [doc.doc_id]
+    end
+
+    test "results are ordered by BM25, so matching more terms ranks higher", %{
+      store_pid: pid,
+      session: session,
+      put: put
+    } do
+      one = put.("Rotate the staging certificates.", "Done.")
+      both = put.("Rotate the staging database password.", "Rotated the database password.")
+
+      results =
+        Store.search(pid, "staging database password",
+          scope: :session,
+          scope_key: session,
+          limit: 5
+        )
+
+      assert Enum.map(results, & &1.doc_id) == [both.doc_id, one.doc_id]
+    end
+
+    test "a query made only of stopwords returns nothing instead of failing", %{
+      store_pid: pid,
+      session: session,
+      put: put
+    } do
+      put.("What is it?", "It is what it is.")
+
+      assert Store.search(pid, "what is it", scope: :session, scope_key: session, limit: 5) == []
+    end
+  end
+
   describe "J4: search scope must not broaden to :all when scope_key is nil" do
     test "scoped :session search with nil scope_key returns empty list", %{store_pid: pid} do
       session_a = "agent:scope_a_#{:rand.uniform(9999)}:main"
@@ -438,7 +530,7 @@ defmodule LemonMemory.StoreTest do
     end
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 200)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

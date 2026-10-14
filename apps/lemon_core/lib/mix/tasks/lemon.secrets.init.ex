@@ -17,7 +17,8 @@ defmodule Mix.Tasks.Lemon.Secrets.Init do
 
     * `--target file` — force a specific provider (`keychain` or `file`)
     * `--force` — overwrite an existing key file. Every secret encrypted under
-      the previous key becomes unreadable, so export them first.
+      the previous key becomes unreadable; to change a key in use and keep its
+      secrets, run `mix lemon.secrets.rotate_key` instead.
   """
 
   @impl true
@@ -44,7 +45,8 @@ defmodule Mix.Tasks.Lemon.Secrets.Init do
       {:error, {:key_file_exists, path}} ->
         Mix.raise(
           "A secrets master key already exists at #{path}. Re-run with --force to " <>
-            "replace it — every secret encrypted under the old key becomes unreadable."
+            "replace it — every secret encrypted under the old key becomes unreadable. " <>
+            "To change the key and keep secrets, run `mix lemon.secrets.rotate_key`."
         )
 
       {:error, reason} ->

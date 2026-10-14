@@ -44,6 +44,11 @@ on:
         type: boolean
         required: true
         default: false
+      skip_preflight:
+        description: "Skip the test-lane preflight (fast/quality/eval/clients); artifacts are still verified"
+        type: boolean
+        required: true
+        default: false
 
 concurrency:
   group: product-release
@@ -101,12 +106,7 @@ jobs:
           git add CHANGELOG.md mix.exs \
             clients/tui/package.json \
             clients/lemon-browser-node/package.json \
-            clients/lemon-browser-node/package-lock.json \
-            clients/lemon-web/package.json \
-            clients/lemon-web/package-lock.json \
-            clients/lemon-web/shared/package.json \
-            clients/lemon-web/server/package.json \
-            clients/lemon-web/web/package.json
+            clients/lemon-browser-node/package-lock.json
           git diff --cached --check
           git commit -m "release: bump version to ${TAG#v}"
           git tag -a "$TAG" -m "Lemon ${TAG#v}"
@@ -170,45 +170,58 @@ jobs:
           echo "mix.exs version matches tag: $MIX_VERSION"
 
   # ── Deterministic release gates for the exact release commit ─────────────────
+  # Pushes to main run every CI job, so when CI already passed on the release
+  # commit, or on the ancestor it differs from only by release metadata
+  # (version fields and changelogs), these lanes would re-prove the same code.
+  # scripts/ci_verified_commit decides; anything else runs the full gates.
   preflight-beam:
     name: Preflight BEAM
     needs: validate
+    # Tag-ref dispatches and tag pushes skip `prepare`; the implicit success()
+    # check covers skipped ancestors, so every downstream job gates explicitly.
+    if: ${{ !cancelled() && needs.validate.result == 'success' && !inputs.skip_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 50
 
-      - name: Setup BEAM
-        uses: erlef/setup-beam@v1
+      - name: Find CI coverage for the release commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if result="$(scripts/ci_verified_commit HEAD)"; then
+            echo "::notice::Release gates already passed in CI: $result"
+            echo "verified=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Running full release gates ($result)"
+            echo "verified=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: BEAM setup
+        if: steps.ci.outputs.verified != 'true'
+        uses: ./.github/actions/beam-setup
         with:
-          otp-version: ${{ env.OTP_VERSION }}
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-
-      - name: Cache Mix deps and build
-        uses: actions/cache@v4
-        with:
-          path: |
-            deps
-            _build
-          key: ${{ runner.os }}-mix-release-preflight-${{ hashFiles('mix.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-mix-release-preflight-
-            ${{ runner.os }}-mix-quality-
-
-      - name: Install dependencies
-        run: mix deps.get
+          family: install
+          bun: "true"
 
       - name: Run deterministic BEAM release gates
+        if: steps.ci.outputs.verified != 'true'
         run: |
           scripts/test fast
           scripts/test quality
           scripts/test eval-fast
 
       - name: Verify supported source and installer flows
+        if: steps.ci.outputs.verified != 'true'
         run: |
           scripts/verify_source_install
           scripts/verify_install_script
@@ -216,30 +229,49 @@ jobs:
   preflight-clients:
     name: Preflight clients
     needs: validate
+    if: ${{ !cancelled() && needs.validate.result == 'success' && !inputs.skip_preflight }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.validate.outputs.tag }}
+          fetch-depth: 50
+
+      - name: Find CI coverage for the release commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if result="$(scripts/ci_verified_commit HEAD)"; then
+            echo "::notice::Client gates already passed in CI: $result"
+            echo "verified=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Running full client gates ($result)"
+            echo "verified=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node
+        if: steps.ci.outputs.verified != 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "24"
           cache: npm
-          cache-dependency-path: |
-            clients/lemon-web/package-lock.json
-            clients/lemon-browser-node/package-lock.json
+          cache-dependency-path: clients/lemon-browser-node/package-lock.json
 
       - name: Setup Bun
+        if: steps.ci.outputs.verified != 'true'
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: clients/tui/.bun-version
 
       - name: Cache Bun install cache
+        if: steps.ci.outputs.verified != 'true'
         uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
@@ -248,6 +280,7 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Run client release gates
+        if: steps.ci.outputs.verified != 'true'
         run: scripts/test clients
 
   # ── Build release artifacts ──────────────────────────────────────────────────
@@ -255,6 +288,7 @@ jobs:
     name: Build ${{ matrix.profile }} (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
 
     strategy:
       fail-fast: false
@@ -360,6 +394,9 @@ jobs:
       # Remove only this profile's generated output so --overwrite cannot
       # package stale app/dependency versions beside the current release.
       - name: Build release
+        env:
+          LEMON_GIT_SHA: ${{ needs.validate.outputs.release_sha }}
+          LEMON_CHANNEL: ${{ needs.validate.outputs.channel }}
         run: |
           rm -rf "_build/prod/rel/${{ matrix.profile }}"
           mix release ${{ matrix.profile }}
@@ -373,9 +410,9 @@ jobs:
           PLATFORM="${{ matrix.platform }}"
           ARTIFACT_NAME="lemon-${VERSION}-${CHANNEL}-${PLATFORM}-${PROFILE}.tar.gz"
 
-          # Create tarball of the release directory
-          tar -czf "$ARTIFACT_NAME" \
-            -C "./_build/prod/rel/$PROFILE" .
+          # Reuse Mix's clean :tar output instead of compressing the runtime a
+          # second time. With no custom release :path, Mix writes it here.
+          cp "./_build/prod/$PROFILE-$VERSION.tar.gz" "$ARTIFACT_NAME"
 
           if command -v sha256sum >/dev/null 2>&1; then
             SHA256=$(sha256sum "$ARTIFACT_NAME" | awk '{print $1}')
@@ -411,6 +448,7 @@ jobs:
     name: Build lemon_tui
     runs-on: ubuntu-24.04
     needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
 
     env:
       LEMON_VERSION: ${{ needs.validate.outputs.version }}
@@ -424,7 +462,7 @@ jobs:
           ref: ${{ needs.validate.outputs.tag }}
 
       # clients/tui/.bun-version is the single source of truth for the Bun
-      # toolchain; quality.yml and release-smoke.yml read the same file.
+      # toolchain; ci.yml and release-smoke.yml read the same file.
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -508,6 +546,7 @@ jobs:
     name: Verify lemon_tui (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
     needs: [validate, build-tui]
+    if: ${{ !cancelled() && needs.build-tui.result == 'success' }}
     timeout-minutes: 15
 
     strategy:
@@ -558,6 +597,7 @@ jobs:
     name: Docker ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
     needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
 
     permissions:
       contents: read
@@ -701,6 +741,7 @@ jobs:
     name: Docker manifest
     runs-on: ubuntu-24.04
     needs: [validate, docker-build]
+    if: ${{ !cancelled() && needs.docker-build.result == 'success' }}
     timeout-minutes: 15
 
     permissions:
@@ -760,6 +801,7 @@ jobs:
     name: Publish release
     runs-on: ubuntu-latest
     needs: [validate, build, build-tui, verify-tui, docker-merge]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build-tui.result == 'success' && needs.verify-tui.result == 'success' && needs.docker-merge.result == 'success' }}
     permissions:
       contents: write
 
@@ -913,7 +955,7 @@ jobs:
   promote-container:
     name: Promote container channel
     needs: [validate, publish]
-    if: needs.publish.result == 'success' && (github.event_name == 'push' || github.event.inputs.draft != 'true')
+    if: ${{ !cancelled() && needs.publish.result == 'success' && (github.event_name == 'push' || github.event.inputs.draft != 'true') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read

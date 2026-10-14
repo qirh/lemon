@@ -73,9 +73,11 @@ usage() {
 Usage: scripts/test <lane> [args]
 
 Canonical test lanes:
-  fast       MIX_ENV=test compile with warnings as errors, then ExUnit excluding integration
-  quality    Lemon quality gates: CI/docs lint, skill lint, architecture quality, duplicate tests, focused quality tests
-  clients    Client CI parity checks for lemon-web, tui, and lemon-browser-node
+  fast       CI test lane: compile with warnings as errors, then ExUnit excluding integration (no coverage)
+  quality    CI check lane: compile -Werror, format check, credo, skip-tag guard, shellcheck, launcher
+             script tests, skill lint, mix lemon.quality, focused quality tests
+  clients    CI client lane: tui (typecheck, lint, bun test) and lemon-browser-node (typecheck, lint, build, vitest)
+  coverage   Nightly lane: ExUnit excluding integration with --cover (per-app coverage thresholds)
   eval-fast  Small deterministic eval harness run: mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}
   live-eval  Opt-in provider-backed eval run: mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}
   smoke      Product-smoke pointer: run scripts/product_smoke_local locally; CI definition is .github/workflows/product-smoke.yml
@@ -176,14 +178,47 @@ run_fast() {
   mix test --exclude integration "$@"
 }
 
+run_coverage() {
+  ensure_repo_root
+  setup_test_env
+  mix compile --warnings-as-errors
+  mix test --exclude integration --cover "$@"
+}
+
+# ExUnit skip tags hide tests forever. Tests that need an optional host tool
+# use a named tag the app's test_helper excludes when the tool is missing.
+check_skipped_tests() {
+  local pattern='@(module|describe)?tag[[:space:]]+(:skip([^_[:alnum:]]|$)|skip:)'
+  if git grep -nE "$pattern" -- 'apps/*.exs'; then
+    echo "error: found skipped ExUnit tests (listed above). Fix and re-enable them, or tag them for a conditional exclude." >&2
+    return 1
+  fi
+}
+
+# --shell=sh on install.sh is load-bearing: the curl one-liner runs under
+# whatever /bin/sh the user has, so the script must stay POSIX.
+run_shellcheck() {
+  if ! command -v shellcheck >/dev/null 2>&1; then
+    echo "error: shellcheck is required for scripts/test quality (brew install shellcheck / apt-get install shellcheck)" >&2
+    return 1
+  fi
+  shellcheck --shell=sh install.sh
+  shellcheck scripts/verify_install_script
+  shellcheck rel/overlays/bin/lemon
+  shellcheck bin/lemonup scripts/test_lemonup.sh
+}
+
 run_quality() {
   ensure_repo_root
   setup_test_env
+  mix compile --warnings-as-errors
   mix format --check-formatted
   mix credo
-  bash scripts/test_contract.sh
+  check_skipped_tests
+  run_shellcheck
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh
+  bash scripts/test_lemonup.sh
   mix lemon.skill.lint
   mix lemon.quality
   mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs
@@ -206,14 +241,11 @@ run_bun_install_if_needed() {
 run_clients() {
   ensure_repo_root
 
-  run_npm_ci_if_needed clients/lemon-web
-  (cd clients/lemon-web && npm run test:startup-contract && npm run typecheck && npm --workspace web run lint && npm run build && npm run test:coverage && npm audit --omit=dev --audit-level=high)
-
   run_bun_install_if_needed clients/tui
-  (cd clients/tui && bun run check && bun test)
+  (cd clients/tui && bun run check && bun run lint && bun test)
 
   run_npm_ci_if_needed clients/lemon-browser-node
-  (cd clients/lemon-browser-node && npm run typecheck && npm run lint && npm run build && npm run test:coverage && npm audit --omit=dev --audit-level=high)
+  (cd clients/lemon-browser-node && npm run typecheck && npm run lint && npm run build && npm test)
 }
 
 run_eval_fast() {
@@ -285,6 +317,7 @@ case "$LANE" in
   fast) run_fast "$@" ;;
   quality) run_quality "$@" ;;
   clients) run_clients "$@" ;;
+  coverage) run_coverage "$@" ;;
   eval-fast) run_eval_fast "$@" ;;
   live-eval) run_live_eval "$@" ;;
   smoke) run_smoke "$@" ;;

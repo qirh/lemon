@@ -100,6 +100,7 @@ describe("profile chat routing in the real TUI shell", () => {
 		expect(server.requestsFor("profiles.get").at(-1)?.params).toEqual({ id: "ordinary" });
 		expect(server.requestsFor("profile.chat")).toHaveLength(0);
 		expect(server.requestsFor("chat.send")[0]?.params).toEqual({
+			cwd: process.cwd(),
 			sessionKey: "agent:ordinary:main",
 			prompt: "ordinary agent prompt",
 		});

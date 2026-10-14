@@ -90,12 +90,11 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
     _ -> fallback_catalog()
   end
 
-  defp to_model_map(%{provider: provider, id: id} = model) when is_binary(id) do
+  defp to_model_map(%{provider: provider, id: id} = model)
+       when is_binary(id) and (is_binary(provider) or is_atom(provider)) do
     provider_str = provider |> to_string() |> String.downcase()
     name = Map.get(model, :name) || Map.get(model, "name") || id
     %{provider: provider_str, id: id, name: name}
-  rescue
-    _ -> nil
   end
 
   defp to_model_map(_), do: nil
@@ -124,8 +123,6 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
     cfg = LemonCore.Config.cached()
     defaults = default_provider_hints(cfg)
     Enum.filter(model_maps, fn model -> normalize_provider_name(model.provider) in defaults end)
-  rescue
-    _ -> []
   end
 
   defp maybe_fallback_to_default_providers(filtered, _), do: filtered
@@ -143,8 +140,6 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
     |> Enum.filter(fn provider ->
       provider_enabled?(provider, configured, defaults, routing)
     end)
-  rescue
-    _ -> []
   end
 
   defp configured_provider_index(cfg) do
@@ -153,8 +148,6 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
     Enum.reduce(providers, %{}, fn {name, provider_cfg}, acc ->
       Map.put(acc, normalize_provider_name(name), provider_cfg || %{})
     end)
-  rescue
-    _ -> %{}
   end
 
   defp default_provider_hints(cfg) do
@@ -168,8 +161,6 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
     |> Enum.map(&normalize_provider_name/1)
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
-  rescue
-    _ -> []
   end
 
   defp split_model_hint(hint) when is_binary(hint) and hint != "" do
@@ -187,8 +178,6 @@ defmodule LemonChannels.Adapters.Discord.ModelCatalog do
   defp provider_routing_config(cfg) do
     agent = map_get(cfg, :agent) || %{}
     map_get(agent, :provider_routing) || %{}
-  rescue
-    _ -> %{}
   end
 
   defp provider_enabled?(provider, configured, defaults, routing) do

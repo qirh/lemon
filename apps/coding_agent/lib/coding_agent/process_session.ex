@@ -3,23 +3,28 @@ defmodule CodingAgent.ProcessSession do
   GenServer that manages a single background process via a Port.
 
   Features:
-  - Rolling log buffer (bounded)
+  - Rolling log buffer (bounded), split on complete lines (a partial line is
+    held until its newline arrives or the process exits)
+  - Incremental reads (`read_output/1`) with a per-process read cursor
   - Stdin writing support
   - Process kill support
   - Exit status tracking
   - Integration with ProcessStore for persistence
 
   The session monitors the OS process via a Port and maintains
-  a bounded ring buffer of output lines.
+  a bounded ring buffer of output lines. Complete output is archived in a
+  private temporary file, retrievable even after unread lines leave the ring.
   """
 
   use GenServer
-  require Logger
 
-  alias CodingAgent.ProcessStore
+  alias CodingAgent.{BashExecutor, ProcessStore}
   alias LemonCore.TerminalBackends
 
   @default_max_log_lines 1000
+  # A line longer than this (for example `\r` progress output with no
+  # newline) is flushed to the log as-is instead of growing without bound.
+  @max_partial_line_bytes 65_536
 
   # Client API
 
@@ -34,6 +39,8 @@ defmodule CodingAgent.ProcessSession do
   - :max_log_lines - Maximum log lines to keep (default: 1000)
   - :timeout_ms - Timeout in milliseconds (optional, nil = no timeout)
   - :on_exit - Callback when process exits (optional)
+  - :owner - Owning session id, recorded in the store (optional)
+  - :owner_pid - Owning process; the OS process tree is killed when it exits (optional)
   """
   def start_link(opts) do
     process_id = Keyword.get(opts, :process_id) || generate_id()
@@ -57,6 +64,17 @@ defmodule CodingAgent.ProcessSession do
   """
   def poll(process_id, line_count \\ 100) do
     GenServer.call(via_tuple(process_id), {:poll, line_count}, 5_000)
+  end
+
+  @doc """
+  Return the complete output lines produced since the previous
+  `read_output/1` call and advance the read cursor.
+
+  `dropped_lines` counts lines that scrolled out of the bounded buffer before
+  they could be read.
+  """
+  def read_output(process_id) do
+    GenServer.call(via_tuple(process_id), :read_output, 5_000)
   end
 
   @doc """
@@ -109,6 +127,16 @@ defmodule CodingAgent.ProcessSession do
     max_log_lines = Keyword.get(opts, :max_log_lines, @default_max_log_lines)
     timeout_ms = Keyword.get(opts, :timeout_ms)
     on_exit = Keyword.get(opts, :on_exit)
+    owner = Keyword.get(opts, :owner)
+
+    output_path =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-process-#{:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)}.log"
+      )
+
+    {:ok, output_file} = File.open(output_path, [:write, :binary, :exclusive])
+    File.chmod!(output_path, 0o600)
 
     # Create the process entry in the store
     ProcessStore.new_process(%{
@@ -119,9 +147,11 @@ defmodule CodingAgent.ProcessSession do
       backend: backend,
       terminal_capabilities: terminal_capabilities,
       max_log_lines: max_log_lines,
+      full_output_path: output_path,
       timeout_ms: timeout_ms,
       restarted_from: Keyword.get(opts, :restarted_from),
       restart_generation: Keyword.get(opts, :restart_generation, 0),
+      owner: owner,
       status: :queued
     })
 
@@ -134,6 +164,12 @@ defmodule CodingAgent.ProcessSession do
 
     # Set up timeout if specified
     timeout_ref = if timeout_ms, do: Process.send_after(self(), :timeout, timeout_ms)
+
+    owner_monitor =
+      case Keyword.get(opts, :owner_pid) do
+        pid when is_pid(pid) -> Process.monitor(pid)
+        _ -> nil
+      end
 
     state = %{
       process_id: process_id,
@@ -149,6 +185,13 @@ defmodule CodingAgent.ProcessSession do
       max_log_lines: max_log_lines,
       log_buffer: :queue.new(),
       log_count: 0,
+      partial_line: "",
+      total_lines: 0,
+      read_cursor: 0,
+      output_file: output_file,
+      full_output_path: output_path,
+      owner: owner,
+      owner_monitor: owner_monitor,
       timeout_ref: timeout_ref,
       on_exit: on_exit,
       started_at: System.system_time(:second),
@@ -193,6 +236,31 @@ defmodule CodingAgent.ProcessSession do
     {:reply, {:ok, result}, state}
   end
 
+  def handle_call(:read_output, _from, state) do
+    first_buffered = state.total_lines - :queue.len(state.log_buffer)
+    start = max(state.read_cursor, first_buffered)
+
+    lines =
+      state.log_buffer
+      |> :queue.to_list()
+      |> Enum.drop(start - first_buffered)
+
+    ProcessStore.put_read_cursor(state.process_id, state.total_lines)
+
+    result = %{
+      process_id: state.process_id,
+      status: state.status,
+      exit_code: state.exit_code,
+      command: state.command,
+      owner: state.owner,
+      lines: lines,
+      full_output_path: state.full_output_path,
+      dropped_lines: start - state.read_cursor
+    }
+
+    {:reply, {:ok, result}, %{state | read_cursor: state.total_lines}}
+  end
+
   def handle_call({:write_stdin, data}, _from, state) do
     if state.status == :running do
       try do
@@ -223,24 +291,21 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
-    lines = String.split(data, "\n", trim: false)
+    :ok = IO.binwrite(state.output_file, data)
+    parts = String.split(state.partial_line <> data, "\n")
+    {lines, [partial]} = Enum.split(parts, -1)
 
-    # Append each line to the log buffer
-    Enum.each(lines, fn line ->
-      ProcessStore.append_log(state.process_id, line)
-    end)
+    {lines, partial} =
+      if byte_size(partial) > @max_partial_line_bytes,
+        do: {lines ++ [partial], ""},
+        else: {lines, partial}
 
-    new_buffer =
-      lines
-      |> Enum.reduce(state.log_buffer, fn line, buf -> :queue.in(line, buf) end)
-      |> trim_log_buffer(state.max_log_lines)
-
-    new_count = :queue.len(new_buffer)
-
-    {:noreply, %{state | log_buffer: new_buffer, log_count: new_count}}
+    {:noreply, state |> append_lines(lines) |> Map.put(:partial_line, partial)}
   end
 
   def handle_info({port, {:exit_status, exit_code}}, %{port: port} = state) do
+    state = flush_partial_line(state)
+
     # Cancel timeout if still pending
     if state.timeout_ref do
       Process.cancel_timer(state.timeout_ref)
@@ -306,6 +371,20 @@ defmodule CodingAgent.ProcessSession do
     end
   end
 
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_monitor: ref} = state)
+      when is_reference(ref) do
+    # The owning session is gone; nothing can read or stop this process any more.
+    if state.status == :running do
+      do_kill(state.os_pid, :sigkill)
+      ProcessStore.mark_killed(state.process_id)
+
+      {:noreply,
+       %{state | status: :killed, owner_monitor: nil, completed_at: System.system_time(:second)}}
+    else
+      {:noreply, %{state | owner_monitor: nil}}
+    end
+  end
+
   def handle_info(:stop_after_exit, state) do
     {:stop, :normal, state}
   end
@@ -316,6 +395,7 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def terminate(_reason, state) do
+    File.close(state.output_file)
     # Ensure port is closed
     if state.port do
       try do
@@ -453,62 +533,35 @@ defmodule CodingAgent.ProcessSession do
     end
   end
 
-  defp do_kill(os_pid, :sigterm) do
-    case :os.type() do
-      {:unix, _} ->
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -15 #{os_pid} 2>/dev/null")
-        catch
-          _, _ -> :ok
-        end
+  defp append_lines(state, []), do: state
 
-      {:win32, _} ->
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"taskkill /PID #{os_pid}")
-        catch
-          _, _ -> :ok
-        end
-    end
+  defp append_lines(state, lines) do
+    ProcessStore.append_logs(state.process_id, lines)
 
-    :ok
+    buffer =
+      lines
+      |> Enum.reduce(state.log_buffer, &:queue.in/2)
+      |> trim_log_buffer(state.max_log_lines)
+
+    %{
+      state
+      | log_buffer: buffer,
+        log_count: :queue.len(buffer),
+        total_lines: state.total_lines + length(lines)
+    }
   end
 
-  defp do_kill(os_pid, :sigkill) do
-    case :os.type() do
-      {:unix, _} ->
-        # Try process group first, then single process
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -9 -#{os_pid} 2>/dev/null")
-        catch
-          _, _ -> :ok
-        end
+  defp flush_partial_line(%{partial_line: ""} = state), do: state
 
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"kill -9 #{os_pid} 2>/dev/null")
-        catch
-          _, _ -> :ok
-        end
-
-      {:win32, _} ->
-        try do
-          # os_pid is guard-checked as an integer; shell process-tree kill syntax is deliberate.
-          # credo:disable-for-next-line Credo.Check.Warning.UnsafeExec
-          :os.cmd(~c"taskkill /F /T /PID #{os_pid}")
-        catch
-          _, _ -> :ok
-        end
-    end
-
-    :ok
+  defp flush_partial_line(state) do
+    append_lines(%{state | partial_line: ""}, [state.partial_line])
   end
+
+  defp do_kill(os_pid, signal) when is_integer(os_pid) do
+    BashExecutor.kill_process_tree(os_pid, signal)
+  end
+
+  defp do_kill(_os_pid, _signal), do: :ok
 
   defp get_shell_config do
     case :os.type() do

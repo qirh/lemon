@@ -84,22 +84,10 @@ defmodule LemonControlPlane.Methods.SessionsPreview do
   defp truncate(text, max) when is_binary(text), do: String.slice(text, 0, max) <> "..."
   defp truncate(_, _), do: nil
 
-  defp preview_text(text, max) when is_binary(text), do: text |> redact_text() |> truncate(max)
-  defp preview_text(_, _), do: nil
+  defp preview_text(text, max) when is_binary(text),
+    do: text |> LemonCore.Redact.text() |> truncate(max)
 
-  defp redact_text(text) do
-    text
-    |> then(fn value ->
-      Regex.replace(
-        ~r/(?i)\b(api[_-]?key|token|secret|password|private[_-]?key|credential)\s*=\s*([^\s,;]+)/,
-        value,
-        "\\1=[REDACTED]"
-      )
-    end)
-    |> then(fn value ->
-      Regex.replace(~r/(?i)\bbearer\s+[A-Za-z0-9._~+\/=-]+/, value, "Bearer [REDACTED]")
-    end)
-  end
+  defp preview_text(_, _), do: nil
 
   defp truncated?(text, max) when is_binary(text), do: byte_size(text) > max
   defp truncated?(_, _), do: false

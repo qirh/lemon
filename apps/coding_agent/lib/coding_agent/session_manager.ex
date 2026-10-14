@@ -34,14 +34,18 @@ defmodule CodingAgent.SessionManager do
             id: String.t(),
             timestamp: integer(),
             cwd: String.t(),
-            parent_session: String.t() | nil
+            parent_session: String.t() | nil,
+            active_leaf_id: String.t() | nil,
+            checkpoint_entry_count: non_neg_integer() | nil
           }
     defstruct type: :session,
               version: 3,
               id: "",
               timestamp: 0,
               cwd: "",
-              parent_session: nil
+              parent_session: nil,
+              active_leaf_id: nil,
+              checkpoint_entry_count: nil
   end
 
   defmodule SessionEntry do
@@ -265,13 +269,15 @@ defmodule CodingAgent.SessionManager do
             entries: [SessionEntry.t()] | nil,
             entries_rev: [SessionEntry.t()],
             by_id: %{String.t() => SessionEntry.t()},
-            leaf_id: String.t() | nil
+            leaf_id: String.t() | nil,
+            file_path: String.t() | nil
           }
     defstruct header: %SessionHeader{},
               entries: [],
               entries_rev: [],
               by_id: %{},
-              leaf_id: nil
+              leaf_id: nil,
+              file_path: nil
   end
 
   # ============================================================================
@@ -317,7 +323,11 @@ defmodule CodingAgent.SessionManager do
          {:ok, {header, entries}} <- parse_jsonl(content),
          {:ok, migrated_entries} <- migrate_to_current_version(header.version, entries) do
       by_id = Map.new(migrated_entries, fn entry -> {entry.id, entry} end)
-      leaf_id = find_latest_leaf(migrated_entries)
+
+      leaf_id =
+        if header.checkpoint_entry_count == length(migrated_entries),
+          do: header.active_leaf_id,
+          else: find_latest_leaf(migrated_entries)
 
       {:ok,
        %Session{
@@ -340,7 +350,14 @@ defmodule CodingAgent.SessionManager do
     ordered = entries(session)
 
     lines =
-      [encode_header(session.header) | Enum.map(ordered, &encode_entry/1)]
+      [
+        encode_header(%{
+          session.header
+          | active_leaf_id: session.leaf_id,
+            checkpoint_entry_count: length(ordered)
+        })
+        | Enum.map(ordered, &encode_entry/1)
+      ]
       |> Enum.join("\n")
 
     with :ok <- File.mkdir_p(dir) do
@@ -364,6 +381,66 @@ defmodule CodingAgent.SessionManager do
   defp atomic_temp_path(path) do
     suffix = :crypto.strong_rand_bytes(6) |> Base.encode16(case: :lower)
     "#{path}.tmp.#{suffix}"
+  end
+
+  @doc """
+  Enable synchronous incremental persistence for a live session.
+  The initial atomic snapshot also repairs an interrupted trailing append.
+  """
+  @spec persist(Session.t(), String.t()) :: Session.t()
+  def persist(%Session{} = session, path) do
+    case save_to_file(path, session) do
+      :ok -> %{session | file_path: path}
+      {:error, reason} -> raise File.Error, reason: reason, action: "persist session", path: path
+    end
+  end
+
+  @doc """
+  Fork the selected branch into an independent session file, preserving model,
+  thinking level and compaction history. A separate cumulative-spend snapshot
+  includes off-branch usage so forking cannot reset budget caps; it does not add
+  model-visible conversation messages. The source file is never modified.
+  """
+  @spec fork_file(String.t(), String.t(), keyword()) :: {:ok, Session.t()} | {:error, term()}
+  def fork_file(source_path, destination_path, opts \\ []) do
+    with false <- Path.expand(source_path) == Path.expand(destination_path),
+         false <- File.exists?(destination_path),
+         {:ok, source} <- load_from_file(source_path) do
+      leaf_id = Keyword.get(opts, :leaf_id, source.leaf_id)
+
+      if is_nil(leaf_id) or Map.has_key?(source.by_id, leaf_id) do
+        branch = get_branch(source, leaf_id)
+
+        child =
+          new(source.header.cwd, id: Keyword.get(opts, :id), parent_session: source.header.id)
+
+        child = %{
+          child
+          | entries: branch,
+            entries_rev: Enum.reverse(branch),
+            by_id: Map.new(branch, &{&1.id, &1}),
+            leaf_id: leaf_id
+        }
+
+        # Forks inherit all source spend, including off-branch and interrupted
+        # requests; copying only the selected branch could otherwise evade caps.
+        child =
+          CodingAgent.Session.BudgetLedger.append(
+            child,
+            CodingAgent.Session.BudgetLedger.restore(source)
+          )
+
+        case save_to_file(destination_path, child) do
+          :ok -> {:ok, child}
+          {:error, _} = error -> error
+        end
+      else
+        {:error, :entry_not_found}
+      end
+    else
+      true -> {:error, :eexist}
+      {:error, _} = error -> error
+    end
   end
 
   @doc """
@@ -409,6 +486,16 @@ defmodule CodingAgent.SessionManager do
     parent_id = entry.parent_id || session.leaf_id
 
     entry = %{entry | id: new_id, parent_id: parent_id}
+
+    if session.file_path do
+      case append_to_file(session.file_path, entry) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          raise File.Error, reason: reason, action: "append session", path: session.file_path
+      end
+    end
 
     %{
       session
@@ -489,7 +576,8 @@ defmodule CodingAgent.SessionManager do
   """
   @spec set_leaf_id(Session.t(), String.t() | nil) :: Session.t()
   def set_leaf_id(%Session{} = session, id) do
-    %{session | leaf_id: id}
+    session = %{session | leaf_id: id}
+    if session.file_path, do: persist(session, session.file_path), else: session
   end
 
   @doc """
@@ -532,6 +620,22 @@ defmodule CodingAgent.SessionManager do
   # Context Building
   # ============================================================================
 
+  # The rebuilt context opens with the latest compaction summary as a user
+  # message carrying this prefix.
+  @compaction_summary_prefix "[Conversation summary: "
+
+  @doc "Whether `message` is the compaction summary `build_session_context/2` emits."
+  @spec compaction_summary?(map()) :: boolean()
+  def compaction_summary?(message) when is_map(message) do
+    role = Map.get(message, :role) || Map.get(message, "role")
+    content = Map.get(message, :content) || Map.get(message, "content")
+
+    role in [:user, "user"] and is_binary(content) and
+      String.starts_with?(content, @compaction_summary_prefix)
+  end
+
+  def compaction_summary?(_message), do: false
+
   @doc """
   Build messages list for LLM.
 
@@ -572,7 +676,7 @@ defmodule CodingAgent.SessionManager do
         # Summary message + kept entries
         summary_msg = %{
           "role" => "user",
-          "content" => "[Conversation summary: #{compaction_entry.summary}]"
+          "content" => "#{@compaction_summary_prefix}#{compaction_entry.summary}]"
         }
 
         compacted_entries =
@@ -828,6 +932,20 @@ defmodule CodingAgent.SessionManager do
   @spec get_session_dir(String.t()) :: String.t()
   defdelegate get_session_dir(cwd), to: CodingAgent.Config, as: :sessions_dir
 
+  @doc "Derive a portable journal filename without changing the native session identity."
+  @spec session_file_path(String.t(), String.t()) :: String.t()
+  def session_file_path(cwd, session_id) when is_binary(session_id) do
+    basename =
+      if byte_size(session_id) <= 120 and
+           String.match?(session_id, ~r/\A[A-Za-z0-9][A-Za-z0-9_.-]*\z/) do
+        session_id
+      else
+        "session-" <> Base.encode16(:crypto.hash(:sha256, session_id), case: :lower)
+      end
+
+    Path.join(get_session_dir(cwd), basename <> ".jsonl")
+  end
+
   @doc """
   List all sessions for a cwd with metadata.
 
@@ -847,7 +965,7 @@ defmodule CodingAgent.SessionManager do
             load_session_metadata(path)
           end)
           |> Enum.reject(&is_nil/1)
-          |> Enum.sort_by(& &1.timestamp, :desc)
+          |> Enum.sort_by(&{&1.updated_at, &1.timestamp}, :desc)
 
         {:ok, sessions}
 
@@ -865,12 +983,17 @@ defmodule CodingAgent.SessionManager do
         first_line = IO.read(file, :line)
         File.close(file)
 
-        case Jason.decode(first_line) do
+        case if(is_binary(first_line), do: Jason.decode(first_line), else: {:error, :empty}) do
           {:ok, %{"type" => "session"} = header} ->
             %{
               path: path,
               id: header["id"],
               timestamp: header["timestamp"],
+              updated_at:
+                case File.stat(path, time: :posix) do
+                  {:ok, stat} -> stat.mtime * 1000
+                  _ -> header["timestamp"]
+                end,
               cwd: header["cwd"]
             }
 
@@ -900,7 +1023,7 @@ defmodule CodingAgent.SessionManager do
       [header_line | entry_lines] ->
         with {:ok, header_data} <- Jason.decode(header_line),
              {:ok, header} <- parse_header(header_data),
-             {:ok, entries} <- parse_entries(entry_lines) do
+             {:ok, entries} <- parse_entries(entry_lines, not String.ends_with?(content, "\n")) do
           {:ok, {header, entries}}
         end
     end
@@ -913,7 +1036,9 @@ defmodule CodingAgent.SessionManager do
       id: data["id"],
       timestamp: data["timestamp"],
       cwd: data["cwd"],
-      parent_session: data["parentSession"]
+      parent_session: data["parentSession"],
+      active_leaf_id: data["activeLeafId"],
+      checkpoint_entry_count: data["checkpointEntryCount"]
     }
 
     {:ok, header}
@@ -921,10 +1046,13 @@ defmodule CodingAgent.SessionManager do
 
   defp parse_header(_), do: {:error, :invalid_header}
 
-  defp parse_entries(lines) do
-    Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, acc} ->
+  defp parse_entries(lines, interrupted_append?) do
+    last_index = length(lines) - 1
+
+    Enum.reduce_while(Enum.with_index(lines), {:ok, []}, fn {line, index}, {:ok, acc} ->
       case Jason.decode(line) do
         {:ok, data} -> {:cont, {:ok, [data | acc]}}
+        {:error, _reason} when index == last_index and interrupted_append? -> {:halt, {:ok, acc}}
         {:error, reason} -> {:halt, {:error, {:json_parse_error, reason, line}}}
       end
     end)
@@ -941,7 +1069,9 @@ defmodule CodingAgent.SessionManager do
       "id" => header.id,
       "timestamp" => header.timestamp,
       "cwd" => header.cwd,
-      "parentSession" => header.parent_session
+      "parentSession" => header.parent_session,
+      "activeLeafId" => header.active_leaf_id,
+      "checkpointEntryCount" => header.checkpoint_entry_count
     }
     |> reject_nil_values()
     |> json_safe()
@@ -1081,7 +1211,6 @@ defmodule CodingAgent.SessionManager do
 
   defp json_safe(term) when is_list(term), do: Enum.map(term, &json_safe/1)
   defp json_safe(term) when is_tuple(term), do: term |> Tuple.to_list() |> json_safe()
-  defp json_safe(%MapSet{} = term), do: term |> MapSet.to_list() |> json_safe()
 
   defp json_safe(term)
        when is_pid(term) or is_port(term) or is_reference(term) or is_function(term),

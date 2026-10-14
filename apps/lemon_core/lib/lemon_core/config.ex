@@ -18,11 +18,14 @@ defmodule LemonCore.Config do
   require Logger
 
   defstruct providers: %{},
+            model_roles: %{},
+            budgets: %{},
             agent: %{},
             tui: %{},
             logging: %{},
             gateway: %{},
             agents: %{},
+            memory: %{auto_recall: true},
             secrets: %LemonCore.Config.Secrets{}
 
   @type provider_config :: %{
@@ -37,11 +40,14 @@ defmodule LemonCore.Config do
         }
   @type t :: %__MODULE__{
           providers: %{optional(String.t()) => provider_config()},
+          model_roles: %{optional(String.t()) => String.t()},
+          budgets: map(),
           agent: map(),
           tui: map(),
           logging: map(),
           gateway: map(),
           agents: map(),
+          memory: %{auto_recall: boolean()},
           secrets: LemonCore.Config.Secrets.t()
         }
 
@@ -156,11 +162,14 @@ defmodule LemonCore.Config do
   def to_map(%__MODULE__{} = config) do
     %{
       providers: config.providers,
+      model_roles: config.model_roles,
+      budgets: config.budgets,
       agent: config.agent,
       tui: config.tui,
       logging: config.logging,
       gateway: config.gateway,
       agents: config.agents,
+      memory: config.memory,
       secrets: secrets_to_map(config.secrets)
     }
   end
@@ -174,12 +183,27 @@ defmodule LemonCore.Config do
   defp from_modular(modular, profiles, defaults) do
     %__MODULE__{
       providers: convert_providers(modular.providers),
+      model_roles: modular.model_roles,
+      budgets: modular.budgets,
       agent: convert_agent(modular.agent, modular.tools),
       tui: convert_tui(modular.tui),
       logging: convert_logging(modular.logging),
       gateway: convert_gateway(modular.gateway),
       agents: convert_agents(profiles, defaults),
+      memory: convert_memory(modular.memory, modular.features),
       secrets: modular.secrets
+    }
+  end
+
+  # `auto_recall` here is the effective switch hot paths read per turn: it is
+  # off when `[memory] auto_recall = false` *or* when durable memory itself is
+  # killed (`[features] session_search = "off"`), since the kill switch promises
+  # that memory search is inactive.
+  defp convert_memory(memory, features) do
+    %{
+      auto_recall:
+        LemonCore.Config.Memory.auto_recall?(memory) and
+          LemonCore.Config.Features.enabled?(features, :session_search)
     }
   end
 
@@ -204,7 +228,6 @@ defmodule LemonCore.Config do
       auto_resize_images: tools.auto_resize_images,
       web: tools.web,
       wasm: tools.wasm,
-      execute_code: tools.execute_code,
       disclosure: tools.disclosure
     }
   end
@@ -289,7 +312,7 @@ defmodule LemonCore.Config do
     |> Map.put(:system_prompt, cfg["system_prompt"])
     |> Map.put(:tool_policy, tool_policy)
     |> Map.put(:rate_limit, cfg["rate_limit"])
-    |> Map.put(:status, cfg["status"] || base.status || "active")
+    |> Map.put(:status, cfg["status"] || base.status)
   end
 
   defp default_agent_profile(id, _cfg, defaults) do
@@ -421,16 +444,40 @@ defmodule LemonCore.Config do
   defp apply_overrides(%__MODULE__{} = config, overrides) when is_map(overrides) do
     overrides = stringify_keys(overrides)
 
+    budgets =
+      config.budgets
+      |> deep_merge_values(overrides["budgets"])
+      |> LemonCore.Config.Modular.resolve_budgets()
+
+    case LemonCore.Config.Validator.validate_budgets(budgets) do
+      :ok ->
+        :ok
+
+      {:error, errors} ->
+        raise LemonCore.Config.ValidationError, message: "Invalid budgets", errors: errors
+    end
+
     %__MODULE__{
       providers: deep_merge_values(config.providers, overrides["providers"]),
+      model_roles: merge_model_roles(config.model_roles, overrides["model_roles"]),
+      budgets: budgets,
       agent: deep_merge_values(config.agent, overrides["agent"]),
       tui: deep_merge_values(config.tui, overrides["tui"]),
       logging: deep_merge_values(config.logging, overrides["logging"]),
       gateway: deep_merge_values(config.gateway, overrides["gateway"]),
       agents: deep_merge_values(config.agents, overrides["agents"]),
+      memory: deep_merge_values(config.memory, overrides["memory"]),
       secrets: config.secrets
     }
   end
+
+  # Role names are metadata strings, not atom-keyed config fields.
+  defp merge_model_roles(base, nil), do: base
+
+  defp merge_model_roles(base, override) when is_map(base) and is_map(override),
+    do: Map.merge(base, override)
+
+  defp merge_model_roles(_base, override), do: override
 
   # Deep merge a value into existing config, handling nil override gracefully
   defp deep_merge_values(base, nil), do: base

@@ -137,22 +137,18 @@ defmodule LemonGateway.Transports.Webhook.Response do
     ready_ref = make_ref()
     ready_timeout_ms = Keyword.get(opts, :callback_waiter_ready_timeout_ms, 1_000)
 
-    case Task.start(fn -> async_callback_waiter(parent, ready_ref, run_ctx) end) do
-      {:ok, pid} ->
-        receive do
-          {^ready_ref, :subscribed} ->
-            {:ok, %{callback_waiter_pid: pid}, %{status: "scheduled", url: run_ctx.callback_url}}
+    {:ok, pid} = Task.start(fn -> async_callback_waiter(parent, ready_ref, run_ctx) end)
 
-          {^ready_ref, {:error, reason}} ->
-            {:error, reason}
-        after
-          ready_timeout_ms ->
-            Process.exit(pid, :kill)
-            {:error, :callback_waiter_timeout}
-        end
+    receive do
+      {^ready_ref, :subscribed} ->
+        {:ok, %{callback_waiter_pid: pid}, %{status: "scheduled", url: run_ctx.callback_url}}
 
-      {:error, reason} ->
+      {^ready_ref, {:error, reason}} ->
         {:error, reason}
+    after
+      ready_timeout_ms ->
+        Process.exit(pid, :kill)
+        {:error, :callback_waiter_timeout}
     end
   end
 

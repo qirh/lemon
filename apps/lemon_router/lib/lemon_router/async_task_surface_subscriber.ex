@@ -6,6 +6,10 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
   This worker survives parent RunProcess completion, ensuring that async
   child task progress continues to edit the original Telegram status message
   after the parent run has exited.
+
+  Abnormal callback failures are supervised and re-subscribe on restart.
+  Terminal task events stop the subscriber normally without restarting it.
+  Restarting resumes future events; this worker does not replay missed deltas.
   """
 
   use GenServer
@@ -41,7 +45,7 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
     %{
       id: {__MODULE__, binding.child_run_id},
       start: {__MODULE__, :start_link, [opts]},
-      restart: :temporary,
+      restart: :transient,
       shutdown: 5_000
     }
   end
@@ -70,10 +74,6 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
           {:error, reason} -> {:error, reason}
         end
     end
-  rescue
-    e ->
-      Logger.warning("Failed to start async task surface subscriber: #{inspect(e)}")
-      :ok
   end
 
   @impl true
@@ -105,8 +105,6 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
     end
 
     {:noreply, state}
-  rescue
-    _ -> {:noreply, state}
   end
 
   def handle_info(%Event{type: type} = event, state) when type in @terminal_event_types do
@@ -127,9 +125,6 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
     end
 
     {:stop, :normal, state}
-  rescue
-    _ ->
-      {:stop, :normal, state}
   end
 
   def handle_info(_msg, state), do: {:noreply, state}
@@ -147,8 +142,6 @@ defmodule LemonRouter.AsyncTaskSurfaceSubscriber do
       is_binary(binding[:root_action_id]) and binding[:root_action_id] != "" and
       binding[:surface] != nil
   end
-
-  defp valid_binding?(_), do: false
 
   defp terminal_ok?(%Event{type: :task_completed}), do: true
 

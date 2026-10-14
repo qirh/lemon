@@ -16,10 +16,4 @@ defmodule LemonSkills.Sources.RegistryTrustTest do
       assert Registry.trust_for_ref("acme/tools/my-skill") == :community
     end
   end
-
-  describe "trust_level/0 - module default" do
-    test "default trust_level/0 is :official (for official/ refs)" do
-      assert Registry.trust_level() == :official
-    end
-  end
 end

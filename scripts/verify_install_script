@@ -887,6 +887,36 @@ else
   fi
 fi
 
+# 8b. --resolve-version prints only the version an install would pick, unpinned
+#     or pinned, and installs nothing. stderr (curl progress) is kept apart.
+resolve_home="$work_dir/home-resolve"
+mkdir -p "$resolve_home"
+
+resolve_version() {
+  env -i \
+    HOME="$resolve_home" \
+    PATH="$PATH" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LEMON_INSTALL_BASE_URL="$base_url" \
+    LEMON_INSTALL_IGNORE_GLIBC=0 \
+    "$@" \
+    sh "$INSTALL_SH" --resolve-version 2>>"$work_dir/resolve.log"
+}
+
+if resolved="$(resolve_version)" && [ "$resolved" = "9999.1.0" ] &&
+  pinned="$(resolve_version LEMON_VERSION=9999.2.0)" && [ "$pinned" = "9999.2.0" ]; then
+  ok "--resolve-version prints the unpinned and pinned versions"
+else
+  fail "--resolve-version printed '${resolved:-}' / '${pinned:-}', expected 9999.1.0 / 9999.2.0"
+  cat "$work_dir/resolve.log" >&2
+fi
+
+if [ -z "$(ls -A "$resolve_home/.lemon/versions" 2>/dev/null)" ] && [ ! -e "$resolve_home/.lemon/bin/lemon" ]; then
+  ok "--resolve-version installs nothing"
+else
+  fail "--resolve-version changed $resolve_home/.lemon"
+fi
+
 # 9. Unsupported platforms are refused. install.sh resolves `uname` through
 #    PATH, so a stub in front of PATH exercises the real detection branch.
 fake_bin="$work_dir/fakebin"
@@ -944,16 +974,16 @@ else
   cat "$work_dir/install-10.log" >&2
 fi
 
-# 11. PATH handling: the rc file is only touched with --modify-path, and the
-#     edit is idempotent. `env -i` sets SHELL first, so a later SHELL= wins.
+# 11. PATH handling: the rc file is untouched with --no-modify-path, and the
+#     default edit is idempotent. `env -i` sets SHELL first, so a later SHELL= wins.
 path_home="$work_dir/home-path"
 mkdir -p "$path_home"
 
-if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh; then
+if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --no-modify-path; then
   if [ ! -e "$path_home/.zshrc" ] && grep -q 'export PATH=' "$work_dir/install-11.log"; then
-    ok "PATH line is printed without touching the shell rc file"
+    ok "--no-modify-path prints the PATH line without touching the shell rc file"
   else
-    fail "install.sh edited the rc file without --modify-path, or printed no PATH line"
+    fail "install.sh edited the rc file despite --no-modify-path, or printed no PATH line"
     cat "$work_dir/install-11.log" >&2
   fi
 else
@@ -961,16 +991,16 @@ else
   cat "$work_dir/install-11.log" >&2
 fi
 
-if run_install "$work_dir/install-12.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path &&
-  run_install "$work_dir/install-13.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path; then
+if run_install "$work_dir/install-12.log" "$path_home" "$base_url" SHELL=/bin/zsh &&
+  run_install "$work_dir/install-13.log" "$path_home" "$base_url" SHELL=/bin/zsh; then
   marker_count="$(grep -c 'added by the lemon installer' "$path_home/.zshrc" || true)"
   if [ "$marker_count" = "1" ] && grep -q "$path_home/.lemon/bin" "$path_home/.zshrc"; then
-    ok "--modify-path appends the PATH line to ~/.zshrc exactly once"
+    ok "default install appends the PATH line to ~/.zshrc exactly once"
   else
-    fail "--modify-path wrote the marker $marker_count time(s) or the wrong path"
+    fail "default install wrote the marker $marker_count time(s) or the wrong path"
   fi
 else
-  fail "--modify-path install exited non-zero"
+  fail "default PATH install exited non-zero"
   cat "$work_dir/install-12.log" "$work_dir/install-13.log" >&2
 fi
 

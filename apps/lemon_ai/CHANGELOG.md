@@ -6,10 +6,46 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonAi.Auth.AnthropicOAuth` implements Claude Pro/Max sign-in natively:
+  `build_authorize_url/1`, `parse_authorization_input/1`,
+  `exchange_code_for_secret/3`, `describe_secret/1` and a `login_device_flow/1`
+  that uses a loopback listener or Anthropic's hosted code page.
+
+### Changed
+
+- **Breaking:** `AnthropicOAuth.login_device_flow/1` no longer runs
+  `claude setup-token` or copies Claude Code's credentials file; it requires
+  `:on_auth` and `:on_prompt`. A pasted setup token is still accepted.
+  `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
+- Anthropic refresh is single-flight per secret name on the local node and
+  re-reads the stored secret through the new `:reload_secret` option. It runs
+  five minutes before expiry, uses only `platform.claude.com`, and returns
+  `{:error, :reauth_required}` when the token endpoint rejects the refresh
+  token, even if the access token has not expired.
+- The Claude Code user agent uses the newer of the installed CLI version and
+  2.1.296, detected once per `PATH` instead of on every request.
+
+## [0.2.0] - 2026-10-13
+
 First release as a standalone package. `lemon_ai` was extracted from the Lemon
 umbrella, where it lives as the `:lemon_ai` application; the OTP application name and
 every `LemonAi.*` module name are unchanged, so only the `mix.exs` line differs from
 what in-repo code has been using.
+
+### Fixed
+
+- The Anthropic, GitHub Copilot, Google Antigravity and Google Gemini CLI
+  OAuth helpers no longer report success when a refreshed secret could not be
+  stored: a `:persist_secret` callback returning `{:error, _}` (or raising)
+  now makes `resolve_api_key_from_secret/3` return
+  `{:error, :oauth_secret_persistence_failed}`, as the Codex helper already
+  did, instead of handing out a token whose rotated refresh token was lost.
+- Installable from Hex. The `0.1.0` release's `mix.exs` began with
+  `Code.require_file("../../hex_package.exs", __DIR__)`, a file that was not in
+  the package, so it failed to load in every consumer project; `0.1.0` is
+  retired. The shipped `mix.exs` is now self-contained.
 
 ### Added
 
@@ -22,13 +58,27 @@ what in-repo code has been using.
   a host application can add a provider without a fork.
 - Reliability layer around every call: `LemonAi.RateLimiter` (per-provider token and
   request budgets), `LemonAi.CircuitBreaker` (opens on repeated provider failure and
-  half-opens on a timer), and per-provider retry with respect for `Retry-After`.
-- `LemonAi.CompactingClient` and `LemonAi.ContextCompactor` — context-window management
-  that summarizes and drops history rather than failing the call.
+  half-opens on a timer), and in-provider retry for 429/529/5xx and transport errors
+  (Anthropic, OpenAI Chat Completions, Responses and Codex): 4 attempts, capped
+  exponential backoff with jitter from ~1s, honoring `retry-after`/`retry-after-ms`
+  and Anthropic rate-limit reset headers. Server waits beyond the in-provider cap are
+  returned to the caller as `AssistantMessage.retry_after_ms`
+  (`config :lemon_ai, :provider_retry`).
+- `LemonAi.CallDispatcher` queues callers FIFO when a provider is at its in-flight cap
+  and only returns `{:error, :max_concurrency}` after a bounded wait
+  (`queue_timeout_ms`, default 120s; `0` fails fast).
 - `LemonAi.Tokens` and `LemonAi.Text` for token accounting and text extraction, and
   `LemonAi.calculate_cost/2` for per-call cost from the model's price table.
 - `LemonAi.Models` catalogue plus `LemonAi.ModelCache`, covering model IDs, context
-  windows, capabilities and pricing.
+  windows, capabilities and pricing — including Claude Opus 5.5 / Opus 5 / Opus 4.8 /
+  Opus 4.7 / Sonnet 5 / Fable 5.x and OpenAI GPT-5.5 / GPT-5.5 Pro / GPT-6 Astra, Sol
+  and Luna. Explicit `adaptive_thinking` and `reasoning_efforts` capability flags on
+  each model drive Anthropic adaptive thinking and reasoning-effort clamping
+  (`LemonAi.Models.reasoning_effort_for/2`) instead of model-id substring checks.
+- Anthropic tool results carry image blocks inside `tool_result.content` for vision
+  models instead of dropping them.
+- OpenAI Chat Completions and AWS Bedrock responses report cost from usage and catalog
+  pricing instead of $0.
 - `LemonAi.Env` declares the 28 environment variables this package reads — provider
   credentials, endpoint overrides and client tuning — each with a type, default,
   documentation string and a secret flag. It is self-describing on its own and

@@ -802,7 +802,7 @@ defmodule LemonChannels.Adapters.Telegram.RendererTest do
     end
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 200)
   defp eventually(fun, attempts) when attempts <= 0, do: fun.()
 
   defp eventually(fun, attempts) do

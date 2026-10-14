@@ -1,7 +1,7 @@
 defmodule LemonSimUi.Live.Components.SpectatorChrome do
   @moduledoc """
   Shared chrome for `LemonSimUi.SpectatorLive` domain views: the header bar
-  (back link, title, meta line, League link, winner banner, LIVE/STOPPED
+  (back link, title, meta line, League link, winner banner, lifecycle
   badge), the winner banner on its own, and the "LIVE FEED" event log panel.
 
   Every supported domain's spectator view composes these instead of
@@ -22,7 +22,7 @@ defmodule LemonSimUi.Live.Components.SpectatorChrome do
   attr(:league_path, :string, default: nil)
   attr(:winner, :any, default: nil)
   attr(:running, :boolean, required: true)
-  attr(:show_stopped, :boolean, default: true)
+  attr(:completed, :boolean, required: true)
   slot(:meta, required: true)
 
   def page_header(assigns) do
@@ -63,10 +63,10 @@ defmodule LemonSimUi.Live.Components.SpectatorChrome do
           LIVE
         </span>
         <span
-          :if={!@running && @show_stopped}
+          :if={!@running}
           class="text-[11px] font-mono text-slate-500 px-3 py-1.5 rounded border border-slate-700"
         >
-          STOPPED
+          {if @completed, do: "COMPLETED", else: "STOPPED"}
         </span>
       </div>
     </header>
@@ -112,9 +112,8 @@ defmodule LemonSimUi.Live.Components.SpectatorChrome do
   Renders the "LIVE FEED" footer panel (icon + title + scrollable event
   log). `wrapper_class`/`body_class` are passed through verbatim because the
   panel sits in two different parent layouts: a `flex-shrink-0`, fixed-height
-  footer inside a `flex flex-col overflow-hidden` page (space_station,
-  stock_market, survivor, werewolf), or a plain block at the bottom of a
-  scrolling page (poker).
+  footer inside a `flex flex-col overflow-hidden` page (werewolf), or a plain
+  block at the bottom of a scrolling page (poker).
   """
   attr(:events, :list, required: true)
   attr(:wrapper_class, :string, required: true)

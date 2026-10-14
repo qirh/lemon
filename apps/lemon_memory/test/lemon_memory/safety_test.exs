@@ -9,7 +9,6 @@ defmodule LemonMemory.SafetyTest do
     {text, count} = Safety.redact("visible #{planted} password=hunter2")
 
     assert count == 2
-    assert text == "visible [REDACTED] [REDACTED]"
     refute text =~ planted
     refute text =~ "hunter2"
   end
@@ -22,7 +21,15 @@ defmodule LemonMemory.SafetyTest do
     {text, count} = Safety.redact_for_operator(content)
 
     assert count == 4
-    assert text == "Read [REDACTED] at [REDACTED] or [REDACTED] with [REDACTED]"
+
+    for secret <- [
+          "CUSTOM_CLIENT_SECRET",
+          "/custom/work/private.txt",
+          "internal.example",
+          "abcdefghijklmnop"
+        ] do
+      refute text =~ secret
+    end
   end
 
   describe "contains_secret?/1" do

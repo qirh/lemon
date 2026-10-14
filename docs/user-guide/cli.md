@@ -1,60 +1,241 @@
 # Lemon command-line reference
 
-Lemon exposes the same Mix-free command families from an installed
-`lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
-Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
+The source checkout (`./bin/lemon`) and packaged releases (`lemon`) share the
+same command surface. The launcher handles lifecycle commands; all other
+commands are dispatched by the CLI registry.
 
-## Learn from bounded sources
+## No-argument behavior
 
-```bash
-lemon learn '@file:docs/runbook.md' --root "$PWD" --json
-lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
-  --confirm <exact-review-digest> --json
-```
+This behavior is identical in source checkouts and packaged installs:
 
-Review is the default and never writes. Confirmation re-runs the bounded
-context selection and destination checks, then writes one canonical memory row
-and one audited skill draft only when the exact digest still matches. Responses
-omit source text, prompts, paths, URLs, secret names, and secret values. See
-[Learn from files, folders, and URLs](learn-from-sources.md).
+- In an interactive terminal (stdin and stdout are TTYs), including a Tern pane, `lemon` opens the TUI, the same as `lemon tui`. Tern's native ACP chat is opened explicitly with `tern acp lemon` after [registration](tern.md).
+- Without a TTY, `lemon` fails immediately with status 2 and points to `lemon -p`, `lemon daemon`, and `lemon --help`. It does not compile, initialize HOME state, or start a daemon.
+- `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
 
-The runtime command boundary has stable exit codes:
+Use `./bin/lemon` instead of `lemon` in the examples below when running from a
+source checkout.
 
-- `0` means the command completed successfully;
-- `1` means a safe operational or verification failure;
-- `2` means the command or its arguments are invalid.
+Launch from the repository you want to work on. Source compilation runs in the
+Lemon checkout, but the TUI and project-scoped CLI commands retain the calling
+directory, including on a cold daemon start.
+Source build and bootstrap diagnostics, including waits for another compiler,
+go to stderr; concurrent JSON commands keep stdout reserved for their result.
+
+## Commands and availability
+
+### Launcher lifecycle commands
+
+The registry defines their help and completion; the launcher executes them:
+
+| Command | Source checkout | Packaged release | Purpose |
+| --- | --- | --- | --- |
+| `tui [args]` | Yes | Yes | Reuse a healthy runtime; otherwise run `setup --if-required` in an interactive terminal, start the daemon, and open the TUI. |
+| `web [--no-open]` | Yes | Full profile only | Start the daemon if needed, wait for Web UI health, and print its URL; open a browser unless `--no-open` is set. |
+| `start` | Yes | Yes | Run the runtime in the foreground. |
+| `daemon` | Yes | Yes | Start the runtime in the background and wait for health. |
+| `stop`, `restart`, `status` | Yes | Yes | Manage or inspect the daemon using its pidfile. |
+| `remote`, `eval EXPR`, `rpc EXPR` | No | Yes | Use release VM remote/eval/RPC tools. |
+
+Source runtime options go after `start`, `daemon`, or `restart`:
+`--debug`, `--port N`, `--web-port N`, `--sim-port N`, `--name name@host`,
+`--sname name`, `--cookie C`, and `--no-distribution`. For example,
+`./bin/lemon start --no-distribution`. Runtime options are accepted after the
+relevant lifecycle command, not as bare launcher flags.
+
+### CLI commands
+
+These commands are dispatched by `LemonCli.CLI` in both source checkouts and
+packaged releases:
+
+| Command | Availability | Notes |
+| --- | --- | --- |
+| `run`, `-p`, `--print` | Source and release | Run a coding prompt non-interactively, reusing or starting the local daemon. |
+| `setup` | Source and release | `setup --if-required` exits 0 if setup is complete; otherwise runs the wizard and exits 1 if setup remains incomplete. |
+| `model`, `gateway`, `doctor`, `config`, `secrets`, `channels`, `providers` | Source and release | Configure or inspect Lemon and its integrations. |
+| `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
+| `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
+| `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
+| `omp` | Source and release | Start, watch, steer, and resume omp coding-agent sessions owned by the runtime; starts the local runtime through the launcher if it is not healthy. |
+| `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
+| `completion` | Source and release | Generate completion for the current launcher's available commands. |
+| `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
+| `node` | Source and release | Includes `node join`. |
+| `version`, `--version` | Source and release | `version` prints bare CalVer for scripts; `--version` or `version --verbose` also reports source/release, commit, and build channel. |
+| `send`, `media`, `models`, `policy`, `skill`, `usage` | Source and release | Mix-free channel notifications, diagnostics, catalog, policies, and skill management; existing Mix tasks remain thin source adapters. |
+
+The `runtime.build` doctor check reports the same build identity. Source builds
+use the umbrella CalVer and current checkout commit. Packaged releases use
+metadata stamped at assembly; an older artifact without metadata reports
+`unknown` rather than guessing a commit or channel from the updater settings.
+Packaged version commands work before setup: they read build identity without
+running the runtime configuration providers or creating HOME state.
+
+Clients reusing an external daemon use its existing credential, not a newly
+generated token. Set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` or use the HOME that
+owns that daemon. An explicitly configured
+`LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` runtime can be used
+without a credential; the launcher does not silently enable this compatibility
+mode.
+
+## Help and exit codes
+
+`lemon <launcher-command> --help` and `lemon help <command>` print help.
+Success exits 0, operational failures exit 1, and invalid commands or
+arguments exit 2.
 
 `--help`, `-h`, and `help` print command help without running the command body.
-Commands that support `--json` write one JSON document to stdout on success
-and one redacted JSON error document to stderr on operational failure. Invalid
-arguments remain human-readable usage errors with exit code `2`.
+Commands that document `--json` emit JSON on success. Redacted operational
+error JSON is supported by the profile, session, blueprint, provider, learning,
+and secret-source command families; other commands report errors as text on
+stderr. Invalid arguments remain human-readable usage errors.
 
-## Runtime command families
+## ChatGPT authentication and Codex CLI login import
 
-| Family | Purpose |
-| --- | --- |
-| `setup` | Complete first-run configuration |
-| `model` | Configure a model provider |
-| `gateway` | Configure Telegram or Discord |
-| `doctor` | Run diagnostics or create a support bundle |
-| `config` | Validate or show resolved configuration |
-| `secrets` | Manage encrypted credentials and inspect external read-only sources |
-| `channels` | Inspect channel launch readiness |
-| `providers` | Inspect provider readiness and manage routing |
-| `blueprints` | Review and exactly confirm cataloged skill automation bundles |
-| `profile` | Manage isolated specialist profiles |
-| `backup` | Create, verify, list, or restore user-state backups |
-| `context` | Preview or resolve bounded context references |
-| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
-| `sessions` | Inspect and manage durable sessions |
-| `update` | Check, non-mutating plan, exact-confirm apply/history/rollback |
-| `completion` | Generate shell completion scripts |
+`lemon model --provider openai-codex` offers browser OAuth (the default),
+an existing token, or an explicit **Import existing Codex CLI ChatGPT login**
+choice. Lemon never discovers or imports CLI credentials automatically.
 
-The source and packaged launchers also expose commands specific to their own
-runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
-launcher. Completion generation detects the launcher, so it does not advertise
-packaged daemon commands in a source checkout or source-only commands in an
-installed release.
+```bash
+lemon model --provider openai-codex --auth codex-cli --non-interactive \
+  --set-default --model gpt-6.1-sol
+# Optionally select a copied login file instead:
+lemon model --provider openai-codex --auth codex-cli \
+  --codex-auth-path /path/to/auth.json --non-interactive
+# First-time setup can import too; defer its separate live verification if offline:
+lemon setup --provider openai-codex --auth codex-cli --non-interactive --skip-verify
+```
+
+Import reads only the explicitly selected file, otherwise `$CODEX_HOME/auth.json`
+when set, otherwise `$HOME/.codex/auth.json`. It requires a ChatGPT OAuth login
+with an access-token JWT expiry, account ID, and non-empty refresh token;
+API-key-only and incomplete logins are rejected. `codex_cli` is also accepted
+as an auth label. `--codex-auth-path` is valid only with this import choice.
+`--token` cannot be combined with browser OAuth or CLI import. Other
+non-interactive provider setup still requires `--token`.
+
+The copied credentials are encrypted in Lemon's secret store under
+`llm_openai_codex_api_key` by default (`model --secret-name` overrides the name).
+Config references that name with `auth_source = "oauth"` and `oauth_secret`;
+tokens are never written to TOML. Import itself makes no HTTP requests and
+never changes the CLI login file. Later credential resolution refreshes the
+Lemon copy as needed and persists only Lemon's encrypted secret. A failed
+refresh may reuse an unexpired token, but never returns an expired token as
+successful authentication. This is a one-time copy, not ongoing synchronization.
+
+## Claude subscription sign-in (Anthropic OAuth)
+
+`lemon model anthropic` (or `lemon model --provider anthropic`) offers
+**Sign in with Claude Pro/Max (browser)**, the default, or an API key. Sign-in
+runs Anthropic's authorization-code flow with PKCE on `claude.ai`; Claude Code
+does not need to be installed.
+
+```bash
+lemon model anthropic --auth oauth --set-default --model claude-sonnet-5-5
+lemon model anthropic --status   # auth source, account, expiry, usable or not
+lemon model anthropic --logout   # delete the stored login and its config keys
+```
+
+Lemon listens on `http://localhost:53692/callback` and captures the browser
+redirect. If that port is busy, sign-in uses Anthropic's hosted code page
+instead: paste the `code#state` value it shows. When the listener is running
+but the browser cannot reach it (SSH, containers), wait for the two-minute
+timeout and paste the full redirect URL from the address bar. A token printed
+by `claude setup-token` may be pasted at the same prompt; it is stored as a
+static credential without refresh.
+
+The login is encrypted in Lemon's secret store under `llm_anthropic_api_key`
+(`--secret-name` overrides it) and referenced by `auth_source = "oauth"` and
+`oauth_secret`. Access tokens last about eight hours; Lemon refreshes them five
+minutes before expiry and stores the rotated refresh token. Concurrent sessions
+on one runtime share a single refresh. If Anthropic rejects the refresh, or
+the rotated token cannot be stored, requests fail rather than falling back to
+another credential; sign in again with `lemon model anthropic`. Anthropic ends
+a login about 30 days after sign-in regardless of refreshes, so `--status`
+shows an estimated re-sign-in date.
+
+With `auth_source = "oauth"`, `ANTHROPIC_API_KEY` is ignored. With
+`auth_source = "api_key"` or no auth source, the API key applies and the
+subscription login is not used. `--logout` removes `auth_source` and
+`oauth_secret`, so API-key resolution applies again. It does not revoke the
+grant at Anthropic and does not touch Claude Code's own login.
+
+Requests sent with a subscription token use Claude Code's request shape
+(Bearer authorization, `claude-code-20250219` and `oauth-2025-04-20` betas,
+the Claude Code user agent and system-prompt identity). Anthropic's terms
+govern subscription use in third-party tools; see
+[Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+and [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance).
+
+As of October 2026, Anthropic bills Lemon's subscription requests to the
+account's extra usage rather than the plan's included limits. Without extra
+usage available, sign-in and `--status` succeed but model requests fail with
+"You're out of extra usage. Add more at claude.ai/settings/usage". Lemon does
+not forge Claude Code's billing attestation to change that classification.
+
+claude.ai does not list individual OAuth grants. `--logout` deletes Lemon's
+only copy of the tokens, and Anthropic ends the grant about 30 days after
+sign-in. To revoke every session immediately, use **Settings → Account → Log
+out of all devices** on claude.ai; this also signs out Claude Code and browsers.
+
+## Non-interactive coding
+
+```bash
+lemon -p "Explain this repository"
+echo 'list files' | lemon -p --output stream-json
+lemon run "Fix the failing parser" --cwd ./project --model openai-codex:gpt-6.1-sol \
+  --approval-policy allow --output json | jq .
+lemon run "Continue the fix" --continue
+lemon run "Review the changes" --session agent:default:cli-SESSION
+```
+
+With no prompt argument, `run` reads stdin to EOF. A prompt argument is used
+as-is (stdin is not read). Empty prompts and invalid options exit 2. A fresh
+run creates a durable, isolated session. `--continue` resumes the most recently
+updated CLI session for the current `--cwd`; `--session` selects an explicit
+session key. The two flags are mutually exclusive.
+
+`--output text` (default) prints only the final answer. `json` prints one
+result document with `ok`, `answer`, `error`, `run_id`, and `session_key`.
+`stream-json` prints newline-delimited JSON: an `init` record, run-scoped
+`event` records containing control-plane event names and payloads, and a final
+`result` record. Stdout and stderr use UTF-8 even under an ASCII shell locale,
+so non-ASCII JSON strings remain valid. Startup diagnostics stay on stderr. Runs exit 0 only when the
+agent reports success; submission, connection, provider, and execution failures
+exit 1. Runs are bounded to ten minutes; timeout cancels the submitted run.
+Protocol keepalive pings keep long-running tools connected without adding records
+to stdout. A lost connection produces a failed result, not a successful fallback
+or an automatic re-submission of the prompt.
+
+### Token and estimated-spend stops
+
+The canonical [`[budgets]` configuration](../config.md#cumulative-usage-budgets)
+applies to print runs too. `--continue` and `--session` retain cumulative session
+spend; each prompt starts a fresh run counter. Clear, rewind, compaction and fork
+do not erase prior session spend.
+
+A budget stop exits 1 with a readable `error`. Both `--output json` and the final
+`stream-json` result include a `budget` object with `reason: "budget_exceeded"`,
+`scope` (`"run"` or `"session"`), `metric` (`"tokens"` or `"cost_usd"`), `limit`,
+`used`, `run_usage`, and `session_usage`. The accompanying `usage` includes actual
+reported `total_tokens` and estimated `cost.total` for this run, including known
+interrupted/retried usage rather than the configured allowance. Zero-cap stops
+report zero run usage without calling the provider.
+
+Costs are catalog estimates, not invoices. Final-only provider accounting means
+an in-flight response can exceed a positive cap before Lemon stops; unreported
+usage cannot be reconstructed. This is not a hard billing cap.
+Counters cover the prompt agent loop and its reported retries. Compaction and
+project-memory maintenance model calls are not counted; subagent sessions have
+their own counters rather than spending the parent's allowance.
+
+Non-interactive mode never waits for a human approval. `--approval-policy deny`
+(default) denies requested approvals; `allow` approves each request once.
+Existing tool policy still applies. Use `--allowed-tools read,grep,find` and/or
+`--denied-tools bash,write,edit` to narrow the run's tool policy. These flags
+do not provide OS-level sandboxing. The daemon is reused when healthy and is
+started through the normal launcher when absent; the client does not boot a
+second router or scheduler.
+
 
 ## Update lifecycle
 
@@ -111,8 +292,8 @@ configuration and fail-closed resolution contract.
 
 `lemon blueprints` talks only to the authenticated local control plane. It
 never accepts a filesystem root or path and never starts a scheduler in the
-one-shot CLI VM. Installed releases start the daemon when needed; from a source
-checkout, start `./bin/lemon --daemon` first.
+one-shot CLI VM. Both source and packaged launchers start the local runtime
+when it is not already healthy.
 
 ```bash
 lemon blueprints
@@ -150,6 +331,11 @@ invalid CLI arguments use exit `2`. See the
 chat state, policy, and session metadata stores. It does not create another
 conversation database. All list and history reads are bounded; history and
 exports are always redacted.
+Session commands connect to the authenticated running daemon, starting it through
+the normal launcher when absent. They read and mutate that daemon's canonical
+state, not a separate store in the short-lived CLI process. This also applies
+when the runtime uses an isolated home or agent directory. Export destination
+files are still written locally by the client.
 
 ### List, search, show, and history
 
@@ -180,6 +366,25 @@ ordered and capped from 1 to 50 entries (`--group-limit`, default 10); omitted
 cardinality is reported. The report never contains session keys, titles,
 messages, prompts, answers, paths, URLs, or credentials. Message/turn counts are
 not inferred because no single canonical store exposes them reliably.
+
+### Context-window usage
+
+```bash
+lemon sessions context agent:default:tui:local:dm:<uuid>
+lemon sessions context agent:research:main --cwd ~/src/project --json
+```
+
+`sessions context` prints how a native session's next request spends the
+model's context window: system prompt, tool definitions, skills, context files,
+memory, user and assistant messages, tool results, summaries and free space,
+with the auto-compaction threshold and the largest contributors. `--cwd`
+(default: the current directory) locates a stopped session's native history.
+The total is the latest provider-reported request size plus estimates for newer
+messages; category splits are ~4 characters/token estimates scaled to that total.
+A stopped session reuses the system-prompt/tool profile recorded when its last
+turn ended. Output contains counts and bounded labels only—no prompt text, tool
+arguments or absolute paths. The TUI `/context` and ACP `/context` commands use
+the same `sessions.context` control-plane method.
 
 ### Title, pin, and archive state
 
@@ -265,6 +470,35 @@ A mismatch is a usage error and does not mutate state. The lifecycle service
 deletes canonical run history last, verifies all core-owned state is gone, and
 restores recoverable ancillary metadata if final deletion or verification
 fails.
+
+## omp delegate sessions
+
+`lemon omp` drives omp (oh-my-pi) coding-agent processes that the runtime owns,
+through the authenticated control plane (`omp.*` methods; see the
+[omp guide](omp.md)). Every subcommand accepts `--json`; text that came from omp
+is printed with terminal control characters removed.
+
+```bash
+lemon omp status                         # installed?, version, live/max sessions
+lemon omp list [--all] [--limit N]       # live sessions; --all adds ended ones
+lemon omp show omp_3f9a1c2b7d4e          # bounded plain-text summary
+lemon omp start [--cwd PATH] [--model M] [--thinking LEVEL] fix the flaky test
+lemon omp watch omp_3f9a1c2b7d4e         # follow until the turn settles
+lemon omp send omp_3f9a1c2b7d4e [--follow-up] also update the docs
+lemon omp cancel omp_3f9a1c2b7d4e        # abort the turn; the process stays open
+lemon omp close omp_3f9a1c2b7d4e         # end the process; it stays resumable
+lemon omp discover [--cwd PATH] [--limit N]
+lemon omp resume 01a137e9 [--cwd PATH] [prompt...]
+```
+
+`--cwd` defaults to the current directory. `send` steers the running turn
+(`--follow-up` queues the message after it) and starts a new turn on an idle
+session; messages are limited to 16 KiB. `watch` follows `omp.session` events,
+re-reading the session every two seconds when none arrive; leaving it, including
+with Ctrl-C, never cancels the turn. A send, cancel, or start reported as not
+retry-safe may already have taken effect: check `lemon omp show ID` before
+retrying. When omp is not installed, `status` says so and `start` fails with
+`UNAVAILABLE`; set `LEMON_OMP_BIN` for a non-`PATH` install.
 
 ## Shell completion
 

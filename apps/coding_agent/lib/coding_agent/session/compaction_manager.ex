@@ -44,7 +44,16 @@ defmodule CodingAgent.Session.CompactionManager do
   @spec clear_auto_compaction_state(map()) :: map()
   def clear_auto_compaction_state(state) do
     state = clear_auto_compaction_task_tracking(state)
-    %{state | auto_compaction: %{state.auto_compaction | in_progress: false, signature: nil}}
+
+    %{
+      state
+      | auto_compaction: %{
+          state.auto_compaction
+          | in_progress: false,
+            signature: nil,
+            pending_prompt: nil
+        }
+    }
   end
 
   @spec clear_auto_compaction_task_tracking(map()) :: map()
@@ -72,7 +81,9 @@ defmodule CodingAgent.Session.CompactionManager do
         state
 
       true ->
-        clear_auto_compaction_state(state)
+        state
+        |> CodingAgent.Session.CompactionLifecycle.resume_pending_prompt()
+        |> clear_auto_compaction_state()
     end
   end
 
@@ -136,34 +147,6 @@ defmodule CodingAgent.Session.CompactionManager do
             task_timeout_ref: nil
         }
     }
-  end
-
-  @spec handle_overflow_recovery_task_down(map(), (map(), String.t(), atom() -> :ok)) :: map()
-  def handle_overflow_recovery_task_down(state, ui_notify_fn) do
-    state = clear_overflow_recovery_task_tracking(state)
-
-    cond do
-      not state.overflow_recovery.in_progress ->
-        state
-
-      true ->
-        failure_reason = :overflow_recovery_task_down
-        failed_state = clear_overflow_recovery_task_state(state)
-
-        ui_notify_fn.(failed_state, "Overflow compaction worker stopped unexpectedly", :error)
-
-        emit_overflow_recovery_telemetry(:failure, failed_state, %{
-          duration_ms: overflow_recovery_duration_ms(state),
-          reason: normalize_overflow_reason(failure_reason)
-        })
-
-        # Return the failed state; the caller should call finalize_overflow_recovery_failure
-        # with the appropriate event handling callbacks
-        %{
-          failed_state
-          | overflow_recovery: %{failed_state.overflow_recovery | error_reason: failure_reason}
-        }
-    end
   end
 
   @spec clear_overflow_recovery_state_on_terminal(LemonAgent.Types.agent_event(), map()) :: map()
@@ -256,6 +239,7 @@ defmodule CodingAgent.Session.CompactionManager do
     opts
     |> maybe_put_keep_recent_tokens(compaction_settings)
     |> maybe_put_keep_recent_messages(message_budget)
+    |> summary_options(state)
   end
 
   @spec get_compaction_settings(CodingAgent.SettingsManager.t() | nil) :: map()
@@ -263,6 +247,50 @@ defmodule CodingAgent.Session.CompactionManager do
 
   def get_compaction_settings(%CodingAgent.SettingsManager{} = settings) do
     CodingAgent.SettingsManager.get_compaction_settings(settings)
+  end
+
+  @doc false
+  def summary_options(opts, state) do
+    resolver = CodingAgent.Session.ModelResolver
+
+    model =
+      resolver.resolve_compaction_model(
+        Keyword.get(opts, :model),
+        state.settings_manager,
+        state.model
+      )
+
+    existing_stream_options =
+      if Keyword.has_key?(opts, :api_key) do
+        Map.put(
+          Keyword.get(opts, :stream_options) || %{},
+          :api_key,
+          Keyword.fetch!(opts, :api_key)
+        )
+      else
+        Keyword.get(opts, :stream_options)
+      end
+
+    stream_options =
+      resolver.build_stream_options(
+        model,
+        state.settings_manager,
+        existing_stream_options,
+        state.cwd
+      )
+
+    api_key =
+      if Keyword.has_key?(opts, :api_key) do
+        Keyword.fetch!(opts, :api_key)
+      else
+        stream_options.api_key ||
+          resolver.build_get_api_key(state.settings_manager).(model.provider)
+      end
+
+    opts
+    |> Keyword.put(:model, model)
+    |> Keyword.put(:stream_options, stream_options)
+    |> Keyword.put(:api_key, api_key)
   end
 
   # ============================================================================
@@ -274,9 +302,7 @@ defmodule CodingAgent.Session.CompactionManager do
           {:ok, map()} | {:error, term()},
           String.t() | nil,
           (map() -> [map()]),
-          (map(), LemonAgent.Types.agent_event() -> :ok),
-          (map(), String.t() | nil -> :ok),
-          (map(), String.t(), atom() -> :ok)
+          (map(), LemonAgent.Types.agent_event() -> :ok)
         ) ::
           {:ok, map()} | {:error, term(), map()}
   def apply_compaction_result(
@@ -284,9 +310,7 @@ defmodule CodingAgent.Session.CompactionManager do
         result,
         custom_summary,
         restore_messages_fn,
-        broadcast_event_fn,
-        ui_set_working_message_fn,
-        ui_notify_fn
+        broadcast_event_fn
       ) do
     case result do
       {:ok, compaction_result} ->
@@ -328,20 +352,11 @@ defmodule CodingAgent.Session.CompactionManager do
            }}
 
         broadcast_event_fn.(state, compaction_event)
-
-        # Clear working message and notify success
-        ui_set_working_message_fn.(state, nil)
-        ui_notify_fn.(state, "Context compacted", :info)
+        _ = CodingAgent.Session.ProjectMemory.after_compaction(state, summary)
 
         {:ok, %{state | session_manager: session_manager}}
 
-      {:error, :cannot_compact} ->
-        ui_set_working_message_fn.(state, nil)
-        {:error, :cannot_compact, state}
-
       {:error, reason} ->
-        ui_set_working_message_fn.(state, nil)
-        ui_notify_fn.(state, "Compaction failed: #{inspect(reason)}", :error)
         {:error, reason, state}
     end
   end

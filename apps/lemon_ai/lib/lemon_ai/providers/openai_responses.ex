@@ -43,6 +43,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
   alias LemonAi.EventStream
   alias LemonAi.Providers.HttpTrace
   alias LemonAi.Providers.OpenAIResponsesShared
+  alias LemonAi.Providers.RetryHelper
   alias LemonAi.Providers.SSEParser
   import LemonAi.Providers.AssistantMessageHelper
 
@@ -91,8 +92,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
       EventStream.push_async(stream, {:start, output})
 
-      # Make streaming request
-      case stream_request(url, headers, body, trace_id) do
+      # Make streaming request (retries 429/5xx/transport failures in place)
+      case stream_request(url, headers, body, trace_id, RetryHelper.policy(), 0) do
         {:ok, event_stream} ->
           # Process stream events
           case OpenAIResponsesShared.process_stream(
@@ -116,11 +117,11 @@ defmodule LemonAi.Providers.OpenAIResponses do
                 session_id: opts.session_id
               })
 
-              output = %{output | stop_reason: :error, error_message: reason}
+              output = error_assistant_message(output, reason)
               EventStream.error(stream, output)
           end
 
-        {:error, reason} ->
+        {:error, reason, retry_after_ms} ->
           HttpTrace.log_error("openai-responses", "request_error", %{
             trace_id: trace_id,
             error: reason,
@@ -128,7 +129,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
             session_id: opts.session_id
           })
 
-          output = %{output | stop_reason: :error, error_message: reason}
+          output = error_assistant_message(output, reason, retry_after_ms)
+
           EventStream.error(stream, output)
       end
     rescue
@@ -141,7 +143,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
           session_id: opts.session_id
         })
 
-        output = %{output | stop_reason: :error, error_message: Exception.message(e)}
+        output = error_assistant_message(output, e)
         EventStream.error(stream, output)
     end
   end
@@ -295,8 +297,8 @@ defmodule LemonAi.Providers.OpenAIResponses do
 
   defp add_reasoning_config(params, model, opts, _messages) do
     if model.reasoning do
-      reasoning_effort = opts.reasoning
-      # Map :xhigh to "xhigh" if supported, otherwise use opts as-is
+      # Clamp to the levels the model declares (e.g. :xhigh -> :high on gpt-5.1).
+      reasoning_effort = LemonAi.Models.reasoning_effort_for(model, opts.reasoning)
       reasoning_summary = Map.get(opts.thinking_budgets || %{}, :summary, "auto")
 
       if reasoning_effort do
@@ -355,21 +357,19 @@ defmodule LemonAi.Providers.OpenAIResponses do
   # HTTP Streaming
   # ============================================================================
 
-  defp stream_request(url, headers, body, trace_id) do
-    # Use Finch or Req for HTTP streaming
-    # This is a simplified implementation - in production you'd want proper
-    # streaming with backpressure handling
-
+  defp stream_request(url, headers, body, trace_id, policy, attempt) do
     headers_list = Enum.map(headers, fn {k, v} -> {k, v} end)
+    retry_allowed? = RetryHelper.retry_allowed?(attempt, policy)
 
     case Req.post(url,
            json: body,
            headers: headers_list,
            into: :self,
+           retry: false,
            receive_timeout: 300_000
          ) do
-      {:ok, %Req.Response{status: status}} when status in 200..299 ->
-        {:ok, receive_sse_events()}
+      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
+        {:ok, SSEParser.events(response)}
 
       {:ok, %Req.Response{status: status, headers: response_headers} = response} ->
         response_body = materialize_response_body(response.body)
@@ -377,6 +377,7 @@ defmodule LemonAi.Providers.OpenAIResponses do
         HttpTrace.log_error("openai-responses", "http_error", %{
           trace_id: trace_id,
           status: status,
+          attempt: attempt + 1,
           provider_request_id:
             HttpTrace.response_header_value(response_headers, [
               "x-request-id",
@@ -389,18 +390,38 @@ defmodule LemonAi.Providers.OpenAIResponses do
           input_items: count_input_items(Map.get(body, "input"))
         })
 
-        error = LemonAi.Error.parse_http_error(status, response_body, response_headers)
-        {:error, error.message}
+        retry_delay =
+          if retry_allowed? and RetryHelper.retryable_http_error?(status, response_body) do
+            RetryHelper.http_retry_delay_ms(attempt, response_headers, policy)
+          else
+            :give_up
+          end
+
+        case retry_delay do
+          :give_up ->
+            error = LemonAi.Error.parse_http_error(status, response_body, response_headers)
+            {:error, error, RetryHelper.retry_after_ms(response_headers)}
+
+          delay_ms ->
+            RetryHelper.sleep(delay_ms)
+            stream_request(url, headers, body, trace_id, policy, attempt + 1)
+        end
 
       {:error, reason} ->
         HttpTrace.log_error("openai-responses", "transport_error", %{
           trace_id: trace_id,
+          attempt: attempt + 1,
           error: inspect(reason, limit: 50, printable_limit: 8_000),
           model: Map.get(body, "model"),
           input_items: count_input_items(Map.get(body, "input"))
         })
 
-        {:error, "Request failed: #{inspect(reason)}"}
+        if retry_allowed? and RetryHelper.retryable_transport_error?(reason) do
+          RetryHelper.sleep(RetryHelper.backoff_delay_ms(attempt, policy))
+          stream_request(url, headers, body, trace_id, policy, attempt + 1)
+        else
+          {:error, reason, nil}
+        end
     end
   end
 
@@ -511,63 +532,6 @@ defmodule LemonAi.Providers.OpenAIResponses do
   end
 
   defp trace_header(_headers, _key), do: nil
-
-  defp receive_sse_events do
-    Stream.resource(
-      fn -> %{buffer: ""} end,
-      fn state ->
-        receive do
-          message ->
-            case normalize_sse_message(message) do
-              {:data, chunk} ->
-                {events, new_buffer} = SSEParser.parse_sse_chunk(state.buffer <> chunk)
-                {events, %{state | buffer: new_buffer}}
-
-              :done ->
-                {:halt, state}
-
-              {:error, reason} ->
-                throw({:stream_error, reason})
-
-              :ignore ->
-                {[], state}
-            end
-        after
-          300_000 ->
-            {:halt, state}
-        end
-      end,
-      fn _state -> :ok end
-    )
-  end
-
-  defp normalize_sse_message(message) do
-    case message do
-      {:data, data} when is_binary(data) ->
-        {:data, data}
-
-      {_, {:data, data}} when is_binary(data) ->
-        {:data, data}
-
-      {:done, _} ->
-        :done
-
-      {_, :done} ->
-        :done
-
-      {_, {:done, _}} ->
-        :done
-
-      {:error, reason} ->
-        {:error, reason}
-
-      {_, {:error, reason}} ->
-        {:error, reason}
-
-      _ ->
-        :ignore
-    end
-  end
 
   # ============================================================================
   # Helpers

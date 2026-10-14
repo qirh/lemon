@@ -22,7 +22,7 @@ defmodule LemonCore.ContextTest do
     assert preview.summary == resolved.summary
     assert preview.selected_text == nil
     refute Map.has_key?(hd(preview.sources), :content)
-    assert resolved.selected_text =~ "token=[REDACTED]"
+    refute resolved.selected_text =~ "secret-value"
     assert resolved.summary.redaction_count == 1
     assert resolved.redacted
   end
@@ -109,8 +109,8 @@ defmodule LemonCore.ContextTest do
                session_export_fun: session_export
              )
 
-    assert result.selected_text =~ "password=[REDACTED]"
-    assert result.selected_text =~ "api_key=[REDACTED]"
+    refute result.selected_text =~ "hunter2"
+    refute result.selected_text =~ "abc123"
 
     assert Enum.any?(
              result.sources,
@@ -155,9 +155,9 @@ defmodule LemonCore.ContextTest do
                root: root,
                timeout_ms: 10,
                resolve_fun: fn _ -> {:ok, [{93, 184, 216, 34}]} end,
+               # Never answers; the resolver must cut it off at timeout_ms
                request_fun: fn _, _, _, _ ->
-                 Process.sleep(100)
-                 {:error, :late}
+                 Process.sleep(:infinity)
                end
              )
   end

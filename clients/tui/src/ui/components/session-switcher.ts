@@ -18,17 +18,37 @@
  * The overlay itself is a {@link PickerOverlay}: same box, same fuzzy filter,
  * same draft-preserving contract (it never touches the editor). Prompt mode is
  * an inline detail row plus first refusal on keys, not a second overlay — a
- * modal over a modal is how Esc stops meaning one thing.
+ * modal over a modal is how Esc stops meaning one thing. On a native (TSP)
+ * sheet the prompt sits in the preview pane under the list, and Ctrl+N / Ctrl+W are
+ * action-bar buttons running the same code as the keys.
  */
 
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import type { SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
+import { span, text } from "@oh-my-pi/pi-tui/native/describe";
+import { CLOSE_ACTION, pickerAction, pickerAge, pickerDate } from "@oh-my-pi/pi-tui/native/picker";
 import { collectSessions, type SessionRow } from "../../commands/session.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import { getTheme } from "../theme/theme.ts";
-import { isPrintable, type PickerItem, PickerOverlay } from "./pickers.ts";
+import {
+	confirmAction,
+	isPrintable,
+	type PickerBadge,
+	type PickerItem,
+	PickerOverlay,
+	type PickerSheet,
+} from "./pickers.ts";
+
+const SESSION_COLUMNS: PickerSheet["columns"] = [
+	{ id: "runs", format: "dim", priority: 1 },
+	{ id: "model", format: "dim", priority: 2 },
+	{ id: "when", format: "time", priority: 3 },
+];
+
+/** The sheet's preview pane while the list is in charge: empty. */
+const NO_PREVIEW: readonly [] = [];
 
 export interface SessionSwitcherHost {
 	store: AppStore;
@@ -52,6 +72,11 @@ export class SessionSwitcher {
 	#rows: SessionRow[] = [];
 	#promptMode = false;
 	#promptText = "";
+	#searchTimer: NodeJS.Timeout | undefined;
+	#searchVersion = 0;
+	#searching = false;
+	/** Why the last search left the list empty (too long, failed), until the next one. */
+	#searchProblem: string | undefined;
 
 	constructor(host: SessionSwitcherHost) {
 		this.#host = host;
@@ -98,20 +123,68 @@ export class SessionSwitcher {
 				},
 			];
 		}
+		this.#searchProblem = undefined;
 		this.#overlay = new PickerOverlay({
 			title: "sessions",
 			items: this.#items(),
 			footer: this.#footer(),
 			detail: () => this.#detail(),
+			remoteFilter: true,
+			onFilterChange: (filter) => this.#search(filter),
 			onSelect: (item) => void this.#onSelect(item),
 			onCancel: () => this.#onCancel(),
 			onKey: (data) => this.#onKey(data),
 			onMouse: (event) => this.#onMouse(event),
+			sheet: {
+				icon: "history",
+				noun: "sessions",
+				layout: "cards",
+				placeholder: "Search stored sessions…",
+				columns: SESSION_COLUMNS,
+				empty: "No sessions match",
+				current: () => [this.#host.store.focusedKey],
+				subtitle: () => undefined,
+				// The inline prompt sits under the list, styled; the plain detail row is the rows view's.
+				preview: () =>
+					this.#promptMode
+						? [
+								text([
+									span("New session  ", "muted"),
+									this.#promptText ? span(this.#promptText) : span("type its first prompt", "dim"),
+								]),
+							]
+						: NO_PREVIEW,
+				status: () =>
+					this.#searching
+						? { state: "loading", message: "Searching stored sessions…" }
+						: this.#searchProblem
+							? { state: "error", message: this.#searchProblem }
+							: undefined,
+				actions: () =>
+					this.#promptMode
+						? [confirmAction("Create session"), { ...CLOSE_ACTION, label: "Back" }]
+						: [
+								confirmAction("Switch"),
+								pickerAction("new", "New session", "ctrl+n"),
+								pickerAction("close-session", "Close session", "ctrl+w", { danger: true }),
+								CLOSE_ACTION,
+							],
+				// Prompt mode takes the pointer with the keyboard, as for the mouse.
+				onEvent: (event) => this.#promptMode && event.kind !== "action",
+				onAction: (act) => {
+					if (act === "new") this.#startPrompt();
+					else if (act === "close-session") this.#closeSelected();
+				},
+			},
 		});
 		this.#close = this.#host.present(this.#overlay);
 	}
 
 	close(): void {
+		if (this.#searchTimer) clearTimeout(this.#searchTimer);
+		this.#searchTimer = undefined;
+		this.#searchVersion++;
+		this.#searching = false;
 		this.#close?.();
 		this.#close = undefined;
 		this.#overlay = undefined;
@@ -129,7 +202,9 @@ export class SessionSwitcher {
 
 	#footer(): string {
 		if (this.#promptMode) return "enter creates the session with this prompt · esc goes back";
-		return "enter switches · ctrl+n new · ctrl+w close · esc cancels";
+		return this.#searching
+			? "searching stored sessions… · esc cancels"
+			: "type to search stored sessions · enter switches · ctrl+n new · ctrl+w close";
 	}
 
 	/** The inline prompt row, or nothing while the list is in charge. */
@@ -144,22 +219,29 @@ export class SessionSwitcher {
 	#onKey(data: string): boolean {
 		if (this.#promptMode) return this.#onPromptKey(data);
 		if (matchesKey(data, "ctrl+n")) {
-			this.#promptMode = true;
-			this.#promptText = "";
-			this.#refresh();
+			this.#startPrompt();
 			return true;
 		}
 		if (matchesKey(data, "ctrl+w")) {
-			const selected = this.#overlay?.selected;
-			if (selected) {
-				// The confirm overlay replaces this one; reopening afterwards would
-				// fight the user's own next keystroke.
-				this.close();
-				void this.#host.closeSession(selected.value);
-			}
+			this.#closeSelected();
 			return true;
 		}
 		return false;
+	}
+
+	#startPrompt(): void {
+		this.#promptMode = true;
+		this.#promptText = "";
+		this.#refresh();
+	}
+
+	#closeSelected(): void {
+		const selected = this.#overlay?.selected;
+		if (!selected) return;
+		// The confirm overlay replaces this one; reopening afterwards would
+		// fight the user's own next keystroke.
+		this.close();
+		void this.#host.closeSession(selected.value);
 	}
 
 	/**
@@ -211,6 +293,9 @@ export class SessionSwitcher {
 
 	async #onSelect(item: PickerItem): Promise<void> {
 		this.close();
+		this.#host.store.session(item.value).title = this.#rows.find(
+			(row) => row.key === item.value,
+		)?.title;
 		await this.#host.switchSession(item.value);
 	}
 
@@ -230,6 +315,44 @@ export class SessionSwitcher {
 		this.#overlay.setFooter(this.#footer());
 		this.#overlay.invalidate();
 		this.#host.repaint();
+	}
+
+	#search(filter: string): void {
+		if (this.#searchTimer) clearTimeout(this.#searchTimer);
+		const version = ++this.#searchVersion;
+		const overlay = this.#overlay;
+		if (!overlay) return;
+		const query = filter.trim();
+		if (Buffer.byteLength(query, "utf8") > 512) {
+			this.#searching = false;
+			this.#searchProblem = "Search is limited to 512 bytes — shorten the query";
+			overlay.setItems([], filter);
+			overlay.setFooter("search is limited to 512 bytes · shorten the query");
+			this.#host.repaint();
+			return;
+		}
+		this.#searching = true;
+		this.#searchProblem = undefined;
+		// An old row must not be selectable under a new, not-yet-resolved query.
+		overlay.setItems([], filter);
+		this.#refresh();
+		this.#searchTimer = setTimeout(async () => {
+			this.#searchTimer = undefined;
+			try {
+				const rows = await collectSessions(this.#host, query);
+				if (version !== this.#searchVersion || this.#overlay !== overlay) return;
+				this.#rows = rows;
+				this.#searching = false;
+				overlay.setItems(this.#items(), filter);
+				this.#refresh();
+			} catch {
+				if (version !== this.#searchVersion || this.#overlay !== overlay) return;
+				this.#searching = false;
+				this.#searchProblem = "Session search failed — edit the query to retry";
+				overlay.setFooter("session search failed · edit the query to retry · esc cancels");
+				this.#host.repaint();
+			}
+		}, 150);
 	}
 }
 
@@ -265,10 +388,40 @@ export function describeSessionRow(row: SessionRow, focusedKey: string, now: num
 		row.local ? undefined : "not loaded",
 		relativeAge(row.updatedAtMs, now),
 	].filter((mark): mark is string => Boolean(mark));
+	const badges: PickerBadge[] = [];
+	if (row.key === focusedKey) badges.push({ text: "current", tone: "accent" });
+	if (row.active) badges.push({ text: "busy", tone: "pending" });
+	if (row.unread > 0) badges.push({ text: `${row.unread} unread`, tone: "info" });
+	if (row.archived) badges.push({ text: "archived", tone: "muted" });
+	if (!row.local) {
+		badges.push({
+			text: "not loaded",
+			tone: "muted",
+			title: "Stored by the daemon; not loaded here",
+		});
+	}
+	const facts: Record<string, string> = {};
+	if (row.model) facts.model = row.model;
+	if (row.runCount !== undefined)
+		facts.runs = `${row.runCount} run${row.runCount === 1 ? "" : "s"}`;
+	const updated =
+		row.updatedAtMs !== undefined && row.updatedAtMs > 0 ? row.updatedAtMs : undefined;
+	if (updated !== undefined) facts.when = pickerAge(updated, now);
 	return {
 		value: row.key,
 		label: row.title ? `${shortTitle(row.title)} (${row.key})` : row.key,
 		description: marks.join(" · "),
+		// The sheet's cards put the title on top and the key, a machine string, under it.
+		native: {
+			label: row.title ? shortTitle(row.title) : row.key,
+			detail: row.title ? row.key : undefined,
+			mono: !row.title,
+			...(row.active ? { dot: "pending" as const } : {}),
+			...(row.pinned ? { icon: "pin" } : {}),
+			...(badges.length > 0 ? { badges } : {}),
+			facts,
+			...(updated !== undefined ? { title: pickerDate(updated) } : {}),
+		},
 	};
 }
 

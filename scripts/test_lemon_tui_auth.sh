@@ -12,7 +12,7 @@ cleanup() {
 
   for pid_file in "$TEST_DIR/runtime.pid" "$TEST_DIR/source-runtime.pid" "$TEST_DIR/package-runtime.pid"; do
     if [[ -f "$pid_file" ]]; then
-      runtime_pid="$(<"$pid_file")"
+      IFS= read -r runtime_pid < "$pid_file" || true
       if [[ "$runtime_pid" =~ ^[0-9]+$ && "$runtime_pid" -gt 1 ]]; then
         kill -KILL "$runtime_pid" 2>/dev/null || true
       fi
@@ -22,6 +22,33 @@ cleanup() {
   rm -rf "$TEST_DIR"
 }
 trap cleanup EXIT
+
+assert_token_absent() {
+  if grep -Fq -- "$1" "$2"; then
+    echo "credential leaked into $2" >&2
+    exit 1
+  fi
+}
+
+# GNU `stat -f` means --file-system and prints filesystem details before
+# failing, so the BSD form's output must be discarded when it fails.
+file_mode() {
+  local mode
+  if mode="$(stat -f '%Lp' "$1" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  else
+    stat -c '%a' "$1"
+  fi
+}
+
+# Bare `lemon` only opens the TUI on a terminal, so run it under a PTY.
+run_in_tty() {
+  if script --version 2>/dev/null | grep -qi 'util-linux'; then
+    script -q -e -c "$(printf '%q ' "$@")" /dev/null
+  else
+    script -q /dev/null "$@"
+  fi
+}
 
 cat > "$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
@@ -41,6 +68,7 @@ fi
 
 printf '%s' "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" > "$LEMON_TUI_TEST_CLIENT_TOKEN"
 printf '%s\n' "$@" > "$LEMON_TUI_TEST_CLIENT_ARGS"
+pwd -P > "$LEMON_TUI_TEST_CLIENT_CWD"
 EOF
 
 cat > "$TEST_DIR/runtime-launcher" <<'EOF'
@@ -51,7 +79,7 @@ printf '%s\n' "$@" > "$LEMON_TUI_TEST_RUNTIME_ARGS"
 if [[ -n "${LEMON_RUNTIME_PID_FILE:-}" ]]; then
   sleep 300 &
   runtime_pid=$!
-  printf '%s\n' "$runtime_pid" > "$LEMON_RUNTIME_PID_FILE"
+  printf '%s\n%s\n' "$runtime_pid" "$(ps -p "$runtime_pid" -o lstart=)" > "$LEMON_RUNTIME_PID_FILE"
   printf '%s\n' "$runtime_pid" > "$LEMON_TUI_TEST_RUNTIME_PID"
 fi
 
@@ -63,10 +91,17 @@ cat > "$FAKE_BIN/mix" <<'EOF'
 for arg in "$@"; do
   if [[ "$arg" == "--no-halt" ]]; then
     printf '%s' "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" > "$LEMON_TUI_TEST_SOURCE_RUNTIME_TOKEN"
-    sleep 300
-    exit 0
+    touch "$LEMON_TUI_TEST_HEALTH"
+    exec sleep 300
   fi
 done
+EOF
+
+cat > "$FAKE_BIN/elixir" <<'EOF'
+#!/usr/bin/env bash
+while [[ "$#" -gt 0 && "$1" != "-S" ]]; do shift; done
+shift
+exec "$@"
 EOF
 
 cat > "$FAKE_BIN/security" <<'EOF'
@@ -74,7 +109,12 @@ cat > "$FAKE_BIN/security" <<'EOF'
 exit 1
 EOF
 
-chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/bun" "$FAKE_BIN/mix" "$FAKE_BIN/security" "$TEST_DIR/runtime-launcher"
+cat > "$FAKE_BIN/tern" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$LEMON_TUI_TEST_TERN_ARGS"
+EOF
+
+chmod +x "$FAKE_BIN/curl" "$FAKE_BIN/bun" "$FAKE_BIN/mix" "$FAKE_BIN/elixir" "$FAKE_BIN/security" "$FAKE_BIN/tern" "$TEST_DIR/runtime-launcher"
 
 export PATH="$FAKE_BIN:$PATH"
 export HOME="$TEST_DIR/home"
@@ -84,6 +124,7 @@ export LEMON_TUI_TEST_HEALTH="$TEST_DIR/health"
 export LEMON_TUI_TEST_INSTALL_TOKEN="$TEST_DIR/install-token"
 export LEMON_TUI_TEST_CLIENT_TOKEN="$TEST_DIR/client-token"
 export LEMON_TUI_TEST_CLIENT_ARGS="$TEST_DIR/client-args"
+export LEMON_TUI_TEST_CLIENT_CWD="$TEST_DIR/client-cwd"
 export LEMON_TUI_TEST_RUNTIME_TOKEN="$TEST_DIR/runtime-token"
 export LEMON_TUI_TEST_RUNTIME_ARGS="$TEST_DIR/runtime-args"
 export LEMON_TUI_TEST_RUNTIME_PID="$TEST_DIR/runtime.pid"
@@ -93,6 +134,8 @@ unset LEMON_CONTROL_PLANE_OPERATOR_TOKEN
 unset LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK
 unset LEMON_RUNTIME_PID_FILE
 unset LEMON_WS_TOKEN
+unset TERN_ACP TERN_PANE
+export LEMON_TUI_TEST_TERN_ARGS="$TEST_DIR/tern-args"
 
 bootstrap_output="$TEST_DIR/bootstrap-output"
 "$ROOT/bin/lemon-tui" --test-argument > "$bootstrap_output" 2>&1
@@ -104,10 +147,10 @@ runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
 [[ "$runtime_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$runtime_token" == "$client_token" ]]
 [[ ! -s "$LEMON_TUI_TEST_INSTALL_TOKEN" ]]
-grep -qx -- '--daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
+grep -qx -- 'daemon' "$LEMON_TUI_TEST_RUNTIME_ARGS"
 grep -qx -- '--test-argument' "$LEMON_TUI_TEST_CLIENT_ARGS"
-! grep -Fq -- "$runtime_token" "$LEMON_TUI_TEST_CLIENT_ARGS"
-! grep -Fq -- "$runtime_token" "$bootstrap_output"
+assert_token_absent "$runtime_token" "$LEMON_TUI_TEST_CLIENT_ARGS"
+assert_token_absent "$runtime_token" "$bootstrap_output"
 
 for _ in $(seq 1 50); do
   kill -0 "$runtime_pid" 2>/dev/null || break
@@ -135,14 +178,14 @@ managed_pid_file="$TEST_DIR/source-runtime.pid"
 rm -f "$LEMON_TUI_TEST_HEALTH" "$LEMON_TUI_TEST_CLIENT_TOKEN"
 export LEMON_RUNTIME_PID_FILE="$managed_pid_file"
 
-if ! "$ROOT/bin/lemon" --daemon --no-distribution --port "$managed_port" > "$TEST_DIR/source-daemon-output" 2>&1; then
+if ! "$ROOT/bin/lemon" daemon --no-distribution --port "$managed_port" > "$TEST_DIR/source-daemon-output" 2>&1; then
   cat "$TEST_DIR/source-daemon-output" >&2
   exit 1
 fi
 
 managed_token_file="$HOME/.lemon/run/control-plane-${managed_port}.token"
 managed_token="$(<"$managed_token_file")"
-managed_mode="$(stat -f '%Lp' "$managed_token_file" 2>/dev/null || stat -c '%a' "$managed_token_file")"
+managed_mode="$(file_mode "$managed_token_file")"
 [[ "$managed_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$managed_mode" == "600" ]]
 [[ "$(<"$LEMON_TUI_TEST_SOURCE_RUNTIME_TOKEN")" == "$managed_token" ]]
@@ -155,9 +198,41 @@ if ! "$ROOT/bin/lemon-tui" > "$TEST_DIR/managed-attach-output" 2>&1; then
 fi
 
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
-! grep -Fq -- "$managed_token" "$TEST_DIR/managed-attach-output"
+assert_token_absent "$managed_token" "$TEST_DIR/managed-attach-output"
 
-managed_runtime_pid="$(<"$managed_pid_file")"
+# The unified source entrypoint must load the same credential and refuse an
+# unsafe credential file before launching a client.
+"$ROOT/bin/lemon" tui > "$TEST_DIR/source-tui-output" 2>&1
+[[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
+
+# In a Tern pane, bare `lemon` opens the same TUI; it never redirects to `tern acp`.
+rm -f "$LEMON_TUI_TEST_CLIENT_TOKEN"
+run_in_tty env TERN_PANE=test-pane "$ROOT/bin/lemon" < /dev/null > "$TEST_DIR/source-tern-output" 2>&1
+[[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$managed_token" ]]
+[[ ! -e "$LEMON_TUI_TEST_TERN_ARGS" ]]
+chmod 644 "$managed_token_file"
+rm -f "$LEMON_TUI_TEST_CLIENT_TOKEN"
+if "$ROOT/bin/lemon" tui > "$TEST_DIR/source-unsafe-output" 2>&1; then
+  echo "source launcher accepted a world-readable managed token" >&2
+  exit 1
+fi
+[[ ! -e "$LEMON_TUI_TEST_CLIENT_TOKEN" ]]
+chmod 600 "$managed_token_file"
+
+IFS= read -r managed_runtime_pid < "$managed_pid_file"
+kill -TERM "$managed_runtime_pid" 2>/dev/null || true
+
+# A cold TUI compiles and starts the daemon from the checkout, but must launch
+# the client in the user's repository, including paths containing spaces.
+project_dir="$TEST_DIR/coding project"
+mkdir -p "$project_dir"
+rm -f "$LEMON_TUI_TEST_HEALTH"
+(
+  cd "$project_dir"
+  "$ROOT/bin/lemon" tui > "$TEST_DIR/source-cold-tui-output" 2>&1
+  [[ "$(<"$LEMON_TUI_TEST_CLIENT_CWD")" == "$(pwd -P)" ]]
+)
+IFS= read -r managed_runtime_pid < "$managed_pid_file"
 kill -TERM "$managed_runtime_pid" 2>/dev/null || true
 unset LEMON_CONTROL_PLANE_PORT
 unset LEMON_RUNTIME_PID_FILE
@@ -172,7 +247,7 @@ fi
 
 [[ "$(<"$LEMON_TUI_TEST_RUNTIME_TOKEN")" == "$stable_token" ]]
 [[ "$(<"$LEMON_TUI_TEST_CLIENT_TOKEN")" == "$stable_token" ]]
-! grep -Fq -- "$stable_token" "$TEST_DIR/stable-output"
+assert_token_absent "$stable_token" "$TEST_DIR/stable-output"
 
 stable_runtime_pid="$(<"$LEMON_TUI_TEST_RUNTIME_PID")"
 for _ in $(seq 1 50); do
@@ -231,12 +306,12 @@ fi
 
 package_token_file="$package_home/.lemon/run/control-plane-46666.token"
 package_token="$(<"$package_token_file")"
-package_mode="$(stat -f '%Lp' "$package_token_file" 2>/dev/null || stat -c '%a' "$package_token_file")"
+package_mode="$(file_mode "$package_token_file")"
 [[ "$package_token" =~ ^[0-9a-fA-F]{64}$ ]]
 [[ "$package_mode" == "600" ]]
 [[ "$(<"$package_runtime_token")" == "$package_token" ]]
 [[ "$(<"$package_client_token")" == "$package_token" ]]
-! grep -Fq -- "$package_token" "$TEST_DIR/package-first-output"
+assert_token_absent "$package_token" "$TEST_DIR/package-first-output"
 
 rm -f "$package_client_token"
 if ! "$release_root/bin/lemon" tui > "$TEST_DIR/package-attach-output" 2>&1; then
@@ -245,7 +320,21 @@ if ! "$release_root/bin/lemon" tui > "$TEST_DIR/package-attach-output" 2>&1; the
 fi
 
 [[ "$(<"$package_client_token")" == "$package_token" ]]
-! grep -Fq -- "$package_token" "$TEST_DIR/package-attach-output"
+assert_token_absent "$package_token" "$TEST_DIR/package-attach-output"
+
+rm -f "$package_client_token"
+run_in_tty env TERN_PANE=test-pane "$release_root/bin/lemon" < /dev/null > "$TEST_DIR/package-tern-output" 2>&1
+[[ "$(<"$package_client_token")" == "$package_token" ]]
+[[ ! -e "$LEMON_TUI_TEST_TERN_ARGS" ]]
+
+chmod 644 "$package_token_file"
+rm -f "$package_client_token"
+if "$release_root/bin/lemon" tui > "$TEST_DIR/package-unsafe-output" 2>&1; then
+  echo "release launcher accepted a world-readable managed token" >&2
+  exit 1
+fi
+[[ ! -e "$package_client_token" ]]
+chmod 600 "$package_token_file"
 
 kill -TERM "$(<"$TEST_DIR/package-runtime.pid")" 2>/dev/null || true
 

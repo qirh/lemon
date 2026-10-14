@@ -17,9 +17,8 @@ Closes #
 
 ## Checklist
 
-- [ ] `mix test` passes
-- [ ] `mix lemon.quality` passes (lint + architecture boundaries + doc freshness)
-- [ ] New docs files registered in `docs/catalog.exs`
+- [ ] `scripts/test fast` passes
+- [ ] `scripts/test quality` passes (lint + docs links + architecture boundaries)
 - [ ] New features gated behind a feature flag (if applicable)
 - [ ] CODEOWNERS updated for new files (if applicable)
 - [ ] CHANGELOG.md updated (if user-visible change)

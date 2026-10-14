@@ -60,7 +60,7 @@ defmodule LemonWeb do
       use Gettext, backend: LemonWeb.Gettext
 
       import Phoenix.HTML
-      import LemonWeb.CoreComponents
+      import LemonWeb.UI
 
       alias Phoenix.LiveView.JS
 

@@ -37,15 +37,14 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert ctx.identity == nil
     end
 
-    test "does not accept params-only node or device roles" do
+    test "does not accept params-only node or unsupported roles" do
       assert {:error, {:unauthorized, "A valid node session token is required"}} =
                Authorize.from_params(%{"role" => "node", "client" => %{"id" => "node-123"}})
 
-      assert {:error, {:unauthorized, "A valid device session token is required"}} =
-               Authorize.from_params(%{
-                 "role" => "device",
-                 "client" => %{"id" => "device-456"}
-               })
+      for role <- ["device", "service"] do
+        assert {:error, {:unauthorized, "Unsupported role"}} =
+                 Authorize.from_params(%{"role" => role})
+      end
     end
   end
 
@@ -55,6 +54,14 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       identity = %{"type" => "service", "serviceId" => "svc-1"}
 
       {:ok, _} = TokenStore.store(token, identity)
+
+      assert {:error, {:unauthorized, "Unsupported token identity"}} =
+               Authorize.from_params(%{"auth" => %{"token" => token}})
+    end
+
+    test "retired device tokens cannot establish a connection" do
+      token = "retired-device-token-#{System.unique_integer([:positive])}"
+      {:ok, _} = TokenStore.store(token, %{"type" => "device", "deviceId" => "legacy"})
 
       assert {:error, {:unauthorized, "Unsupported token identity"}} =
                Authorize.from_params(%{"auth" => %{"token" => token}})
@@ -96,6 +103,55 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
 
       assert message =~ "Operator authentication is required"
       assert message =~ "LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
+    end
+  end
+
+  describe "operator credential helpers" do
+    test "configured_operator_token/0 trims and treats blank as unset" do
+      Application.put_env(:lemon_control_plane, :operator_token, "  tok  ")
+      assert Authorize.configured_operator_token() == "tok"
+
+      Application.put_env(:lemon_control_plane, :operator_token, "   ")
+      previous_env = System.get_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+      System.delete_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+
+      on_exit(fn ->
+        if previous_env, do: System.put_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN", previous_env)
+      end)
+
+      assert Authorize.configured_operator_token() == nil
+    end
+
+    test "loopback_address?/1 accepts only direct loopback forms" do
+      assert Authorize.loopback_address?({127, 0, 0, 1})
+      assert Authorize.loopback_address?({127, 1, 2, 3})
+      assert Authorize.loopback_address?({0, 0, 0, 0, 0, 0, 0, 1})
+      assert Authorize.loopback_address?({0, 0, 0, 0, 0, 65_535, 0x7F00, 1})
+      refute Authorize.loopback_address?({10, 0, 0, 1})
+      refute Authorize.loopback_address?({0, 0, 0, 0, 0, 65_535, 0x0A00, 1})
+      refute Authorize.loopback_address?(nil)
+      refute Authorize.loopback_address?("127.0.0.1")
+    end
+
+    test "tokenless_loopback_allowed?/1 requires the explicit flag and a loopback peer" do
+      previous =
+        Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator)
+
+      on_exit(fn ->
+        Application.put_env(
+          :lemon_control_plane,
+          :allow_unauthenticated_loopback_operator,
+          previous
+        )
+      end)
+
+      Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false)
+      refute Authorize.tokenless_loopback_allowed?({127, 0, 0, 1})
+
+      Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+      assert Authorize.tokenless_loopback_allowed?({127, 0, 0, 1})
+      refute Authorize.tokenless_loopback_allowed?({192, 168, 1, 2})
+      refute Authorize.tokenless_loopback_allowed?(nil)
     end
   end
 
@@ -153,7 +209,7 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
       assert Authorize.required_scopes("config.get") == [:admin]
       assert Authorize.required_scopes("exec.approvals.list") == [:approvals]
       assert Authorize.required_scopes("node.pair.start") == [:pairing]
-      assert Authorize.required_scopes("node.event") == [:invoke, :event]
+      assert Authorize.required_scopes("node.invoke.result") == [:invoke, :event]
       assert Authorize.required_scopes("chat.send") == [:write]
       assert Authorize.required_scopes("sessions.list") == [:read]
     end

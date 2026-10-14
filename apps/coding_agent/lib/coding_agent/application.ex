@@ -17,27 +17,25 @@ defmodule CodingAgent.Application do
       Application.get_env(
         :coding_agent,
         :task_max_concurrency,
-        CodingAgent.Parallel.default_max_concurrency()
+        8
       )
 
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
-      {Registry, keys: :unique, name: CodingAgent.RateLimitHealerRegistry},
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
+      CodingAgent.MutationLock,
+      CodingAgent.FileReadTracker,
       CodingAgent.SessionSupervisor,
       CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,
       CodingAgent.Tools.Task.LiveBridgeSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
-      # one_for_all Python REPL subsystem (session supervisor + registry).
-      # Must start after TaskSupervisor: per-cell RPC servers started for
-      # REPL workers depend on it.
-      CodingAgent.PythonRepl.Supervisor,
       {CodingAgent.TaskStoreServer, name: CodingAgent.TaskStoreServer},
+      CodingAgent.Tools.Task.Control,
       {CodingAgent.TaskProgressBindingServer, name: CodingAgent.TaskProgressBindingServer},
       {CodingAgent.ParentQuestionStoreServer, name: CodingAgent.ParentQuestionStoreServer},
       {CodingAgent.RunGraphServer, name: CodingAgent.RunGraphServer},
@@ -64,23 +62,15 @@ defmodule CodingAgent.Application do
     end
   end
 
-  # The control plane introspects this agent through a registered provider. The
-  # call is indirect (module in a variable) so this app keeps no compile-time
-  # reference to the reference runtime and stays extractable without it.
+  # Runtime consumers reach this agent through the shared core registry.
   defp register_control_plane_provider do
-    runtime = Module.concat(["LemonControlPlane", "AgentRuntime"])
+    case LemonCore.AgentRuntime.register(CodingAgent.ControlPlaneProvider) do
+      :ok ->
+        :ok
 
-    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :register, 1) do
-      case apply(runtime, :register, [CodingAgent.ControlPlaneProvider]) do
-        :ok ->
-          :ok
-
-        other ->
-          Logger.debug("control plane provider not registered: #{inspect(other)}")
-          :ok
-      end
-    else
-      :ok
+      other ->
+        Logger.debug("agent runtime provider not registered: #{inspect(other)}")
+        :ok
     end
   end
 

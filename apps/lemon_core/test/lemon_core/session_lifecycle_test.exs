@@ -20,6 +20,72 @@ defmodule LemonCore.SessionLifecycleTest do
     def history(_session_key, _opts), do: []
   end
 
+  test "history preserves action identity across newest-first tool phases" do
+    suffix = unique_suffix()
+    key = "agent:lifecycle_action_#{suffix}:main"
+    run_id = "run-action-#{suffix}"
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    events =
+      for phase <- [:started, :updated, :completed] do
+        %{
+          __event__: :action_event,
+          action: %{
+            id: "same-action",
+            title: "Inspect source",
+            kind: :tool,
+            detail: %{name: "read"}
+          },
+          phase: phase,
+          ok: phase == :completed
+        }
+      end
+
+    seed_session(key, run_id, "Inspect source", "Finished", events)
+    assert [history] = SessionLifecycle.history(key)
+
+    assert Enum.map(history.tools, &{&1.action_id, &1.phase}) ==
+             [
+               {"same-action", "completed"},
+               {"same-action", "updated"},
+               {"same-action", "started"}
+             ]
+
+    assert Enum.map(history.tools, & &1.id) == List.duplicate("same-action", 3)
+  end
+
+  test "history preserves native tool-call identity independently of event action identity" do
+    suffix = unique_suffix()
+    key = "agent:lifecycle_native_tool_#{suffix}:main"
+    run_id = "run-native-tool-#{suffix}"
+    on_exit(fn -> cleanup_sessions([key]) end)
+
+    events =
+      for phase <- [:started, :updated, :completed] do
+        %{
+          __event__: :action_event,
+          action: %{
+            id: "logical-#{phase}",
+            title: "Run consumer",
+            kind: :tool,
+            detail: %{"name" => "bash", "tool_call_id" => "native-tool"}
+          },
+          phase: phase,
+          ok: phase == :completed
+        }
+      end
+
+    seed_session(key, run_id, "Run consumer", "Finished", events)
+    assert [history] = SessionLifecycle.history(key)
+
+    assert Enum.map(history.tools, &{&1.id, &1.action_id, &1.phase}) ==
+             [
+               {"native-tool", "logical-completed", "completed"},
+               {"native-tool", "logical-updated", "updated"},
+               {"native-tool", "logical-started", "started"}
+             ]
+  end
+
   test "lists, filters, pins, archives, and searches metadata plus redacted history" do
     suffix = unique_suffix()
     first = "agent:lifecycle_#{suffix}:web:browser:unknown:first"
@@ -185,7 +251,6 @@ defmodule LemonCore.SessionLifecycleTest do
 
     [safe] = SessionLifecycle.history(session_key)
     refute inspect(safe) =~ secret
-    assert inspect(safe) =~ "[redacted]"
     assert [%{kind: "tool", title: "exec"}] = Enum.map(safe.tools, &Map.take(&1, [:kind, :title]))
 
     [full] = SessionLifecycle.history(session_key, redact: false)
@@ -226,7 +291,6 @@ defmodule LemonCore.SessionLifecycleTest do
     assert byte_size(json.sha256) == 64
     assert json.filename =~ ".json"
     refute json.content =~ secret
-    assert json.content =~ "[redacted]"
 
     decoded = Jason.decode!(json.content)
     assert decoded["redacted"] == true

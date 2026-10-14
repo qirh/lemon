@@ -1,0 +1,828 @@
+defmodule LemonAutomation.Tools.Cron do
+  @moduledoc """
+  LemonAgent tool for managing Lemon internal cron/scheduled jobs.
+
+  Supports actions to list, add, update, pause, resume, abort, remove, and trigger cron
+  jobs, as well as viewing run history. Delegates to
+  `LemonAutomation.CronManager` for persistence and scheduling.
+
+  Results are delivered to the originating Telegram/Discord chat or, for jobs
+  created from any other session (TUI, web, CLI), to the paired owner chat.
+  `deliverTo` overrides the target; `deliverTo: "none"` opts out.
+
+  ## Registration
+
+  `LemonAutomation.Application` registers this module under `:cron` with
+  `LemonAgent.ToolRegistry` once the cron scheduler is up, so the coding agent
+  offers it to every session without the platform naming this app. Like any
+  registered tool it goes through the session's tool policy and approval
+  wrapping. `tool/2` reads `:session_key` and `:agent_id` from the session's
+  tool options; calls return an error result, never raise, while
+  `LemonAutomation.CronManager` is not running.
+  """
+
+  alias LemonAgent.Types.{AgentTool, AgentToolResult}
+  alias LemonAi.Types.TextContent
+  alias LemonAutomation.{CronJob, CronManager, CronMemory}
+
+  @actions ~w(status list add update pause resume abort remove run runs)
+  @default_timeout_ms 300_000
+  @default_limit 100
+
+  @spec tool(String.t(), keyword()) :: AgentTool.t()
+  def tool(cwd, opts \\ []) do
+    session_key = normalize_string(Keyword.get(opts, :session_key))
+    agent_id = normalize_string(Keyword.get(opts, :agent_id))
+
+    %AgentTool{
+      name: "cron",
+      label: "Cron",
+      description:
+        "Manage Lemon internal cron jobs: status, list, add, update, pause, resume, abort, remove, run, and runs. Prompt jobs run native coding sessions in cwd (defaults to the current repository). Pause disables future runs; abort stops a specific active cron run. Add/update accepts 5-field cron and shorthands like 'every 30m'. Results reach the user's paired chat automatically; use deliverTo='none' to opt out.",
+      parameters: tool_schema(),
+      execute: &execute(&1, inherit_cwd(&2, cwd), &3, &4, session_key, agent_id)
+    }
+  end
+
+  def execute(_tool_call_id, params, _signal, _on_update, session_key, default_agent_id)
+      when is_map(params) do
+    action = normalize_string(fetch_param(params, "action"))
+
+    with :ok <- ensure_scheduler_started(),
+         {:ok, {title, payload}} <- dispatch(action, params, session_key, default_agent_id) do
+      success_result(title, payload)
+    else
+      {:error, message} ->
+        error_result(message)
+    end
+  end
+
+  def execute(_tool_call_id, _params, _signal, _on_update, _session_key, _default_agent_id) do
+    error_result("Invalid parameters (expected object).")
+  end
+
+  defp inherit_cwd(params, cwd) when is_map(params) do
+    if fetch_param(params, "action") == "add" do
+      case nested_map(params, "job") do
+        nil -> Map.put_new(params, "cwd", fetch_param(params, "cwd") || cwd)
+        job -> Map.put(params, "job", Map.put_new(job, "cwd", fetch_param(job, "cwd") || cwd))
+      end
+    else
+      params
+    end
+  end
+
+  defp inherit_cwd(params, _cwd), do: params
+
+  defp tool_schema do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "action" => %{
+          "type" => "string",
+          "enum" => @actions,
+          "description" =>
+            "Cron action: status, list, add, update, pause, resume, abort, remove, run, or runs."
+        },
+        "includeDisabled" => %{
+          "type" => "boolean",
+          "description" => "For list: include disabled jobs (default: true)."
+        },
+        "id" => %{
+          "type" => "string",
+          "description" => "Job id (update/remove/run/runs)."
+        },
+        "jobId" => %{
+          "type" => "string",
+          "description" => "Alias for id (update/remove/run/runs)."
+        },
+        "runId" => %{
+          "type" => "string",
+          "description" => "Cron run id for abort."
+        },
+        "cronRunId" => %{
+          "type" => "string",
+          "description" => "Alias for runId for abort."
+        },
+        "name" => %{
+          "type" => "string",
+          "description" => "Job name (add/update)."
+        },
+        "schedule" => %{
+          "type" => "string",
+          "description" =>
+            "Schedule as a 5-field cron expression or supported shorthand, for example: '0 9 * * *', 'every 30m', 'daily at 9am', or 'weekdays at 09:30'."
+        },
+        "prompt" => %{
+          "type" => "string",
+          "description" => "Prompt text to run when the job fires."
+        },
+        "cwd" => %{
+          "type" => "string",
+          "description" =>
+            "Target repository directory (add/update). Defaults to the current tool working directory on add."
+        },
+        "model" => %{
+          "type" => "string",
+          "description" =>
+            "Optional provider:model pin for the native coding session (add/update)."
+        },
+        "memoryFile" => %{
+          "type" => "string",
+          "description" =>
+            "Optional markdown file path used as cross-run memory for cron continuity."
+        },
+        "enabled" => %{
+          "type" => "boolean",
+          "description" => "Whether the job is enabled (add/update)."
+        },
+        "timezone" => %{
+          "type" => "string",
+          "description" =>
+            "'UTC' (default) or 'local' (the server's wall-clock time; use it for times the user states)."
+        },
+        "deliverTo" => %{
+          "type" => "string",
+          "description" =>
+            "Where results are sent (add/update). Omit for the default: the originating chat, else the user's paired chat. 'none' disables delivery; 'telegram:<chat_id>[:<topic_id>]' or 'discord:<channel_id>[:<thread_id>]' picks a chat; 'auto' restores the default."
+        },
+        "once" => %{
+          "type" => "boolean",
+          "description" =>
+            "One-shot job (add/update): runs at the next scheduled time, then is removed. Pin the date in the schedule, e.g. '30 14 28 9 *'."
+        },
+        "jitterSec" => %{
+          "type" => "integer",
+          "description" => "Optional jitter spread in seconds."
+        },
+        "timeoutMs" => %{
+          "type" => "integer",
+          "description" => "Optional timeout in milliseconds (default: 300000)."
+        },
+        "maxRetries" => %{
+          "type" => "integer",
+          "description" =>
+            "Scheduled-run retry count after confirmed failure (default: 0). Unknown submission or completion outcomes never retry automatically."
+        },
+        "retryBackoffMs" => %{
+          "type" => "integer",
+          "description" => "Delay before retry runs in milliseconds (default: 30000)."
+        },
+        "agentId" => %{
+          "type" => "string",
+          "description" =>
+            "Optional agent id for add. Defaults to current session agent id when available."
+        },
+        "sessionKey" => %{
+          "type" => "string",
+          "description" =>
+            "Optional session key for add. Defaults to current session key when available."
+        },
+        "limit" => %{
+          "type" => "integer",
+          "description" => "For runs: max number of run records (default: 100)."
+        },
+        "meta" => %{
+          "type" => "object",
+          "description" => "Optional metadata map for add/update.",
+          "additionalProperties" => true
+        },
+        "job" => %{
+          "type" => "object",
+          "description" => "Optional wrapper object for add fields.",
+          "additionalProperties" => true
+        },
+        "patch" => %{
+          "type" => "object",
+          "description" => "Optional wrapper object for update fields.",
+          "additionalProperties" => true
+        }
+      },
+      "required" => ["action"]
+    }
+  end
+
+  defp dispatch("status", _params, _session_key, _default_agent_id) do
+    with {:ok, jobs} <- cron_call(:list, []) do
+      payload = %{
+        "enabled" => true,
+        "jobCount" => length(jobs),
+        "activeJobs" => Enum.count(jobs, &truthy?(Map.get(&1, :enabled))),
+        "nextRunAtMs" => next_run_ms(jobs)
+      }
+
+      {:ok, {"Cron status", payload}}
+    end
+  end
+
+  defp dispatch("list", params, _session_key, _default_agent_id) do
+    include_disabled = parse_bool(fetch_param(params, "includeDisabled"), true)
+    agent_id = normalize_string(fetch_param(params, "agentId") || fetch_param(params, "agent_id"))
+
+    with {:ok, jobs} <- cron_call(:list, []) do
+      payload =
+        jobs
+        |> maybe_filter_enabled(include_disabled)
+        |> maybe_filter_agent(agent_id)
+        |> Enum.map(&format_job/1)
+        |> then(&%{"jobs" => &1})
+
+      {:ok, {"Cron jobs", payload}}
+    end
+  end
+
+  defp dispatch("add", params, session_key, default_agent_id) do
+    source = nested_map(params, "job") || params
+
+    schedule = normalize_string(fetch_param(source, "schedule"))
+    prompt = normalize_string(fetch_param(source, "prompt") || fetch_param(source, "message"))
+    name = normalize_string(fetch_param(source, "name")) || default_name(prompt)
+    agent_id = resolve_agent_id(source, session_key, default_agent_id)
+    target_session_key = resolve_session_key(source, session_key, agent_id)
+
+    cond do
+      is_nil(schedule) ->
+        {:error, "schedule is required for action=add"}
+
+      is_nil(prompt) ->
+        {:error, "prompt is required for action=add"}
+
+      not LemonCore.SessionKey.valid?(target_session_key) ->
+        {:error, "sessionKey must be a valid Lemon session key"}
+
+      true ->
+        meta = fetch_param(source, "meta")
+
+        add_params =
+          %{
+            name: name,
+            schedule: schedule,
+            agent_id: agent_id,
+            session_key: target_session_key,
+            prompt: prompt,
+            cwd: normalize_string(fetch_param(source, "cwd")),
+            model: normalize_string(fetch_param(source, "model")),
+            memory_file:
+              normalize_string(
+                fetch_param(source, "memoryFile") || fetch_param(source, "memory_file")
+              ),
+            deliver_to: fetch_param(source, "deliverTo") || fetch_param(source, "deliver_to"),
+            once: parse_bool(fetch_param(source, "once"), false),
+            enabled: parse_bool(fetch_param(source, "enabled"), true),
+            timezone: normalize_string(fetch_param(source, "timezone")) || "UTC",
+            jitter_sec:
+              parse_non_negative_integer(
+                fetch_param(source, "jitterSec") || fetch_param(source, "jitter_sec"),
+                0
+              ),
+            timeout_ms:
+              parse_positive_integer(
+                fetch_param(source, "timeoutMs") || fetch_param(source, "timeout_ms"),
+                @default_timeout_ms
+              ),
+            max_retries:
+              parse_non_negative_integer(
+                fetch_param(source, "maxRetries") || fetch_param(source, "max_retries"),
+                0
+              ),
+            retry_backoff_ms:
+              parse_non_negative_integer(
+                fetch_param(source, "retryBackoffMs") || fetch_param(source, "retry_backoff_ms"),
+                30_000
+              )
+          }
+          |> maybe_put(:meta, if(is_map(meta), do: meta, else: nil))
+
+        case cron_call(:add, [add_params]) do
+          {:ok, {:ok, job}} ->
+            payload = format_job(job)
+            {:ok, {"Cron job added", payload}}
+
+          {:ok, {:error, {:missing_keys, keys}}} ->
+            {:error, "Missing required fields: #{inspect(keys)}"}
+
+          {:ok, {:error, {:invalid_schedule, reason}}} ->
+            {:error, "Invalid schedule: #{reason}"}
+
+          {:ok, {:error, {:invalid_target, reason}}} ->
+            {:error, "Invalid job: #{reason}"}
+
+          {:ok, {:error, reason}} ->
+            {:error, "Failed to add cron job: #{inspect(reason)}"}
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp dispatch("update", params, _session_key, _default_agent_id) do
+    job_id = resolve_job_id(params)
+    patch_source = nested_map(params, "patch") || params
+
+    patch =
+      %{}
+      |> maybe_put(:name, normalize_string(fetch_param(patch_source, "name")))
+      |> maybe_put(:schedule, normalize_string(fetch_param(patch_source, "schedule")))
+      |> maybe_put(:cwd, normalize_string(fetch_param(patch_source, "cwd")))
+      |> maybe_put(:model, normalize_string(fetch_param(patch_source, "model")))
+      |> maybe_put(
+        :prompt,
+        normalize_string(
+          fetch_param(patch_source, "prompt") || fetch_param(patch_source, "message")
+        )
+      )
+      |> maybe_put(
+        :memory_file,
+        normalize_string(
+          fetch_param(patch_source, "memoryFile") || fetch_param(patch_source, "memory_file")
+        )
+      )
+      |> maybe_put(:timezone, normalize_string(fetch_param(patch_source, "timezone")))
+      |> maybe_put(
+        :deliver_to,
+        normalize_string(
+          fetch_param(patch_source, "deliverTo") || fetch_param(patch_source, "deliver_to")
+        )
+      )
+      |> maybe_put(:once, parse_bool_or_nil(fetch_param(patch_source, "once")))
+      |> maybe_put(:enabled, parse_bool_or_nil(fetch_param(patch_source, "enabled")))
+      |> maybe_put(
+        :jitter_sec,
+        parse_non_negative_integer_or_nil(
+          fetch_param(patch_source, "jitterSec") || fetch_param(patch_source, "jitter_sec")
+        )
+      )
+      |> maybe_put(
+        :timeout_ms,
+        parse_positive_integer_or_nil(
+          fetch_param(patch_source, "timeoutMs") || fetch_param(patch_source, "timeout_ms")
+        )
+      )
+      |> maybe_put(
+        :max_retries,
+        parse_non_negative_integer_or_nil(
+          fetch_param(patch_source, "maxRetries") || fetch_param(patch_source, "max_retries")
+        )
+      )
+      |> maybe_put(
+        :retry_backoff_ms,
+        parse_non_negative_integer_or_nil(
+          fetch_param(patch_source, "retryBackoffMs") ||
+            fetch_param(patch_source, "retry_backoff_ms")
+        )
+      )
+      |> maybe_put(
+        :meta,
+        if(is_map(fetch_param(patch_source, "meta")),
+          do: fetch_param(patch_source, "meta"),
+          else: nil
+        )
+      )
+
+    cond do
+      is_nil(job_id) ->
+        {:error, "id (or jobId) is required for action=update"}
+
+      map_size(patch) == 0 ->
+        {:error, "No update fields were provided"}
+
+      true ->
+        case cron_call(:update, [job_id, patch]) do
+          {:ok, {:ok, job}} ->
+            payload = %{
+              "id" => Map.get(job, :id),
+              "updated" => true,
+              "nextRunAtMs" => Map.get(job, :next_run_at_ms)
+            }
+
+            {:ok, {"Cron job updated", payload}}
+
+          {:ok, {:error, :not_found}} ->
+            {:error, "Cron job not found: #{job_id}"}
+
+          {:ok, {:error, {:invalid_target, reason}}} ->
+            {:error, "Invalid job: #{reason}"}
+
+          {:ok, {:error, reason}} ->
+            {:error, "Failed to update cron job: #{inspect(reason)}"}
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp dispatch("remove", params, _session_key, _default_agent_id) do
+    with {:ok, job_id} <- require_job_id(params) do
+      case cron_call(:remove, [job_id]) do
+        {:ok, :ok} ->
+          {:ok, {"Cron job removed", %{"removed" => true, "id" => job_id}}}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron job not found: #{job_id}"}
+
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to remove cron job: #{inspect(reason)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp dispatch("pause", params, _session_key, _default_agent_id) do
+    update_enabled(params, false, "paused", "Cron job paused")
+  end
+
+  defp dispatch("resume", params, _session_key, _default_agent_id) do
+    update_enabled(params, true, "resumed", "Cron job resumed")
+  end
+
+  defp dispatch("abort", params, _session_key, _default_agent_id) do
+    with {:ok, run_id} <- require_run_id(params) do
+      case cron_call(:abort_run, [run_id]) do
+        {:ok, {:ok, run}} ->
+          payload = %{
+            "aborted" => true,
+            "runId" => Map.get(run, :id),
+            "jobId" => Map.get(run, :job_id),
+            "status" => run |> Map.get(:status) |> to_string(),
+            "routerRunId" => Map.get(run, :run_id)
+          }
+
+          {:ok, {"Cron run aborted", payload}}
+
+        {:ok, {:error, :outcome_unknown}} ->
+          {:ok,
+           {"Cron abort outcome unknown",
+            %{
+              "runId" => run_id,
+              "aborted" => false,
+              "outcomeUnknown" => true,
+              "retrySafe" => false
+            }}}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron run not found: #{run_id}"}
+
+        {:ok, {:error, :not_active}} ->
+          {:error, "Cron run is not active: #{run_id}"}
+
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to abort cron run: #{inspect(reason)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp dispatch("run", params, _session_key, _default_agent_id) do
+    with {:ok, job_id} <- require_job_id(params) do
+      case cron_call(:run_now, [job_id]) do
+        {:ok, {:ok, run}} ->
+          payload = %{"triggered" => true, "jobId" => job_id, "runId" => Map.get(run, :id)}
+          {:ok, {"Cron job triggered", payload}}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron job not found: #{job_id}"}
+
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to run cron job: #{inspect(reason)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp dispatch("runs", params, _session_key, _default_agent_id) do
+    with {:ok, job_id} <- require_job_id(params) do
+      limit = parse_positive_integer(fetch_param(params, "limit"), @default_limit)
+
+      case cron_call(:runs, [job_id, [limit: limit]]) do
+        {:ok, runs} when is_list(runs) ->
+          payload = %{"jobId" => job_id, "runs" => Enum.map(runs, &format_run/1)}
+          {:ok, {"Cron run history", payload}}
+
+        {:ok, other} ->
+          {:error, "Unexpected cron.runs response: #{inspect(other)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp dispatch(nil, _params, _session_key, _default_agent_id),
+    do: {:error, "action is required"}
+
+  defp dispatch(action, _params, _session_key, _default_agent_id),
+    do: {:error, "Unknown action '#{action}'. Supported: #{Enum.join(@actions, ", ")}"}
+
+  defp update_enabled(params, enabled, result_key, title) do
+    with {:ok, job_id} <- require_job_id(params) do
+      case cron_call(:update, [job_id, %{enabled: enabled}]) do
+        {:ok, {:ok, job}} ->
+          payload = %{
+            "id" => Map.get(job, :id),
+            result_key => true,
+            "enabled" => Map.get(job, :enabled),
+            "nextRunAtMs" => Map.get(job, :next_run_at_ms)
+          }
+
+          {:ok, {title, payload}}
+
+        {:ok, {:error, :not_found}} ->
+          {:error, "Cron job not found: #{job_id}"}
+
+        {:ok, {:error, reason}} ->
+          {:error, "Failed to update cron job: #{inspect(reason)}"}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  defp ensure_scheduler_started do
+    if is_pid(Process.whereis(CronManager)) do
+      :ok
+    else
+      {:error, "Cron scheduler is unavailable (LemonAutomation.CronManager not started)."}
+    end
+  end
+
+  defp cron_call(function, args) do
+    {:ok, apply(CronManager, function, args)}
+  catch
+    :exit, {:noproc, _} ->
+      {:error, "Cron scheduler is not running."}
+
+    :exit, reason ->
+      {:error, "Cron scheduler call failed: #{inspect(reason)}"}
+  end
+
+  defp require_job_id(params) do
+    case resolve_job_id(params) do
+      nil -> {:error, "id (or jobId) is required"}
+      job_id -> {:ok, job_id}
+    end
+  end
+
+  defp require_run_id(params) do
+    case resolve_run_id(params) do
+      nil -> {:error, "runId (or cronRunId) is required"}
+      run_id -> {:ok, run_id}
+    end
+  end
+
+  defp resolve_job_id(params) do
+    normalize_string(fetch_param(params, "id")) || normalize_string(fetch_param(params, "jobId"))
+  end
+
+  defp resolve_run_id(params) do
+    normalize_string(fetch_param(params, "runId")) ||
+      normalize_string(fetch_param(params, "cronRunId"))
+  end
+
+  defp resolve_agent_id(source, session_key, default_agent_id) do
+    normalize_string(fetch_param(source, "agentId") || fetch_param(source, "agent_id")) ||
+      default_agent_id ||
+      LemonCore.SessionKey.agent_id(session_key || "") ||
+      "default"
+  end
+
+  defp resolve_session_key(source, session_key, agent_id) do
+    # Prefer the running session's key over the AI-provided one: it always
+    # carries the correct channel/thread routing, while an AI-supplied
+    # sessionKey may omit the thread_id and route output to the wrong
+    # Telegram chat/topic. Clients whose session ids are not Lemon session keys
+    # (e.g. the TUI's `tui-<timestamp>`) fall back to the agent's main session;
+    # delivery then targets the paired owner chat.
+    explicit =
+      normalize_string(fetch_param(source, "sessionKey") || fetch_param(source, "session_key"))
+
+    cond do
+      valid_session_key?(session_key) -> session_key
+      is_binary(explicit) -> explicit
+      true -> LemonCore.SessionKey.main(agent_id)
+    end
+  end
+
+  defp valid_session_key?(session_key) when is_binary(session_key),
+    do: LemonCore.SessionKey.valid?(session_key)
+
+  defp valid_session_key?(_session_key), do: false
+
+  defp default_name(prompt) do
+    trimmed = normalize_string(prompt) || "job"
+    base = String.slice(trimmed, 0, 32)
+    "Cron #{base}"
+  end
+
+  defp maybe_filter_enabled(jobs, true), do: jobs
+  defp maybe_filter_enabled(jobs, false), do: Enum.filter(jobs, &truthy?(Map.get(&1, :enabled)))
+
+  defp maybe_filter_agent(jobs, nil), do: jobs
+
+  defp maybe_filter_agent(jobs, agent_id),
+    do: Enum.filter(jobs, &(Map.get(&1, :agent_id) == agent_id))
+
+  defp next_run_ms(jobs) do
+    jobs
+    |> Enum.filter(&truthy?(Map.get(&1, :enabled)))
+    |> Enum.map(&Map.get(&1, :next_run_at_ms))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.min(fn -> nil end)
+  end
+
+  defp format_job(job) do
+    %{
+      "id" => Map.get(job, :id),
+      "name" => Map.get(job, :name),
+      "schedule" => Map.get(job, :schedule),
+      "enabled" => Map.get(job, :enabled),
+      "agentId" => Map.get(job, :agent_id),
+      "sessionKey" => Map.get(job, :session_key),
+      "prompt" => Map.get(job, :prompt),
+      "cwd" => Map.get(job, :cwd),
+      "model" => Map.get(job, :model),
+      "memoryFile" => resolved_memory_file(job),
+      "deliverTo" => Map.get(job, :deliver_to),
+      "once" => Map.get(job, :once) == true,
+      "timezone" => Map.get(job, :timezone) || "UTC",
+      "jitterSec" => Map.get(job, :jitter_sec) || 0,
+      "timeoutMs" => Map.get(job, :timeout_ms),
+      "maxRetries" => Map.get(job, :max_retries) || 0,
+      "retryBackoffMs" => Map.get(job, :retry_backoff_ms) || 30_000,
+      "createdAtMs" => Map.get(job, :created_at_ms),
+      "updatedAtMs" => Map.get(job, :updated_at_ms),
+      "lastRunAtMs" => Map.get(job, :last_run_at_ms),
+      "nextRunAtMs" => Map.get(job, :next_run_at_ms)
+    }
+  end
+
+  defp format_run(run) do
+    %{
+      "id" => Map.get(run, :id),
+      "jobId" => Map.get(run, :job_id),
+      "routerRunId" => Map.get(run, :run_id),
+      "sessionKey" => meta_value(run, :router_session_key),
+      "outcomeUnknown" => meta_value(run, :outcome_unknown) == true,
+      "reconciling" => meta_value(run, :outcome_unknown) == true,
+      "abortRequested" => meta_value(run, :abort_requested) == true,
+      "status" => run |> Map.get(:status) |> to_string(),
+      "triggeredBy" => run |> Map.get(:triggered_by) |> to_string(),
+      "retryAttempt" => retry_attempt(run),
+      "retryOf" => meta_value(run, :retry_of),
+      "retryRootId" => meta_value(run, :retry_root_id),
+      "startedAtMs" => Map.get(run, :started_at_ms),
+      "completedAtMs" => Map.get(run, :completed_at_ms),
+      "output" => truncate(Map.get(run, :output), 500),
+      "error" => Map.get(run, :error),
+      "suppressed" => Map.get(run, :suppressed) || false
+    }
+  end
+
+  defp retry_attempt(run) do
+    case meta_value(run, :retry_attempt) do
+      value when is_integer(value) -> value
+      _ -> 0
+    end
+  end
+
+  defp meta_value(run, key) do
+    meta = Map.get(run, :meta) || %{}
+    Map.get(meta, key) || Map.get(meta, to_string(key))
+  end
+
+  defp truncate(nil, _max), do: nil
+  defp truncate(text, max) when is_binary(text) and byte_size(text) <= max, do: text
+  defp truncate(text, max) when is_binary(text), do: String.slice(text, 0, max) <> "..."
+  defp truncate(other, _max), do: to_string(other)
+
+  defp success_result(title, payload) do
+    body = Jason.encode!(payload, pretty: true)
+
+    %AgentToolResult{
+      content: [%TextContent{type: :text, text: "#{title}\n#{body}"}],
+      details: payload
+    }
+  end
+
+  defp error_result(message) do
+    %AgentToolResult{
+      content: [%TextContent{type: :text, text: message}],
+      details: %{error: true, message: message}
+    }
+  end
+
+  defp fetch_param(params, key) when is_map(params) and is_binary(key) do
+    case Map.fetch(params, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        case to_existing_atom(key) do
+          nil -> nil
+          atom_key -> Map.get(params, atom_key)
+        end
+    end
+  end
+
+  defp fetch_param(_params, _key), do: nil
+
+  defp nested_map(params, key) do
+    case fetch_param(params, key) do
+      value when is_map(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp to_existing_atom(key) when is_binary(key) do
+    try do
+      String.to_existing_atom(key)
+    rescue
+      ArgumentError -> nil
+    end
+  end
+
+  defp normalize_string(value) when is_binary(value) do
+    value = String.trim(value)
+    if value == "", do: nil, else: value
+  end
+
+  defp normalize_string(_), do: nil
+
+  defp parse_bool(value, _default) when is_boolean(value), do: value
+  defp parse_bool(nil, default), do: default
+
+  defp parse_bool(value, default) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() do
+      "1" -> true
+      "true" -> true
+      "yes" -> true
+      "on" -> true
+      "0" -> false
+      "false" -> false
+      "no" -> false
+      "off" -> false
+      _ -> default
+    end
+  end
+
+  defp parse_bool(_value, default), do: default
+
+  defp parse_bool_or_nil(nil), do: nil
+  defp parse_bool_or_nil(value), do: parse_bool(value, nil)
+
+  defp parse_non_negative_integer(value, default) do
+    case parse_integer(value) do
+      int when is_integer(int) and int >= 0 -> int
+      _ -> default
+    end
+  end
+
+  defp parse_non_negative_integer_or_nil(value) do
+    case parse_integer(value) do
+      int when is_integer(int) and int >= 0 -> int
+      _ -> nil
+    end
+  end
+
+  defp parse_positive_integer(value, default) do
+    case parse_integer(value) do
+      int when is_integer(int) and int > 0 -> int
+      _ -> default
+    end
+  end
+
+  defp parse_positive_integer_or_nil(value) do
+    case parse_integer(value) do
+      int when is_integer(int) and int > 0 -> int
+      _ -> nil
+    end
+  end
+
+  defp parse_integer(value) when is_integer(value), do: value
+  defp parse_integer(value) when is_float(value), do: trunc(value)
+
+  defp parse_integer(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {int, ""} -> int
+      _ -> nil
+    end
+  end
+
+  defp parse_integer(_value), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp resolved_memory_file(%CronJob{} = job), do: CronMemory.memory_file(job)
+  defp resolved_memory_file(job), do: Map.get(job, :memory_file)
+
+  defp truthy?(value), do: value not in [false, nil]
+end

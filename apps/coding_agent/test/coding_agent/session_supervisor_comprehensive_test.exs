@@ -15,8 +15,11 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Session
+  alias CodingAgent.SessionManager
   alias CodingAgent.SessionRegistry
   alias CodingAgent.SessionSupervisor
+
+  import CodingAgent.AsyncHelpers
 
   alias LemonAi.Types.{
     AssistantMessage,
@@ -109,13 +112,17 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   defp default_session_opts(overrides) do
     Keyword.merge(
       [
-        cwd: System.tmp_dir!(),
+        cwd: session_cwd(),
         model: mock_model(),
         stream_fn: mock_stream_fn()
       ],
       overrides
     )
   end
+
+  # Session init scans the working directory; a shared, empty directory keeps
+  # every session start cheap (System.tmp_dir!() can be arbitrarily large).
+  defp session_cwd, do: :persistent_term.get({__MODULE__, :cwd})
 
   defp start_test_session(opts \\ []) do
     opts = default_session_opts(opts)
@@ -127,7 +134,34 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       SessionSupervisor.stop_session(pid)
     end
 
-    Process.sleep(50)
+    assert_eventually(fn -> SessionSupervisor.list_sessions() == [] end,
+      message: "sessions were not cleaned up"
+    )
+  end
+
+  # Kills `pid` and waits until it is actually down.
+  defp kill_and_await(pid) do
+    ref = Process.monitor(pid)
+    Process.exit(pid, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^pid, _}, 2_000
+    :ok
+  end
+
+  # Waits until the supervisor has processed the child's exit.
+  defp await_session_removed(pid) do
+    assert_eventually(fn -> pid not in SessionSupervisor.list_sessions() end,
+      message: "session #{inspect(pid)} still listed by supervisor"
+    )
+  end
+
+  defp await_first_turn(pid) do
+    assert_eventually(
+      fn ->
+        state = Session.get_state(pid)
+        state.turn_index >= 1 and not state.is_streaming
+      end,
+      message: "session never completed its first turn"
+    )
   end
 
   defp wait_for_registry_cleanup(session_id, timeout_ms \\ 1000) do
@@ -148,6 +182,24 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
           do_wait_for_registry_cleanup(session_id, deadline)
         end
     end
+  end
+
+  setup_all do
+    cwd =
+      Path.join(
+        System.tmp_dir!(),
+        "session_supervisor_comprehensive_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(cwd)
+    :persistent_term.put({__MODULE__, :cwd}, cwd)
+
+    on_exit(fn ->
+      :persistent_term.erase({__MODULE__, :cwd})
+      File.rm_rf(cwd)
+    end)
+
+    :ok
   end
 
   setup do
@@ -238,7 +290,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     end
 
     test "sessions can have different working directories" do
-      dir1 = System.tmp_dir!()
+      dir1 = session_cwd()
       dir2 = Path.join(System.tmp_dir!(), "test_subdir_#{:erlang.unique_integer([:positive])}")
       File.mkdir_p!(dir2)
 
@@ -303,7 +355,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session(thinking_level: :high)
 
       state = Session.get_state(pid)
-      assert state.cwd == System.tmp_dir!()
+      assert state.cwd == session_cwd()
       assert state.thinking_level == :high
       assert state.is_streaming == false
     end
@@ -341,7 +393,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session()
 
       :ok = Session.prompt(pid, "Hello!")
-      Process.sleep(100)
+      await_first_turn(pid)
 
       :ok = Session.reset(pid)
 
@@ -381,7 +433,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session()
 
       :ok = SessionSupervisor.stop_session(pid)
-      Process.sleep(50)
+      await_session_removed(pid)
 
       sessions = SessionSupervisor.list_sessions()
       refute pid in sessions
@@ -392,9 +444,10 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session(session_id: session_id)
 
       :ok = SessionSupervisor.stop_session(pid)
-      Process.sleep(50)
 
-      assert :error = SessionRegistry.lookup(session_id)
+      assert_eventually(fn -> SessionRegistry.lookup(session_id) == :error end,
+        message: "session id still registered"
+      )
     end
   end
 
@@ -410,7 +463,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Process.exit(pid, :kill)
 
       assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
-      Process.sleep(100)
+      await_session_removed(pid)
 
       # Session should not be restarted
       refute Process.alive?(pid)
@@ -419,8 +472,8 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
     test "supervisor remains alive after session crash" do
       {:ok, pid} = start_test_session()
 
-      Process.exit(pid, :kill)
-      Process.sleep(100)
+      kill_and_await(pid)
+      await_session_removed(pid)
 
       assert Process.whereis(SessionSupervisor)
       assert Process.alive?(Process.whereis(SessionSupervisor))
@@ -431,8 +484,8 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid2} = start_test_session()
       {:ok, pid3} = start_test_session()
 
-      Process.exit(pid2, :kill)
-      Process.sleep(100)
+      kill_and_await(pid2)
+      await_session_removed(pid2)
 
       assert Process.alive?(pid1)
       assert Process.alive?(pid3)
@@ -444,8 +497,8 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       initial_count = length(SessionSupervisor.list_sessions())
 
-      Process.exit(pid, :kill)
-      Process.sleep(100)
+      kill_and_await(pid)
+      await_session_removed(pid)
 
       final_count = length(SessionSupervisor.list_sessions())
       assert final_count == initial_count - 1
@@ -457,8 +510,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session()
 
       state = Session.get_state(pid)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       health = Session.health_check(pid)
       assert health.status == :unhealthy
@@ -471,8 +523,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Kill agent of first session
       state = Session.get_state(pid1)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       health_results = SessionSupervisor.health_all()
 
@@ -487,8 +538,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Kill agent of first session
       state = Session.get_state(pid1)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       summary = SessionSupervisor.health_summary()
 
@@ -510,24 +560,22 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
         end
 
       # Crash sessions one by one
-      Enum.each(pids, fn pid ->
-        Process.exit(pid, :kill)
-        Process.sleep(10)
-      end)
-
-      Process.sleep(100)
+      Enum.each(pids, &kill_and_await/1)
+      Enum.each(pids, &await_session_removed/1)
 
       # Supervisor should still be alive
       assert Process.alive?(Process.whereis(SessionSupervisor))
     end
 
     test "rapid session creation and termination is handled gracefully" do
-      for _ <- 1..20 do
-        {:ok, pid} = start_test_session()
-        Process.exit(pid, :kill)
-      end
+      pids =
+        for _ <- 1..20 do
+          {:ok, pid} = start_test_session()
+          kill_and_await(pid)
+          pid
+        end
 
-      Process.sleep(200)
+      Enum.each(pids, &await_session_removed/1)
 
       # Supervisor should still be alive and functional
       assert Process.alive?(Process.whereis(SessionSupervisor))
@@ -545,9 +593,8 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
         end
 
       # Kill all at once
-      Enum.each(pids, &Process.exit(&1, :kill))
-
-      Process.sleep(200)
+      Enum.each(pids, &kill_and_await/1)
+      Enum.each(pids, &await_session_removed/1)
 
       # Supervisor should still be functional
       assert Process.alive?(Process.whereis(SessionSupervisor))
@@ -596,7 +643,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid2} = start_test_session()
 
       :ok = SessionSupervisor.stop_session(pid1)
-      Process.sleep(50)
+      await_session_removed(pid1)
 
       assert Process.alive?(pid2)
 
@@ -612,14 +659,12 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       :ok = Session.prompt(pid1, "Hello from 1!")
       :ok = Session.prompt(pid2, "Hello from 2!")
 
-      Process.sleep(200)
-
       # Both should complete without affecting each other
-      state1 = Session.get_state(pid1)
-      state2 = Session.get_state(pid2)
+      await_first_turn(pid1)
+      await_first_turn(pid2)
 
-      assert state1.turn_index >= 1
-      assert state2.turn_index >= 1
+      assert Session.get_state(pid1).turn_index >= 1
+      assert Session.get_state(pid2).turn_index >= 1
     end
   end
 
@@ -650,8 +695,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       session_id = "crash-cleanup-#{:erlang.unique_integer([:positive])}"
       {:ok, pid} = start_test_session(session_id: session_id)
 
-      Process.exit(pid, :kill)
-      Process.sleep(100)
+      kill_and_await(pid)
 
       # Registry should be cleaned up
       assert :ok = wait_for_registry_cleanup(session_id)
@@ -667,7 +711,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Stop session gracefully
       :ok = SessionSupervisor.stop_session(pid)
-      Process.sleep(50)
+      await_session_removed(pid)
 
       # Session is gone, so listeners are cleaned up implicitly
       refute Process.alive?(pid)
@@ -681,7 +725,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid2} = start_test_session(session_id: session_id2)
 
       :ok = SessionSupervisor.stop_session(pid1)
-      Process.sleep(50)
 
       # Session 1 should be cleaned up
       assert :ok = wait_for_registry_cleanup(session_id1)
@@ -712,7 +755,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
           end)
         end
 
-      results = Task.await_many(tasks, 5000)
+      results = Task.await_many(tasks, 60_000)
 
       # All should succeed
       assert Enum.all?(results, fn
@@ -730,7 +773,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
           end)
         end
 
-      session_ids = Task.await_many(tasks, 5000)
+      session_ids = Task.await_many(tasks, 60_000)
 
       # All session IDs should be unique
       assert length(Enum.uniq(session_ids)) == length(session_ids)
@@ -759,7 +802,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
           end)
         end
 
-      Task.await_many(stop_tasks ++ create_tasks, 5000)
+      Task.await_many(stop_tasks ++ create_tasks, 30_000)
 
       # Supervisor should still be functional
       assert Process.alive?(Process.whereis(SessionSupervisor))
@@ -782,7 +825,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
           end)
         end
 
-      results = Task.await_many(tasks, 10_000)
+      results = Task.await_many(tasks, 60_000)
 
       # Should complete without errors
       assert length(results) == 50
@@ -805,8 +848,8 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid2} = start_test_session()
 
       # Kill one session - should not affect the other
-      Process.exit(pid1, :kill)
-      Process.sleep(50)
+      kill_and_await(pid1)
+      await_session_removed(pid1)
 
       assert Process.alive?(pid2)
     end
@@ -820,7 +863,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       Process.exit(pid, :kill)
       assert_receive {:DOWN, ^ref, :process, ^pid, _}, 1000
 
-      Process.sleep(100)
+      await_session_removed(pid)
 
       # Session count should decrease (not restarted)
       final_sessions = SessionSupervisor.list_sessions()
@@ -850,7 +893,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
   describe "health monitoring across sessions" do
     test "health_all returns empty list when no sessions" do
       cleanup_all_sessions()
-      Process.sleep(50)
 
       assert SessionSupervisor.health_all() == []
     end
@@ -872,8 +914,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       # Make one session unhealthy
       state = Session.get_state(pid1)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       health_results = SessionSupervisor.health_all()
 
@@ -901,7 +942,6 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
     test "health_summary returns :no_sessions when empty" do
       cleanup_all_sessions()
-      Process.sleep(50)
 
       summary = SessionSupervisor.health_summary()
 
@@ -920,8 +960,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       # Make one unhealthy
       {:ok, pid3} = start_test_session()
       state = Session.get_state(pid3)
-      Process.exit(state.agent, :kill)
-      Process.sleep(50)
+      kill_and_await(state.agent)
 
       summary2 = SessionSupervisor.health_summary()
       assert summary2.overall == :unhealthy
@@ -949,19 +988,21 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session(session_id: session_id)
 
       :ok = SessionSupervisor.stop_session(pid)
-      Process.sleep(50)
 
-      assert :error = SessionSupervisor.lookup(session_id)
+      assert_eventually(fn -> SessionSupervisor.lookup(session_id) == :error end,
+        message: "session id still registered"
+      )
     end
 
     test "lookup returns :error after session crashes" do
       session_id = "lookup-crash-test-#{:erlang.unique_integer([:positive])}"
       {:ok, pid} = start_test_session(session_id: session_id)
 
-      Process.exit(pid, :kill)
-      Process.sleep(50)
+      kill_and_await(pid)
 
-      assert :error = SessionSupervisor.lookup(session_id)
+      assert_eventually(fn -> SessionSupervisor.lookup(session_id) == :error end,
+        message: "session id still registered"
+      )
     end
   end
 
@@ -974,7 +1015,7 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       {:ok, pid} = start_test_session()
 
       :ok = SessionSupervisor.stop_session(pid)
-      Process.sleep(50)
+      await_session_removed(pid)
 
       # Second stop should fail
       result = SessionSupervisor.stop_session(pid)
@@ -996,6 +1037,11 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
       assert stats.session_id == long_id
 
       assert {:ok, ^pid} = SessionRegistry.lookup(long_id)
+      state = Session.get_state(pid)
+      assert File.regular?(state.session_file)
+      assert byte_size(Path.basename(state.session_file)) < 255
+      assert {:ok, journal} = SessionManager.load_from_file(state.session_file)
+      assert journal.header.id == long_id
     end
 
     test "sessions with special characters in session_id are handled" do
@@ -1004,6 +1050,15 @@ defmodule CodingAgent.SessionSupervisorComprehensiveTest do
 
       stats = Session.get_stats(pid)
       assert stats.session_id == special_id
+    end
+
+    test "native identities cannot escape the session journal directory" do
+      session_id = "../escaped-session-#{System.unique_integer([:positive])}"
+      {:ok, pid} = start_test_session(session_id: session_id)
+      state = Session.get_state(pid)
+      assert Path.dirname(state.session_file) == SessionManager.get_session_dir(state.cwd)
+      assert {:ok, journal} = SessionManager.load_from_file(state.session_file)
+      assert journal.header.id == session_id
     end
   end
 

@@ -3,7 +3,6 @@ defmodule LemonCore.RunStoreTest do
 
   alias LemonCore.{RunStore, Store}
   alias LemonCore.Store.EtsBackend
-  alias LemonCore.Store.Table
 
   defmodule FailFirstSessionIndexPutBackend do
     @behaviour LemonCore.Store.Backend
@@ -42,28 +41,6 @@ defmodule LemonCore.RunStoreTest do
     spec = Supervisor.child_spec({Store, Keyword.put(opts, :name, name)}, id: name)
     start_supervised!(spec)
     name
-  end
-
-  test "declares the run-domain tables without changing their runtime path" do
-    assert [runs, sessions_index] = RunStore.__store_tables__()
-
-    assert %Table{
-             name: :runs,
-             owner: RunStore,
-             cached: true,
-             persistence: :ephemeral,
-             retention: nil,
-             version: 1
-           } = runs
-
-    assert %Table{
-             name: :sessions_index,
-             owner: RunStore,
-             cached: true,
-             persistence: :durable,
-             retention: nil,
-             version: 1
-           } = sessions_index
   end
 
   test "appends, fetches, finalizes, and lists run history through the typed wrapper" do
@@ -127,8 +104,61 @@ defmodule LemonCore.RunStoreTest do
     assert_receive {:finalized, ^run_id}
 
     assert [{^session_key, public_entry}] = RunStore.list_sessions(store)
-    refute Map.has_key?(public_entry, :__indexed_run_ids__)
-    refute Map.has_key?(public_entry, :__legacy_run_count__)
+    refute Map.has_key?(public_entry, :__recent_run_ids__)
+  end
+
+  test "the session index stays bounded across many runs while retries stay idempotent" do
+    store = start_store(:run_store_bounded_index, backend: EtsBackend)
+    session_key = "agent:bounded:main"
+    runs = 10_000
+
+    for i <- 1..runs do
+      :ok = RunStore.finalize(store, "run-#{i}", %{session_key: session_key, n: i})
+    end
+
+    entry = Store.get(store, :sessions_index, session_key)
+    assert %{run_count: ^runs} = entry
+
+    # The idempotency marker must not grow with the session's lifetime: before
+    # it was bounded, every run id ever finalized stayed in the entry, and the
+    # entry was copied on every finalization and every cached read.
+    assert length(entry.__recent_run_ids__) <= 32
+    assert :erts_debug.flat_size(entry) < 1_000
+
+    # A retry of a recent run is still a no-op for the index.
+    assert :ok = RunStore.finalize(store, "run-#{runs}", %{session_key: session_key, n: runs})
+    assert %{run_count: ^runs} = Store.get(store, :sessions_index, session_key)
+
+    assert [{^session_key, %{run_count: ^runs} = public_entry}] = RunStore.list_sessions(store)
+    refute Map.has_key?(public_entry, :__recent_run_ids__)
+  end
+
+  test "an entry carrying the old unbounded marker is migrated on the session's next run" do
+    store = start_store(:run_store_legacy_index, backend: EtsBackend)
+    session_key = "agent:legacy:main"
+
+    :ok =
+      Store.put(store, :sessions_index, session_key, %{
+        session_key: session_key,
+        agent_id: "legacy",
+        origin: :unknown,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+        run_count: 3,
+        __indexed_run_ids__: MapSet.new(["old-1", "old-2", "old-3"]),
+        __legacy_run_count__: 0
+      })
+
+    assert [{^session_key, listed}] = RunStore.list_sessions(store)
+    refute Map.has_key?(listed, :__indexed_run_ids__)
+    refute Map.has_key?(listed, :__legacy_run_count__)
+
+    assert :ok = RunStore.finalize(store, "new-1", %{session_key: session_key})
+
+    entry = Store.get(store, :sessions_index, session_key)
+    assert %{run_count: 4, __recent_run_ids__: ["new-1"]} = entry
+    refute Map.has_key?(entry, :__indexed_run_ids__)
+    refute Map.has_key?(entry, :__legacy_run_count__)
   end
 
   test "finalizing a run with a different summary fails without leaking the first summary" do
@@ -145,7 +175,7 @@ defmodule LemonCore.RunStoreTest do
     assert %{summary: ^original} = Store.get(store, :runs, "run-conflict")
   end
 
-  defp eventually(fun, attempts \\ 20)
+  defp eventually(fun, attempts \\ 500)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

@@ -32,8 +32,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec prepare_status_action(map(), map()) :: {map(), term(), boolean()}
@@ -92,8 +90,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec ingest_status_action(map(), map(), term()) :: :ok
@@ -112,8 +108,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec ingest_projected_child_action(map(), map(), term()) :: :ok
@@ -130,8 +124,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec commit_status_segment(map(), term()) :: :ok
@@ -147,8 +139,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec finalize_status(map(), Event.t()) :: :ok
@@ -176,8 +166,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec flush_status(map()) :: :ok
@@ -189,8 +177,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec flush_all(map()) :: :ok
@@ -204,84 +190,83 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
-  @spec finalize_answer(map(), Event.t(), map()) :: :ok
+  @spec finalize_answer(map(), Event.t(), map()) :: :ok | {:error, term()}
   def finalize_answer(state, %Event{} = event, extra_meta) when is_map(extra_meta) do
-    with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
-      resume =
-        event
-        |> CompactionTrigger.extract_completed_resume()
-        |> CompactionTrigger.normalize_resume_token()
+    case ChannelContext.channel_id(state.session_key) do
+      {:ok, channel_id} ->
+        resume =
+          event
+          |> CompactionTrigger.extract_completed_resume()
+          |> CompactionTrigger.normalize_resume_token()
 
-      final_text =
-        case CompactionTrigger.extract_completed_answer(event) do
-          answer when is_binary(answer) and answer != "" ->
-            answer
+        final_text =
+          case CompactionTrigger.extract_completed_answer(event) do
+            answer when is_binary(answer) and answer != "" ->
+              answer
 
-          _ ->
-            case CompactionTrigger.extract_completed_ok_and_error(event) do
-              {false, err} -> "Run failed: #{RetryHandler.format_run_error(err)}"
-              _ -> nil
+            _ ->
+              case CompactionTrigger.extract_completed_ok_and_error(event) do
+                {false, err} -> "Run failed: #{RetryHandler.format_run_error(err)}"
+                _ -> nil
+              end
+          end
+
+        meta =
+          state
+          |> coalescer_meta()
+          |> maybe_put_resume(resume)
+          |> Map.merge(extra_meta)
+
+        if state[:saw_delta] == true do
+          resolved_final_text = streamed_final_text(state, channel_id, final_text)
+
+          record_finalize_dispatch(state, :direct_stream_finalize)
+
+          with :ok <- dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta) do
+            case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
+                   meta: meta,
+                   final_text: resolved_final_text,
+                   dispatch?: false
+                 ) do
+              :ok ->
+                :ok
+
+              {:error, reason} ->
+                record_finalize_dispatch(state, :fallback_stream_finalize)
+                dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
+
+                maybe_dispatch_fallback_final_text(
+                  state,
+                  channel_id,
+                  resolved_final_text,
+                  meta,
+                  reason
+                )
             end
+          end
+        else
+          case stream_coalescer().finalize_run(
+                 state.session_key,
+                 channel_id,
+                 state.run_id,
+                 meta: meta,
+                 final_text: final_text
+               ) do
+            :ok ->
+              record_finalize_dispatch(state, :coalescer_finalize)
+              :ok
+
+            {:error, reason} ->
+              record_finalize_dispatch(state, :fallback_final_text)
+              dispatch_fallback_final_answer(state, channel_id, final_text, meta, reason)
+          end
         end
 
-      meta =
-        state
-        |> coalescer_meta()
-        |> maybe_put_resume(resume)
-        |> Map.merge(extra_meta)
-
-      if state[:saw_delta] == true do
-        resolved_final_text = streamed_final_text(state, channel_id, final_text)
-
-        record_finalize_dispatch(state, :direct_stream_finalize)
-        dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
-
-        case stream_coalescer().finalize_run(state.session_key, channel_id, state.run_id,
-               meta: meta,
-               final_text: resolved_final_text,
-               dispatch?: false
-             ) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            record_finalize_dispatch(state, :fallback_stream_finalize)
-            dispatch_direct_final_answer(state, channel_id, resolved_final_text, meta)
-
-            maybe_dispatch_fallback_final_text(
-              state,
-              channel_id,
-              resolved_final_text,
-              meta,
-              reason
-            )
-        end
-      else
-        case stream_coalescer().finalize_run(
-               state.session_key,
-               channel_id,
-               state.run_id,
-               meta: meta,
-               final_text: final_text
-             ) do
-          :ok ->
-            record_finalize_dispatch(state, :coalescer_finalize)
-            :ok
-
-          {:error, reason} ->
-            record_finalize_dispatch(state, :fallback_final_text)
-            dispatch_fallback_final_answer(state, channel_id, final_text, meta, reason)
-        end
-      end
+      :error ->
+        :ok
     end
-
-    :ok
-  rescue
-    _ -> :ok
   end
 
   @spec maybe_seed_final_answer(map(), Event.t()) :: :ok
@@ -301,8 +286,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   @spec fanout_final_answer(map(), Event.t()) :: :ok
@@ -342,8 +325,6 @@ defmodule LemonRouter.SurfaceManager do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp coalescer_meta(%{execution_request: %LemonCore.ExecutionCommand{} = request}) do
@@ -383,7 +364,7 @@ defmodule LemonRouter.SurfaceManager do
       Process.alive?(pid) and subscriber_owns_surface?(pid, surface)
     end)
   rescue
-    _ -> false
+    ArgumentError -> false
   end
 
   defp subscriber_owns_surface?(pid, surface) when is_pid(pid) do
@@ -548,8 +529,6 @@ defmodule LemonRouter.SurfaceManager do
           thread_id: if(is_binary(thread_id) and thread_id != "", do: thread_id, else: nil)
         }
     end
-  rescue
-    _ -> nil
   end
 
   defp normalize_fanout_route(_), do: nil
@@ -608,8 +587,6 @@ defmodule LemonRouter.SurfaceManager do
 
   defp streamed_final_text(state, channel_id, _final_text) do
     stream_coalescer().current_text(state.session_key, channel_id, state.run_id)
-  rescue
-    _ -> nil
   end
 
   defp record_finalize_dispatch(state, mode) when is_atom(mode) do
@@ -621,8 +598,6 @@ defmodule LemonRouter.SurfaceManager do
       engine: "lemon",
       provenance: :direct
     )
-  rescue
-    _ -> :ok
   end
 
   defp dispatch_direct_final_answer(_state, _channel_id, text, _meta)
@@ -650,21 +625,17 @@ defmodule LemonRouter.SurfaceManager do
             Logger.warning(
               "Streamed final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)}"
             )
+
+            {:error, {:dispatch_failed, dispatch_reason}}
         end
+
       _ ->
         Logger.warning(
           "Streamed final route resolution failed for run_id=#{inspect(state.run_id)}"
         )
+
+        {:error, :invalid_delivery_route}
     end
-
-    :ok
-  rescue
-    error ->
-      Logger.warning(
-        "Streamed final dispatch raised for run_id=#{inspect(state.run_id)} error=#{Exception.message(error)}"
-      )
-
-      :ok
   end
 
   defp maybe_dispatch_fallback_final_text(_state, _channel_id, text, _meta, _reason)
@@ -700,21 +671,17 @@ defmodule LemonRouter.SurfaceManager do
             Logger.warning(
               "Fallback final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)} coalescer_reason=#{inspect(reason)}"
             )
+
+            {:error, {:dispatch_failed, dispatch_reason}}
         end
+
       _ ->
         Logger.warning(
           "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} coalescer_reason=#{inspect(reason)}"
         )
+
+        {:error, :invalid_delivery_route}
     end
-
-    :ok
-  rescue
-    error ->
-      Logger.warning(
-        "Fallback final dispatch raised for run_id=#{inspect(state.run_id)} error=#{Exception.message(error)} coalescer_reason=#{inspect(reason)}"
-      )
-
-      :ok
   end
 
   # ---- Async task surface subscriber wiring ----
@@ -737,10 +704,10 @@ defmodule LemonRouter.SurfaceManager do
           fallback_binding: fallback_binding,
           meta: coalescer_meta(state)
         )
-      _ -> :ok
+
+      _ ->
+        :ok
     end
-  rescue
-    _ -> :ok
   end
 
   defp async_task_child_binding_fields(action_event) do

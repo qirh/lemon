@@ -16,12 +16,16 @@ import {
 	type ApprovalBlock,
 	type AssistantBlock,
 	type Block,
+	type CompactionDetails,
 	type NoticeBlock,
 	type NoticeLevel,
 	nextBlockId,
+	type ReasoningBlock,
 	type ToolBlock,
 	type ToolPhase,
+	type TurnSummary,
 	toolTitle,
+	type UserDetails,
 } from "./transcript-model.ts";
 
 export interface DeltaResult {
@@ -56,8 +60,11 @@ export interface FinalizeOptions {
 	ok?: boolean | null;
 	/** Server-truncated; loses to the delta buffer whenever the buffer has text. */
 	answer?: string | null;
+	error?: string | null;
 	/** Renders an `*[interrupted]*` marker on the block. */
 	interrupted?: boolean;
+	/** The daemon's completion report (duration, usage, model). */
+	turn?: TurnSummary;
 }
 
 export class SessionStore {
@@ -65,6 +72,8 @@ export class SessionStore {
 	readonly blocks: Block[] = [];
 	/** Tool blocks by `action.id`, for phase upserts. */
 	readonly byActionId = new Map<string, ToolBlock>();
+	/** Reasoning blocks by `action.id`, for phase upserts. */
+	readonly reasoningByActionId = new Map<string, ReasoningBlock>();
 
 	activeRunId: string | undefined;
 	busy = false;
@@ -80,6 +89,8 @@ export class SessionStore {
 	lastRunEndedAtMs = 0;
 	/** Last engine reported by `agent started`, for the status line. */
 	engine: string | undefined;
+	/** Server-confirmed user label, separate from the durable routing key. */
+	title: string | undefined;
 	/** Model this session runs on, as last set through `/model` or reported. */
 	model: string | undefined;
 	/** Where {@link model} came from. See {@link setModel} for what that buys. */
@@ -94,10 +105,24 @@ export class SessionStore {
 	contextWindow: number | undefined;
 	/** Token counts from this session's most recent completed run. */
 	usage: RunUsage | undefined;
+	/**
+	 * The daemon's own `sessions.context` measurement. Authoritative when taken;
+	 * the next completed run's usage supersedes it.
+	 */
+	contextMeasurement: { tokens: number; window: number | undefined } | undefined;
 	/** Reasoning effort, as last set through `/think`. */
 	thinkingLevel: string | undefined;
 	/** Tool-policy profile, as last set through `/toolpolicy`. */
 	toolPolicy: string | undefined;
+	/**
+	 * Daemon plan mode as last confirmed through `sessions.plan` (or optimistically
+	 * after a plan proposal was approved); undefined until it has been read.
+	 */
+	planMode: "plan" | "code" | undefined;
+	/** The session's plan file, when the daemon has reported one. */
+	planPath: string | undefined;
+	/** Bumped by every {@link setPlan}, so a slower status read cannot undo a newer write. */
+	planWrites = 0;
 
 	/** runId -> accumulated delta text. */
 	readonly #buffers = new Map<string, string>();
@@ -105,6 +130,9 @@ export class SessionStore {
 	readonly #deltaSeqs = new Map<string, number>();
 	/** runId -> the assistant block that run streams into. */
 	readonly #assistantByRun = new Map<string, AssistantBlock>();
+	/** A tool/thinking/user boundary sealed the current contiguous text segment. */
+	readonly #assistantNeedsSegment = new Set<string>();
+	readonly #finishedRuns = new Map<string, AssistantBlock["status"]>();
 	/** Runs whose buffer holds the server's truncated answer, not streamed text. */
 	readonly #answerOnly = new Set<string>();
 
@@ -164,6 +192,10 @@ export class SessionStore {
 		this.modelSource = source;
 		if (changed || provider !== undefined) this.provider = provider;
 		if (changed || contextWindow !== undefined) this.contextWindow = contextWindow;
+		// The measured total still describes the conversation; its window was the old model's.
+		if (changed && this.contextMeasurement) {
+			this.contextMeasurement = { tokens: this.contextMeasurement.tokens, window: undefined };
+		}
 		if (thinking !== undefined) this.thinkingLevel = thinking;
 
 		return (
@@ -178,6 +210,20 @@ export class SessionStore {
 	applyUsage(usage: RunUsage | null | undefined): void {
 		if (!usage) return;
 		this.usage = usage;
+		this.contextMeasurement = undefined;
+	}
+
+	/** Record a `sessions.context` total (and its window) for the gauge. */
+	applyContextMeasurement(tokens: number, window: number | null | undefined): void {
+		if (!Number.isFinite(tokens) || tokens < 0) return;
+		this.contextMeasurement = { tokens, window: positive(window) };
+	}
+
+	/** Record plan mode; `path` undefined keeps the known plan file, null forgets it. */
+	setPlan(mode: "plan" | "code", path?: string | null): void {
+		this.planMode = mode;
+		if (path !== undefined) this.planPath = path ?? undefined;
+		this.planWrites += 1;
 	}
 
 	/**
@@ -190,6 +236,7 @@ export class SessionStore {
 	 * Undefined here makes the status bar fall back to its honest `use N` label.
 	 */
 	get contextTokens(): number | undefined {
+		if (this.contextMeasurement) return this.contextMeasurement.tokens;
 		const usage = this.usage;
 		if (!usage) return undefined;
 		const context = positive(usage.contextTokens);
@@ -201,17 +248,42 @@ export class SessionStore {
 
 	// -- writes --------------------------------------------------------------
 
-	addUser(text: string, at = Date.now()): Block {
-		return this.#push({ id: nextBlockId("user"), kind: "user", at, text });
+	/** Forget all transcript indexes when the active branch is replaced. */
+	resetTranscript(): void {
+		this.blocks.length = 0;
+		this.byActionId.clear();
+		this.reasoningByActionId.clear();
+		this.#buffers.clear();
+		this.#deltaSeqs.clear();
+		this.#assistantByRun.clear();
+		this.#assistantNeedsSegment.clear();
+		this.#finishedRuns.clear();
+		this.#answerOnly.clear();
+		this.activeRunId = undefined;
+		this.busy = false;
+		this.usage = undefined;
+		this.contextMeasurement = undefined;
+		this.unread = 0;
 	}
 
-	addNotice(text: string, level: NoticeLevel = "info", at = Date.now()): NoticeBlock {
+	/** `details.sentAt` defaults to `at`: a live prompt is sent as it is echoed. */
+	addUser(text: string, at = Date.now(), details: UserDetails = { sentAt: at }): Block {
+		return this.#push({ id: nextBlockId("user"), kind: "user", at, text, ...details });
+	}
+
+	addNotice(
+		text: string,
+		level: NoticeLevel = "info",
+		at = Date.now(),
+		compaction?: CompactionDetails,
+	): NoticeBlock {
 		return this.#push({
 			id: nextBlockId("notice"),
 			kind: "notice",
 			at,
 			level,
 			text,
+			...(compaction ? { compaction } : {}),
 		}) as NoticeBlock;
 	}
 
@@ -227,19 +299,19 @@ export class SessionStore {
 	}
 
 	/**
-	 * The assistant block a run streams into, created on first sight. `agent
-	 * started` and the first `chat delta` race in practice, so both call this.
+	 * The current contiguous assistant segment. A new segment starts after a
+	 * tool/thinking boundary, never above already-rendered tool history.
 	 */
 	ensureAssistant(runId: string, at = Date.now()): AssistantBlock {
 		const existing = this.#assistantByRun.get(runId);
-		if (existing) return existing;
+		if (existing && !this.#assistantNeedsSegment.delete(runId)) return existing;
 		const block: AssistantBlock = {
 			id: nextBlockId("assistant"),
 			kind: "assistant",
 			at,
 			runId,
 			text: "",
-			status: "streaming",
+			status: this.#finishedRuns.get(runId) ?? "streaming",
 		};
 		this.#assistantByRun.set(runId, block);
 		this.#push(block);
@@ -259,14 +331,18 @@ export class SessionStore {
 	 * a reveal on a block that is already history.
 	 */
 	appendDelta(runId: string, seq: number, text: string): DeltaResult {
-		const block = this.ensureAssistant(runId);
 		if (Number.isFinite(seq)) {
 			const previous = this.#deltaSeqs.get(runId);
 			if (previous !== undefined && seq <= previous) {
-				return { accepted: false, amended: false, block };
+				return {
+					accepted: false,
+					amended: false,
+					block: this.#assistantByRun.get(runId)!,
+				};
 			}
 			this.#deltaSeqs.set(runId, seq);
 		}
+		const block = this.ensureAssistant(runId);
 		const amended = block.status !== "streaming";
 		// A finalized block whose text came from the truncated `answer` fallback
 		// has no real stream behind it; the first genuine delta supersedes that
@@ -274,10 +350,11 @@ export class SessionStore {
 		if (amended && this.#answerOnly.has(runId)) {
 			this.#answerOnly.delete(runId);
 			this.#buffers.set(runId, "");
+			block.text = "";
 		}
 		const buffer = (this.#buffers.get(runId) ?? "") + (text ?? "");
 		this.#buffers.set(runId, buffer);
-		block.text = buffer;
+		block.text += text ?? "";
 		return { accepted: true, amended, block };
 	}
 
@@ -289,7 +366,15 @@ export class SessionStore {
 	upsertTool(
 		action: AgentAction | undefined,
 		phase: ToolPhase,
-		options: { runId?: string | null; ok?: boolean | null; message?: string | null } = {},
+		options: {
+			runId?: string | null;
+			ok?: boolean | null;
+			message?: string | null;
+			at?: number;
+			historical?: boolean;
+			cancelled?: boolean;
+			durationMs?: number | null;
+		} = {},
 	): ToolBlock {
 		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:${toolTitle(action)}`;
 		const existing = this.byActionId.get(actionId);
@@ -304,6 +389,20 @@ export class SessionStore {
 			// not just the phase — a `started` frame carries the pre-result detail,
 			// so merging it would erase the result from an already-sealed card.
 			if (existing.phase === "completed" && phase !== "completed") return existing;
+			// Only a genuinely observed live transition supplies local timing.
+			if (
+				!existing.historical &&
+				!options.historical &&
+				existing.phase !== "completed" &&
+				phase === "completed"
+			) {
+				existing.completedAt = Date.now();
+			}
+			if (options.historical !== undefined) existing.historical = options.historical;
+			if (options.cancelled === true) existing.cancelled = true;
+			if (options.durationMs !== undefined && options.durationMs !== null) {
+				existing.durationMs = options.durationMs;
+			}
 			existing.phase = phase;
 			existing.title = toolTitle(action) || existing.title;
 			if (detail !== undefined) existing.detail = detail;
@@ -317,7 +416,7 @@ export class SessionStore {
 		const block: ToolBlock = {
 			id: nextBlockId("tool"),
 			kind: "tool",
-			at: Date.now(),
+			at: options.at ?? Date.now(),
 			runId: options.runId ?? undefined,
 			actionId,
 			toolKind: action?.kind ?? "tool",
@@ -326,8 +425,47 @@ export class SessionStore {
 			phase,
 			ok: options.ok ?? undefined,
 			message: options.message ?? undefined,
+			historical: options.historical,
+			cancelled: options.cancelled,
+			durationMs: options.durationMs ?? undefined,
 		};
 		this.byActionId.set(actionId, block);
+		this.#push(block);
+		return block;
+	}
+
+	/**
+	 * Insert or update the reasoning block for a `kind: "reasoning"` action. Each
+	 * phase carries the block's accumulated text, so it replaces rather than
+	 * appends. Like tools, the phase only advances: a replayed `updated` after
+	 * `completed` is dropped.
+	 */
+	upsertReasoning(
+		action: AgentAction | undefined,
+		phase: ToolPhase,
+		options: { runId?: string | null } = {},
+	): ReasoningBlock {
+		const actionId = action?.id?.trim() || `${options.runId ?? "run"}:reasoning`;
+		const reasoning = action?.detail?.reasoning as { text?: unknown } | undefined;
+		const text =
+			typeof reasoning?.text === "string" && reasoning.text.length > 0 ? reasoning.text : undefined;
+		const existing = this.reasoningByActionId.get(actionId);
+		if (existing) {
+			if (existing.phase === "completed" && phase !== "completed") return existing;
+			existing.phase = phase;
+			if (text !== undefined) existing.text = text;
+			return existing;
+		}
+		const block: ReasoningBlock = {
+			id: nextBlockId("reasoning"),
+			kind: "reasoning",
+			at: Date.now(),
+			runId: options.runId ?? undefined,
+			actionId,
+			text: text ?? "",
+			phase,
+		};
+		this.reasoningByActionId.set(actionId, block);
 		this.#push(block);
 		return block;
 	}
@@ -342,21 +480,37 @@ export class SessionStore {
 	 */
 	finalizeRun(runId: string, options: FinalizeOptions = {}): AssistantBlock | undefined {
 		const answer = options.answer ?? "";
+		const alreadyFinished = this.#finishedRuns.has(runId);
 		const block =
-			this.#assistantByRun.get(runId) ?? (answer ? this.ensureAssistant(runId) : undefined);
+			this.#assistantByRun.get(runId) ??
+			(answer || options.interrupted || options.error ? this.ensureAssistant(runId) : undefined);
+		if (!alreadyFinished) {
+			this.#finishedRuns.set(
+				runId,
+				options.interrupted ? "aborted" : options.ok === false ? "error" : "done",
+			);
+		}
 		if (this.activeRunId === runId) {
 			this.activeRunId = undefined;
 			this.busy = false;
 			this.lastRunEndedAtMs = Date.now();
 		}
+		// Thinking the run never closed (an abort, a dropped `thinking_end`) is
+		// over too: a live reasoning block would pin the commit seam forever.
+		for (const reasoning of this.reasoningByActionId.values()) {
+			if (reasoning.runId === runId) reasoning.phase = "completed";
+		}
 		if (!block) return undefined;
-		if (block.status !== "streaming") return block;
+		// A client-side interrupt seals the block first; the daemon's later
+		// completion still owns the turn's numbers.
+		if (options.turn) block.turn = options.turn;
+		if (block.status !== "streaming" && alreadyFinished) return block;
 
 		const buffered = this.bufferFor(runId);
 		// The buffer wins: `answer` is truncated to 500 bytes server-side.
-		const text = buffered.length > 0 ? buffered : answer;
+		const text = buffered.length > 0 ? block.text : answer;
 		block.text = text;
-		this.#buffers.set(runId, text);
+		if (buffered.length === 0) this.#buffers.set(runId, text);
 		// Remember that this run's text is the server's summary rather than a
 		// stream, so a late delta replaces it instead of appending to it.
 		if (buffered.length === 0 && answer) this.#answerOnly.add(runId);
@@ -365,7 +519,12 @@ export class SessionStore {
 		} else if (options.ok === false) {
 			block.status = "error";
 			// Surface the server's message only when it is not already the body.
-			block.error = answer && answer !== text ? answer : undefined;
+			block.error =
+				options.error && options.error !== text
+					? options.error
+					: answer && answer !== text
+						? answer
+						: undefined;
 		} else {
 			block.status = "done";
 		}
@@ -384,6 +543,15 @@ export class SessionStore {
 	// -- internals -----------------------------------------------------------
 
 	#push<T extends Block>(block: T): T {
+		const previous = this.lastBlock;
+		if (
+			block.kind !== "assistant" &&
+			previous?.kind === "assistant" &&
+			previous.status === "streaming"
+		) {
+			previous.status = "done";
+			this.#assistantNeedsSegment.add(previous.runId);
+		}
 		this.blocks.push(block);
 		// The user's own message is never "unread" — they just typed it.
 		if (!this.focused && block.kind !== "user") this.unread += 1;

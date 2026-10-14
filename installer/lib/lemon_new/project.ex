@@ -11,17 +11,26 @@ defmodule LemonNew.Project do
     :app,
     :app_module,
     :app_path,
-    :lemon_path,
+    :package_root,
+    source: :checkout,
     channel?: false,
     memory?: false
   ]
+
+  @typedoc """
+  Where the platform packages come from: `:checkout` (path dependencies on a
+  lemon checkout), `:unpacked` (path dependencies on unpacked Hex tarballs) or
+  `:hex` (Hex requirements, no local copy of Lemon needed).
+  """
+  @type source :: :checkout | :unpacked | :hex
 
   @type t :: %__MODULE__{
           base_path: String.t(),
           app: String.t(),
           app_module: String.t(),
           app_path: String.t(),
-          lemon_path: String.t(),
+          package_root: String.t() | nil,
+          source: source(),
           channel?: boolean(),
           memory?: boolean()
         }
@@ -30,22 +39,71 @@ defmodule LemonNew.Project do
   Build a project from the target path and parsed switches.
 
   `:app` defaults to the basename of the path, `:module` to its camel case.
+
+  The platform packages come from exactly one of:
+
+    * `:hex` — the published packages, as `~> 0.2` Hex requirements. Needs no
+      checkout, but only published packages are resolvable, so `:channel` —
+      which needs the unpublished `lemon_channels` — is rejected.
+    * `:lemon_path` — a lemon checkout; each package is `apps/<package>`.
+    * `:packages_path` — a directory of unpacked Hex tarballs, one
+      `<package>/` per package (what `mix hex.build --unpack` produces). Only
+      published packages are there, so `:channel` — which needs the unpublished
+      `lemon_channels` — is rejected.
   """
   @spec new(String.t(), keyword()) :: t()
   def new(base_path, opts) do
     base_path = Path.expand(base_path)
     app = opts[:app] || Path.basename(base_path)
     module = opts[:module] || camelize(app)
+    channel? = !!opts[:channel]
+    {package_root, source} = package_source!(opts, channel?)
 
     %__MODULE__{
       base_path: base_path,
       app: app,
       app_module: module,
       app_path: app,
-      lemon_path: Keyword.fetch!(opts, :lemon_path),
-      channel?: !!opts[:channel],
+      package_root: package_root,
+      source: source,
+      channel?: channel?,
       memory?: !!opts[:memory]
     }
+  end
+
+  defp package_source!(opts, channel?) do
+    case {!!opts[:hex], opts[:lemon_path], opts[:packages_path]} do
+      {false, nil, nil} ->
+        raise ArgumentError, "expected :hex, a :lemon_path or a :packages_path"
+
+      {false, lemon_path, nil} ->
+        {Path.join(lemon_path, "apps"), :checkout}
+
+      {false, nil, _packages_path} when channel? ->
+        raise ArgumentError, """
+        --channel cannot be combined with --packages-path: the channel adapter \
+        depends on lemon_channels, which is not a published package. Generate \
+        it against a lemon checkout with --lemon-path instead.
+        """
+
+      {false, nil, packages_path} ->
+        {packages_path, :unpacked}
+
+      {true, nil, nil} when channel? ->
+        raise ArgumentError, """
+        --channel cannot be combined with --hex: the channel adapter depends on \
+        lemon_channels, which is not published to Hex, so the project could not \
+        resolve its dependencies. Generate it against a lemon checkout with \
+        --lemon-path instead.
+        """
+
+      {true, nil, nil} ->
+        {nil, :hex}
+
+      _more_than_one ->
+        raise ArgumentError,
+              "--hex, --lemon-path and --packages-path are mutually exclusive"
+    end
   end
 
   @doc """
@@ -58,7 +116,8 @@ defmodule LemonNew.Project do
     [
       app: project.app,
       app_module: project.app_module,
-      lemon_path: project.lemon_path,
+      package_root: project.package_root,
+      source: project.source,
       channel?: project.channel?,
       memory?: project.memory?
     ]

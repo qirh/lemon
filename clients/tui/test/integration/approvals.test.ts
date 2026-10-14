@@ -12,6 +12,7 @@ import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-approvals";
@@ -29,14 +30,17 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-async function boot() {
-	const server = await FakeControlPlane.start();
+async function boot(
+	options: { methods?: string[]; script?: (server: FakeControlPlane) => void } = {},
+) {
+	const server = await FakeControlPlane.start({ methods: options.methods });
 	teardown.push(() => server.stop());
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: "run-1",
 		sessionKey: params.sessionKey,
 	}));
 	server.respondWith("exec.approval.resolve", { resolved: true });
+	options.script?.(server);
 
 	const terminal = new MemoryTerminal();
 	const client = new ControlPlaneClient({
@@ -224,18 +228,18 @@ describe("approval flow", () => {
 		await waitFor(() => app.approvals.panel.visible === false, { what: "the panel to dismiss" });
 	});
 
-	test("a pending request keeps the transcript's live region open, a resolved one lets it close", async () => {
+	test("a pending request stays mutable until its decision is resolved", async () => {
 		const { app, server, terminal } = await boot();
 		requested(server);
 		await waitForPanel(app);
 
 		app.chatContainer.render(80);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeGreaterThan(0);
+		expect(unfinalizedBlocks(app.chatContainer).length).toBeGreaterThan(0);
 
 		terminal.sendInput("1");
 		await waitFor(() => app.store.pendingApprovals === 0, { what: "the approval to clear" });
 		app.chatContainer.render(80);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 
 	test("resolving something that is already gone says so instead of throwing", async () => {
@@ -256,5 +260,148 @@ describe("approval panel and the rest of the keyboard", () => {
 		// Ctrl+L would otherwise clear the transcript out from under the question.
 		terminal.sendInput("\x0c");
 		expect(app.store.focused.blocks.length).toBe(before);
+	});
+});
+
+describe("plan proposals", () => {
+	const PLAN = Array.from({ length: 30 }, (_, i) => `${i + 1}. step ${i + 1}`).join("\n");
+
+	/** A daemon in plan mode whose approved proposal switches it to code mode. */
+	async function bootPlanning(options: { flipOnApprove?: boolean } = {}) {
+		const state = { mode: "plan" as "plan" | "code" };
+		const booted = await boot({
+			methods: [...new FakeControlPlane().advertisedMethods, "sessions.plan"],
+			script: (server) => {
+				server.onMethod("sessions.plan", (params: { sessionKey: string }) => ({
+					sessionKey: params.sessionKey,
+					plan: { mode: state.mode, path: "/plans/fix-api-plan.md", content: PLAN },
+				}));
+				server.onMethod("exec.approval.resolve", (params: { decision: string }) => {
+					if (params.decision === "approve_once" && options.flipOnApprove !== false) {
+						state.mode = "code";
+					}
+					return { resolved: true };
+				});
+			},
+		});
+		// The handshake's own read, not one the test asked for.
+		await waitFor(() => booted.app.statusData().planMode === "plan", { what: "plan mode" });
+		return { ...booted, state };
+	}
+
+	function propose(server: FakeControlPlane) {
+		requested(server, {
+			approvalId: "ap-plan",
+			tool: "propose_plan",
+			action: { title: "Fix the API", path: "/plans/fix-api-plan.md", plan: PLAN },
+			rationale: 'Approve plan "Fix the API" and start implementation?',
+		});
+	}
+
+	function statusLine(app: AppShell): string {
+		return renderPlain(app.statusLineContainer.render(120));
+	}
+
+	test("connecting reads plan mode and the status line shows it", async () => {
+		const { app } = await bootPlanning();
+		await waitFor(() => app.statusData().planMode === "plan", { what: "plan mode" });
+		expect(statusLine(app)).toMatch(/^plan · /);
+	});
+
+	test("the panel offers only execute or refine, with a bounded plan preview", async () => {
+		const { app, server } = await bootPlanning();
+		propose(server);
+		await waitForPanel(app);
+		const text = panelText(app);
+		expect(text).toContain("Plan proposal · Fix the API");
+		expect(text).toContain("plan file: /plans/fix-api-plan.md");
+		expect(text).toContain("1. step 1");
+		expect(text).not.toContain("30. step 30");
+		expect(text).toContain("… 18 more lines (30 total)");
+		expect(text).toContain("1  Approve and execute");
+		expect(text).toContain("2  Refine plan");
+		expect(text).not.toContain("allow for this session");
+		expect(text).not.toContain("allow always");
+	});
+
+	test("approving executes: plan mode goes off and the indicator disappears", async () => {
+		const { app, server, terminal } = await bootPlanning();
+		propose(server);
+		await waitForPanel(app);
+		terminal.sendInput("1");
+		const frame = await server.waitForRequest("exec.approval.resolve");
+		expect(frame.params).toEqual({ approvalId: "ap-plan", decision: "approve_once" });
+		await waitFor(() => app.statusData().planMode === "code", { what: "plan mode off" });
+		expect(statusLine(app)).not.toMatch(/^plan · /);
+		await waitFor(() => transcript(app).includes("plan approved — executing"), {
+			what: "the record",
+		});
+	});
+
+	test("a status read that races the daemon's switch cannot bring plan mode back", async () => {
+		const { app, server, terminal } = await bootPlanning({ flipOnApprove: false });
+		propose(server);
+		await waitForPanel(app);
+		const reads = server.requestsFor("sessions.plan").length;
+		terminal.sendInput("1");
+		await waitFor(() => server.requestsFor("sessions.plan").length > reads, {
+			what: "the post-approval refresh",
+		});
+		// Responses arrive in request order, so once this read settles the
+		// listener's earlier one has been applied (or dropped) too.
+		await app.refreshPlanMode(SESSION, { afterApproval: true });
+		expect(app.statusData().planMode).toBe("code");
+	});
+
+	test("refining keeps plan mode on and the record says so", async () => {
+		const { app, server, terminal, state } = await bootPlanning();
+		propose(server);
+		await waitForPanel(app);
+		terminal.sendInput("2");
+		const frame = await server.waitForRequest("exec.approval.resolve");
+		expect(frame.params).toEqual({ approvalId: "ap-plan", decision: "deny" });
+		await waitFor(() => transcript(app).includes("plan sent back for refinement"), {
+			what: "the record",
+		});
+		expect(state.mode).toBe("plan");
+		expect(app.statusData().planMode).toBe("plan");
+		expect(statusLine(app)).toMatch(/^plan · /);
+	});
+
+	test("/approve refuses a scoped approval of a plan proposal", async () => {
+		const { app, server } = await bootPlanning();
+		propose(server);
+		await waitForPanel(app);
+		await app.submit("/approve 1 session");
+		expect(server.requestsFor("exec.approval.resolve")).toEqual([]);
+		expect(transcript(app)).toContain("scopes do not apply");
+	});
+
+	test("focusing another session reads that session's plan mode", async () => {
+		const { app, server, state } = await bootPlanning();
+		state.mode = "code";
+		app.store.setFocused("tui-other");
+		await waitFor(() => app.store.session("tui-other").planMode === "code", {
+			what: "the other session's mode",
+		});
+		expect(app.statusData().planMode).toBe("code");
+		expect(statusLine(app)).not.toMatch(/^plan · /);
+		expect(
+			server.requestsFor("sessions.plan").map((frame) => frame.params as { sessionKey: string }),
+		).toContainEqual(expect.objectContaining({ sessionKey: "tui-other", action: "status" }));
+	});
+
+	test("a completed run on the focused session re-reads plan mode", async () => {
+		const { app, server, state } = await bootPlanning();
+		await waitFor(() => app.statusData().planMode === "plan", { what: "plan mode" });
+		state.mode = "code";
+		server.pushEvent("agent", {
+			type: "completed",
+			runId: "run-9",
+			sessionKey: SESSION,
+			ok: true,
+			answer: "done",
+		});
+		await waitFor(() => app.statusData().planMode === "code", { what: "the resync" });
 	});
 });

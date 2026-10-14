@@ -1,51 +1,325 @@
 defmodule CodingAgent.ControlPlaneProvider do
   @moduledoc """
-  Exposes this agent's internals to the control plane's ops methods.
+  Exposes this agent's internals through the shared core runtime contract.
 
-  The control plane reports on tasks, sessions, extensions, the run graph and
-  progress, but must not depend on this app; it calls whatever provider is
-  registered (see `LemonControlPlane.AgentRuntime`). `CodingAgent.Application`
-  registers this module at boot.
+  Runtime consumers report on tasks, sessions, extensions, the run graph and
+  progress without depending on this app; they call the provider registered with
+  `LemonCore.AgentRuntime`. `CodingAgent.Application` registers this module at boot.
 
   Each function is a thin adapter over the agent's own modules. Shapes match
   what the control plane used to read directly, so method payloads are
   unchanged.
 
-  The `LemonControlPlane.AgentRuntime.Provider` behaviour is deliberately *not*
-  declared here: this app must stay extractable without the reference runtime,
-  so it carries no compile-time reference to it. `control_plane_provider_test`
-  checks this module against the behaviour's callback list at runtime instead.
+  Implements `LemonCore.AgentRuntime.Provider` through the app's core dependency.
   """
+
+  @behaviour LemonCore.AgentRuntime.Provider
 
   def list_tasks, do: CodingAgent.TaskStore.list(:all)
 
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
 
   def todo_progress(session_key) do
-    case CodingAgent.Tools.TodoStore.get_progress(session_key) do
-      progress when is_map(progress) ->
-        actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
-        Map.put(progress, :actionable_count, actionable_count)
-
-      _ ->
-        nil
-    end
+    progress = CodingAgent.Tools.TodoStore.get_progress(session_key)
+    actionable_count = session_key |> CodingAgent.Tools.TodoStore.get_actionable() |> length()
+    Map.put(progress, :actionable_count, actionable_count)
   end
 
   def feature_progress(cwd), do: CodingAgent.Tools.FeatureRequirements.get_progress(cwd)
 
   def compact_session(session_key, opts) do
-    case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
-      [{pid, _}] -> CodingAgent.Session.compact(pid, opts)
-      [] -> {:error, :session_not_found}
+    case live_session(session_key) do
+      nil ->
+        with cwd when is_binary(cwd) <- Keyword.get(opts, :cwd),
+             {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, pid} <-
+               CodingAgent.Session.start_link(native_session_opts(session_key, cwd, path)) do
+          try do
+            CodingAgent.Session.compact(pid, opts)
+          after
+            GenServer.stop(pid, :normal)
+          end
+        else
+          nil -> {:error, :session_not_found}
+          {:error, _} = error -> error
+        end
+
+      pid ->
+        CodingAgent.Session.compact(pid, opts)
     end
   end
 
-  def session_heartbeat(session_key, action, params) do
-    case CodingAgent.SessionRegistry.lookup_session_key(session_key) do
-      {:ok, pid} -> dispatch_session_heartbeat(pid, action, params)
-      :error -> {:error, :session_not_found}
-      {:error, :ambiguous} -> {:error, :session_ambiguous}
+  @doc "Return durable native branch entries for history replay through the runtime seam."
+  def session_history(session_key, cwd) do
+    with {:ok, path} <- native_session_path(session_key, cwd),
+         {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
+      {:ok, CodingAgent.SessionManager.get_branch(session)}
+    end
+  end
+
+  def session_tree(session_key, cwd, opts) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
+          {:ok, CodingAgent.Session.Rewind.tree(session, opts)}
+        end
+
+      pid ->
+        CodingAgent.Session.tree(pid, opts)
+    end
+  end
+
+  def session_rewind(session_key, cwd, entry_id, opts) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd) do
+          :global.trans({{__MODULE__, path}, self()}, fn ->
+            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                 {:ok, result, _session} <-
+                   CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
+              {:ok, result}
+            end
+          end)
+        end
+
+      pid ->
+        CodingAgent.Session.rewind(pid, entry_id, opts)
+    end
+  end
+
+  @doc "Fork native history and bind the independent resume token to a new logical session."
+  def session_fork(source_key, cwd, destination_key) do
+    with :ok <- ensure_idle(source_key),
+         nil <- LemonCore.ChatStateStore.get(destination_key),
+         {:ok, source_path} <- native_session_path(source_key, cwd) do
+      id = LemonCore.Id.uuid()
+      destination_path = CodingAgent.Session.Presentation.session_file_path(id, cwd)
+
+      with {:ok, _session} <-
+             CodingAgent.SessionManager.fork_file(source_path, destination_path, id: id) do
+        LemonCore.ChatStateStore.put(destination_key, %LemonCore.ChatState{
+          last_engine: "lemon",
+          last_resume_token: id,
+          updated_at: System.system_time(:millisecond)
+        })
+      end
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :destination_exists}
+    end
+  end
+
+  @doc """
+  Per-category context-window usage for a live or durable native session. A
+  stopped session combines its durable history with the overhead profile its
+  last save recorded (see `CodingAgent.Session.ContextUsage`).
+  """
+  def session_context_usage(session_key, cwd) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd),
+             {:ok, session} <- load_native_session(path) do
+          settings = CodingAgent.SettingsManager.load(session.header.cwd)
+          context = CodingAgent.SessionManager.build_session_context(session)
+          model = durable_model(context.model, settings)
+          messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
+
+          CodingAgent.Session.ContextUsage.measure_durable(
+            %{session_manager: session, model: model, settings_manager: settings},
+            messages,
+            CodingAgent.Session.ContextUsage.stored_overhead(session.header.id)
+          )
+        end
+
+      pid ->
+        CodingAgent.Session.context_usage(pid)
+    end
+  end
+
+  defp load_native_session(path) do
+    case CodingAgent.SessionManager.load_from_file(path) do
+      {:error, :enoent} -> {:error, :session_not_found}
+      result -> result
+    end
+  end
+
+  # A model that is no longer registered still has history worth measuring;
+  # its window is then reported as unknown.
+  defp durable_model(model, settings) do
+    CodingAgent.Session.ModelResolver.resolve_session_model(model, settings)
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc "Explicitly allocate a durable empty native session without entering a mode or sending a prompt."
+  def session_create(session_key, cwd) do
+    if LemonCore.SessionKey.agent_id(session_key) in [nil, ""] do
+      {:error, :invalid_session_key}
+    else
+      :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
+        case native_session_path(session_key, cwd) do
+          {:ok, path} ->
+            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                 result when result in [:ok, {:error, :exists}] <-
+                   register_native_index(session_key) do
+              {:ok, %{"sessionId" => session.header.id, "created" => false}}
+            end
+
+          {:error, :session_not_found} ->
+            cond do
+              live_session(session_key) != nil ->
+                {:error, :busy}
+
+              LemonCore.SessionLifecycle.get(session_key) != nil ->
+                {:error, :unsupported_session}
+
+              true ->
+                with {:ok, session} <- create_native_session(session_key, cwd) do
+                  {:ok, %{"sessionId" => session.header.id, "created" => true}}
+                end
+            end
+
+          {:error, _} = error ->
+            error
+        end
+      end)
+    end
+  end
+
+  @doc "Inspect, enter, or exit branch-aware native plan mode."
+  def session_plan(session_key, cwd, action, opts) do
+    case live_session(session_key) do
+      nil ->
+        :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
+          case native_session_path(session_key, cwd) do
+            {:ok, path} ->
+              :global.trans({{__MODULE__, path}, self()}, fn ->
+                with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
+                     {:ok, plan, _} <-
+                       CodingAgent.Session.Planning.transition(
+                         %{session | file_path: path},
+                         action,
+                         opts
+                       ) do
+                  {:ok, plan}
+                end
+              end)
+
+            {:error, :session_not_found} when action in [:status, :exit] ->
+              {:ok, CodingAgent.Session.Planning.status(nil)}
+
+            {:error, :session_not_found} when action == :enter ->
+              with {:ok, session} <- create_native_session(session_key, cwd),
+                   {:ok, plan, _} <- CodingAgent.Session.Planning.transition(session, :enter, []) do
+                {:ok, plan}
+              end
+
+            {:error, _} = error ->
+              error
+          end
+        end)
+
+      pid ->
+        CodingAgent.Session.plan(pid, action, opts)
+    end
+  end
+
+  defp create_native_session(session_key, cwd) do
+    session = CodingAgent.SessionManager.new(cwd)
+    path = CodingAgent.SessionManager.session_file_path(cwd, session.header.id)
+    session = CodingAgent.SessionManager.persist(session, path)
+
+    with :ok <-
+           LemonCore.ChatStateStore.put(session_key, %LemonCore.ChatState{
+             last_engine: "lemon",
+             last_resume_token: session.header.id,
+             updated_at: System.system_time(:millisecond)
+           }),
+         :ok <- register_native_index(session_key) do
+      {:ok, session}
+    end
+  end
+
+  defp register_native_index(session_key) do
+    LemonCore.RunStore.create_session_index(
+      session_key,
+      LemonCore.SessionKey.agent_id(session_key) || "default",
+      :control_plane
+    )
+  end
+
+  defp native_session_opts(session_key, cwd, path) do
+    agent_id = LemonCore.SessionKey.agent_id(session_key) || "default"
+    opts = [cwd: cwd, session_file: path, session_key: session_key, agent_id: agent_id]
+
+    case LemonCore.ProfileStore.get(agent_id) do
+      {:ok, %{"canonicalSessionKey" => ^session_key, "paths" => %{"workspace" => workspace}}} ->
+        Keyword.put(opts, :workspace_dir, workspace)
+
+      _ ->
+        opts
+    end
+  end
+
+  def tool_policy(profile), do: CodingAgent.ToolPolicy.from_profile(profile)
+
+  @doc "Resolve canonical persona instructions and policy without exposing product dependencies."
+  def resolve_subagent(cwd, id) do
+    case CodingAgent.Subagents.fetch(cwd, id) do
+      {:ok, persona} ->
+        {:ok,
+         persona
+         |> Map.take([:prompt, :model, :role])
+         |> Map.put(:tool_policy, CodingAgent.Subagents.tool_policy(persona, nil))}
+
+      {:error, _reason} ->
+        {:error, :persona_unavailable}
+    end
+  end
+
+  defp ensure_idle(session_key) do
+    case live_session(session_key) do
+      nil ->
+        :ok
+
+      pid ->
+        if CodingAgent.Session.get_state(pid).is_streaming, do: {:error, :busy}, else: :ok
+    end
+  end
+
+  defp native_session_path(session_key, cwd) do
+    case LemonCore.ChatStateStore.get(session_key) do
+      state when is_map(state) ->
+        engine = Map.get(state, :last_engine) || Map.get(state, "last_engine")
+        token = Map.get(state, :last_resume_token) || Map.get(state, "last_resume_token")
+
+        if engine == "lemon" and is_binary(token) and token != "" and
+             Path.basename(token) == token do
+          {:ok, CodingAgent.Session.Presentation.session_file_path(token, cwd)}
+        else
+          {:error, :unsupported_session}
+        end
+
+      nil ->
+        {:error, :session_not_found}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp live_session(session_key) do
+    if Process.whereis(CodingAgent.SessionRegistry) do
+      case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
+        [{pid, _}] ->
+          pid
+
+        [] ->
+          CodingAgent.SessionRegistry
+          |> Registry.select([{{:_, :"$1", %{session_key: session_key}}, [], [:"$1"]}])
+          |> List.first()
+      end
     end
   end
 
@@ -110,22 +384,4 @@ defmodule CodingAgent.ControlPlaneProvider do
         Keyword.delete(opts, :status)
     end
   end
-
-  defp dispatch_session_heartbeat(pid, :status, _params),
-    do: CodingAgent.Session.heartbeat_status(pid)
-
-  defp dispatch_session_heartbeat(pid, :set, params) do
-    CodingAgent.Session.heartbeat_set(pid, params[:prompt], params[:interval_seconds])
-  end
-
-  defp dispatch_session_heartbeat(pid, :pause, _params),
-    do: CodingAgent.Session.heartbeat_pause(pid)
-
-  defp dispatch_session_heartbeat(pid, :resume, _params),
-    do: CodingAgent.Session.heartbeat_resume(pid)
-
-  defp dispatch_session_heartbeat(pid, :clear, _params),
-    do: CodingAgent.Session.heartbeat_clear(pid)
-
-  defp dispatch_session_heartbeat(_pid, _action, _params), do: {:error, :invalid_action}
 end

@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Find whether a commit is already covered by a green CI run on main.
+#
+# Usage: scripts/ci_verified_commit <commit> [--repo OWNER/NAME] [--max-depth N]
+#
+# Walks first-parent history from <commit>. A commit with a successful `CI`
+# (ci.yml) push run is verified: pushes to main run every CI job, so that run
+# covers the commit completely. Release cuts and package releases are pushed
+# with the workflow token or tagged later, so they often have no CI run of
+# their own; such a commit is skipped over only when it changes nothing but
+# release metadata (changelogs and version fields), so its tested ancestor
+# still describes the same code.
+#
+# Prints `verified <sha>` and exits 0, or prints the reason and exits 1.
+# Needs git history (fetch-depth > max-depth) and `gh` with actions:read.
+set -euo pipefail
+
+commit="${1:?usage: scripts/ci_verified_commit <commit> [--repo OWNER/NAME] [--max-depth N]}"
+shift
+repo="${GITHUB_REPOSITORY:-}"
+max_depth=25
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo) repo="$2"; shift 2 ;;
+    --max-depth) max_depth="$2"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$repo" ] || repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+
+# Version-only edits in these files keep the tested code identical.
+metadata_only() {
+  local sha="$1" file
+  while IFS= read -r file; do
+    case "$file" in
+      CHANGELOG.md | apps/*/CHANGELOG.md | installer/CHANGELOG.md) ;;
+      mix.exs | apps/*/mix.exs | installer/mix.exs | clients/*/package.json | clients/*/package-lock.json)
+        # Every changed line must be a version field.
+        if git diff "${sha}^" "$sha" -- "$file" |
+          grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' |
+          grep -vqE '^[+-][[:space:]]*(version:|@version |"version":)'; then
+          return 1
+        fi
+        ;;
+      *) return 1 ;;
+    esac
+  done < <(git diff --name-only "${sha}^" "$sha")
+}
+
+ci_green() {
+  local count
+  count="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?head_sha=$1&event=push&status=success&per_page=1" \
+    --jq '.total_count')"
+  [ "${count:-0}" -gt 0 ]
+}
+
+sha="$(git rev-parse "${commit}^{commit}")"
+for _ in $(seq 1 "$max_depth"); do
+  if ci_green "$sha"; then
+    echo "verified $sha"
+    exit 0
+  fi
+  if ! git rev-parse -q --verify "${sha}^" >/dev/null || ! metadata_only "$sha"; then
+    echo "unverified: $sha has no green CI push run and changes more than release metadata"
+    exit 1
+  fi
+  sha="$(git rev-parse "${sha}^")"
+done
+echo "unverified: no green CI push run within $max_depth release-metadata commits"
+exit 1

@@ -18,6 +18,26 @@ defmodule LemonRouter.ToolStatusRendererTest do
     assert String.contains?(text, "\u2717 Test tool -> something went wrong")
   end
 
+  test "channel rendering uses the preview, never the operator-only full result" do
+    actions = %{
+      "a1" => %{
+        title: "bash",
+        phase: :completed,
+        ok: false,
+        detail: %{
+          result: "exit 1: short preview",
+          result_full: "operator-only full output\n" <> String.duplicate("x", 5_000),
+          details: %{exit_code: 1}
+        }
+      }
+    }
+
+    text = ToolStatusRenderer.render("telegram", actions, ["a1"])
+
+    assert String.contains?(text, "exit 1: short preview")
+    refute String.contains?(text, "operator-only")
+  end
+
   test "does not render result preview on successful actions" do
     inspected =
       "%LemonAgent.Types.AgentToolResult{content: [%LemonAi.Types.TextContent{type: :text, text: \"hello\\nworld\"}]}"

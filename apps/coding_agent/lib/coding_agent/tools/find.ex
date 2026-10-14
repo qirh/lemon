@@ -2,8 +2,14 @@ defmodule CodingAgent.Tools.Find do
   @moduledoc """
   Find files tool for the coding agent.
 
-  Finds files by name/pattern. Uses `fd` if available for performance,
-  falling back to Elixir's Path.wildcard for compatibility.
+  Finds files by glob pattern. Uses `fd` in case-sensitive glob mode if
+  available, falling back to Elixir's Path.wildcard with the same semantics.
+
+  `.gitignore`/`.ignore` rules are respected by default (so `_build/`,
+  `deps/`, and `node_modules/` do not crowd out real results); pass
+  `no_ignore: true` to include ignored files. The Elixir fallback filters
+  ignored paths with `git check-ignore` when the search path is inside a git
+  work tree.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -32,14 +38,14 @@ defmodule CodingAgent.Tools.Find do
         "Find files by name or pattern. Searches recursively from the given path. " <>
           "Returns matching file paths relative to the working directory.",
       label: "Find Files",
+      parallel_safe: true,
       parameters: %{
         "type" => "object",
         "properties" => %{
           "pattern" => %{
             "type" => "string",
             "description" =>
-              "File name pattern to search for. Supports glob patterns (e.g., '*.ex', 'test_*.exs') " <>
-                "and regex patterns when using fd."
+              "Case-sensitive file name glob (e.g., '*.ex', 'test_*.exs'). Plain names match exactly."
           },
           "path" => %{
             "type" => "string",
@@ -63,6 +69,11 @@ defmodule CodingAgent.Tools.Find do
           "hidden" => %{
             "type" => "boolean",
             "description" => "Include hidden files/directories (default: false)"
+          },
+          "no_ignore" => %{
+            "type" => "boolean",
+            "description" =>
+              "Include files ignored by .gitignore/.ignore (default: false; ignored files are skipped)"
           }
         },
         "required" => ["pattern"]
@@ -115,7 +126,10 @@ defmodule CodingAgent.Tools.Find do
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
 
-    include_hidden = Map.get(params, "hidden", false)
+    flags = %{
+      hidden: Map.get(params, "hidden", false) == true,
+      no_ignore: Map.get(params, "no_ignore", false) == true
+    }
 
     with {:ok, resolved_path} <- resolve_path(search_path, cwd),
          :ok <- check_directory(resolved_path),
@@ -126,7 +140,7 @@ defmodule CodingAgent.Tools.Find do
         entry_type,
         max_depth,
         max_results,
-        include_hidden,
+        flags,
         signal,
         cwd,
         opts
@@ -166,7 +180,7 @@ defmodule CodingAgent.Tools.Find do
          entry_type,
          max_depth,
          max_results,
-         include_hidden,
+         flags,
          signal,
          cwd,
          opts
@@ -179,7 +193,7 @@ defmodule CodingAgent.Tools.Find do
           entry_type,
           max_depth,
           max_results,
-          include_hidden,
+          flags,
           signal,
           cwd,
           opts
@@ -192,7 +206,7 @@ defmodule CodingAgent.Tools.Find do
           entry_type,
           max_depth,
           max_results,
-          include_hidden,
+          flags,
           signal,
           cwd,
           opts
@@ -217,19 +231,18 @@ defmodule CodingAgent.Tools.Find do
          entry_type,
          max_depth,
          max_results,
-         include_hidden,
+         flags,
          signal,
          cwd,
          opts
        ) do
-    args = build_fd_args(pattern, search_path, entry_type, max_depth, max_results, include_hidden)
+    args = build_fd_args(pattern, search_path, entry_type, max_depth, max_results, flags)
 
     case run_fd(args, cwd, signal) do
       {:ok, output} ->
         results =
           output
           |> String.split("\n", trim: true)
-          |> Enum.take(max_results)
 
         format_results(results, cwd, max_results)
 
@@ -241,7 +254,7 @@ defmodule CodingAgent.Tools.Find do
                entry_type,
                max_depth,
                max_results,
-               include_hidden,
+               flags,
                signal,
                cwd,
                opts
@@ -252,19 +265,13 @@ defmodule CodingAgent.Tools.Find do
     end
   end
 
-  defp build_fd_args(pattern, search_path, entry_type, max_depth, max_results, include_hidden) do
-    # Match fallback semantics more closely:
-    # - follow symlinked directories
-    # - do not hide results due .gitignore/.ignore/global ignore rules
-    args = ["--follow", "--no-ignore"]
-
-    # Use glob mode if pattern contains glob characters
+  defp build_fd_args(pattern, search_path, entry_type, max_depth, max_results, flags) do
+    # Follow symlinked directories (matches the Elixir fallback). fd respects
+    # .gitignore/.ignore rules unless the caller opts out.
     args =
-      if glob_pattern?(pattern) do
-        args ++ ["--glob"]
-      else
-        args
-      end
+      if flags.no_ignore,
+        do: ["--follow", "--no-ignore", "--glob", "--case-sensitive"],
+        else: ["--follow", "--glob", "--case-sensitive"]
 
     # Entry type
     args =
@@ -283,23 +290,19 @@ defmodule CodingAgent.Tools.Find do
       end
 
     # Max results (fd uses --max-results)
-    args = args ++ ["--max-results", to_string(max_results)]
+    args = args ++ ["--max-results", to_string(max_results + 1)]
 
     # Hidden files
     args =
-      if include_hidden do
+      if flags.hidden do
         args ++ ["--hidden"]
       else
         args
       end
 
-    # Pattern and path
-    args ++ [pattern, search_path]
-  end
-
-  # Detect if a pattern contains glob characters
-  defp glob_pattern?(pattern) do
-    String.contains?(pattern, ["*", "?", "[", "]", "{", "}"])
+    # Pattern and path; `--` keeps a pattern starting with `-` from being
+    # parsed as a flag.
+    args ++ ["--", pattern, search_path]
   end
 
   defp run_fd(args, cwd, signal) do
@@ -353,20 +356,20 @@ defmodule CodingAgent.Tools.Find do
          entry_type,
          max_depth,
          max_results,
-         include_hidden,
+         flags,
          signal,
          cwd,
          opts
        ) do
-    glob_pattern = build_glob_pattern(pattern, search_path, max_depth)
+    glob_patterns = build_glob_patterns(pattern, search_path, max_depth)
     wildcard_fun = Keyword.get(opts, :wildcard_fun, &Path.wildcard/2)
     timeout_ms = Keyword.get(opts, :elixir_timeout_ms, @elixir_find_timeout_ms)
 
     with :ok <- check_abort(signal),
          {:ok, wildcard_results} <-
            run_wildcard_with_timeout(
-             glob_pattern,
-             include_hidden,
+             glob_patterns,
+             flags.hidden,
              wildcard_fun,
              signal,
              timeout_ms
@@ -374,8 +377,10 @@ defmodule CodingAgent.Tools.Find do
          :ok <- check_abort(signal) do
       results =
         wildcard_results
+        |> Enum.uniq()
         |> filter_by_type(entry_type)
-        |> Enum.take(max_results)
+        |> reject_ignored(search_path, flags.no_ignore)
+        |> Enum.sort()
 
       format_results(results, cwd, max_results)
     end
@@ -384,10 +389,10 @@ defmodule CodingAgent.Tools.Find do
       {:error, "Find operation failed: #{Exception.message(e)}"}
   end
 
-  defp run_wildcard_with_timeout(glob_pattern, include_hidden, wildcard_fun, signal, timeout_ms) do
+  defp run_wildcard_with_timeout(patterns, include_hidden, wildcard_fun, signal, timeout_ms) do
     task =
       Task.Supervisor.async_nolink(CodingAgent.TaskSupervisor, fn ->
-        wildcard_fun.(glob_pattern, match_dot: include_hidden)
+        Enum.flat_map(patterns, &wildcard_fun.(&1, match_dot: include_hidden))
       end)
 
     started_at_ms = System.monotonic_time(:millisecond)
@@ -422,25 +427,66 @@ defmodule CodingAgent.Tools.Find do
     end
   end
 
-  defp build_glob_pattern(pattern, search_path, nil) do
-    Path.join([search_path, "**", pattern])
+  defp build_glob_patterns(pattern, search_path, nil) do
+    [Path.join([search_path, "**", pattern])]
   end
 
-  defp build_glob_pattern(pattern, search_path, max_depth) when max_depth > 0 do
-    # Build pattern for limited depth
-    depth_patterns =
-      0..max_depth
-      |> Enum.map(fn depth ->
-        parts = List.duplicate("*", depth)
-        Path.join([search_path | parts] ++ [pattern])
+  # One pattern per level: entries directly under `search_path` are depth 1
+  # (fd's `--max-depth` semantics), so depth d means d - 1 directory segments.
+  defp build_glob_patterns(pattern, search_path, max_depth)
+       when is_integer(max_depth) and max_depth > 0 do
+    Enum.map(0..(max_depth - 1), fn dirs ->
+      Path.join([search_path | List.duplicate("*", dirs)] ++ [pattern])
+    end)
+  end
+
+  defp build_glob_patterns(pattern, search_path, _), do: [Path.join(search_path, pattern)]
+
+  defp reject_ignored(paths, _search_path, true), do: paths
+  defp reject_ignored([], _search_path, _no_ignore), do: []
+
+  defp reject_ignored(paths, search_path, false) do
+    case git_ignored(paths, search_path) do
+      {:ok, ignored} -> Enum.reject(paths, &MapSet.member?(ignored, &1))
+      :unavailable -> paths
+    end
+  end
+
+  # `git check-ignore` prints the ignored subset of its arguments (exit 0),
+  # nothing (exit 1), or fails outside a work tree (exit 128). Like fd, a
+  # search rooted inside an ignored directory is not filtered at all.
+  @check_ignore_chunk 200
+
+  defp git_ignored(paths, search_path) do
+    with git when is_binary(git) <- System.find_executable("git"),
+         {:ok, root_ignored} <- check_ignore(git, search_path, [search_path]),
+         true <- MapSet.size(root_ignored) == 0 do
+      paths
+      |> Enum.chunk_every(@check_ignore_chunk)
+      |> Enum.reduce_while({:ok, MapSet.new()}, fn chunk, {:ok, acc} ->
+        case check_ignore(git, search_path, chunk) do
+          {:ok, ignored} -> {:cont, {:ok, MapSet.union(acc, ignored)}}
+          :unavailable -> {:halt, :unavailable}
+        end
       end)
-
-    # Return first pattern; Path.wildcard doesn't support multiple patterns
-    # so we'll use the deepest one
-    List.last(depth_patterns)
+    else
+      _ -> :unavailable
+    end
   end
 
-  defp build_glob_pattern(pattern, search_path, _), do: Path.join(search_path, pattern)
+  defp check_ignore(git, search_path, paths) do
+    args = ["-C", search_path, "check-ignore", "--" | paths]
+
+    case System.cmd(git, args, stderr_to_stdout: false) do
+      {output, status} when status in [0, 1] ->
+        {:ok, output |> String.split("\n", trim: true) |> MapSet.new()}
+
+      _ ->
+        :unavailable
+    end
+  rescue
+    _ -> :unavailable
+  end
 
   defp filter_by_type(paths, "file") do
     Enum.filter(paths, &File.regular?/1)
@@ -463,8 +509,9 @@ defmodule CodingAgent.Tools.Find do
       |> Enum.map(&make_relative(&1, cwd))
       |> Enum.sort()
 
+    truncated = length(relative_results) > max_results
+    relative_results = Enum.take(relative_results, max_results)
     count = length(relative_results)
-    truncated = count >= max_results
 
     text =
       if count == 0 do
@@ -472,7 +519,7 @@ defmodule CodingAgent.Tools.Find do
       else
         header =
           if truncated do
-            "Found #{count} matches (limited to #{max_results}):\n\n"
+            "Found #{count} matches (limited to #{max_results}); increase max_results or narrow path/pattern for more:\n\n"
           else
             "Found #{count} match#{if count == 1, do: "", else: "es"}:\n\n"
           end
@@ -492,18 +539,5 @@ defmodule CodingAgent.Tools.Find do
     }
   end
 
-  defp make_relative(path, cwd) do
-    case Path.relative_to(path, cwd) do
-      ^path ->
-        # Path is not under cwd, try to make it relative anyway
-        if String.starts_with?(path, cwd) do
-          String.trim_leading(path, cwd) |> String.trim_leading("/")
-        else
-          path
-        end
-
-      relative ->
-        relative
-    end
-  end
+  defp make_relative(path, cwd), do: Path.relative_to(path, cwd)
 end

@@ -3,563 +3,60 @@ defmodule LemonCore.Quality.DocsCheckTest do
 
   alias LemonCore.Quality.DocsCheck
 
-  describe "run/1" do
-    test "docs check passes for a valid catalog" do
-      tmp_dir = create_valid_tmp_dir()
-
-      assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
-      assert report.issue_count == 0
-      assert report.checked_files > 0
-      assert is_binary(report.root)
-    end
-
-    test "returns error report when catalog has issues" do
-      # Create a temporary directory with an invalid catalog
-      tmp_dir = create_tmp_dir()
-
-      catalog_content = """
-      [
-        %{path: "nonexistent.md", owner: "test", last_reviewed: Date.from_iso8601!("2020-01-01"), max_age_days: 30}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count > 0
-        assert report.issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "accepts custom today date for freshness checks" do
-      tmp_dir = create_valid_tmp_dir()
-
-      assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
-      assert is_integer(report.checked_files)
-    end
-
-    test "report structure contains all required fields" do
-      tmp_dir = create_valid_tmp_dir()
-
-      assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
-
-      assert Map.has_key?(report, :root)
-      assert Map.has_key?(report, :checked_files)
-      assert Map.has_key?(report, :issue_count)
-      assert Map.has_key?(report, :issues)
-    end
-  end
-
-  describe "catalog coverage checks" do
-    test "detects missing catalog entries for tracked docs" do
-      tmp_dir = create_tmp_dir_with_structure()
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        missing_entry_issues = Enum.filter(report.issues, &(&1.code == :missing_catalog_entry))
-        assert missing_entry_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "passes when all tracked docs are in catalog" do
-      tmp_dir = create_tmp_dir_with_structure()
-
-      try do
-        # Add the missing file to catalog (paths are relative to docs/ directory)
-        catalog_path = Path.join(tmp_dir, "docs/catalog.exs")
-
-        catalog_content = """
-        [
-          %{path: "docs/README.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365},
-          %{path: "docs/guide.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-        ]
-        """
-
-        File.write!(catalog_path, catalog_content)
-
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "uses the Git index and ignores untracked markdown in repositories" do
-      tmp_dir = create_tmp_dir()
-
-      try do
-        File.write!(Path.join(tmp_dir, "docs/tracked.md"), "# Tracked")
-        File.write!(Path.join(tmp_dir, "docs/untracked.md"), "# Untracked")
-
-        File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
-        [
-          %{path: "docs/tracked.md", owner: "test", last_reviewed: ~D[2026-06-01], max_age_days: 365}
-        ]
-        """)
-
-        assert {_, 0} = System.cmd("git", ["init", "--quiet", tmp_dir])
-
-        assert {_, 0} =
-                 System.cmd("git", ["-C", tmp_dir, "add", "docs/catalog.exs", "docs/tracked.md"])
-
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-  end
-
-  describe "entry shape validation" do
-    test "detects missing required fields in catalog entries" do
-      tmp_dir = create_tmp_dir()
-
-      catalog_content = """
-      [
-        %{owner: "test", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: 30}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert invalid_entry_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "detects invalid owner field" do
-      tmp_dir = create_tmp_dir()
-
-      catalog_content = """
-      [
-        %{path: "test.md", owner: "", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: 30}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-      File.write!(Path.join(tmp_dir, "test.md"), "content")
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert invalid_entry_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "detects invalid max_age_days field" do
-      tmp_dir = create_tmp_dir()
-
-      catalog_content = """
-      [
-        %{path: "test.md", owner: "test", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: -1}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-      File.write!(Path.join(tmp_dir, "test.md"), "content")
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert invalid_entry_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "detects missing last_reviewed field" do
-      tmp_dir = create_tmp_dir()
-
-      catalog_content = """
-      [
-        %{path: "test.md", owner: "test", max_age_days: 30}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        invalid_entry_issues = Enum.filter(report.issues, &(&1.code == :invalid_catalog_entry))
-        assert invalid_entry_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "detects invalid lifecycle and visibility metadata" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "docs/page.md"), "content")
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
-      %{
-        defaults: %{owner: "test", max_age_days: 365},
-        entries: [
-          %{
-            path: "docs/page.md",
-            last_reviewed: ~D[2026-06-01],
-            kind: :unknown,
-            status: :retired,
-            public: "yes"
-          }
-        ]
-      }
-      """)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
-
-        messages =
-          report.issues
-          |> Enum.filter(&(&1.code == :invalid_catalog_entry))
-          |> Enum.map(& &1.message)
-
-        assert Enum.any?(messages, &String.contains?(&1, ":kind"))
-        assert Enum.any?(messages, &String.contains?(&1, ":status"))
-        assert Enum.any?(messages, &String.contains?(&1, ":public"))
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "rejects public historical and superseded documents" do
-      for status <- [:historical, :superseded] do
-        tmp_dir = create_tmp_dir()
-        File.write!(Path.join(tmp_dir, "docs/page.md"), "content")
-
-        File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
-        [
-          %{
-            path: "docs/page.md",
-            owner: "test",
-            last_reviewed: ~D[2026-06-01],
-            max_age_days: 365,
-            status: #{inspect(status)},
-            public: true
-          }
-        ]
-        """)
-
-        try do
-          assert {:error, report} = DocsCheck.run(root: tmp_dir, today: ~D[2026-06-17])
-
-          assert Enum.any?(
-                   report.issues,
-                   &(&1.code == :invalid_catalog_entry and
-                       &1.message == "historical or superseded documents cannot be public")
-                 )
-        after
-          File.rm_rf!(tmp_dir)
-        end
-      end
-    end
-  end
-
-  describe "file existence checks" do
-    test "detects catalog entries pointing to non-existent files" do
-      tmp_dir = create_tmp_dir()
-
-      catalog_content = """
-      [
-        %{path: "missing.md", owner: "test", last_reviewed: Date.from_iso8601!("2024-01-01"), max_age_days: 30}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        missing_file_issues = Enum.filter(report.issues, &(&1.code == :missing_doc_file))
-        assert missing_file_issues != []
-        assert hd(missing_file_issues).path == "missing.md"
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "passes when catalog files exist" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "exists.md"), "content")
-
-      catalog_content = """
-      [
-        %{path: "exists.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-  end
-
-  describe "freshness checks" do
-    test "detects stale documents" do
-      old_date = Date.add(Date.utc_today(), -100)
-
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "stale.md"), "content")
-
-      catalog_content = """
-      [
-        %{path: "stale.md", owner: "test", last_reviewed: "#{Date.to_iso8601(old_date)}" |> Date.from_iso8601!(), max_age_days: 30}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        stale_issues = Enum.filter(report.issues, &(&1.code == :stale_doc))
-        assert stale_issues != []
-        assert hd(stale_issues).path == "stale.md"
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "passes for fresh documents" do
-      recent_date = Date.utc_today()
-
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "fresh.md"), "content")
-
-      catalog_content = """
-      [
-        %{path: "fresh.md", owner: "test", last_reviewed: "#{Date.to_iso8601(recent_date)}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-  end
-
-  describe "link checking" do
-    test "detects broken local markdown links" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "page.md"), "[broken link](nonexistent.md)")
-
-      catalog_content = """
-      [
-        %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-
-        broken_link_issues = Enum.filter(report.issues, &(&1.code == :broken_link))
-        assert broken_link_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "passes for valid local links" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "target.md"), "target content")
-      File.write!(Path.join(tmp_dir, "page.md"), "[valid link](target.md)")
-
-      catalog_content = """
-      [
-        %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365},
-        %{path: "target.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "ignores external links" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "page.md"), "[external](https://example.com)")
-
-      catalog_content = """
-      [
-        %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "ignores anchor links" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "page.md"), "[anchor](#section)")
-
-      catalog_content = """
-      [
-        %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "ignores mailto links" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "page.md"), "[email](mailto:test@example.com)")
-
-      catalog_content = """
-      [
-        %{path: "page.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-      ]
-      """
-
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
-
-      try do
-        assert {:ok, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count == 0
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-  end
-
-  describe "catalog load failures" do
-    test "returns error when catalog file is missing" do
-      tmp_dir = System.tmp_dir!() |> Path.join("docs_check_test_#{System.unique_integer()}")
-      File.mkdir_p!(tmp_dir)
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count > 0
-
-        load_failed_issues = Enum.filter(report.issues, &(&1.code == :catalog_load_failed))
-        assert load_failed_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "returns error when catalog has invalid Elixir syntax" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), "invalid elixir syntax [{")
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count > 0
-
-        load_failed_issues = Enum.filter(report.issues, &(&1.code == :catalog_load_failed))
-        assert load_failed_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-
-    test "returns error when catalog evaluates to non-list" do
-      tmp_dir = create_tmp_dir()
-      File.write!(Path.join(tmp_dir, "docs/catalog.exs"), "%{not: :a_list}")
-
-      try do
-        assert {:error, report} = DocsCheck.run(root: tmp_dir)
-        assert report.issue_count > 0
-
-        load_failed_issues = Enum.filter(report.issues, &(&1.code == :catalog_load_failed))
-        assert load_failed_issues != []
-      after
-        File.rm_rf!(tmp_dir)
-      end
-    end
-  end
-
-  # Helper functions
-
-  defp create_tmp_dir do
+  setup do
     tmp_dir =
-      System.tmp_dir!()
-      |> Path.join("docs_check_test_#{System.unique_integer([:positive, :monotonic])}")
+      Path.join(
+        System.tmp_dir!(),
+        "docs_check_test_#{System.unique_integer([:positive, :monotonic])}"
+      )
 
-    File.rm_rf!(tmp_dir)
-    File.mkdir_p!(Path.join(tmp_dir, "docs"))
-    tmp_dir
+    File.mkdir_p!(Path.join(tmp_dir, "docs/guide"))
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+    {:ok, root: tmp_dir}
   end
 
-  defp create_valid_tmp_dir do
-    tmp_dir = create_tmp_dir()
+  test "passes when every local link resolves, ignoring external, anchor and mailto links",
+       %{root: root} do
+    write(root, "docs/target.md", "# Target\n")
 
-    File.write!(Path.join(tmp_dir, "docs/README.md"), "# README")
-
-    File.write!(Path.join(tmp_dir, "docs/catalog.exs"), """
-    [
-      %{path: "docs/README.md", owner: "test", last_reviewed: ~D[2026-06-01], max_age_days: 365}
-    ]
+    write(root, "docs/guide/page.md", """
+    [relative](../target.md) [anchor into file](../target.md#section) [self](#top)
+    [absolute](/docs/target.md) [angle](<../target.md>)
+    [external](https://example.com) [plain](http://example.com) [mail](mailto:a@b.c)
     """)
 
-    tmp_dir
+    assert {:ok, report} = DocsCheck.run(root: root)
+    assert report.checked_files == 2
+    assert report.issues == []
   end
 
-  defp create_tmp_dir_with_structure do
-    tmp_dir = create_tmp_dir()
+  test "reports each broken local link once, with the source doc path", %{root: root} do
+    write(root, "docs/page.md", "[a](missing.md) [again](missing.md) [b](gone/file.md#x)")
 
-    # Create some markdown files in the docs directory (where discover_tracked_docs looks)
-    File.write!(Path.join(tmp_dir, "docs/README.md"), "# README")
-    File.write!(Path.join(tmp_dir, "docs/guide.md"), "# Guide")
+    assert {:error, report} = DocsCheck.run(root: root)
+    assert report.issue_count == 2
+    assert Enum.all?(report.issues, &(&1.code == :broken_link and &1.path == "docs/page.md"))
 
-    # Create catalog with only one entry (missing the other file)
-    # Paths should be relative to root, so they include "docs/" prefix
-    catalog_content = """
-    [
-      %{path: "docs/README.md", owner: "test", last_reviewed: "#{Date.to_iso8601(Date.utc_today())}" |> Date.from_iso8601!(), max_age_days: 365}
-    ]
-    """
+    assert Enum.map(report.issues, & &1.message) == [
+             "Broken local markdown link in docs/page.md: missing.md",
+             "Broken local markdown link in docs/page.md: gone/file.md#x"
+           ]
+  end
 
-    File.write!(Path.join(tmp_dir, "docs/catalog.exs"), catalog_content)
+  test "in a Git checkout only tracked docs are checked", %{root: root} do
+    write(root, "docs/tracked.md", "# Tracked\n")
+    write(root, "docs/untracked.md", "[broken](nowhere.md)")
 
-    tmp_dir
+    assert {_, 0} = System.cmd("git", ["init", "--quiet", root])
+    assert {_, 0} = System.cmd("git", ["-C", root, "add", "docs/tracked.md"])
+
+    assert {:ok, %{checked_files: 1}} = DocsCheck.run(root: root)
+  end
+
+  defp write(root, path, content) do
+    full = Path.join(root, path)
+    File.mkdir_p!(Path.dirname(full))
+    File.write!(full, content)
   end
 end

@@ -1,23 +1,50 @@
 defmodule CodingAgent.Tools.Edit do
   @moduledoc """
-  Edit (text replacement) tool for the coding agent.
+  Snapshot-anchored line editing and unique text replacement.
 
-  This tool replaces exact text in a file. The old_text must match exactly
-  and uniquely in the file. Supports fuzzy matching for common character
-  substitutions (smart quotes, unicode dashes, etc.).
+  Prefer `path`, `snapshot`, and `edits`: copy the tag from `read` and describe
+  inclusive 1-based original line ranges, without reproducing `old_text`.
+  All edits are preflighted against one complete-file snapshot. Supported
+  operations are `replace`, `insert_before`, `insert_after`, and `delete`.
+  Disjoint edits may share a call; changed snapshots or overlapping ranges
+  fail without writing. Whole-line replacement text may omit its final LF.
 
-  ## Features
+  Alternatively, `old_text` and `new_text` replace one unique text occurrence.
 
-  - UTF-8 BOM handling (preserves BOM if present)
-  - Line ending detection and preservation (CRLF/LF)
-  - Fuzzy matching for common character variations
-  - Uniqueness validation (text must occur exactly once)
-  - Diff generation with context lines
+  ## Matching
+
+  1. Exact byte match. Exactly one occurrence is required.
+  2. If there is no exact match, a line-based match: file lines and
+     `old_text` lines are compared after trimming, collapsing runs of
+     whitespace, and folding smart quotes/unicode dashes to ASCII. The first
+     and last `old_text` lines may match a suffix/prefix of a file line;
+     interior lines must match whole lines. The replaced span is the matching
+     span of the ORIGINAL file, so indentation differences and multibyte
+     characters never shift it.
+
+  More than one candidate (exact or line-based) is an error that lists the
+  matching line numbers.
+
+  ## Safety
+
+  - Edits of one file are serialized (`CodingAgent.MutationLock`), so two
+    concurrent edits of the same file both apply.
+  - When the session has read the file, the edit is refused if the file
+    changed on disk since that read (`CodingAgent.FileReadTracker`).
+  - UTF-8 BOM, CRLF/LF line endings, and the trailing newline are preserved.
+  - Binary data (invalid UTF-8 or NUL bytes) is rejected before matching.
+
+  Successful results include the absolute `path` and complete `oldText`/`newText`
+  snapshots only when both are at most 16 KiB. Otherwise both snapshots are
+  omitted; the existing diff and first changed line remain available.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
+  alias CodingAgent.FileReadTracker
+  alias CodingAgent.MutationLock
   alias CodingAgent.Tools.ACPFileBridge
+  alias CodingAgent.Tools.AnchoredEdit
   alias CodingAgent.Tools.CheckpointGuard
   alias CodingAgent.Tools.FileFormatHelpers
   alias CodingAgent.Tools.FileValidation
@@ -39,7 +66,11 @@ defmodule CodingAgent.Tools.Edit do
     %AgentTool{
       name: "edit",
       description:
-        "Replace exact text in a file. The old_text must match exactly and uniquely in the file.",
+        "Edit a text file. Prefer snapshot-anchored line edits after read: copy its snapshot tag and " <>
+          "send edits [{start_line, end_line, new_text, operation}]. Lines are 1-based and inclusive; " <>
+          "every edit uses the ORIGINAL read snapshot. operation is replace (default), insert_before, " <>
+          "insert_after, or delete. No old text is needed. Re-read if the snapshot changed. " <>
+          "Alternatively supply unique old_text and new_text for text matching.",
       label: "Edit File",
       parameters: %{
         "type" => "object",
@@ -50,6 +81,39 @@ defmodule CodingAgent.Tools.Edit do
             "description" => "The exact text to find and replace (must be unique in the file)"
           },
           "new_text" => %{"type" => "string", "description" => "The replacement text"},
+          "snapshot" => %{
+            "type" => "string",
+            "description" => "Copy the 16-character file tag from read's [path#SNAPSHOT] header",
+            "pattern" => "^[0-9A-Fa-f]{16}$"
+          },
+          "edits" => %{
+            "type" => "array",
+            "minItems" => 1,
+            "maxItems" => 100,
+            "description" =>
+              "Non-overlapping edits using original read line numbers. Replacement/insertion new_text contains whole lines; a final newline is optional. Original file line endings/final newline are preserved.",
+            "items" => %{
+              "type" => "object",
+              "properties" => %{
+                "operation" => %{
+                  "type" => "string",
+                  "enum" => ["replace", "insert_before", "insert_after", "delete"]
+                },
+                "start_line" => %{"type" => "integer", "minimum" => 1},
+                "end_line" => %{
+                  "type" => "integer",
+                  "minimum" => 1,
+                  "description" =>
+                    "Inclusive final line; defaults to start_line. Insertions target just start_line."
+                },
+                "new_text" => %{
+                  "type" => "string",
+                  "description" => "Whole replacement/inserted lines; omitted for delete"
+                }
+              },
+              "required" => ["start_line"]
+            }
+          },
           "diagnostics" => %{
             "type" => "boolean",
             "default" => Keyword.get(opts, :diagnostics, false),
@@ -57,7 +121,11 @@ defmodule CodingAgent.Tools.Edit do
               "Whether to run language diagnostics after editing and report newly introduced issues"
           }
         },
-        "required" => ["path", "old_text", "new_text"]
+        "required" => ["path"],
+        "anyOf" => [
+          %{"required" => ["snapshot", "edits"]},
+          %{"required" => ["old_text", "new_text"]}
+        ]
       },
       execute: &execute(&1, &2, &3, &4, cwd, opts)
     }
@@ -81,101 +149,88 @@ defmodule CodingAgent.Tools.Edit do
       {:error, "Operation aborted"}
     else
       path = params["path"]
-      old_text = params["old_text"]
-      new_text = params["new_text"]
 
       # Parameter validation
       result =
         with :ok <- validate_required_param(path, "path"),
-             :ok <- validate_required_param(old_text, "old_text"),
-             :ok <- validate_required_param(new_text, "new_text"),
+             {:ok, edit_spec} <- build_edit_spec(params),
              {:ok, diagnostics?} <- LspDiagnostics.option(params, opts) do
-          do_execute(path, old_text, new_text, diagnostics?, signal, cwd, opts)
+          do_execute(path, edit_spec, diagnostics?, signal, cwd, opts)
         end
 
       case result do
         {:error, :aborted} -> {:error, "Operation aborted"}
-        other -> other
+        other -> LemonAgent.Security.ToolResultTrust.untrusted(other, :local_file)
       end
     end
   end
 
-  defp do_execute(path, old_text, new_text, diagnostics?, signal, cwd, opts) do
+  defp do_execute(path, edit_spec, diagnostics?, signal, cwd, opts) do
     resolved_path = resolve_path(path, cwd, opts)
 
     if ACPFileBridge.read_enabled?(opts) and ACPFileBridge.write_enabled?(opts) do
-      do_execute_acp(path, resolved_path, old_text, new_text, signal, opts)
+      do_execute_acp(path, resolved_path, edit_spec, signal, opts)
     else
-      do_execute_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts)
+      do_execute_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts)
     end
   end
 
-  defp do_execute_acp(path, resolved_path, old_text, new_text, signal, opts) do
+  defp do_execute_acp(path, resolved_path, edit_spec, signal, opts) do
     with :ok <- check_aborted(signal),
          {:ok, raw_content} <- ACPFileBridge.read_text_file(resolved_path, nil, nil, opts),
+         :ok <- FileValidation.check_text_content(raw_content, path),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         normalized_old_text <- FileFormatHelpers.normalize_to_lf(old_text),
-         {:ok, match_index, match_length} <-
-           fuzzy_find_text(normalized_content, normalized_old_text),
-         :ok <-
-           check_uniqueness(normalized_content, normalized_old_text, match_index, match_length),
-         {:ok, new_content} <-
-           perform_replacement(normalized_content, match_index, match_length, new_text),
+         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
          :ok <- ACPFileBridge.write_text_file(resolved_path, final_content, opts) do
-      diff = generate_diff(content, new_content)
-      first_changed_line = find_first_changed_line(content, new_content)
+      diff = generate_diff(normalized_content, new_content)
+      first_changed_line = find_first_changed_line(normalized_content, new_content)
+      snapshot = AnchoredEdit.snapshot(final_content)
 
       %AgentToolResult{
         content: [
           %TextContent{
             type: :text,
-            text: "Successfully replaced text in #{path}.\n\n#{diff}"
+            text:
+              "Successfully replaced text in #{path}.\n\n[#{resolved_path}##{snapshot}]\n#{diff}"
           }
         ],
-        details: %{diff: diff, first_changed_line: first_changed_line, acp_client: true}
+        details:
+          %{diff: diff, first_changed_line: first_changed_line, acp_client: true}
+          |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
+          |> Map.put(:snapshot, snapshot)
       }
     else
-      {:error, :not_found} ->
-        {:error, "Could not find the exact text to replace. The text must match exactly."}
-
-      {:error, {:multiple_occurrences, count}} ->
-        {:error, "Found #{count} occurrences of the text. The text to replace must be unique."}
-
-      {:error, :no_change} ->
-        {:error, "No changes made. The replacement produces identical content."}
-
-      {:error, :aborted} ->
-        {:error, "Operation aborted"}
-
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
-
-      {:error, reason} ->
-        {:error, "Failed to edit file: #{inspect(reason)}"}
+      error -> format_error(error, path)
     end
   end
 
-  defp do_execute_local(path, resolved_path, old_text, new_text, diagnostics?, signal, cwd, opts) do
+  defp do_execute_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts) do
+    MutationLock.with_lock(MutationLock.path_key(resolved_path), fn ->
+      edit_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts)
+    end)
+  end
+
+  defp edit_local(path, resolved_path, edit_spec, diagnostics?, signal, cwd, opts) do
     baseline = LspDiagnostics.baseline(resolved_path, cwd, diagnostics?, opts)
 
     with :ok <- check_aborted(signal),
-         :ok <- check_file_access(resolved_path),
+         :ok <-
+           FileValidation.check_mutation_target(
+             resolved_path,
+             Keyword.put(opts, :mutation_root, cwd)
+           ),
          {:ok, raw_content} <- File.read(resolved_path),
+         :ok <- FileValidation.check_text_content(raw_content, path),
+         :ok <- FileReadTracker.check(opts, resolved_path, raw_content),
          {bom, content} <- FileFormatHelpers.strip_bom(raw_content),
          line_ending <- FileFormatHelpers.detect_line_ending(content),
          normalized_content <- FileFormatHelpers.normalize_to_lf(content),
-         normalized_old_text <- FileFormatHelpers.normalize_to_lf(old_text),
-         {:ok, match_index, match_length} <-
-           fuzzy_find_text(normalized_content, normalized_old_text),
-         :ok <-
-           check_uniqueness(normalized_content, normalized_old_text, match_index, match_length),
-         {:ok, new_content} <-
-           perform_replacement(normalized_content, match_index, match_length, new_text),
+         {:ok, new_content} <- perform_edit(raw_content, normalized_content, edit_spec),
          :ok <- check_content_changed(normalized_content, new_content),
          :ok <- check_aborted(signal),
          final_content <- FileFormatHelpers.finalize_content(new_content, line_ending, bom),
@@ -186,8 +241,11 @@ defmodule CodingAgent.Tools.Edit do
              path: resolved_path
            }),
          :ok <- File.write(resolved_path, final_content) do
-      diff = generate_diff(content, new_content)
-      first_changed_line = find_first_changed_line(content, new_content)
+      digest = :erlang.md5(final_content)
+      FileReadTracker.record_digest(opts, resolved_path, digest)
+      snapshot = AnchoredEdit.snapshot_for_digest(digest)
+      diff = generate_diff(normalized_content, new_content)
+      first_changed_line = find_first_changed_line(normalized_content, new_content)
 
       {diagnostics, diagnostics_text} =
         LspDiagnostics.post_edit(resolved_path, cwd, baseline, diagnostics?, opts)
@@ -196,40 +254,86 @@ defmodule CodingAgent.Tools.Edit do
         content: [
           %TextContent{
             type: :text,
-            text: "Successfully replaced text in #{path}.\n\n#{diff}#{diagnostics_text}"
+            text:
+              "Successfully replaced text in #{path}.\n\n[#{resolved_path}##{snapshot}]\n#{diff}#{diagnostics_text}"
           }
         ],
         details:
           %{diff: diff, first_changed_line: first_changed_line}
           |> CheckpointGuard.put_details(checkpoint)
+          |> FileValidation.put_text_snapshots(resolved_path, raw_content, final_content)
+          |> Map.put(:snapshot, snapshot)
           |> maybe_put_diagnostics(diagnostics)
       }
     else
-      {:error, :enoent} ->
-        {:error, "File not found: #{path}"}
-
-      {:error, :eacces} ->
-        {:error, "Permission denied: #{path}"}
-
-      {:error, :not_found} ->
-        {:error, "Could not find the exact text to replace. The text must match exactly."}
-
-      {:error, {:multiple_occurrences, count}} ->
-        {:error, "Found #{count} occurrences of the text. The text to replace must be unique."}
-
-      {:error, :no_change} ->
-        {:error, "No changes made. The replacement produces identical content."}
-
-      {:error, :aborted} ->
-        {:error, "Operation aborted"}
-
-      {:error, reason} when is_binary(reason) ->
-        {:error, reason}
-
-      {:error, reason} ->
-        {:error, "Failed to edit file: #{inspect(reason)}"}
+      error -> format_error(error, path)
     end
   end
+
+  defp build_edit_spec(params) do
+    if not is_nil(params["snapshot"]) or not is_nil(params["edits"]) do
+      if not is_nil(params["old_text"]) or not is_nil(params["new_text"]) do
+        {:error,
+         "Choose snapshot + edits OR old_text + new_text; anchored replacements put new_text inside each edit."}
+      else
+        with :ok <- AnchoredEdit.validate(params["snapshot"], params["edits"]) do
+          {:ok, {:anchored, params["snapshot"], params["edits"]}}
+        end
+      end
+    else
+      with :ok <- validate_required_param(params["old_text"], "old_text"),
+           :ok <- validate_required_param(params["new_text"], "new_text"),
+           :ok <- validate_old_text(params["old_text"]) do
+        {:ok, {:text, params["old_text"], params["new_text"]}}
+      end
+    end
+  end
+
+  defp perform_edit(raw_content, content, {:anchored, snapshot, edits}) do
+    AnchoredEdit.apply(raw_content, content, snapshot, edits)
+  end
+
+  defp perform_edit(_raw_content, content, {:text, old_text, new_text}) do
+    normalized_old_text = FileFormatHelpers.normalize_to_lf(old_text)
+
+    with {:ok, index, length} <- find_match(content, normalized_old_text) do
+      perform_replacement(content, index, length, new_text)
+    end
+  end
+
+  defp format_error({:error, :enoent}, path), do: {:error, "File not found: #{path}"}
+  defp format_error({:error, :eacces}, path), do: {:error, "Permission denied: #{path}"}
+
+  defp format_error({:error, :stale}, path) do
+    {:error,
+     "#{path} has been modified on disk since you last read it (by the user, a formatter, " <>
+       "or a command). Re-read the file before editing it."}
+  end
+
+  defp format_error({:error, :not_found}, _path) do
+    {:error,
+     "Could not find the exact text to replace. The text must match exactly " <>
+       "(or match whole lines ignoring indentation and whitespace). " <>
+       "Re-read the file and copy old_text from it."}
+  end
+
+  defp format_error({:error, {:multiple_occurrences, count, lines, more?}}, _path) do
+    listed = Enum.map_join(lines, ", ", &Integer.to_string/1)
+    listed = if more?, do: listed <> ", ...", else: listed
+
+    {:error,
+     "Found #{count} occurrences of the text (at lines #{listed}). " <>
+       "The text to replace must be unique: include more surrounding lines in old_text."}
+  end
+
+  defp format_error({:error, :no_change}, _path),
+    do: {:error, "No changes made. The replacement produces identical content."}
+
+  defp format_error({:error, :aborted}, _path), do: {:error, "Operation aborted"}
+  defp format_error({:error, reason}, _path) when is_binary(reason), do: {:error, reason}
+
+  defp format_error({:error, reason}, _path),
+    do: {:error, "Failed to edit file: #{inspect(reason)}"}
 
   defp maybe_put_diagnostics(details, nil), do: details
 
@@ -245,7 +349,15 @@ defmodule CodingAgent.Tools.Edit do
     {:error, "Missing required parameter: #{param_name}"}
   end
 
-  defp validate_required_param(_value, _param_name), do: :ok
+  defp validate_required_param(value, param_name) when is_binary(value) do
+    FileValidation.check_text_content(value, param_name)
+  end
+
+  defp validate_required_param(_value, param_name),
+    do: {:error, "#{param_name} must be a string"}
+
+  defp validate_old_text(""), do: {:error, "old_text must not be empty"}
+  defp validate_old_text(_old_text), do: :ok
 
   # ============================================================================
   # Path Resolution
@@ -258,221 +370,291 @@ defmodule CodingAgent.Tools.Edit do
   # File Access
   # ============================================================================
 
-  @spec check_file_access(String.t()) :: :ok | {:error, atom()}
-  defp check_file_access(path), do: FileValidation.check_write_access(path)
-
   # ============================================================================
   # Text Matching
   # ============================================================================
 
-  @spec fuzzy_find_text(String.t(), String.t()) ::
-          {:ok, non_neg_integer(), non_neg_integer()} | {:error, :not_found}
-  defp fuzzy_find_text(content, search_text) do
-    # Try exact match first
-    case :binary.match(content, search_text) do
-      {index, length} ->
-        {:ok, index, length}
+  @max_reported_lines 10
 
-      :nomatch ->
-        # Try fuzzy match
-        fuzzy_find_text_fuzzy(content, search_text)
-    end
-  end
-
-  @spec fuzzy_find_text_fuzzy(String.t(), String.t()) ::
-          {:ok, non_neg_integer(), non_neg_integer()} | {:error, :not_found}
-  defp fuzzy_find_text_fuzzy(content, search_text) do
-    normalized_content = normalize_for_fuzzy(content)
-    normalized_search = normalize_for_fuzzy(search_text)
-
-    case :binary.match(normalized_content, normalized_search) do
-      {index, _length} ->
-        # We found a match in normalized space, now find the actual match
-        # in the original content at approximately the same position
-        find_original_match(content, search_text, index)
-
-      :nomatch ->
-        {:error, :not_found}
-    end
-  end
-
-  @spec find_original_match(String.t(), String.t(), non_neg_integer()) ::
-          {:ok, non_neg_integer(), non_neg_integer()} | {:error, :not_found}
-  defp find_original_match(content, search_text, approx_index) do
-    # Search in a window around the approximate index
-    search_len = String.length(search_text)
-    content_len = String.length(content)
-
-    # Calculate search window (give some buffer for character expansions)
-    window_start = max(0, approx_index - search_len)
-    window_end = min(content_len, approx_index + search_len * 3)
-
-    # Extract the window and search within it
-    window = String.slice(content, window_start, window_end - window_start)
-    normalized_window = normalize_for_fuzzy(window)
-    normalized_search = normalize_for_fuzzy(search_text)
-
-    case :binary.match(normalized_window, normalized_search) do
-      {local_index, _} ->
-        # Find the actual span in the original window
-        find_matching_span(window, normalized_search, local_index, window_start)
-
-      :nomatch ->
-        {:error, :not_found}
-    end
-  end
-
-  @spec find_matching_span(String.t(), String.t(), non_neg_integer(), non_neg_integer()) ::
-          {:ok, non_neg_integer(), non_neg_integer()} | {:error, :not_found}
-  defp find_matching_span(window, normalized_search, approx_local_index, window_start) do
-    normalized_search_len = String.length(normalized_search)
-
-    # Walk through the window character by character to find exact boundaries
-    # This handles cases where original chars map to different normalized lengths
-    window_chars = String.graphemes(window)
-    window_len = length(window_chars)
-
-    # Find start position: walk forward until normalized prefix matches
-    result =
-      Enum.reduce_while(0..(window_len - 1), nil, fn start_idx, _acc ->
-        remaining = Enum.drop(window_chars, start_idx) |> Enum.join()
-        normalized_remaining = normalize_for_fuzzy(remaining)
-
-        if String.starts_with?(normalized_remaining, normalized_search) do
-          # Found start, now find end
-          case find_match_end(window_chars, start_idx, normalized_search, normalized_search_len) do
-            {:ok, end_idx} ->
-              original_text =
-                window_chars
-                |> Enum.slice(start_idx..(end_idx - 1))
-                |> Enum.join()
-
-              byte_offset = byte_offset_at_grapheme(window, start_idx)
-              {:halt, {:ok, window_start + byte_offset, byte_size(original_text)}}
-
-            :error ->
-              {:cont, nil}
-          end
-        else
-          if start_idx > approx_local_index + normalized_search_len do
-            {:halt, {:error, :not_found}}
-          else
-            {:cont, nil}
-          end
-        end
-      end)
-
-    case result do
-      {:ok, _, _} = success -> success
-      _ -> {:error, :not_found}
-    end
-  end
-
-  @spec find_match_end([String.t()], non_neg_integer(), String.t(), non_neg_integer()) ::
-          {:ok, non_neg_integer()} | :error
-  defp find_match_end(window_chars, start_idx, normalized_search, normalized_search_len) do
-    window_len = length(window_chars)
-
-    Enum.reduce_while((start_idx + 1)..window_len, :error, fn end_idx, _acc ->
-      slice = Enum.slice(window_chars, start_idx..(end_idx - 1)) |> Enum.join()
-      normalized_slice = normalize_for_fuzzy(slice)
-      normalized_slice_len = String.length(normalized_slice)
-
-      cond do
-        normalized_slice == normalized_search ->
-          {:halt, {:ok, end_idx}}
-
-        normalized_slice_len >= normalized_search_len ->
-          {:halt, :error}
-
-        true ->
-          {:cont, :error}
-      end
-    end)
-  end
-
-  @spec byte_offset_at_grapheme(String.t(), non_neg_integer()) :: non_neg_integer()
-  defp byte_offset_at_grapheme(string, grapheme_index) do
-    string
-    |> String.graphemes()
-    |> Enum.take(grapheme_index)
-    |> Enum.join()
-    |> byte_size()
-  end
-
-  # Smart quote characters for normalization
-  # Left single quote, right single quote, single high-reversed-9 quote, prime, reversed prime
+  # Smart quotes and unicode dashes fold to ASCII for line-based matching.
+  # Left/right single quote, single high-reversed-9 quote, prime, reversed prime
   @single_quotes [0x2018, 0x2019, 0x201B, 0x2032, 0x2035]
-  # Left double quote, right double quote, double low-9 quote, double high-reversed-9 quote, double prime, reversed double prime
+  # Left/right double quote, double low-9 / high-reversed-9 quote, (reversed) double prime
   @double_quotes [0x201C, 0x201D, 0x201E, 0x201F, 0x2033, 0x2036]
   # En dash, em dash, horizontal bar, minus sign
   @dashes [0x2013, 0x2014, 0x2015, 0x2212]
+  # Collapsed to a single space; trimmed at line edges
+  @horizontal_space [?\s, ?\t, ?\r, ?\f, ?\v, 0x00A0]
 
-  @spec normalize_for_fuzzy(String.t()) :: String.t()
-  defp normalize_for_fuzzy(text) do
-    text
-    # Strip trailing whitespace per line
-    |> String.split("\n")
-    |> Enum.map(&String.trim_trailing/1)
-    |> Enum.join("\n")
-    # Smart quotes to ASCII
-    |> replace_unicode_chars(@single_quotes, "'")
-    |> replace_unicode_chars(@double_quotes, "\"")
-    # Unicode dashes to hyphen
-    |> replace_unicode_chars(@dashes, "-")
-    # Multiple spaces to single space
-    |> String.replace(~r/[ \t]+/, " ")
+  @typep match_result ::
+           {:ok, non_neg_integer(), non_neg_integer()}
+           | {:error, :not_found}
+           | {:error, {:multiple_occurrences, pos_integer(), [pos_integer()], boolean()}}
+
+  # Returns the byte index and byte length of the unique match in `content`.
+  @spec find_match(String.t(), String.t()) :: match_result()
+  defp find_match(content, search_text) do
+    case overlapping_matches(content, search_text) do
+      [{index, length}] -> {:ok, index, length}
+      [] -> find_line_match(content, search_text)
+      matches -> multiple_occurrences(content, Enum.map(matches, &elem(&1, 0)))
+    end
   end
 
-  @spec replace_unicode_chars(String.t(), [non_neg_integer()], String.t()) :: String.t()
-  defp replace_unicode_chars(text, codepoints, replacement) do
-    Enum.reduce(codepoints, text, fn codepoint, acc ->
-      String.replace(acc, <<codepoint::utf8>>, replacement)
-    end)
-  end
+  # :binary.matches/2 skips overlapping matches (e.g. "aa" in "aaa").
+  # Advance one byte so uniqueness means every possible replacement location.
+  defp overlapping_matches(content, needle), do: overlapping_matches(content, needle, 0, [])
 
-  # ============================================================================
-  # Uniqueness Check
-  # ============================================================================
-
-  @spec check_uniqueness(String.t(), String.t(), non_neg_integer(), non_neg_integer()) ::
-          :ok | {:error, {:multiple_occurrences, non_neg_integer()}}
-  defp check_uniqueness(content, search_text, match_index, match_length) do
-    # Extract the actual matched text from the original content
-    matched_text = :binary.part(content, match_index, match_length)
-
-    count = count_occurrences(content, matched_text)
-
-    if count > 1 do
-      {:error, {:multiple_occurrences, count}}
+  defp overlapping_matches(content, needle, offset, acc) do
+    if offset + byte_size(needle) > byte_size(content) do
+      Enum.reverse(acc)
     else
-      # Also check if the normalized search text appears multiple times
-      # (for cases where fuzzy matching might find different variations)
-      normalized_count = count_fuzzy_occurrences(content, search_text)
+      case :binary.match(content, needle, scope: {offset, byte_size(content) - offset}) do
+        :nomatch ->
+          Enum.reverse(acc)
 
-      if normalized_count > 1 do
-        {:error, {:multiple_occurrences, normalized_count}}
-      else
-        :ok
+        {index, length} ->
+          overlapping_matches(content, needle, index + 1, [{index, length} | acc])
       end
     end
   end
 
-  @spec count_occurrences(String.t(), String.t()) :: non_neg_integer()
-  defp count_occurrences(content, search_text) do
+  defp multiple_occurrences(content, starts) do
+    lines =
+      starts
+      |> Enum.take(@max_reported_lines)
+      |> Enum.map(&line_number_at(content, &1))
+      |> Enum.uniq()
+
+    count = length(starts)
+    {:error, {:multiple_occurrences, count, lines, count > @max_reported_lines}}
+  end
+
+  defp line_number_at(content, byte_index) do
     content
-    |> String.split(search_text)
+    |> binary_part(0, byte_index)
+    |> :binary.matches("\n")
     |> length()
-    |> Kernel.-(1)
+    |> Kernel.+(1)
   end
 
-  @spec count_fuzzy_occurrences(String.t(), String.t()) :: non_neg_integer()
-  defp count_fuzzy_occurrences(content, search_text) do
-    normalized_content = normalize_for_fuzzy(content)
-    normalized_search = normalize_for_fuzzy(search_text)
+  # Line-based fallback. Every offset below is a byte offset into `content`;
+  # normalized text is only ever compared, never used as a coordinate.
+  defp find_line_match(content, search_text) do
+    raw_search_lines = String.split(search_text, "\n")
+    needles = Enum.map(raw_search_lines, &normalize_line/1)
 
-    count_occurrences(normalized_content, normalized_search)
+    if Enum.all?(needles, &(&1 == "")) do
+      {:error, :not_found}
+    else
+      lines = String.split(content, "\n")
+
+      file = %{
+        lines: List.to_tuple(lines),
+        norms: lines |> Enum.map(&normalize_line/1) |> List.to_tuple(),
+        starts: lines |> line_start_offsets() |> List.to_tuple()
+      }
+
+      search = %{
+        needles: needles,
+        leading_space?: leading_space?(List.first(raw_search_lines)),
+        trailing_space?: trailing_space?(List.last(raw_search_lines))
+      }
+
+      case line_match_spans(file, search) do
+        [] -> {:error, :not_found}
+        [{start, stop}] -> {:ok, start, stop - start}
+        spans -> multiple_occurrences(content, Enum.map(spans, &elem(&1, 0)))
+      end
+    end
   end
+
+  defp line_start_offsets(lines) do
+    {starts, _end} =
+      Enum.map_reduce(lines, 0, fn line, offset -> {offset, offset + byte_size(line) + 1} end)
+
+    starts
+  end
+
+  defp leading_space?(<<cp::utf8, _::binary>>) when cp in @horizontal_space, do: true
+  defp leading_space?(_line), do: false
+
+  defp trailing_space?(line) do
+    case String.last(line) do
+      <<cp::utf8>> when cp in @horizontal_space -> true
+      _ -> false
+    end
+  end
+
+  # Single-line search: any occurrence inside a normalized file line.
+  defp line_match_spans(file, %{needles: [needle]} = search) do
+    Enum.flat_map(0..(tuple_size(file.lines) - 1), fn index ->
+      norm = elem(file.norms, index)
+
+      norm
+      |> overlapping_matches(needle)
+      |> Enum.flat_map(fn {pos, len} ->
+        with {:ok, start} <- span_start(file, index, pos, search.leading_space?),
+             {:ok, stop} <- span_end(file, index, pos + len, search.trailing_space?) do
+          [{start, stop}]
+        else
+          _ -> []
+        end
+      end)
+    end)
+  end
+
+  # Multi-line search: the first needle matches a suffix of a line, interior
+  # needles match whole lines, and the last needle matches a line prefix.
+  defp line_match_spans(file, %{needles: [first | rest]} = search) do
+    {middle, [last]} = Enum.split(rest, -1)
+    needle_count = length(rest) + 1
+    line_count = tuple_size(file.lines)
+
+    if needle_count > line_count do
+      []
+    else
+      Enum.flat_map(0..(line_count - needle_count), fn index ->
+        with {:ok, start} <- first_line_start(file, index, first, search.leading_space?),
+             true <- middle_lines_match?(file, index + 1, middle),
+             {:ok, stop} <-
+               last_line_end(file, index + needle_count - 1, last, search.trailing_space?) do
+          [{start, stop}]
+        else
+          _ -> []
+        end
+      end)
+    end
+  end
+
+  defp first_line_start(file, index, "", _leading_space?) do
+    # The search starts with a blank line: begin at the end of this line.
+    if elem(file.norms, index) == "",
+      do: {:ok, elem(file.starts, index)},
+      else: {:ok, elem(file.starts, index) + byte_size(elem(file.lines, index))}
+  end
+
+  defp first_line_start(file, index, needle, leading_space?) do
+    norm = elem(file.norms, index)
+
+    if String.ends_with?(norm, needle) do
+      span_start(file, index, byte_size(norm) - byte_size(needle), leading_space?)
+    else
+      :error
+    end
+  end
+
+  defp middle_lines_match?(file, first_index, needles) do
+    needles
+    |> Enum.with_index(first_index)
+    |> Enum.all?(fn {needle, index} -> elem(file.norms, index) == needle end)
+  end
+
+  defp last_line_end(file, index, "", _trailing_space?) do
+    # The search ends with a newline: stop at the start of this line.
+    if elem(file.norms, index) == "",
+      do: {:ok, elem(file.starts, index) + byte_size(elem(file.lines, index))},
+      else: {:ok, elem(file.starts, index)}
+  end
+
+  defp last_line_end(file, index, needle, trailing_space?) do
+    if String.starts_with?(elem(file.norms, index), needle) do
+      span_end(file, index, byte_size(needle), trailing_space?)
+    else
+      :error
+    end
+  end
+
+  # A match that begins at the first normalized character starts at the line
+  # start when the search itself was indented, otherwise at the first
+  # non-blank character (keeping the file's indentation).
+  defp span_start(file, index, 0, true), do: {:ok, elem(file.starts, index)}
+
+  defp span_start(file, index, norm_offset, _leading_space?) do
+    case original_offset(elem(file.lines, index), norm_offset, :start) do
+      nil -> :error
+      offset -> {:ok, elem(file.starts, index) + offset}
+    end
+  end
+
+  defp span_end(file, index, norm_offset, trailing_space?) do
+    line = elem(file.lines, index)
+
+    if trailing_space? and norm_offset == byte_size(elem(file.norms, index)) do
+      {:ok, elem(file.starts, index) + byte_size(line)}
+    else
+      case original_offset(line, norm_offset, :end) do
+        nil -> :error
+        offset -> {:ok, elem(file.starts, index) + offset}
+      end
+    end
+  end
+
+  # Map a normalized byte offset on a token boundary back to the byte offset
+  # in the original line.
+  defp original_offset(line, norm_offset, edge) do
+    {_norm_end, offset} =
+      line
+      |> line_tokens()
+      |> Enum.reduce_while({0, nil}, fn {text, orig_start, orig_end}, {norm_pos, nil} ->
+        norm_end = norm_pos + byte_size(text)
+
+        cond do
+          edge == :start and norm_pos == norm_offset -> {:halt, {norm_end, orig_start}}
+          edge == :end and norm_end == norm_offset -> {:halt, {norm_end, orig_end}}
+          norm_pos > norm_offset -> {:halt, {norm_end, nil}}
+          true -> {:cont, {norm_end, nil}}
+        end
+      end)
+
+    offset
+  end
+
+  defp normalize_line(line) do
+    line
+    |> line_tokens()
+    |> Enum.map_join(fn {text, _orig_start, _orig_end} -> text end)
+  end
+
+  # Tokens are `{normalized_text, orig_start, orig_end}` byte ranges of the
+  # original line: one per codepoint (quotes/dashes folded to ASCII), with
+  # whitespace runs collapsed to one " " token and trimmed at both ends.
+  defp line_tokens(line) do
+    line
+    |> tokenize(0, [])
+    |> Enum.drop_while(&space_token?/1)
+    |> Enum.reverse()
+    |> Enum.drop_while(&space_token?/1)
+  end
+
+  defp space_token?({" ", _start, _end}), do: true
+  defp space_token?(_token), do: false
+
+  defp tokenize(<<>>, _pos, acc), do: acc
+
+  defp tokenize(<<cp::utf8, rest::binary>>, pos, acc) when cp in @horizontal_space do
+    next = pos + byte_size(<<cp::utf8>>)
+
+    case acc do
+      [{" ", start, _end} | tail] -> tokenize(rest, next, [{" ", start, next} | tail])
+      _ -> tokenize(rest, next, [{" ", pos, next} | acc])
+    end
+  end
+
+  defp tokenize(<<cp::utf8, rest::binary>>, pos, acc) do
+    next = pos + byte_size(<<cp::utf8>>)
+    tokenize(rest, next, [{fold_codepoint(cp), pos, next} | acc])
+  end
+
+  # Invalid UTF-8 byte: keep it as an opaque one-byte token.
+  defp tokenize(<<byte, rest::binary>>, pos, acc) do
+    tokenize(rest, pos + 1, [{<<byte>>, pos, pos + 1} | acc])
+  end
+
+  defp fold_codepoint(cp) when cp in @single_quotes, do: "'"
+  defp fold_codepoint(cp) when cp in @double_quotes, do: "\""
+  defp fold_codepoint(cp) when cp in @dashes, do: "-"
+  defp fold_codepoint(cp), do: <<cp::utf8>>
 
   # ============================================================================
   # Replacement
@@ -513,8 +695,8 @@ defmodule CodingAgent.Tools.Edit do
 
   @spec generate_diff(String.t(), String.t(), non_neg_integer()) :: String.t()
   defp generate_diff(old_content, new_content, context_lines \\ @default_context_lines) do
-    old_lines = String.split(old_content, "\n")
-    new_lines = String.split(new_content, "\n")
+    old_lines = AnchoredEdit.lines(old_content)
+    new_lines = AnchoredEdit.lines(new_content)
 
     # Find changed regions
     changes = compute_line_changes(old_lines, new_lines)
@@ -527,119 +709,20 @@ defmodule CodingAgent.Tools.Edit do
           {:same | :removed | :added, non_neg_integer(), String.t()}
         ]
   defp compute_line_changes(old_lines, new_lines) do
-    # Simple diff algorithm using longest common subsequence approach
-    # For each line, mark as same, removed, or added
-    lcs_diff(old_lines, new_lines)
-  end
-
-  @spec lcs_diff([String.t()], [String.t()]) :: [
-          {:same | :removed | :added, non_neg_integer(), String.t()}
-        ]
-  defp lcs_diff(old_lines, new_lines) do
-    # Build LCS matrix
-    m = length(old_lines)
-    n = length(new_lines)
-
-    # Convert to 0-indexed arrays for easier access
-    old_arr = :array.from_list(old_lines)
-    new_arr = :array.from_list(new_lines)
-
-    # Build the DP table
-    dp = build_lcs_table(old_arr, new_arr, m, n)
-
-    # Backtrack to find the diff
-    backtrack_diff(old_arr, new_arr, dp, m, n)
-  end
-
-  @spec build_lcs_table(
-          :array.array(String.t()),
-          :array.array(String.t()),
-          non_neg_integer(),
-          non_neg_integer()
-        ) ::
-          :array.array(:array.array(non_neg_integer()))
-  defp build_lcs_table(old_arr, new_arr, m, n) do
-    # Initialize (m+1) x (n+1) table with zeros
-    initial_row = :array.new(n + 1, default: 0)
-    dp = :array.new(m + 1, default: initial_row)
-
-    # Fill the table
-    Enum.reduce(1..m, dp, fn i, dp_acc ->
-      row =
-        Enum.reduce(1..n, :array.get(i, dp_acc), fn j, row_acc ->
-          old_line = :array.get(i - 1, old_arr)
-          new_line = :array.get(j - 1, new_arr)
-
-          value =
-            if old_line == new_line do
-              :array.get(j - 1, :array.get(i - 1, dp_acc)) + 1
-            else
-              max(
-                :array.get(j, :array.get(i - 1, dp_acc)),
-                :array.get(j - 1, row_acc)
-              )
-            end
-
-          :array.set(j, value, row_acc)
+    {changes, _old_line, _new_line} =
+      old_lines
+      |> List.myers_difference(new_lines)
+      |> Enum.reduce({[], 1, 1}, fn {kind, lines}, state ->
+        Enum.reduce(lines, state, fn text, {acc, old_line, new_line} ->
+          case kind do
+            :eq -> {[{:same, old_line, text} | acc], old_line + 1, new_line + 1}
+            :del -> {[{:removed, old_line, text} | acc], old_line + 1, new_line}
+            :ins -> {[{:added, new_line, text} | acc], old_line, new_line + 1}
+          end
         end)
+      end)
 
-      :array.set(i, row, dp_acc)
-    end)
-  end
-
-  @spec backtrack_diff(
-          :array.array(String.t()),
-          :array.array(String.t()),
-          :array.array(:array.array(non_neg_integer())),
-          non_neg_integer(),
-          non_neg_integer()
-        ) ::
-          [{:same | :removed | :added, non_neg_integer(), String.t()}]
-  defp backtrack_diff(old_arr, new_arr, dp, m, n) do
-    do_backtrack(old_arr, new_arr, dp, m, n, [])
-  end
-
-  defp do_backtrack(_old_arr, _new_arr, _dp, 0, 0, acc), do: acc
-
-  defp do_backtrack(old_arr, _new_arr, _dp, i, 0, acc) do
-    # All remaining old lines are removals
-    entries =
-      for idx <- (i - 1)..0//-1, idx >= 0 do
-        {:removed, idx + 1, :array.get(idx, old_arr)}
-      end
-      |> Enum.reverse()
-
-    entries ++ acc
-  end
-
-  defp do_backtrack(_old_arr, new_arr, _dp, 0, j, acc) do
-    # All remaining new lines are additions
-    entries =
-      for idx <- (j - 1)..0//-1, idx >= 0 do
-        {:added, idx + 1, :array.get(idx, new_arr)}
-      end
-      |> Enum.reverse()
-
-    entries ++ acc
-  end
-
-  defp do_backtrack(old_arr, new_arr, dp, i, j, acc) do
-    old_line = :array.get(i - 1, old_arr)
-    new_line = :array.get(j - 1, new_arr)
-
-    if old_line == new_line do
-      do_backtrack(old_arr, new_arr, dp, i - 1, j - 1, [{:same, i, old_line} | acc])
-    else
-      # Choose the direction with the higher LCS value
-      up_val = :array.get(j, :array.get(i - 1, dp))
-      left_val = :array.get(j - 1, :array.get(i, dp))
-
-      if up_val >= left_val do
-        do_backtrack(old_arr, new_arr, dp, i - 1, j, [{:removed, i, old_line} | acc])
-      else
-        do_backtrack(old_arr, new_arr, dp, i, j - 1, [{:added, j, new_line} | acc])
-      end
-    end
+    Enum.reverse(changes)
   end
 
   @spec format_diff(
@@ -688,22 +771,15 @@ defmodule CodingAgent.Tools.Edit do
     indices
     |> Enum.reduce([], fn idx, acc ->
       case acc do
-        [] ->
-          [[idx]]
+        [[previous | _] = current | rest] when idx == previous + 1 ->
+          [[idx | current] | rest]
 
-        [current_hunk | rest] ->
-          last_in_hunk = List.last(current_hunk)
-
-          if idx - last_in_hunk <= 1 do
-            # Prepend to hunk for O(1) instead of O(n) append
-            [[idx | current_hunk] | rest]
-          else
-            [[idx], Enum.reverse(current_hunk) | rest]
-          end
+        _ ->
+          [[idx] | acc]
       end
     end)
-    |> Enum.map(&Enum.reverse/1)
     |> Enum.reverse()
+    |> Enum.map(&Enum.reverse/1)
   end
 
   @spec format_hunk([{:same | :removed | :added, non_neg_integer(), String.t()}], [
@@ -725,8 +801,8 @@ defmodule CodingAgent.Tools.Edit do
 
   @spec find_first_changed_line(String.t(), String.t()) :: non_neg_integer()
   defp find_first_changed_line(old_content, new_content) do
-    old_lines = String.split(old_content, "\n")
-    new_lines = String.split(new_content, "\n")
+    old_lines = AnchoredEdit.lines(old_content)
+    new_lines = AnchoredEdit.lines(new_content)
 
     # Find first differing line (1-indexed)
     old_lines

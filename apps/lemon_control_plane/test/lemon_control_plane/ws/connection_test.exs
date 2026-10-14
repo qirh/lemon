@@ -28,6 +28,67 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     end
   end
 
+  defmodule InvalidResultHandler do
+    @behaviour LemonControlPlane.Method
+    @impl true
+    def name, do: "connection.test.invalid_result"
+    @impl true
+    def scopes, do: []
+    @impl true
+    def handle(_params, _ctx), do: {:ok, %{"usage" => %LemonAi.Types.Usage{input: 1}}}
+  end
+
+  test "unsupported inline and async responses preserve the socket with reconciliation errors" do
+    :ok = Registry.register(InvalidResultHandler)
+    on_exit(fn -> Registry.unregister(InvalidResultHandler.name()) end)
+
+    state = %Connection{
+      conn_id: "encoding-test",
+      auth: %{role: :operator, scopes: [:read, :write], client_id: "test"},
+      connected: true
+    }
+
+    request =
+      Jason.encode!(%{
+        "type" => "req",
+        "id" => "invalid-result",
+        "method" => InvalidResultHandler.name(),
+        "params" => %{}
+      })
+
+    for {operation, id} <- [
+          {fn -> Connection.handle_in({request, [opcode: :text]}, state) end, "invalid-result"},
+          {fn ->
+             Connection.handle_info(
+               {:method_result, "invalid-async", {:ok, %{private_value: self()}}},
+               state
+             )
+           end, "invalid-async"}
+        ] do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:push, {:text, frame}, ^state} = operation.()
+
+          assert %{
+                   "id" => ^id,
+                   "ok" => false,
+                   "error" => %{
+                     "code" => "INTERNAL_ERROR",
+                     "details" => %{"code" => "RESPONSE_ENCODING_FAILED", "retrySafe" => false}
+                   }
+                 } = Jason.decode!(frame)
+        end)
+
+      refute log =~ "private_value"
+      refute log =~ "LemonAi.Types.Usage"
+    end
+
+    assert {:push, {:text, valid}, ^state} =
+             Connection.handle_info({:method_result, "healthy", {:ok, %{ok: true}}}, state)
+
+    assert %{"id" => "healthy", "ok" => true} = Jason.decode!(valid)
+  end
+
   describe "async method dispatch" do
     test "keeps event delivery live while an approval-style method is waiting" do
       :ok = Registry.register(AsyncHandler)
@@ -43,9 +104,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
         },
         connected: true,
         event_seq: 0,
-        state_version: %{},
-        subscription_mode: :all,
-        subscriptions: MapSet.new()
+        state_version: %{}
       }
 
       request =
@@ -91,8 +150,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
         auth: %{role: :operator, scopes: [:read, :write], client_id: "test-client"},
         connected: true,
         event_seq: 0,
-        state_version: %{},
-        subscriptions: MapSet.new()
+        state_version: %{}
       }
 
       {:ok, state: state}
@@ -191,8 +249,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
         auth: nil,
         connected: false,
         event_seq: 0,
-        state_version: %{},
-        subscriptions: MapSet.new()
+        state_version: %{}
       }
 
       {:ok, state: state}
@@ -210,102 +267,6 @@ defmodule LemonControlPlane.WS.ConnectionTest do
     end
   end
 
-  describe "handle_info/2 subscription state" do
-    setup do
-      state = %Connection{
-        conn_id: "test-conn-#{System.unique_integer()}",
-        auth: nil,
-        connected: true,
-        event_seq: 0,
-        state_version: %{},
-        subscriptions: MapSet.new()
-      }
-
-      {:ok, state: state}
-    end
-
-    test "tracks subscribed and unsubscribed topics", %{state: state} do
-      {:ok, state} = Connection.handle_info({:subscribe_topics, ["system", "run:abc"]}, state)
-      assert MapSet.equal?(state.subscriptions, MapSet.new(["system", "run:abc"]))
-
-      {:ok, state} = Connection.handle_info({:unsubscribe_topics, ["system"]}, state)
-      assert MapSet.equal?(state.subscriptions, MapSet.new(["run:abc"]))
-
-      {:ok, state} = Connection.handle_info({:unsubscribe_topics, :all}, state)
-      assert MapSet.size(state.subscriptions) == 0
-    end
-
-    test "filters events after explicit subscription changes", %{state: state} do
-      {:ok, state} =
-        Connection.handle_info({:subscribe_topics, ["system", "goals", "run:run-1"]}, state)
-
-      {:ok, unchanged} =
-        Connection.handle_info(
-          {:event, "cron", %{"runId" => "run-2"}, %{cron: 1}},
-          state
-        )
-
-      assert unchanged.event_seq == 0
-      assert unchanged.state_version == %{}
-
-      {:push, {:text, _}, state} =
-        Connection.handle_info(
-          {:event, "agent", %{"runId" => "run-1"}, %{presence: 0}},
-          state
-        )
-
-      assert state.event_seq == 1
-
-      {:push, {:text, _}, state} =
-        Connection.handle_info({:event, "health", %{"ok" => true}, %{health: 1}}, state)
-
-      assert state.event_seq == 2
-
-      {:push, {:text, _}, state} =
-        Connection.handle_info({:event, "goal", %{"goalId" => "goal-1"}, %{}}, state)
-
-      assert state.event_seq == 3
-
-      {:push, {:text, _}, state} =
-        Connection.handle_info({:event, "metrics", %{"runId" => "run-1"}, %{}}, state)
-
-      assert state.event_seq == 4
-    end
-
-    test "clear-all unsubscribe suppresses later events", %{state: state} do
-      {:ok, state} = Connection.handle_info({:unsubscribe_topics, :all}, state)
-
-      assert {:ok, unchanged} =
-               Connection.handle_info(
-                 {:event, "health", %{"ok" => true}, %{health: 1}},
-                 state
-               )
-
-      assert unchanged.event_seq == 0
-      assert unchanged.state_version == %{}
-    end
-
-    test "session subscriptions match session-keyed events", %{state: state} do
-      {:ok, state} = Connection.handle_info({:subscribe_topics, ["session:session-1"]}, state)
-
-      {:push, {:text, _}, state} =
-        Connection.handle_info(
-          {:event, "task.completed", %{"sessionKey" => "session-1"}, %{}},
-          state
-        )
-
-      assert state.event_seq == 1
-
-      assert {:ok, unchanged} =
-               Connection.handle_info(
-                 {:event, "task.completed", %{"sessionKey" => "session-2"}, %{}},
-                 state
-               )
-
-      assert unchanged.event_seq == 1
-    end
-  end
-
   describe "handle_info/2 unknown messages" do
     setup do
       state = %Connection{
@@ -313,8 +274,7 @@ defmodule LemonControlPlane.WS.ConnectionTest do
         auth: nil,
         connected: false,
         event_seq: 0,
-        state_version: %{},
-        subscriptions: MapSet.new()
+        state_version: %{}
       }
 
       {:ok, state: state}

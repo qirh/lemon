@@ -4,6 +4,14 @@ defmodule CodingAgent.ParallelTest do
   alias CodingAgent.Parallel
   alias CodingAgent.Parallel.Semaphore
 
+  import CodingAgent.AsyncHelpers
+
+  defp await_waiters(sem, count) do
+    assert_eventually(fn -> :queue.len(:sys.get_state(sem).waiters) == count end,
+      message: "expected #{count} queued waiters"
+    )
+  end
+
   describe "Semaphore" do
     test "acquire succeeds immediately when slots are available" do
       {:ok, sem} = Semaphore.start_link(2)
@@ -91,8 +99,8 @@ defmodule CodingAgent.ParallelTest do
           1
         end)
 
-      # Small delay to ensure ordering
-      Process.sleep(10)
+      # Wait until task1 is queued so the ordering is deterministic
+      await_waiters(sem, 1)
 
       task2 =
         Task.async(fn ->
@@ -103,6 +111,7 @@ defmodule CodingAgent.ParallelTest do
         end)
 
       # Neither should have acquired yet
+      await_waiters(sem, 2)
       refute_receive {:acquired, _}, 50
 
       # Release - task1 should get the slot first

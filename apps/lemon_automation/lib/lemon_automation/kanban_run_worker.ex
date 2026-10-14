@@ -8,40 +8,76 @@ defmodule LemonAutomation.KanbanRunWorker do
   @default_timeout_ms 300_000
 
   def run(task, opts \\ []) do
-    router_mod = Keyword.get(opts, :router_mod, LemonRouter)
-    waiter_mod = Keyword.get(opts, :waiter_mod, RunCompletionWaiter)
-    timeout_ms = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-    wait_opts = Keyword.get(opts, :wait_opts, [])
+    with {:ok, workspace} <- prepare_workspace(task, opts) do
+      board = KanbanStore.get_board(task.board_id)
+      config = get_in(board, [:meta, "codingWorkflow"])
+
+      if config in [nil, false] and not is_map(task.meta["codingWorkflow"]) do
+        run_coding(task, workspace, opts)
+      else
+        LemonAutomation.KanbanCodingWorkflow.run(task, workspace, config, opts)
+      end
+    end
+  end
+
+  @doc false
+  def run_coding(task, workspace, opts) do
     run_id = Keyword.get(opts, :run_id, Id.run_id())
 
-    with {:ok, workspace} <- prepare_workspace(task, opts) do
-      params =
-        build_params(
-          task,
-          run_id,
-          Keyword.merge(opts, cwd: workspace.cwd, worktree: workspace.worktree)
-        )
+    params =
+      build_params(
+        task,
+        run_id,
+        Keyword.merge(opts, cwd: workspace.cwd, worktree: workspace.worktree)
+      )
 
-      try do
-        case RunCompletionWaiter.submit_and_wait(params,
-               router_mod: router_mod,
-               waiter_mod: waiter_mod,
-               bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
-               timeout_ms: timeout_ms,
-               wait_opts: wait_opts
-             ) do
-          {:ok, completed_run_id, _output} -> {:ok, %{run_id: completed_run_id}}
-          {:error, {:timeout, _run_id}} -> {:error, :timeout}
-          {:error, {:run_failed, _run_id, reason}} -> {:error, reason}
-          {:error, {:submit_failed, reason}} -> {:error, reason}
-          {:error, reason} -> {:error, reason}
+    case RunCompletionWaiter.submit_and_wait(params,
+           router_mod: Keyword.get(opts, :router_mod, LemonRouter),
+           waiter_mod: Keyword.get(opts, :waiter_mod, RunCompletionWaiter),
+           bus_mod: Keyword.get(opts, :bus_mod, LemonCore.Bus),
+           timeout_ms: Keyword.get(opts, :timeout_ms, @default_timeout_ms),
+           wait_opts: Keyword.get(opts, :wait_opts, []),
+           on_submitting: submission_claim(opts, params, workspace, task)
+         ) do
+      {:ok, completed_run_id, output} ->
+        {:ok, %{run_id: completed_run_id, output: output, session_key: params.session_key}}
+
+      {:error, {state, id}}
+      when state in [:timeout, :completion_outcome_unknown, :submission_outcome_unknown] ->
+        {:outcome_unknown, id}
+
+      {:error, {:unexpected_run_id, id, _other}} ->
+        {:outcome_unknown, id}
+
+      {:error, {:run_failed, _run_id, reason}} ->
+        {:error, reason}
+
+      {:error, {:submit_failed, reason}} ->
+        {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    _error -> {:error, :worker_failed}
+  catch
+    :exit, _reason -> {:error, :worker_failed}
+  end
+
+  defp submission_claim(opts, params, workspace, task) do
+    fn run_id ->
+      with :ok <- LemonAutomation.RunNotifications.bind_kanban(task, params) do
+        case Keyword.get(opts, :on_submitting) do
+          callback when is_function(callback, 2) ->
+            callback.(run_id, %{
+              "sessionKey" => params.session_key,
+              "cwd" => workspace.cwd,
+              "branch" => workspace.worktree && workspace.worktree.branch
+            })
+
+          _ ->
+            :ok
         end
-      rescue
-        error ->
-          {:error, Exception.message(error)}
-      catch
-        :exit, reason ->
-          {:error, {:exit, reason}}
       end
     end
   end
@@ -58,7 +94,7 @@ defmodule LemonAutomation.KanbanRunWorker do
       session_key: task.session_key || fork_session_key(agent_id),
       agent_id: agent_id,
       model: Keyword.get(opts, :model),
-      prompt: prompt(task, board),
+      prompt: Keyword.get(opts, :prompt, prompt(task, board)),
       cwd: Keyword.get(opts, :cwd) || board[:workspace],
       tool_policy: %{blocked_tools: ["kanban"]},
       meta:

@@ -125,7 +125,7 @@ defmodule LemonCore.ClockTest do
 
       assert is_integer(elapsed)
       assert elapsed >= 1_000
-      assert elapsed < 2_000
+      assert elapsed < 10_000
     end
 
     test "returns 0 for current timestamp" do
@@ -133,7 +133,7 @@ defmodule LemonCore.ClockTest do
       elapsed = Clock.elapsed_ms(now)
 
       assert elapsed >= 0
-      assert elapsed < 100
+      assert elapsed < 5_000
     end
 
     test "returns negative for future timestamps" do

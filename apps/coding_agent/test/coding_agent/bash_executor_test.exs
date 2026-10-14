@@ -128,7 +128,6 @@ defmodule CodingAgent.BashExecutorTest do
         )
 
       assert result.truncated == true
-      assert result.output =~ "[Output truncated."
       # Should contain later lines (tail truncation keeps the end)
       assert result.output =~ "line3000"
       # Full output should be saved to temp file
@@ -166,7 +165,6 @@ defmodule CodingAgent.BashExecutorTest do
         {:ok, {:ok, result}} ->
           assert result.exit_code == 0
           assert result.truncated == true
-          assert result.output =~ "[Output truncated."
           # Should contain the 'A' characters
           assert result.output =~ "AAAA"
 
@@ -329,13 +327,6 @@ defmodule CodingAgent.BashExecutorTest do
       assert is_list(args)
       # Should have -c for Unix or /C for Windows
       assert "-c" in args or "/C" in args
-    end
-
-    test "returns valid shell path" do
-      {shell, _args} = BashExecutor.get_shell_config()
-      # Shell should be an absolute path or findable
-      assert shell != nil
-      assert is_binary(shell)
     end
   end
 

@@ -46,8 +46,12 @@ The workflow serializes release cuts and performs the complete operation:
    notes into the new version section.
 2. GitHub Actions commits that cut to `main`, creates an annotated CalVer tag,
    and checks out the exact tag for every build.
-3. The canonical fast, quality, deterministic eval, and client lanes run
-   against the exact tag.
+3. The canonical fast, quality, deterministic eval, install and client lanes
+   are reused from `ci.yml` when it passed on the tagged commit or on the
+   ancestor the cut differs from only by version fields and changelogs
+   (`scripts/ci_verified_commit`); otherwise they run against the exact tag.
+   A dispatch with `skip_preflight=true` skips these lanes for an urgent cut;
+   artifact, manifest and container verification still run.
 4. Native runners build and verify all 11 artifacts. The container builds are
    smoke-tested and merged under the version-specific tag.
 5. The workflow verifies the assembled manifest and artifacts, publishes the
@@ -203,17 +207,12 @@ visibility and receipts; packaged `plan`, `apply`, and `rollback` fail closed
 with Git workflow guidance. The same source
 wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
 delegates for the setup and diagnostics Mix tasks, plus
-`./bin/lemon channels ...` for redacted Telegram/Discord launch readiness,
-`./bin/lemon config ...` for config inspection and validation,
+`./bin/lemon channels ...` to inspect redacted Telegram and Discord
+configuration, `./bin/lemon config ...` for config inspection and validation,
 `./bin/lemon models ...` for model catalog discovery,
-`./bin/lemon providers ...` for redacted provider readiness, and
+`./bin/lemon providers ...` for redacted provider configuration, and
 `./bin/lemon policy ...` for route-specific model policy management. It also
-exposes `./bin/lemon proofs ...` for redacted local proof artifact inventory,
-`./bin/lemon media ...` for redacted generated-media job, artifact, and
-provider-proof readiness,
-`./bin/lemon readiness ...` for compact launch-gate readiness summaries and
-`./bin/lemon readiness --strict` for scripts that should fail unless the
-compact readiness status is fully ready,
+exposes `./bin/lemon media ...` for generated-media job status,
 `./bin/lemon secrets ...` as an allowlisted dispatcher for the existing
 secret-store tasks, `./bin/lemon skill ...` for the existing skill lifecycle
 task, and `./bin/lemon usage ...` for redacted usage/cost diagnostics.

@@ -21,7 +21,6 @@ defmodule CodingAgent.Session.StateTest do
     opts = State.build_context_guardrail_opts("/tmp", "session-1", %{max_thinking_bytes: 1_024})
 
     assert opts.max_thinking_bytes == 1_024
-    assert opts.max_tool_result_images == 0
     assert is_binary(opts.spill_dir)
   end
 

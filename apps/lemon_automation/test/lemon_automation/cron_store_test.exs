@@ -25,6 +25,8 @@ defmodule LemonAutomation.CronStoreTest do
         build_job(token, "due",
           created_at_ms: 1_000,
           enabled: true,
+          once: true,
+          deliver_to: "discord:55:66",
           next_run_at_ms: 0
         )
 
@@ -279,6 +281,28 @@ defmodule LemonAutomation.CronStoreTest do
 
       assert Enum.map(CronStore.list_runs(job_one.id, limit: 10), & &1.id) == [one_4.id, one_3.id]
       assert Enum.map(CronStore.list_runs(job_two.id, limit: 10), & &1.id) == [two_3.id, two_2.id]
+    end
+
+    test "retention never deletes an old run with unresolved router ownership", %{token: token} do
+      job = build_job(token, "retained_owner", created_at_ms: 10_000)
+      :ok = CronStore.put_job(job)
+
+      active =
+        build_run(token, "unresolved", job.id,
+          status: :running,
+          started_at_ms: 1,
+          completed_at_ms: nil,
+          meta: %{outcome_unknown: true}
+        )
+
+      terminal = build_run(token, "terminal", job.id, started_at_ms: 2)
+      :ok = CronStore.put_run(active)
+      :ok = CronStore.put_run(terminal)
+
+      assert :ok = CronStore.cleanup_old_runs(0)
+      assert CronStore.get_run(active.id).run_id == active.run_id
+      assert CronStore.get_run(terminal.id) == nil
+      assert Enum.map(CronStore.active_runs(), & &1.id) == [active.id]
     end
 
     test "claim_run preserves the first claimant", %{token: token} do

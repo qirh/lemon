@@ -32,39 +32,16 @@ defmodule LemonControlPlane.Methods.Registry do
   @builtin_methods [
     LemonControlPlane.Methods.Health,
     LemonControlPlane.Methods.Status,
-    LemonControlPlane.Methods.IntrospectionSnapshot,
+    LemonControlPlane.Methods.DoctorRun,
     LemonControlPlane.Methods.Agent,
-    LemonControlPlane.Methods.AgentProgress,
     LemonControlPlane.Methods.AgentWait,
-    LemonControlPlane.Methods.AgentIdentityGet,
-    LemonControlPlane.Methods.AgentInboxSend,
     LemonControlPlane.Methods.AgentDirectoryList,
-    LemonControlPlane.Methods.AgentTargetsList,
-    LemonControlPlane.Methods.AgentEndpointsList,
-    LemonControlPlane.Methods.AgentEndpointsSet,
-    LemonControlPlane.Methods.AgentEndpointsDelete,
     # Goals
     LemonControlPlane.Methods.GoalSet,
     LemonControlPlane.Methods.GoalStatus,
     LemonControlPlane.Methods.GoalPause,
     LemonControlPlane.Methods.GoalResume,
-    LemonControlPlane.Methods.GoalContinue,
-    LemonControlPlane.Methods.GoalLoopOnce,
-    LemonControlPlane.Methods.GoalLoopStart,
-    LemonControlPlane.Methods.GoalLoopStop,
-    LemonControlPlane.Methods.GoalLoopStatus,
     LemonControlPlane.Methods.GoalClear,
-    # Kanban/fleet boards
-    LemonControlPlane.Methods.KanbanBoardCreate,
-    LemonControlPlane.Methods.KanbanBoardList,
-    LemonControlPlane.Methods.KanbanBoardGet,
-    LemonControlPlane.Methods.KanbanBoardArchive,
-    LemonControlPlane.Methods.KanbanTaskCreate,
-    LemonControlPlane.Methods.KanbanTaskUpdate,
-    LemonControlPlane.Methods.KanbanTaskComment,
-    LemonControlPlane.Methods.KanbanDispatcherStart,
-    LemonControlPlane.Methods.KanbanDispatcherStatus,
-    LemonControlPlane.Methods.KanbanDispatcherStop,
     # Logs
     LemonControlPlane.Methods.LogsTail,
     # Channels
@@ -75,14 +52,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.BackgroundResult,
     LemonControlPlane.Methods.BackgroundCancel,
     LemonControlPlane.Methods.SessionBtw,
-    LemonControlPlane.Methods.ChannelsStatus,
-    LemonControlPlane.Methods.TransportsStatus,
-    LemonControlPlane.Methods.ChannelsLogout,
     # Models
     LemonControlPlane.Methods.ModelsList,
-    LemonControlPlane.Methods.ProvidersStatus,
-    LemonControlPlane.Methods.ProvidersConfigure,
-    LemonControlPlane.Methods.MemoryStatus,
     # User-managed profiles
     LemonControlPlane.Methods.ProfilesList,
     LemonControlPlane.Methods.ProfilesGet,
@@ -95,27 +66,25 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfileChat,
     # Agents
     LemonControlPlane.Methods.AgentsList,
-    LemonControlPlane.Methods.AgentsFilesList,
-    LemonControlPlane.Methods.AgentsFilesGet,
-    LemonControlPlane.Methods.AgentsFilesSet,
     # Skills
-    LemonControlPlane.Methods.SkillsStatus,
-    LemonControlPlane.Methods.SkillsBins,
     LemonControlPlane.Methods.SkillsHermesCatalog,
     LemonControlPlane.Methods.SkillsInstall,
-    LemonControlPlane.Methods.SkillsUpdate,
-    LemonControlPlane.Methods.ExtensionsStatus,
+    LemonControlPlane.Methods.SkillsList,
+    LemonControlPlane.Methods.SkillsEnable,
+    LemonControlPlane.Methods.SkillsDisable,
+    # MCP server connections
+    LemonControlPlane.Methods.McpServersList,
+    LemonControlPlane.Methods.McpServersRefresh,
     # Portable skill bundles and automation blueprints
     LemonControlPlane.Methods.BlueprintsList,
     LemonControlPlane.Methods.BlueprintsInspect,
     LemonControlPlane.Methods.BlueprintsValidate,
     LemonControlPlane.Methods.BlueprintsPreview,
     LemonControlPlane.Methods.BlueprintsActivate,
-    # Review-first learning from bounded sources
-    LemonControlPlane.Methods.LearnReview,
-    LemonControlPlane.Methods.LearnConfirm,
     # Sessions
     LemonControlPlane.Methods.SessionsList,
+    LemonControlPlane.Methods.SessionsGet,
+    LemonControlPlane.Methods.SessionsHistory,
     LemonControlPlane.Methods.SessionsStats,
     LemonControlPlane.Methods.SessionsPreview,
     LemonControlPlane.Methods.SessionsDelete,
@@ -125,15 +94,19 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsPrune,
     LemonControlPlane.Methods.SessionsReset,
     LemonControlPlane.Methods.SessionsCompact,
-    LemonControlPlane.Methods.SessionHeartbeat,
+    LemonControlPlane.Methods.SessionsTree,
+    LemonControlPlane.Methods.SessionsRewind,
+    LemonControlPlane.Methods.SessionsCreate,
+    LemonControlPlane.Methods.SessionsPlan,
+    LemonControlPlane.Methods.SessionsContext,
+    LemonControlPlane.Methods.SessionsChanges,
+    LemonControlPlane.Methods.SessionsFork,
     LemonControlPlane.Methods.SessionsActive,
     LemonControlPlane.Methods.SessionsActiveList,
     LemonControlPlane.Methods.SessionDetail,
     # Runs
     LemonControlPlane.Methods.RunsActiveList,
     LemonControlPlane.Methods.RunsRecentList,
-    LemonControlPlane.Methods.RunGraphGet,
-    LemonControlPlane.Methods.RunIntrospectionList,
     # Tasks
     LemonControlPlane.Methods.TasksActiveList,
     LemonControlPlane.Methods.TasksRecentList,
@@ -151,136 +124,38 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.CronStatus,
     # Exec approvals
     LemonControlPlane.Methods.ExecApprovalsGet,
-    LemonControlPlane.Methods.ExecApprovalsSet,
-    LemonControlPlane.Methods.ExecApprovalsNodeGet,
-    LemonControlPlane.Methods.ExecApprovalsNodeSet,
     LemonControlPlane.Methods.ExecApprovalResolve,
-    LemonControlPlane.Methods.ExecApprovalRequest,
     # Chat
     LemonControlPlane.Methods.ChatSend,
     LemonControlPlane.Methods.ChatAbort,
     LemonControlPlane.Methods.ChatHistory,
-    # Send
-    LemonControlPlane.Methods.Send,
-    # Wake/Heartbeats
-    LemonControlPlane.Methods.Wake,
-    LemonControlPlane.Methods.SetHeartbeats,
-    LemonControlPlane.Methods.LastHeartbeat,
-    # Talk mode
-    LemonControlPlane.Methods.TalkMode,
-    # Browser
-    LemonControlPlane.Methods.BrowserStatus,
-    LemonControlPlane.Methods.BrowserRequest,
-    LemonControlPlane.Methods.BrowserControllerTicket,
-    LemonControlPlane.Methods.BrowserControllerRegister,
-    LemonControlPlane.Methods.BrowserControllerHeartbeat,
-    LemonControlPlane.Methods.BrowserControllerResult,
-    LemonControlPlane.Methods.BrowserControllerStatus,
-    LemonControlPlane.Methods.MediaStatus,
-    LemonControlPlane.Methods.ReadinessStatus,
-    LemonControlPlane.Methods.ProofsStatus,
-    LemonControlPlane.Methods.CheckpointStatus,
-    LemonControlPlane.Methods.CheckpointDiff,
-    LemonControlPlane.Methods.CheckpointRestore,
-    LemonControlPlane.Methods.LspDiagnosticsStatus,
-    LemonControlPlane.Methods.LspDocumentChange,
-    LemonControlPlane.Methods.LspDocumentClose,
-    LemonControlPlane.Methods.LspDocumentOpen,
-    LemonControlPlane.Methods.LspServerInitialize,
-    LemonControlPlane.Methods.LspServerRequest,
-    LemonControlPlane.Methods.LspServerStart,
-    LemonControlPlane.Methods.LspServerStop,
-    LemonControlPlane.Methods.TerminalBackendsStatus,
-    # Node pairing
+    # Execution node pairing and invocation
     LemonControlPlane.Methods.NodePairRequest,
-    LemonControlPlane.Methods.NodePairList,
     LemonControlPlane.Methods.NodePairApprove,
-    LemonControlPlane.Methods.NodePairReject,
-    LemonControlPlane.Methods.NodePairVerify,
-    # Node management
-    LemonControlPlane.Methods.NodeRename,
-    LemonControlPlane.Methods.NodeList,
-    LemonControlPlane.Methods.NodeDescribe,
     LemonControlPlane.Methods.NodeInvoke,
     LemonControlPlane.Methods.NodeInvokeResult,
     LemonControlPlane.Methods.NodeInvokeControlResult,
-    LemonControlPlane.Methods.NodeEvent,
-    # System methods
-    LemonControlPlane.Methods.SystemPresence,
-    LemonControlPlane.Methods.SystemEvent,
-    LemonControlPlane.Methods.SystemReload,
-    # Voicewake
-    LemonControlPlane.Methods.VoicewakeGet,
-    LemonControlPlane.Methods.VoicewakeSet,
-    # TTS
-    LemonControlPlane.Methods.TtsStatus,
-    LemonControlPlane.Methods.TtsProviders,
-    LemonControlPlane.Methods.TtsEnable,
-    LemonControlPlane.Methods.TtsDisable,
-    LemonControlPlane.Methods.TtsConvert,
-    LemonControlPlane.Methods.TtsSetProvider,
-    # Update
-    LemonControlPlane.Methods.UpdateRun,
+    LemonControlPlane.Methods.NodesList,
+    LemonControlPlane.Methods.NodesRevoke,
     # Config
     LemonControlPlane.Methods.ConfigGet,
     LemonControlPlane.Methods.ConfigSet,
-    LemonControlPlane.Methods.ConfigPatch,
-    LemonControlPlane.Methods.ConfigSchema,
-    LemonControlPlane.Methods.ConfigReload,
-    # Secrets
-    LemonControlPlane.Methods.SecretsStatus,
-    LemonControlPlane.Methods.SecretsList,
-    LemonControlPlane.Methods.SecretsSet,
-    LemonControlPlane.Methods.SecretsDelete,
-    LemonControlPlane.Methods.SecretsExists,
-    # Device pairing
-    LemonControlPlane.Methods.DevicePairRequest,
-    LemonControlPlane.Methods.DevicePairApprove,
-    LemonControlPlane.Methods.DevicePairReject,
-    # Wizard
-    LemonControlPlane.Methods.WizardStart,
-    LemonControlPlane.Methods.WizardStep,
-    LemonControlPlane.Methods.WizardCancel,
-    # Connect
+    # Connect challenge (node pairing handshake)
     LemonControlPlane.Methods.ConnectChallenge,
+    # omp delegate sessions
+    LemonControlPlane.Methods.OmpStatus,
+    LemonControlPlane.Methods.OmpSessionsList,
+    LemonControlPlane.Methods.OmpSessionsGet,
+    LemonControlPlane.Methods.OmpSessionsDiscover,
+    LemonControlPlane.Methods.OmpSessionsStart,
+    LemonControlPlane.Methods.OmpSessionsResume,
+    LemonControlPlane.Methods.OmpSessionsSend,
+    LemonControlPlane.Methods.OmpSessionsCancel,
+    LemonControlPlane.Methods.OmpSessionsClose,
     # Usage
     LemonControlPlane.Methods.UsageStatus,
-    LemonControlPlane.Methods.UsageCost,
-    # Events / Ingestion
-    LemonControlPlane.Methods.EventsSubscribe,
-    LemonControlPlane.Methods.EventsUnsubscribe,
-    LemonControlPlane.Methods.EventsIngest,
-    LemonControlPlane.Methods.EventsSubscriptionsList
+    LemonControlPlane.Methods.UsageCost
   ]
-
-  @capability_methods %{
-    voicewake: [
-      LemonControlPlane.Methods.VoicewakeGet,
-      LemonControlPlane.Methods.VoicewakeSet
-    ],
-    tts: [
-      LemonControlPlane.Methods.TtsStatus,
-      LemonControlPlane.Methods.TtsProviders,
-      LemonControlPlane.Methods.TtsEnable,
-      LemonControlPlane.Methods.TtsDisable,
-      LemonControlPlane.Methods.TtsConvert,
-      LemonControlPlane.Methods.TtsSetProvider
-    ],
-    updates: [
-      LemonControlPlane.Methods.UpdateRun
-    ],
-    device_pairing: [
-      LemonControlPlane.Methods.DevicePairRequest,
-      LemonControlPlane.Methods.DevicePairApprove,
-      LemonControlPlane.Methods.DevicePairReject,
-      LemonControlPlane.Methods.ConnectChallenge
-    ],
-    wizard: [
-      LemonControlPlane.Methods.WizardStart,
-      LemonControlPlane.Methods.WizardStep,
-      LemonControlPlane.Methods.WizardCancel
-    ]
-  }
 
   ## Client API
 
@@ -386,8 +261,7 @@ defmodule LemonControlPlane.Methods.Registry do
   def init(_opts) do
     table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
 
-    # Register built-in methods
-    for module <- enabled_builtin_methods() do
+    for module <- @builtin_methods do
       :ets.insert(table, {module.name(), module})
     end
 
@@ -405,59 +279,6 @@ defmodule LemonControlPlane.Methods.Registry do
   def handle_call({:unregister, method}, _from, state) do
     :ets.delete(state.table, method)
     {:reply, :ok, state}
-  end
-
-  defp enabled_builtin_methods do
-    disabled_modules =
-      enabled_capabilities()
-      |> disabled_capabilities()
-      |> Enum.flat_map(fn capability -> Map.get(@capability_methods, capability, []) end)
-      |> MapSet.new()
-
-    @builtin_methods
-    |> Enum.reject(&MapSet.member?(disabled_modules, &1))
-    |> Enum.uniq()
-  end
-
-  defp enabled_capabilities do
-    defaults = @capability_methods |> Map.keys() |> MapSet.new()
-
-    case Application.get_env(:lemon_control_plane, :capabilities, :default) do
-      :default ->
-        defaults
-
-      list when is_list(list) ->
-        list
-        |> Enum.filter(&is_atom/1)
-        |> MapSet.new()
-
-      map when is_map(map) ->
-        known = Map.keys(@capability_methods)
-
-        map
-        |> Enum.reduce(MapSet.new(), fn
-          {capability, true}, acc when is_atom(capability) ->
-            MapSet.put(acc, capability)
-
-          {capability, value}, acc when is_binary(capability) and value in [true, "true", 1] ->
-            case Enum.find(known, &(Atom.to_string(&1) == capability)) do
-              nil -> acc
-              cap -> MapSet.put(acc, cap)
-            end
-
-          _, acc ->
-            acc
-        end)
-
-      _ ->
-        defaults
-    end
-  end
-
-  defp disabled_capabilities(enabled) do
-    @capability_methods
-    |> Map.keys()
-    |> Enum.reject(&MapSet.member?(enabled, &1))
   end
 end
 

@@ -33,27 +33,6 @@ defmodule Mix.Tasks.Lemon.Secrets.DeleteTest do
     :ok
   end
 
-  describe "module attributes" do
-    test "has proper @shortdoc" do
-      # Access module attributes via Code.fetch_docs or module reflection
-      moduledoc = Code.fetch_docs(Delete)
-
-      case moduledoc do
-        {:docs_v1, _, _, _, %{} = module_doc, _, _} ->
-          doc = module_doc["en"]
-          assert doc =~ "Deletes a secret"
-
-        _ ->
-          # If docs aren't available, verify module loads correctly
-          assert Code.ensure_loaded?(Delete)
-      end
-
-      # Verify the shortdoc is set (Mix.Task provides this via module attribute)
-      assert {:module, Delete} = Code.ensure_loaded(Delete)
-      assert function_exported?(Delete, :run, 1)
-    end
-  end
-
   describe "argument parsing" do
     test "accepts name as positional argument" do
       # Create a secret first

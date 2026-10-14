@@ -75,8 +75,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
 
   @impl true
   def init(%Room{} = room) do
-    restore_rng(room.rng_state)
-
     state = %{
       room: room,
       timer_ref: nil,
@@ -179,7 +177,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     else
       false -> {:reply, {:error, :seat_taken}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
-      _ -> {:reply, {:error, :invalid_seat}, state}
     end
   end
 
@@ -219,7 +216,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     else
       false -> {:reply, {:error, :invalid_seat_kind}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
-      _ -> {:reply, {:error, :invalid_seat}, state}
     end
   end
 
@@ -258,7 +254,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
           handle_host_control(action, params, state)
         end
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -306,11 +303,15 @@ defmodule LemonSimUi.HostedGame.RoomServer do
         state = %{state | connections: connections, monitor_refs: monitor_refs}
         broadcast(state.room)
 
-        HostedGame.emit(:player_connected, %{count: 1}, %{room_id: state.room.id, seat_id: actor_id})
+        HostedGame.emit(:player_connected, %{count: 1}, %{
+          room_id: state.room.id,
+          seat_id: actor_id
+        })
 
         {:reply, {:ok, actor_id}, state}
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -436,7 +437,7 @@ defmodule LemonSimUi.HostedGame.RoomServer do
         state = clear_ai_pending(state)
 
         case result do
-          {:ok, %{state: %State{} = game_state, events: events}, rng_state} ->
+          {:ok, %{state: %State{} = game_state, events: events}} ->
             if rejected_state?(game_state, room.game_state) do
               HostedGame.emit(:ai_error, %{count: 1}, %{
                 room_id: room.id,
@@ -455,7 +456,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
                      %{events: summarize_events(events)},
                      events,
                      game_state,
-                     rng_state,
                      "ai"
                    ) do
                 {:ok, next_state, _result} -> {:noreply, next_state}
@@ -463,7 +463,7 @@ defmodule LemonSimUi.HostedGame.RoomServer do
               end
             end
 
-          {:error, reason, _rng_state} ->
+          {:error, reason} ->
             error_class = HostedGame.error_class(reason)
             Logger.warning("Hosted Werewolf AI step failed for #{room.id}: #{error_class}")
             HostedGame.emit(:ai_error, %{count: 1}, %{room_id: room.id, error_class: error_class})
@@ -614,7 +614,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
             {:reply, {:error, reason}, state}
         end
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -669,7 +670,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
           room
           |> Map.merge(%{
             status: "stopped",
-            terminal_reason: if(room.status == "lobby", do: "host_cancelled", else: "host_stopped"),
+            terminal_reason:
+              if(room.status == "lobby", do: "host_cancelled", else: "host_stopped"),
             deadline_at_ms: nil,
             paused_remaining_ms: nil,
             paused_at_ms: nil,
@@ -689,7 +691,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
             {:reply, {:error, reason}, state}
         end
 
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -702,8 +705,7 @@ defmodule LemonSimUi.HostedGame.RoomServer do
       seed = parse_rematch_seed(params) || random_seed()
       config = %{room.config | seed: seed}
 
-      {game_state, rng_state} =
-        new_game_state(room.id, config, room.match_number + 1, Map.keys(room.seats))
+      game_state = new_game_state(room.id, config, room.match_number + 1, Map.keys(room.seats))
 
       now = now_ms()
       match_archives = Enum.take(room.match_archives ++ [replay_archive(room)], -10)
@@ -714,7 +716,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
           terminal_reason: nil,
           config: config,
           game_state: game_state,
-          rng_state: rng_state,
           command_seq: 0,
           command_ids: [],
           replay: [HostedGame.replay_entry("rematch_created", nil, %{seed: seed}, now)],
@@ -802,16 +803,12 @@ defmodule LemonSimUi.HostedGame.RoomServer do
         reject_command(state, :not_active_actor)
 
       true ->
-        restore_rng(room.rng_state)
-
         params = if source == "player", do: Map.delete(params, "thought"), else: params
 
         with {:ok, event} <- ActionSpace.execute_action(room.game_state, actor_id, action, params),
              {:ok, next_game_state, _signal} <-
                Runner.ingest_events(room.game_state, [event], Werewolf.Updater, []),
              false <- rejected_state?(next_game_state, room.game_state) do
-          rng_state = :rand.export_seed()
-
           commit_transition(
             state,
             actor_id,
@@ -820,7 +817,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
             redact_command_params(params),
             [event],
             next_game_state,
-            rng_state,
             source
           )
         else
@@ -838,12 +834,11 @@ defmodule LemonSimUi.HostedGame.RoomServer do
          params,
          applied_events,
          game_state,
-         rng_state,
          source
        ) do
     room = state.room
     now = now_ms()
-    terminal? = MapHelpers.get_key(game_state.world, :status) == "game_over"
+    terminal? = LemonSim.Examples.terminal?(game_state)
     previous_phase = MapHelpers.get_key(room.game_state.world, :phase)
     next_phase = MapHelpers.get_key(game_state.world, :phase)
     phase_changed? = previous_phase != next_phase
@@ -853,7 +848,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
       %{
         room
         | game_state: game_state,
-          rng_state: rng_state,
           command_seq: room.command_seq + 1,
           command_ids: Enum.take([command_id | room.command_ids], @max_command_ids),
           status: if(terminal?, do: "completed", else: "running"),
@@ -960,13 +954,12 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     parent = self()
     version = room.game_state.version
     match_number = room.match_number
-    rng_state = room.rng_state
     game_state = room.game_state
     ai_model = room.config.ai_model
     generation = make_ref()
 
     case Task.Supervisor.start_child(LemonSimUi.HostedGame.AiTaskSupervisor, fn ->
-           result = run_ai_step(game_state, rng_state, ai_model)
+           result = run_ai_step(game_state, ai_model)
 
            send(
              parent,
@@ -1003,11 +996,11 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     end
   end
 
-  defp run_ai_step(game_state, rng_state, ai_model) do
+  defp run_ai_step(game_state, ai_model) do
     started_at = System.monotonic_time(:millisecond)
-    result = do_run_ai_step(game_state, rng_state, ai_model)
+    result = do_run_ai_step(game_state, ai_model)
     duration_ms = max(System.monotonic_time(:millisecond) - started_at, 0)
-    status = if match?({:ok, _, _}, result), do: :ok, else: :error
+    status = if match?({:ok, _}, result), do: :ok, else: :error
 
     HostedGame.emit(
       :provider_request,
@@ -1021,39 +1014,22 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     result
   end
 
-  defp do_run_ai_step(game_state, rng_state, ai_model) do
-    restore_rng(rng_state)
-
+  defp do_run_ai_step(game_state, ai_model) do
     opts =
       hosted_ai_overrides(ai_model)
       |> Werewolf.default_opts()
       |> Keyword.put(:persist?, false)
 
     with {:ok, decision, _state} <- Runner.decide_once(game_state, Werewolf.modules(), opts),
-         {:ok, events} <- ToolResultEvents.to_events(decision, game_state, opts) do
-      restore_rng(rng_state)
-
-      case Runner.ingest_events(
-             game_state,
-             events,
-             Werewolf.Updater,
-             halt_on_decide?: false
-           ) do
-        {:ok, next_state, signal} ->
-          {:ok, %{decision: decision, events: events, state: next_state, signal: signal},
-           :rand.export_seed()}
-
-        {:error, reason} ->
-          {:error, reason, rng_state}
-      end
-    else
-      {:error, reason} ->
-        {:error, reason, rng_state}
+         {:ok, events} <- ToolResultEvents.to_events(decision, game_state, opts),
+         {:ok, next_state, signal} <-
+           Runner.ingest_events(game_state, events, Werewolf.Updater, halt_on_decide?: false) do
+      {:ok, %{decision: decision, events: events, state: next_state, signal: signal}}
     end
   rescue
-    error -> {:error, Exception.message(error), rng_state}
+    error -> {:error, Exception.message(error)}
   catch
-    kind, reason -> {:error, {kind, reason}, rng_state}
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp hosted_ai_overrides(model_spec) do
@@ -1103,7 +1079,8 @@ defmodule LemonSimUi.HostedGame.RoomServer do
 
         {:ok, action["name"], params}
 
-      _ -> {:error, :no_legal_action}
+      _ ->
+        {:error, :no_legal_action}
     end
   end
 
@@ -1284,28 +1261,21 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   end
 
   defp new_game_state(room_id, config, match_number, player_ids) do
-    previous_seed = :rand.export_seed()
-    :rand.seed(:exsss, {config.seed, config.seed + 1, config.seed + 2})
-
     state =
       Werewolf.initial_state(
         sim_id: "hosted_#{room_id}_m#{match_number}",
         player_count: config.player_count,
         player_ids: Enum.sort(player_ids),
+        seed: config.seed,
         generate_lore?: false
       )
 
-    state =
-      put_in(
-        state.world[:rules],
-        config.rules_preset
-        |> RulesConfig.for_preset()
-        |> Map.put(:turn_timeout_seconds, config.turn_timeout_seconds)
-      )
-
-    rng_state = :rand.export_seed()
-    restore_rng(previous_seed)
-    {state, rng_state}
+    put_in(
+      state.world[:rules],
+      config.rules_preset
+      |> RulesConfig.for_preset()
+      |> Map.put(:turn_timeout_seconds, config.turn_timeout_seconds)
+    )
   end
 
   defp authorize_host(room, token) do
@@ -1394,7 +1364,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
   end
 
   defp redact_command_params(params) when is_map(params), do: Map.delete(params, "thought")
-  defp redact_command_params(_params), do: %{}
 
   defp summarize_events(events) do
     events
@@ -1561,10 +1530,6 @@ defmodule LemonSimUi.HostedGame.RoomServer do
     |> rem(2_147_483_646)
     |> Kernel.+(1)
   end
-
-  defp restore_rng(nil), do: :rand.seed(:default)
-  defp restore_rng(:undefined), do: :rand.seed(:default)
-  defp restore_rng(seed), do: :rand.seed(seed)
 
   defp cancel_timer(%{timer_ref: nil} = state), do: state
 

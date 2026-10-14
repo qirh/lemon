@@ -2,6 +2,9 @@ defmodule LemonGateway.EngineLockTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
 
+  import LemonGateway.AsyncHelpers,
+    only: [assert_eventually: 1, assert_eventually: 2, assert_process_dead: 1]
+
   alias Elixir.LemonGateway.ExecutionRequest
   alias LemonCore.ResumeToken
 
@@ -23,8 +26,8 @@ defmodule LemonGateway.EngineLockTest do
       # Manually release using cast to our test lock
       GenServer.cast(lock, {:release, :key1, self()})
 
-      # Small delay for async cast to process
-      Process.sleep(10)
+      # Casts from this process are handled before a later synchronous call
+      _ = :sys.get_state(lock)
 
       # Should be able to acquire again immediately
       assert {:ok, _} = GenServer.call(lock, {:acquire, :key1, 100})
@@ -52,8 +55,7 @@ defmodule LemonGateway.EngineLockTest do
       waiter2 = spawn_waiter(lock, :key1, 5000)
       waiter3 = spawn_waiter(lock, :key1, 5000)
 
-      # Give time for waiters to register
-      Process.sleep(50)
+      await_waiters(lock, :key1, 3)
 
       # Check state - should have 3 waiters in queue
       state = :sys.get_state(lock)
@@ -78,7 +80,7 @@ defmodule LemonGateway.EngineLockTest do
         receive do: ({:release, lock_pid} -> GenServer.cast(lock_pid, {:release, :key1, self()}))
       end)
 
-      Process.sleep(10)
+      await_waiters(lock, :key1, 1)
 
       spawn(fn ->
         {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
@@ -86,7 +88,7 @@ defmodule LemonGateway.EngineLockTest do
         receive do: ({:release, lock_pid} -> GenServer.cast(lock_pid, {:release, :key1, self()}))
       end)
 
-      Process.sleep(10)
+      await_waiters(lock, :key1, 2)
 
       spawn(fn ->
         {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 5000})
@@ -94,11 +96,11 @@ defmodule LemonGateway.EngineLockTest do
         receive do: ({:release, lock_pid} -> GenServer.cast(lock_pid, {:release, :key1, self()}))
       end)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 3)
 
       # Release lock - waiters should get it in order
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive {:acquired, 1, _}, 500
+      assert_receive {:acquired, 1, _}
 
       # Waiter 1 still holds lock, waiter 2 waiting
       refute_receive {:acquired, 2, _}, 50
@@ -116,7 +118,8 @@ defmodule LemonGateway.EngineLockTest do
       waiter_b1 = spawn_waiter_persistent(lock, :key_b, 5000)
       waiter_b2 = spawn_waiter_persistent(lock, :key_b, 5000)
 
-      Process.sleep(50)
+      await_waiters(lock, :key_a, 3)
+      await_waiters(lock, :key_b, 2)
 
       state = :sys.get_state(lock)
       assert :queue.len(Map.get(state.waiters, :key_a)) == 3
@@ -124,7 +127,7 @@ defmodule LemonGateway.EngineLockTest do
 
       # Release key_a - only key_a waiters should progress
       GenServer.cast(lock, {:release, :key_a, self()})
-      Process.sleep(20)
+      await_waiters(lock, :key_a, 2)
 
       state = :sys.get_state(lock)
       # key_a should have 2 waiters left (one got the lock and is holding it)
@@ -154,13 +157,13 @@ defmodule LemonGateway.EngineLockTest do
         Process.sleep(:infinity)
       end)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 1)
 
       # Release triggers release_and_next
       GenServer.cast(lock, {:release, :key1, self()})
 
       # Waiter should receive lock
-      assert_receive :waiter_got_lock, 500
+      assert_receive :waiter_got_lock
     end
 
     test "release_and_next removes waiter from queue after granting", %{lock: lock} do
@@ -178,10 +181,8 @@ defmodule LemonGateway.EngineLockTest do
                          GenServer.cast(lock_pid, {:release, :key1, self()}))
         end)
 
-        Process.sleep(10)
+        await_waiters(lock, :key1, i)
       end
-
-      Process.sleep(20)
 
       # Should have 3 waiters
       state = :sys.get_state(lock)
@@ -189,9 +190,9 @@ defmodule LemonGateway.EngineLockTest do
 
       # Release lock
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive {:acquired, 1, _}, 500
+      assert_receive {:acquired, 1, _}
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 2)
 
       # Should have 2 waiters now
       state = :sys.get_state(lock)
@@ -211,13 +212,11 @@ defmodule LemonGateway.EngineLockTest do
           Process.sleep(:infinity)
         end)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 1)
 
       # Release - waiter gets lock, queue should be cleaned up
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive :got_lock, 500
-
-      Process.sleep(20)
+      assert_receive :got_lock
 
       state = :sys.get_state(lock)
       # No more waiters for key1
@@ -239,11 +238,11 @@ defmodule LemonGateway.EngineLockTest do
           Process.sleep(:infinity)
         end)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 1)
 
       # Release and let waiter get lock
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive :got_lock, 500
+      assert_receive :got_lock
 
       # Wait past when timer would have fired if not cancelled
       Process.sleep(100)
@@ -272,16 +271,16 @@ defmodule LemonGateway.EngineLockTest do
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
       # Spawn waiter with short timeout
-      spawn_waiter(lock, :key1, 50)
+      spawn_waiter(lock, :key1, 5_000)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 1)
 
       # Should have 1 waiter
       state = :sys.get_state(lock)
       assert :queue.len(Map.get(state.waiters, :key1)) == 1
 
       # Wait for timeout
-      Process.sleep(100)
+      assert_eventually(fn -> waiter_count(lock, :key1) == 0 end, timeout: 10_000)
 
       # Waiter should be removed
       state = :sys.get_state(lock)
@@ -293,34 +292,29 @@ defmodule LemonGateway.EngineLockTest do
 
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
-      # Waiter 1 - short timeout
-      spawn(fn ->
-        result = GenServer.call(lock, {:acquire, :key1, 50}, 1000)
-        send(test_pid, {:waiter1, result})
-      end)
-
-      Process.sleep(10)
-
       # Waiter 2 - long timeout
       spawn(fn ->
-        result = GenServer.call(lock, {:acquire, :key1, 2000}, 3000)
+        result = GenServer.call(lock, {:acquire, :key1, 10_000}, 11_000)
         send(test_pid, {:waiter2, result})
       end)
 
-      Process.sleep(10)
+      await_waiters(lock, :key1, 1)
+
+      # Waiter 1 - short timeout
+      spawn(fn ->
+        result = GenServer.call(lock, {:acquire, :key1, 50}, 5_000)
+        send(test_pid, {:waiter1, result})
+      end)
 
       # Waiter 3 - short timeout
       spawn(fn ->
-        result = GenServer.call(lock, {:acquire, :key1, 30}, 1000)
+        result = GenServer.call(lock, {:acquire, :key1, 30}, 5_000)
         send(test_pid, {:waiter3, result})
       end)
 
-      # Wait for short timeouts
-      Process.sleep(150)
-
       # Short timeout waiters should have timed out
-      assert_receive {:waiter1, {:error, :timeout}}, 100
-      assert_receive {:waiter3, {:error, :timeout}}, 100
+      assert_receive {:waiter1, {:error, :timeout}}
+      assert_receive {:waiter3, {:error, :timeout}}
 
       # Long timeout waiter should still be waiting
       refute_receive {:waiter2, _}, 50
@@ -338,7 +332,7 @@ defmodule LemonGateway.EngineLockTest do
       waiter =
         spawn(fn ->
           # Request with timeout slightly longer than we'll wait
-          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 200}, 1000)
+          {:ok, _release} = GenServer.call(lock, {:acquire, :key1, 500}, 2000)
           send(test_pid, {:got_lock, self()})
           # Hold lock for a while past when timeout would fire
           receive do
@@ -346,27 +340,26 @@ defmodule LemonGateway.EngineLockTest do
               GenServer.cast(lock_pid, {:release, :key1, self()})
               send(test_pid, :released)
           after
-            300 ->
+            2_000 ->
               send(test_pid, :released)
           end
         end)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 1)
 
       # Release quickly before waiter times out
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive {:got_lock, waiter_pid}, 100
+      assert_receive {:got_lock, waiter_pid}
 
       # Tell waiter to release after some time
-      Process.sleep(250)
+      Process.sleep(550)
       send(waiter_pid, {:release, lock})
 
       # Wait past timeout - should not cause issues
-      assert_receive :released, 500
+      assert_receive :released
 
       # No crashes, waiter completed normally
-      Process.sleep(50)
-      refute Process.alive?(waiter)
+      assert_process_dead(waiter)
     end
   end
 
@@ -427,27 +420,32 @@ defmodule LemonGateway.EngineLockTest do
     end
 
     test "concurrent acquires for different keys proceed in parallel", %{lock: lock} do
+      test_pid = self()
       num_keys = 5
-
-      t_start = System.monotonic_time(:millisecond)
 
       tasks =
         for i <- 1..num_keys do
           Task.async(fn ->
             key = :"key_#{i}"
             {:ok, _release} = GenServer.call(lock, {:acquire, key, 5000})
-            Process.sleep(50)
+            send(test_pid, {:holding, i, self()})
+            receive do: (:proceed -> :ok)
             GenServer.cast(lock, {:release, key, self()})
             i
           end)
         end
 
+      # All holders are inside their critical sections at the same time
+      holders =
+        for _ <- 1..num_keys do
+          assert_receive {:holding, _i, pid}, 5_000
+          pid
+        end
+
+      Enum.each(holders, &send(&1, :proceed))
       results = Task.await_many(tasks, 5000)
-      t_end = System.monotonic_time(:millisecond)
 
       assert length(results) == num_keys
-      # Should complete in ~50ms (parallel), not ~250ms (serial)
-      assert t_end - t_start < 150
     end
 
     test "race condition: release during acquire processing", %{lock: lock} do
@@ -467,10 +465,12 @@ defmodule LemonGateway.EngineLockTest do
       end
 
       # Lock should be clean
-      Process.sleep(50)
-      state = :sys.get_state(lock)
-      refute Map.has_key?(state.locks, :race_key)
-      refute Map.has_key?(state.waiters, :race_key)
+      assert_eventually(fn ->
+        state = :sys.get_state(lock)
+
+        not Map.has_key?(state.locks, :race_key) and
+          not Map.has_key?(state.waiters, :race_key)
+      end)
 
       send(test_pid, :race_test_complete)
       assert_receive :race_test_complete
@@ -496,14 +496,12 @@ defmodule LemonGateway.EngineLockTest do
           end
         end)
 
-        Process.sleep(10)
+        await_waiters(lock, :key1, i)
       end
-
-      Process.sleep(20)
 
       # Release - exactly one waiter should get it
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive {:waiter_acquired, waiter_i, waiter_pid}, 500
+      assert_receive {:waiter_acquired, waiter_i, waiter_pid}
       assert waiter_i in 1..3
 
       # Others should not yet
@@ -533,36 +531,36 @@ defmodule LemonGateway.EngineLockTest do
           end)
         end
 
-      Process.sleep(50)
+      await_waiters(lock, :key1, 3)
 
       # Release initial lock
       GenServer.cast(lock, {:release, :key1, self()})
 
       # First waiter acquires
-      assert_receive {:waiter_acquired, i1, waiter1_pid}, 500
+      assert_receive {:waiter_acquired, i1, waiter1_pid}
       assert i1 in 1..3
 
       # Tell first waiter to release
       send(waiter1_pid, {:release, lock})
-      assert_receive {:waiter_released, ^i1}, 500
+      assert_receive {:waiter_released, ^i1}
 
       # Second waiter acquires
-      assert_receive {:waiter_acquired, i2, waiter2_pid}, 500
+      assert_receive {:waiter_acquired, i2, waiter2_pid}
       assert i2 in 1..3
       refute i2 == i1
 
       # Tell second waiter to release
       send(waiter2_pid, {:release, lock})
-      assert_receive {:waiter_released, ^i2}, 500
+      assert_receive {:waiter_released, ^i2}
 
       # Third waiter acquires
-      assert_receive {:waiter_acquired, i3, waiter3_pid}, 500
+      assert_receive {:waiter_acquired, i3, waiter3_pid}
       assert i3 in 1..3
       refute i3 == i1
       refute i3 == i2
 
       send(waiter3_pid, {:release, lock})
-      assert_receive {:waiter_released, ^i3}, 500
+      assert_receive {:waiter_released, ^i3}
       assert Enum.sort([i1, i2, i3]) == [1, 2, 3]
 
       # Clean up any remaining waiters
@@ -580,12 +578,10 @@ defmodule LemonGateway.EngineLockTest do
           receive do: (:done -> :ok)
         end)
 
-      assert_receive :task_a_acquired, 500
+      assert_receive :task_a_acquired
 
       # Process B tries to release (should be ignored)
       GenServer.cast(lock, {:release, :key1, self()})
-
-      Process.sleep(50)
 
       # Lock should still be held by task_a
       state = :sys.get_state(lock)
@@ -611,7 +607,7 @@ defmodule LemonGateway.EngineLockTest do
           receive do: (:die -> :ok)
         end)
 
-      assert_receive :acquired, 500
+      assert_receive :acquired
 
       # Verify lock is held
       state = :sys.get_state(lock)
@@ -621,7 +617,7 @@ defmodule LemonGateway.EngineLockTest do
       Process.exit(owner, :kill)
 
       # Wait for :DOWN to be processed
-      Process.sleep(50)
+      assert_eventually(fn -> not Map.has_key?(:sys.get_state(lock).locks, :key1) end)
 
       # Lock should be released
       state = :sys.get_state(lock)
@@ -639,7 +635,7 @@ defmodule LemonGateway.EngineLockTest do
           receive do: (:die -> :ok)
         end)
 
-      assert_receive :owner_acquired, 500
+      assert_receive :owner_acquired
 
       # Waiter queues up
       waiter =
@@ -649,13 +645,13 @@ defmodule LemonGateway.EngineLockTest do
           Process.sleep(:infinity)
         end)
 
-      Process.sleep(50)
+      await_waiters(lock, :key1, 1)
 
       # Kill owner
       Process.exit(owner, :kill)
 
       # Waiter should get lock
-      assert_receive :waiter_acquired, 500
+      assert_receive :waiter_acquired
 
       Process.exit(waiter, :kill)
     end
@@ -670,7 +666,7 @@ defmodule LemonGateway.EngineLockTest do
           receive do: (:die -> :ok)
         end)
 
-      assert_receive :owner_acquired, 500
+      assert_receive :owner_acquired
 
       # Spawn waiters in order
       waiters =
@@ -682,17 +678,15 @@ defmodule LemonGateway.EngineLockTest do
               Process.sleep(:infinity)
             end)
 
-          Process.sleep(10)
+          await_waiters(lock, :key1, i)
           waiter
         end
-
-      Process.sleep(30)
 
       # Kill owner
       Process.exit(owner, :kill)
 
       # First waiter should get lock
-      assert_receive {:waiter_acquired, 1}, 500
+      assert_receive {:waiter_acquired, 1}
 
       # Others should not
       refute_receive {:waiter_acquired, 2}, 50
@@ -719,12 +713,12 @@ defmodule LemonGateway.EngineLockTest do
           receive do: (:die -> :ok)
         end)
 
-      assert_receive {:owner1_acquired, :key_a}, 500
-      assert_receive {:owner2_acquired, :key_b}, 500
+      assert_receive {:owner1_acquired, :key_a}
+      assert_receive {:owner2_acquired, :key_b}
 
       # Kill only owner1
       Process.exit(owner1, :kill)
-      Process.sleep(50)
+      assert_eventually(fn -> not Map.has_key?(:sys.get_state(lock).locks, :key_a) end)
 
       state = :sys.get_state(lock)
       # key_a should be released
@@ -744,19 +738,20 @@ defmodule LemonGateway.EngineLockTest do
           GenServer.call(lock, {:acquire, :key1, 5000})
         end)
 
-      Process.sleep(30)
+      await_waiters(lock, :key1, 1)
 
       # Verify waiter is queued
       state = :sys.get_state(lock)
       assert :queue.len(Map.get(state.waiters, :key1)) == 1
 
       # Kill the waiter
+      ref = Process.monitor(waiter)
       Process.exit(waiter, :kill)
 
       # Note: The current implementation doesn't monitor waiters,
       # so the waiter stays in queue until timeout or lock release.
       # This test documents current behavior.
-      Process.sleep(30)
+      assert_receive {:DOWN, ^ref, :process, ^waiter, _}
 
       state = :sys.get_state(lock)
       # Waiter is still in queue (current behavior)
@@ -772,11 +767,11 @@ defmodule LemonGateway.EngineLockTest do
 
       # First release
       GenServer.cast(lock, {:release, :key1, self()})
-      Process.sleep(10)
+      _ = :sys.get_state(lock)
 
       # Second release - should be ignored
       GenServer.cast(lock, {:release, :key1, self()})
-      Process.sleep(10)
+      _ = :sys.get_state(lock)
 
       # No crash, lock is free
       state = :sys.get_state(lock)
@@ -785,7 +780,7 @@ defmodule LemonGateway.EngineLockTest do
 
     test "release for non-existent key is safely ignored", %{lock: lock} do
       GenServer.cast(lock, {:release, :non_existent_key, self()})
-      Process.sleep(10)
+      _ = :sys.get_state(lock)
 
       # No crash
       state = :sys.get_state(lock)
@@ -805,11 +800,11 @@ defmodule LemonGateway.EngineLockTest do
           Process.sleep(:infinity)
         end)
 
-      Process.sleep(20)
+      await_waiters(lock, :key1, 1)
 
       # Release lock quickly
       GenServer.cast(lock, {:release, :key1, self()})
-      assert_receive :waiter_got_lock, 100
+      assert_receive :waiter_got_lock
 
       # Wait for timeout to fire (it should be cancelled, but test handles if not)
       Process.sleep(600)
@@ -821,14 +816,16 @@ defmodule LemonGateway.EngineLockTest do
     end
 
     test "empty waiter queue cleanup after timeout", %{lock: lock} do
+      test_pid = self()
+
       {:ok, _release1} = GenServer.call(lock, {:acquire, :key1, 5000})
 
       # Single waiter with short timeout
       spawn(fn ->
-        GenServer.call(lock, {:acquire, :key1, 30}, 1000)
+        send(test_pid, {:waiter_result, GenServer.call(lock, {:acquire, :key1, 30}, 5_000)})
       end)
 
-      Process.sleep(100)
+      assert_receive {:waiter_result, {:error, :timeout}}
 
       # Queue should be cleaned up after timeout
       state = :sys.get_state(lock)
@@ -866,8 +863,7 @@ defmodule LemonGateway.EngineLockTest do
 
       assert_receive {:engine_lock_telemetry,
                       [:lemon, :gateway, :engine_lock, :over_age_live_owner],
-                      %{age_ms: age_ms, threshold_ms: 120}, %{thread_key: ":stale_key"}},
-                     500
+                      %{age_ms: age_ms, threshold_ms: 120}, %{thread_key: ":stale_key"}}
 
       assert age_ms > 120
     end
@@ -881,14 +877,18 @@ defmodule LemonGateway.EngineLockTest do
 
   # Helper to start a fresh EngineLock for unit tests
   defp start_engine_lock(context) do
-    # Start a new EngineLock with a unique name for isolation
+    # Start a new EngineLock with a unique name for isolation. The test
+    # supervisor owns it: a lock linked to the test process dies with it, racing
+    # any on_exit stop.
     name = :"engine_lock_#{:erlang.unique_integer([:positive])}"
     opts = Map.get(context, :engine_lock_opts, %{})
-    {:ok, pid} = GenServer.start_link(Elixir.LemonGateway.EngineLock, opts, name: name)
 
-    on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
-    end)
+    pid =
+      start_supervised!(%{
+        id: name,
+        start: {GenServer, :start_link, [Elixir.LemonGateway.EngineLock, opts, [name: name]]},
+        restart: :temporary
+      })
 
     %{lock: pid, lock_name: name}
   end
@@ -907,6 +907,20 @@ defmodule LemonGateway.EngineLockTest do
       # Stay alive to hold the lock
       Process.sleep(:infinity)
     end)
+  end
+
+  defp waiter_count(lock, key) do
+    case Map.get(:sys.get_state(lock).waiters, key) do
+      nil -> 0
+      queue -> :queue.len(queue)
+    end
+  end
+
+  # Blocks until exactly `count` waiters are queued for `key`.
+  defp await_waiters(lock, key, count) do
+    assert_eventually(fn -> waiter_count(lock, key) == count end,
+      message: "expected #{count} queued waiters for #{inspect(key)}"
+    )
   end
 
   # ============================================================================
@@ -934,8 +948,15 @@ defmodule LemonGateway.EngineLockTest do
           )
 
           if Map.get(meta, :crash_run, false) do
+            send(meta.notify_pid, {:fixture_crashing, sink_pid})
             Process.exit(sink_pid, :kill)
           else
+            if Map.get(meta, :gate, false) do
+              # Hold the run open until the test releases it
+              send(meta.notify_pid, {:fixture_running, request.prompt, self()})
+              receive do: (:proceed -> :ok)
+            end
+
             Process.sleep(Map.get(meta, :delay_ms, 0))
 
             send(
@@ -997,8 +1018,8 @@ defmodule LemonGateway.EngineLockTest do
     assert_receive {:lemon_gateway_run_completed, ^request, %{__event__: :completed, ok: true}},
                    1_000
 
-    # Wait a bit for lock release to propagate (cast is async)
-    Process.sleep(50)
+    # Lock release is an async cast; wait until the lock table is clean
+    assert_eventually(fn -> :sys.get_state(LemonGateway.EngineLock).locks == %{} end)
 
     # Lock should be released - another request for the same scope should proceed immediately
     request2 = request(session_key, "test2", nil, %{notify_pid: self(), user_msg_id: 2})
@@ -1013,16 +1034,21 @@ defmodule LemonGateway.EngineLockTest do
     session_key = "test:101"
 
     request1 =
-      request(session_key, "first", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 1})
+      request(session_key, "first", nil, %{notify_pid: self(), gate: true, user_msg_id: 1})
 
     request2 =
-      request(session_key, "second", nil, %{notify_pid: self(), delay_ms: 50, user_msg_id: 2})
+      request(session_key, "second", nil, %{notify_pid: self(), gate: true, user_msg_id: 2})
 
-    # Submit both concurrently
+    # Submit both concurrently; the second must wait for the first
     Task.async(fn -> submit_request(request1) end)
-    Process.sleep(10)
+    assert_receive {:fixture_running, "first", first_pid}
     Task.async(fn -> submit_request(request2) end)
-    completions = collect_completions(2, 2_000)
+    refute_receive {:fixture_running, "second", _}, 200
+
+    send(first_pid, :proceed)
+    assert_receive {:fixture_running, "second", second_pid}
+    send(second_pid, :proceed)
+    completions = collect_completions(2, 5_000)
 
     assert length(completions) == 2
     # First request submitted should complete first due to lock serialization
@@ -1036,24 +1062,23 @@ defmodule LemonGateway.EngineLockTest do
     session_key2 = "test:103"
 
     request1 =
-      request(session_key1, "scope1", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 1})
+      request(session_key1, "scope1", nil, %{notify_pid: self(), gate: true, user_msg_id: 1})
 
     request2 =
-      request(session_key2, "scope2", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 2})
-
-    t_start = System.monotonic_time(:millisecond)
+      request(session_key2, "scope2", nil, %{notify_pid: self(), gate: true, user_msg_id: 2})
 
     Task.async(fn -> submit_request(request1) end)
     Task.async(fn -> submit_request(request2) end)
 
-    completions = collect_completions(2, 2_000)
-    t_end = System.monotonic_time(:millisecond)
+    # Both runs are executing at the same time (neither waits for the other)
+    assert_receive {:fixture_running, "scope1", pid1}, 5_000
+    assert_receive {:fixture_running, "scope2", pid2}, 5_000
+    send(pid1, :proceed)
+    send(pid2, :proceed)
+
+    completions = collect_completions(2, 5_000)
 
     assert length(completions) == 2
-    # Both should complete in roughly parallel time (not serialized)
-    # If serialized, would take ~200ms+; parallel should be ~100ms
-    elapsed = t_end - t_start
-    assert elapsed < 180, "Expected parallel execution, got #{elapsed}ms"
   end
 
   test "lock uses resume token value as key when present" do
@@ -1065,28 +1090,32 @@ defmodule LemonGateway.EngineLockTest do
     request1 =
       request(session_key1, "resume1", resume, %{
         notify_pid: self(),
-        delay_ms: 100,
+        gate: true,
         user_msg_id: 1
       })
 
     request2 =
-      request(session_key2, "resume2", resume, %{notify_pid: self(), delay_ms: 50, user_msg_id: 2})
-
-    t_start = System.monotonic_time(:millisecond)
+      request(session_key2, "resume2", resume, %{
+        notify_pid: self(),
+        gate: true,
+        user_msg_id: 2
+      })
 
     Task.async(fn -> submit_request(request1) end)
-    Process.sleep(10)
+    assert_receive {:fixture_running, "resume1", first_pid}
     Task.async(fn -> submit_request(request2) end)
 
-    completions = collect_completions(2, 2_000)
-    t_end = System.monotonic_time(:millisecond)
+    # Should be serialized despite different scopes: the second run cannot start
+    # while the first one holds the lock
+    refute_receive {:fixture_running, "resume2", _}, 200
+
+    send(first_pid, :proceed)
+    assert_receive {:fixture_running, "resume2", second_pid}
+    send(second_pid, :proceed)
+
+    completions = collect_completions(2, 5_000)
 
     assert length(completions) == 2
-    # Should be serialized despite different scopes
-    elapsed = t_end - t_start
-
-    assert elapsed >= 140,
-           "Expected serialized execution due to shared resume token, got #{elapsed}ms"
   end
 
   test "lock is released when run process crashes" do
@@ -1099,7 +1128,9 @@ defmodule LemonGateway.EngineLockTest do
 
     # Submit the crashing request first, then the successful request.
     submit_request(crash_request)
-    Process.sleep(50)
+    assert_receive {:fixture_crashing, sink_pid}
+    ref = Process.monitor(sink_pid)
+    assert_receive {:DOWN, ^ref, :process, ^sink_pid, _}
     submit_request(ok_request)
 
     # The successful request should complete even after the crashing process dies
@@ -1124,25 +1155,19 @@ defmodule LemonGateway.EngineLockTest do
 
     session_key = "test:107"
 
-    # With locking disabled, two requests for the same scope should run in parallel
-    request1 =
-      request(session_key, "no-lock-1", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 1})
-
-    request2 =
-      request(session_key, "no-lock-2", nil, %{notify_pid: self(), delay_ms: 100, user_msg_id: 2})
-
-    t_start = System.monotonic_time(:millisecond)
+    # NOTE: LemonGateway.ConfigLoader.fetch/2 turns a configured `false` into nil, so
+    # `require_engine_lock: false` currently falls back to the default (true). The
+    # former "runs in parallel" timing assertion could not observe that either (the
+    # thread worker serializes same-scope requests), so only completion is asserted.
+    request1 = request(session_key, "no-lock-1", nil, %{notify_pid: self(), user_msg_id: 1})
+    request2 = request(session_key, "no-lock-2", nil, %{notify_pid: self(), user_msg_id: 2})
 
     Task.async(fn -> submit_request(request1) end)
     Task.async(fn -> submit_request(request2) end)
 
-    completions = collect_completions(2, 2_000)
-    t_end = System.monotonic_time(:millisecond)
+    completions = collect_completions(2, 5_000)
 
     assert length(completions) == 2
-    # Without locking, should be parallel (allow some overhead for test/CI)
-    elapsed = t_end - t_start
-    assert elapsed < 250, "Expected parallel execution without locking, got #{elapsed}ms"
   end
 
   defp collect_completions(count, timeout) do

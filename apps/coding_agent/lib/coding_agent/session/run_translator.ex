@@ -25,13 +25,21 @@ defmodule CodingAgent.Session.RunTranslator do
     :run_id,
     :resume_token,
     :delta_callback,
+    :retry_action_id,
+    :compaction_action_id,
+    :budget_usage,
+    :budget_stop,
+    :cancel_reason,
     accumulated_text: "",
     pending_actions: %{},
+    task_actions: %{},
     reasoning_accumulator: nil,
     started_emitted: false,
     completed_emitted: false,
     delta_seq: 0,
-    first_token_emitted: false
+    first_token_emitted: false,
+    turns: 0,
+    tool_errors: 0
   ]
 
   def new(opts) do
@@ -71,7 +79,7 @@ defmodule CodingAgent.Session.RunTranslator do
     action_id = "tool_#{id}"
     kind = Presentation.tool_kind(name)
     title = Presentation.tool_title(name, args)
-    detail = %{name: name, args: args}
+    detail = %{name: name, args: args, tool_call_id: id}
 
     action = %{id: action_id, kind: kind, title: title, detail: detail}
 
@@ -86,6 +94,78 @@ defmodule CodingAgent.Session.RunTranslator do
 
     pending = Map.put(t.pending_actions, action_id, action)
     %{t | pending_actions: pending}
+  end
+
+  def handle_event(
+        %__MODULE__{} = t,
+        {:tool_execution_update, launch_id, "task", args,
+         %{details: %{task_id: task_id} = details} = partial_result}
+      )
+      when is_binary(task_id) do
+    action_id = "task_#{task_id}"
+
+    if Map.get(t.task_actions, action_id) == :terminal do
+      t
+    else
+      status = details[:status]
+
+      terminal? =
+        status in [
+          :completed,
+          "completed",
+          :error,
+          "error",
+          :aborted,
+          "aborted",
+          :cancelled,
+          "cancelled",
+          :killed,
+          "killed"
+        ]
+
+      phase =
+        cond do
+          terminal? -> :completed
+          Map.has_key?(t.task_actions, action_id) -> :updated
+          true -> :started
+        end
+
+      detail = %{
+        name: "task",
+        args: args,
+        task_id: task_id,
+        tool_call_id: action_id,
+        parent_action_id: "tool_#{launch_id}",
+        parent_tool_call_id: launch_id,
+        partial_result: partial_result
+      }
+
+      detail =
+        if terminal? do
+          detail
+          |> Map.put(:result, Presentation.truncate_result(partial_result))
+          |> Presentation.put_operator_result(partial_result)
+          |> Presentation.maybe_put_result_meta(partial_result, "task")
+        else
+          detail
+        end
+
+      t =
+        emit_action_event(t, %{
+          id: action_id,
+          kind: Presentation.tool_kind("task"),
+          title: details[:name] || details[:description] || "Task #{task_id}",
+          phase: phase,
+          ok: if(terminal?, do: status in [:completed, "completed"], else: nil),
+          detail: detail
+        })
+
+      %{
+        t
+        | task_actions:
+            Map.put(t.task_actions, action_id, if(terminal?, do: :terminal, else: :running))
+      }
+    end
   end
 
   def handle_event(
@@ -117,6 +197,11 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:tool_execution_end, id, name, result, is_error}) do
+    t =
+      if Presentation.action_ok?(name, result, is_error),
+        do: t,
+        else: %{t | tool_errors: t.tool_errors + 1}
+
     action_id = "tool_#{id}"
 
     case Map.get(t.pending_actions, action_id) do
@@ -125,7 +210,8 @@ defmodule CodingAgent.Session.RunTranslator do
         title = Presentation.tool_title(name, %{})
 
         detail =
-          %{name: name, result: Presentation.truncate_result(result)}
+          %{name: name, tool_call_id: id, result: Presentation.truncate_result(result)}
+          |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
         ok? = Presentation.action_ok?(name, result, is_error)
@@ -143,6 +229,7 @@ defmodule CodingAgent.Session.RunTranslator do
         detail =
           action.detail
           |> Map.merge(%{result: Presentation.truncate_result(result)})
+          |> Presentation.put_operator_result(result)
           |> Presentation.maybe_put_result_meta(result, name)
 
         ok? = Presentation.action_ok?(name, result, is_error)
@@ -197,15 +284,112 @@ defmodule CodingAgent.Session.RunTranslator do
     emit_approval_action(t, event)
   end
 
-  def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
-    answer = Presentation.extract_answer(messages, t.accumulated_text)
-    usage = Presentation.build_usage(messages)
+  def handle_event(%__MODULE__{} = t, {:provider_retry, details}) when is_map(details) do
+    attempt = Map.get(details, :attempt, 1)
+    max_retries = Map.get(details, :max_retries, attempt)
+    seconds = Float.round(Map.get(details, :delay_ms, 0) / 1000, 1)
 
-    emit_completed_ok(t, answer, usage)
+    text =
+      "Provider request failed (#{Map.get(details, :category, :transient)}); " <>
+        "retrying in #{seconds}s (attempt #{attempt}/#{max_retries})"
+
+    id = t.retry_action_id || "provider_retry_#{System.unique_integer([:positive])}"
+
+    t =
+      emit_action_event(t, %{
+        id: id,
+        kind: :note,
+        title: text,
+        phase: if(t.retry_action_id, do: :updated, else: :started),
+        level: :warning,
+        detail: %{text: text, retry: details}
+      })
+
+    %{t | retry_action_id: id}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:provider_retry_end, details}) do
+    if t.retry_action_id do
+      t =
+        emit_action_event(t, %{
+          id: t.retry_action_id,
+          kind: :note,
+          title: "Provider retry finished",
+          phase: :completed,
+          detail: %{retry: details}
+        })
+
+      %{t | retry_action_id: nil}
+    else
+      t
+    end
+  end
+
+  def handle_event(%__MODULE__{} = t, {:compaction_start, info}) do
+    id = "compaction_#{System.unique_integer([:positive])}"
+
+    t =
+      emit_action_event(t, %{
+        id: id,
+        kind: :compaction,
+        title: "Compacting context",
+        phase: :started,
+        detail: %{compaction: Map.merge(info, %{id: id, status: "in_progress"})}
+      })
+
+    %{t | compaction_action_id: id}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:compaction_complete, info}) do
+    id = t.compaction_action_id || "compaction_#{System.unique_integer([:positive])}"
+
+    t =
+      emit_action_event(t, %{
+        id: id,
+        kind: :compaction,
+        title: "Context compacted",
+        phase: :completed,
+        detail: %{compaction: Map.merge(info, %{id: id, status: "completed"})}
+      })
+
+    %{t | compaction_action_id: nil}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:usage_budget_updated, usage}) do
+    %{t | budget_usage: usage}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:budget_exceeded, details}) do
+    %{t | budget_stop: details}
+  end
+
+  def handle_event(%__MODULE__{} = t, {:error, {:budget_exceeded, details}, partial_state}) do
+    t = %{t | budget_stop: details, budget_usage: Map.take(details, [:run_usage, :session_usage])}
+    emit_completed_error(t, details.message, partial_state)
+  end
+
+  def handle_event(%__MODULE__{} = t, {:agent_end, messages}) do
+    if t.cancel_reason do
+      emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason), %{
+        messages: messages
+      })
+    else
+      answer = Presentation.extract_answer(messages, t.accumulated_text)
+      usage = messages |> Presentation.build_usage() |> with_budget_usage(t) |> with_metrics(t)
+      emit_completed_ok(t, answer, usage)
+    end
+  end
+
+  def handle_event(%__MODULE__{} = t, {:canceled, reason}) do
+    t = mark_cancelled(t, reason)
+    emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason))
   end
 
   def handle_event(%__MODULE__{} = t, {:error, reason, partial_state}) do
-    error_msg = Presentation.format_error(reason, t)
+    error_msg =
+      if t.cancel_reason,
+        do: Presentation.cancel_error_message(t.cancel_reason),
+        else: Presentation.format_error(reason, t)
 
     Logger.error(
       "#{t.label} stream error " <>
@@ -221,25 +405,37 @@ defmodule CodingAgent.Session.RunTranslator do
   end
 
   def handle_event(%__MODULE__{} = t, {:turn_start}), do: t
-  def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: t
+
+  def handle_event(
+        %__MODULE__{} = t,
+        {:turn_end, %LemonAi.Types.AssistantMessage{stop_reason: :aborted}, _results}
+      ) do
+    t = mark_cancelled(%{t | turns: t.turns + 1}, :assistant_aborted)
+    emit_completed_error(t, Presentation.cancel_error_message(t.cancel_reason))
+  end
+
+  def handle_event(%__MODULE__{} = t, {:turn_end, _msg, _results}), do: %{t | turns: t.turns + 1}
   def handle_event(%__MODULE__{} = t, {:message_start, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:message_end, _msg}), do: t
   def handle_event(%__MODULE__{} = t, {:extension_status_report, _report}), do: t
-  def handle_event(%__MODULE__{} = t, {:compaction_complete, _info}), do: t
   def handle_event(%__MODULE__{} = t, {:branch_summarized, _info}), do: t
   def handle_event(%__MODULE__{} = t, _event), do: t
 
-  def handle_cancel(%__MODULE__{} = t, reason) do
-    if t.started_emitted and not t.completed_emitted do
-      emit_completed_error(t, Presentation.cancel_error_message(reason))
-    else
-      t
-    end
+  @doc "Marks cancellation intent without discarding queued terminal tool events."
+  def mark_cancelled(%__MODULE__{} = t, reason) do
+    if t.completed_emitted or t.cancel_reason,
+      do: t,
+      else: %{t | cancel_reason: reason || :user_requested}
   end
 
   def handle_session_down(%__MODULE__{} = t, reason) do
     if t.started_emitted and not t.completed_emitted do
-      emit_completed_error(t, "Session terminated: #{inspect(reason)}")
+      error =
+        if t.cancel_reason,
+          do: Presentation.cancel_error_message(t.cancel_reason),
+          else: "Session terminated: #{inspect(reason)}"
+
+      emit_completed_error(t, error)
     else
       t
     end
@@ -340,7 +536,12 @@ defmodule CodingAgent.Session.RunTranslator do
     if t.completed_emitted do
       t
     else
-      usage = Presentation.build_failure_usage(t.emitter_state, partial_state)
+      usage =
+        case t.budget_usage do
+          nil -> Presentation.build_failure_usage(t.emitter_state, partial_state)
+          _ -> with_budget_usage(%{}, t)
+        end
+        |> with_metrics(t)
 
       emitter_state =
         t.emitter.emit_completed(t.emitter_state, %{
@@ -349,12 +550,35 @@ defmodule CodingAgent.Session.RunTranslator do
           error: error_msg,
           answer: t.accumulated_text,
           resume: t.resume_token,
-          usage: usage
+          usage: usage,
+          meta:
+            Map.put(
+              if(t.budget_stop, do: %{budget: t.budget_stop}, else: %{}),
+              :cancelled,
+              not is_nil(t.cancel_reason)
+            )
         })
 
       %{t | emitter_state: emitter_state, completed_emitted: true}
     end
   end
+
+  defp with_budget_usage(usage, %{budget_usage: %{run_usage: run_usage}}) do
+    usage = usage || %{}
+    cost = Map.put(Map.get(usage, :cost) || %{}, :total, run_usage.cost_usd)
+
+    Map.merge(usage, %{
+      total_tokens: run_usage.tokens,
+      tokens: run_usage.tokens,
+      cost_usd: run_usage.cost_usd,
+      cost: cost
+    })
+  end
+
+  defp with_budget_usage(usage, _translator), do: usage
+
+  defp with_metrics(usage, t),
+    do: Map.merge(usage || %{}, %{turns: t.turns, tool_errors: t.tool_errors})
 
   defp emit_action_event(%__MODULE__{} = t, fields) do
     fields =

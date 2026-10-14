@@ -1,0 +1,390 @@
+name: CI
+
+# The gate for every pull request and every push to main, on GitHub-hosted
+# runners. Each job runs a `scripts/test` lane or repository script, so local
+# runs and CI execute the same commands.
+#
+#   changes      decides what a pull request can skip (pushes to main run all)
+#   check        scripts/test quality + scripts/test eval-fast (always)
+#   test (1..4)  scripts/test fast split with ExUnit --partitions 4
+#   dialyzer     full advisory run + allowlist gate (scripts/dialyzer_gate.sh)
+#   sim-bench    offline sim suites and byte-determinism gates
+#   install      scripts/verify_source_install + scripts/verify_install_script
+#   clients      scripts/test clients (TUI + lemon-browser-node)
+#   wasm-runtime cargo tests + WASM integration test
+#   history      pull requests only: reject unrelated Git history
+#   result       single required status; fails if any job failed or was cancelled
+#
+# Every push to main runs every job, so a green run on a main commit means the
+# commit was fully verified; release.yml relies on that (scripts/ci_verified_commit).
+#
+# Caches: one deps/_build entry per MIX_ENV family and commit, saved only by
+# pushes to main. Pull requests restore main's newest entry and compile
+# incrementally instead of filling the repository's cache quota.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# ExUnit fixture names and Lemon's Unicode path contracts need a UTF-8 locale.
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ github.event_name == 'push' || steps.code.outputs.code == 'true' }}
+      clients: ${{ github.event_name == 'push' || steps.paths.outputs.clients == 'true' }}
+      wasm: ${{ github.event_name == 'push' || steps.paths.outputs.wasm == 'true' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Anything but prose and the docs site can change BEAM behaviour. The TUI
+      # counts: control-plane wire tests execute the compiled client.
+      - name: Detect code changes
+        uses: dorny/paths-filter@v4
+        id: code
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!clients/lemon-browser-node/**'
+              - '!.github/workflows/docs-site.yml'
+
+      - name: Detect client and WASM changes
+        uses: dorny/paths-filter@v4
+        id: paths
+        with:
+          filters: |
+            clients:
+              - 'clients/**'
+              - 'scripts/test'
+              - '.github/workflows/ci.yml'
+            wasm:
+              - 'native/**'
+              - 'apps/coding_agent/lib/coding_agent/wasm/**'
+              - 'apps/coding_agent/test/coding_agent/wasm_integration_test.exs'
+              - '.github/workflows/ci.yml'
+
+  # Cheapest, broadest signal first: format, credo, docs and architecture
+  # checks also cover prose-only changes, so this job never skips.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        id: beam
+        uses: ./.github/actions/beam-setup
+        with:
+          family: test
+
+      - name: scripts/test quality
+        run: scripts/test quality
+
+      - name: scripts/test eval-fast
+        run: scripts/test eval-fast
+
+      - name: Save deps and _build
+        if: github.event_name == 'push' && steps.beam.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ steps.beam.outputs.cache-key }}
+
+  test:
+    name: test (${{ matrix.partition }}/4)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # Shards finish in ~4 minutes; a hung VM should fail fast, not hold the run.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        uses: ./.github/actions/beam-setup
+        with:
+          family: test
+          bun: "true"
+
+      - name: scripts/test fast (partition ${{ matrix.partition }}/4)
+        env:
+          MIX_TEST_PARTITION: ${{ matrix.partition }}
+        run: scripts/test fast --partitions 4
+
+  dialyzer:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        id: beam
+        uses: ./.github/actions/beam-setup
+        with:
+          family: dev
+
+      # PLTs live under _build/dialyzer (root mix.exs `dialyzer/0`); they only
+      # change with the dependency/toolchain surface, so key them on mix.lock.
+      - name: Restore Dialyzer PLTs
+        id: plt
+        uses: actions/cache/restore@v4
+        with:
+          path: _build/dialyzer
+          key: ${{ runner.os }}-plt-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-plt-otp28.5-elixir1.19.5-
+
+      - name: Compile
+        run: mix compile
+
+      - name: Build/refresh PLTs
+        run: mix dialyzer --plt
+
+      # The full umbrella keeps a documented backlog, so this run is advisory;
+      # the gate below is what blocks. `--format github`/`short` crash on
+      # OTP 28.5's `:exact_compare` tag, so use Erlang's own formatter.
+      - name: Run Dialyzer (full, advisory)
+        run: |
+          set -o pipefail
+          mix dialyzer --format dialyzer 2>&1 | tee dialyzer.out || true
+
+      - name: Green gate — allowlisted packages must stay Dialyzer-clean
+        run: scripts/dialyzer_gate.sh dialyzer.out
+
+      - name: Save Dialyzer PLTs
+        if: github.event_name == 'push' && steps.plt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: _build/dialyzer
+          key: ${{ runner.os }}-plt-otp28.5-elixir1.19.5-${{ hashFiles('mix.lock') }}
+
+      - name: Save deps and _build
+        if: github.event_name == 'push' && steps.beam.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ steps.beam.outputs.cache-key }}
+
+  sim-bench:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        uses: ./.github/actions/beam-setup
+        with:
+          family: dev
+
+      - name: Compile
+        run: mix compile --warnings-as-errors
+
+      - name: Run simulation bench lane
+        run: scripts/ci_sim_bench.sh
+
+      - name: Upload simulation bench artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-bench
+          path: |
+            ${{ runner.temp }}/sim-bench-ci/suites
+            ${{ runner.temp }}/sim-bench-ci/scores
+            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.md
+            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.json
+
+  # The supported source-checkout and installer flows. These used to run only
+  # in the release preflight, where stale checks surfaced at release time.
+  install:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        id: beam
+        uses: ./.github/actions/beam-setup
+        with:
+          family: install
+
+      - name: Verify supported source and installer flows
+        run: |
+          scripts/verify_source_install
+          scripts/verify_install_script
+
+      - name: Save deps and _build
+        if: github.event_name == 'push' && steps.beam.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ steps.beam.outputs.cache-key }}
+
+  clients:
+    needs: changes
+    if: needs.changes.outputs.clients == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: clients/lemon-browser-node/package-lock.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Cache Bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('clients/tui/bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: scripts/test clients
+        run: scripts/test clients
+
+  wasm-runtime:
+    needs: changes
+    if: needs.changes.outputs.wasm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: BEAM setup
+        uses: ./.github/actions/beam-setup
+        with:
+          family: test
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and native runtime target dir
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/lemon-wasm-runtime/target
+          key: ${{ runner.os }}-cargo-wasm-runtime-${{ hashFiles('native/lemon-wasm-runtime/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-runtime-
+
+      - name: Install WASM target
+        run: rustup target add wasm32-wasip2
+
+      - name: Run WASM runtime tests
+        run: cargo test --manifest-path native/lemon-wasm-runtime/Cargo.toml
+
+      # The coding_agent test_helper isolates HOME, so pin the rustup/cargo
+      # toolchain homes installed by dtolnay/rust-toolchain explicitly.
+      - name: Run WASM integration tests
+        run: |
+          RUSTUP_HOME="$HOME/.rustup" CARGO_HOME="$HOME/.cargo" \
+            scripts/test path apps/coding_agent/test/coding_agent/wasm_integration_test.exs --include integration
+
+  history:
+    if: github.event_name == 'pull_request'
+    name: Reject unrelated history
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout PR head with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+
+      - name: Require a common ancestor with base
+        run: |
+          if ! BASE=$(git merge-base "origin/${GITHUB_BASE_REF}" HEAD 2>/dev/null) || [ -z "$BASE" ]; then
+            echo "::error::This PR has no common ancestor with ${GITHUB_BASE_REF}."
+            echo "Merging it would graft an unrelated root into Lemon's main history."
+            echo "Recreate the branch from the current target branch, then"
+            echo "cherry-pick or re-apply the intended changes."
+            exit 1
+          fi
+
+          echo "::notice::Common ancestor with ${GITHUB_BASE_REF}: $BASE"
+
+  # One status to require. Skipped jobs (unchanged paths) are fine; failed or
+  # cancelled ones are not.
+  result:
+    name: CI result
+    if: always()
+    needs: [changes, check, test, dialyzer, sim-bench, install, clients, wasm-runtime, history]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every job to pass or skip
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::a CI job finished with: $result"; exit 1 ;;
+            esac
+          done

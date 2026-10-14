@@ -132,7 +132,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
     assert CronStore.get_run(first.id).run_id == "router_first_dispatcher"
   end
 
-  test "scheduled tick times out stale active runs before applying the active-run lock", %{
+  test "scheduled tick retains stale router ownership instead of retrying", %{
     job: job
   } do
     %CronJob{} = job
@@ -164,22 +164,16 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
 
     CronManager.tick()
 
-    assert_receive %Event{
-                     type: :cron_run_completed,
-                     payload: %{cron_run_id: cron_run_id, status: :timeout}
-                   },
-                   2_000
-
-    assert cron_run_id == stale_run.id
-
     assert await(fn ->
-             case CronStore.get_run(stale_run.id) do
-               %CronRun{status: :timeout, error: "Run exceeded timeout"} -> true
-               _ -> false
-             end
+             match?(
+               %CronRun{status: :running, meta: %{outcome_unknown: true}},
+               CronStore.get_run(stale_run.id)
+             )
            end)
 
-    assert CronStore.active_runs(due_job.id) == []
+    refute_receive %Event{type: :cron_run_completed}, 100
+    assert Enum.map(CronStore.active_runs(due_job.id), & &1.id) == [stale_run.id]
+    refute_receive {:cron_submit, _, _}, 100
   end
 
   test "manager restart reloads persisted active runs without duplicate scheduled submit", %{
@@ -220,7 +214,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
     assert Enum.map(CronStore.active_runs(job.id), & &1.id) == [existing_run.id]
   end
 
-  test "manager restart recovers stale active runs as timeouts", %{job: job} do
+  test "manager restart retains stale router runs until durable completion", %{job: job} do
     %CronJob{} = job
 
     stale_job = %{
@@ -253,22 +247,32 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
     Process.exit(old_pid, :kill)
     assert_receive {:DOWN, ^ref, :process, ^old_pid, :killed}, 2_000
 
-    assert_receive %Event{
-                     type: :cron_run_completed,
-                     payload: %{cron_run_id: cron_run_id, status: :timeout}
-                   },
-                   2_000
+    assert await(fn ->
+             match?(
+               %CronRun{status: :running, meta: %{outcome_unknown: true}},
+               CronStore.get_run(stale_run.id)
+             )
+           end)
 
-    assert cron_run_id == stale_run.id
+    refute_receive %Event{type: :cron_run_completed}, 100
+    assert Enum.map(CronStore.active_runs(stale_job.id), & &1.id) == [stale_run.id]
+
+    LemonCore.RunStore.finalize(stale_run.run_id, %{
+      completed: %{ok: true, answer: "durable coding result"},
+      session_key: job.session_key
+    })
+
+    CronManager.tick()
 
     assert await(fn ->
-             case CronStore.get_run(stale_run.id) do
-               %CronRun{status: :timeout, error: "Run exceeded timeout"} -> true
-               _ -> false
-             end
+             match?(
+               %CronRun{status: :completed, output: "durable coding result"},
+               CronStore.get_run(stale_run.id)
+             )
            end)
 
     assert CronStore.active_runs(stale_job.id) == []
+    LemonCore.Store.delete(:runs, stale_run.run_id)
   end
 
   defp replace_job_state(job) do
@@ -277,7 +281,7 @@ defmodule LemonAutomation.CronManagerSchedulerLockTest do
     end)
   end
 
-  defp await(fun, attempts \\ 100)
+  defp await(fun, attempts \\ 500)
 
   defp await(_fun, 0), do: false
 

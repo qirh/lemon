@@ -200,7 +200,6 @@ defmodule CodingAgent.SideQuery do
          ) do
       %AgentToolResult{} = result -> {:ok, Result.visible_output_text(result)}
       {:error, reason} -> {:error, reason}
-      other -> {:error, {:unexpected_result, other}}
     end
   end
 

@@ -1,8 +1,8 @@
 /**
- * Formatters for file listing tools (find, glob, ls).
+ * Formatters for file listing tools (find, ls).
  *
  * Handles formatting of file search and directory listing arguments and results,
- * including file counts, type indicators, and truncated listings.
+ * including file counts, truncation, and listings.
  */
 
 import { extractText, formatPath, truncateLines } from "./base.js";
@@ -12,23 +12,29 @@ import type { FormattedOutput, ToolFormatter } from "./types.js";
 const MAX_FILES_SHOWN = 10;
 
 /**
+ * Lines the find tool writes around its file list: the "Found N matches"
+ * header and the empty-result message.
+ */
+const FIND_TEXT_CHROME =
+	/^(Found \d+ match(es)? \(limited to \d+\):|Found \d+ match(es)?:|No files found matching the pattern\.)$/;
+
+/**
+ * Lines the ls tool writes around its entry list: the "Directory:" header and
+ * the count/empty/truncation footer.
+ */
+const LS_TEXT_CHROME =
+	/^(Directory: .*|\d+ entries|\(empty directory\)|\[Showing \d+ of \d+ entries\. Limit: \d+\])$/;
+
+/**
  * Arguments structure for find tool.
  */
 interface FindArgs {
-	pattern: string;
+	pattern?: string;
 	path?: string;
-	type?: "f" | "d";
+	type?: string;
 	max_depth?: number;
 	max_results?: number;
-}
-
-/**
- * Arguments structure for glob tool.
- */
-interface GlobArgs {
-	pattern: string;
-	path?: string;
-	max_results?: number;
+	hidden?: boolean;
 }
 
 /**
@@ -44,26 +50,30 @@ interface LsArgs {
 }
 
 /**
- * Gets a file type indicator based on path.
+ * Reads the structured details object from a tool result.
  *
- * @param path - The file path to analyze
- * @returns Type indicator character or empty string
+ * @param result - The raw result from the tool
+ * @returns The details object, or an empty object
  */
-function getFileTypeIndicator(path: string): string {
-	// Directory if ends with /
-	if (path.endsWith("/")) {
-		return "/";
+function resultDetails(result: unknown): Record<string, unknown> {
+	if (result && typeof result === "object") {
+		const details = (result as { details?: unknown }).details;
+		if (details && typeof details === "object") {
+			return details as Record<string, unknown>;
+		}
 	}
-	return "";
+	return {};
 }
 
 /**
- * Parses file list from tool result.
+ * Parses listing lines from the result text, dropping the tool's header and
+ * footer lines.
  *
  * @param result - The raw result from the tool
- * @returns Array of file paths
+ * @param chrome - Pattern matching header/footer lines to drop
+ * @returns Array of listed entries
  */
-function parseFileList(result: unknown): string[] {
+function parseListing(result: unknown, chrome: RegExp): string[] {
 	const text = extractText(result);
 	if (!text) {
 		return [];
@@ -72,20 +82,7 @@ function parseFileList(result: unknown): string[] {
 	return text
 		.split(/\r?\n/)
 		.map((line) => line.trim())
-		.filter((line) => line.length > 0);
-}
-
-/**
- * Formats a file entry for display.
- *
- * @param filePath - The file path to format
- * @returns Formatted file entry with type indicator
- */
-function formatFileEntry(filePath: string): string {
-	const indicator = getFileTypeIndicator(filePath);
-	// Remove trailing slash for display if it's a directory
-	const displayPath = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
-	return displayPath + indicator;
+		.filter((line) => line.length > 0 && !chrome.test(line));
 }
 
 /**
@@ -124,21 +121,16 @@ export const findFormatter: ToolFormatter = {
 		const path = findArgs.path;
 
 		// Build summary
-		let summary = pattern;
-		if (path) {
-			summary = `${pattern} in ${formatPath(path)}`;
-		}
+		const summary = path ? `${pattern} in ${formatPath(path)}` : pattern;
 
 		// Build details
-		const details: string[] = [];
-		details.push(`pattern: ${pattern}`);
+		const details: string[] = [`pattern: ${pattern}`];
 
 		if (path) {
 			details.push(`path: ${formatPath(path)}`);
 		}
 		if (findArgs.type) {
-			const typeLabel = findArgs.type === "f" ? "files" : "directories";
-			details.push(`type: ${typeLabel}`);
+			details.push(`type: ${findArgs.type}`);
 		}
 		if (findArgs.max_depth !== undefined) {
 			details.push(`max_depth: ${findArgs.max_depth}`);
@@ -146,63 +138,8 @@ export const findFormatter: ToolFormatter = {
 		if (findArgs.max_results !== undefined) {
 			details.push(`max_results: ${findArgs.max_results}`);
 		}
-
-		return {
-			summary,
-			details,
-		};
-	},
-
-	formatResult(result: unknown, _args?: Record<string, unknown>): FormattedOutput {
-		const files = parseFileList(result);
-		const count = files.length;
-
-		// Build summary
-		const summary = count === 0 ? "No matches" : `${count} file${count === 1 ? "" : "s"} found`;
-
-		// Build details with file list
-		const details: string[] = [];
-		if (count > 0) {
-			const formattedFiles = files.map(formatFileEntry);
-			const truncatedFiles = truncateLines(formattedFiles, MAX_FILES_SHOWN);
-			details.push(...truncatedFiles);
-		}
-
-		return {
-			summary,
-			details,
-		};
-	},
-};
-
-/**
- * Formatter for glob tool.
- *
- * Handles formatting of glob pattern matching arguments and results.
- */
-export const globFormatter: ToolFormatter = {
-	tools: ["glob"],
-
-	formatArgs(args: Record<string, unknown>): FormattedOutput {
-		const globArgs = args as unknown as GlobArgs;
-		const pattern = globArgs.pattern || "*";
-		const path = globArgs.path;
-
-		// Build summary
-		let summary = pattern;
-		if (path) {
-			summary = `${pattern} in ${formatPath(path)}`;
-		}
-
-		// Build details
-		const details: string[] = [];
-		details.push(`pattern: ${pattern}`);
-
-		if (path) {
-			details.push(`path: ${formatPath(path)}`);
-		}
-		if (globArgs.max_results !== undefined) {
-			details.push(`max_results: ${globArgs.max_results}`);
+		if (findArgs.hidden) {
+			details.push("hidden: true");
 		}
 
 		return {
@@ -212,23 +149,29 @@ export const globFormatter: ToolFormatter = {
 	},
 
 	formatResult(result: unknown, _args?: Record<string, unknown>): FormattedOutput {
-		const files = parseFileList(result);
-		const count = files.length;
+		const details = resultDetails(result);
+
+		const files =
+			Array.isArray(details.files) && details.files.every((file) => typeof file === "string")
+				? (details.files as string[])
+				: parseListing(result, FIND_TEXT_CHROME);
+		const count = typeof details.count === "number" ? details.count : files.length;
+		const truncated = details.truncated === true;
 
 		// Build summary
-		const summary = count === 0 ? "No matches" : `${count} file${count === 1 ? "" : "s"} found`;
-
-		// Build details with file list
-		const details: string[] = [];
-		if (count > 0) {
-			const formattedFiles = files.map(formatFileEntry);
-			const truncatedFiles = truncateLines(formattedFiles, MAX_FILES_SHOWN);
-			details.push(...truncatedFiles);
+		let summary: string;
+		if (count === 0) {
+			summary = "No matches";
+		} else {
+			summary = `${count} file${count === 1 ? "" : "s"} found`;
+			if (truncated) {
+				summary += " (limited)";
+			}
 		}
 
 		return {
 			summary,
-			details,
+			details: count > 0 ? truncateLines(files, MAX_FILES_SHOWN) : [],
 		};
 	},
 };
@@ -251,8 +194,7 @@ export const lsFormatter: ToolFormatter = {
 		const summary = flags ? `${formattedPath} ${flags}` : formattedPath;
 
 		// Build details
-		const details: string[] = [];
-		details.push(`path: ${formattedPath}`);
+		const details: string[] = [`path: ${formattedPath}`];
 
 		if (flags) {
 			details.push(`flags: ${flags}`);
@@ -271,29 +213,26 @@ export const lsFormatter: ToolFormatter = {
 	},
 
 	formatResult(result: unknown, args?: Record<string, unknown>): FormattedOutput {
-		const lsArgs = args as unknown as LsArgs | undefined;
-		const path = lsArgs?.path || ".";
-		const formattedPath = formatPath(path);
+		const lsArgs = (args ?? {}) as unknown as LsArgs;
+		const formattedPath = formatPath(lsArgs.path || ".");
+		const details = resultDetails(result);
 
-		const entries = parseFileList(result);
-		const count = entries.length;
+		const entries = parseListing(result, LS_TEXT_CHROME);
+		const shown =
+			typeof details.shown_entries === "number" ? details.shown_entries : entries.length;
+		const total = typeof details.total_entries === "number" ? details.total_entries : shown;
 
 		// Build summary
-		const summary = `${formattedPath} (${count} entr${count === 1 ? "y" : "ies"})`;
-
-		// Build details with entry list
-		const details: string[] = [];
-		if (count > 0) {
-			const formattedEntries = entries.map(formatFileEntry);
-			const truncatedEntries = truncateLines(formattedEntries, MAX_FILES_SHOWN);
-			details.push(...truncatedEntries);
-		}
+		const countLabel =
+			details.truncated === true && total > shown
+				? `${shown} of ${total} entries`
+				: `${shown} entr${shown === 1 ? "y" : "ies"}`;
 
 		return {
-			summary,
-			details,
+			summary: `${formattedPath} (${countLabel})`,
+			details: truncateLines(entries, MAX_FILES_SHOWN),
 		};
 	},
 };
 
-export default [findFormatter, globFormatter, lsFormatter];
+export default [findFormatter, lsFormatter];

@@ -84,7 +84,7 @@ export interface SessionSource {
  * best-effort: a daemon that cannot answer one still produces a usable list from
  * the others, which is what keeps the switcher openable while reconnecting.
  */
-export async function collectSessions(source: SessionSource): Promise<SessionRow[]> {
+export async function collectSessions(source: SessionSource, query = ""): Promise<SessionRow[]> {
 	const rows = new Map<string, SessionRow>();
 	const add = (summary: SessionSummary, active: boolean) => {
 		const key = pickString(summary, "sessionKey", "session_key", "key");
@@ -106,18 +106,22 @@ export async function collectSessions(source: SessionSource): Promise<SessionRow
 		});
 	};
 
-	if (source.methods.supports(METHOD.sessionsActiveList)) {
+	if (!query && source.methods.supports(METHOD.sessionsActiveList)) {
 		const result = await source.methods.sessionsActiveList().catch(() => undefined);
 		for (const entry of asArray(result?.sessions)) add(entry as SessionSummary, true);
 	}
 	if (source.methods.supports(METHOD.sessionsList)) {
-		const result = await source.methods
-			.sessionsList({ limit: SESSION_LIST_LIMIT })
-			.catch(() => undefined);
+		const request = source.methods.sessionsList({
+			limit: SESSION_LIST_LIMIT,
+			...(query ? { query } : {}),
+		});
+		// An explicit search failure is not an empty result; the picker reports it.
+		const result = query ? await request : await request.catch(() => undefined);
 		for (const entry of asArray(result?.sessions)) add(entry as SessionSummary, false);
 	}
 	for (const session of source.store.sessions.values()) {
 		const existing = rows.get(session.key);
+		if (query && !existing && !session.key.toLowerCase().includes(query.toLowerCase())) continue;
 		rows.set(session.key, {
 			key: session.key,
 			agentId: existing?.agentId,
@@ -129,7 +133,7 @@ export async function collectSessions(source: SessionSource): Promise<SessionRow
 			local: true,
 			unread: session.unread,
 			model: session.model ?? existing?.model,
-			title: existing?.title,
+			title: existing?.title ?? session.title,
 			pinned: existing?.pinned ?? false,
 			archived: existing?.archived ?? false,
 			origin: existing?.origin,
@@ -512,6 +516,7 @@ async function resumeSession(ctx: CommandContext, argv: string[]): Promise<void>
 	}
 	const result = await ctx.methods.chatHistory({
 		sessionKey: key,
+		cwd: ctx.cwd,
 		limit,
 		includeFullText: true,
 	});
@@ -542,14 +547,43 @@ async function titleSession(ctx: CommandContext, argv: string[]): Promise<void> 
 		ctx.ui.notice("do not combine title text with --clear", "error");
 		return;
 	}
+	if (
+		key === ctx.session.key &&
+		key.startsWith("agent:default:tui:local:dm:") &&
+		!ctx.session.busy &&
+		ctx.session.blocks.every((block) => block.kind === "notice")
+	) {
+		if (!requireSessionMethod(ctx, METHOD.sessionsCreate)) return;
+		const created = await ctx.methods.sessionsCreate({
+			sessionKey: key,
+			cwd: ctx.cwd ?? process.cwd(),
+		});
+		if (created.sessionKey !== key || !created.sessionId) {
+			throw new Error("session creation was not verified");
+		}
+	}
 	const result = await ctx.methods.sessionsMetadataPatch({
 		sessionKey: key,
 		title: clear ? null : title,
 	});
+	if (!result.success) throw new Error("metadata patch was not verified");
+	ctx.store.session(key).title = clear ? undefined : title;
+	ctx.ui.refreshStatus();
 	ctx.ui.notice(
 		`title ${clear ? "cleared" : "updated"} for ${key} (${result.metadata.titleBytes} bytes)`,
 	);
 }
+
+export const nameCommand: SlashCommand = {
+	name: "name",
+	summary: "name the current session for later search and resume",
+	usage: "<title…> | --clear",
+	group: "sessions",
+	methods: [METHOD.sessionsMetadataPatch],
+	async run(ctx, argv) {
+		await titleSession(ctx, [ctx.session.key, ...argv]);
+	},
+};
 
 async function patchSessionFlag(ctx: CommandContext, action: string, key: string): Promise<void> {
 	if (!requireSessionMethod(ctx, METHOD.sessionsMetadataPatch)) return;
@@ -959,6 +993,7 @@ export const resumeCommand: SlashCommand = {
 		}
 		const result = await ctx.methods.chatHistory({
 			sessionKey: key,
+			cwd: ctx.cwd,
 			limit,
 			includeFullText: true,
 		});
@@ -984,6 +1019,7 @@ export const historyCommand: SlashCommand = {
 			Number.isFinite(requested) && requested > 0 ? Math.min(requested, 200) : HISTORY_DEFAULT;
 		const result = await ctx.methods.chatHistory({
 			sessionKey: ctx.session.key,
+			cwd: ctx.cwd,
 			limit,
 			includeFullText: false,
 		});

@@ -6,6 +6,11 @@ defmodule CodingAgent.ContextGuardrails do
   - Cap tool outputs / images / tool-call args deterministically (cache-friendly)
   - Optionally spill large blobs to disk and replace with stable references
   - Drop or clamp thinking blocks
+
+  `max_tool_result_images` (default 3) is a budget for the whole context: the
+  most recent N images across all tool results are sent as images, and older
+  ones are replaced by spill placeholders. Screenshots and image reads reach
+  the model without every historical image riding along on each request.
   """
 
   require Logger
@@ -27,7 +32,7 @@ defmodule CodingAgent.ContextGuardrails do
     enabled: true,
     mode: :trim,
     max_tool_result_bytes: 60_000,
-    max_tool_result_images: 0,
+    max_tool_result_images: 3,
     max_thinking_bytes: 0,
     max_tool_call_arg_string_bytes: 12_000,
     spill_dir: nil
@@ -47,9 +52,14 @@ defmodule CodingAgent.ContextGuardrails do
     opts = normalize_opts(opts)
 
     if opts.enabled do
+      budgets = image_budgets(messages, opts.max_tool_result_images)
+
       transformed =
         messages
-        |> Enum.map(&guard_message(&1, opts))
+        |> Enum.with_index()
+        |> Enum.map(fn {message, index} ->
+          guard_message(message, Map.put(opts, :image_budget, Map.get(budgets, index, 0)))
+        end)
 
       {:ok, transformed}
     else
@@ -62,6 +72,27 @@ defmodule CodingAgent.ContextGuardrails do
 
   defp normalize_opts(opts) when is_map(opts),
     do: Map.merge(@default_opts, opts)
+
+  # Assign the image budget newest-first: message index => images it may keep.
+  defp image_budgets(messages, max_images) when is_integer(max_images) and max_images > 0 do
+    {budgets, _left} =
+      messages
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.reduce({%{}, max_images}, fn
+        {%ToolResultMessage{content: content}, index}, {acc, left}
+        when is_list(content) and left > 0 ->
+          keep = min(Enum.count(content, &match?(%ImageContent{}, &1)), left)
+          {Map.put(acc, index, keep), left - keep}
+
+        _message, acc ->
+          acc
+      end)
+
+    budgets
+  end
+
+  defp image_budgets(_messages, _max_images), do: %{}
 
   # ----------------------------------------------------------------------------
   # Message guards
@@ -96,16 +127,31 @@ defmodule CodingAgent.ContextGuardrails do
   defp guard_thinking_block(%ThinkingContent{thinking: thinking} = block, opts) do
     maxb = opts.max_thinking_bytes
 
-    if byte_size(thinking) <= maxb do
-      [block]
-    else
-      {tr, meta} =
-        truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
+    cond do
+      byte_size(thinking) <= maxb ->
+        [block]
 
-      Logger.warning("Thinking block truncated: #{inspect(meta)}")
-      [%{block | thinking: tr}]
+      # A provider signature covers the exact thinking text (Anthropic rejects
+      # a modified signed block), so an oversized signed block is dropped whole
+      # rather than replayed truncated under a signature that no longer matches.
+      signed?(block) ->
+        Logger.warning(
+          "Signed thinking block dropped: #{byte_size(thinking)} bytes exceeds #{maxb}"
+        )
+
+        []
+
+      true ->
+        {tr, meta} =
+          truncate_with_meta(thinking, maxb, spill_label: "assistant_thinking", opts: opts)
+
+        Logger.warning("Thinking block truncated: #{inspect(meta)}")
+        [%{block | thinking: tr}]
     end
   end
+
+  defp signed?(%ThinkingContent{thinking_signature: signature}),
+    do: is_binary(signature) and signature != ""
 
   defp guard_tool_call_args(args, opts) when is_map(args) do
     maxb = opts.max_tool_call_arg_string_bytes
@@ -132,6 +178,7 @@ defmodule CodingAgent.ContextGuardrails do
         "bytes" => meta.original_bytes,
         "sha256" => meta.sha256,
         "spill_path" => meta.spill_path,
+        "artifact_uri" => meta.artifact_uri,
         "head_tail_excerpt" => tr
       }
     end
@@ -186,7 +233,7 @@ defmodule CodingAgent.ContextGuardrails do
         else
           truncate_with_meta(text, opts.max_tool_result_bytes,
             spill_label: "tool_result:#{tool_name(msg)}",
-            opts: opts
+            opts: Map.put(opts, :existing_artifact, existing_artifact(msg, opts))
           )
         end
       end
@@ -196,13 +243,15 @@ defmodule CodingAgent.ContextGuardrails do
         # Important: deterministic header (no timestamps).
         sha = if(meta, do: meta.sha256, else: sha256_hex(text))
         spill_path = if(meta, do: meta.spill_path, else: nil)
+        artifact_uri = if(meta, do: meta.artifact_uri, else: nil)
 
         [
           "[tool_result truncated]",
           "tool=#{tool_name(msg)}",
           "original_bytes=#{byte_size(text)}",
-          "sha256=#{sha}",
-          if(spill_path, do: "spill_path=#{spill_path}", else: nil)
+          if(meta && meta.existing_artifact, do: "preview_sha256=#{sha}", else: "sha256=#{sha}"),
+          if(artifact_uri, do: "artifact_uri=#{artifact_uri}", else: nil),
+          if(spill_path && is_nil(artifact_uri), do: "spill_path=#{spill_path}", else: nil)
         ]
         |> Enum.reject(&is_nil/1)
         |> Enum.join(" ")
@@ -239,12 +288,11 @@ defmodule CodingAgent.ContextGuardrails do
   end
 
   defp spill_or_keep_images(images, opts, tname) do
-    # Keep at most N images as actual ImageContent; spill the rest to text placeholders.
-    max_images = opts[:max_tool_result_images] || 0
+    # Keep this message's share of the context image budget (its newest
+    # images); spill the rest to text placeholders.
+    keep_count = opts[:image_budget] || 0
 
-    {keep, spill} = Enum.split(images, max_images)
-
-    kept_images = keep
+    {spill, kept_images} = Enum.split(images, max(length(images) - keep_count, 0))
 
     placeholders =
       spill
@@ -256,13 +304,17 @@ defmodule CodingAgent.ContextGuardrails do
               ext = mime_to_ext(mime)
               path = stable_spill_path(opts[:spill_dir], "tool_image", sha, ext)
 
-              _ = maybe_write_spill(path, raw_bytes)
+              {path, artifact_uri} = spill_reference(path, raw_bytes, opts)
 
               %TextContent{
                 type: :text,
                 text:
                   "[tool_result image spilled] tool=#{tname} mime=#{mime} sha256=#{sha}" <>
-                    if(path, do: " spill_path=#{path}", else: "")
+                    cond do
+                      artifact_uri -> " artifact_uri=#{artifact_uri}"
+                      path -> " spill_path=#{path}"
+                      true -> " (full image unavailable)"
+                    end
               }
 
             :error ->
@@ -287,9 +339,11 @@ defmodule CodingAgent.ContextGuardrails do
 
   defp truncate_with_meta(text, max_bytes, spill_label: label, opts: opts) do
     sha = sha256_hex(text)
-    path = stable_spill_path(opts[:spill_dir], label, sha, "txt")
+    existing = opts[:existing_artifact]
 
-    _ = maybe_write_spill(path, text)
+    {path, artifact_uri} =
+      existing ||
+        spill_reference(stable_spill_path(opts[:spill_dir], label, sha, "txt"), text, opts)
 
     truncated =
       LemonAi.Text.truncate_middle_utf8(text, max_bytes,
@@ -301,11 +355,23 @@ defmodule CodingAgent.ContextGuardrails do
       truncated_bytes: byte_size(truncated),
       sha256: sha,
       spill_path: path,
+      artifact_uri: artifact_uri,
+      existing_artifact: not is_nil(existing),
       label: label
     }
 
     {truncated, meta}
   end
+
+  defp existing_artifact(%ToolResultMessage{details: %{artifact_uri: uri}}, opts)
+       when is_binary(uri) do
+    case CodingAgent.Artifacts.resolve_in_dir(uri, opts[:spill_dir]) do
+      {:ok, path} -> {path, uri}
+      {:error, _} -> nil
+    end
+  end
+
+  defp existing_artifact(_message, _opts), do: nil
 
   defp stable_spill_path(nil, _label, _sha, _ext), do: nil
 
@@ -326,25 +392,29 @@ defmodule CodingAgent.ContextGuardrails do
     end
   end
 
-  defp maybe_write_spill(nil, _data), do: :ok
+  defp spill_reference(path, data, opts) do
+    case maybe_write_spill(path, data) do
+      :ok ->
+        case CodingAgent.Artifacts.register_in_dir(path, opts[:spill_dir]) do
+          {:ok, uri} -> {path, uri}
+          {:error, _} -> {path, nil}
+        end
+
+      {:error, _} ->
+        {nil, nil}
+    end
+  end
+
+  defp maybe_write_spill(nil, _data), do: {:error, :disabled}
 
   defp maybe_write_spill(path, data) when is_binary(path) do
-    try do
-      File.mkdir_p!(Path.dirname(path))
-
+    with :ok <- File.mkdir_p(Path.dirname(path)) do
       case File.stat(path) do
-        {:ok, _} ->
-          :ok
-
-        {:error, :enoent} ->
-          File.write!(path, data)
-          :ok
-
-        {:error, _} ->
-          :ok
+        {:ok, %File.Stat{type: :regular}} -> :ok
+        {:ok, _} -> {:error, :not_a_regular_file}
+        {:error, :enoent} -> File.write(path, data)
+        {:error, reason} -> {:error, reason}
       end
-    rescue
-      _ -> :ok
     end
   end
 

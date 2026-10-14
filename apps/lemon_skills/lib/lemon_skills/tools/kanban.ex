@@ -2,16 +2,23 @@ defmodule LemonSkills.Tools.Kanban do
   @moduledoc """
   Durable kanban board tool backed by LemonAgent.Workspace.KanbanStore.
 
-  Wired into CodingAgent.ToolRegistry's builtin tool list and the
-  CodingAgent.Tools factories. No external service or credentials are
+  Wired into CodingAgent.ToolRegistry's builtin tool list. No external service or credentials are
   required; boards and tasks persist in the workspace KanbanStore.
+
+  `board_create` optionally accepts `coding_workflow`: an explicit opt-in map
+  for isolated coding, review of the exact diff, and a local branch commit before
+  completion. Omission or `false` preserves coding-only behavior. Publishing is
+  disabled unless an explicit `publish` map selects `branch` or `pull_request`.
+  Workflow settings are validated by the optional automation service and stored
+  unchanged as JSON-safe string-key settings under board metadata `codingWorkflow`;
+  arbitrary metadata, force-push, and command options are not accepted.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias LemonAgent.Workspace.KanbanStore
 
-  @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment)
+  @actions ~w(board_list board_create board_get task_list task_get task_create task_update task_comment dispatch_start dispatch_stop dispatch_status)
 
   @doc """
   Returns the `LemonAgent.Types.AgentTool.t()` definition for the `"kanban"`
@@ -29,7 +36,7 @@ defmodule LemonSkills.Tools.Kanban do
     %AgentTool{
       name: "kanban",
       description:
-        "Manage durable Lemon kanban boards and tasks for multi-agent work. Use this for work that should persist beyond the current session.",
+        "Manage durable Lemon kanban boards and coding tasks. Create a board in a repository, add tasks, then dispatch_start to execute them in isolated worktrees. Inspect task_get for progress/results; dispatch_stop cancels workers. Move a failed task back to the first column to explicitly retry.",
       label: "Kanban",
       parameters: %{
         "type" => "object",
@@ -57,6 +64,22 @@ defmodule LemonSkills.Tools.Kanban do
           "owner" => %{"type" => "string", "description" => "Board owner or owner filter."},
           "workspace" => %{"type" => "string", "description" => "Board workspace path."},
           "author" => %{"type" => "string", "description" => "Comment author."},
+          "coding_workflow" => coding_workflow_schema(),
+          "deliver_to" => %{
+            "type" => "string",
+            "description" =>
+              "Supervision for board_create: auto (origin channel or owner), none, telegram:chat[:thread], or discord:channel[:thread]."
+          },
+          "max_concurrency" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "maximum" => 8,
+            "description" => "Parallel coding workers for dispatch_start (default 1)."
+          },
+          "model" => %{
+            "type" => "string",
+            "description" => "Optional provider:model for workers."
+          },
           "columns" => %{
             "type" => "array",
             "description" => "Board columns for board_create.",
@@ -91,7 +114,7 @@ defmodule LemonSkills.Tools.Kanban do
   `board_create`, `board_get`, `task_list`, `task_get`, `task_create`,
   `task_update`, or `task_comment`. Per action: `board_list` reads `"status"`,
   `"owner"`, `"workspace"`, `"limit"`; `board_create` requires `"name"` and
-  reads `"workspace"`, `"owner"`, `"columns"`; `board_get` requires
+  reads `"workspace"`, `"owner"`, `"columns"`, `"coding_workflow"`; `board_get` requires
   `"board_id"` and reads `"include_tasks"` (defaults to `true`) and `"limit"`
   (defaults to `100`); `task_list` requires `"board_id"` and reads `"status"`,
   `"assignee"`, `"limit"`; `task_get` requires `"task_id"`; `task_create`
@@ -100,6 +123,14 @@ defmodule LemonSkills.Tools.Kanban do
   `"depends_on"`; `task_update` requires `"task_id"` and reads the same
   optional fields; `task_comment` requires `"task_id"` and `"body"` and reads
   `"author"`.
+
+  `dispatch_start`, `dispatch_stop`, and `dispatch_status` require `"board_id"`
+  and operate on the long-running automation dispatcher. Start accepts
+  `"max_concurrency"` (1–8) and an optional worker `"model"`. No scheduler is
+  started by this tool when the automation runtime is unavailable.
+  Supplied `"coding_workflow"` settings also require the automation service and
+  are validated before board creation. Only explicit caller settings are stored;
+  publishing settings are never inferred from the repository or coding output.
 
   On success returns a `%LemonAgent.Types.AgentToolResult{}` whose `content`
   is the pretty-printed JSON encoding of the details and whose `details` map
@@ -120,9 +151,99 @@ defmodule LemonSkills.Tools.Kanban do
       "task_create" -> task_create(params)
       "task_update" -> task_update(params)
       "task_comment" -> task_comment(params, opts)
+      "dispatch_start" -> dispatch(:start_board, params)
+      "dispatch_stop" -> dispatch(:stop_board, params)
+      "dispatch_status" -> dispatch(:status, params)
       nil -> {:error, "missing required parameter: action"}
       action -> {:error, "unsupported kanban action: #{inspect(action)}"}
     end
+  end
+
+  defp coding_workflow_schema do
+    %{
+      "description" =>
+        "board_create only. Explicit opt-in to isolated coding, exact-diff review, and a local branch commit before done. Omit or set false for coding-only behavior. Never publishes unless publish explicitly selects a mode.",
+      "anyOf" => [
+        %{"type" => "boolean", "enum" => [false]},
+        %{
+          "type" => "object",
+          "additionalProperties" => false,
+          "properties" => %{
+            "reviewModel" => %{
+              "type" => "string",
+              "minLength" => 1,
+              "description" => "Optional nonempty reviewer model (provider:model)."
+            },
+            "publish" => %{
+              "description" =>
+                "Omit or set false to keep commits local with no network publishing. Supply a mode only when publishing is explicitly authorized.",
+              "anyOf" => [
+                %{"type" => "boolean", "enum" => [false]},
+                %{
+                  "type" => "object",
+                  "additionalProperties" => false,
+                  "properties" => %{
+                    "mode" => %{
+                      "type" => "string",
+                      "enum" => ["branch", "pull_request"],
+                      "description" =>
+                        "branch pushes the task branch; pull_request also opens a PR and records its link."
+                    },
+                    "remote" => %{
+                      "type" => "string",
+                      "minLength" => 1,
+                      "description" => "Explicit Git remote name, such as origin."
+                    },
+                    "repository" => %{
+                      "type" => "string",
+                      "minLength" => 1,
+                      "description" => "Required for pull_request: repository as owner/repo."
+                    },
+                    "base" => %{
+                      "type" => "string",
+                      "minLength" => 1,
+                      "description" => "Required for pull_request: target branch, such as main."
+                    },
+                    "draft" => %{
+                      "type" => "boolean",
+                      "default" => true,
+                      "description" => "Create pull requests as drafts by default."
+                    }
+                  },
+                  "required" => ["mode", "remote"]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  end
+
+  defp dispatch(operation, params) do
+    module = :"Elixir.LemonAutomation.KanbanDispatcher"
+    concurrency = Map.get(params, "max_concurrency", 1)
+
+    with {:ok, board_id} <- required_string(params, "board_id"),
+         true <- is_integer(concurrency) and concurrency in 1..8,
+         true <- Code.ensure_loaded?(module) and function_exported?(module, operation, 2) do
+      opts =
+        if operation == :start_board do
+          [max_concurrency: concurrency, worker_opts: put_opt([], :model, params["model"])]
+        else
+          []
+        end
+
+      case apply(module, operation, [board_id, opts]) do
+        {:ok, dispatch} -> result("kanban dispatch #{board_id}", %{dispatch: dispatch})
+        {:error, reason} -> {:error, format_error(reason)}
+      end
+    else
+      false -> {:error, "kanban dispatcher unavailable or max_concurrency must be 1..8"}
+      {:error, reason} -> {:error, reason}
+    end
+  catch
+    :exit, _ -> {:error, "kanban dispatcher unavailable"}
   end
 
   defp board_list(params) do
@@ -136,19 +257,72 @@ defmodule LemonSkills.Tools.Kanban do
     result("kanban boards", %{boards: KanbanStore.list_boards(opts)})
   end
 
+  defp validate_delivery(nil), do: {:ok, nil}
+
+  defp validate_delivery(value) do
+    module = :"Elixir.LemonAutomation.CronDelivery"
+
+    if Code.ensure_loaded?(module),
+      do: apply(module, :validate, [value]),
+      else: {:error, "kanban supervision unavailable"}
+  end
+
   defp board_create(params, cwd, opts) do
-    with {:ok, name} <- required_string(params, "name") do
+    with {:ok, name} <- required_string(params, "name"),
+         {:ok, meta} <- coding_workflow_meta(params),
+         {:ok, delivery} <- validate_delivery(params["deliver_to"]) do
+      meta =
+        Map.merge(meta || %{}, %{
+          "deliverTo" => delivery,
+          "notificationSessionKey" => Keyword.get(opts, :session_key)
+        })
+        |> Map.reject(fn {_key, value} -> is_nil(value) end)
+
       create_opts =
         []
         |> put_opt(:workspace, params["workspace"] || Keyword.get(opts, :kanban_workspace) || cwd)
         |> put_opt(:owner, params["owner"] || Keyword.get(opts, :agent_id))
         |> put_opt(:columns, params["columns"])
+        |> put_opt(:meta, meta)
 
       case KanbanStore.create_board(name, create_opts) do
         {:ok, board} -> result("created kanban board #{board.id}", %{board: board})
         {:error, reason} -> {:error, format_error(reason)}
       end
     end
+  end
+
+  defp coding_workflow_meta(params) do
+    case Map.fetch(params, "coding_workflow") do
+      :error ->
+        {:ok, nil}
+
+      {:ok, settings} ->
+        module = :"Elixir.LemonAutomation.KanbanGitWorkflow"
+
+        cond do
+          not (Code.ensure_loaded?(module) and function_exported?(module, :normalize, 1)) ->
+            {:error, "kanban coding workflow unavailable"}
+
+          not (is_map(settings) or settings == false) ->
+            {:error, "coding_workflow must be an object or false"}
+
+          is_map(settings) and not string_key_settings?(settings) ->
+            {:error, "coding_workflow settings must use string keys"}
+
+          true ->
+            case apply(module, :normalize, [settings]) do
+              {:ok, _runtime_config} -> {:ok, %{"codingWorkflow" => settings}}
+              {:error, reason} -> {:error, format_error(reason)}
+            end
+        end
+    end
+  end
+
+  defp string_key_settings?(settings) do
+    Enum.all?(settings, fn {key, value} ->
+      is_binary(key) and (not is_map(value) or string_key_settings?(value))
+    end)
   end
 
   defp board_get(params) do

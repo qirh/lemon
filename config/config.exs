@@ -18,7 +18,12 @@ config :phoenix, :filter_parameters, [
   "credential_ref",
   "credentialRef",
   "hosted_werewolf_",
-  "params"
+  "params",
+  # Private conversation and automation content typed into Lemon Web forms.
+  "prompt",
+  "objective",
+  "message",
+  "guidance"
 ]
 
 config :logger, :default_formatter,
@@ -42,10 +47,6 @@ config :coding_agent, :lane_caps,
 
 config :coding_agent, :async_followups, default_queue_mode: :steer_backlog
 
-# The gateway writes channel-bound files into the agent's workspace, but must
-# not depend on the agent product; the reference runtime forwards the value.
-config :lemon_gateway, :workspace_dir, {CodingAgent.Config, :workspace_dir, []}
-
 # The native executor is owned by coding_agent. The gateway looks this up
 # dynamically through LemonGateway.Executor, so this wiring creates no gateway
 # dependency on the agent product.
@@ -64,19 +65,18 @@ config :lemon_core, :workspace_diagnostics,
 # See LemonCore.Doctor.RuntimeModules.
 config :lemon_core, :doctor_runtime,
   memory_providers: LemonMemory.Providers,
-  memory_store: LemonMemory.Store,
   media_jobs: LemonMedia.MediaJobs,
   media_supervisor: LemonMedia.MediaJobSupervisor,
   browser_artifacts: LemonBrowser.Artifacts,
   browser_server: LemonBrowser.LocalServer,
   lsp_server_manager: LemonLsp.ServerManager,
-  channel_diagnostics: LemonChannels.Doctor.Diagnostics,
-  channel_readiness: LemonChannels.Doctor.Readiness,
-  channel_proofs: LemonChannels.Doctor.ProofSpec
+  channel_diagnostics: LemonChannels.Doctor.Diagnostics
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).
 config :lemon_core, :doctor_checks, [
+  LemonMemory.Doctor.Checks.Memory,
+  LemonSkills.Doctor.Checks.Skills,
   LemonAutomation.Doctor.Checks.Synthesis,
   LemonChannels.Doctor.Checks.Channels
 ]
@@ -107,12 +107,12 @@ config :lemon_core, :env_registries, [
   LemonEvals.Env,
   LemonGateway.Env,
   LemonHoncho.Env,
+  LemonOmp.Env,
   LemonRouter.Env,
   LemonSkills.Env,
   LemonWeb.Env,
-  # lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5)
-  LemonSimUi.Env,
-  LemonTcg.Env
+  # lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md)
+  LemonSimUi.Env
 ]
 
 config :lemon_channels,
@@ -146,15 +146,16 @@ config :lemon_core, LemonCore.Secrets,
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 #
 # The store is a storage primitive and must not name its collaborators, so the
-# runtime wires them here: run history and memory ingest attach as finalize-run
-# hooks, and run-history reads forward to the same provider. Channels register
-# their own cached tables at boot (see LemonChannels.Application).
+# runtime wires them here: run history, memory ingest and the usage ledger attach
+# as finalize-run hooks, and run-history reads forward to the same provider.
+# Channels register their own cached tables at boot (see LemonChannels.Application).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
   backend_opts: [],
   finalize_run_hooks: [
     {LemonCore.RunHistoryStore, :handle_finalize_run},
-    {LemonMemory.Ingest, :handle_finalize_run}
+    {LemonMemory.Ingest, :handle_finalize_run},
+    {LemonCore.UsageLedger, :handle_finalize_run}
   ],
   run_history_provider: LemonCore.RunHistoryStore
 
@@ -168,7 +169,6 @@ config :lemon_web, LemonWeb.Endpoint,
   pubsub_server: LemonCore.PubSub,
   live_view: [signing_salt: "lemonwebsigningsalt"]
 
-config :lemon_web, :access_token, nil
 config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads")
 
 # Phoenix endpoints whose HTTP port LemonCore.Runtime.Env.apply_ports/1 rewrites
@@ -176,11 +176,11 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 # here rather than in lemon_core so the platform never names a product's module.
 config :lemon_core, :runtime_endpoints, [
   {:web_port, :lemon_web, LemonWeb.Endpoint},
-  # lemon-sim product block — moves to the lemon-sim repo (see docs/platform-split.md Phase 5)
+  # lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md)
   {:sim_port, :lemon_sim_ui, LemonSimUi.Endpoint}
 ]
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
+# ── lemon-sim product block — sim wiring outside apps/lemon_sim* (docs/platform-split.md) ──
 config :lemon_sim_ui, LemonSimUi.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],

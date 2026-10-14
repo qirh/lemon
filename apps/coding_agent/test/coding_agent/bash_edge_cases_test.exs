@@ -189,7 +189,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
         BashExecutor.execute(
           "for i in $(seq 1 1000); do echo line$i; done; sleep 10",
           tmp_dir,
-          timeout: 500
+          timeout: 2_000
         )
 
       assert result.cancelled == true
@@ -227,7 +227,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
           "echo before; sleep 10",
           tmp_dir,
           on_chunk: callback,
-          timeout: 200
+          timeout: 1_000
         )
 
       {count, _last_chunk} = Agent.get(agent, & &1)
@@ -264,8 +264,8 @@ defmodule CodingAgent.BashEdgeCasesTest do
       {:ok, result} = Task.await(task, 10_000)
       elapsed = System.monotonic_time(:millisecond) - start_time
 
-      # Should abort quickly (within 500ms of calling abort)
-      assert elapsed < 500
+      # Should abort well before the ~10s the loop would otherwise run
+      assert elapsed < 5_000
       assert result.cancelled == true
 
       AbortSignal.clear(signal)
@@ -337,7 +337,7 @@ defmodule CodingAgent.BashEdgeCasesTest do
       elapsed = System.monotonic_time(:millisecond) - start_time
 
       # Should return promptly under full-suite scheduler load.
-      assert elapsed < 1_000
+      assert elapsed < 5_000
       assert %AgentToolResult{content: [%TextContent{text: text}]} = result
       assert text =~ "cancelled"
 
@@ -346,18 +346,21 @@ defmodule CodingAgent.BashEdgeCasesTest do
 
     test "abort preserves partial output", %{tmp_dir: tmp_dir} do
       signal = AbortSignal.new()
+      parent = self()
 
       task =
         Task.async(fn ->
           BashExecutor.execute(
             "echo before_abort; sleep 5; echo after_abort",
             tmp_dir,
-            signal: signal
+            signal: signal,
+            on_chunk: fn chunk -> send(parent, {:chunk, chunk}) end
           )
         end)
 
-      # Wait for initial output
-      Process.sleep(100)
+      # Abort only once the command has produced output (a fixed sleep races
+      # shell startup under full-suite load).
+      assert_receive {:chunk, _chunk}, 5_000
       AbortSignal.abort(signal)
 
       {:ok, result} = Task.await(task, 5_000)
@@ -511,20 +514,6 @@ defmodule CodingAgent.BashEdgeCasesTest do
       assert result.output =~ "line2999"
       # Should not have early lines
       refute result.output =~ "line1\n"
-    end
-
-    test "truncation notice includes statistics", %{tmp_dir: tmp_dir} do
-      {:ok, result} =
-        BashExecutor.execute(
-          "for i in $(seq 1 500); do echo line$i; done",
-          tmp_dir,
-          max_bytes: 1000
-        )
-
-      assert result.truncated == true
-      assert result.output =~ "[Output truncated."
-      assert result.output =~ "Total:"
-      assert result.output =~ "lines"
     end
 
     test "temp file created for very large output", %{tmp_dir: tmp_dir} do

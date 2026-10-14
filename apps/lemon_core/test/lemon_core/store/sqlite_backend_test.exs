@@ -28,6 +28,14 @@ defmodule LemonCore.Store.SqliteBackendTest do
       :ok = SqliteBackend.close(state)
     end
 
+    test "preserves a trailing slash on a database-named directory", %{tmp_dir: tmp_dir} do
+      directory = Path.join(tmp_dir, "store.sqlite3")
+      assert {:ok, state} = SqliteBackend.init(path: directory <> "/")
+      assert state.path == Path.join(directory, "store.sqlite3")
+      assert File.dir?(directory)
+      :ok = SqliteBackend.close(state)
+    end
+
     test "creates SQLite database file with explicit file path", %{tmp_dir: tmp_dir} do
       db_path = Path.join(tmp_dir, "custom.db")
       assert {:ok, state} = SqliteBackend.init(path: db_path)
@@ -879,6 +887,78 @@ defmodule LemonCore.Store.SqliteBackendTest do
                SqliteBackend.list_recent(state, :mytable, 5)
 
       assert context.table == :mytable
+    end
+  end
+
+  describe "compare_and_swap/5 and sync/1" do
+    test "a read on one connection does not block its writes after another connection commits",
+         %{tmp_dir: tmp_dir} do
+      {:ok, a} = SqliteBackend.init(path: tmp_dir)
+      {:ok, b} = SqliteBackend.init(path: tmp_dir)
+      {:ok, a} = SqliteBackend.put(a, :secrets_lock, :secrets, %{owner: "a"})
+
+      # B sees A's lease, A releases it, then B tries to take it.
+      assert {:ok, %{owner: "a"}, b} = SqliteBackend.get(b, :secrets_lock, :secrets)
+      {:ok, a} = SqliteBackend.delete(a, :secrets_lock, :secrets)
+      assert {:ok, b} = SqliteBackend.put_new(b, :secrets_lock, :secrets, %{owner: "b"})
+
+      # Same for compare-and-swap after a fresh read on B and a write on A.
+      assert {:ok, %{owner: "b"}, b} = SqliteBackend.get(b, :secrets_lock, :secrets)
+      {:ok, a} = SqliteBackend.put(a, :secrets_lock, :secrets, %{owner: "a2"})
+
+      assert {:ok, b} =
+               SqliteBackend.compare_and_swap(b, :secrets_lock, :secrets, %{owner: "a2"}, %{
+                 owner: "b2"
+               })
+
+      # And a checkpoint on B is not blocked by an outstanding read on A.
+      assert {:ok, %{owner: "b2"}, a} = SqliteBackend.get(a, :secrets_lock, :secrets)
+      assert {:ok, b} = SqliteBackend.sync(b)
+
+      :ok = SqliteBackend.close(a)
+      :ok = SqliteBackend.close(b)
+    end
+
+    test "compare-and-swap compares against the shared file, not one connection",
+         %{tmp_dir: tmp_dir} do
+      {:ok, first} = SqliteBackend.init(path: tmp_dir)
+      {:ok, second} = SqliteBackend.init(path: tmp_dir)
+      {:ok, first} = SqliteBackend.put(first, :secrets_v1, {"default", "A"}, %{v: 0})
+
+      assert {:ok, _} =
+               SqliteBackend.compare_and_swap(first, :secrets_v1, {"default", "A"}, %{v: 0}, %{
+                 v: 1
+               })
+
+      # The second connection (another OS process sharing the store) still
+      # holds the old snapshot; its swap must be refused, not overwrite.
+      assert {:error, :mismatch, _} =
+               SqliteBackend.compare_and_swap(second, :secrets_v1, {"default", "A"}, %{v: 0}, %{
+                 v: 2
+               })
+
+      assert {:ok, %{v: 1}, _} = SqliteBackend.get(second, :secrets_v1, {"default", "A"})
+      :ok = SqliteBackend.close(first)
+      :ok = SqliteBackend.close(second)
+    end
+
+    test "sync checkpoints committed writes out of the WAL", %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      {:ok, state} = SqliteBackend.put(state, :secrets_v1, {"default", "A"}, %{v: 1})
+      wal = Path.join(tmp_dir, "store.sqlite3-wal")
+      assert File.stat!(wal).size > 0
+
+      # A read leaves its cached statement on the row, as the store's reads do.
+      {:ok, %{v: 1}, state} = SqliteBackend.get(state, :secrets_v1, {"default", "A"})
+      {:ok, [_ | _], state} = SqliteBackend.list(state, :secrets_v1)
+
+      assert {:ok, state} = SqliteBackend.sync(state)
+      assert File.stat!(wal).size == 0
+
+      {:ok, reader} = SqliteBackend.init(path: tmp_dir)
+      assert {:ok, %{v: 1}, _} = SqliteBackend.get(reader, :secrets_v1, {"default", "A"})
+      :ok = SqliteBackend.close(reader)
+      :ok = SqliteBackend.close(state)
     end
   end
 

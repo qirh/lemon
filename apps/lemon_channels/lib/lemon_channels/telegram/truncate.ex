@@ -175,7 +175,6 @@ defmodule LemonChannels.Telegram.Truncate do
     end
   end
 
-  defp append_resume_to_last([], _resume_text), do: []
   defp append_resume_to_last(chunks, ""), do: chunks
 
   defp append_resume_to_last(chunks, resume_text) do

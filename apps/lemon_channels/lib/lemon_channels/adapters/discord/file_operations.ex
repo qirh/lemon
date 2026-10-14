@@ -7,8 +7,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   module where possible, adapting the download/upload paths for Discord's API.
   """
 
-  require Logger
-
   alias LemonChannels.Adapters.Telegram.Transport.FileOperations, as: TelegramFileOps
   alias LemonChannels.BindingResolver
   alias LemonCore.ChatScope
@@ -38,15 +36,19 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
          {:ok, dest_abs} <- TelegramFileOps.resolve_dest_abs(root, dest_rel),
          :ok <- TelegramFileOps.ensure_not_denied(root, dest_rel, cfg),
          {:ok, bytes} <- download_attachment_bytes(url),
-         :ok <- TelegramFileOps.enforce_bytes_limit(bytes, cfg, :max_upload_bytes, @default_max_upload_bytes),
-         {:ok, final_rel, _final_abs} <- TelegramFileOps.write_document(dest_rel, dest_abs, bytes, force: force) do
+         :ok <-
+           TelegramFileOps.enforce_bytes_limit(
+             bytes,
+             cfg,
+             :max_upload_bytes,
+             @default_max_upload_bytes
+           ),
+         {:ok, final_rel, _final_abs} <-
+           TelegramFileOps.write_document(dest_rel, dest_abs, bytes, force: force) do
       {:ok, "Saved: #{final_rel}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
-      _ -> {:error, "Upload failed."}
     end
-  rescue
-    _ -> {:error, "Upload failed."}
   end
 
   # ---------------------------------------------------------------------------
@@ -71,16 +73,19 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
          {:ok, abs} <- TelegramFileOps.resolve_dest_abs(root, rel),
          :ok <- TelegramFileOps.ensure_not_denied(root, rel, cfg),
          {:ok, kind, send_path, filename} <- TelegramFileOps.prepare_file_get(abs),
-         :ok <- TelegramFileOps.enforce_path_size(send_path, cfg, :max_download_bytes, @default_max_download_bytes),
+         :ok <-
+           TelegramFileOps.enforce_path_size(
+             send_path,
+             cfg,
+             :max_download_bytes,
+             @default_max_download_bytes
+           ),
          :ok <- send_file_to_channel(channel_id, send_path, filename) do
       if kind == :zip, do: File.rm(send_path)
       {:ok, "Sent: #{filename}"}
     else
       {:error, msg} when is_binary(msg) -> {:error, msg}
-      _ -> {:error, "Download failed."}
     end
-  rescue
-    _ -> {:error, "Download failed."}
   end
 
   # ---------------------------------------------------------------------------
@@ -95,7 +100,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   """
   def handle_attachment_auto_put(state, inbound) do
     cfg = files_cfg(state)
-    attachments = (inbound.meta[:attachments] || [])
+    attachments = inbound.meta[:attachments] || []
 
     channel_id = inbound.meta[:channel_id]
 
@@ -113,12 +118,18 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
           with {:ok, dest_abs} <- TelegramFileOps.resolve_dest_abs(root, rel),
                :ok <- TelegramFileOps.ensure_not_denied(root, rel, cfg),
                {:ok, bytes} <- download_attachment_bytes(url),
-               :ok <- TelegramFileOps.enforce_bytes_limit(bytes, cfg, :max_upload_bytes, @default_max_upload_bytes),
-               {:ok, final_rel, _} <- TelegramFileOps.write_document(rel, dest_abs, bytes, force: false) do
+               :ok <-
+                 TelegramFileOps.enforce_bytes_limit(
+                   bytes,
+                   cfg,
+                   :max_upload_bytes,
+                   @default_max_upload_bytes
+                 ),
+               {:ok, final_rel, _} <-
+                 TelegramFileOps.write_document(rel, dest_abs, bytes, force: false) do
             {:ok, final_rel}
           else
             {:error, msg} -> {:error, msg}
-            _ -> {:error, "upload failed"}
           end
         end)
 
@@ -147,8 +158,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     else
       _ -> []
     end
-  rescue
-    _ -> []
   end
 
   @doc """
@@ -157,10 +166,8 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   """
   def should_auto_put?(state, inbound) when is_map(state) do
     cfg = files_cfg(state)
-    attachments = (inbound.meta[:attachments] || [])
+    attachments = inbound.meta[:attachments] || []
     should_auto_put?(cfg) and attachments != []
-  rescue
-    _ -> false
   end
 
   # ---------------------------------------------------------------------------
@@ -176,7 +183,7 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       _ -> {:error, "Failed to download attachment."}
     end
   rescue
-    _ -> {:error, "Failed to download attachment."}
+    ArgumentError -> {:error, "Failed to download attachment."}
   end
 
   def download_attachment_bytes(_), do: {:error, "No attachment URL provided."}
@@ -216,17 +223,22 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       id = parse_id(attachment_id)
 
       cond do
-        is_integer(id) and is_map_key(resolved, id) -> Map.get(resolved, id)
-        is_binary(attachment_id) and is_map_key(resolved, attachment_id) -> Map.get(resolved, attachment_id)
+        is_integer(id) and is_map_key(resolved, id) ->
+          Map.get(resolved, id)
+
+        is_binary(attachment_id) and is_map_key(resolved, attachment_id) ->
+          Map.get(resolved, attachment_id)
+
         # Try the first attachment if we can't match by ID
-        map_size(resolved) == 1 -> resolved |> Map.values() |> List.first()
-        true -> nil
+        map_size(resolved) == 1 ->
+          resolved |> Map.values() |> List.first()
+
+        true ->
+          nil
       end
     else
       nil
     end
-  rescue
-    _ -> nil
   end
 
   # ---------------------------------------------------------------------------
@@ -236,8 +248,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
   defp files_cfg(state) do
     cfg = state[:files] || %{}
     if is_map(cfg), do: cfg, else: %{}
-  rescue
-    _ -> %{}
   end
 
   defp ensure_files_enabled(cfg) do
@@ -258,8 +268,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     root = BindingResolver.resolve_cwd(scope)
     TelegramFileOps.ensure_project_root(root)
-  rescue
-    _ -> TelegramFileOps.ensure_project_root(nil)
   end
 
   defp resolve_project_root_from_inbound(inbound) do
@@ -268,8 +276,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
     scope = %ChatScope{transport: :discord, chat_id: channel_id, topic_id: thread_id}
     root = BindingResolver.resolve_cwd(scope)
     TelegramFileOps.ensure_project_root(root)
-  rescue
-    _ -> TelegramFileOps.ensure_project_root(nil)
   end
 
   defp resolve_put_dest(cfg, dest_path, filename) do
@@ -336,14 +342,12 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       %{} -> interaction |> map_get(:channel_id) |> parse_id()
       _ -> nil
     end
-  rescue
-    _ -> nil
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do
     Nostrum.Api.Message.create(channel_id, %{content: text})
   rescue
-    _ -> :ok
+    error -> {:error, {:discord_send_crashed, error}}
   end
 
   defp nested_option_value(interaction, subcommand, option_name) do
@@ -364,8 +368,6 @@ defmodule LemonChannels.Adapters.Discord.FileOperations do
       if map_get(option, :name) == option_name, do: map_get(option, :value), else: nil
     end)
     |> normalize_blank()
-  rescue
-    _ -> nil
   end
 
   defp map_get(map, key) when is_map(map) do

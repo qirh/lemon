@@ -12,7 +12,7 @@ defmodule LemonAi.Models do
   ## Usage
 
       # Get a specific model
-      model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
 
       # List all models for a provider
       models = LemonAi.Models.get_models(:openai)
@@ -29,7 +29,7 @@ defmodule LemonAi.Models do
   OAuth-only model IDs.
   """
 
-  alias LemonAi.Types.{Model, ModelCost}
+  alias LemonAi.Types.Model
 
   @default_openai_base_url "https://api.openai.com/v1"
   @default_openai_discovery_timeout_ms 4_000
@@ -38,66 +38,7 @@ defmodule LemonAi.Models do
   # Provider Submodule Imports
   # ============================================================================
 
-  @openai_codex_oauth_only_models %{
-    "codex-mini-latest" => %Model{
-      id: "codex-mini-latest",
-      name: "Codex Mini",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://chatgpt.com",
-      reasoning: true,
-      input: [:text],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 200_000,
-      max_tokens: 100_000
-    },
-    "gpt-5.3-codex-spark" => %Model{
-      id: "gpt-5.3-codex-spark",
-      name: "GPT-5.3 Codex Spark",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://chatgpt.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 128_000,
-      max_tokens: 32_000
-    },
-    "gpt-5.5" => %Model{
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: :openai_codex_responses,
-      provider: :"openai-codex",
-      base_url: "https://chatgpt.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 400_000,
-      max_tokens: 128_000
-    }
-  }
-
-  # OpenAI Codex (ChatGPT OAuth) uses the Codex Responses endpoint.
-  # Most models mirror the direct OpenAI Responses API, but some IDs are only
-  # available through the ChatGPT/Codex auth surface and should not be inferred
-  # from the direct `/v1/models` API-key catalog.
-  @openai_codex_models LemonAi.Models.OpenAI.models()
-                       |> Enum.into(%{}, fn {id, model} ->
-                         {id,
-                          %Model{
-                            model
-                            | api: :openai_codex_responses,
-                              provider: :"openai-codex",
-                              base_url: "https://chatgpt.com",
-                              cost: %ModelCost{
-                                input: 0.0,
-                                output: 0.0,
-                                cache_read: 0.0,
-                                cache_write: 0.0
-                              }
-                          }}
-                       end)
-                       |> Map.merge(@openai_codex_oauth_only_models)
+  @openai_codex_models LemonAi.Models.OpenAI.codex_models()
 
   # ============================================================================
   # Combined Registry
@@ -175,9 +116,9 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> model.name
-      "Claude Sonnet 4"
+      "Claude Sonnet 5"
 
       iex> LemonAi.Models.get_model(:anthropic, "nonexistent")
       nil
@@ -248,6 +189,12 @@ defmodule LemonAi.Models do
           | {:openai_api_key, String.t()}
           | {:openai_base_url, String.t()}
           | {:openai_timeout_ms, pos_integer()}
+          | {:discover_codex, boolean()}
+          | {:codex_access_token, String.t()}
+          | {:codex_base_url, String.t()}
+          | {:codex_timeout_ms, pos_integer()}
+          | {:codex_force_refresh, boolean()}
+          | {:codex_req_options, keyword()}
 
   @doc """
   List all known models with optional runtime discovery.
@@ -260,21 +207,53 @@ defmodule LemonAi.Models do
   - `:openai_api_key` - Optional API key override for discovery.
   - `:openai_base_url` - Optional OpenAI-compatible base URL override.
   - `:openai_timeout_ms` - Optional request timeout in milliseconds.
+  - `:discover_codex` - Query the account-scoped ChatGPT Codex registry. A failed
+    lookup never falls back to unverified Codex models. Successful results are
+    cached by account and endpoint for five minutes.
+  - `:codex_access_token` - Concrete ChatGPT JWT (no credential-file lookup or refresh).
+  - `:codex_base_url`, `:codex_timeout_ms`, `:codex_force_refresh` - Discovery controls.
   """
   @spec list_models([list_models_opt()]) :: [Model.t()]
   def list_models(opts) when is_list(opts) do
     static_models = list_models()
 
-    if Keyword.get(opts, :discover_openai, false) do
-      case discover_openai_model_ids(opts) do
-        {:ok, available_ids} ->
-          filter_openai_models(static_models, available_ids)
-
-        {:error, _reason} ->
-          static_models
+    models =
+      if Keyword.get(opts, :discover_openai, false) do
+        case discover_openai_model_ids(opts) do
+          {:ok, available_ids} -> filter_openai_models(static_models, available_ids)
+          {:error, _reason} -> static_models
+        end
+      else
+        static_models
       end
+
+    if Keyword.get(opts, :discover_codex, false) do
+      discovery_opts = [
+        access_token: Keyword.get(opts, :codex_access_token),
+        base_url: Keyword.get(opts, :codex_base_url),
+        timeout_ms: Keyword.get(opts, :codex_timeout_ms, 5_000),
+        force_refresh: Keyword.get(opts, :codex_force_refresh, false),
+        req_options: Keyword.get(opts, :codex_req_options, [])
+      ]
+
+      discovered =
+        case LemonAi.Models.OpenAICodexDiscovery.discover(discovery_opts) do
+          {:ok, available} -> Map.new(available, &{&1.id, &1})
+          {:error, _} -> %{}
+        end
+
+      Enum.flat_map(models, fn
+        %Model{provider: :"openai-codex", id: id} ->
+          case Map.get(discovered, id) do
+            nil -> []
+            model -> [model]
+          end
+
+        model ->
+          [model]
+      end)
     else
-      static_models
+      models
     end
   end
 
@@ -283,7 +262,7 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> LemonAi.Models.supports_vision?(model)
       true
 
@@ -302,7 +281,7 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> LemonAi.Models.supports_reasoning?(model)
       true
 
@@ -317,46 +296,78 @@ defmodule LemonAi.Models do
   end
 
   @doc """
-  Check if a model supports the xhigh thinking level.
+  Check if a model supports the xhigh reasoning level.
 
-  Supported models:
-  - GPT-5.2 / GPT-5.3 model families
-  - Anthropic Opus 4.6 models (xhigh maps to adaptive effort "max")
-
-  Ported from Pi's model-resolver.
+  Driven by the model's `reasoning_efforts` capability flag (see
+  `LemonAi.Types.Model`). On Anthropic adaptive-thinking models `:xhigh` maps
+  to effort `"max"`.
 
   ## Examples
 
-      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.2")
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.5")
       iex> LemonAi.Models.supports_xhigh(model)
       true
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-opus-4-6")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-opus-5-5")
       iex> LemonAi.Models.supports_xhigh(model)
       true
 
-      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-5")
       iex> LemonAi.Models.supports_xhigh(model)
       false
   """
   @spec supports_xhigh(Model.t()) :: boolean()
-  def supports_xhigh(%Model{id: id, api: api}) do
-    cond do
-      String.contains?(id, "gpt-5.2") or String.contains?(id, "gpt-5.3") ->
-        true
-
-      api == :anthropic_messages and
-          (String.contains?(id, "opus-4-6") or String.contains?(id, "opus-4.6")) ->
-        true
-
-      true ->
-        false
-    end
-  end
+  def supports_xhigh(%Model{reasoning_efforts: efforts}), do: :xhigh in efforts
 
   @doc false
   @spec supports_xhigh?(Model.t()) :: boolean()
   def supports_xhigh?(model), do: supports_xhigh(model)
+
+  @reasoning_levels [:minimal, :low, :medium, :high, :xhigh]
+
+  @doc """
+  Resolve the reasoning level to send for `model`.
+
+  Models that declare `reasoning_efforts` get the requested level when it is
+  declared, otherwise the highest declared level below it, otherwise their
+  lowest declared level. Models with no declaration (and unknown levels) pass
+  the requested level through unchanged.
+
+  ## Examples
+
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.1")
+      iex> LemonAi.Models.reasoning_effort_for(model, :xhigh)
+      :high
+
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.2")
+      iex> LemonAi.Models.reasoning_effort_for(model, :minimal)
+      :low
+
+      iex> model = LemonAi.Models.get_model(:openai, "gpt-5.5")
+      iex> LemonAi.Models.reasoning_effort_for(model, :xhigh)
+      :xhigh
+  """
+  @spec reasoning_effort_for(Model.t(), atom() | nil) :: atom() | nil
+  def reasoning_effort_for(%Model{}, nil), do: nil
+  def reasoning_effort_for(%Model{reasoning_efforts: []}, level), do: level
+
+  def reasoning_effort_for(%Model{reasoning_efforts: efforts}, level)
+      when level in @reasoning_levels do
+    if level in efforts do
+      level
+    else
+      below =
+        Enum.take_while(@reasoning_levels, &(&1 != level))
+        |> Enum.filter(&(&1 in efforts))
+
+      case below do
+        [] -> Enum.find(@reasoning_levels, &(&1 in efforts))
+        levels -> List.last(levels)
+      end
+    end
+  end
+
+  def reasoning_effort_for(%Model{}, level), do: level
 
   @default_thinking_budgets %{
     minimal: 1024,
@@ -473,12 +484,12 @@ defmodule LemonAi.Models do
 
   ## Examples
 
-      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
-      iex> model2 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
+      iex> model2 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> LemonAi.Models.models_equal?(model1, model2)
       true
 
-      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-4-20250514")
+      iex> model1 = LemonAi.Models.get_model(:anthropic, "claude-sonnet-5")
       iex> model2 = LemonAi.Models.get_model(:openai, "gpt-4o")
       iex> LemonAi.Models.models_equal?(model1, model2)
       false
@@ -501,7 +512,7 @@ defmodule LemonAi.Models do
   ## Examples
 
       iex> ids = LemonAi.Models.get_model_ids(:anthropic)
-      iex> "claude-sonnet-4-20250514" in ids
+      iex> "claude-sonnet-5" in ids
       true
 
   """

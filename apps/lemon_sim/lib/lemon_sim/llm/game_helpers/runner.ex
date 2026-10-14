@@ -9,6 +9,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
 
   import LemonSim.Examples.Helpers
 
+  alias LemonSim.Bench.Artifacts.Replay.Recorder
   alias LemonSim.Kernel.{Runner, Store}
   alias LemonSim.LLM.GameHelpers.{Config, ProviderThrottle, Transcript}
   alias LemonSim.LLM.Usage
@@ -68,7 +69,8 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
   `Runner.run_until_terminal/3` as-is: an `:on_after_step` that returns
   `{:ok, new_state}` feeds `new_state` into the next turn, and `resumable?:
   true` makes a failure return `{:error, reason, state}` (state at the last
-  completed step) instead of `{:error, reason}`.
+  completed step) instead of `{:error, reason}`. `opts[:replay_recorder]`
+  records every step's input batch for a replay-verifiable bundle.
   """
   def run(state, modules, default_opts_fn, opts, callbacks) do
     {usage_collector, owns_usage_collector?} = usage_collector(state.sim_id, opts)
@@ -80,6 +82,8 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
       |> Keyword.put(:usage_collector, usage_collector)
       |> Keyword.put_new(:usage_actor_id, "operator")
       |> ProviderThrottle.wrap_opts()
+
+    run_opts = Recorder.wrap_opts(run_opts, Keyword.get(opts, :replay_recorder))
 
     try do
       Keyword.fetch!(callbacks, :print_setup).(state)
@@ -125,7 +129,8 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
   `:print_step`'s return value is forwarded as the `run_until_terminal/3`
   `on_after_step` result: return `{:ok, new_state}` to fold extra bookkeeping
   (e.g. a decision-trace log) into the state seen on later turns, same as
-  `run/5`. `opts[:resumable?]` is also forwarded — see `run/5` for both.
+  `run/5`. `opts[:resumable?]` and `opts[:replay_recorder]` are also
+  forwarded — see `run/5`.
   """
   def run_multi_model(state, modules, default_opts_fn, opts, callbacks) do
     model_assignments = Keyword.fetch!(opts, :model_assignments)
@@ -142,7 +147,10 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
     {:ok, model_agent} = Agent.start_link(fn -> {default_model, default_key} end)
     {:ok, active_actor_agent} = Agent.start_link(fn -> nil end)
 
+    # One stable provider session id per game and acting player (providers such
+    # as OpenCode Go route/cache per conversation and require it).
     complete_fn = fn _model, context, stream_options ->
+      session_id = "#{state.sim_id}:#{Agent.get(active_actor_agent, & &1) || "none"}"
       {actual_model, api_key} = Agent.get(model_agent, & &1)
 
       model_stream_options =
@@ -156,6 +164,7 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
         |> Map.new()
         |> Map.merge(Map.new(model_stream_options))
         |> Map.put(:api_key, api_key)
+        |> Map.put_new(:session_id, session_id)
 
       LemonAi.complete(actual_model, context, actual_stream_options)
     end
@@ -236,6 +245,8 @@ defmodule LemonSim.LLM.GameHelpers.Runner do
       |> Keyword.put(:usage_actor_id, fn -> Agent.get(active_actor_agent, & &1) end)
       |> Keyword.put(:usage_model, fn -> Agent.get(model_agent, fn {model, _key} -> model end) end)
       |> ProviderThrottle.wrap_opts()
+
+    run_opts = Recorder.wrap_opts(run_opts, Keyword.get(opts, :replay_recorder))
 
     try do
       Keyword.fetch!(callbacks, :print_setup).(state)

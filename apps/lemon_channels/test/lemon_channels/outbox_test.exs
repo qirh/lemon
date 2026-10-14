@@ -149,8 +149,6 @@ defmodule LemonChannels.OutboxTest do
       assert {:ok, _ref} = Outbox.enqueue(payload1)
       assert {:ok, _ref} = Outbox.enqueue(payload2)
 
-      Process.sleep(50)
-
       state = :sys.get_state(outbox_pid)
       queued = :queue.to_list(state.queue)
 
@@ -210,108 +208,6 @@ defmodule LemonChannels.OutboxTest do
   end
 
   describe "telemetry" do
-    test "emits :start event when processing begins" do
-      ref = make_ref()
-      test_pid = self()
-
-      handler_id = "test-start-#{inspect(ref)}"
-
-      :telemetry.attach(
-        handler_id,
-        [:lemon_channels, :outbox, :send, :start],
-        fn event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, :start, event, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        kind: :text,
-        content: "telemetry test",
-        account_id: "account-1",
-        peer: %{kind: :dm, id: "user-1", thread_id: nil}
-      }
-
-      Outbox.enqueue(payload)
-
-      # Give time for processing
-      Process.sleep(50)
-
-      # We may or may not receive the event depending on adapter availability
-      # The important thing is the code path exists and doesn't crash
-    end
-
-    test "emits :stop event on success" do
-      ref = make_ref()
-      test_pid = self()
-
-      handler_id = "test-stop-#{inspect(ref)}"
-
-      :telemetry.attach(
-        handler_id,
-        [:lemon_channels, :outbox, :send, :stop],
-        fn event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, :stop, event, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
-
-      payload = %OutboundPayload{
-        channel_id: "test-channel",
-        kind: :text,
-        content: "telemetry test",
-        account_id: "account-1",
-        peer: %{kind: :dm, id: "user-1", thread_id: nil}
-      }
-
-      Outbox.enqueue(payload)
-
-      # Give time for processing
-      Process.sleep(50)
-
-      # We may or may not receive the event depending on adapter availability
-      # The important thing is the code path exists and doesn't crash
-    end
-
-    test "emits :exception event on failure" do
-      ref = make_ref()
-      test_pid = self()
-
-      handler_id = "test-exception-#{inspect(ref)}"
-
-      :telemetry.attach(
-        handler_id,
-        [:lemon_channels, :outbox, :send, :exception],
-        fn event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry, :exception, event, measurements, metadata})
-        end,
-        nil
-      )
-
-      on_exit(fn -> :telemetry.detach(handler_id) end)
-
-      # Send to a channel with no adapter - may trigger exception path
-      payload = %OutboundPayload{
-        channel_id: "non-existent-channel",
-        kind: :text,
-        content: "exception test",
-        account_id: "account-1",
-        peer: %{kind: :dm, id: "user-1", thread_id: nil}
-      }
-
-      Outbox.enqueue(payload)
-
-      # Give time for processing
-      Process.sleep(50)
-
-      # The important thing is the code path exists and doesn't crash
-    end
-
     test "emits outbox queue rejection telemetry when queue is full", %{outbox_pid: outbox_pid} do
       original_state = :sys.get_state(outbox_pid)
 

@@ -171,6 +171,28 @@ defmodule CodingAgent.TaskStore do
     end
   end
 
+  @doc "Read task metadata without copying or reversing its retained event stream."
+  @spec get_record(task_id()) :: {:ok, map()} | {:error, :not_found}
+  def get_record(task_id) when is_binary(task_id) do
+    ensure_table()
+
+    case :ets.lookup_element(@table, task_id, 2, nil) do
+      nil -> {:error, :not_found}
+      record -> {:ok, record}
+    end
+  end
+
+  @doc "Read only lifecycle status, without copying prompts, results or event history."
+  @spec get_status(task_id()) :: {:ok, atom()} | {:error, :not_found}
+  def get_status(task_id) when is_binary(task_id) do
+    ensure_table()
+
+    case :ets.select(@table, [{{task_id, %{status: :"$1"}, :_}, [], [:"$1"]}]) do
+      [status] -> {:ok, status}
+      [] -> {:error, :not_found}
+    end
+  end
+
   @doc """
   List all tasks with optional status filter.
   """

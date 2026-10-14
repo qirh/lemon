@@ -92,7 +92,7 @@ defmodule LemonPlatformTest do
 
       iex> %{optional: optional} = LemonPlatformTest.callbacks(LemonCore.Store.Backend)
       iex> Enum.sort(optional)
-      [compare_and_delete_many: 2, list_recent: 3, ping: 1]
+      [compare_and_delete_many: 2, compare_and_swap: 5, list_recent: 3, ping: 1, sync: 1]
   """
   @spec callbacks(module()) :: %{required: [{atom(), arity()}], optional: [{atom(), arity()}]}
   def callbacks(behaviour) do
@@ -165,10 +165,18 @@ defmodule LemonPlatformTest do
       The platform apps are optional dependencies of :lemon_platform_test, so you
       compile only the one your case uses. Add it to your test deps:
 
-          {#{inspect(dep)}, "~> 0.1", only: :test}
+          #{dep_line(dep)}
 
       then `mix deps.get` and recompile.
       """
     end
   end
+
+  # lemon_channels is the one case target that is not published to Hex.
+  defp dep_line(:lemon_channels) do
+    ~s|{:lemon_channels, path: "/path/to/lemon/apps/lemon_channels", only: :test}| <>
+      " (lemon_channels is not on Hex; point at a lemon checkout)"
+  end
+
+  defp dep_line(dep), do: "{#{inspect(dep)}, \"~> 0.2\", only: :test}"
 end

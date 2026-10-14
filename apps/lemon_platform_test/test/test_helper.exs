@@ -5,4 +5,4 @@
 {:ok, _} = Application.ensure_all_started(:lemon_channels)
 {:ok, _} = Application.ensure_all_started(:lemon_memory)
 
-ExUnit.start()
+ExUnit.start(capture_log: true)

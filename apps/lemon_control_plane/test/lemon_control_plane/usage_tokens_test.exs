@@ -4,6 +4,28 @@ defmodule LemonControlPlane.UsageTokensTest do
   alias LemonControlPlane.UsageTokens
 
   describe "normalize/1" do
+    test "preserves native cache, context, and benchmark counters" do
+      usage = %{
+        input: 100,
+        output: 20,
+        cache_read: 800,
+        cache_write: 50,
+        total_tokens: 970,
+        context_tokens: 920,
+        turns: 3,
+        tool_errors: 1
+      }
+
+      assert %{
+               "cacheReadTokens" => 800,
+               "cacheWriteTokens" => 50,
+               "contextTokens" => 920,
+               "totalTokens" => 970,
+               "turns" => 3,
+               "tool_errors" => 1
+             } = UsageTokens.normalize(usage)
+    end
+
     test "returns nil for anything without numbers in it" do
       assert UsageTokens.normalize(nil) == nil
       assert UsageTokens.normalize(%{}) == nil
@@ -25,8 +47,21 @@ defmodule LemonControlPlane.UsageTokensTest do
                "cacheReadTokens" => 8_000,
                "cacheWriteTokens" => 500,
                "contextTokens" => 9_700,
-               "totalTokens" => 1_540
+               "totalTokens" => 10_040
              } = UsageTokens.normalize(usage)
+    end
+
+    test "keeps latest context separate from cumulative cache-inclusive totals" do
+      usage = %{
+        input: 1_200,
+        output: 340,
+        cache_read: 8_000,
+        cache_write: 500,
+        context_tokens: 3_200
+      }
+
+      assert %{"contextTokens" => 3_200, "totalTokens" => 10_040} =
+               UsageTokens.normalize(usage)
     end
 
     test "reads the session.detail spelling (:input/:output/:total_tokens/:cost)" do
@@ -42,7 +77,11 @@ defmodule LemonControlPlane.UsageTokensTest do
     end
 
     test "treats prompt_tokens as already cache-inclusive" do
-      usage = %{"prompt_tokens" => 5_000, "completion_tokens" => 20, "cached_input_tokens" => 4_000}
+      usage = %{
+        "prompt_tokens" => 5_000,
+        "completion_tokens" => 20,
+        "cached_input_tokens" => 4_000
+      }
 
       normalized = UsageTokens.normalize(usage)
 

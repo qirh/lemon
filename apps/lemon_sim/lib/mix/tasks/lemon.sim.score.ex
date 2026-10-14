@@ -3,6 +3,9 @@ defmodule Mix.Tasks.Lemon.Sim.Score do
   Print the scorecard for a LemonSim run artifact bundle.
 
       mix lemon.sim.score path/to/run
+
+  The scorecard is printed only after the bundle passes the same checks as
+  `mix lemon.sim.verify`.
   """
 
   use Mix.Task
@@ -14,12 +17,6 @@ defmodule Mix.Tasks.Lemon.Sim.Score do
       [artifact_dir] ->
         with {:ok, verified} <- Verifier.verify_run(artifact_dir),
              scorecard when is_map(scorecard) <- verified.scorecard do
-          if Map.get(verified, :legacy) do
-            Mix.shell().error(
-              "warning: legacy bundle — hash integrity and scorecard recompute checks were SKIPPED"
-            )
-          end
-
           Mix.shell().info(Jason.encode!(scorecard, pretty: true))
         else
           nil ->

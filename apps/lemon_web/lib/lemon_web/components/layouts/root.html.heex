@@ -1,23 +1,38 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <title><%= assigns[:page_title] || "Lemon Dashboard" %></title>
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#0b0b0d" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f8f8f6" media="(prefers-color-scheme: light)" />
+    <meta name="referrer" content="no-referrer" />
+    <title>{assigns[:page_title] || "Lemon"}</title>
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem("lemon-theme") || "system";
+          var dark = pref === "dark" || (pref === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.dataset.theme = dark ? "dark" : "light";
+          root.dataset.themePref = pref;
+          if (/Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)) root.dataset.platform = "mac";
+        } catch (_) {}
+      })();
+    </script>
     <link rel="icon" type="image/svg+xml" href={~p"/favicon.svg"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/session.css"} />
-    <link phx-track-static rel="stylesheet" href={~p"/assets/management.css"} />
-    <script defer phx-track-static type="module" src={~p"/assets/app.js"}></script>
+    <script defer phx-track-static type="module" src={~p"/assets/app.js"}>
+    </script>
   </head>
-  <body class="min-h-screen bg-slate-100 text-slate-900 antialiased">
+  <body>
     <a
       href="#main-content"
-      class="sr-only z-50 rounded bg-slate-950 px-3 py-2 text-white focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+      class="sr-only z-[70] rounded-md bg-fg px-3 py-2 text-bg focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
     >
       Skip to main content
     </a>
-    <%= @inner_content %>
+    {@inner_content}
   </body>
 </html>

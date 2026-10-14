@@ -33,7 +33,7 @@ defmodule LemonCore.PathsTest do
       assert Paths.global_config(home_dir: "/home/x") == "/home/x/.lemon/config.toml"
       assert Paths.project_config("/srv/app") == "/srv/app/.lemon/config.toml"
       assert Paths.home_path("store", home_dir: "/home/x") == "/home/x/.lemon/store"
-      assert Paths.project_path("/srv/app", "proofs") == "/srv/app/.lemon/proofs"
+      assert Paths.project_path("/srv/app", "extensions") == "/srv/app/.lemon/extensions"
     end
 
     test "home comes from HOME when no option is given" do
@@ -53,7 +53,7 @@ defmodule LemonCore.PathsTest do
       assert Paths.home_state_dir(home_dir: "/home/x") == "/home/x/.myapp"
       assert Paths.global_config(home_dir: "/home/x") == "/home/x/.myapp/config.toml"
       assert Paths.project_config("/srv/app") == "/srv/app/.myapp/config.toml"
-      assert Paths.project_path("/srv/app", "proofs") == "/srv/app/.myapp/proofs"
+      assert Paths.project_path("/srv/app", "extensions") == "/srv/app/.myapp/extensions"
     end
 
     test "renaming the config file moves both config paths" do
@@ -84,6 +84,28 @@ defmodule LemonCore.PathsTest do
 
       assert Paths.project_config("/srv/app", state_dir: ".other") ==
                "/srv/app/.other/config.toml"
+    end
+  end
+
+  describe "store directory" do
+    @tag :tmp_dir
+    test "resolves companion databases beside explicit primary files", %{tmp_dir: dir} do
+      for extension <- [".db", ".sqlite", ".sqlite3", ".SQLITE3"] do
+        assert Paths.store_dir(Path.join(dir, "primary" <> extension)) == dir
+      end
+
+      assert Paths.store_dir(Path.join(dir, "store")) == Path.join(dir, "store")
+    end
+
+    @tag :tmp_dir
+    test "preserves database-named directories and explicit directory paths", %{tmp_dir: dir} do
+      existing = Path.join(dir, "existing.db")
+      File.mkdir_p!(existing)
+
+      assert Paths.store_dir(existing) == existing
+
+      assert Paths.store_dir(Path.join(dir, "new.sqlite3") <> "/") ==
+               Path.join(dir, "new.sqlite3")
     end
   end
 
@@ -138,15 +160,6 @@ defmodule LemonCore.PathsTest do
       assert LemonCore.Config.Modular.project_path("/srv/app") == "/srv/app/.myapp/lemon.toml"
       assert LemonCore.Config.global_path() == LemonCore.Config.Modular.global_path()
       assert LemonCore.Config.global_path() =~ ".myapp/lemon.toml"
-    end
-
-    test "the doctor's skills check follows the state directory" do
-      put_paths(home_state_dir: "/tmp/lemon-paths-test-skills")
-
-      [check] = LemonCore.Doctor.Checks.Skills.run()
-
-      assert check.message =~ "/tmp/lemon-paths-test-skills/skills" or
-               check.remediation =~ "/tmp/lemon-paths-test-skills/skills"
     end
   end
 end

@@ -58,6 +58,20 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   # ============================================================================
 
   @doc """
+  Stable OpenAI prompt-cache/routing identity, bounded to 64 wire bytes.
+  Long session IDs are hashed rather than truncated, so distinct sessions keep
+  their affinity across turns and resumed calls. Missing IDs do not invent a
+  per-request identity.
+  """
+  @spec normalize_prompt_cache_key(String.t() | nil) :: String.t() | nil
+  def normalize_prompt_cache_key(id) when id in [nil, ""], do: nil
+
+  def normalize_prompt_cache_key(id) when is_binary(id) and byte_size(id) <= 64, do: id
+
+  def normalize_prompt_cache_key(id) when is_binary(id),
+    do: "pc_" <> Base.url_encode64(:crypto.hash(:sha256, id), padding: false)
+
+  @doc """
   Fast deterministic hash to shorten long strings.
   Used for truncating message IDs to fit OpenAI's 64-char limit.
   """
@@ -721,6 +735,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     state = %{
       current_item: nil,
       current_block: nil,
+      current_index: 0,
+      items: %{},
       output: output,
       stream: stream,
       model: model,
@@ -729,8 +745,10 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
     try do
       Enum.reduce_while(events, state, fn event, state ->
+        state = activate_item(event, state)
+
         case process_event(event, state) do
-          {:ok, new_state} -> {:cont, new_state}
+          {:ok, new_state} -> {:cont, remember_item(event, new_state)}
           {:done, new_state} -> {:halt, {:ok, new_state}}
           {:error, reason} -> {:halt, {:error, reason}}
         end
@@ -738,16 +756,65 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       |> case do
         {:ok, final_state} -> {:ok, final_state.output}
         {:error, reason} -> {:error, reason}
-        final_state -> {:ok, final_state.output}
+        _final_state -> {:error, "Connection closed before the provider completed the response"}
       end
     rescue
-      e -> {:error, Exception.message(e)}
+      e ->
+        if LemonAi.Error.classify(e) == :transient,
+          do: {:error, e},
+          else: {:error, Exception.message(e)}
     catch
       :throw, {:stream_error, reason} -> {:error, reason}
       :throw, reason -> {:error, reason}
       :exit, reason -> {:error, reason}
     end
   end
+
+  # Parallel tool/reasoning items can interleave. Route by the wire identity,
+  # never by whichever content block happened to arrive last.
+  defp activate_item(%{"type" => "response.output_item.added"}, state),
+    do: %{
+      state
+      | current_item: nil,
+        current_block: nil,
+        current_index: length(state.output.content)
+    }
+
+  defp activate_item(event, state) do
+    key =
+      event["item_id"] || get_in(event, ["item", "id"]) ||
+        if(is_integer(event["output_index"]), do: {:index, event["output_index"]})
+
+    case Map.get(state.items, key) do
+      {item, block, index} ->
+        %{state | current_item: item, current_block: block, current_index: index}
+
+      nil when not is_nil(key) ->
+        %{state | current_item: nil, current_block: nil}
+
+      nil ->
+        state
+    end
+  end
+
+  defp remember_item(event, %{current_item: %{} = item} = state) do
+    value = {item, state.current_block, state.current_index}
+
+    keys = [
+      item["id"],
+      if(is_integer(event["output_index"]), do: {:index, event["output_index"]})
+    ]
+
+    items =
+      Enum.reduce(keys, state.items, fn
+        nil, items -> items
+        key, items -> Map.put(items, key, value)
+      end)
+
+    %{state | items: items}
+  end
+
+  defp remember_item(_event, state), do: state
 
   defp process_event(%{"type" => "response.output_item.added", "item" => item}, state) do
     case item["type"] do
@@ -818,8 +885,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       block = %{state.current_block | thinking: state.current_block.thinking <> delta}
 
       # Update output
-      output = update_content_block(state.output, block)
-      idx = length(output.content) - 1
+      output = update_content_block(state, block)
+      idx = state.current_index
 
       EventStream.push_async(state.stream, {:thinking_delta, idx, delta, output})
       {:ok, %{state | current_block: block, output: output}}
@@ -833,8 +900,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
          state.current_block && state.current_block.type == :thinking do
       delta = "\n\n"
       block = %{state.current_block | thinking: state.current_block.thinking <> delta}
-      output = update_content_block(state.output, block)
-      idx = length(output.content) - 1
+      output = update_content_block(state, block)
+      idx = state.current_index
 
       EventStream.push_async(state.stream, {:thinking_delta, idx, delta, output})
       {:ok, %{state | current_block: block, output: output}}
@@ -861,8 +928,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     if state.current_item && state.current_item["type"] == "message" &&
          state.current_block && state.current_block.type == :text do
       block = %{state.current_block | text: state.current_block.text <> delta}
-      output = update_content_block(state.output, block)
-      idx = length(output.content) - 1
+      output = update_content_block(state, block)
+      idx = state.current_index
 
       EventStream.push_async(state.stream, {:text_delta, idx, delta, output})
       {:ok, %{state | current_block: block, output: output}}
@@ -875,8 +942,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     if state.current_item && state.current_item["type"] == "message" &&
          state.current_block && state.current_block.type == :text do
       block = %{state.current_block | text: state.current_block.text <> delta}
-      output = update_content_block(state.output, block)
-      idx = length(output.content) - 1
+      output = update_content_block(state, block)
+      idx = state.current_index
 
       EventStream.push_async(state.stream, {:text_delta, idx, delta, output})
       {:ok, %{state | current_block: block, output: output}}
@@ -897,8 +964,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
       block =
         %{state.current_block | arguments: arguments} |> Map.put(:partial_json, partial_json)
 
-      output = update_content_block(state.output, block)
-      idx = length(output.content) - 1
+      output = update_content_block(state, block)
+      idx = state.current_index
 
       EventStream.push_async(state.stream, {:tool_call_delta, idx, delta, output})
       {:ok, %{state | current_block: block, output: output}}
@@ -915,7 +982,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
          state.current_block && state.current_block.type == :tool_call do
       parsed_args = parse_streaming_json(arguments)
       block = %{state.current_block | arguments: parsed_args} |> Map.put(:partial_json, arguments)
-      output = update_content_block(state.output, block)
+      output = update_content_block(state, block)
       {:ok, %{state | current_block: block, output: output}}
     else
       {:ok, state}
@@ -938,8 +1005,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
             thinking_signature: Jason.encode!(item)
         }
 
-        output = update_content_block(state.output, block)
-        idx = length(output.content) - 1
+        output = update_content_block(state, block)
+        idx = state.current_index
 
         EventStream.push_async(state.stream, {:thinking_end, idx, thinking, output})
         {:ok, %{state | current_block: nil, output: output}}
@@ -957,8 +1024,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
           |> Enum.join("")
 
         block = %{state.current_block | text: text, text_signature: item["id"]}
-        output = update_content_block(state.output, block)
-        idx = length(output.content) - 1
+        output = update_content_block(state, block)
+        idx = state.current_index
 
         EventStream.push_async(state.stream, {:text_end, idx, text, output})
         {:ok, %{state | current_block: nil, output: output}}
@@ -968,10 +1035,12 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
         partial_json = Map.get(state.current_block, :partial_json, "")
 
         args =
-          if partial_json && partial_json != "" do
-            parse_streaming_json(partial_json)
-          else
-            parse_streaming_json(item["arguments"] || "{}")
+          case Jason.decode(item["arguments"] || partial_json) do
+            {:ok, arguments} when is_map(arguments) ->
+              arguments
+
+            _ ->
+              raise "Invalid tool arguments for #{response_tool_name(item, state.current_block.name)}: expected a JSON object"
           end
 
         tool_call = %ToolCall{
@@ -984,8 +1053,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
           arguments: args
         }
 
-        output = update_content_block(state.output, tool_call)
-        idx = length(output.content) - 1
+        output = update_content_block(state, tool_call)
+        idx = state.current_index
 
         EventStream.push_async(state.stream, {:tool_call_end, idx, tool_call, output})
         {:ok, %{state | current_block: nil, output: output}}
@@ -995,18 +1064,23 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
     end
   end
 
-  defp process_event(%{"type" => "response.completed", "response" => response}, state) do
+  defp process_event(%{"type" => type, "response" => response}, state)
+       when type in ["response.completed", "response.incomplete", "response.done"] do
     output = state.output
 
     # Process usage
     output =
       if response && response["usage"] do
         usage = response["usage"]
-        cached_tokens = get_in(usage, ["input_tokens_details", "cached_tokens"]) || 0
+
+        cached_tokens =
+          get_in(usage, ["input_tokens_details", "cached_tokens"]) ||
+            usage["prompt_cache_hit_tokens"] || 0
+
         raw_input_tokens = usage["input_tokens"] || 0
         input_tokens = max(raw_input_tokens - cached_tokens, 0)
         output_tokens = usage["output_tokens"] || 0
-        total_tokens = usage["total_tokens"] || 0
+        total_tokens = usage["total_tokens"] || raw_input_tokens + output_tokens
 
         usage_struct = %Usage{
           input: input_tokens,
@@ -1107,7 +1181,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   defp unique_response_tool_call_id(requested_id, state, opts \\ []) do
     content =
       if Keyword.get(opts, :exclude_current, false) do
-        Enum.drop(state.output.content, -1)
+        List.delete_at(state.output.content, state.current_index)
       else
         state.output.content
       end
@@ -1153,9 +1227,8 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
 
   defp present_string?(value), do: is_binary(value) and value != ""
 
-  defp update_content_block(output, block) do
-    content = List.replace_at(output.content, length(output.content) - 1, block)
-    %{output | content: content}
+  defp update_content_block(state, block) do
+    %{state.output | content: List.replace_at(state.output.content, state.current_index, block)}
   end
 
   defp map_stop_reason(nil), do: :stop
@@ -1176,24 +1249,7 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   """
   @spec calculate_cost(Model.t(), Usage.t()) :: Usage.t()
   def calculate_cost(model, usage) do
-    cost = model.cost
-
-    input_cost = usage.input / 1_000_000 * cost.input
-    output_cost = usage.output / 1_000_000 * cost.output
-    cache_read_cost = usage.cache_read / 1_000_000 * cost.cache_read
-    cache_write_cost = usage.cache_write / 1_000_000 * cost.cache_write
-    total_cost = input_cost + output_cost + cache_read_cost + cache_write_cost
-
-    %{
-      usage
-      | cost: %Cost{
-          input: input_cost,
-          output: output_cost,
-          cache_read: cache_read_cost,
-          cache_write: cache_write_cost,
-          total: total_cost
-        }
-    }
+    %{usage | cost: LemonAi.calculate_cost(model, usage)}
   end
 
   # ============================================================================
@@ -1265,16 +1321,21 @@ defmodule LemonAi.Providers.OpenAIResponsesShared do
   Get cost multiplier for service tier.
   """
   @spec service_tier_cost_multiplier(String.t() | nil) :: float()
-  def service_tier_cost_multiplier("flex"), do: 0.5
-  def service_tier_cost_multiplier("priority"), do: 2.0
-  def service_tier_cost_multiplier(_), do: 1.0
+  @spec service_tier_cost_multiplier(String.t() | nil, map()) :: number()
+  def service_tier_cost_multiplier(tier, tier_cost \\ %{"flex" => 0.5, "priority" => 2.0}),
+    do: Map.get(tier_cost, tier, 1.0)
 
   @doc """
   Apply service tier pricing to usage.
   """
   @spec apply_service_tier_pricing(Usage.t(), String.t() | nil) :: Usage.t()
-  def apply_service_tier_pricing(usage, service_tier) do
-    multiplier = service_tier_cost_multiplier(service_tier)
+  @spec apply_service_tier_pricing(Usage.t(), String.t() | nil, map()) :: Usage.t()
+  def apply_service_tier_pricing(
+        usage,
+        service_tier,
+        tier_cost \\ %{"flex" => 0.5, "priority" => 2.0}
+      ) do
+    multiplier = service_tier_cost_multiplier(service_tier, tier_cost)
 
     if multiplier == 1.0 do
       usage

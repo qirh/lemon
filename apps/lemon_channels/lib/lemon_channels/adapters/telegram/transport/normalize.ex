@@ -84,13 +84,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Normalize do
            user_msg_id: meta_int(inbound.meta, :user_msg_id),
            text: inbound.message[:text] || inbound.message["text"],
            reply_to_text: inbound.meta[:reply_to_text],
-           reply_to_id: parse_int(inbound.message[:reply_to_id] || inbound.message["reply_to_id"]),
+           reply_to_id:
+             parse_int(inbound.message[:reply_to_id] || inbound.message["reply_to_id"]),
            media_group_id: inbound.meta[:media_group_id],
            raw_update: update,
            inbound: inbound,
-           meta: inbound.meta || %{}
+           meta: inbound.meta
          }}
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

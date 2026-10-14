@@ -44,6 +44,52 @@ Key fields:
 
 ---
 
+## Discovery and Precedence
+
+Lemon discovers existing bundles without copying or installing them. Put each
+skill at `<skills-root>/<skill-key>/SKILL.md`; scanning is one level deep, not
+recursive. The directory name is the lookup key, while frontmatter `name` is a
+display name. Invalid manifests are skipped.
+
+Project skills override user skills with the same key. Within the project:
+
+1. `<cwd>/.lemon/skill` wins.
+2. Walk from cwd to the nearest repository root (including it). At each level,
+   read `.agents/skills`, then `.omp/skills`, then `.claude/skills`. The nearest
+   level wins over more distant ancestors, regardless of provider.
+
+A `.git` directory or worktree `.git` file stops the walk. Outside a repository,
+the walk reaches the filesystem root. Ancestor `.lemon/skill` directories are
+not scanned. Supplying a different cwd changes project discovery; global-only
+lookups do not include project skills.
+
+User roots, highest precedence first:
+
+1. `~/.lemon/agent/skill`
+2. `~/.agents/skills`
+3. `~/.omp/agent/skills`
+4. `~/.claude/skills`
+
+`LEMON_AGENT_DIR` overrides the Lemon agent directory, followed by the
+`:lemon_skills` and `:coding_agent` `:agent_dir` application settings.
+`LEMON_HARNESS_SKILLS_DIR` (or `:lemon_skills, :harness_global_skills_dir`)
+overrides the harness root. When any of these isolation overrides is present,
+the additional OMP and Claude **user defaults are omitted**; existing Lemon
+and harness resolution is unchanged.
+
+To explicitly include alternative user roots, set `LEMON_OMP_SKILLS_DIR` and/or
+`LEMON_CLAUDE_SKILLS_DIR`. Their application-setting equivalents are
+`:lemon_skills, :omp_global_skills_dir` and
+`:lemon_skills, :claude_global_skills_dir`; environment variables win.
+These explicit paths still apply in isolated runtimes.
+
+Discovery does not grant trust or execute a bundle. External and project skills
+remain untrusted content. Listings expose metadata; `read_skill` loads the
+selected body or supporting file on demand. Registry refresh and content-change
+detection apply equally to all roots.
+
+---
+
 ## Listing Skills
 
 ```bash
@@ -81,6 +127,12 @@ system prompt lists installed skills by key and tells the agent to call
 `read_skill` before following any clearly relevant skill, so skill instructions
 can be loaded on demand without injecting every full `SKILL.md` body up front.
 
+The coding `read` tool also accepts `skill://<skill-key>` for the raw `SKILL.md`
+and `skill://<skill-key>/references/example.md` for a supporting file. These use
+the same scoped registry and remain untrusted, read-only references. Use normal
+`offset` and `limit` parameters for a long file; use `read_skill` when you want
+the skill's status, manifest, or a selected heading.
+
 Agents can also maintain procedural memory with `skill_manage`. Use project
 scope for repository-specific workflows and global scope for reusable workflows.
 The tool can create, edit, patch, delete, and maintain supporting files under
@@ -91,10 +143,9 @@ agent-authored skills.
 
 Use skills for procedures, not for every remembered fact. A good skill captures
 repeatable steps: commands, preconditions, checks, rollback paths, API quirks, or
-project conventions that should guide future runs. Use `memory_topic` instead
-for durable facts, preferences, decisions, people, dates, or project context.
-Use `search_memory` to recall previous run history before answering "last time"
-questions, and use `todo` only for the active run's work queue.
+project conventions that should guide future runs. Use `remember` for compact
+durable facts and `recall` for previous run history or longer memory notes.
+Use `todo` only for the active run's work queue.
 
 ---
 
@@ -230,11 +281,9 @@ header, at least one skill, and exactly one cron automation:
 
 ### Review and activate
 
-Start the unified runtime, then use the same catalog-scoped CLI in a source
-checkout or packaged release. The packaged launcher starts its daemon when
-needed; source users run `./bin/lemon --daemon` first. With no arguments the
-family lists the bounded catalog, and a bundle ID plus `--profile` is preview
-shorthand:
+Use the same catalog-scoped CLI in a source checkout or packaged release. Both
+launchers start the daemon when needed. With no arguments the family lists the
+bounded catalog, and a bundle ID plus `--profile` is preview shorthand:
 
 ```bash
 lemon blueprints
@@ -320,14 +369,6 @@ only for trusted source-checkout administration that genuinely needs a local
 path; normal operators should use `lemon blueprints`, and remote clients should
 use the catalog-scoped RPC.
 
-Run the booted-runtime proof to activate the disabled example, verify
-profile-local discovery and persisted provenance, replay it without a
-duplicate, then clean up the isolated profile and job:
-
-```bash
-MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
-```
-
 ---
 
 ## Skill Drafts (Synthesized Skills)
@@ -404,7 +445,7 @@ The runtime also has an idle background curator path. When enabled, Lemon waits
 for active router sessions to drain, applies the same interval/pause gates, and
 submits the curator prompt to the configured agent only when review is required.
 Those background reviews default to the learning tools only: `read_skill`,
-`skill_manage`, `search_memory`, and `memory_topic`.
+`skill_manage`, `remember`, and `recall`.
 
 ---
 

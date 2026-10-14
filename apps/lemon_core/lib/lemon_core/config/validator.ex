@@ -32,7 +32,7 @@ defmodule LemonCore.Config.Validator do
   implementations produce messages in the same shape.
   """
 
-  alias LemonCore.Config.{Features, Modular}
+  alias LemonCore.Config.{Features, LegacyAgentMigration, Memory, Modular}
   alias LemonCore.Config.Gateway.Channel
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
@@ -57,6 +57,8 @@ defmodule LemonCore.Config.Validator do
   @spec validate(Modular.t() | LemonCore.Config.t()) :: :ok | {:error, [String.t()]}
   def validate(%Modular{} = config) do
     errors = []
+    errors = model_role_errors(config.model_roles) ++ errors
+    errors = budget_errors(config.budgets) ++ errors
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
@@ -65,6 +67,8 @@ defmodule LemonCore.Config.Validator do
     errors = validate_tools(config.tools, errors)
     errors = validate_tui(config.tui, errors)
     errors = validate_features(config.features, errors)
+    errors = validate_memory(config.memory, errors)
+    errors = validate_automation(config.automation, errors)
 
     case errors do
       [] -> :ok
@@ -74,6 +78,8 @@ defmodule LemonCore.Config.Validator do
 
   def validate(%LemonCore.Config{} = config) do
     errors = []
+    errors = model_role_errors(config.model_roles) ++ errors
+    errors = budget_errors(config.budgets) ++ errors
     errors = validate_agent(config.agent, errors)
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
@@ -86,9 +92,58 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
+  @doc "Validates the canonical string-valued model role table without provider dependencies."
+  @spec validate_model_roles(term()) :: :ok | {:error, [String.t()]}
+  def validate_model_roles(roles), do: errors_to_result(model_role_errors(roles))
+
+  @doc "Validates optional cumulative token and estimated dollar caps; zero blocks requests."
+  def validate_budgets(budgets), do: errors_to_result(budget_errors(budgets))
+
+  defp budget_errors(budgets) when is_map(budgets) do
+    Enum.flat_map(
+      [:max_run_tokens, :max_run_cost_usd, :max_session_tokens, :max_session_cost_usd],
+      fn key ->
+        value = Map.get(budgets, key)
+        tokens? = key in [:max_run_tokens, :max_session_tokens]
+
+        cond do
+          is_nil(value) -> []
+          tokens? and is_integer(value) and value >= 0 -> []
+          not tokens? and is_number(value) and value >= 0 -> []
+          tokens? -> ["budgets.#{key}: must be a nonnegative integer"]
+          true -> ["budgets.#{key}: must be a finite nonnegative number"]
+        end
+      end
+    )
+  end
+
+  defp budget_errors(_budgets), do: ["budgets: must be a table"]
+
+  defp model_role_errors(roles) when is_map(roles) do
+    Enum.flat_map(roles, fn {role, selector} ->
+      cond do
+        not is_binary(role) or role == "" or String.contains?(role, "@") or
+            String.match?(role, ~r/\s/u) ->
+          ["model_roles: keys must be non-empty role names without @ or whitespace"]
+
+        not is_binary(selector) or String.trim(selector) == "" ->
+          ["model_roles.#{role}: must be a non-empty model selector string"]
+
+        true ->
+          []
+      end
+    end)
+  end
+
+  defp model_role_errors(_), do: ["model_roles: must be a table of model selector strings"]
+
   @doc """
   Validates settings for removed configuration sections and engine-routing keys,
   returning an ok/error tuple.
+
+  The legacy `[agent]` table is not an error: loaders map it onto the canonical
+  sections with `LemonCore.Config.LegacyAgentMigration` first and report it
+  through `deprecation_warnings/1`.
 
   Returns `:ok` if no removed settings are found, or `{:error, errors}`.
   """
@@ -97,16 +152,8 @@ defmodule LemonCore.Config.Validator do
     deprecated_errors =
       []
       |> check_deprecated(
-        is_map(settings["agent"]),
-        "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
-      )
-      |> check_deprecated(
         is_map(settings["agents"]),
         "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
-      )
-      |> check_deprecated(
-        is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
-        "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
       )
       |> check_deprecated(
         is_map(settings["tools"]),
@@ -120,6 +167,21 @@ defmodule LemonCore.Config.Validator do
 
     (deprecated_errors ++ removed_engine_config_errors(settings))
     |> errors_to_result()
+  end
+
+  @doc """
+  Returns non-fatal warnings for legacy settings that still load.
+  """
+  @spec deprecation_warnings(map()) :: [String.t()]
+  def deprecation_warnings(settings) when is_map(settings) do
+    if LegacyAgentMigration.legacy?(settings) do
+      [
+        "[agent] is deprecated and is read as [defaults], [runtime] and [tui]. " <>
+          "Run `lemon config migrate` to rewrite it (the original is kept as a backup)."
+      ]
+    else
+      []
+    end
   end
 
   @removed_engine_keys ~w(
@@ -576,6 +638,25 @@ defmodule LemonCore.Config.Validator do
   end
 
   @doc """
+  Validates the `[memory]` section.
+  """
+  @spec validate_memory(Memory.t() | nil, [String.t()]) :: [String.t()]
+  def validate_memory(%Memory{} = memory, errors) do
+    validate_boolean(errors, memory.auto_recall, "memory.auto_recall")
+  end
+
+  def validate_memory(_memory, errors), do: errors
+
+  @doc """
+  Validates the `[automation]` section.
+  """
+  @spec validate_automation(LemonCore.Config.Automation.t() | nil, [String.t()]) :: [String.t()]
+  def validate_automation(nil, errors), do: errors
+
+  def validate_automation(%LemonCore.Config.Automation{} = automation, errors),
+    do: LemonCore.Config.Automation.validate(automation, errors)
+
+  @doc """
   Validates TUI configuration.
   """
   @spec validate_tui(map(), [String.t()]) :: [String.t()]
@@ -601,13 +682,9 @@ defmodule LemonCore.Config.Validator do
     end
   end
 
-  defp validate_non_empty_string(errors, value, path) when is_atom(value) do
+  defp validate_non_empty_string(errors, value, _path) when is_atom(value) do
     # Atoms are valid for enum-like fields (thinking_level, provider, etc.)
-    if value == nil do
-      ["#{path}: cannot be nil" | errors]
-    else
-      errors
-    end
+    errors
   end
 
   defp validate_non_empty_string(errors, _value, path) do

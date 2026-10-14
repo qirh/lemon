@@ -41,8 +41,6 @@ defmodule LemonAi.Providers.GoogleVertex do
     Usage
   }
 
-  require Logger
-
   @api_version "v1"
 
   # ============================================================================

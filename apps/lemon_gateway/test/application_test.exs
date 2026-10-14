@@ -1,6 +1,7 @@
 defmodule LemonGateway.ApplicationTest do
   alias Elixir.LemonGateway, as: LemonGateway
   use ExUnit.Case, async: false
+  import LemonGateway.AsyncHelpers, only: [assert_eventually: 1, assert_eventually: 2]
 
   alias Elixir.LemonGateway.ExecutionRequest
 
@@ -102,6 +103,19 @@ defmodule LemonGateway.ApplicationTest do
     else
       Application.put_env(:lemon_gateway, :executor, @executor_config)
     end
+  end
+
+  # Blocks until the supervisor has restarted `name` under a new pid and returns it.
+  defp await_restart(name, old_pid) do
+    assert_eventually(
+      fn ->
+        pid = Process.whereis(name)
+        is_pid(pid) and pid != old_pid
+      end,
+      message: "expected #{inspect(name)} to be restarted"
+    )
+
+    Process.whereis(name)
   end
 
   defp expected_children do
@@ -386,10 +400,8 @@ defmodule LemonGateway.ApplicationTest do
 
       # Store should be functional
       scope = {:test, 12_345}
-      LemonCore.Store.put_chat_state(scope, %{test: true})
-      Process.sleep(10)
-      state = LemonCore.Store.get_chat_state(scope)
-      assert state.test == true
+      LemonCore.ChatStateStore.put(scope, %{test: true})
+      assert_eventually(fn -> match?(%{test: true}, LemonCore.ChatStateStore.get(scope)) end)
     end
 
     test "ThreadRegistry is available for ThreadWorker registration" do
@@ -636,9 +648,6 @@ defmodule LemonGateway.ApplicationTest do
       # Stop application
       :ok = Application.stop(:lemon_gateway)
 
-      # Give some time for cleanup
-      Process.sleep(50)
-
       # All should be dead
       assert Enum.all?(child_pids, fn pid -> not Process.alive?(pid) end)
     end
@@ -651,7 +660,6 @@ defmodule LemonGateway.ApplicationTest do
       assert is_pid(Process.whereis(Elixir.LemonGateway.Scheduler))
 
       :ok = Application.stop(:lemon_gateway)
-      Process.sleep(50)
 
       # Names should be freed
       assert Process.whereis(Elixir.LemonGateway.Config) == nil
@@ -661,7 +669,6 @@ defmodule LemonGateway.ApplicationTest do
     test "application can be restarted after shutdown" do
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
       :ok = Application.stop(:lemon_gateway)
-      Process.sleep(50)
 
       # Restart
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
@@ -680,7 +687,6 @@ defmodule LemonGateway.ApplicationTest do
 
       # Stop and restart
       :ok = Application.stop(:lemon_gateway)
-      Process.sleep(50)
       {:ok, _} = Application.ensure_all_started(:lemon_gateway)
 
       # DynamicSupervisors should start fresh with no children
@@ -859,7 +865,7 @@ defmodule LemonGateway.ApplicationTest do
       assert is_pid(pid)
 
       # Should respond to calls
-      result = LemonCore.Store.get_chat_state({:test, 999})
+      result = LemonCore.ChatStateStore.get({:test, 999})
       assert result == nil
     end
 
@@ -903,7 +909,7 @@ defmodule LemonGateway.ApplicationTest do
       session_key = "test:1"
 
       request = %ExecutionRequest{
-        run_id: nil,
+        run_id: LemonCore.Id.run_id(),
         session_key: session_key,
         prompt: "test message",
         resume: nil,
@@ -921,19 +927,15 @@ defmodule LemonGateway.ApplicationTest do
       scope = {:integration_test, System.unique_integer()}
 
       # Write
-      LemonCore.Store.put_chat_state(scope, %{key: "value"})
-      Process.sleep(10)
-
-      # Read
-      state = LemonCore.Store.get_chat_state(scope)
-      assert state.key == "value"
+      LemonCore.ChatStateStore.put(scope, %{key: "value"})
+      assert_eventually(fn -> match?(%{key: "value"}, LemonCore.ChatStateStore.get(scope)) end)
 
       # Delete
-      LemonCore.Store.delete_chat_state(scope)
-      Process.sleep(10)
+      LemonCore.ChatStateStore.delete(scope)
+      assert_eventually(fn -> LemonCore.ChatStateStore.get(scope) == nil end)
 
       # Verify deleted
-      assert LemonCore.Store.get_chat_state(scope) == nil
+      assert LemonCore.ChatStateStore.get(scope) == nil
     end
 
     test "EngineLock provides mutual exclusion" do
@@ -954,7 +956,7 @@ defmodule LemonGateway.ApplicationTest do
         end)
 
       # Should timeout waiting for lock
-      assert_receive {:task_result, {:error, :timeout}}, 500
+      assert_receive {:task_result, {:error, :timeout}}
 
       Task.shutdown(task, :brutal_kill)
 
@@ -1005,11 +1007,7 @@ defmodule LemonGateway.ApplicationTest do
       # Kill the process
       Process.exit(original_pid, :kill)
 
-      # Wait for restart
-      Process.sleep(100)
-
-      # Should have a new pid
-      new_pid = Process.whereis(Elixir.LemonGateway.Config)
+      new_pid = await_restart(Elixir.LemonGateway.Config, original_pid)
       assert is_pid(new_pid)
       assert new_pid != original_pid
 
@@ -1027,11 +1025,7 @@ defmodule LemonGateway.ApplicationTest do
       # Kill the process
       Process.exit(original_pid, :kill)
 
-      # Wait for restart
-      Process.sleep(100)
-
-      # Should have a new pid
-      new_pid = Process.whereis(Elixir.LemonGateway.Scheduler)
+      new_pid = await_restart(Elixir.LemonGateway.Scheduler, original_pid)
       assert is_pid(new_pid)
       assert new_pid != original_pid
     end
@@ -1045,16 +1039,12 @@ defmodule LemonGateway.ApplicationTest do
       # Kill the process
       Process.exit(original_pid, :kill)
 
-      # Wait for restart
-      Process.sleep(100)
-
-      # Should have a new pid
-      new_pid = Process.whereis(LemonCore.Store)
+      new_pid = await_restart(LemonCore.Store, original_pid)
       assert is_pid(new_pid)
       assert new_pid != original_pid
 
       # Should still be functional
-      result = LemonCore.Store.get_chat_state({:test, 1})
+      result = LemonCore.ChatStateStore.get({:test, 1})
       assert result == nil
     end
 
@@ -1067,11 +1057,7 @@ defmodule LemonGateway.ApplicationTest do
       # Kill the process
       Process.exit(original_pid, :kill)
 
-      # Wait for restart
-      Process.sleep(100)
-
-      # Should have a new pid
-      new_pid = Process.whereis(Elixir.LemonGateway.EngineLock)
+      new_pid = await_restart(Elixir.LemonGateway.EngineLock, original_pid)
       assert is_pid(new_pid)
       assert new_pid != original_pid
 

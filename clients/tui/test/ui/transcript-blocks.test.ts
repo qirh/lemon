@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+	setTranscriptActionHandler,
+	type TranscriptAction,
+} from "@oh-my-pi/pi-tui/chat/transcript-actions";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AssistantMessageComponent } from "../../src/ui/components/assistant-message.ts";
 import { NoticeComponent } from "../../src/ui/components/notice-message.ts";
@@ -78,33 +83,36 @@ describe("AssistantMessageComponent", () => {
 		expect(component.getTranscriptBlockVersion()).toBeGreaterThan(before);
 	});
 
-	test("declares settled rows only from the markdown frozen prefix", () => {
+	test("publishes only the markdown frozen source prefix", () => {
 		const component = new AssistantMessageComponent();
 		component.updateContent("first paragraph\n\nsecond paragraph still growing");
 		const lines = component.render(WIDTH);
-		const settled = component.getTranscriptBlockSettledRows();
-		// Never over-declare: the settled prefix cannot exceed what was rendered,
-		// and the still-growing tail paragraph must stay outside it.
-		expect(settled).toBeGreaterThan(0);
-		expect(settled).toBeLessThan(lines.length);
+		const stable = component.renderTranscriptStableRows(
+			component.getTranscriptStableRows().length,
+			WIDTH,
+		);
+		expect(stable.length).toBeGreaterThan(0);
+		expect(stable.length).toBeLessThan(lines.length);
+		expect(lines.slice(0, stable.length)).toEqual([...stable]);
 	});
 
-	test("declares no settled rows once finalized", () => {
+	test("finalization preserves already-published identities for history replay", () => {
 		const component = new AssistantMessageComponent();
 		component.updateContent("a\n\nb\n\nc");
 		component.render(WIDTH);
+		const keys = component.getTranscriptStableRows().map((row) => row.key);
 		component.finalize({ ok: true });
 		component.render(WIDTH);
-		expect(component.getTranscriptBlockSettledRows()).toBe(0);
+		expect(component.getTranscriptStableRows().map((row) => row.key)).toEqual(keys);
 	});
 
-	test("settled rows never shrink while text only grows", () => {
+	test("stable publications never shrink while text only grows", () => {
 		const component = new AssistantMessageComponent();
 		let previous = 0;
 		for (const text of ["one\n\n", "one\n\ntwo\n\n", "one\n\ntwo\n\nthree\n\nfour"]) {
 			component.updateContent(text);
 			component.render(WIDTH);
-			const settled = component.getTranscriptBlockSettledRows();
+			const settled = component.getTranscriptStableRows().length;
 			expect(settled).toBeGreaterThanOrEqual(previous);
 			previous = settled;
 		}
@@ -127,6 +135,34 @@ describe("AssistantMessageComponent", () => {
 		expect(text).toContain("partial");
 		expect(text).toContain("Error: provider exploded");
 	});
+
+	test("natively, only the reported turn gets a footer whose Copy copies the reply", () => {
+		const copied: TranscriptAction[] = [];
+		setTranscriptActionHandler((action) => copied.push(action));
+		try {
+			const roles = (node: NativeNode) =>
+				(node.c ?? []).map((child) => ("k" in child ? child.p?.role : "component"));
+			const earlier = new AssistantMessageComponent("Looking first.");
+			earlier.finalize({});
+			expect(roles(earlier.describe())).toEqual([undefined]);
+
+			const last = new AssistantMessageComponent("half");
+			last.finalize({ interrupted: true, turn: { durationMs: 4200 } });
+			const described = last.describe();
+			expect(described.c?.[0]).toMatchObject({ k: "md", p: { text: "half" } });
+			expect(roles(described)).toEqual([undefined, "omp.assistant.abort", "omp.turn.usage"]);
+			expect(last.describe()).toBe(described);
+			last.handleNativeEvent({
+				type: "action",
+				key: "turn-usage/copy",
+				act: "copy-answer",
+				mods: [],
+			});
+			expect(copied).toEqual([{ act: "copy", text: "half" }]);
+		} finally {
+			setTranscriptActionHandler(undefined);
+		}
+	});
 });
 
 describe("TranscriptContainer", () => {
@@ -141,23 +177,25 @@ describe("TranscriptContainer", () => {
 		]);
 	});
 
-	test("the commit seam stops at the first unfinalized block", () => {
+	test("retirement stops before an unfinished block and resumes on finalization", () => {
 		const container = new TranscriptContainer();
 		container.addChild(new UserMessageComponent("hello"));
 		const assistant = new AssistantMessageComponent();
 		assistant.updateContent("frozen paragraph\n\nstill streaming");
 		container.addChild(assistant);
-		container.render(WIDTH);
-
-		const seam = container.getNativeScrollbackLiveRegionStart();
-		const rows = container.render(WIDTH).length;
-		expect(seam).toBeGreaterThan(0);
-		expect(seam).toBeLessThan(rows);
+		container.addChild(new NoticeComponent("after the reply"));
+		const prefix = container.peekFlushBatch(WIDTH)!;
+		expect(renderPlain(prefix.rows)).toContain("hello");
+		expect(renderPlain(prefix.rows)).not.toContain("after the reply");
+		container.acknowledgeFinalizedBatch(prefix.id);
+		expect(container.peekFlushBatch(WIDTH)).toBeUndefined();
 
 		assistant.finalize({ ok: true });
-		container.render(WIDTH);
-		// Nothing is live any more: the whole transcript is committable.
-		expect(container.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		const remainder = container.peekFlushBatch(WIDTH)!;
+		expect(renderPlain(remainder.rows)).toContain("still streaming");
+		expect(renderPlain(remainder.rows)).toContain("after the reply");
+		container.acknowledgeFinalizedBatch(remainder.id);
+		expect(container.peekFlushBatch(WIDTH)).toBeUndefined();
 	});
 
 	test("returns the same array reference when nothing changed", () => {

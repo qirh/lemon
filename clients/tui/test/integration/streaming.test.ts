@@ -14,6 +14,7 @@ import { resetBlockIds } from "../../src/store/transcript-model.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { MemoryTerminal, renderPlain } from "../helpers/memory-terminal.ts";
+import { unfinalizedBlocks } from "../helpers/transcript.ts";
 import { waitFor } from "../helpers/wait.ts";
 
 const SESSION = "tui-it";
@@ -41,6 +42,7 @@ afterEach(() => {
 async function boot() {
 	const server = await FakeControlPlane.start();
 	teardown.push(() => server.stop());
+	server.respondWith("chat.history", { messages: [] });
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: RUN,
 		sessionKey: params.sessionKey,
@@ -79,7 +81,7 @@ describe("scripted conversation", () => {
 			type: "started",
 			runId: RUN,
 			sessionKey: SESSION,
-			engine: "claude",
+			engine: "lemon",
 		});
 		for (const [index, text] of DELTAS.entries()) {
 			server.pushEvent("chat", {
@@ -95,7 +97,12 @@ describe("scripted conversation", () => {
 			runId: RUN,
 			sessionKey: SESSION,
 			phase: "started",
-			action: { id: "act-1", kind: "command", title: "bash: ls -la", detail: { args: "ls -la" } },
+			action: {
+				id: "act-1",
+				kind: "command",
+				title: "bash: ls -la",
+				detail: { name: "bash", args: { command: "ls -la" } },
+			},
 		});
 
 		const session = app.store.focused;
@@ -112,8 +119,17 @@ describe("scripted conversation", () => {
 			sessionKey: SESSION,
 			phase: "completed",
 			ok: true,
-			message: "12 entries",
-			action: { id: "act-1", kind: "command", title: "bash: ls -la", detail: null },
+			action: {
+				id: "act-1",
+				kind: "command",
+				title: "bash: ls -la",
+				detail: {
+					name: "bash",
+					args: { command: "ls -la" },
+					result: "12 entries",
+					details: { exit_code: 0 },
+				},
+			},
 		});
 		server.pushEvent("agent", {
 			type: "completed",
@@ -237,7 +253,7 @@ describe("scripted conversation", () => {
 		expect(transcript(app)).toContain("Error: run failed");
 	});
 
-	test("the commit seam opens while streaming and closes when the run ends", async () => {
+	test("the reply stays mutable while streaming and finalizes when the run ends", async () => {
 		const { app, server } = await boot();
 		await app.submit("stream please");
 		server.pushEvent("agent", { type: "started", runId: RUN, sessionKey: SESSION });
@@ -252,8 +268,7 @@ describe("scripted conversation", () => {
 		const session = app.store.focused;
 		await waitFor(() => session.bufferFor(RUN).length > 0, { what: "the first delta" });
 		app.chatContainer.render(80);
-		const seam = app.chatContainer.getNativeScrollbackLiveRegionStart();
-		expect(seam).toBeGreaterThan(0);
+		expect(unfinalizedBlocks(app.chatContainer).length).toBeGreaterThan(0);
 
 		server.pushEvent("agent", {
 			type: "completed",
@@ -264,6 +279,6 @@ describe("scripted conversation", () => {
 		});
 		await waitFor(() => session.busy === false, { what: "the run to finish" });
 		app.chatContainer.render(80);
-		expect(app.chatContainer.getNativeScrollbackLiveRegionStart()).toBeUndefined();
+		expect(unfinalizedBlocks(app.chatContainer)).toHaveLength(0);
 	});
 });

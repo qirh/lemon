@@ -56,8 +56,8 @@ defmodule LemonSkills.Lockfile do
   @lock_sleep_ms 10
 
   @type scope :: :global | {:project, String.t()}
-  @type record :: %{String.t() => term()}
-  @type skills_map :: %{String.t() => record()}
+  @type skill_record :: %{String.t() => term()}
+  @type skills_map :: %{String.t() => skill_record()}
 
   # ---------------------------------------------------------------------------
   # Path helpers
@@ -114,7 +114,7 @@ defmodule LemonSkills.Lockfile do
 
   Returns `{:ok, record}` or `:not_found`.
   """
-  @spec get(scope(), String.t()) :: {:ok, record()} | :not_found
+  @spec get(scope(), String.t()) :: {:ok, skill_record()} | :not_found
   def get(scope, key) when is_binary(key) do
     case read(scope) do
       {:ok, skills} ->
@@ -134,7 +134,7 @@ defmodule LemonSkills.Lockfile do
   `record` must include a `"key"` string field (as returned by
   `LemonSkills.Entry.to_lockfile_record/1`).
   """
-  @spec put(scope(), record()) :: :ok | {:error, term()}
+  @spec put(scope(), skill_record()) :: :ok | {:error, term()}
   def put(scope, %{"key" => key} = record) when is_binary(key) do
     with_file_lock(scope, fn ->
       with {:ok, skills} <- read(scope) do

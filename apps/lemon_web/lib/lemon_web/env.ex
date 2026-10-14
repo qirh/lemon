@@ -10,18 +10,6 @@ defmodule LemonWeb.Env do
 
   @declarations [
     %{
-      name: :lemon_web_access_token,
-      env_var: "LEMON_WEB_ACCESS_TOKEN",
-      aliases: [],
-      type: :string,
-      default: nil,
-      doc: "Bearer token required to access the LemonWeb HTTP API.",
-      secret?: true,
-      required?: false,
-      area: :endpoints,
-      apps: [:lemon_web]
-    },
-    %{
       name: :lemon_web_host,
       env_var: "LEMON_WEB_HOST",
       aliases: [],

@@ -45,7 +45,78 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     ensure_channel_registry_started()
     ensure_channel_outbox_started()
 
+    if is_nil(Process.whereis(LemonChannels.Supervision)),
+      do: start_supervised!(LemonChannels.Supervision)
+
     {:ok, token: System.unique_integer([:positive, :monotonic])}
+  end
+
+  test "goal and isolated kanban supervision keep their exact bound topic", %{token: token} do
+    register_forwarding_telegram_plugin()
+    session = "agent:remote_#{token}:main"
+    params = %{run_id: "run_goal_remote_#{token}", session_key: session <> ":goal_judge"}
+
+    {:ok, goal} =
+      LemonAgent.Workspace.GoalStore.set(session, "Check result",
+        meta: %{"deliverTo" => "telegram:-100777:12"}
+      )
+
+    on_exit(fn -> LemonAgent.Workspace.GoalStore.clear(session) end)
+    assert :ok = LemonAutomation.RunNotifications.bind_goal(goal, params)
+
+    {:ok, _} =
+      LemonAgent.Workspace.GoalStore.record_loop_status(session, :running,
+        run_id: params.run_id,
+        run_kind: :judge
+      )
+
+    {:ok, _} = LemonAgent.Workspace.GoalStore.complete(session)
+    assert :ok = LemonAutomation.RunNotifications.goal_finished(session, :finished)
+
+    assert_receive {:cron_forwarded_channel_payload,
+                    %{peer: %{id: "-100777", thread_id: "12"}, content: content}},
+                   2_000
+
+    assert content =~ goal.id
+    assert content =~ params.run_id
+    assert :ok = LemonAutomation.RunNotifications.goal_finished(session, :finished)
+    refute_receive {:cron_forwarded_channel_payload, _}, 100
+
+    {:ok, board} =
+      LemonAgent.Workspace.KanbanStore.create_board("Remote",
+        meta: %{
+          "notificationSessionKey" => "agent:operator:telegram:default:group:-100777:thread:12"
+        }
+      )
+
+    on_exit(fn -> LemonAgent.Workspace.KanbanStore.clear_board(board.id) end)
+
+    {:ok, task} =
+      LemonAgent.Workspace.KanbanStore.create_task(board.id, "Remote card",
+        session_key: session,
+        run_id: "run_card_remote_#{token}"
+      )
+
+    assert :ok =
+             LemonAutomation.RunNotifications.bind_kanban(task, %{
+               run_id: task.run_id,
+               session_key: session
+             })
+
+    {:ok, leased} = LemonAgent.Workspace.KanbanStore.lease_task(board.id, "worker")
+    lease = leased.meta["kanbanLease"]["id"]
+
+    {:ok, failed} =
+      LemonAgent.Workspace.KanbanStore.fail_leased_task(task.id, lease, "run_failed")
+
+    assert :ok = LemonAutomation.RunNotifications.kanban_finished(failed, lease)
+
+    assert_receive {:cron_forwarded_channel_payload,
+                    %{peer: %{id: "-100777", thread_id: "12"}, content: content}},
+                   2_000
+
+    assert content =~ task.id
+    assert content =~ task.run_id
   end
 
   test "forwards completed cron summary into originating main session", %{token: token} do
@@ -181,24 +252,179 @@ defmodule LemonAutomation.CronManagerForwardingTest do
                       account_id: "default",
                       peer: %{kind: :group, id: peer_id, thread_id: thread_id},
                       kind: :text,
-                      content: content,
-                      idempotency_key: idempotency_key,
-                      meta: %{
-                        origin: :cron,
-                        cron_forwarded_summary: true,
-                        cron_run_id: run_id,
-                        cron_job_id: job_id
-                      }
+                      content: content
                     }},
                    2_000
 
     assert peer_id == "-100#{abs(token)}"
     assert thread_id == "#{abs(token)}"
-    assert content =~ "RUN SUMMARY"
-    assert content =~ "cron_run_id: #{run.id}"
-    assert idempotency_key == "cron_notify_#{run.id}"
-    assert run_id == run.id
-    assert job_id == run.job_id
+    assert content =~ "delivered to topic"
+    assert content =~ run.run_id
+
+    assert await(fn ->
+             match?(
+               {:ok, %{delivery_state: :delivered}},
+               LemonChannels.Supervision.status({:cron, run.job_id, run.run_id, :completed})
+             )
+           end)
+  end
+
+  describe "default delivery to the paired owner chat" do
+    setup do
+      register_forwarding_telegram_plugin()
+      pair_owner_chat(424_242)
+      :ok
+    end
+
+    test "a job created from a non-channel session delivers to the owner chat", %{token: token} do
+      job = add_job!(token, "tui", LemonCore.SessionKey.main("cron_forward_#{token}"))
+      run = complete_run!(job, "Morning: 2 reminders today")
+
+      assert_receive {:cron_forwarded_channel_payload,
+                      %LemonChannels.OutboundPayload{
+                        channel_id: "telegram",
+                        account_id: "default",
+                        peer: %{kind: :dm, id: "424242", thread_id: nil},
+                        content: content
+                      }},
+                     2_000
+
+      assert content =~ "Morning: 2 reminders today"
+      assert content =~ run.run_id
+    end
+
+    test "a non-Lemon session id (web/CLI client) also falls back to the owner chat", %{
+      token: token
+    } do
+      web_session =
+        "agent:cron_forward_#{token}:web:browser:unknown:tab-#{token}"
+
+      job = add_job!(token, "web", web_session)
+      complete_run!(job, "done")
+
+      assert_receive {:cron_forwarded_channel_payload,
+                      %LemonChannels.OutboundPayload{peer: %{id: "424242"}}},
+                     2_000
+    end
+
+    test "an explicit deliver_to overrides the owner chat", %{token: token} do
+      job =
+        add_job!(token, "explicit", LemonCore.SessionKey.main("cron_forward_#{token}"),
+          deliver_to: "telegram:-100777:12"
+        )
+
+      complete_run!(job, "sent to the team topic")
+
+      assert_receive {:cron_forwarded_channel_payload,
+                      %LemonChannels.OutboundPayload{
+                        peer: %{kind: :group, id: "-100777", thread_id: "12"},
+                        content: content
+                      }},
+                     2_000
+
+      assert content =~ "sent to the team topic"
+    end
+
+    test "deliver_to none opts out of channel delivery", %{token: token} do
+      job =
+        add_job!(token, "quiet", LemonCore.SessionKey.main("cron_forward_#{token}"),
+          deliver_to: "none"
+        )
+
+      run = complete_run!(job, "nobody should see this")
+
+      refute_receive {:cron_forwarded_channel_payload, _payload}, 300
+      assert %CronRun{status: :completed} = CronStore.get_run(run.id)
+    end
+
+    test "a healthy heartbeat is suppressed; any other heartbeat reply is delivered", %{
+      token: token
+    } do
+      job =
+        add_job!(token, "heartbeat", LemonCore.SessionKey.main("cron_forward_#{token}"),
+          meta: %{heartbeat: true}
+        )
+
+      ok_run = complete_run!(job, "  HEARTBEAT_OK\n", "ok")
+
+      refute_receive {:cron_forwarded_channel_payload, _payload}, 300
+      assert await(fn -> match?(%CronRun{suppressed: true}, CronStore.get_run(ok_run.id)) end)
+
+      complete_run!(job, "CI is red on main", "alert")
+
+      assert_receive {:cron_forwarded_channel_payload,
+                      %LemonChannels.OutboundPayload{content: content}},
+                     2_000
+
+      assert content =~ "CI is red on main"
+    end
+
+    test "a one-shot job is delivered and then removed", %{token: token} do
+      job =
+        add_job!(token, "once", LemonCore.SessionKey.main("cron_forward_#{token}"), once: true)
+
+      complete_run!(job, "check the oven")
+
+      assert_receive {:cron_forwarded_channel_payload,
+                      %LemonChannels.OutboundPayload{content: content}},
+                     2_000
+
+      assert content =~ "check the oven"
+      assert await(fn -> not Enum.any?(CronManager.list(), &(&1.id == job.id)) end)
+    end
+  end
+
+  defp pair_owner_chat(chat_id) do
+    previous = Application.get_env(:lemon_gateway, LemonGateway.Config)
+
+    Application.put_env(:lemon_gateway, LemonGateway.Config, %{
+      enable_telegram: true,
+      telegram: %{allowed_chat_ids: [chat_id]},
+      max_concurrent_runs: 1
+    })
+
+    on_exit(fn ->
+      if previous do
+        Application.put_env(:lemon_gateway, LemonGateway.Config, previous)
+      else
+        Application.delete_env(:lemon_gateway, LemonGateway.Config)
+      end
+    end)
+  end
+
+  defp add_job!(token, suffix, session_key, opts \\ []) do
+    params =
+      %{
+        name: "forward-#{token}-#{suffix}",
+        schedule: "0 9 * * *",
+        agent_id: "cron_forward_#{token}",
+        session_key: session_key,
+        prompt: "report",
+        enabled: false
+      }
+      |> Map.merge(Map.new(opts))
+
+    {:ok, job} = CronManager.add(params)
+    on_exit(fn -> CronManager.remove(job.id) end)
+    job
+  end
+
+  # Simulates the scheduled run of `job` finishing with `output`.
+  defp complete_run!(job, output, suffix \\ "run") do
+    run = %CronRun{
+      id: "run_#{job.id}_#{suffix}",
+      job_id: job.id,
+      run_id: "router_#{job.id}_#{suffix}",
+      status: :running,
+      started_at_ms: LemonCore.Clock.now_ms() - 1_000,
+      triggered_by: :schedule,
+      suppressed: false,
+      meta: %{session_key: job.session_key, job_name: job.name, agent_id: job.agent_id}
+    }
+
+    :ok = CronStore.put_run(run)
+    send(CronManager, {:run_complete, run.id, {:ok, output}})
+    run
   end
 
   defp register_forwarding_telegram_plugin do
@@ -258,7 +484,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     }
   end
 
-  defp await(fun, attempts \\ 100)
+  defp await(fun, attempts \\ 500)
 
   defp await(_fun, 0), do: false
 
@@ -271,7 +497,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
     end
   end
 
-  defp await_value(fun, attempts \\ 100)
+  defp await_value(fun, attempts \\ 500)
 
   defp await_value(_fun, 0), do: flunk("timed out waiting for expected value")
 

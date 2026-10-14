@@ -27,7 +27,7 @@ defmodule LemonAi.Providers.Bedrock do
   alias LemonAi.EventStream
   alias LemonAi.Providers.HttpTrace
   import LemonAi.Providers.AssistantMessageHelper
-  alias LemonAi.Types.{AssistantMessage, Context, Cost, Model, StreamOptions, Usage}
+  alias LemonAi.Types.{AssistantMessage, Context, Model, StreamOptions, Usage}
   alias LemonAi.Types.{TextContent, ThinkingContent, ToolCall}
   alias LemonAi.Types.{UserMessage, ToolResultMessage}
   alias LemonAi.Providers.TextSanitizer
@@ -108,7 +108,7 @@ defmodule LemonAi.Providers.Bedrock do
              ) do
           {:ok, response} ->
             EventStream.push_async(stream, {:start, output})
-            output = process_event_stream(response.body, output, stream)
+            output = process_event_stream(response.body, output, stream, model)
 
             if output.stop_reason in [:error, :aborted] do
               EventStream.error(stream, output)
@@ -669,8 +669,6 @@ defmodule LemonAi.Providers.Bedrock do
     end)
   end
 
-  defp summarize_messages(_), do: []
-
   defp summarize_content_types(content) when is_list(content) do
     content
     |> Enum.map(fn
@@ -857,10 +855,11 @@ defmodule LemonAi.Providers.Bedrock do
   # Event Stream Processing (Bedrock Binary Protocol)
   # ============================================================================
 
-  defp process_event_stream(body_stream, output, stream) do
+  defp process_event_stream(body_stream, output, stream, model) do
     # State for tracking content blocks by index
     initial_state = %{
       output: output,
+      model: model,
       # Map of content_block_index -> block data
       blocks: %{},
       # Buffer for incomplete frames
@@ -914,7 +913,7 @@ defmodule LemonAi.Providers.Bedrock do
     if byte_size(buffer) < message_length do
       :incomplete
     else
-      <<frame_data::binary-size(message_length), remaining::binary>> = buffer
+      {frame_data, remaining} = :erlang.split_binary(buffer, message_length)
 
       # Extract headers and payload
       # Frame structure: prelude(8) + prelude_crc(4) + headers + payload + message_crc(4)
@@ -1163,9 +1162,12 @@ defmodule LemonAi.Providers.Bedrock do
             cache_read: usage["cacheReadInputTokens"] || 0,
             cache_write: usage["cacheWriteInputTokens"] || 0,
             total_tokens:
-              usage["totalTokens"] || (usage["inputTokens"] || 0) + (usage["outputTokens"] || 0),
-            # Cost calculation could be added based on model pricing
-            cost: %Cost{}
+              usage["totalTokens"] || (usage["inputTokens"] || 0) + (usage["outputTokens"] || 0)
+          }
+
+          updated_usage = %{
+            updated_usage
+            | cost: LemonAi.calculate_cost(state.model, updated_usage)
           }
 
           output = %{state.output | usage: updated_usage}

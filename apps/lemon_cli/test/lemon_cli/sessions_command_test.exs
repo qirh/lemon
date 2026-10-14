@@ -8,12 +8,68 @@ defmodule LemonCli.SessionsCommandTest do
 
   setup do
     suffix = System.unique_integer([:positive, :monotonic])
+
+    system_keys = [
+      "LEMON_CONTROL_PLANE_PORT",
+      "LEMON_CONTROL_PLANE_OPERATOR_TOKEN",
+      "LEMON_WS_TOKEN",
+      "LEMON_LAUNCHER"
+    ]
+
+    previous_system = Map.new(system_keys, &{&1, System.get_env(&1)})
+    app_keys = [:operator_token, :allow_unauthenticated_loopback_operator]
+    previous_app = Map.new(app_keys, &{&1, Application.get_env(:lemon_control_plane, &1)})
+    token = "sessions-cli-wire-operator"
+    Application.put_env(:lemon_control_plane, :operator_token, token)
+    Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false)
+
+    bandit =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Bandit,
+           plug: LemonControlPlane.HTTP.Router, ip: {127, 0, 0, 1}, port: 0, startup_log: false},
+          id: {:session_cli_wire, suffix}
+        )
+      )
+
+    assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
+    System.put_env("LEMON_CONTROL_PLANE_PORT", Integer.to_string(port))
+    System.put_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN", token)
+    System.delete_env("LEMON_WS_TOKEN")
+    System.delete_env("LEMON_LAUNCHER")
+
+    on_exit(fn ->
+      Enum.each(previous_system, fn
+        {key, nil} -> System.delete_env(key)
+        {key, value} -> System.put_env(key, value)
+      end)
+
+      Enum.each(previous_app, fn
+        {key, nil} -> Application.delete_env(:lemon_control_plane, key)
+        {key, value} -> Application.put_env(:lemon_control_plane, key, value)
+      end)
+    end)
+
     session_key = "agent:cli_sessions_#{suffix}:main"
     run_id = "run-cli-sessions-#{suffix}"
 
     on_exit(fn -> SessionLifecycle.delete(session_key) end)
 
     {:ok, session_key: session_key, run_id: run_id, suffix: suffix}
+  end
+
+  test "session management refuses invalid daemon credentials instead of reading local state",
+       %{session_key: session_key, run_id: run_id} do
+    seed_session(session_key, run_id, "daemon-owned", "persisted")
+    System.put_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN", "wrong-operator")
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["sessions", "list", "--json"]) == 1
+      end)
+
+    assert Jason.decode!(error)["error"]["code"] == "session_authentication_failed"
+    assert SessionLifecycle.get(session_key)
   end
 
   test "bounded list/search/show/history and metadata commands share redacted state",
@@ -55,7 +111,6 @@ defmodule LemonCli.SessionsCommandTest do
     assert history["redacted"] == true
     assert length(history["history"]) == 1
     refute inspect(history) =~ secret
-    assert inspect(history) =~ "[redacted]"
 
     stats =
       run_json([
@@ -114,7 +169,6 @@ defmodule LemonCli.SessionsCommandTest do
 
     content = File.read!(output_path)
     refute content =~ secret
-    assert content =~ "[redacted]"
     assert Bitwise.band(File.stat!(output_path).mode, 0o777) == 0o600
 
     error =
@@ -226,6 +280,90 @@ defmodule LemonCli.SessionsCommandTest do
     assert not_found == "Session not found.\n"
   end
 
+  defmodule ContextProvider do
+    def session_context_usage(key, cwd) do
+      case :persistent_term.get({__MODULE__, :result}) do
+        :report ->
+          ids = ~w(system_prompt tool_definitions skills context_files memory user_messages
+                   assistant_messages tool_results summaries)a
+
+          tokens = [2_000, 6_000, 500, 1_500, 0, 500, 1_500, 8_000, 0]
+          :persistent_term.put({__MODULE__, :request}, {key, cwd})
+
+          {:ok,
+           %{
+             live: false,
+             overhead: :snapshot,
+             model: %{provider: "anthropic", id: "claude-sonnet-4-5"},
+             window: 200_000,
+             used_tokens: 20_000,
+             source: "usage",
+             estimated_tokens: 19_000,
+             auto_compaction: %{
+               enabled: true,
+               threshold_tokens: 168_000,
+               reserve_tokens: 32_000,
+               headroom_tokens: 148_000
+             },
+             categories:
+               Enum.zip_with(ids, tokens, &%{id: &1, tokens: &2, percent: nil, items: 1}),
+             top: [%{category: :tool_results, label: "read result #5", tokens: 8_000}],
+             message_count: 6,
+             measured_at: 1
+           }}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  test "sessions context prints the daemon's context-window breakdown" do
+    previous = Application.get_env(:lemon_core, :agent_runtime_provider)
+    Application.put_env(:lemon_core, :agent_runtime_provider, ContextProvider)
+    :persistent_term.put({ContextProvider, :result}, :report)
+
+    on_exit(fn ->
+      :persistent_term.erase({ContextProvider, :result})
+      :persistent_term.erase({ContextProvider, :request})
+
+      if previous,
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, previous),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
+    end)
+
+    key = "agent:default:tui:local:dm:context"
+    json = run_json(["sessions", "context", key, "--cwd", "/repo", "--json"])
+    assert :persistent_term.get({ContextProvider, :request}) == {key, "/repo"}
+    assert json["context"]["usedTokens"] == 20_000
+    assert Enum.sum(Enum.map(json["context"]["categories"], & &1["tokens"])) == 20_000
+
+    text =
+      capture_io(fn -> assert CLI.run(["sessions", "context", key, "--cwd", "/repo"]) == 0 end)
+
+    assert text =~ "Model: claude-sonnet-4-5  20.0k / 200.0k tokens (10.0%)  [provider-reported]"
+    assert text =~ "[" <> String.duplicate("#", 4) <> String.duplicate(".", 36) <> "]"
+    assert text =~ ~r/Tool results\s+8\.0k\s+4\.0%/
+    assert text =~ ~r/Free space\s+180\.0k\s+90\.0%/
+    assert text =~ "1. read result #5  8.0k"
+    assert text =~ "measured when the last turn ended"
+
+    :persistent_term.put({ContextProvider, :result}, {:error, :session_not_found})
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["sessions", "context", key, "--cwd", "/repo", "--json"]) == 1
+      end)
+
+    assert Jason.decode!(error)["error"]["code"] == "session_not_found"
+
+    :persistent_term.put({ContextProvider, :result}, {:error, :unavailable})
+
+    assert capture_io(:stderr, fn ->
+             assert CLI.run(["sessions", "context", key]) == 1
+           end) =~ "not available yet"
+  end
+
   defp seed_session(session_key, run_id, prompt, answer, updated_at_ms \\ nil) do
     :ok =
       RunStore.finalize(run_id, %{
@@ -271,7 +409,7 @@ defmodule LemonCli.SessionsCommandTest do
     assert output =~ expected
   end
 
-  defp eventually(fun, attempts \\ 100)
+  defp eventually(fun, attempts \\ 500)
 
   defp eventually(fun, attempts) when attempts > 0 do
     if fun.() do

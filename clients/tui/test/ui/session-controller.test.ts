@@ -4,6 +4,7 @@ import { FakeControlPlane } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import type { ChatHistoryMessage } from "../../src/protocol/types.ts";
 import { SessionStore } from "../../src/store/session-store.ts";
+import { ToolCardComponent } from "../../src/ui/components/tool-card.ts";
 import {
 	pendingApprovalsFrom,
 	synthesizeHistory,
@@ -192,11 +193,13 @@ describe("SessionController.create", () => {
 		const key = await app.sessions.create(undefined, "first thing");
 
 		expect(app.sessionKey).toBe(key);
-		expect(key.startsWith("tui-")).toBe(true);
+		expect(key).toMatch(/^agent:default:tui:local:dm:[0-9a-f-]{36}$/);
 		const send = server.requestsFor("chat.send").at(-1);
 		expect(send?.params).toMatchObject({ sessionKey: key, prompt: "first thing" });
 		// A minted session has no stored history worth a round-trip.
-		expect(server.requestsFor("chat.history")).toHaveLength(0);
+		expect(server.requestsFor("chat.history")).not.toContainEqual(
+			expect.objectContaining({ params: expect.objectContaining({ sessionKey: key }) }),
+		);
 	});
 
 	test("accepts an explicit key and creates nothing daemon-side without a prompt", async () => {
@@ -404,9 +407,19 @@ describe("synthesizeHistory", () => {
 		expect(result.accepted).toBe(true);
 	});
 
-	test("maps tool records to completed tool blocks, named from whatever field exists", () => {
+	test("maps explicit tool results to completed tool blocks with their recorded outcome", () => {
 		const session = build([
-			{ id: "m3", role: "tool", content: "exit 0", timestampMs: 6, name: "bash" },
+			{
+				id: "m3",
+				role: "tool_result",
+				content: "exit 0",
+				timestampMs: 6,
+				toolCallId: "call-3",
+				toolName: "bash",
+				phase: "completed",
+				ok: true,
+				cancelled: false,
+			},
 		]);
 		expect(session.blocks[0]).toMatchObject({
 			kind: "tool",
@@ -414,6 +427,28 @@ describe("synthesizeHistory", () => {
 			title: "bash",
 			ok: true,
 		});
+	});
+
+	test("a historical receipt without authoritative timing omits duration after remount", () => {
+		const session = build([
+			{ id: "old-tool", role: "tool", name: "read", content: "saved output", timestampMs: 6 },
+		]);
+		const block = session.blocks[0];
+		if (block?.kind !== "tool") throw new Error("expected historical tool");
+		expect(block.completedAt).toBeUndefined();
+		let original: string | undefined;
+		for (const clock of [600_000, 1_200_000]) {
+			const component = new ToolCardComponent(block, { now: () => clock });
+			component.update(block);
+			const text = renderPlain(component.render(100));
+			expect(text).toContain("saved output");
+			expect(text.split("\n")[0]).not.toMatch(/\d+(ms|s)\s*$/);
+			expect(component.describe().p).not.toHaveProperty("took");
+			expect(component.describe().p).not.toHaveProperty("age");
+			if (original !== undefined) expect(text).toBe(original);
+			original = text;
+			component.dispose();
+		}
 	});
 
 	test("keeps anything else as a notice rather than dropping it", () => {
@@ -486,5 +521,24 @@ describe("SessionController routing hydration", () => {
 		// No `session.detail` responder is registered, so the call rejects.
 		await app.sessions.hydrateRouting(app.store.focused);
 		expect(app.store.focused.model).toBeUndefined();
+	});
+});
+
+test("rewind reload replaces abandoned history with full active-branch messages and retains the draft", async () => {
+	const { app, server } = await bootApp("tui-a");
+	app.store.focused.appendDelta("history:a", Number.NaN, "abandoned answer");
+	app.store.focused.finalizeRun("history:a", { ok: true });
+	app.editor.setText("recalled prompt");
+	server.respondWith("chat.history", {
+		messages: [{ id: "a", role: "assistant", content: "active answer", timestampMs: 10 }],
+	});
+	await app.sessions.reload("tui-a");
+	expect(chatText(app)).toContain("active answer");
+	expect(chatText(app)).not.toContain("abandoned answer");
+	expect(app.editor.getExpandedText()).toBe("recalled prompt");
+	expect(server.requestsFor("chat.history").at(-1)?.params).toMatchObject({
+		sessionKey: "tui-a",
+		cwd: process.cwd(),
+		includeFullText: true,
 	});
 });

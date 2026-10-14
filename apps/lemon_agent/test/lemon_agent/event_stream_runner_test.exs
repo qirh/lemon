@@ -403,17 +403,21 @@ defmodule LemonAgent.EventStreamRunnerTest do
 
       {:ok, stream} = EventStream.start_link(runner: runner)
 
-      # Cancel first
+      :ok = EventStream.push(stream, {:accepted_before_cancel})
+      monitor = Process.monitor(stream)
       EventStream.cancel(stream, :user_cancel)
+      assert {:error, :canceled} = EventStream.push(stream, {:too_late})
 
-      # Give time for cancel to process
-      Process.sleep(50)
+      # Cancellation remains readable until the consumer drains its terminal.
+      assert Process.alive?(stream)
+      Process.exit(runner, :kill)
 
-      # Stream should be dead (cancel stops it)
-      refute Process.alive?(stream)
+      assert Enum.to_list(EventStream.events(stream)) == [
+               {:accepted_before_cancel},
+               {:canceled, :user_cancel}
+             ]
 
-      # Clean up runner
-      send(runner, :done)
+      assert_receive {:DOWN, ^monitor, :process, ^stream, :normal}, 1_000
     end
   end
 
@@ -531,13 +535,11 @@ defmodule LemonAgent.EventStreamRunnerTest do
           end
         end)
 
+      runner_ref = Process.monitor(runner)
       send(runner, :exit)
-      Process.sleep(50)
-      refute Process.alive?(runner)
+      assert_receive {:DOWN, ^runner_ref, :process, ^runner, _reason}, 5_000
 
       {:ok, stream} = EventStream.start_link(runner: runner)
-
-      Process.sleep(50)
 
       # Consumer should still receive error (monitor fires immediately for dead process)
       # Note: reason will be :noproc since process was already dead
@@ -611,12 +613,9 @@ defmodule LemonAgent.EventStreamRunnerTest do
   # ============================================================================
 
   describe "integration with producer-consumer pattern" do
-    test "simulates JsonlRunner crash scenario" do
-      # Simulate the JsonlRunner pattern:
-      # 1. Runner creates stream with runner: self()
-      # 2. Runner pushes events
-      # 3. Runner crashes before completing
-      # 4. Consumer should receive error
+    test "producer crash preserves buffered events for a separately owned consumer" do
+      # The consumer owns the stream lifetime; a producer crash reports an error
+      # without discarding its already accepted events.
 
       test_pid = self()
 
@@ -624,11 +623,9 @@ defmodule LemonAgent.EventStreamRunnerTest do
       # start the runner without trapping exits
       {:ok, stream_holder} = Agent.start(fn -> nil end)
 
-      # Simulate runner process (without trap_exit - like real JsonlRunner)
       runner =
         spawn(fn ->
-          # Use start (not start_link) to avoid link, just like JsonlRunner
-          {:ok, stream} = EventStream.start(runner: self())
+          {:ok, stream} = EventStream.start(owner: test_pid, runner: self())
 
           # Push some events
           EventStream.push(stream, {:cli_event, %{type: :started}})

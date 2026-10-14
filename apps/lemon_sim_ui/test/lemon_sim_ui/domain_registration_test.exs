@@ -23,7 +23,7 @@ defmodule LemonSimUi.DomainRegistrationTest do
     test "domains/0 preserves the curated werewolf-first display order" do
       # Domains.arena_domains/0 exists specifically to preserve this order
       # (see its moduledoc); the lobby page's arena card order depends on it.
-      assert Arena.domains() == [:werewolf, :space_station, :stock_market, :survivor, :poker]
+      assert Arena.domains() == [:werewolf, :poker]
     end
 
     test "sim_prefix/1 matches the registry for every arena domain" do
@@ -37,13 +37,7 @@ defmodule LemonSimUi.DomainRegistrationTest do
       # Snapshot of the values LemonSimUi.Arena hardcoded before deriving
       # from LemonSim.Bench.Domains. Poker intentionally diverges from the
       # registry's own `default_player_count` (4): the arena always seats 6.
-      expected = %{
-        werewolf: 6,
-        space_station: 6,
-        stock_market: 4,
-        survivor: 8,
-        poker: 6
-      }
+      expected = %{werewolf: 6, poker: 6}
 
       for {domain, count} <- expected do
         assert Arena.default_player_count(domain) == count

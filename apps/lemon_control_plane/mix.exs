@@ -32,6 +32,7 @@ defmodule LemonControlPlane.MixProject do
       {:lemon_browser, in_umbrella: true},
       {:lemon_media, in_umbrella: true},
       {:lemon_lsp, in_umbrella: true},
+      {:lemon_omp, in_umbrella: true},
       {:lemon_router, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
       {:lemon_skills, in_umbrella: true},

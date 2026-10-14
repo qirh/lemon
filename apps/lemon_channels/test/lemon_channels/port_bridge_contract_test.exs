@@ -22,17 +22,6 @@ defmodule LemonChannels.PortBridgeContractTest do
     }
   ]
 
-  test "adapter wrappers preserve their public worker child specs" do
-    Enum.each(@bridges, fn %{module: module} ->
-      opts = [config: %{bridge_script: "/tmp/bridge.mjs"}, notify_pid: self()]
-
-      assert %{id: ^module, start: {^module, :start_link, [^opts]}} = module.child_spec(opts)
-      assert function_exported?(module, :init, 1)
-      assert function_exported?(module, :handle_cast, 2)
-      assert function_exported?(module, :handle_info, 2)
-    end)
-  end
-
   test "adapter wrappers preserve event tags, labels, and configured script paths", %{
     tmp_dir: tmp_dir
   } do
@@ -71,6 +60,21 @@ defmodule LemonChannels.PortBridgeContractTest do
         assert state.script_path == Path.expand(missing_script)
         assert state.bridge.script_filename == bridge.script_filename
       end)
+    end)
+  end
+
+  test "without a configured bridge_script both wrappers run the script shipped in lemon_channels/priv" do
+    Enum.each(@bridges, fn bridge ->
+      {:ok, pid} = bridge.module.start_link(config: %{}, notify_pid: self())
+
+      try do
+        expected = Application.app_dir(:lemon_channels, "priv/#{bridge.script_filename}")
+
+        assert :sys.get_state(pid).script_path == expected
+        assert File.regular?(expected)
+      after
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      end
     end)
   end
 

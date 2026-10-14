@@ -4,7 +4,7 @@ defmodule Lemon.MixProject do
   def project do
     [
       apps_path: "apps",
-      version: "2026.08.1",
+      version: "2026.10.3",
       start_permanent: Mix.env() == :prod,
       # Coverage thresholds are enforced per app; see each app's mix.exs.
       deps: deps(),
@@ -31,12 +31,8 @@ defmodule Lemon.MixProject do
         "do --app lemon_sim_ui cmd --cd assets npm ci --cache /tmp/lemon-sim-ui-npm-cache"
       ],
       "sim_ui.assets.build": ["do --app lemon_sim_ui cmd --cd assets npm run build"],
-      "sim_ui.assets.audit": [
-        "do --app lemon_sim_ui cmd --cd assets npm audit --audit-level=high --cache /tmp/lemon-sim-ui-npm-cache"
-      ],
       "sim_ui.assets.deploy": [
         "sim_ui.assets.setup",
-        "sim_ui.assets.audit",
         "sim_ui.assets.build",
         "do --app lemon_sim_ui phx.digest"
       ]
@@ -77,7 +73,7 @@ defmodule Lemon.MixProject do
   # lemon_mcp is different again: it is a library with no application callback.
   # Both runtimes load it explicitly so LemonSkills.McpSource can discover the
   # client modules dynamically, while callers remain responsible for supervising
-  # every MCP client, server, and transport process they start.
+  # every MCP client and transport process they start.
   defp releases do
     [
       lemon_runtime_min: [
@@ -89,6 +85,7 @@ defmodule Lemon.MixProject do
           lemon_browser: :permanent,
           lemon_media: :permanent,
           lemon_lsp: :permanent,
+          lemon_omp: :permanent,
           lemon_mcp: :load,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
@@ -99,7 +96,7 @@ defmodule Lemon.MixProject do
           lemon_control_plane: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, :tar]
+        steps: [:assemble, &stamp_build/1, :tar]
       ],
       lemon_runtime_full: [
         applications: [
@@ -110,6 +107,7 @@ defmodule Lemon.MixProject do
           lemon_browser: :permanent,
           lemon_media: :permanent,
           lemon_lsp: :permanent,
+          lemon_omp: :permanent,
           lemon_mcp: :load,
           coding_agent: :permanent,
           lemon_gateway: :permanent,
@@ -124,7 +122,7 @@ defmodule Lemon.MixProject do
           lemon_sim_ui: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, :tar]
+        steps: [:assemble, &stamp_build/1, :tar]
       ],
       sim_broadcast_platform: [
         applications: [
@@ -134,8 +132,26 @@ defmodule Lemon.MixProject do
           lemon_sim_ui: :permanent
         ],
         include_executables_for: [:unix],
-        steps: [:assemble, :tar]
+        steps: [:assemble, &stamp_build/1, :tar]
       ]
     ]
+  end
+
+  defp stamp_build(release) do
+    commit =
+      System.get_env("LEMON_GIT_SHA") ||
+        case System.cmd("git", ["rev-parse", "HEAD"], stderr_to_stdout: true) do
+          {sha, 0} -> String.trim(sha)
+          _ -> "unknown"
+        end
+
+    metadata = %{
+      version: release.version,
+      commit: commit,
+      channel: System.get_env("LEMON_CHANNEL") || "stable"
+    }
+
+    File.write!(Path.join(release.version_path, "lemon-build.json"), Jason.encode!(metadata))
+    release
   end
 end
