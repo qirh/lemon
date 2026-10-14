@@ -256,6 +256,26 @@ defmodule LemonOmp.SessionFilesTest do
     assert session["createdAt"] == 1_791_885_600_000
   end
 
+  test "a file larger than the head but within the tail budget is read to its end", ctx do
+    dir = Path.join(ctx.sessions_dir, absolute_name(ctx.canonical))
+    filler = for i <- 1..20, do: user("filler #{i} " <> String.duplicate("z", 1_000))
+
+    path =
+      write_session(
+        dir,
+        "01mid",
+        [title_slot("Mid session"), header("01mid", ctx.canonical), assistant("toolUse")] ++
+          filler ++ [assistant("stop", %{"provider" => "tail", "model" => "model"})]
+      )
+
+    size = File.stat!(path).size
+    assert size > 16_384 and size < 65_536
+
+    assert {:ok, [session]} = SessionFiles.discover(ctx.workspace, sessions_dir: ctx.sessions_dir)
+    assert session["lastStatus"] == "completed"
+    assert session["model"] == "tail/model"
+  end
+
   test "an unterminated last line in the tail is ignored", ctx do
     dir = Path.join(ctx.sessions_dir, absolute_name(ctx.canonical))
 

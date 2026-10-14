@@ -121,7 +121,9 @@ defmodule LemonOmp.SessionFiles do
          {:ok, %{size: size}} <- File.stat(path) do
       head = pread(io, 0, @head_bytes)
       tail_offset = max(size - @tail_bytes, 0)
-      tail = if tail_offset == 0, do: head, else: pread(io, tail_offset, @tail_bytes)
+      # Files between the head and tail budgets need their own tail read: the
+      # head slice stops short of their latest entries.
+      tail = if size <= @head_bytes, do: head, else: pread(io, tail_offset, @tail_bytes)
       File.close(io)
 
       head_entries = decode_lines(head, drop_partial_last: size > @head_bytes)
