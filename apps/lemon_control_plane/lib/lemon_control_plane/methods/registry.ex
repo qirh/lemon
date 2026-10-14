@@ -92,6 +92,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SessionsCreate,
     LemonControlPlane.Methods.SessionsPlan,
     LemonControlPlane.Methods.SessionsContext,
+    LemonControlPlane.Methods.SessionsChanges,
     LemonControlPlane.Methods.SessionsFork,
     LemonControlPlane.Methods.SessionsActive,
     LemonControlPlane.Methods.SessionsActiveList,
