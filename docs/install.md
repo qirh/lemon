@@ -233,6 +233,34 @@ so runtimes started with one still require it when attaching. Every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
 
+### Switching between releases and source with `lvm`
+
+`bin/lvm` switches the `lemon` on your PATH (`~/.lemon/bin/lemon`) between
+installed releases and a source checkout. Config, secrets, and the store in
+`~/.lemon` are shared by every selection. Put it on PATH next to the launcher:
+
+```bash
+ln -s "$PWD/bin/lvm" ~/.lemon/bin/lvm
+
+lvm list                      # installed releases and this checkout; * is active
+lvm current
+lvm use local                 # run from source (this checkout, compiled on demand)
+lvm use local .worktrees/foo  # or another checkout/worktree
+lvm use 2026.10.2             # back to an installed release
+lvm install 2026.10.1         # download via this checkout's install.sh and activate
+lvm uninstall 2026.10.1       # delete a release that is not versions/current
+```
+
+Release selection moves only `versions/current`, the pointer `lemon update`
+manages; `local` repoints `~/.lemon/bin/lemon` at the checkout's `bin/lemon`
+and leaves `versions/current` alone. `lemon update` refuses to run from source,
+so `lvm use <version>` first. Releases and source keep different daemon
+records, so when a runtime answers on the control port, `lvm` stops it with
+the active launcher and starts it again with the new selection; if the stop
+fails, nothing is switched. `lvm` refuses to replace a `~/.lemon/bin/lemon`
+it did not create. On Linux, `lvm` shadows or is shadowed by the LVM2 volume
+manager command depending on PATH order; invoke it by path if needed.
+
 ## Browser interface
 
 The full release profile also includes a local browser interface. The launcher
