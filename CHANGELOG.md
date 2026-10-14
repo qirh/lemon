@@ -57,8 +57,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Code's credentials; a pasted setup token is still accepted.
   `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
 
-### Changed
-
 - **Plan mode works like omp's `/plan`.** `/plan` toggles plan mode in the TUI
   and in ACP chat (`/plan <request>` enters it and sends the request). While on,
   only read-only tools run; the agent drafts `<slug>-plan.md` in a
