@@ -211,7 +211,8 @@ defmodule LemonOmp do
           %LemonCore.Event{type: :omp_session, payload: %{"session" => %{"id" => ^id} = next} = p} ->
             notify(opts[:on_update], next)
 
-            if p["reason"] in ["settled", "exited"] or next["status"] in ["idle", "closed", "failed"] do
+            if p["reason"] in ["settled", "exited"] or
+                 next["status"] in ["idle", "closed", "failed"] do
               {:ok, next, :settled}
             else
               wait_loop(id, next, deadline, opts)
@@ -249,7 +250,8 @@ defmodule LemonOmp do
   def discover(cwd, opts \\ [])
 
   def discover(cwd, opts) when is_binary(cwd) do
-    with {:ok, sessions} <- SessionFiles.discover(cwd, Keyword.take(opts, [:limit, :sessions_dir])) do
+    with {:ok, sessions} <-
+           SessionFiles.discover(cwd, Keyword.take(opts, [:limit, :sessions_dir])) do
       live =
         for {_id, pid, wire} <- Manager.all(),
             Manager.live?(pid, wire),
@@ -283,7 +285,10 @@ defmodule LemonOmp do
     do: "too many live omp sessions; close one first (LEMON_OMP_MAX_SESSIONS raises the cap)."
 
   def error_message(:not_found), do: "no such omp session."
-  def error_message(:not_running), do: "that omp session is no longer running; resume it to continue."
+
+  def error_message(:not_running),
+    do: "that omp session is no longer running; resume it to continue."
+
   def error_message(:not_ready), do: "that omp session is still starting."
   def error_message(:no_active_turn), do: "that omp session has no turn in progress."
   def error_message({:rejected, message}), do: "omp rejected the request: #{message}"
@@ -345,10 +350,17 @@ defmodule LemonOmp do
     trimmed = String.trim(prompt)
 
     cond do
-      byte_size(prompt) > @max_prompt_bytes or not String.valid?(prompt) -> {:error, :invalid_prompt}
-      trimmed == "" and is_binary(resume) -> {:ok, nil}
-      trimmed == "" -> {:error, :invalid_prompt}
-      true -> {:ok, prompt}
+      byte_size(prompt) > @max_prompt_bytes or not String.valid?(prompt) ->
+        {:error, :invalid_prompt}
+
+      trimmed == "" and is_binary(resume) ->
+        {:ok, nil}
+
+      trimmed == "" ->
+        {:error, :invalid_prompt}
+
+      true ->
+        {:ok, prompt}
     end
   end
 

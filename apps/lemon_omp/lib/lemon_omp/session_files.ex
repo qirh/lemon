@@ -79,7 +79,13 @@ defmodule LemonOmp.SessionFiles do
       String.starts_with?(path, root <> "/") ->
         relative = String.replace_prefix(path, root <> "/", "")
         encoded = String.replace(relative, ["/", "\\", ":"], "-")
-        [if(String.ends_with?(prefix, "-"), do: prefix <> encoded, else: prefix <> "-" <> encoded)]
+
+        [
+          if(String.ends_with?(prefix, "-"),
+            do: prefix <> encoded,
+            else: prefix <> "-" <> encoded
+          )
+        ]
 
       true ->
         []
@@ -87,7 +93,8 @@ defmodule LemonOmp.SessionFiles do
   end
 
   defp absolute_name(path) do
-    "--" <> (path |> String.replace_prefix("/", "") |> String.replace(["/", "\\", ":"], "-")) <> "--"
+    "--" <>
+      (path |> String.replace_prefix("/", "") |> String.replace(["/", "\\", ":"], "-")) <> "--"
   end
 
   defp session_files(dir) do

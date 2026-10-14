@@ -10,6 +10,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **Delegate work to omp.** Lemon can run tasks in
+  [omp](https://github.com/can1357/oh-my-pi) sessions: ask in chat ("run this
+  in omp"), use the TUI's `/omp` panel, or `lemon omp start`. Lemon starts omp
+  in the workspace over its RPC protocol and reports live status — activity,
+  tools, todos, subagents, tokens and cost, latest output — and can steer,
+  queue follow-ups, cancel, close and resume sessions. `lemon omp discover`
+  lists omp's stored sessions for a workspace (read-only). omp output is
+  treated as untrusted data, control fails closed, omp processes end with the
+  runtime, and everything degrades to "omp is not installed" without the
+  binary. See [Delegating to omp](docs/user-guide/omp.md).
 - `lemon config migrate` rewrites deprecated sections (`[agent]`, `[agents.*]`,
   `[tools.*]`) in the global and project config to the current schema, keeping
   comments and a `config.toml.bak-<timestamp>` backup; `lemon setup` does the

@@ -18,7 +18,8 @@ defmodule LemonOmp.Rpc do
 
   @type frame ::
           {:ready, map()}
-          | {:response, String.t() | nil, String.t(), {:ok, term()} | {:error, String.t(), term()}}
+          | {:response, String.t() | nil, String.t(),
+             {:ok, term()} | {:error, String.t(), term()}}
           | {:ui_request, String.t(), String.t(), map()}
           | {:host_request, String.t(), map()}
           | {:event, String.t(), map()}

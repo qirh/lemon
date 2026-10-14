@@ -190,7 +190,10 @@ defmodule LemonOmp.Session do
     state = fail_pending(state)
 
     state =
-      update_projection(state, &Projection.finish(&1, status, %{code: code, reason: reason, error: error}))
+      update_projection(
+        state,
+        &Projection.finish(&1, status, %{code: code, reason: reason, error: error})
+      )
 
     publish(state, "exited")
     {:stop, :normal, state}
@@ -208,8 +211,11 @@ defmodule LemonOmp.Session do
 
   def handle_info({:command_timeout, id}, state) do
     case Map.pop(state.pending, id) do
-      {nil, _} -> {:noreply, state}
-      {entry, pending} -> {:noreply, reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})}
+      {nil, _} ->
+        {:noreply, state}
+
+      {entry, pending} ->
+        {:noreply, reply_pending(%{state | pending: pending}, entry, {:error, :outcome_unknown})}
     end
   end
 
@@ -263,7 +269,11 @@ defmodule LemonOmp.Session do
         %{state | buffer: [], buffer_bytes: 0, skipping: true, malformed: state.malformed + 1}
 
       true ->
-        %{state | buffer: [state.buffer | chunk], buffer_bytes: state.buffer_bytes + byte_size(chunk)}
+        %{
+          state
+          | buffer: [state.buffer | chunk],
+            buffer_bytes: state.buffer_bytes + byte_size(chunk)
+        }
     end
   end
 
@@ -347,7 +357,12 @@ defmodule LemonOmp.Session do
         state |> cancel_idle() |> publish_now("updated")
 
       state.projection.settling and not before.settling ->
-        Process.send_after(self(), {:settle_fallback, state.projection.turns}, @settle_fallback_ms)
+        Process.send_after(
+          self(),
+          {:settle_fallback, state.projection.turns},
+          @settle_fallback_ms
+        )
+
         publish_now(state, "updated")
 
       type in ["tool_execution_start", "tool_execution_end", "subagent_lifecycle", "message_end"] ->
@@ -373,7 +388,10 @@ defmodule LemonOmp.Session do
 
   defp handle_response(state, %{kind: :initial_prompt}, {:error, message, _code}) do
     state = started(state, {:error, {:rejected, Projection.clean(message, 500)}})
-    state |> update_projection(&Projection.settle(%{&1 | error: Projection.clean(message, 1_000)})) |> schedule_idle()
+
+    state
+    |> update_projection(&Projection.settle(%{&1 | error: Projection.clean(message, 1_000)}))
+    |> schedule_idle()
   end
 
   defp handle_response(state, %{kind: {:send, from, delivery}}, {:ok, _data}) do
@@ -443,8 +461,11 @@ defmodule LemonOmp.Session do
     ArgumentError -> :ok
   end
 
-  defp reply_pending(state, %{kind: {:send, from, _}}, reply), do: tap(state, fn _ -> GenServer.reply(from, reply) end)
-  defp reply_pending(state, %{kind: {:cancel, from}}, reply), do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+  defp reply_pending(state, %{kind: {:send, from, _}}, reply),
+    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
+
+  defp reply_pending(state, %{kind: {:cancel, from}}, reply),
+    do: tap(state, fn _ -> GenServer.reply(from, reply) end)
 
   defp reply_pending(state, %{kind: :initial_prompt}, {:error, :outcome_unknown}) do
     # omp never acknowledged the prompt: report it as unknown, not as a failure.
@@ -480,7 +501,9 @@ defmodule LemonOmp.Session do
 
   defp mark_failed(state, message) do
     state
-    |> update_projection(&Projection.finish(&1, :failed, %{code: nil, reason: :startup_timeout, error: message}))
+    |> update_projection(
+      &Projection.finish(&1, :failed, %{code: nil, reason: :startup_timeout, error: message})
+    )
     |> tap(&publish(&1, "exited"))
   end
 
@@ -546,7 +569,8 @@ defmodule LemonOmp.Session do
         {:line, @line_bytes},
         {:cd, cwd},
         {:env, scrubbed_env()},
-        {:args, ["-c", ~s(f="$1"; shift; exec "$@" 2>>"$f"), "lemon-omp", stderr_path, executable | args]}
+        {:args,
+         ["-c", ~s(f="$1"; shift; exec "$@" 2>>"$f"), "lemon-omp", stderr_path, executable | args]}
       ])
 
     case Port.info(port, :os_pid) do
@@ -598,7 +622,9 @@ defmodule LemonOmp.Session do
           ""
       end
 
-    if tail == "", do: "omp exited with status #{code}", else: "omp exited with status #{code}: #{tail}"
+    if tail == "",
+      do: "omp exited with status #{code}",
+      else: "omp exited with status #{code}: #{tail}"
   end
 
   defp stop_process(%{port: port, os_pid: os_pid}) do
@@ -613,7 +639,9 @@ defmodule LemonOmp.Session do
       signal(["-TERM" | Enum.map([os_pid | descendants], &to_string/1)])
 
       if wait_exit(os_pid, 1_000) == :alive do
-        signal(["-KILL" | Enum.map([os_pid | descendant_pids(os_pid) ++ descendants], &to_string/1)])
+        signal([
+          "-KILL" | Enum.map([os_pid | descendant_pids(os_pid) ++ descendants], &to_string/1)
+        ])
       end
     end
 

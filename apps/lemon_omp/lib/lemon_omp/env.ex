@@ -41,7 +41,8 @@ defmodule LemonOmp.Env do
       aliases: [],
       type: :integer,
       default: 1_800_000,
-      doc: "Close an idle omp process after this many milliseconds (0 disables). Sessions stay resumable.",
+      doc:
+        "Close an idle omp process after this many milliseconds (0 disables). Sessions stay resumable.",
       secret?: false,
       required?: false,
       area: :omp,

@@ -50,7 +50,14 @@ defmodule LemonOmp.Projection do
             recent_tools: [],
             todos: [],
             subagents: %{},
-            usage: %{input: 0, output: 0, cache_read: 0, cache_write: 0, total_tokens: 0, cost: 0.0},
+            usage: %{
+              input: 0,
+              output: 0,
+              cache_read: 0,
+              cache_write: 0,
+              total_tokens: 0,
+              cost: 0.0
+            },
             context_percent: nil,
             stream_text: "",
             last_text: nil,
@@ -261,8 +268,11 @@ defmodule LemonOmp.Projection do
     |> put_if(:context_percent, percent(get_in(data, ["contextUsage", "percent"])))
     |> then(fn state ->
       case data["todoPhases"] do
-        phases when is_list(phases) and phases != [] -> %{state | todos: todos_from_phases(phases)}
-        _ -> state
+        phases when is_list(phases) and phases != [] ->
+          %{state | todos: todos_from_phases(phases)}
+
+        _ ->
+          state
       end
     end)
   end
