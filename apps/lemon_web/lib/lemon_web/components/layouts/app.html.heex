@@ -135,5 +135,6 @@
     </main>
   </div>
 
+  {live_render(@socket, LemonWeb.ShellLive, id: "lemon-shell", sticky: true)}
   <.flash_group flash={@flash} />
 </div>
