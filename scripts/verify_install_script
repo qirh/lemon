@@ -944,16 +944,16 @@ else
   cat "$work_dir/install-10.log" >&2
 fi
 
-# 11. PATH handling: the rc file is only touched with --modify-path, and the
-#     edit is idempotent. `env -i` sets SHELL first, so a later SHELL= wins.
+# 11. PATH handling: the rc file is untouched with --no-modify-path, and the
+#     default edit is idempotent. `env -i` sets SHELL first, so a later SHELL= wins.
 path_home="$work_dir/home-path"
 mkdir -p "$path_home"
 
-if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh; then
+if run_install "$work_dir/install-11.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --no-modify-path; then
   if [ ! -e "$path_home/.zshrc" ] && grep -q 'export PATH=' "$work_dir/install-11.log"; then
-    ok "PATH line is printed without touching the shell rc file"
+    ok "--no-modify-path prints the PATH line without touching the shell rc file"
   else
-    fail "install.sh edited the rc file without --modify-path, or printed no PATH line"
+    fail "install.sh edited the rc file despite --no-modify-path, or printed no PATH line"
     cat "$work_dir/install-11.log" >&2
   fi
 else
@@ -961,16 +961,16 @@ else
   cat "$work_dir/install-11.log" >&2
 fi
 
-if run_install "$work_dir/install-12.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path &&
-  run_install "$work_dir/install-13.log" "$path_home" "$base_url" SHELL=/bin/zsh -- --modify-path; then
+if run_install "$work_dir/install-12.log" "$path_home" "$base_url" SHELL=/bin/zsh &&
+  run_install "$work_dir/install-13.log" "$path_home" "$base_url" SHELL=/bin/zsh; then
   marker_count="$(grep -c 'added by the lemon installer' "$path_home/.zshrc" || true)"
   if [ "$marker_count" = "1" ] && grep -q "$path_home/.lemon/bin" "$path_home/.zshrc"; then
-    ok "--modify-path appends the PATH line to ~/.zshrc exactly once"
+    ok "default install appends the PATH line to ~/.zshrc exactly once"
   else
-    fail "--modify-path wrote the marker $marker_count time(s) or the wrong path"
+    fail "default install wrote the marker $marker_count time(s) or the wrong path"
   fi
 else
-  fail "--modify-path install exited non-zero"
+  fail "default PATH install exited non-zero"
   cat "$work_dir/install-12.log" "$work_dir/install-13.log" >&2
 fi
 

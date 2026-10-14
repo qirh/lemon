@@ -15,7 +15,7 @@ authentication, and default-model prompts, then start the TUI:
 $HOME/.lemon/bin/lemon
 ```
 
-The installer prints the PATH entry; after adding `~/.lemon/bin`, use `lemon`.
+The installer adds `~/.lemon/bin` to PATH for new shells; then use `lemon`.
 That is your first chat. The TUI starts the daemon when needed. To use a local
 browser instead, run `lemon web`; it starts the full runtime when needed,
 checks the same readiness state, and opens the page only after Web health is

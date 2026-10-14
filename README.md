@@ -58,11 +58,9 @@ workflow, recovery, and these next steps:
 | Connect MCP tools | `lemon mcp list`, then [add and test a trusted server](docs/skills.md#manage-named-mcp-servers) |
 | Track durable work | Ask for a goal or kanban board, then inspect **Automation** with `lemon web --no-open` |
 
-**Release availability:** the published `2026.08.1` release predates the current
-Tern and agent-workflow features. Until a newer release is published, use the
-source instructions below for those features. See [setup](docs/user-guide/setup.md),
-the [CLI guide](docs/user-guide/cli.md), and the [web guide](docs/user-guide/web.md)
-for the complete command and configuration reference.
+See [setup](docs/user-guide/setup.md), the [CLI guide](docs/user-guide/cli.md),
+and the [web guide](docs/user-guide/web.md) for the complete command and
+configuration reference.
 
 ## Develop from source
 

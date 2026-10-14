@@ -40,7 +40,8 @@ When setup completes, start the interactive TUI and send your first message:
 $HOME/.lemon/bin/lemon
 ```
 
-The launcher prints the PATH entry for its command. In an interactive terminal,
+The installer adds `~/.lemon/bin` to PATH in your shell rc file (zsh, bash or
+fish), so new terminals find `lemon`. In an interactive terminal,
 invoking `lemon` with no arguments opens the TUI; without a TTY it prints usage
 and exits. The TUI runs setup when required, starts a daemon if needed, and
 then attaches. Use `lemon start` (or `lemon run`) to run the runtime in the
@@ -129,7 +130,7 @@ warning.
 | --- | --- |
 | `--force` | Reinstall a version already present. |
 | `--verify` | Boot the installed runtime on ephemeral ports and poll `/healthz` before finishing. |
-| `--modify-path` | Add the printed PATH entry to the appropriate shell rc file. |
+| `--no-modify-path` | Do not add `~/.lemon/bin` to PATH in your shell rc file; only print the line. |
 | `--skip-setup` | Do not start the post-install setup wizard. |
 
 | Variable | Default | Purpose |
@@ -142,7 +143,8 @@ warning.
 
 The installed launcher is `~/.lemon/bin/lemon`; updates atomically move only
 `~/.lemon/versions/current`. Your configuration, encrypted secrets, and store
-remain in place. Add the launcher to your PATH if needed:
+remain in place. The installer adds the launcher to PATH unless you pass
+`--no-modify-path`; to add it yourself:
 
 ```bash
 export PATH="$HOME/.lemon/bin:$PATH"

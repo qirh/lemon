@@ -17,8 +17,8 @@ export PATH="$HOME/.lemon/bin:$PATH"
 lemon setup
 ```
 
-The installer verifies both runtime and TUI checksums. Add the printed PATH line
-to your shell configuration if you want it in future terminals.
+The installer verifies both runtime and TUI checksums and adds `~/.lemon/bin`
+to PATH in your shell rc file; the `export` line covers the current terminal.
 
 In setup, choose **OpenAI Codex**, then **Sign in with ChatGPT (browser OAuth)**.
 Alternatively, explicitly choose **Import existing Codex CLI ChatGPT login

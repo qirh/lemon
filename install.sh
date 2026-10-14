@@ -28,7 +28,7 @@ GLIBC_MIN_MINOR=39
 
 FORCE=0
 VERIFY=0
-MODIFY_PATH=0
+MODIFY_PATH=1
 SKIP_SETUP=0
 
 
@@ -43,14 +43,16 @@ Lemon installer
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-  sh install.sh [--force] [--verify] [--modify-path] [--skip-setup] [--help]
+  sh install.sh [--force] [--verify] [--no-modify-path] [--skip-setup] [--help]
 
 Options:
   --force         Reinstall even if the target version is already present.
   --verify        Boot the installed runtime on ephemeral ports, poll /healthz,
                   then stop it. Fails the install if the smoke check fails.
-  --modify-path   Append the PATH export to your shell rc file. Without it the
-                  installer only prints the line for you to add.
+  --no-modify-path
+                  Do not add ~/.lemon/bin to PATH in your shell rc file; only
+                  print the line for you to add. (--modify-path, the default,
+                  is still accepted.)
   --skip-setup    Do not start the interactive provider setup wizard after
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
@@ -102,6 +104,7 @@ while [ "$#" -gt 0 ]; do
     --force) FORCE=1 ;;
     --verify) VERIFY=1 ;;
     --modify-path) MODIFY_PATH=1 ;;
+    --no-modify-path) MODIFY_PATH=0 ;;
     --skip-setup) SKIP_SETUP=1 ;;
     -h|--help)
       usage
@@ -481,8 +484,12 @@ path_hint() {
         printf '\n# added by the lemon installer\n'
         printf '%s\n' "$path_line"
       } >>"$rc_file"
-      info "Added $BIN_DIR to PATH in $rc_file (open a new shell to pick it up)."
+      info "Added $BIN_DIR to PATH in $rc_file."
     fi
+    info "New shells will find lemon. For this shell, run:"
+    info ""
+    info "    $path_line"
+    info ""
     return 0
   fi
 
@@ -492,7 +499,7 @@ path_hint() {
   info "    $path_line"
   info ""
   if [ -n "$rc_file" ]; then
-    info "Re-run with --modify-path to append that line to $rc_file automatically."
+    info "Re-run without --no-modify-path to append that line to $rc_file automatically."
   fi
 }
 
