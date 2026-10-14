@@ -69,6 +69,12 @@ defmodule LemonControlPlane.Methods.Registry do
     # Skills
     LemonControlPlane.Methods.SkillsHermesCatalog,
     LemonControlPlane.Methods.SkillsInstall,
+    LemonControlPlane.Methods.SkillsList,
+    LemonControlPlane.Methods.SkillsEnable,
+    LemonControlPlane.Methods.SkillsDisable,
+    # MCP server connections
+    LemonControlPlane.Methods.McpServersList,
+    LemonControlPlane.Methods.McpServersRefresh,
     # Portable skill bundles and automation blueprints
     LemonControlPlane.Methods.BlueprintsList,
     LemonControlPlane.Methods.BlueprintsInspect,
@@ -129,6 +135,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeInvoke,
     LemonControlPlane.Methods.NodeInvokeResult,
     LemonControlPlane.Methods.NodeInvokeControlResult,
+    LemonControlPlane.Methods.NodesList,
+    LemonControlPlane.Methods.NodesRevoke,
     # Config
     LemonControlPlane.Methods.ConfigGet,
     LemonControlPlane.Methods.ConfigSet,

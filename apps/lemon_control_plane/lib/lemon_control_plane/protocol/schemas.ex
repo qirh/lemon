@@ -194,6 +194,29 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "timeoutMs" => :integer
       }
     },
+    "skills.list" => %{
+      optional: %{
+        "cwd" => :string
+      }
+    },
+    "skills.enable" => %{
+      required: %{
+        "skillKey" => :string
+      },
+      optional: %{
+        "cwd" => :string
+      }
+    },
+    "skills.disable" => %{
+      required: %{
+        "skillKey" => :string
+      },
+      optional: %{
+        "cwd" => :string
+      }
+    },
+    "mcp.servers.list" => %{},
+    "mcp.servers.refresh" => %{},
     "blueprints.list" => %{},
     "blueprints.inspect" => %{
       required: %{
@@ -560,6 +583,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "node.pair.approve" => %{
       required: %{
         "pairingId" => :string
+      }
+    },
+    "nodes.list" => %{},
+    "nodes.revoke" => %{
+      required: %{
+        "nodeId" => :string,
+        "confirmName" => :string
       }
     },
     "node.invoke" => %{
