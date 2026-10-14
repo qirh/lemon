@@ -80,7 +80,7 @@ defmodule LemonWeb.ChatLiveTest do
     assert_patch(view, "/chat/" <> URI.encode_www_form(key))
 
     # The first prompt shows in the new pane before history has it.
-    [pane] = live_children(view)
+    [pane] = panes(view)
     assert has_element?(pane, "[data-kind=user]", "Add a farewell helper")
   end
 
@@ -112,7 +112,7 @@ defmodule LemonWeb.ChatLiveTest do
     a = key("split-a")
     b = key("split-b")
     {:ok, view, _html} = live(conn, "/chat/#{a}?split=#{b}")
-    panes = live_children(view)
+    panes = panes(view)
     assert length(panes) == 2
     assert Enum.any?(panes, &(render(&1) =~ ~s(data-role="secondary")))
     assert_received {:rpc, "sessions.active", %{"sessionKey" => ^a}}
@@ -267,7 +267,9 @@ defmodule LemonWeb.ChatLiveTest do
               "run-t",
               id,
               :completed,
-              detail |> Map.merge(result) |> Map.put(:tool_call_id, id), ok: true)
+              detail |> Map.merge(result) |> Map.put(:tool_call_id, id),
+              ok: true
+            )
           )
 
     eventually(fn -> count(pane, "details.tool-card[data-status=done]") == 8 end)
@@ -311,7 +313,9 @@ defmodule LemonWeb.ChatLiveTest do
           },
           result: "cancelled preview",
           details: %{"error_type" => "aborted", "outcome" => "unknown"}
-        }, ok: false)
+        },
+        ok: false
+      )
     )
 
     send(
@@ -661,9 +665,12 @@ defmodule LemonWeb.ChatLiveTest do
 
   defp open(conn, key) do
     {:ok, view, _html} = live(conn, "/chat/#{URI.encode_www_form(key)}")
-    [pane] = live_children(view)
+    [pane] = panes(view)
     {view, pane}
   end
+
+  # Chat panes are nested LiveViews; the sticky shell is a sibling child.
+  defp panes(view), do: Enum.reject(live_children(view), &(&1.id == "lemon-shell"))
 
   defp key(name),
     do:

@@ -135,6 +135,10 @@
     </main>
   </div>
 
-  {live_render(@socket, LemonWeb.ShellLive, id: "lemon-shell", sticky: true)}
+  {live_render(@socket, LemonWeb.ShellLive,
+    id: "lemon-shell",
+    sticky: true,
+    session: %{"parent_access" => to_string(assigns[:operator_access])}
+  )}
   <.flash_group flash={@flash} />
 </div>

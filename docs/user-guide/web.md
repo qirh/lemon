@@ -1,230 +1,200 @@
 # Use Lemon in a Browser
 
-Last reviewed: 2026-08-30
+Last reviewed: 2026-10-13
 
-The full Lemon runtime includes a local browser interface. The launcher starts
-the daemon when needed, reuses a healthy runtime already serving the configured
-control-plane port, waits for the Web UI to become healthy, and opens the page:
-
-```bash
-lemon web
-```
-
-For scripts, SSH sessions, or when you only want the address:
+The full Lemon runtime includes Lemon Web: a browser workspace for coding
+sessions plus every operator surface (automation, skills, memory, MCP, nodes,
+models, usage, diagnostics and settings). It talks to the same control-plane
+methods and events as the TUI, so both clients always show the same sessions,
+approvals and plan state.
 
 ```bash
-lemon web --no-open
+lemon web            # start the runtime if needed, open the browser signed in
+lemon web --no-open  # only print the address
 ```
 
 The default address is `http://127.0.0.1:4080/`. Set `LEMON_WEB_PORT` before
-launch to choose another port. A source checkout uses the same command with the
-repository wrapper:
+launch to choose another port. A source checkout uses `./bin/lemon web`.
+`lemon web` requires the `lemon_runtime_full` release profile; reinstall with
+`LEMON_PROFILE=full` if the launcher reports the minimal profile.
 
-```bash
-./bin/lemon web
-```
+## Sign in
 
-In a source checkout, `./bin/lemon web` reuses a healthy runtime or starts one
-when needed. In an interactive terminal, bare `./bin/lemon` opens the TUI,
-which also reuses a healthy runtime.
+Lemon Web uses the control plane's operator token, the same credential the TUI
+uses (`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, normally the launcher-managed
+token). `lemon web` opens `/login#token=…`: the token travels in the URL
+fragment, which browsers never send to a server, and the page removes it from
+history before signing in. Otherwise paste the token on the login page.
 
-`lemon web` requires the `lemon_runtime_full` release profile. If the launcher
-reports that the Web UI is unavailable in the minimal profile, reinstall with
-`LEMON_PROFILE=full`.
+- The server checks the token and keeps only a derived marker in a signed,
+  encrypted, httpOnly cookie. Rotating the operator token signs every browser
+  out.
+- Every page requires sign-in. Without a configured token the UI returns 503,
+  unless `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true` is set and the
+  browser connects directly from loopback.
+- Repeated wrong tokens from one address are throttled for a minute.
+- Sign out from the bottom of the navigation rail or **Settings → Operator**.
 
-## First run
+`LEMON_WEB_ACCESS_TOKEN`, `?token=` URLs and the `/manage` pages were removed;
+use the operator token and the pages below.
 
-The page uses the same setup-readiness contract as `lemon setup` and the TUI.
-It checks for:
+## Layout, themes and keyboard
 
-1. a Lemon config;
-2. secure secret storage; and
-3. a matching default provider/model with a usable credential.
+The navigation rail groups **Workspace** (Chat, omp, Sessions), **Automate**,
+**Knowledge**, **Runtime** and **Settings**. On phones it becomes a drawer behind
+the menu button. Choose light, dark or system theme at the bottom of the rail or
+in **Settings** (⌘⇧L / Ctrl+Shift+L cycles it).
 
-When any item is missing, the page explains exactly what is pending and keeps
-the prompt and file-upload controls disabled. It does not persist uploads or
-start a doomed agent run. In a terminal, run:
+| Keys | Action |
+| --- | --- |
+| ⌘K / Ctrl+K | Command palette: pages, actions, sessions; Tab or a leading `/` searches everywhere (session content, memory, cron jobs) |
+| `?` | Every shortcut, grouped |
+| `g` then a letter | Go to a page (`g c` chat, `g s` sessions, `g a` automation, `g m` models, …) |
+| ⌘/ | Focus the composer |
+| ⌘. | Stop the active run |
+| ⌘⇧O | New session |
+| ⌘⇧P | Toggle plan mode |
+| ⌘⇧M | Model picker; Shift+Tab in the composer cycles thinking level |
+| ⌘B / ⌘I | Toggle the sessions sidebar / inspector |
+| ⌘\\ | Split view |
+| Alt+↑ / Alt+↓ | Previous / next session |
+| Alt+O / Alt+R | Expand all tool output / the latest tool or thought |
+| `/` | Focus the filter on list pages; `j`/`k`, Enter on the session manager |
 
-```bash
-lemon setup
-```
+Ctrl replaces ⌘ off macOS. The palette's chat actions (fork, compact, plan,
+stop, inspector, split, pickers) appear only on a chat page.
 
-Then choose **Check again** in the browser. Config and secret changes made by a
-running Lemon process also refresh the check automatically. If setup still does
-not become ready, run `lemon doctor` and follow its recovery guidance.
+**Notifications:** the bell lists recent run completions and approval requests
+from sessions other than the one in front of you. Enable desktop alerts there
+or in **Settings**; they appear only while the tab is in the background.
 
-## Chat and active runs
+## Chat
 
-Once the page shows **Ready**, enter a prompt or attach up to five files (20 MB
-each). Responses and tool activity stream into the page. While a run is active,
-the composer switches to text-only active-run controls:
+**Chat** (`/`) starts a session: describe the task, choose the workspace folder
+(recent folders are one click) and optionally a profile. The page lists active
+and recent sessions. If setup is incomplete it explains what is missing and
+keeps sending disabled; run `lemon setup`, then **Check again**.
 
-- **Follow-up** queues a separate turn after the current run finishes.
-- **Steer** adds guidance to the current run without replacing its direction.
-- **Redirect** replaces the pending direction while preserving tool work that
-  has already completed.
+A session opens at `/chat/<session-key>`:
 
-The page discovers active work when a named session is opened, rechecks the
-same shared router state before submitting guidance, and keeps the draft if the
-run ended in the meantime. A successful message confirms what was requested;
-a refused request uses a bounded explanation and never displays node
-credentials, remote paths, or internal runtime terms. Choose **Check status**
-to reconcile the controls manually or **Stop** to request cancellation of the
-actual active run. Session and run identifiers remain hidden during ordinary
-use and are available under **Session details** only when debugging.
+- **Sidebar:** search, new, rename, pin, archive, fork, open in split, and a dot
+  on sessions with a running agent.
+- **Header:** inline rename, run status, plan indicator, context gauge, split,
+  fork and a menu with exports and the session manager. The toolbar holds the
+  model, thinking-level and tool-policy pickers ("Ask before commands & edits"
+  requires approvals).
+- **Transcript:** answers stream as Markdown with highlighted, copyable code.
+  Thinking is collapsible. Tool cards show shell commands with live output, exit
+  status and duration; file reads with line ranges; edits as diffs; searches with
+  match counts; todo checklists; subagents with status and links. Each run ends
+  with model, duration, tokens and cost.
+- **Composer:** Enter sends, Shift+Enter adds a line, attachments (up to five
+  files of 20 MB; paste or drop images). While Lemon works, choose **Follow-up**
+  (queued for after the run), **Steer** (guidance for the current run; ⌘Enter)
+  or **Redirect** (new direction, finished tool work kept), or **Stop**.
+- **Approvals** appear in the conversation: Approve once, for the session,
+  always, or Deny. Answers given in the TUI or another tab clear the card.
+- **Plan mode** (⌘⇧P) keeps the agent read-only. Its proposal appears as a plan
+  card: **Approve & execute** runs it, **Refine** sends it back and focuses the
+  composer for your feedback. Leaving plan mode never approves a plan.
+- **Inspector** (⌘I): **Context** (window usage by category, largest items,
+  auto-compaction threshold, Compact), **Plan**, **Changes** (git status of the
+  session folder with unified or split diffs), **Subagents** and **Details**.
+- **Split view:** ⌘\\ or "Open in split" shows two sessions side by side
+  (`/chat/<key>?split=<other-key>`); each pane runs independently.
 
-Each browser tab gets its own stable session in `sessionStorage`. Use
-`/sessions/<session-key>` only when deliberately attaching to a known Lemon
-session. Named routes reload durable prompt, tool, and answer history before
-subscribing to new streaming events, so an existing conversation can be
-continued rather than merely reused as an empty routing key.
+After a reconnect the page re-checks the active run and continues streaming
+without repeating the final answer. Controls that change state are disabled
+while the connection is down; nothing is queued offline.
 
-Tool cards update while a command is still running, not only when it finishes.
-Expand a card to inspect its bounded arguments and latest output; the completed
-result replaces the live preview. Reopening a named session retains one card
-per durable action, with its latest phase; live updates reuse that same card.
+## Sessions and profiles
 
-The **Subagents** panel follows actual parent/child task links for the session.
-It refreshes every two seconds while the page is connected and includes running
-and finished children, their status, and links to available child sessions.
-The tree is bounded to 50 nodes and eight levels. Missing runtime data is shown
-as unavailable, never as proof that no child work exists. It does not expose
-child prompts, results, repository paths, or credentials.
+**Sessions** (`/sessions`) searches titles, keys, prompts and answers, with
+Active/Archived/All tabs, a pinned filter and an agent/profile filter (all kept
+in the URL). Rows open in chat or inspection and offer rename, pin, archive,
+fork, JSON/Markdown export and delete; bulk select pins or archives. **Working
+now** shows live runs. Delete and **Prune** always preview the exact sessions
+first and refuse if anything changed since. Exports and inspection are redacted.
 
-## Management access
+**Profiles** (`/profiles`): create, clone and rename preview first; delete
+requires typing the profile ID and moves its home to trash; Export downloads a
+credential-safe JSON file; **Open chat** goes to the profile's stable session.
 
-Set `LEMON_WEB_ACCESS_TOKEN`, launch the full runtime, and open `/manage` with
-the token once:
+## omp
 
-```text
-http://127.0.0.1:4080/manage?token=<your-token>
-```
+**omp** (`/omp`) lists live and recent [omp](omp.md) sessions with status,
+activity, todos, tokens and cost, and lets you start, resume, steer, queue a
+follow-up, cancel a turn and close a session. When `omp` is not installed the
+page says so.
 
-The server validates the token, stores only a derived signed-session marker,
-and redirects to the same address without `token` before rendering the page.
-The server validates the same token for every page under `/manage`. The
-sessions page shows local runtime health, live named-node names, and
-durable-session counts. **Working now** includes active agents before their
-first run has produced durable history. Open **Live transcript** to watch a run
-or **Open** beside a saved session to continue it. The list refreshes every
-three seconds while connected; an unavailable router preserves the last known
-work with an explicit unavailable state. Up to 40 active runs and 200 matching
-durable sessions are shown. From there you can:
+## Automation and blueprints
 
-- search session keys, titles, prompts, and answers, then filter active,
-  archived, or all sessions;
-- add a title, pin important work, archive completed work, and resume a chat;
-- inspect redacted prompts, answers, and structured tool activity;
-- download bounded, redacted JSON or Markdown exports; and
-- preview and confirm pruning of archived, unpinned sessions older than a
-  chosen threshold.
+**Automation** (`/automation`, keys `1`/`2`/`3` switch tabs):
 
-Prune never accepts a count-only confirmation. The preview token binds the
-threshold and exact candidate identities plus their current lifecycle state.
-If any candidate changes, no deletion occurs and the page asks for a fresh
-preview. Export and inspection omit raw run records, raw event payloads,
-credentials, and secret values and report any size-bound run omissions.
+- **Kanban:** boards in their configured column order with result, attempt and
+  retry state; start a board or stop its dispatcher.
+- **Goals:** progress, loop status and verdicts; start, pause, resume, stop; set
+  a new goal for a session.
+- **Cron:** schedules in plain words with next/last run; run now, pause/resume,
+  stop the exact active run, recent runs, create and edit (cron syntax or
+  "every 15m", "weekdays at 09:30", with the next three run times shown).
 
-Management labels and in-page history additionally omit path-bearing tokens;
-the private chat transcript remains available only through its authenticated
-session page.
+Every action previews against the current revision and is refused if the item
+changed. Prompts and objectives are write-only in the browser. An unknown
+outcome is never retried automatically.
 
-### Manage automated coding work
+**Blueprints** (`/blueprints`) shows the catalog with validate and preview;
+activation requires retyping the fresh digest.
 
-Choose **Automation** from the sessions page, or open `/manage/work`, to follow
-the same kanban boards, goals, and cron jobs used by agent tools and the CLI.
-The dashboard refreshes while connected and links accepted runs to their live
-session transcripts. It shows bounded status, progress, result-state, and
-retry information without exposing stored prompts, objectives, repository
-paths, or raw errors.
+## Knowledge
 
-- **Kanban:** inspect cards in the board's configured workflow order, including
-  custom columns; start a board or stop its dispatcher and active work.
-- **Goals:** start a bounded execution, inspect active and completed progress,
-  and pause, resume, or stop its loop.
-- **Cron:** run a configured job now, pause or resume its schedule, inspect
-  recent runs, and stop an exact active invocation.
+- **Skills** (`/skills`): installed skills with source and trust level, and the
+  Hermes catalog with install.
+- **Memory** (`/memory`): search bounded, redacted summaries with provenance;
+  delete requires the exact digest.
+- **MCP** (`/mcp`): configured servers with connection status and tools.
+- **Nodes** (`/nodes`): paired execution nodes and pending pairing requests.
 
-Controls use the existing automation managers, not a separate browser
-scheduler. Changes are previewed against the current target revision before
-confirmation. A changed target requires a new preview; stale confirmations
-cannot stop a replacement run or silently apply to newer settings. Cancellation
-requests and unknown outcomes remain visible until the shared runtime confirms
-the final state.
+## Runtime and settings
 
-A failed attempt is shown as **Last run: failed**, not silently treated as
-unfinished work. Resume a paused goal before starting another bounded attempt.
-Failed kanban cards are not automatically redispatched: after reviewing the
-private transcript, use the `kanban` tool to update the card back to its first
-column, then start its board. Cron shows each attempt's retry number and links
-to that invocation's actual session rather than only the job's parent session.
-If a browser control reports an unknown outcome, it does not retry the action;
-inspect shared live state before reopening the page to act again.
+- **Models** (`/models`): model catalog with context window, output limit and
+  price; set the default model (preview then apply). **Providers** shows whether
+  each provider has a usable credential (add them with `lemon setup provider`);
+  **Routing** edits fallbacks and credential pools with previews, and typed
+  confirmation for destructive changes. Credential references are entered in
+  password fields and never stored in the page.
+- **Usage** (`/usage`): spend and tokens for today, 7 and 30 days (UTC), by
+  model, provider and top sessions. Usage is recorded when a run finishes.
+- **Diagnostics** (`/diagnostics`): health, versions, capacity, channels, setup
+  readiness, the same read-only checks as `lemon doctor`, and the last 1,000 log
+  lines with secrets and paths hidden. Use `lemon doctor --bundle` for a
+  support bundle.
+- **Settings** (`/settings`): theme, notifications, default model and thinking
+  level for new sessions (written to `[defaults]` in `config.toml`), the
+  shortcut reference and the operator section. Theme and notification choices
+  are stored in this browser only.
 
-Create repository-backed work with the `kanban`, `goal`, or `cron` agent tools
-(or their existing control-plane surfaces), then use the dashboard to operate
-it. Creating a cron job does not require enabling its schedule: a paused job can
-still be run manually. The browser does not accept arbitrary shell commands or
-repository paths in management forms.
+## Remote access
 
-### Manage provider routing
-
-Choose **Providers** from the sessions page, or open `/manage/providers`, to
-inspect effective routing without displaying config paths, prompts, base URLs,
-environment-variable names, secret names, or credential references. The page
-supports:
-
-- ordered fallback append, removal, and clear;
-- credential-pool create/update, strategy selection, activation, and delete;
-- credential-reference add, remove, and provider-level clear; and
-- redacted pool/reference counts plus the active pool.
-
-Every mutation starts as a preview and writes nothing. The preview is bound to
-an opaque revision of the target config; if another process changes that config
-before apply, Lemon rejects the stale apply and keeps the non-secret form draft
-for another preview. Removing or clearing fallbacks, updating or deleting an
-existing pool, and removing or clearing credential references also require the
-provider or pool confirmation shown by the preview to be typed exactly.
-
-Credential references accept only `secret:NAME` or `env:NAME`. Their names are
-entered through a password field, filtered from LiveView logs, and never stored
-in socket draft state or rendered back into HTML. For an apply, the browser asks
-you to re-enter the same reference and Lemon compares only its digest before
-calling the shared provider-configuration service. The service remains the
-single owner of comment-preserving validation and atomic TOML replacement.
-
-Skills/MCP, memory, logs, and broader configuration retain their existing
-CLI/TUI/control-plane surfaces where no management page is linked.
-
-## Access control
-
-The Web UI binds to localhost in the supported local launch path. To require a
-token for chat as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before
-starting Lemon. The management surface always requires this token and returns
-HTTP 503 when it is not configured. `lemon web` passes URL-safe configured
-tokens to the browser for the one-time login; the server consumes the query
-parameter with an immediate token-free redirect after the authenticated
-session cookie is established.
-
-For a remote deployment, terminate TLS in front of Lemon and require the token.
-Do not expose an unauthenticated HTTP listener to an untrusted network.
+Lemon Web binds to localhost in the supported launch path. For remote use,
+terminate TLS in front of Lemon (the session cookie is marked `Secure` on HTTPS
+requests) and keep the operator token private. Never enable tokenless loopback
+compatibility behind a reverse proxy.
 
 ## Recovery
 
 | Symptom | What to do |
 | --- | --- |
+| Login says no operator token is configured | Start Lemon through `lemon web`/`lemon daemon` (managed token) or set `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, then restart. |
+| Token not accepted | Use the token of this runtime; rerun `lemon web` to sign in automatically. |
+| "Too many attempts" | Wait a minute before trying again. |
 | `Setup needed` | Run `lemon setup`, then choose **Check again**. |
-| Provider or model remains pending | Run `lemon setup provider`; use `--skip-verify` only when deliberately offline. |
-| Web UI does not become healthy | Run `lemon status`, inspect the launcher log, then run `lemon doctor`. |
-| Port 4080 is occupied | Set `LEMON_WEB_PORT` to an unused port and rerun `lemon web`. |
-| Minimal-profile error | Reinstall with `LEMON_PROFILE=full`. |
-| Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
-| HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
-| Management HTTP 503 | Set a non-empty `LEMON_WEB_ACCESS_TOKEN`, restart Lemon, and authenticate once. |
-| Provider preview became stale | Keep the preserved non-secret draft, review the refreshed status, and preview the exact change again. |
-| Active-run choices disappeared | The run finished or is no longer eligible. Send the preserved draft as a new message, or choose **Check status** if the run is still active elsewhere. |
+| Web UI does not become healthy | Run `lemon status`, inspect the launcher log, then `lemon doctor`. |
+| Port 4080 is occupied | Set `LEMON_WEB_PORT` and rerun `lemon web`. |
+| A preview became stale | Review the refreshed state and preview again; nothing was changed. |
+| Active-run choices disappeared | The run finished; send the preserved draft as a new message. |
 
-The UI ships its CSS and Phoenix client assets inside the Lemon release. It
-does not require a JavaScript or CSS CDN at runtime. The page includes a skip
-link, labeled status regions, keyboard focus states, responsive layouts, and
-live announcements for streamed activity and errors.
+The UI ships its CSS, JavaScript and syntax highlighter inside the release and
+needs no CDN. It includes a skip link, labeled controls, visible focus,
+keyboard access to every action, live regions for streaming status, and
+responsive layouts down to phone width.

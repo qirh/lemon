@@ -180,7 +180,7 @@ defmodule LemonWeb.ChatSubagentsLiveTest do
 
   defp open(conn, key) do
     {:ok, view, _} = live(conn, "/chat/#{URI.encode_www_form(key)}")
-    [pane] = live_children(view)
+    [pane] = Enum.reject(live_children(view), &(&1.id == "lemon-shell"))
     render_click(pane, "inspector-tab", %{"tab" => "subagents"})
     {:ok, pane, nil}
   end

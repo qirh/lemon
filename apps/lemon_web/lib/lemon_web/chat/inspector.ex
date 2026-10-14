@@ -1,19 +1,12 @@
 defmodule LemonWeb.Chat.Inspector do
   @moduledoc """
-  Chat inspector panel tabs (Context, Plan, Subagents, Details).
+  Chat inspector panel tabs (Context, Plan, Changes, Subagents, Details).
 
   ## Adding a tab
 
   Append `{id, label, icon}` to `tabs/0` and add a `tab/1` clause matching
   that id. The pane passes its whole assigns map, so a tab can read the
-  session key (`@session_key`) and workspace (`@cwd`), e.g. a "Changes" tab:
-
-      def tab(%{tab: "changes"} = assigns) do
-        ~H\"\"\"
-        <.live_component module={LemonWeb.WorkspaceChangesComponent}
-          id={"changes-" <> @dom_key} session_key={@session_key} cwd={@cwd} />
-        \"\"\"
-      end
+  session key (`@session_key`) and workspace (`@cwd`).
   """
 
   use Phoenix.Component
@@ -23,6 +16,7 @@ defmodule LemonWeb.Chat.Inspector do
   @tabs [
     {"context", "Context", "gauge"},
     {"plan", "Plan", "list-checks"},
+    {"changes", "Changes", "file-diff"},
     {"subagents", "Subagents", "network"},
     {"details", "Details", "info"}
   ]
@@ -31,6 +25,19 @@ defmodule LemonWeb.Chat.Inspector do
   def tabs, do: @tabs
 
   def tab_ids, do: Enum.map(@tabs, &elem(&1, 0))
+
+  # ── Changes ─────────────────────────────────────────────────────────────
+
+  def tab(%{tab: "changes"} = assigns) do
+    ~H"""
+    <.live_component
+      module={LemonWeb.WorkspaceChangesComponent}
+      id={"changes-" <> @dom_key}
+      session_key={@session_key}
+      cwd={@cwd}
+    />
+    """
+  end
 
   # ── Context ─────────────────────────────────────────────────────────────
 
