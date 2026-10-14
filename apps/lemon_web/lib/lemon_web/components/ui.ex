@@ -578,7 +578,7 @@ defmodule LemonWeb.UI do
 
   def tabs(assigns) do
     ~H"""
-    <div role="tablist" aria-label={@label} class={["flex items-center gap-4 overflow-x-auto border-b border-line", @class]}>
+    <div role="tablist" aria-label={@label} class={["flex items-center gap-4 overflow-x-auto overflow-y-hidden border-b border-line", @class]}>
       <%= for tab <- @tab do %>
         <.link
           :if={tab[:patch] || tab[:navigate]}
