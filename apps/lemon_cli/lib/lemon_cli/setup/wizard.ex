@@ -19,6 +19,7 @@ defmodule LemonCli.Setup.Wizard do
   alias LemonCore.Runtime.{Env, Profile}
   alias LemonCore.Secrets
   alias LemonCore.Secrets.MasterKey
+  alias LemonCore.Update.ConfigMigrator
 
   @type io_callbacks :: %{
           required(:info) => (String.t() -> any()),
@@ -261,6 +262,7 @@ defmodule LemonCli.Setup.Wizard do
 
     if File.exists?(expanded) do
       io.info.("Config: #{expanded} (already exists)")
+      migrate_deprecated_config(expanded, io)
       :ok
     else
       io.info.("Creating minimal config at #{expanded} ...")
@@ -277,6 +279,28 @@ defmodule LemonCli.Setup.Wizard do
           io.error.("Could not create config scaffold: #{inspect(reason)}")
           {:error, {:scaffold_failed, reason}}
       end
+    end
+  end
+
+  # A config written by an older Lemon (for example an `[agent]` table from a
+  # previous terminal client) is rewritten to the current schema, keeping a
+  # backup. Settings that cannot be moved automatically are reported, not fatal.
+  defp migrate_deprecated_config(path, io) do
+    with {:needs_migration, _issues} <- ConfigMigrator.check(path),
+         {:ok, %{backup: backup, changes: changes}} <- ConfigMigrator.migrate!(path) do
+      io.info.("Migrated deprecated config settings:")
+      Enum.each(changes, &io.info.("  #{&1}"))
+      io.info.("  Backup: #{backup}")
+    else
+      :ok ->
+        :ok
+
+      {:error, {:manual_steps_required, errors}} ->
+        io.error.("Config uses settings that need a manual edit:")
+        Enum.each(errors, &io.error.("  • #{&1}"))
+
+      {:error, reason} ->
+        io.error.("Could not migrate deprecated config settings: #{inspect(reason)}")
     end
   end
 

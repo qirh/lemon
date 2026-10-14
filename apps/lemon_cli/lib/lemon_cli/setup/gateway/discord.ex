@@ -264,7 +264,6 @@ defmodule LemonCli.Setup.Gateway.Discord do
     allowed_channel_ids = Enum.join(scope.allowed_channel_ids, ", ")
 
     content
-    |> ensure_gateway_table()
     |> TomlPatch.upsert_raw_line("gateway", "enable_discord", "enable_discord = true")
     |> TomlPatch.upsert_string("gateway.discord", "bot_token_secret", secret_key)
     |> TomlPatch.upsert_raw_line(
@@ -284,22 +283,6 @@ defmodule LemonCli.Setup.Gateway.Discord do
     )
     |> maybe_patch_allowed_guild_ids(scope.allowed_guild_ids)
     |> then(&{:ok, &1})
-  end
-
-  defp ensure_gateway_table(content) do
-    if Regex.match?(~r/^\s*\[gateway\]\s*$/m, content) do
-      content
-    else
-      case Regex.run(~r/^\s*\[gateway\.[^\]]+\]\s*$/m, content, return: :index) do
-        [{index, _length}] ->
-          String.slice(content, 0, index) <>
-            "[gateway]\nenable_discord = true\n\n" <>
-            String.slice(content, index, String.length(content) - index)
-
-        _ ->
-          content
-      end
-    end
   end
 
   defp maybe_patch_allowed_guild_ids(content, []), do: content

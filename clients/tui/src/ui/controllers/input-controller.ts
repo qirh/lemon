@@ -36,6 +36,7 @@ export const LEMON_KEYBINDINGS = {
 		description: "Search commands, skills and prompts",
 	},
 	"lemon.tasks.toggle": { defaultKeys: "alt+a", description: "Show/hide live subagent tree" },
+	"lemon.omp.toggle": { defaultKeys: "alt+m", description: "Show/hide omp delegate sessions" },
 	"lemon.tools.toggle": { defaultKeys: "alt+o", description: "Collapse/expand all tool output" },
 	"lemon.tools.diff": { defaultKeys: "alt+d", description: "Inspect the latest edit diff" },
 } as const;
@@ -60,6 +61,7 @@ export interface InputControllerOptions {
 	openCommandPalette?: (mode: CommandPaletteMode) => void | Promise<void>;
 	isComposerEmpty?: () => boolean;
 	toggleTaskTree?: () => void;
+	toggleOmpPanel?: () => void;
 	toggleToolOutputs?: () => void;
 	openDiff?: () => void;
 	notice?: (text: string) => void;
@@ -99,6 +101,10 @@ export class InputController {
 			}
 			if (this.#matches(data, "lemon.tasks.toggle")) {
 				this.#options.toggleTaskTree?.();
+				return { consume: true };
+			}
+			if (this.#matches(data, "lemon.omp.toggle")) {
+				this.#options.toggleOmpPanel?.();
 				return { consume: true };
 			}
 			if (this.#matches(data, "lemon.tools.toggle")) {

@@ -59,7 +59,11 @@ import {
 	type SearchProviderId,
 } from "@oh-my-pi/pi-tui/tools/web-search-types";
 import { formatCount } from "@oh-my-pi/pi-utils";
+import { safeLine, safeText } from "../formatters/base.ts";
+import { ompSessionLabel, ompStatusText, ompTodoProgress } from "../formatters/omp.ts";
+import { parseOmpDiscoveredList, parseOmpSession, parseOmpSessions } from "../protocol/omp.ts";
 import type { ToolBlock } from "../store/transcript-model.ts";
+import { ompAgentNode, ompDetailNodes } from "../ui/omp-nodes.ts";
 import { type ToolView, toolArgs, toolDetails } from "../ui/tool-view.ts";
 import { fileTarget, toolLocation } from "./links.ts";
 
@@ -284,6 +288,8 @@ export function nativeToolView(
 		case "task":
 		case "agent":
 			return taskView(f);
+		case "omp":
+			return ompView(f);
 		default:
 			return defaultView(f, view.toolName);
 	}
@@ -1131,6 +1137,93 @@ function taskView(f: ToolFacts): NativeToolView {
 				(f.failed
 					? errorText(error ?? "Task failed")
 					: noteText(f.output.trim() || "No results", "dim")),
+		]),
+	};
+}
+
+// -- omp delegates -------------------------------------------------------------------
+
+/**
+ * The `omp` tool: the session(s) it reports as `agent` nodes, the same nodes
+ * the `/omp` panel draws. Ages are measured to the snapshot's own update time
+ * so the view stays a pure function of the block; omp text is plain, never
+ * markdown.
+ */
+function ompView(f: ToolFacts): NativeToolView {
+	const action = safeLine(str(f.details.action) ?? str(f.args.action) ?? "omp", 20);
+	if (f.failed) {
+		return {
+			tool: { title: "omp", meta: [action] },
+			tone: "error",
+			body: [errorText(safeText(failureMessage(f)))],
+		};
+	}
+	if (action === "list" && Array.isArray(f.details.sessions)) {
+		const sessions = parseOmpSessions(f.details.sessions);
+		return {
+			tool: {
+				title: "omp",
+				target: formatCount("session", sessions.length),
+				targetKind: "text",
+				meta: [action],
+			},
+			preview: "children",
+			body:
+				sessions.length > 0
+					? sessions.map((session) =>
+							ompAgentNode(session, {
+								now: session.updatedAt ?? session.startedAt ?? 0,
+								key: session.id,
+							}),
+						)
+					: [noteText("No omp sessions", "dim")],
+		};
+	}
+	if (action === "discover" && Array.isArray(f.details.sessions)) {
+		const rows = parseOmpDiscoveredList(f.details.sessions);
+		const lines = rows.map((row) => {
+			const live = row.liveId ? ` · live ${row.liveId}` : "";
+			return `${safeLine(row.ompSessionId, 13)}  ${safeLine(row.title, 80) || "(untitled)"} · ${safeLine(row.lastStatus, 20)}${live}`;
+		});
+		return {
+			tool: {
+				title: "omp",
+				target: formatCount("stored session", rows.length),
+				targetKind: "text",
+				meta: [action],
+			},
+			body: [
+				noteText(lines.join("\n") || "No stored omp sessions", lines.length > 0 ? "muted" : "dim"),
+			],
+		};
+	}
+	const session = parseOmpSession(f.details.session);
+	if (!session) {
+		const output = safeText(f.output).trim();
+		return {
+			tool: { title: "omp", meta: [action] },
+			body: output ? [noteText(output)] : undefined,
+		};
+	}
+	const todos = ompTodoProgress(session.todos);
+	const delivery = str(f.details.delivery);
+	return {
+		tool: {
+			title: "omp",
+			target: ompSessionLabel(session),
+			targetKind: "text",
+			meta: compact([action, ompStatusText(session), todos ? `todos ${todos}` : undefined]),
+		},
+		tone: session.status === "failed" ? "error" : undefined,
+		preview: "children",
+		body: compact<NativeChild>([
+			ompAgentNode(session, {
+				now: session.updatedAt ?? session.startedAt ?? 0,
+				key: session.id,
+				collapsed: !f.options.expanded,
+				children: ompDetailNodes(session),
+			}),
+			delivery ? noteText(`delivered as ${safeLine(delivery, 20)}`, "dim") : undefined,
 		]),
 	};
 }

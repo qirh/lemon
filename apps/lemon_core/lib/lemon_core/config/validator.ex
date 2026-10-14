@@ -32,7 +32,7 @@ defmodule LemonCore.Config.Validator do
   implementations produce messages in the same shape.
   """
 
-  alias LemonCore.Config.{Features, Memory, Modular}
+  alias LemonCore.Config.{Features, LegacyAgentMigration, Memory, Modular}
   alias LemonCore.Config.Gateway.Channel
 
   @valid_log_levels [:debug, :info, :notice, :warning, :error, :critical, :alert, :emergency]
@@ -141,6 +141,10 @@ defmodule LemonCore.Config.Validator do
   Validates settings for removed configuration sections and engine-routing keys,
   returning an ok/error tuple.
 
+  The legacy `[agent]` table is not an error: loaders map it onto the canonical
+  sections with `LemonCore.Config.LegacyAgentMigration` first and report it
+  through `deprecation_warnings/1`.
+
   Returns `:ok` if no removed settings are found, or `{:error, errors}`.
   """
   @spec validate_deprecated_sections(map()) :: :ok | {:error, [String.t()]}
@@ -148,16 +152,8 @@ defmodule LemonCore.Config.Validator do
     deprecated_errors =
       []
       |> check_deprecated(
-        is_map(settings["agent"]),
-        "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime] (other settings)."
-      )
-      |> check_deprecated(
         is_map(settings["agents"]),
         "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
-      )
-      |> check_deprecated(
-        is_map(settings["agent"]) and is_map(settings["agent"]["tools"]),
-        "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
       )
       |> check_deprecated(
         is_map(settings["tools"]),
@@ -171,6 +167,21 @@ defmodule LemonCore.Config.Validator do
 
     (deprecated_errors ++ removed_engine_config_errors(settings))
     |> errors_to_result()
+  end
+
+  @doc """
+  Returns non-fatal warnings for legacy settings that still load.
+  """
+  @spec deprecation_warnings(map()) :: [String.t()]
+  def deprecation_warnings(settings) when is_map(settings) do
+    if LegacyAgentMigration.legacy?(settings) do
+      [
+        "[agent] is deprecated and is read as [defaults], [runtime] and [tui]. " <>
+          "Run `lemon config migrate` to rewrite it (the original is kept as a backup)."
+      ]
+    else
+      []
+    end
   end
 
   @removed_engine_keys ~w(

@@ -217,7 +217,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 		loadConfig().catch(() => undefined),
 		resolveVersion(),
 	]);
-	const theme = initAppearanceTheme({ configured: config?.agent?.theme });
+	const theme = initAppearanceTheme({ configured: config?.tui?.theme });
 	return await new Promise<number>((resolve) => {
 		const app = new AppShell({
 			url: options.url,

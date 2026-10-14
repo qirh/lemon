@@ -37,6 +37,15 @@ defmodule LemonWeb.Nav do
       keywords: "history archive fork rename export prune search"
     },
     %{
+      id: :omp,
+      label: "omp",
+      path: "/omp",
+      icon: "terminal",
+      group: "Workspace",
+      shortcut: "o",
+      keywords: "oh-my-pi delegate external agent sessions steer"
+    },
+    %{
       id: :automation,
       label: "Automation",
       path: "/automation",
