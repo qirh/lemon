@@ -106,6 +106,55 @@ defmodule LemonControlPlane.Auth.AuthorizeTest do
     end
   end
 
+  describe "operator credential helpers" do
+    test "configured_operator_token/0 trims and treats blank as unset" do
+      Application.put_env(:lemon_control_plane, :operator_token, "  tok  ")
+      assert Authorize.configured_operator_token() == "tok"
+
+      Application.put_env(:lemon_control_plane, :operator_token, "   ")
+      previous_env = System.get_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+      System.delete_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+
+      on_exit(fn ->
+        if previous_env, do: System.put_env("LEMON_CONTROL_PLANE_OPERATOR_TOKEN", previous_env)
+      end)
+
+      assert Authorize.configured_operator_token() == nil
+    end
+
+    test "loopback_address?/1 accepts only direct loopback forms" do
+      assert Authorize.loopback_address?({127, 0, 0, 1})
+      assert Authorize.loopback_address?({127, 1, 2, 3})
+      assert Authorize.loopback_address?({0, 0, 0, 0, 0, 0, 0, 1})
+      assert Authorize.loopback_address?({0, 0, 0, 0, 0, 65_535, 0x7F00, 1})
+      refute Authorize.loopback_address?({10, 0, 0, 1})
+      refute Authorize.loopback_address?({0, 0, 0, 0, 0, 65_535, 0x0A00, 1})
+      refute Authorize.loopback_address?(nil)
+      refute Authorize.loopback_address?("127.0.0.1")
+    end
+
+    test "tokenless_loopback_allowed?/1 requires the explicit flag and a loopback peer" do
+      previous =
+        Application.get_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator)
+
+      on_exit(fn ->
+        Application.put_env(
+          :lemon_control_plane,
+          :allow_unauthenticated_loopback_operator,
+          previous
+        )
+      end)
+
+      Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, false)
+      refute Authorize.tokenless_loopback_allowed?({127, 0, 0, 1})
+
+      Application.put_env(:lemon_control_plane, :allow_unauthenticated_loopback_operator, true)
+      assert Authorize.tokenless_loopback_allowed?({127, 0, 0, 1})
+      refute Authorize.tokenless_loopback_allowed?({192, 168, 1, 2})
+      refute Authorize.tokenless_loopback_allowed?(nil)
+    end
+  end
+
   describe "default contexts" do
     test "default_operator/0 returns full operator context" do
       assert Authorize.default_operator() == %{
