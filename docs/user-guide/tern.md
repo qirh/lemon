@@ -123,10 +123,18 @@ absolute directory in `session/new`. Lemon attaches to the healthy local
 runtime, starting a daemon only if needed. Closing chat disconnects the stdio
 client and cancels an active turn; the daemon remains available for other panes.
 
-Use Tern's model/mode/config controls according to the capabilities Lemon
-negotiates. Tool permissions are displayed as native ACP permission requests.
+Use Tern's model/thinking/approval config controls according to the options
+Lemon negotiates; Lemon advertises no session modes, so Tern shows no mode
+selector. Tool permissions are displayed as native ACP permission requests.
 Tern's `/sessions`, `/new` and `/fork` controls operate on the advertised session
 capabilities; neither a new chat pane nor the stdio process is another router.
+
+Type `/plan` to toggle plan mode (or `/plan <request>` to start planning a
+task). The agent explores read-only and drafts a plan file; when it proposes the
+plan, Tern shows an **Approve plan** permission card with **Approve and
+execute** or **Refine plan**. Approving switches back to normal tool access and
+the agent starts implementing; `/plan` again leaves plan mode without approving.
+See [plan mode](../tools/acp.md#plan-mode).
 
 ## Delegate from Carly or a plugin
 

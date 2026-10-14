@@ -121,6 +121,7 @@ defmodule CodingAgent.Session do
     :wasm_sidecar_pid,
     :wasm_tool_names,
     :wasm_status,
+    :plan_gate,
     auto_compaction: %CompactionLifecycle.State{},
     overflow_recovery: %OverflowRecovery.State{}
   ]
@@ -175,6 +176,7 @@ defmodule CodingAgent.Session do
           wasm_sidecar_pid: pid() | nil,
           wasm_tool_names: [String.t()],
           wasm_status: map() | nil,
+          plan_gate: :atomics.atomics_ref() | nil,
           auto_compaction: CompactionLifecycle.State.t(),
           overflow_recovery: OverflowRecovery.State.t()
         }
@@ -522,7 +524,7 @@ defmodule CodingAgent.Session do
     GenServer.call(session, {:compact, opts}, :infinity)
   end
 
-  @doc "Inspect or explicitly transition the native planning lifecycle."
+  @doc "Inspect (`:status`), enter (`:enter`) or leave (`:exit`) plan mode."
   def plan(session, action \\ :status, opts \\ []) do
     GenServer.call(session, {:plan, action, opts}, :infinity)
   end
@@ -672,6 +674,15 @@ defmodule CodingAgent.Session do
         {:error, _} = error ->
           {:reply, error, state}
       end
+    end
+  end
+
+  # Called from the running `propose_plan` tool once the user decided.
+  def handle_call({:resolve_plan_proposal, decision, proposal}, _from, state)
+      when decision in [:approve, :refine] do
+    case CodingAgent.Session.Planning.resolve_proposal(state, decision, proposal) do
+      {:ok, state} -> {:reply, :ok, state}
+      {:error, _} = error -> {:reply, error, state}
     end
   end
 

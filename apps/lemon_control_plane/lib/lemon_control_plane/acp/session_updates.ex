@@ -72,6 +72,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       n when n in ["bash", "bash_output", "kill_process", "shell", "exec", "eval"] -> "execute"
       n when n in ["grep", "glob", "find", "ast_grep"] -> "search"
       n when n in ["web_search", "websearch", "webfetch", "fetch"] -> "fetch"
+      "propose_plan" -> "switch_mode"
       "todo" -> "think"
       _ -> "other"
     end
@@ -411,6 +412,9 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       cond do
         name in ["bash", "shell", "exec"] and is_binary(command) ->
           "$ " <> command
+
+        name == "propose_plan" and is_binary(get(args, :title)) ->
+          "Propose plan: " <> get(args, :title)
 
         name == "eval" and is_binary(get(args, :code)) ->
           "[#{get(args, :language) || "?"}] #{get(args, :title) || ""}\n#{get(args, :code)}"

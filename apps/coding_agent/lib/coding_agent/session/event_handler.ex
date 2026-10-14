@@ -120,7 +120,6 @@ defmodule CodingAgent.Session.EventHandler do
     maybe_record_missed_skills(state, messages)
     maybe_record_missed_learning(state, messages)
     _ = CodingAgent.Session.ProjectMemory.after_turn(state, messages)
-    state = CodingAgent.Session.Planning.after_turn(state, messages)
 
     # Complete all event streams with the final event
     callbacks.complete_event_streams.(state, {:agent_end, messages})

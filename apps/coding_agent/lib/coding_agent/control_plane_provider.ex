@@ -171,7 +171,7 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
-  @doc "Inspect or explicitly transition branch-aware native planning state."
+  @doc "Inspect, enter, or exit branch-aware native plan mode."
   def session_plan(session_key, cwd, action, opts) do
     case live_session(session_key) do
       nil ->
@@ -190,8 +190,8 @@ defmodule CodingAgent.ControlPlaneProvider do
                 end
               end)
 
-            {:error, :session_not_found} when action == :status ->
-              {:ok, CodingAgent.Session.Planning.empty()}
+            {:error, :session_not_found} when action in [:status, :exit] ->
+              {:ok, CodingAgent.Session.Planning.status(nil)}
 
             {:error, :session_not_found} when action == :enter ->
               with {:ok, session} <- create_native_session(session_key, cwd),

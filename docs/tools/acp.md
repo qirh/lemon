@@ -67,23 +67,35 @@ load/resume replay persisted native messages and tool history; close cancels an
 active turn and retains the session for later resume. Fork creates a durable
 branch rather than a new empty chat.
 
-Session configuration exposes code/plan mode, registry model selection,
-thinking level and approval policy. Plan mode is read-only; approval choices
-cannot override administrator restrictions. Existing local provider credentials
+Session configuration exposes registry model selection, thinking level and
+approval policy. Lemon advertises no session modes: plan mode is a `/plan`
+command, not a selectable mode. Approval choices cannot override administrator
+restrictions. Existing local provider credentials
 use the `agent` authentication method. Image/audio/embedded resources and
 client-provided MCP transports are rejected unless actually supported by the
 negotiated capabilities.
 
-### Review and approve a native plan
+### Plan mode
 
-Select **Plan** to draft using read-only project tools. The native session owns
-the plan artifact and its revision; ACP does not maintain a second plan state.
-Use `/plan` to review the artifact and exact revision, then
-`/approve-plan <revision>` to approve that version. Your next ordinary prompt
-executes with the approved plan in context. Switching to Code while a plan is
-pending is rejected—it never silently grants approval. `/discard-plan` exits
-planning without approving execution. Changed artifacts or stale revisions
-must be reviewed again.
+Plan mode follows omp's `/plan` workflow. `/plan` toggles it for the native
+session; `/plan <request>` turns it on (if needed) and sends the request as the
+first planning turn. Toggling is refused while a turn is running.
+
+While plan mode is on the working tree is read-only: only read-only tools run
+(read, search, web fetch/search, questions), and every other tool returns a
+plan-mode error. The agent drafts `<slug>-plan.md` in a session-private plan
+directory outside the project—the only place `write`/`edit` may change, always
+on the Lemon host rather than through client filesystem methods—and calls
+`propose_plan` when the plan is decision-complete.
+
+The proposal arrives as a `session/request_permission` card titled
+**Approve plan: …** (kind `switch_mode`) showing the plan Markdown, with two
+options: **Approve and execute** turns plan mode off, restores full tool access
+and lets the agent implement the plan in the same turn; **Refine plan** keeps
+plan mode on so you can reply with feedback. Approval is never remembered for
+the session. The approved plan stays in the native session's context through
+restarts and compaction. Sending `/plan` while planning exits without approving
+or executing anything.
 
 ### Connection-owned tools
 

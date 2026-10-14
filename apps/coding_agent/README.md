@@ -649,21 +649,25 @@ the previous run's process has exited.
 
 ### Planning and context budget
 
-`Session.plan/3` and the `sessions.plan` RPC share one branch-aware lifecycle:
-`enter` makes the session read-only; a successful planning turn saves its final
-Markdown response as an immutable review artifact under native session storage.
-The journal records the full proposal, so restart, branch navigation and compaction
-do not lose it. Planning tools are restricted to `read`, `read_skill`, `recall`,
-`grep`, `find` and `ls`, further restricted by the session's existing policy.
+Plan mode follows omp's `/plan` toggle. `Session.plan/3` and the `sessions.plan`
+RPC (`status`, `enter`, `exit`) append branch-aware `"lemon.plan"` journal
+entries, so restart, branch navigation and compaction keep the mode, the current
+plan file and any approved plan. Toggling is refused while a turn runs.
 
-Approval is an explicit user operation with the exact reviewed revision. A stale
-revision or edited/missing artifact is rejected. Selecting code mode is not
-approval. Approval restores the original permitted tools and includes the approved
-plan in subsequent model context; it does not itself submit an execution prompt.
-`discard` exits without approval. The TUI exposes `/plan enter`, `/plan`,
-`/plan approve` and `/plan discard`; ACP uses the same native lifecycle.
-Proposals are bounded to 32 KiB. Entering before the first run durably binds the
-native journal to the logical session key, rather than creating parallel client state.
+In plan mode every tool still appears, but a shared gate blocks execution of
+anything outside `read`, `read_skill`, `recall`, `grep`, `find`, `ls`,
+`websearch`, `webfetch` and `ask` (themselves subject to the session policy).
+`write`/`edit` are allowed only for Markdown files in the session-private plan
+directory (under native session storage, written locally even for ACP clients);
+plan-only instances are added when the policy removed the file tools. The agent
+drafts `<slug>-plan.md` there and calls `propose_plan`, which asks the user through
+`LemonCore.ExecApprovals` (tool `propose_plan`, action `title`/`path`/`plan`).
+Approval appends a code-mode entry carrying the plan (≤ 32 KiB), opens the gate,
+swaps the system prompt to include the approved plan and steers the running loop
+into execution; denial means "refine" and keeps plan mode on. `exit` never approves.
+Entering before the first run durably binds the native journal to the logical
+session key. Legacy reviewed-artifact entries load as plan mode or approved-plan
+context.
 
 Manual `/compact [focus]` (alias `/compress`) forwards focus instructions and cwd
 to native compaction, including after the previous runtime has exited. Its

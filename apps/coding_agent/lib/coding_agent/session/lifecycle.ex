@@ -139,7 +139,26 @@ defmodule CodingAgent.Session.Lifecycle do
         approval_context: approval_context
       )
 
-    tools = CodingAgent.Session.Planning.tools(lifecycle.tools, session_manager)
+    plan_gate = CodingAgent.Session.Planning.new_gate()
+
+    tools =
+      CodingAgent.Session.Planning.tools(
+        lifecycle.tools,
+        session_manager,
+        CodingAgent.Session.Planning.runtime_context(
+          %{
+            plan_gate: plan_gate,
+            cwd: cwd,
+            session_manager: session_manager,
+            run_id: run_id,
+            session_key: session_key,
+            agent_id: agent_id,
+            approval_context: approval_context
+          },
+          session_pid
+        )
+      )
+
     tool_names = Enum.map(tools, & &1.name)
 
     # Captured once: the date and git snapshot stay fixed for the session so
@@ -311,6 +330,7 @@ defmodule CodingAgent.Session.Lifecycle do
       wasm_sidecar_pid: wasm_boot.sidecar_pid,
       wasm_tool_names: wasm_boot.wasm_tool_names,
       wasm_status: wasm_boot.wasm_status,
+      plan_gate: plan_gate,
       auto_compaction: %CompactionLifecycle.State{},
       overflow_recovery: %OverflowRecovery.State{}
     }
@@ -365,7 +385,13 @@ defmodule CodingAgent.Session.Lifecycle do
         previous_status_report: state.extension_status_report
       )
 
-    tools = CodingAgent.Session.Planning.tools(lifecycle.tools, state.session_manager)
+    tools =
+      CodingAgent.Session.Planning.tools(
+        lifecycle.tools,
+        state.session_manager,
+        CodingAgent.Session.Planning.runtime_context(state, self())
+      )
+
     :ok = LemonAgent.Agent.set_tools(state.agent, tools)
     Notifier.broadcast_event(state, {:extension_status_report, lifecycle.extension_status_report})
 
