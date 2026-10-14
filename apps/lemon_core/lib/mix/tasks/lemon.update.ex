@@ -155,20 +155,17 @@ defmodule Mix.Tasks.Lemon.Update do
             :ok
           else
             shell.info("  Migrating #{expanded} ...")
-            bak = ConfigMigrator.backup_path(config_path)
 
             case ConfigMigrator.migrate!(config_path) do
-              :ok ->
-                shell.info("  Migration complete. Backup: #{bak}")
+              {:ok, %{backup: backup, changes: changes}} ->
+                Enum.each(changes, &shell.info("    #{&1}"))
+                shell.info("  Migration complete. Backup: #{backup || "(nothing rewritten)"}")
                 :ok
 
               {:error, {:manual_steps_required, errors}} ->
-                shell.error(
-                  "  Migration applied automatic section renames but removed runner settings remain:"
-                )
-
+                shell.error("  Config left unchanged; these settings need a manual edit:")
                 Enum.each(errors, &shell.error("    • #{&1}"))
-                shell.error("  Remove the settings above manually, then rerun lemon.update.")
+                shell.error("  Fix the settings above, then rerun lemon.update.")
                 :error
 
               {:error, reason} ->

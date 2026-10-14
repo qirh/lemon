@@ -30,6 +30,7 @@ FORCE=0
 VERIFY=0
 MODIFY_PATH=1
 SKIP_SETUP=0
+RESOLVE_VERSION=0
 
 
 BASE_URL="${LEMON_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
@@ -44,6 +45,7 @@ Lemon installer
 Usage:
   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
   sh install.sh [--force] [--verify] [--no-modify-path] [--skip-setup] [--help]
+  sh install.sh --resolve-version
 
 Options:
   --force         Reinstall even if the target version is already present.
@@ -56,6 +58,9 @@ Options:
   --skip-setup    Do not start the interactive provider setup wizard after
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
+  --resolve-version
+                  Print the version this run would install, then exit without
+                  installing anything.
   --help          Show this help.
 
 Prerequisites:
@@ -106,6 +111,7 @@ while [ "$#" -gt 0 ]; do
     --modify-path) MODIFY_PATH=1 ;;
     --no-modify-path) MODIFY_PATH=0 ;;
     --skip-setup) SKIP_SETUP=1 ;;
+    --resolve-version) RESOLVE_VERSION=1 ;;
     -h|--help)
       usage
       exit 0
@@ -239,10 +245,15 @@ fi
 
 fetch() {
   # fetch <url> <destination>
+  # --resolve-version fetches only the manifest: errors, but no progress meter.
+  quiet=""
+  if [ "$RESOLVE_VERSION" = "1" ]; then
+    quiet="-sS"
+  fi
   if [ "$INSECURE_BASE" = "1" ]; then
-    curl -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl ${quiet:+"$quiet"} -fL --retry 3 --connect-timeout 10 -o "$2" "$1"
   else
-    curl -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
+    curl ${quiet:+"$quiet"} -fL --proto '=https' --retry 3 --connect-timeout 10 -o "$2" "$1"
   fi
 }
 
@@ -581,7 +592,9 @@ setup_handoff() {
 
 # ----------------------------------------------------------------- install ---
 
-info "Installing Lemon ($PROFILE, $PLATFORM, channel $CHANNEL)"
+if [ "$RESOLVE_VERSION" != "1" ]; then
+  info "Installing Lemon ($PROFILE, $PLATFORM, channel $CHANNEL)"
+fi
 
 manifest_file="$TMP_DIR/manifest.json"
 if ! fetch "$MANIFEST_URL" "$manifest_file"; then
@@ -594,6 +607,12 @@ artifact_line=""
 if ! artifact_line="$(select_artifact "$manifest_file" "$PROFILE")"; then
   rm -f "$manifest_file"
   exit 1
+fi
+
+if [ "$RESOLVE_VERSION" = "1" ]; then
+  rm -f "$manifest_file"
+  printf '%s\n' "$artifact_line" | cut -f4
+  exit 0
 fi
 
 # The TUI is a second, optional artifact in the same manifest: a separate

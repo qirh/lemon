@@ -98,6 +98,16 @@ describe("the gauge segment", () => {
 	});
 });
 
+describe("the omp badge", () => {
+	test("appears only while omp delegates are running, as a clickable composer fact", () => {
+		expect(stripAnsi(renderStatusLine(data(), 200))).not.toContain("omp");
+		expect(stripAnsi(renderStatusLine(data({ ompBusy: 2 }), 200))).toContain("omp 2▶");
+		const extras = JSON.stringify(buildComposerFacts(data({ ompBusy: 1 })).extras);
+		expect(extras).toContain("omp 1▶");
+		expect(extras).toContain("status.omp");
+	});
+});
+
 describe("model naming", () => {
 	test("drops the provider prefix", () => {
 		expect(shortModel("anthropic:claude-sonnet-4")).toBe("claude-sonnet-4");

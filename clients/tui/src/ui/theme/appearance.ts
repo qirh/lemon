@@ -3,7 +3,7 @@
  *
  * Precedence, highest first:
  *   1. `LEMON_TUI_THEME` — an explicit env override always wins;
- *   2. the config file's `agent.theme` (what `/theme` persists);
+ *   2. the config file's `[tui] theme` (what `/theme` persists);
  *   3. the terminal's own background, reported over OSC 11 by pi-tui's
  *      {@link Terminal.appearance} / `onAppearanceChange`;
  *   4. dark.
@@ -60,7 +60,7 @@ export function normalizePreference(value: string | undefined | null): ThemePref
 
 export interface ResolveAppearanceOptions {
 	env?: NodeJS.ProcessEnv;
-	/** `agent.theme` from the config file, if any. */
+	/** `[tui] theme` from the config file, if any. */
 	configured?: string;
 	/** What the terminal reported over OSC 11, when it already has. */
 	terminalAppearance?: TerminalAppearance | undefined;

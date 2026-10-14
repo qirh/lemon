@@ -46,6 +46,7 @@ defmodule LemonCore.Config.Modular do
     Automation,
     Features,
     Gateway,
+    LegacyAgentMigration,
     Logging,
     Memory,
     Providers,
@@ -107,8 +108,10 @@ defmodule LemonCore.Config.Modular do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     validate? = Keyword.get(opts, :validate, false)
 
-    # Load, reject removed settings, and resolve.
+    # Load, map the legacy `[agent]` alias, reject removed settings, and resolve.
     settings = load_merged_settings(project_dir)
+    warn_deprecated(settings)
+    settings = LegacyAgentMigration.migrate_settings(settings)
     check_deprecated_sections!(settings)
     config = resolve_settings(settings)
     check_model_roles!(config.model_roles)
@@ -196,10 +199,13 @@ defmodule LemonCore.Config.Modular do
 
   Comment-preserving editors use this before replacing a TOML file: they can
   validate the exact merged candidate without first making it visible at the
-  canonical global or project path.
+  canonical global or project path. A legacy `[agent]` table is read as its
+  canonical sections, exactly as `load/1` does; see `deprecation_warnings/1`.
   """
   @spec validate_settings(map()) :: {:ok, t()} | {:error, [String.t()]}
   def validate_settings(settings) when is_map(settings) do
+    settings = LegacyAgentMigration.migrate_settings(settings)
+
     # Return removed-setting errors alongside resolved-config validation errors.
     removed_setting_errors =
       case Validator.validate_deprecated_sections(settings) do
@@ -222,6 +228,22 @@ defmodule LemonCore.Config.Modular do
   end
 
   @doc """
+  Non-fatal warnings for legacy settings in the merged global and project
+  config, such as an `[agent]` table that still loads as an alias.
+
+  ## Options
+
+    * `:project_dir` - Project directory to load config from (default: current directory)
+  """
+  @spec deprecation_warnings(keyword()) :: [String.t()]
+  def deprecation_warnings(opts \\ []) do
+    opts
+    |> Keyword.get(:project_dir, File.cwd!())
+    |> load_merged_settings()
+    |> Validator.deprecation_warnings()
+  end
+
+  @doc """
   Returns the path to the global config file.
   """
   @spec global_path() :: String.t()
@@ -237,8 +259,9 @@ defmodule LemonCore.Config.Modular do
   Checks for removed TOML sections and engine-routing settings, raising
   `ValidationError` when found.
 
-  Removed settings include legacy agent/tool sections and engine-routing
-  configuration, including `[runtime.cli]`.
+  Removed settings include `[agents.<id>]`, `[tools.*]` and engine-routing
+  configuration, including `[runtime.cli]`. Map a legacy `[agent]` table with
+  `LemonCore.Config.LegacyAgentMigration.migrate_settings/1` first.
   """
   @spec check_deprecated_sections!(map()) :: :ok
   def check_deprecated_sections!(settings) when is_map(settings) do
@@ -248,6 +271,17 @@ defmodule LemonCore.Config.Modular do
 
       {:error, errors} ->
         raise ValidationError, message: "Configuration uses removed settings", errors: errors
+    end
+  end
+
+  defp warn_deprecated(settings) do
+    case Validator.deprecation_warnings(settings) do
+      [] ->
+        :ok
+
+      warnings ->
+        require Logger
+        Enum.each(warnings, &Logger.warning("Lemon config: #{&1}"))
     end
   end
 

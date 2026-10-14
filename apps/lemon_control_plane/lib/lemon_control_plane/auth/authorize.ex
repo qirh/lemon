@@ -359,7 +359,12 @@ defmodule LemonControlPlane.Auth.Authorize do
       "sessions.rewind",
       "sessions.plan",
       "sessions.fork",
-      "node.invoke"
+      "node.invoke",
+      "omp.sessions.start",
+      "omp.sessions.resume",
+      "omp.sessions.send",
+      "omp.sessions.cancel",
+      "omp.sessions.close"
     ]
   end
 

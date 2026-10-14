@@ -9,26 +9,13 @@ defmodule LemonCli.Setup.ScaffoldTest do
       assert is_binary(result)
     end
 
-    test "contains default provider and model" do
+    test "names no provider, default or credential reference" do
       result = Scaffold.generate()
-      assert String.contains?(result, ~s(provider = "anthropic"))
-      assert String.contains?(result, ~s(model = "claude-sonnet-4-20250514"))
-    end
+      {:ok, settings} = Toml.decode(result)
 
-    test "respects :provider option" do
-      result = Scaffold.generate(provider: "openai")
-      assert String.contains?(result, ~s(provider = "openai"))
-      assert String.contains?(result, "[providers.openai]")
-    end
-
-    test "respects :model option" do
-      result = Scaffold.generate(model: "gpt-4o")
-      assert String.contains?(result, ~s(model = "gpt-4o"))
-    end
-
-    test "includes [defaults] section" do
-      result = Scaffold.generate()
-      assert String.contains?(result, "[defaults]")
+      refute Map.has_key?(settings, "defaults")
+      refute Map.has_key?(settings, "providers")
+      refute Map.has_key?(settings, "agent")
     end
 
     test "includes [runtime] section" do
@@ -41,11 +28,9 @@ defmodule LemonCli.Setup.ScaffoldTest do
       assert String.contains?(result, "[gateway]")
     end
 
-    test "is valid non-empty TOML" do
-      result = Scaffold.generate()
-      # Uncommented lines must be parseable by Toml
-      # Strip comment lines and blank lines to test the uncommented keys
-      assert byte_size(result) > 0
+    test "is valid TOML that passes config validation" do
+      {:ok, settings} = Toml.decode(Scaffold.generate())
+      assert {:ok, _config} = LemonCore.Config.Modular.validate_settings(settings)
     end
   end
 

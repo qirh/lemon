@@ -268,6 +268,11 @@ export interface ProtocolEventMap {
 	"exec.approval.requested": ApprovalRequestedEvent;
 	"exec.approval.resolved": ApprovalResolvedEvent;
 	"channel.delivery": ChannelDeliveryEvent;
+	/**
+	 * `{reason, session: session_wire}` for an omp delegate. Untrusted and
+	 * unvalidated on the wire: consumers parse it with `parseOmpSessionEvent`.
+	 */
+	"omp.session": unknown;
 }
 
 export type ProtocolEventName = keyof ProtocolEventMap & string;

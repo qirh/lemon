@@ -147,6 +147,11 @@ lemon secrets status
 lemon doctor
 ```
 
+If validation or doctor warns about deprecated settings such as an `[agent]`
+table, run `lemon config migrate`: it rewrites them to the current schema and
+keeps the original as `config.toml.bak-<timestamp>`. `lemon setup` does this
+automatically for an existing config.
+
 `lemon doctor` reports diagnostics; it is not a replacement for provider
 onboarding. To retry first-time state, use `lemon setup`. To correct a provider
 or model, use `lemon setup provider` or `lemon model`.
