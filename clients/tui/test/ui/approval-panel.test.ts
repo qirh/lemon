@@ -192,3 +192,19 @@ describe("ApprovalRecordComponent", () => {
 		expect(record.decision).toBe("deny");
 	});
 });
+
+describe("ApprovalPanelComponent native buttons", () => {
+	test("a button click takes its quick-pick decision path", () => {
+		const { panel, decisions } = build();
+		const described = panel.describe();
+		expect(panel.describe()).toBe(described);
+		panel.handleNativeEvent({
+			type: "action",
+			key: "actions/approve_session",
+			act: "approve_session",
+			mods: [],
+		});
+		panel.handleNativeEvent({ type: "action", key: "actions/bogus", act: "bogus", mods: [] });
+		expect(decisions).toEqual(["approve_session"]);
+	});
+});

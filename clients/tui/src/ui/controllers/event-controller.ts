@@ -31,9 +31,11 @@ import type { SessionStore } from "../../store/session-store.ts";
 import {
 	type AssistantBlock,
 	type Block,
+	type CompactionDetails,
 	type NoticeLevel,
 	type ToolBlock,
 	toToolPhase,
+	type UserDetails,
 } from "../../store/transcript-model.ts";
 import {
 	type AccordionState,
@@ -139,13 +141,23 @@ export class EventController {
 	// -- writes the app drives ----------------------------------------------
 
 	/** Echo the user's prompt. Called by the shell right before `chat.send`. */
-	addUserBlock(text: string, session: SessionStore = this.#store.focused): void {
-		session.addUser(text);
+	addUserBlock(
+		text: string,
+		session: SessionStore = this.#store.focused,
+		details?: Omit<UserDetails, "sentAt">,
+	): void {
+		const at = Date.now();
+		session.addUser(text, at, { sentAt: at, ...details });
 		this.#sync(session);
 	}
 
-	notice(text: string, level: NoticeLevel = "info", session = this.#store.focused): void {
-		session.addNotice(text, level);
+	notice(
+		text: string,
+		level: NoticeLevel = "info",
+		session = this.#store.focused,
+		compaction?: CompactionDetails,
+	): void {
+		session.addNotice(text, level, undefined, compaction);
 		this.#sync(session);
 	}
 
@@ -350,6 +362,13 @@ export class EventController {
 							: completed.error == null
 								? undefined
 								: JSON.stringify(completed.error),
+					turn: {
+						...(typeof completed.durationMs === "number" && completed.durationMs >= 0
+							? { durationMs: completed.durationMs }
+							: {}),
+						...(completed.usage ? { usage: completed.usage } : {}),
+						...(completed.model?.trim() ? { model: completed.model.trim() } : {}),
+					},
 				});
 				// finalizeRun may have created the block (completed outran started),
 				// so resolve its component only after the tree is in step.
@@ -442,6 +461,7 @@ export class EventController {
 			// reports `ok: false, answer: ""`); without a fallback the block would
 			// render as nothing at all and the failure would be invisible.
 			error: block.status === "error" ? (block.error ?? "run failed") : undefined,
+			turn: block.turn,
 		});
 	}
 
@@ -517,7 +537,7 @@ export class EventController {
 	#createComponent(block: Block): Component | undefined {
 		switch (block.kind) {
 			case "user":
-				return new UserMessageComponent(block.text);
+				return new UserMessageComponent(block.text, block);
 			case "assistant": {
 				const component = new AssistantMessageComponent(block.text);
 				// A rebuilt session (or a block created straight from `completed`)
@@ -531,7 +551,7 @@ export class EventController {
 				// Owned by a ToolShelfComponent; see #placeToolBlock.
 				return undefined;
 			case "notice":
-				return new NoticeComponent(block.text, block.level);
+				return new NoticeComponent(block.text, block.level, block.compaction);
 			case "reasoning":
 				return new ReasoningComponent(block);
 			case "approval":

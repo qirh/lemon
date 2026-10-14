@@ -110,6 +110,19 @@ describe("SessionStore finalize", () => {
 		expect(session.activeRunId).toBeUndefined();
 	});
 
+	test("the daemon's turn report still lands after a client-side interrupt", () => {
+		const session = new SessionStore("s");
+		session.appendDelta("run-1", 1, "half");
+		session.markInterrupted("run-1");
+		const block = session.finalizeRun("run-1", {
+			ok: false,
+			interrupted: true,
+			turn: { durationMs: 1200, model: "m" },
+		});
+		expect(block?.status).toBe("aborted");
+		expect(block?.turn).toEqual({ durationMs: 1200, model: "m" });
+	});
+
 	test("a replayed delta after finalize is still ignored", () => {
 		const session = new SessionStore("s");
 		session.appendDelta("run-1", 2, "done");

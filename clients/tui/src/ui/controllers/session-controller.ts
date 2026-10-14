@@ -468,7 +468,8 @@ export function synthesizeHistory(session: SessionStore, messages: ChatHistoryMe
 		const content = message.content ?? "";
 		const role = (message.role ?? "").toLowerCase();
 		if (role === "user") {
-			session.addUser(content, at);
+			// Only a recorded timestamp is a send time; hydration time is not.
+			session.addUser(content, at, message.timestampMs ? { sentAt: message.timestampMs } : {});
 			continue;
 		}
 		if (role === "assistant" || role === "") {

@@ -18,7 +18,7 @@ import type { ControlPlaneMethods, MethodName } from "../protocol/methods.ts";
 import type { ChatHistoryMessage } from "../protocol/types.ts";
 import type { AppStore, SubmissionMode } from "../store/app-store.ts";
 import type { SessionStore } from "../store/session-store.ts";
-import type { NoticeLevel } from "../store/transcript-model.ts";
+import type { CompactionDetails, NoticeLevel } from "../store/transcript-model.ts";
 import type { ThemePreference } from "../ui/theme/appearance.ts";
 
 /** One entry in a picker overlay opened from a command. */
@@ -56,8 +56,8 @@ export interface MultiPickerSpec {
  * check for them before calling, and tell the user when they are missing.
  */
 export interface CommandHost {
-	/** Append a notice block to the focused transcript. */
-	notice(text: string, level?: NoticeLevel): void;
+	/** Append a notice block to the focused transcript; `compaction` marks a confirmed compaction. */
+	notice(text: string, level?: NoticeLevel, compaction?: CompactionDetails): void;
 	/** Append a multi-line notice; continuation lines are indented for reading. */
 	noticeBlock(lines: string[], level?: NoticeLevel): void;
 	/** Drop every transcript block and clear native scrollback. */

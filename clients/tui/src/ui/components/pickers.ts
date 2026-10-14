@@ -10,21 +10,108 @@
  *
  * Rendering follows the pi-tui contract: rows are recomputed only when an input
  * changed, and the same array reference is returned otherwise.
+ *
+ * On a Tern Surface Protocol terminal that draws the `picker` kind, the overlay
+ * describes itself as a data-first picker sheet instead (`nativeSheet`): Tern
+ * draws the head, search field, rows, groups and action bar over the transcript.
+ * Keys stay ours — the sheet only mirrors the filter, selection and items — and
+ * pointer events run the paths of the keys they stand for (a row click moves the
+ * selection, a second click or the primary button is Enter, Close is Esc).
  */
 
 import { type SelectItem, SelectList } from "@oh-my-pi/pi-tui/components/select-list";
 import { fuzzyRank } from "@oh-my-pi/pi-tui/fuzzy";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { type MouseRoutable, routeSgrMouseInput, type SgrMouseEvent } from "@oh-my-pi/pi-tui/mouse";
+import { text } from "@oh-my-pi/pi-tui/native/describe";
+import type {
+	DescribeContext,
+	NativeChild,
+	NativeNode,
+	NativeUiEvent,
+} from "@oh-my-pi/pi-tui/native/node";
+import {
+	CLOSE_ACTION,
+	type PickerEvent,
+	picker,
+	pickerAction,
+	pickerEvent,
+	pickerFuzzyHits,
+} from "@oh-my-pi/pi-tui/native/picker";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { getTheme } from "../theme/theme.ts";
 import { getSelectListTheme } from "../theme/tui-adapters.ts";
 
+/** The wire props of a native `picker` sheet. */
+export type PickerSheetProps = Parameters<typeof picker>[0];
+/** One row of a native picker sheet. */
+export type NativePickerItem = NonNullable<PickerSheetProps["items"]>[number];
+/** One action-bar button of a native picker sheet. */
+export type PickerSheetAction = NonNullable<PickerSheetProps["actions"]>[number];
+
 export interface PickerItem extends SelectItem {
 	/** Undecorated identifier, when the label includes a current/installed badge. */
 	searchValue?: string;
+	/**
+	 * Native sheet extras for this row (status dot, badges, fact columns, a mono
+	 * or undecorated label). Only a TSP terminal reads them; rows ignore them.
+	 */
+	native?: Partial<Omit<NativePickerItem, "id">>;
+	/**
+	 * Group heading on the native sheet while the filter is empty; consecutive
+	 * items sharing an id form one group. Ranked search results are never grouped.
+	 */
+	group?: { id: string; label: string };
 }
+
+/** What the native sheet says beyond the generic title/filter/list/footer. */
+export interface PickerSheet {
+	icon?: string;
+	/** Plural noun for counts and empty copy ("models", "sessions"). */
+	noun?: string;
+	size?: PickerSheetProps["size"];
+	layout?: PickerSheetProps["layout"];
+	placeholder?: string;
+	columns?: PickerSheetProps["columns"];
+	/** Shown when nothing matches the filter. */
+	empty?: string;
+	/** Values in use now (the current model, the focused session). */
+	current?: () => readonly string[];
+	/** The line under the title; defaults to the footer hint. */
+	subtitle?: () => PickerSheetProps["subtitle"] | undefined;
+	/** Replaces the default preview pane (the detail lines, below the list). */
+	preview?: () => readonly NativeChild[];
+	/** The whole action bar; defaults to `Select ⏎` and `Close esc`. */
+	actions?: () => readonly PickerSheetAction[];
+	/** A loading/error state replacing the list body. */
+	status?: () => { state: "loading" | "error"; message: string } | undefined;
+	/**
+	 * First refusal on every pointer event of the sheet, same contract as
+	 * {@link PickerOptions.onKey}: return true to consume.
+	 */
+	onEvent?: (event: PickerEvent) => boolean;
+	/**
+	 * Action-bar buttons other than the reserved `confirm` (Enter), `close`
+	 * (Esc) and `clear` (empties the filter).
+	 */
+	onAction?: (act: string, value: string | undefined) => void;
+}
+
+/** The default action bar: the primary button is Enter, Close is Esc. */
+export const SELECT_ACTIONS: readonly PickerSheetAction[] = [
+	pickerAction("confirm", "Select", "enter", { primary: true }),
+	CLOSE_ACTION,
+];
+
+/** A primary `confirm` button labelled for what Enter does in this picker. */
+export function confirmAction(label: string): PickerSheetAction {
+	return pickerAction("confirm", label, "enter", { primary: true });
+}
+
+/** A badge after a native picker row's label (`current`, `busy`, `3 unread`). */
+export type PickerBadge = NonNullable<NativePickerItem["badges"]>[number];
 
 export interface PickerOptions {
 	title: string;
@@ -58,6 +145,8 @@ export interface PickerOptions {
 	 * leaves the row out entirely rather than drawing a blank one.
 	 */
 	detail?: () => string | readonly string[] | undefined;
+	/** How a TSP terminal's native picker sheet presents this picker. */
+	sheet?: PickerSheet;
 }
 
 /**
@@ -103,6 +192,13 @@ export class PickerOverlay implements Component, MouseRoutable {
 	 */
 	#listTopRow = 3;
 
+	/** The native sheet, rebuilt only when {@link #revision} moved. */
+	#native: { revision: number; node: NativeNode } | undefined;
+	/** Native rows for the whole item set, rebuilt only when the set is replaced. */
+	#catalogue: { items: readonly PickerItem[]; value: NativePickerItem[] } | undefined;
+	/** Preview nodes for the detail lines, kept while the lines are unchanged. */
+	#detailNodes: { key: string; nodes: readonly NativeChild[] } | undefined;
+
 	constructor(options: PickerOptions) {
 		this.#options = options;
 		this.#filter = options.filter ?? "";
@@ -123,6 +219,148 @@ export class PickerOverlay implements Component, MouseRoutable {
 
 	get selected(): PickerItem | undefined {
 		return (this.#list.getSelectedItem() as PickerItem | null) ?? undefined;
+	}
+
+	/** Row-renderer fallback stays when the terminal lacks the `picker` kind. */
+	nativeSheet(cx: DescribeContext): boolean {
+		return cx.supports("picker");
+	}
+
+	describe(cx: DescribeContext): NativeNode | null {
+		if (!cx.supports("picker")) return null;
+		const memo = this.#native;
+		if (memo?.revision === this.#revision) return memo.node;
+		const node = this.#describePicker();
+		this.#native = { revision: this.#revision, node };
+		return node;
+	}
+
+	/**
+	 * Pointer events from the native sheet, each on the path of the key it
+	 * stands for, so a host's own key handling (a typed-slash submit, the
+	 * switcher's prompt mode) applies to clicks exactly as to keys.
+	 */
+	handleNativeEvent(event: NativeUiEvent): void {
+		const picked = pickerEvent(event);
+		if (!picked) return;
+		const sheet = this.#options.sheet;
+		if (sheet?.onEvent?.(picked)) {
+			this.#invalidateCache();
+			return;
+		}
+		if (picked.kind !== "action") {
+			const index = this.#filtered.findIndex((item) => item.value === picked.item);
+			if (index < 0) return;
+			this.setSelectedIndex(index);
+			if (picked.kind === "activate") this.handleInput("\r");
+			return;
+		}
+		switch (picked.act) {
+			case "confirm":
+				this.handleInput("\r");
+				return;
+			case "close":
+			case "cancel":
+				this.handleInput("\x1b");
+				return;
+			case "clear":
+				this.setFilter("");
+				return;
+			default:
+				sheet?.onAction?.(picked.act, picked.value);
+				this.#invalidateCache();
+		}
+	}
+
+	#describePicker(): NativeNode {
+		const sheet = this.#options.sheet ?? {};
+		const filter = this.#filter;
+		const grouped = filter.trim().length === 0;
+		const order: (string | { group: string; label: string; count: number })[] = [];
+		const hits: Record<string, [number, number][]> = {};
+		let hasHits = false;
+		const catalogue = this.#nativeCatalogue();
+		const filtered = this.#filtered;
+		for (let index = 0; index < filtered.length; index++) {
+			const item = filtered[index]!;
+			const group = item.group;
+			if (grouped && group && filtered[index - 1]?.group?.id !== group.id) {
+				let count = 1;
+				while (filtered[index + count]?.group?.id === group.id) count++;
+				order.push({ group: `${group.id}:${index}`, label: group.label, count });
+			}
+			order.push(item.value);
+			if (grouped) continue;
+			const label = item.native?.label;
+			const ranges = pickerFuzzyHits(
+				typeof label === "string" ? label : plainText(item.label),
+				filter,
+			);
+			if (ranges) {
+				hits[item.value] = ranges;
+				hasHits = true;
+			}
+		}
+		const subtitle = sheet.subtitle ? sheet.subtitle() : this.#options.footer;
+		const preview = sheet.preview ? sheet.preview() : this.#previewNodes();
+		const status = sheet.status?.();
+		const current = sheet.current?.() ?? [];
+		return picker(
+			{
+				title: this.#options.title,
+				...(subtitle ? { subtitle } : {}),
+				...(sheet.icon ? { icon: sheet.icon } : {}),
+				noun: sheet.noun ?? "items",
+				size: sheet.size ?? "md",
+				layout: sheet.layout ?? "rows",
+				preview: preview.length > 0 ? "below" : "none",
+				query: filter,
+				cursor: filter.length,
+				...(sheet.placeholder ? { placeholder: sheet.placeholder } : {}),
+				...(sheet.columns ? { columns: sheet.columns } : {}),
+				items: catalogue,
+				order,
+				...(hasHits ? { hits } : {}),
+				selected: this.selected?.value ?? null,
+				...(current.length > 0 ? { current } : {}),
+				total: this.#options.items.length,
+				actions: sheet.actions?.() ?? SELECT_ACTIONS,
+				state: status?.state ?? "ready",
+				...(status ? { message: status.message } : {}),
+				empty: sheet.empty ?? "Nothing matches",
+				confirm: null,
+			},
+			preview,
+		);
+	}
+
+	/** Native rows for every item, by value; undecorated labels (no ANSI). */
+	#nativeCatalogue(): NativePickerItem[] {
+		const items = this.#options.items;
+		if (this.#catalogue?.items === items) return this.#catalogue.value;
+		const value = items.map((item): NativePickerItem => {
+			const description = item.description ? plainText(item.description) : "";
+			return {
+				id: item.value,
+				label: plainText(item.label),
+				...(description ? { detail: description } : {}),
+				...(item.disabled ? { disabled: true as const } : {}),
+				...item.native,
+			};
+		});
+		this.#catalogue = { items, value };
+		return value;
+	}
+
+	/** The detail lines as the sheet's preview pane, below the list. */
+	#previewNodes(): readonly NativeChild[] {
+		const detail = this.#options.detail?.();
+		const lines = detail === undefined ? [] : typeof detail === "string" ? [detail] : detail;
+		const key = lines.join("\n");
+		if (this.#detailNodes?.key === key) return this.#detailNodes.nodes;
+		const nodes = lines.map((line) => text(plainText(line), { wrap: "word" }));
+		this.#detailNodes = { key, nodes };
+		return nodes;
 	}
 
 	setSelectedIndex(index: number): void {

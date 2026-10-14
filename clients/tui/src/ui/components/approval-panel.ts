@@ -16,7 +16,10 @@
  * region, so its countdown can tick without touching committed scrollback.
  */
 
-import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { type KeyId, matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { col, EMPTY_NODE, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import { actionBar, actionButton } from "@oh-my-pi/pi-tui/native/overlay";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import type { ApprovalRequestedEvent } from "../../protocol/types.ts";
@@ -28,7 +31,7 @@ export const ACTION_PREVIEW_ROWS = 10;
 
 export interface ApprovalOption {
 	/** The quick-pick digit. */
-	key: string;
+	key: KeyId;
 	label: string;
 	/** Verbatim `exec.approval.resolve` decision — snake_case is the daemon's. */
 	decision: string;
@@ -65,6 +68,7 @@ export class ApprovalPanelComponent implements Component {
 	#cachedRows: readonly string[] | undefined;
 	#cachedWidth = -1;
 	#cachedKey = "";
+	#native: { event: ApprovalRequestedEvent; selected: number; node: NativeNode } | undefined;
 
 	constructor(options: ApprovalPanelOptions) {
 		this.#options = options;
@@ -147,6 +151,86 @@ export class ApprovalPanelComponent implements Component {
 		this.#cachedWidth = width;
 		this.#cachedKey = key;
 		return rows;
+	}
+
+	/**
+	 * omp's approval prompt in the composer's place (an `omp.editor.ask.*`
+	 * root, so Tern sizes it to the composer column): the title, the exact
+	 * action — every line, wrapped, never clipped — the rationale and session,
+	 * then the decisions as `omp.btn` buttons in an `omp.actions` bar with the
+	 * expiry counting down terminal-side. A click takes the quick-pick digit's
+	 * path; the keyboard selection is the accented button.
+	 */
+	describe(): NativeNode {
+		const event = this.#event;
+		if (!event) return EMPTY_NODE;
+		const cached = this.#native;
+		if (cached?.event === event && cached.selected === this.#selected) return cached.node;
+		const securityOverride = event.action?.security_override === true;
+		const children: NativeNode[] = [
+			node(
+				"text",
+				{
+					text: `${securityOverride ? "Security override" : "Approval required"} · ${event.tool ?? "tool"}`,
+					role: "omp.approval.title",
+					tone: securityOverride ? "error" : "warning",
+				},
+				undefined,
+				"title",
+			),
+			node(
+				"col",
+				{ role: "omp.approval.details" },
+				describeAction(event.action)
+					.split("\n")
+					.map((line, index) =>
+						node("text", { text: line, wrap: "word" }, undefined, String(index)),
+					),
+				"details",
+			),
+		];
+		if (event.rationale) {
+			children.push(text([span(event.rationale, "muted")], { wrap: "word", key: "rationale" }));
+		}
+		if (event.sessionKey) {
+			children.push(text([span(event.sessionKey, "dim")], { truncate: "end", key: "session" }));
+		}
+		const buttons = APPROVAL_OPTIONS.map((option, index) =>
+			actionButton(
+				(securityOverride ? securityOverrideLabel(option) : option.label).replace(/^./, (first) =>
+					first.toUpperCase(),
+				),
+				option.decision,
+				{
+					keys: option.key,
+					...(option.decision === "deny"
+						? { tone: "error" as const }
+						: index === this.#selected
+							? { tone: "accent" as const }
+							: {}),
+				},
+			),
+		);
+		const countdown = event.expiresAtMs
+			? node(
+					"elapsed",
+					{ age: Math.min(0, this.#now() - event.expiresAtMs), format: "short" },
+					undefined,
+					"expires",
+				)
+			: undefined;
+		children.push(actionBar([...(countdown ? [countdown] : []), null, ...buttons]));
+		const described = col(children, { role: "omp.editor.ask.approval", gap: "md" });
+		this.#native = { event, selected: this.#selected, node: described };
+		return described;
+	}
+
+	/** A decision button: the same resolve path as its quick-pick digit. */
+	handleNativeEvent(event: NativeUiEvent): void {
+		const pending = this.#event;
+		if (!pending || event.type !== "action") return;
+		const option = APPROVAL_OPTIONS.find((candidate) => candidate.decision === event.act);
+		if (option) this.#options.onDecide(option.decision, pending);
 	}
 
 	// -- internals -----------------------------------------------------------
@@ -271,6 +355,7 @@ export class ApprovalRecordComponent implements Component {
 	#cachedRows: readonly string[] | undefined;
 	#cachedWidth = -1;
 	#cachedVersion = -1;
+	#native: { version: number; node: NativeNode } | undefined;
 
 	constructor(approvalId: string, tool: string | undefined, decision?: string) {
 		this.#approvalId = approvalId;
@@ -311,6 +396,25 @@ export class ApprovalRecordComponent implements Component {
 		this.#cachedWidth = width;
 		this.#cachedVersion = this.#version;
 		return rows;
+	}
+
+	/** An `omp.notice` line toned by the outcome; it never offers a decision. */
+	describe(): NativeNode {
+		if (this.#native?.version === this.#version) return this.#native.node;
+		const tool = this.#tool ?? "tool";
+		const denied = this.#decision === "deny";
+		const line = this.#decision
+			? `Approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
+			: `Approval requested for ${tool}`;
+		const tone = this.#decision ? (denied ? "error" : "success") : "warning";
+		const described = node("text", {
+			spans: [span(line, tone)],
+			wrap: "word",
+			role: "omp.notice",
+			tone,
+		});
+		this.#native = { version: this.#version, node: described };
+		return described;
 	}
 
 	// -- FinalizableBlock ----------------------------------------------------

@@ -1,4 +1,6 @@
+import { formatKeyHint } from "@oh-my-pi/pi-tui/key-hint-format";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { CLOSE_ACTION } from "@oh-my-pi/pi-tui/native/picker";
 import {
 	commandPaletteEntries,
 	discoverPaletteResources,
@@ -9,7 +11,8 @@ import {
 } from "../../commands/palette-source.ts";
 import type { CommandContext } from "../../commands/registry.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
-import { PickerOverlay } from "../components/pickers.ts";
+import { confirmAction, PickerOverlay, type PickerSheet } from "../components/pickers.ts";
+import { LEMON_KEYBINDINGS, type LemonKeybinding } from "./input-controller.ts";
 
 export type CommandPaletteMode = "discovery" | "typed-slash";
 
@@ -36,6 +39,48 @@ const IMMEDIATE_COMMANDS: Record<string, true> = {
 	agents: true,
 	approvals: true,
 };
+
+/**
+ * Commands whose bare invocation does exactly what a global key does, so the
+ * native sheet can show the key beside the command.
+ */
+const COMMAND_KEYS: Record<string, LemonKeybinding> = {
+	model: "lemon.picker.model",
+	think: "lemon.picker.thinking",
+	sessions: "lemon.sessions.switch",
+	clear: "lemon.transcript.clear",
+	palette: "lemon.palette.open",
+	tasktree: "lemon.tasks.toggle",
+	diff: "lemon.tools.diff",
+	editor: "lemon.editor.external",
+};
+
+const KIND_GROUPS: Record<PaletteEntry["kind"], { id: string; label: string; icon: string }> = {
+	command: { id: "command", label: "Commands", icon: "terminal" },
+	skill: { id: "skill", label: "Skills", icon: "sparkles" },
+	template: { id: "template", label: "Prompts", icon: "doc" },
+};
+
+const PALETTE_COLUMNS: PickerSheet["columns"] = [{ id: "keys", format: "dim", priority: 1 }];
+
+/** Native sheet extras: a kind icon and group, the bound key, unavailability. */
+function withNative(entries: readonly PaletteEntry[]): PaletteEntry[] {
+	return entries.map((entry) => {
+		const binding = entry.kind === "command" ? COMMAND_KEYS[entry.name] : undefined;
+		const { id, label, icon } = KIND_GROUPS[entry.kind];
+		return {
+			...entry,
+			group: { id, label },
+			native: {
+				icon,
+				...(binding
+					? { facts: { keys: formatKeyHint(LEMON_KEYBINDINGS[binding].defaultKeys) } }
+					: {}),
+				...(entry.available ? {} : { disabled: entry.reason ?? true }),
+			},
+		};
+	});
+}
 
 /** Replace only a leading slash query; all remaining draft text survives. */
 export function insertPaletteEntry(entry: PaletteEntry, draft: string): string {
@@ -77,7 +122,7 @@ export class CommandPalette {
 		this.#sessionKey = ctx.session.key;
 		this.#resources = { entries: [], issues: [] };
 		this.#mode = mode;
-		this.#entries = commandPaletteEntries(ctx);
+		this.#entries = withNative(commandPaletteEntries(ctx));
 		this.#loading = true;
 		const query = filter ?? this.#draft.match(/^\s*\/([^\s/]*)/)?.[1] ?? "";
 		this.#overlay = new PickerOverlay({
@@ -121,6 +166,14 @@ export class CommandPalette {
 					this.close();
 				}
 			},
+			sheet: {
+				icon: "terminal",
+				noun: "commands",
+				placeholder: "Search commands, skills and prompts…",
+				columns: PALETTE_COLUMNS,
+				empty: "No command, skill or prompt matches",
+				actions: () => [confirmAction(mode === "typed-slash" ? "Submit" : "Insert"), CLOSE_ACTION],
+			},
 		});
 		this.#close = this.#host.present(this.#overlay);
 		try {
@@ -138,7 +191,10 @@ export class CommandPalette {
 			};
 		}
 		this.#loading = false;
-		this.#entries = [...commandPaletteEntries(this.#host.context()), ...this.#resources.entries];
+		this.#entries = withNative([
+			...commandPaletteEntries(this.#host.context()),
+			...this.#resources.entries,
+		]);
 		const currentFilter = this.#overlay?.filter ?? query;
 		this.#overlay?.setItems(rankPaletteEntries(this.#entries, currentFilter), currentFilter);
 		this.#host.repaint();

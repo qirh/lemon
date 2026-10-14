@@ -25,9 +25,15 @@
  */
 
 import { col } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import {
+	leafKey,
+	type NativeChild,
+	type NativeNode,
+	type NativeUiEvent,
+} from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import type { Block, ToolBlock } from "../../store/transcript-model.ts";
+import { nativeReadGroup, readGroupKey } from "../../terminal/native-tool.ts";
 import { type AccordionState, accordionSettings, resolveAccordionState } from "./accordion.ts";
 import { ToolCardComponent, type ToolCardOptions } from "./tool-card.ts";
 
@@ -69,7 +75,11 @@ export class ToolShelfComponent implements Component {
 	#cachedWidth = -1;
 	#cached: readonly string[] = [];
 	#native: NativeNode | undefined;
-	#nativeSize = -1;
+	#nativeSignature = "";
+	/** Native read groups by their first read's block id, with the inputs they were built from. */
+	#readGroups = new Map<string, { key: string; node: NativeNode }>();
+	/** Read groups (by first read's block id) the user opened. */
+	readonly #openReads = new Set<string>();
 
 	constructor(cardOptions: ToolCardOptions = {}) {
 		// Cards live inside the shelf, not directly under a root child, so their
@@ -138,12 +148,14 @@ export class ToolShelfComponent implements Component {
 		if (!card) return undefined;
 		if (card.compact) {
 			this.#pinnedOpen.add(card);
-			card.setAccordionState("expanded");
+			card.expand();
 			this.#recompute();
+			this.#toggleReadGroup(card, true);
 			return "expanded";
 		}
 		const state = card.toggleAccordion();
 		if (state === "collapsed" && this.#pinnedOpen.delete(card)) this.#recompute();
+		this.#toggleReadGroup(card, state === "expanded");
 		return state;
 	}
 
@@ -153,6 +165,7 @@ export class ToolShelfComponent implements Component {
 	 */
 	applyAccordionOverride(): void {
 		this.#pinnedOpen.clear();
+		this.#openReads.clear();
 		for (const card of this.#entries) card.setAccordionState(resolveAccordionState(card.view.kind));
 		this.#recompute();
 	}
@@ -191,12 +204,66 @@ export class ToolShelfComponent implements Component {
 
 	// -- render --------------------------------------------------------------
 
+	/**
+	 * Each card is its own native `tool` node, except a run of two or more
+	 * settled reads, which folds into one `Read N files` node the way omp's
+	 * read group does. Cards keep their identity; a group node is rebuilt only
+	 * when one of its reads or its open state changes.
+	 */
 	describe(): NativeNode {
-		if (!this.#native || this.#nativeSize !== this.#entries.length) {
-			this.#native = col(this.#entries.slice());
-			this.#nativeSize = this.#entries.length;
+		const runs = this.#readRuns();
+		const signature = this.#entries
+			.map((card) => {
+				const run = runs.get(card);
+				if (!run) return card.block.id;
+				return `${card.block.id}@${card.getTranscriptBlockVersion()}${this.#readGroupOpen(run[0]!.block.id) ? "+" : ""}`;
+			})
+			.join("|");
+		if (this.#native && this.#nativeSignature === signature) return this.#native;
+		const children: NativeChild[] = [];
+		const groups = new Map<string, { key: string; node: NativeNode }>();
+		for (const card of this.#entries) {
+			const run = runs.get(card);
+			if (!run) {
+				children.push(card);
+				continue;
+			}
+			if (run[0] !== card) continue;
+			const firstId = card.block.id;
+			const open = this.#readGroupOpen(firstId);
+			const key = `${run.map((read) => `${read.block.id}@${read.getTranscriptBlockVersion()}`).join(",")}|${open}`;
+			const cached = this.#readGroups.get(firstId);
+			const group =
+				cached?.key === key
+					? cached
+					: {
+							key,
+							node: nativeReadGroup(
+								run.map((read) => ({ block: read.block, view: read.view })),
+								open,
+							),
+						};
+			groups.set(firstId, group);
+			children.push(group.node);
 		}
+		this.#readGroups = groups;
+		this.#native = col(children);
+		this.#nativeSignature = signature;
 		return this.#native;
+	}
+
+	/** Tern's disclosure on a read group: open shows each read's content. */
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "toggle") return;
+		const leaf = leafKey(event.key);
+		for (const firstId of this.#readGroups.keys()) {
+			if (readGroupKey(firstId) !== leaf) continue;
+			if (event.collapsed) this.#openReads.delete(firstId);
+			else this.#openReads.add(firstId);
+			this.#version++;
+			this.#cardOptions.requestRender?.(this);
+			return;
+		}
 	}
 
 	render(width: number): readonly string[] {
@@ -224,6 +291,40 @@ export class ToolShelfComponent implements Component {
 		let total = 0;
 		for (const card of this.#entries) total += card.getTranscriptBlockVersion();
 		return total;
+	}
+
+	/**
+	 * Each card that belongs to a native read group, mapped to its run: two or
+	 * more consecutive settled reads. A live read keeps its own card.
+	 */
+	#readRuns(): Map<ToolCardComponent, ToolCardComponent[]> {
+		const runs = new Map<ToolCardComponent, ToolCardComponent[]>();
+		let run: ToolCardComponent[] = [];
+		const close = () => {
+			if (run.length >= 2) for (const card of run) runs.set(card, run);
+			run = [];
+		};
+		for (const card of this.#entries) {
+			const state = card.view.state;
+			if (card.view.toolName === "read" && (state === "success" || state === "error"))
+				run.push(card);
+			else close();
+		}
+		close();
+		return runs;
+	}
+
+	/** Open or fold the native read group holding `card`, so the expand key reaches it too. */
+	#toggleReadGroup(card: ToolCardComponent, open: boolean): void {
+		const run = this.#readRuns().get(card);
+		if (!run) return;
+		const firstId = run[0]!.block.id;
+		if (open) this.#openReads.add(firstId);
+		else this.#openReads.delete(firstId);
+	}
+
+	#readGroupOpen(firstId: string): boolean {
+		return this.#openReads.has(firstId) || accordionSettings.override === "expanded";
 	}
 
 	/**

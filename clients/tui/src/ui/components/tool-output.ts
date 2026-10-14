@@ -1,9 +1,12 @@
 import { stripVTControlCharacters } from "node:util";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { ansi, col, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
 import { extractText } from "../../formatters/base.ts";
 import type { ToolBlock } from "../../store/transcript-model.ts";
+import { diffNode } from "../../terminal/native-tool-view.ts";
 import { getTheme } from "../theme/theme.ts";
 import { buildToolView, type ToolView } from "../tool-view.ts";
 import { renderDiff } from "./diff.ts";
@@ -25,6 +28,7 @@ export class ToolOutputComponent implements Component {
 	#width = -1;
 	#body: string[] = [];
 	#total = 0;
+	#native: NativeNode | undefined;
 
 	constructor(block: ToolBlock, options: ToolOutputOptions) {
 		this.#options = options;
@@ -55,6 +59,37 @@ export class ToolOutputComponent implements Component {
 
 	invalidate(): void {
 		this.#width = -1;
+		this.#native = undefined;
+	}
+
+	/**
+	 * The receipt as semantic nodes: a native diff (hunks, language) or the
+	 * full output, which the terminal scrolls itself; the keys still switch
+	 * diff/output and close.
+	 */
+	describe(): NativeNode {
+		if (this.#native) return this.#native;
+		const diff = this.#mode === "diff" ? this.#view.diff : undefined;
+		const where = this.#view.diff?.path ? ` · ${safeText(this.#view.diff.path)}` : "";
+		this.#native = col(
+			[
+				text([span(`${this.#mode} · ${safeText(this.#view.title)}`, "toolTitle strong")], {
+					lines: 1,
+					truncate: "end",
+				}),
+				text(
+					[span(`${this.#view.state}${where} · server receipt (may be bounded upstream)`, "muted")],
+					{
+						lines: 1,
+						truncate: "end",
+					},
+				),
+				diff ? diffNode(safeText(diff.text), diff.path) : ansi(this.#output()),
+				text([span(`esc back${this.#view.diff ? " · d diff/output" : ""}`, "dim")], { lines: 1 }),
+			],
+			{ gap: "sm" },
+		);
+		return this.#native;
 	}
 
 	handleInput(data: string): void {

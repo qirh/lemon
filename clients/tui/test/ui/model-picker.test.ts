@@ -3,6 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { ModelPicker } from "../../src/ui/components/model-picker.ts";
 import type { PickerOverlay } from "../../src/ui/components/pickers.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -215,4 +216,45 @@ test("an exact model ID ranks before a longer sibling even when marked current",
 	await picker.open();
 	current().handleInput("gpt-5.5");
 	expect(current().selected?.value).toBe("openai-codex:gpt-5.5");
+});
+
+test("a native surface gets one provider-grouped stage with the current model marked", async () => {
+	harness.store.focused.model = "gpt-4o";
+	setNativeRendering(true);
+	try {
+		const picker = makePicker();
+		await picker.open();
+		expect(picker.stage).toBe("model");
+		const sheet = current().describe({
+			cols: 80,
+			dark: true,
+			reduceMotion: true,
+			supports: () => true,
+			feature: () => false,
+		});
+		expect(sheet?.p).toMatchObject({
+			current: ["openai:gpt-4o"],
+			order: [
+				{ group: "anthropic:0", label: "anthropic", count: 2 },
+				"anthropic:claude-sonnet-4",
+				"anthropic:claude-opus-4",
+				{ group: "openai:2", label: "openai", count: 1 },
+				"openai:gpt-4o",
+			],
+		});
+		// Esc closes rather than stepping back to a provider stage that is not shown.
+		const before = closed;
+		current().handleInput(ESC);
+		expect(closed).toBeGreaterThan(before);
+	} finally {
+		setNativeRendering(false);
+	}
+});
+
+test("the native Make default button toggles persistence like Ctrl+G", async () => {
+	const picker = makePicker();
+	await picker.open();
+	current().handleInput(ENTER);
+	current().handleNativeEvent({ type: "action", key: "", act: "global", mods: [] });
+	expect(picker.persistGlobally).toBe(true);
 });

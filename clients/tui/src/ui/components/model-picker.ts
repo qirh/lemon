@@ -11,16 +11,51 @@
  * file — the daemon's `config.set` is a free-form key/value store its router
  * never reads, so persisting there would look like it worked and change
  * nothing.
+ *
+ * On a native (TSP) surface the picker is one stage: every model, grouped by
+ * provider under the sheet's group headings, with the provider's mark, the
+ * current model marked and the global toggle as an action-bar button.
  */
 
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
+import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { describeModel, ensureModels, type ModelEntry } from "../../commands/model.ts";
 import { saveConfigKey } from "../../config.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
-import { type PickerItem, PickerOverlay } from "./pickers.ts";
+import {
+	confirmAction,
+	type NativePickerItem,
+	type PickerItem,
+	PickerOverlay,
+	type PickerSheet,
+} from "./pickers.ts";
+
+/** The context window as a sheet fact column, like omp's model picker. */
+const MODEL_COLUMNS: PickerSheet["columns"] = [{ id: "ctx", head: "Ctx", format: "num" }];
+
+/**
+ * A provider's avatar on the sheet: Tern's logo for `provider:<id>`, else its
+ * initials (`amazon-bedrock` → `AB`, `anthropic` → `An`). Same shape as omp's
+ * `providerMark`, which lives in a module bound to omp's model catalogue.
+ */
+function providerMark(provider: string): NativePickerItem["mark"] {
+	const words = provider.split(/[-_\s.]+/).filter((word) => word.length > 0);
+	const first = words[0] ?? provider;
+	const text =
+		words.length >= 2
+			? `${first.charAt(0)}${words[1]!.charAt(0)}`.toUpperCase()
+			: `${first.charAt(0).toUpperCase()}${first.charAt(1)}`;
+	return { text, seed: provider, icon: `provider:${provider}` };
+}
+
+/** The session's model is stored either as `provider:id` or as a bare id. */
+function isCurrent(entry: ModelEntry, current: string | undefined): boolean {
+	return entry.id === current || `${entry.provider}:${entry.id}` === current;
+}
 
 export interface ModelPickerHost {
 	store: AppStore;
@@ -44,6 +79,8 @@ export class ModelPicker {
 	#provider: string | undefined;
 	#stage: Stage = "provider";
 	#persistGlobally = false;
+	/** One provider-grouped stage on a native sheet instead of provider → model. */
+	#grouped = false;
 
 	constructor(host: ModelPickerHost) {
 		this.#host = host;
@@ -65,24 +102,21 @@ export class ModelPicker {
 			return;
 		}
 		this.#persistGlobally = false;
-		// A single provider makes the first stage a formality.
+		this.#grouped = isNativeRendering();
+		// A single provider makes the first stage a formality; the native sheet
+		// shows every provider's models at once under group headings.
 		const providers = this.#providers();
-		if (providers.length === 1) {
+		if (this.#grouped) {
+			this.#provider = undefined;
+			this.#stage = "model";
+		} else if (providers.length === 1) {
 			this.#provider = providers[0].value;
 			this.#stage = "model";
 		} else {
 			this.#provider = undefined;
 			this.#stage = "provider";
 		}
-		this.#overlay = new PickerOverlay({
-			title: this.#title(),
-			items: this.#stage === "provider" ? providers : this.#models(this.#provider),
-			footer: this.#footer(),
-			onSelect: (item) => void this.#onSelect(item),
-			onCancel: () => this.#onCancel(),
-			onKey: (data) => this.#onKey(data),
-		});
-		this.#close = this.#host.present(this.#overlay);
+		this.#present("");
 	}
 
 	close(): void {
@@ -107,20 +141,36 @@ export class ModelPicker {
 
 	#models(provider: string | undefined): PickerItem[] {
 		const current = this.#host.session().model;
-		return this.#entries
-			.filter((entry) => provider === undefined || entry.provider === provider)
-			.map((entry) => ({
+		const entries = this.#entries.filter(
+			(entry) => provider === undefined || entry.provider === provider,
+		);
+		// Group headings need each provider's models to be contiguous.
+		if (this.#grouped) entries.sort((left, right) => left.provider.localeCompare(right.provider));
+		return entries.map((entry) => {
+			const badges = [
+				...(entry.supportsThinking ? [{ text: "thinking" }] : []),
+				...(entry.supportsVision ? [{ text: "vision" }] : []),
+			];
+			return {
 				value: `${entry.provider}:${entry.id}`,
 				searchValue: entry.id,
-				label:
-					entry.id === current || `${entry.provider}:${entry.id}` === current
-						? `${entry.id} (current)`
-						: entry.id,
+				label: isCurrent(entry, current) ? `${entry.id} (current)` : entry.id,
 				description: describeModel(entry),
-			}));
+				group: { id: entry.provider, label: entry.provider },
+				native: {
+					label: entry.id,
+					detail: entry.name !== entry.id ? entry.name : undefined,
+					mono: true,
+					mark: providerMark(entry.provider),
+					...(entry.contextWindow ? { facts: { ctx: entry.contextWindow } } : {}),
+					...(badges.length > 0 ? { badges } : {}),
+				},
+			};
+		});
 	}
 
 	#title(): string {
+		if (this.#grouped) return "Switch model";
 		if (this.#stage === "provider") return "model — pick a provider";
 		return `model — ${this.#provider ?? "all providers"}`;
 	}
@@ -134,11 +184,15 @@ export class ModelPicker {
 
 	#onKey(data: string): boolean {
 		if (matchesKey(data, "ctrl+g")) {
-			this.#persistGlobally = !this.#persistGlobally;
-			this.#rebuild();
+			this.#togglePersist();
 			return true;
 		}
-		if (this.#stage === "model" && this.#overlay?.filter === "" && matchesKey(data, "backspace")) {
+		if (
+			this.#stage === "model" &&
+			!this.#grouped &&
+			this.#overlay?.filter === "" &&
+			matchesKey(data, "backspace")
+		) {
 			if (this.#providers().length > 1) {
 				this.#stage = "provider";
 				this.#provider = undefined;
@@ -149,24 +203,66 @@ export class ModelPicker {
 		return false;
 	}
 
+	/** Ctrl+G and the sheet's "Make default" button. The list and selection stay. */
+	#togglePersist(): void {
+		this.#persistGlobally = !this.#persistGlobally;
+		this.#overlay?.setFooter(this.#footer());
+		this.#host.repaint();
+	}
+
 	/** Rebuild the overlay in place so title/footer follow the stage. */
 	#rebuild(filter = this.#overlay?.filter ?? ""): void {
 		if (!this.#overlay) return;
 		this.#close?.();
+		this.#present(filter);
+	}
+
+	#present(filter: string): void {
+		const stage = this.#stage;
 		this.#overlay = new PickerOverlay({
 			title: this.#title(),
-			items: this.#stage === "provider" ? this.#providers() : this.#models(this.#provider),
+			items: stage === "provider" ? this.#providers() : this.#models(this.#provider),
 			filter,
 			footer: this.#footer(),
 			onSelect: (item) => void this.#onSelect(item),
 			onCancel: () => this.#onCancel(),
 			onKey: (data) => this.#onKey(data),
+			sheet: {
+				icon: "cpu",
+				noun: stage === "provider" ? "providers" : "models",
+				placeholder: stage === "provider" ? "Search providers…" : "Search models…",
+				...(stage === "model" ? { columns: MODEL_COLUMNS } : {}),
+				empty: "No models match",
+				current: () => {
+					const current = this.#host.session().model;
+					return this.#entries
+						.filter((entry) => isCurrent(entry, current))
+						.map((entry) => `${entry.provider}:${entry.id}`);
+				},
+				subtitle: () =>
+					stage === "provider"
+						? "Pick a provider"
+						: this.#persistGlobally
+							? "Applies to this session and saves it as the default model"
+							: "Applies to this session only",
+				actions: () =>
+					stage === "provider"
+						? [confirmAction("Open"), CLOSE_ACTION]
+						: [
+								confirmAction(this.#persistGlobally ? "Use and make default" : "Use for session"),
+								pickerAction("global", "Make default", "ctrl+g", { on: this.#persistGlobally }),
+								CLOSE_ACTION,
+							],
+				onAction: (act) => {
+					if (act === "global") this.#togglePersist();
+				},
+			},
 		});
 		this.#close = this.#host.present(this.#overlay);
 	}
 
 	#onCancel(): void {
-		if (this.#stage === "model" && this.#providers().length > 1) {
+		if (this.#stage === "model" && !this.#grouped && this.#providers().length > 1) {
 			this.#stage = "provider";
 			this.#provider = undefined;
 			this.#rebuild("");

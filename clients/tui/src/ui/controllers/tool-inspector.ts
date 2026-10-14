@@ -1,9 +1,20 @@
+import { CLOSE_ACTION } from "@oh-my-pi/pi-tui/native/picker";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import type { AppStore } from "../../store/app-store.ts";
 import type { ToolBlock } from "../../store/transcript-model.ts";
-import { PickerOverlay } from "../components/pickers.ts";
+import { confirmAction, type NativePickerItem, PickerOverlay } from "../components/pickers.ts";
 import { ToolOutputComponent } from "../components/tool-output.ts";
-import { buildToolView } from "../tool-view.ts";
+import { buildToolView, type ToolCardState } from "../tool-view.ts";
+
+/** A receipt's lifecycle as the native sheet's status dot. */
+const STATE_DOTS: Record<ToolCardState, NativePickerItem["dot"]> = {
+	streaming: "pending",
+	running: "pending",
+	success: "success",
+	error: "error",
+	cancelled: "warning",
+	unknown: "muted",
+};
 
 export interface ToolInspectorHost {
 	store: AppStore;
@@ -48,9 +59,19 @@ export class ToolInspector {
 						value: block.id,
 						label: view.title.replace(/\p{Cc}/gu, ""),
 						description: `${view.state}${view.diff ? " · diff" : ""}`,
+						native: {
+							dot: STATE_DOTS[view.state],
+							...(view.diff ? { badges: [{ text: "diff" }] } : {}),
+						},
 					};
 				}),
 				footer: "enter inspects full receipt · d switches diff/output in viewer · esc cancels",
+				sheet: {
+					icon: "tools",
+					noun: "tool calls",
+					placeholder: "Search tool calls…",
+					actions: () => [confirmAction("Inspect"), CLOSE_ACTION],
+				},
 				onSelect: (item) => {
 					if (this.#host.store.focusedKey !== session.key) {
 						this.close();

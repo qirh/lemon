@@ -16,13 +16,16 @@ import {
 	type ApprovalBlock,
 	type AssistantBlock,
 	type Block,
+	type CompactionDetails,
 	type NoticeBlock,
 	type NoticeLevel,
 	nextBlockId,
 	type ReasoningBlock,
 	type ToolBlock,
 	type ToolPhase,
+	type TurnSummary,
 	toolTitle,
+	type UserDetails,
 } from "./transcript-model.ts";
 
 export interface DeltaResult {
@@ -60,6 +63,8 @@ export interface FinalizeOptions {
 	error?: string | null;
 	/** Renders an `*[interrupted]*` marker on the block. */
 	interrupted?: boolean;
+	/** The daemon's completion report (duration, usage, model). */
+	turn?: TurnSummary;
 }
 
 export class SessionStore {
@@ -227,17 +232,24 @@ export class SessionStore {
 		this.unread = 0;
 	}
 
-	addUser(text: string, at = Date.now()): Block {
-		return this.#push({ id: nextBlockId("user"), kind: "user", at, text });
+	/** `details.sentAt` defaults to `at`: a live prompt is sent as it is echoed. */
+	addUser(text: string, at = Date.now(), details: UserDetails = { sentAt: at }): Block {
+		return this.#push({ id: nextBlockId("user"), kind: "user", at, text, ...details });
 	}
 
-	addNotice(text: string, level: NoticeLevel = "info", at = Date.now()): NoticeBlock {
+	addNotice(
+		text: string,
+		level: NoticeLevel = "info",
+		at = Date.now(),
+		compaction?: CompactionDetails,
+	): NoticeBlock {
 		return this.#push({
 			id: nextBlockId("notice"),
 			kind: "notice",
 			at,
 			level,
 			text,
+			...(compaction ? { compaction } : {}),
 		}) as NoticeBlock;
 	}
 
@@ -455,6 +467,9 @@ export class SessionStore {
 			if (reasoning.runId === runId) reasoning.phase = "completed";
 		}
 		if (!block) return undefined;
+		// A client-side interrupt seals the block first; the daemon's later
+		// completion still owns the turn's numbers.
+		if (options.turn) block.turn = options.turn;
 		if (block.status !== "streaming" && alreadyFinished) return block;
 
 		const buffered = this.bufferFor(runId);

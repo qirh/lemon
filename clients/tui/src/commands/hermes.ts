@@ -127,7 +127,10 @@ export const compressCommand: SlashCommand = {
 				before !== undefined || after !== undefined
 					? ` · ${before ?? "?"} → ${after ?? "?"} tokens`
 					: "";
-			ctx.ui.notice(`compressed ${ctx.session.key}${tokenChange}`);
+			ctx.ui.notice(`compressed ${ctx.session.key}${tokenChange}`, "info", {
+				...(before !== undefined ? { tokensBefore: before } : {}),
+				...(after !== undefined ? { tokensAfter: after } : {}),
+			});
 		} catch (error) {
 			const code =
 				error instanceof ControlPlaneError || error instanceof NotConnectedError

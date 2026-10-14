@@ -6,7 +6,7 @@
  * imports pi-tui — a block knows what happened, not how it looks.
  */
 
-import type { AgentAction, AgentActionKind } from "../protocol/types.ts";
+import type { AgentAction, AgentActionKind, ImageContent, RunUsage } from "../protocol/types.ts";
 
 export type BlockKind = "user" | "assistant" | "tool" | "reasoning" | "approval" | "notice";
 
@@ -18,9 +18,28 @@ interface BlockBase {
 	at: number;
 }
 
-export interface UserBlock extends BlockBase {
+/** How a prompt reached a busy run (absent: it started its own turn). */
+export type UserDelivery = "steer" | "redirect" | "interrupt";
+
+/** What is known about a prompt beyond its text. */
+export interface UserDetails {
+	/** When it was sent; absent for saved history without a timestamp. */
+	sentAt?: number;
+	/** Images sent with it (the text names them as `[image: …]`). */
+	images?: readonly ImageContent[];
+	delivery?: UserDelivery;
+}
+
+export interface UserBlock extends BlockBase, UserDetails {
 	kind: "user";
 	text: string;
+}
+
+/** A finished run's own report, attached to its final answer segment. */
+export interface TurnSummary {
+	durationMs?: number;
+	usage?: RunUsage;
+	model?: string;
 }
 
 export type AssistantStatus = "streaming" | "done" | "error" | "aborted";
@@ -33,6 +52,8 @@ export interface AssistantBlock extends BlockBase {
 	status: AssistantStatus;
 	/** Set when the run ended badly and the server had something to say. */
 	error?: string;
+	/** Present on the run's last segment once the daemon reported completion. */
+	turn?: TurnSummary;
 }
 
 export type ToolPhase = "started" | "updated" | "completed";
@@ -84,10 +105,18 @@ export interface ApprovalBlock extends BlockBase {
 
 export type NoticeLevel = "info" | "warning" | "error";
 
+/** Token amounts a confirmed context compaction reported. */
+export interface CompactionDetails {
+	tokensBefore?: number;
+	tokensAfter?: number;
+}
+
 export interface NoticeBlock extends BlockBase {
 	kind: "notice";
 	level: NoticeLevel;
 	text: string;
+	/** Set when the notice records a context compaction. */
+	compaction?: CompactionDetails;
 }
 
 export type Block =

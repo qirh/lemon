@@ -22,7 +22,12 @@
  *   - nothing here calls `process.exit`; `onExit` hands that to main.ts
  */
 
+import {
+	setTranscriptActionHandler,
+	type TranscriptAction,
+} from "@oh-my-pi/pi-tui/chat/transcript-actions";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
@@ -51,22 +56,29 @@ import { newSessionKey } from "./session-key.ts";
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
-import type { NoticeLevel } from "./store/transcript-model.ts";
+import type { CompactionDetails, NoticeLevel } from "./store/transcript-model.ts";
 import { type ForkLaunch, openForkSession } from "./terminal/fork.ts";
 import { TerminalIntegration } from "./terminal/integration.ts";
+import { Banner } from "./ui/components/banner.ts";
 import { CustomEditor } from "./ui/components/custom-editor.ts";
 import { ModelPicker } from "./ui/components/model-picker.ts";
-import { PickerOverlay } from "./ui/components/pickers.ts";
+import { confirmAction, PickerOverlay } from "./ui/components/pickers.ts";
 import { QueuePanelComponent } from "./ui/components/queue-panel.ts";
 import { SessionSwitcher } from "./ui/components/session-switcher.ts";
-import { type ContextSource, StatusBar, type StatusBarData } from "./ui/components/status-bar.ts";
+import {
+	type ContextSource,
+	type StatusAction,
+	StatusBar,
+	type StatusBarData,
+} from "./ui/components/status-bar.ts";
 import { TranscriptContainer } from "./ui/components/transcript-container.ts";
 import { ClampedText } from "./ui/components/width-safe.ts";
+import { WorkingIndicatorComponent } from "./ui/components/working-indicator.ts";
 import { ApprovalController } from "./ui/controllers/approval-controller.ts";
 import { CommandController, type DeliverOptions } from "./ui/controllers/command-controller.ts";
 import { CommandPalette } from "./ui/controllers/command-palette.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
-import { InputController } from "./ui/controllers/input-controller.ts";
+import { InputController, LEMON_KEYBINDINGS } from "./ui/controllers/input-controller.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
 import {
 	type ConfirmSpec,
@@ -130,9 +142,9 @@ export class AppShell {
 	readonly statusLineContainer = new Container();
 	readonly editorContainer = new Container();
 
+	readonly #banner: Banner;
 	// Clamped: pi-tui keeps a Text's horizontal padding at every width, so a very
 	// narrow terminal would otherwise get chrome rows wider than the frame.
-	readonly #banner = new ClampedText("", 1, 0);
 	readonly #connectionLine = new ClampedText("", 1, 0);
 	readonly #statusBar: StatusBar;
 	readonly #editor: CustomEditor;
@@ -143,8 +155,14 @@ export class AppShell {
 	readonly #palette: CommandPalette;
 	readonly #taskTree: TaskTreeController;
 	readonly #toolInspector: ToolInspector;
+	/** Native dock working row; paints nothing in the row renderer. */
+	readonly #working = new WorkingIndicatorComponent({
+		activeRun: () => (this.store.focused.busy ? this.store.focused.activeRunId : undefined),
+		onInterrupt: () => {
+			this.#abortActiveRun();
+		},
+	});
 
-	readonly #version: string;
 	readonly #onExit: ((code: number) => void) | undefined;
 	readonly #cwd: string;
 	readonly #forkConnection: Pick<ForkLaunch, "url" | "operatorToken">;
@@ -169,7 +187,7 @@ export class AppShell {
 	readonly #profileSessions = new Map<string, string>();
 
 	constructor(options: AppShellOptions) {
-		this.#version = options.version ?? "dev";
+		this.#banner = new Banner(options.version ?? "dev");
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
 		this.#forkConnection = { url: options.url, operatorToken: options.operatorToken };
@@ -209,6 +227,22 @@ export class AppShell {
 			onCycleMode: () => this.cycleSubmissionMode(),
 			notice: (text, level) => this.events.notice(text, level),
 			requestRender: () => this.tui.requestRender(),
+			// The TSP composer's chips take their keys' paths, and like the keys
+			// they defer to an open overlay.
+			composerState: () => {
+				const session = this.store.focused;
+				return { running: session.busy, thinking: session.thinkingLevel, title: session.title };
+			},
+			onSelectModel: () => {
+				if (!this.#hasOverlay()) void this.#modelPicker.open();
+			},
+			onSelectThinking: () => {
+				if (!this.#hasOverlay()) void this.submit("/think");
+			},
+			controlKeys: {
+				model: LEMON_KEYBINDINGS["lemon.picker.model"].defaultKeys,
+				thinking: LEMON_KEYBINDINGS["lemon.picker.thinking"].defaultKeys,
+			},
 		});
 		const smooth = options.smoothStreaming !== false;
 		this.events = new EventController({
@@ -242,7 +276,10 @@ export class AppShell {
 			cwd: this.#cwd,
 			readBranch: options.readBranch ?? getGitModeline,
 			onChange: () => this.tui.requestRender(),
+			onNativeAction: (action) => this.#statusAction(action),
 		});
+		// A TSP terminal draws no status strip: the composer carries its facts.
+		this.#editor.composerFacts = this.#statusBar;
 		this.selectors = new SelectorController({
 			tui: this.tui,
 			defaultFocus: () => this.#editor,
@@ -441,6 +478,9 @@ export class AppShell {
 			() => this.#taskTree.dispose(),
 			() => this.#toolInspector.close(),
 		);
+		// Native transcript controls (Copy, Switch model) take their keys' paths.
+		setTranscriptActionHandler((action) => this.#runTranscriptAction(action));
+		this.#disposers.push(() => setTranscriptActionHandler(undefined));
 		this.tui.start();
 		this.#registerTerminalCleanup();
 		this.#terminalIntegration.start();
@@ -481,11 +521,11 @@ export class AppShell {
 	// -- ui -----------------------------------------------------------------
 
 	#buildUi(): void {
-		this.#buildBanner();
 		this.bannerContainer.addChild(this.#banner);
 		this.bannerContainer.addChild(this.#connectionLine);
 		this.statusLineContainer.addChild(this.#statusBar);
 		this.statusContainer.addChild(this.#taskTree.panel);
+		this.statusContainer.addChild(this.#working);
 
 		// Slash-command and file-path completion in the prompt.
 		this.#editor.setCommands(
@@ -523,17 +563,6 @@ export class AppShell {
 		);
 		this.tui.setFocus(this.#editor);
 		this.#renderConnection();
-	}
-
-	/** The banner text, rebuilt whenever the palette changes under it. */
-	#buildBanner(): void {
-		const theme = getTheme();
-		this.#banner.setText(
-			`${theme.fg("bannerTitle", "lemon")} ${theme.fg("bannerSubtitle", `tui ${this.#version}`)}  ${theme.fg(
-				"dim",
-				"/help · Ctrl+P commands · Ctrl+X sessions · Ctrl+O model · Ctrl+C abort/quit",
-			)}`,
-		);
 	}
 
 	#renderConnection(): void {
@@ -594,6 +623,42 @@ export class AppShell {
 	}
 
 	// -- input --------------------------------------------------------------
+
+	/** True while a picker/switcher or a pending approval owns the keyboard. */
+	#hasOverlay(): boolean {
+		return this.selectors.isOpen || this.approvals.panel.visible;
+	}
+
+	/** A click on a TSP composer fact: the same paths as the keys and commands for it. */
+	#statusAction(action: StatusAction): void {
+		if (this.#hasOverlay()) return;
+		switch (action) {
+			case "sessions":
+				void this.#switcher.open();
+				return;
+			case "queue":
+				if (!this.focusQueue()) this.events.notice("nothing is queued");
+				return;
+			case "mode":
+				this.cycleSubmissionMode();
+				return;
+			case "approvals":
+				void this.submit("/approvals");
+				return;
+			case "cost":
+				void this.submit("/cost");
+				return;
+		}
+	}
+
+	/** Native transcript controls: Copy goes to the clipboard over OSC 52, Switch model opens the picker. */
+	#runTranscriptAction(action: TranscriptAction): void {
+		if (action.act === "copy") {
+			this.tui.terminal.write(`\x1b]52;c;${Buffer.from(action.text).toString("base64")}\x07`);
+		} else if (action.act === "switch-model") {
+			this.#modelPicker.open();
+		}
+	}
 
 	/** Ctrl+C's first job. Returns true when there was a run to stop. */
 	#abortActiveRun(): boolean {
@@ -887,6 +952,10 @@ export class AppShell {
 					.filter(Boolean)
 					.join("\n"),
 				session,
+				{
+					images: submission.attachments.map((image) => image.content),
+					...(queueMode ? { delivery: queueMode } : {}),
+				},
 			);
 			this.events.noteRunStarted(result.runId, session);
 			return "accepted";
@@ -970,7 +1039,7 @@ export class AppShell {
 		try {
 			const result = await this.#dispatchPrompt(session.key, prompt, mode);
 			if (mode === "interrupt" && runId) this.events.markInterrupted(runId, session);
-			this.events.addUserBlock(prompt, session);
+			this.events.addUserBlock(prompt, session, { delivery: mode });
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
 		} catch (error) {
 			this.store.queue.push(session.key, prompt);
@@ -1084,7 +1153,8 @@ export class AppShell {
 
 	#buildHost(): CommandHost {
 		return {
-			notice: (text: string, level?: NoticeLevel) => this.events.notice(text, level),
+			notice: (text: string, level?: NoticeLevel, compaction?: CompactionDetails) =>
+				this.events.notice(text, level, undefined, compaction),
 			noticeBlock: (lines: string[], level?: NoticeLevel) =>
 				this.events.notice(indentBlock(lines), level),
 			clearTranscript: () => this.#clearTranscript(),
@@ -1130,6 +1200,15 @@ export class AppShell {
 					}));
 
 				let overlay: PickerOverlay;
+				const toggle = () => {
+					const current = overlay.selected;
+					if (!current || disabled.has(current.value)) return;
+					if (selected.has(current.value)) selected.delete(current.value);
+					else selected.add(current.value);
+					const index = overlay.items.findIndex((item) => item.value === current.value);
+					overlay.setItems(decoratedItems(), overlay.filter);
+					overlay.setSelectedIndex(Math.max(0, index));
+				};
 				overlay = new PickerOverlay({
 					title: spec.title,
 					items: decoratedItems(),
@@ -1137,14 +1216,18 @@ export class AppShell {
 					detail: () => `${selected.size} selected`,
 					onKey: (data) => {
 						if (!matchesKey(data, "space")) return false;
-						const current = overlay.selected;
-						if (!current || disabled.has(current.value)) return true;
-						if (selected.has(current.value)) selected.delete(current.value);
-						else selected.add(current.value);
-						const index = overlay.items.findIndex((item) => item.value === current.value);
-						overlay.setItems(decoratedItems(), overlay.filter);
-						overlay.setSelectedIndex(Math.max(0, index));
+						toggle();
 						return true;
+					},
+					sheet: {
+						actions: () => [
+							confirmAction("Confirm"),
+							pickerAction("toggle", "Toggle", "space"),
+							CLOSE_ACTION,
+						],
+						onAction: (act) => {
+							if (act === "toggle") toggle();
+						},
 					},
 					onSelect: () => {
 						this.selectors.close();
@@ -1226,7 +1309,6 @@ export class AppShell {
 	 * the tree-wide invalidate and the forced redraw.
 	 */
 	#themeChanged(): void {
-		this.#buildBanner();
 		this.tui.invalidate();
 		this.tui.requestRender(true);
 	}

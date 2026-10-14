@@ -8,6 +8,29 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- **TUI startup logo.** `lemon` now opens with a block-glyph lemon painted in a
+  yellow gradient with a green leaf, beside the version and key hints. It uses
+  only `█ ▀ ▄` cells, so it renders in Tern and any UTF-8 terminal; ASCII
+  locales and terminals narrower than 50 columns keep the one-line banner.
+- **`lvm` version switcher.** `bin/lvm` switches `~/.lemon/bin/lemon` between
+  installed releases (`lvm use 2026.10.2`) and a source checkout
+  (`lvm use local [checkout]`), installs and removes releases, and moves a
+  running runtime to the new selection. See
+  [Source development](docs/install.md#switching-between-releases-and-source-with-lvm).
+- **Tern-native TUI surfaces.** `lemon tui` in Tern now uses the same native
+  surfaces as omp instead of painted rows. The composer shows a context meter,
+  attachment chips, clickable model and effort chips, status facts, last-run
+  usage, and Send/Stop. Tool calls are structured cards: shell run boxes with
+  exit status, native diffs, numbered reads, file rows, web-search sources, a
+  todo checklist, and subagent rows. Prompts show their send time, finished
+  turns get a Copy/usage footer, and thinking shows a live spinner. The
+  transcript also has error frames, a working row with Stop, editable queued
+  prompts, and approval buttons. Pickers (sessions, models, command palette,
+  `/output`) open as native sheets, and the welcome card draws the lemon as an
+  image. Other terminals render as before.
+
 ### Fixed
 
 - Document reads (PDF and other converted formats) no longer report

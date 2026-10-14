@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+	setTranscriptActionHandler,
+	type TranscriptAction,
+} from "@oh-my-pi/pi-tui/chat/transcript-actions";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AssistantMessageComponent } from "../../src/ui/components/assistant-message.ts";
 import { NoticeComponent } from "../../src/ui/components/notice-message.ts";
@@ -129,6 +134,34 @@ describe("AssistantMessageComponent", () => {
 		const text = renderPlain(component.render(WIDTH));
 		expect(text).toContain("partial");
 		expect(text).toContain("Error: provider exploded");
+	});
+
+	test("natively, only the reported turn gets a footer whose Copy copies the reply", () => {
+		const copied: TranscriptAction[] = [];
+		setTranscriptActionHandler((action) => copied.push(action));
+		try {
+			const roles = (node: NativeNode) =>
+				(node.c ?? []).map((child) => ("k" in child ? child.p?.role : "component"));
+			const earlier = new AssistantMessageComponent("Looking first.");
+			earlier.finalize({});
+			expect(roles(earlier.describe())).toEqual([undefined]);
+
+			const last = new AssistantMessageComponent("half");
+			last.finalize({ interrupted: true, turn: { durationMs: 4200 } });
+			const described = last.describe();
+			expect(described.c?.[0]).toMatchObject({ k: "md", p: { text: "half" } });
+			expect(roles(described)).toEqual([undefined, "omp.assistant.abort", "omp.turn.usage"]);
+			expect(last.describe()).toBe(described);
+			last.handleNativeEvent({
+				type: "action",
+				key: "turn-usage/copy",
+				act: "copy-answer",
+				mods: [],
+			});
+			expect(copied).toEqual([{ act: "copy", text: "half" }]);
+		} finally {
+			setTranscriptActionHandler(undefined);
+		}
 	});
 });
 

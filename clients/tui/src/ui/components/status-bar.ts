@@ -11,10 +11,14 @@
  * The component is dumb: it renders whatever {@link StatusBarData} the host
  * hands it. Git is the one exception — the branch is polled here because
  * nothing else wants it, and the poll is stopped by `dispose()`.
+ *
+ * A TSP terminal gets no status strip: like omp, the prompt composer carries
+ * these facts ({@link StatusBar.describeComposerFacts}) and the bar describes
+ * itself hidden.
  */
 
-import { node } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { node, span } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode, NativeUiEvent, TspSpan } from "@oh-my-pi/pi-tui/native/node";
 import { styledSpans } from "@oh-my-pi/pi-tui/native/spans";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
@@ -55,7 +59,23 @@ export interface StatusBarData {
 
 export type ContextSource = "context" | "aggregate";
 
+type SegmentId =
+	| "model"
+	| "context"
+	| "connection"
+	| "approvals"
+	| "activity"
+	| "thinking"
+	| "usage"
+	| "branch"
+	| "unread"
+	| "sessions"
+	| "mode"
+	| "queued"
+	| "session";
+
 interface Segment {
+	id: SegmentId;
 	text: string;
 	slot: ColorSlot;
 	/** Lower drops first. Pinned segments are never dropped. */
@@ -76,7 +96,62 @@ export interface StatusBarOptions {
 	/** Called when the polled branch changed and the row needs a repaint. */
 	onChange?: () => void;
 	pollMs?: number;
+	/** Clicks on the composer's facts ({@link StatusAction}). */
+	onNativeAction?: (action: StatusAction) => void;
 }
+
+/** What a click on a composer fact asks the host to open or change. */
+export type StatusAction = "sessions" | "queue" | "mode" | "approvals" | "cost";
+
+/**
+ * The status facts the TSP prompt composer carries instead of a status strip
+ * (pi-tui's `ComposerFacts`, shaped for Lemon's data). The same object comes
+ * back while nothing changed.
+ */
+export interface ComposerFacts {
+	/**
+	 * `meter` (role `omp.composer.context`) along the composer's top edge; only
+	 * for a real per-session context measurement, never the daily aggregate.
+	 */
+	readonly context: NativeNode | undefined;
+	/** The model chip's label. */
+	readonly model: readonly TspSpan[];
+	/** `status` (role `omp.composer.extras`, `grow: 1`) of the other facts as `seg`s. */
+	readonly extras: NativeNode;
+	/** `text` (role `omp.composer.usage`): the last run's tokens and cost, once reported. */
+	readonly usage: NativeNode | undefined;
+}
+
+/** Supplies {@link ComposerFacts} and takes the clicks on them (`status.*` actions). */
+export interface ComposerFactsSource {
+	describeComposerFacts(): ComposerFacts;
+	handleNativeEvent(event: NativeUiEvent): void;
+}
+
+const STATUS_ACTION_PREFIX = "status.";
+const STATUS_ACTIONS: ReadonlySet<string> = new Set<StatusAction>([
+	"sessions",
+	"queue",
+	"mode",
+	"approvals",
+	"cost",
+]);
+/** The facts the composer draws as its own controls rather than as segments. */
+const COMPOSER_HOMED: ReadonlySet<SegmentId> = new Set<SegmentId>([
+	"model",
+	"activity",
+	"thinking",
+	"usage",
+]);
+const FACT_ACTIONS: Partial<Record<SegmentId, StatusAction>> = {
+	approvals: "approvals",
+	unread: "sessions",
+	sessions: "sessions",
+	mode: "mode",
+	queued: "queue",
+};
+/** The composer carries the facts, so the TSP dock has no status strip. */
+const HIDDEN_STATUS: NativeNode = node("status", { hidden: true });
 
 export class StatusBar implements Component {
 	readonly #options: StatusBarOptions;
@@ -87,8 +162,7 @@ export class StatusBar implements Component {
 	#cachedRows: string[] | undefined;
 	#cachedWidth = -1;
 	#cachedKey = "";
-	#native: NativeNode | undefined;
-	#nativeKey = "";
+	#facts: { key: string; theme: unknown; facts: ComposerFacts } | undefined;
 
 	constructor(options: StatusBarOptions) {
 		this.#options = options;
@@ -126,28 +200,27 @@ export class StatusBar implements Component {
 
 	invalidate(): void {
 		this.#cachedRows = undefined;
-		this.#native = undefined;
 	}
 
 	describe(): NativeNode {
+		return HIDDEN_STATUS;
+	}
+
+	describeComposerFacts(): ComposerFacts {
 		const live = this.#options.data();
 		const data: StatusBarData = { ...live, branch: live.branch ?? this.#branch };
 		const key = cacheKey(data);
-		if (!this.#native || this.#nativeKey !== key) {
-			const theme = getTheme();
-			this.#native = node(
-				"status",
-				{},
-				buildSegments(data).map((segment) =>
-					node("seg", {
-						spans: styledSpans(theme.fg(segment.slot, segment.text)),
-						priority: segment.priority,
-					}),
-				),
-			);
-			this.#nativeKey = key;
+		const theme = getTheme();
+		if (this.#facts?.key !== key || this.#facts.theme !== theme) {
+			this.#facts = { key, theme, facts: buildComposerFacts(data) };
 		}
-		return this.#native;
+		return this.#facts.facts;
+	}
+
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "action" || !event.act.startsWith(STATUS_ACTION_PREFIX)) return;
+		const action = event.act.slice(STATUS_ACTION_PREFIX.length);
+		if (STATUS_ACTIONS.has(action)) this.#options.onNativeAction?.(action as StatusAction);
 	}
 
 	render(width: number): readonly string[] {
@@ -210,6 +283,7 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	const segments: Segment[] = [];
 
 	segments.push({
+		id: "model",
 		text: shortModel(data.model),
 		slot: data.model ? "accent" : "dim",
 		priority: 100,
@@ -217,6 +291,7 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	});
 	const source = data.contextSource ?? "context";
 	segments.push({
+		id: "context",
 		text: renderGauge(data.contextTokens, data.contextWindow, source),
 		slot: source === "context" ? gaugeSlot(data.contextTokens, data.contextWindow) : "dim",
 		priority: 99,
@@ -225,6 +300,7 @@ export function buildSegments(data: StatusBarData): Segment[] {
 
 	if (data.connection !== "online") {
 		segments.push({
+			id: "connection",
 			// `+2` rather than "(2 queued)": this segment matters most exactly when
 			// the row is tight, so it has to be cheap in columns.
 			text: data.queued > 0 ? `${data.connection} +${data.queued}` : data.connection,
@@ -234,38 +310,33 @@ export function buildSegments(data: StatusBarData): Segment[] {
 	}
 	if (data.approvals > 0) {
 		segments.push({
+			id: "approvals",
 			text: `${data.approvals} approval${data.approvals === 1 ? "" : "s"}`,
 			slot: "warning",
 			priority: 85,
 		});
 	}
 	segments.push({
+		id: "activity",
 		text: data.busy ? (data.engine ? `${data.engine} working` : "working") : "idle",
 		slot: data.busy ? "toolRunning" : "dim",
 		priority: 80,
 	});
 	if (data.thinking && data.thinking !== "off") {
-		segments.push({ text: data.thinking, slot: "muted", priority: 40 });
+		segments.push({ id: "thinking", text: data.thinking, slot: "muted", priority: 40 });
 	}
-	const usage: string[] = [];
-	if (data.runTokens !== undefined && Number.isFinite(data.runTokens) && data.runTokens >= 0) {
-		usage.push(`${compact(data.runTokens)} tok`);
-	}
-	if (data.runCostUsd !== undefined && Number.isFinite(data.runCostUsd) && data.runCostUsd >= 0) {
-		usage.push(`$${data.runCostUsd.toFixed(data.runCostUsd < 0.01 ? 4 : 2)}`);
-	}
-	if (usage.length > 0) {
-		segments.push({ text: `last ${usage.join(" ")}`, slot: "muted", priority: 55 });
-	}
+	const usage = runUsage(data);
+	if (usage) segments.push({ id: "usage", text: usage, slot: "muted", priority: 55 });
 	if (data.branch) {
 		segments.push({
+			id: "branch",
 			text: data.branch,
 			slot: data.branch.includes("*") ? "statusLineGitDirty" : "statusLineText",
 			priority: 50,
 		});
 	}
 	if (data.unread > 0) {
-		segments.push({ text: `${data.unread} unread`, slot: "info", priority: 60 });
+		segments.push({ id: "unread", text: `${data.unread} unread`, slot: "info", priority: 60 });
 	}
 	if (data.sessionCount > 1) {
 		// `3 sessions ●2` — the dot count is what says work is continuing somewhere
@@ -276,26 +347,146 @@ export function buildSegments(data: StatusBarData): Segment[] {
 		const covered = data.busy && busyCount <= 1;
 		const marker = busyCount > 0 && !covered ? ` ●${busyCount}` : "";
 		segments.push({
+			id: "sessions",
 			text: `${data.sessionCount} sessions${marker}`,
 			slot: marker ? "toolRunning" : "muted",
 			priority: busyCount > 0 ? 65 : 30,
 		});
 	}
 	segments.push({
+		id: "mode",
 		text: data.busy ? `enter:${data.mode} · esc:stop` : data.mode,
 		slot: data.busy ? "info" : "dim",
 		priority: data.busy ? 82 : 20,
 	});
 	if ((data.pendingPrompts ?? 0) > 0) {
 		segments.push({
+			id: "queued",
 			text: `${data.pendingPrompts} queued`,
 			slot: "info",
 			priority: 83,
 		});
 	}
-	segments.push({ text: data.sessionKey, slot: "muted", priority: 10 });
+	segments.push({ id: "session", text: data.sessionKey, slot: "muted", priority: 10 });
 
 	return segments;
+}
+
+/** `last 12k tok $0.0042`, or undefined before a run reported either. */
+function runUsage(data: StatusBarData): string | undefined {
+	const usage: string[] = [];
+	if (data.runTokens !== undefined && Number.isFinite(data.runTokens) && data.runTokens >= 0) {
+		usage.push(`${compact(data.runTokens)} tok`);
+	}
+	if (data.runCostUsd !== undefined && Number.isFinite(data.runCostUsd) && data.runCostUsd >= 0) {
+		usage.push(`$${data.runCostUsd.toFixed(data.runCostUsd < 0.01 ? 4 : 2)}`);
+	}
+	return usage.length > 0 ? `last ${usage.join(" ")}` : undefined;
+}
+
+/**
+ * The status line's segments, regrouped for the TSP composer: the context
+ * meter, the model chip's label and the usage text get their own places; the
+ * rest become `omp.composer.fact` segments in row order with their drop
+ * priority. The activity segment goes (the composer's tone and Stop button say
+ * it), but its engine stays as a fact; the thinking level is the effort chip.
+ */
+export function buildComposerFacts(data: StatusBarData): ComposerFacts {
+	const theme = getTheme();
+	const source = data.contextSource ?? "context";
+	const facts: NativeNode[] = [];
+	for (const segment of buildSegments(data)) {
+		if (COMPOSER_HOMED.has(segment.id)) continue;
+		// A per-session context is the meter; the daily aggregate stays a plain fact,
+		// and only once there is a number to show.
+		if (segment.id === "context" && (source === "context" || !data.contextTokens)) continue;
+		// Send/Stop already say what Esc does while busy.
+		const text = segment.id === "mode" ? `enter:${data.mode}` : segment.text;
+		const action = FACT_ACTIONS[segment.id];
+		facts.push(
+			node(
+				"seg",
+				{
+					role: "omp.composer.fact",
+					spans: styledSpans(theme.fg(segment.slot, text)),
+					priority: segment.priority,
+					...(action ? { actions: { click: `${STATUS_ACTION_PREFIX}${action}` } } : {}),
+				},
+				undefined,
+				segment.id,
+			),
+		);
+	}
+	if (data.engine) {
+		facts.push(
+			node(
+				"seg",
+				{
+					role: "omp.composer.fact",
+					spans: styledSpans(theme.fg(data.busy ? "toolRunning" : "muted", data.engine)),
+					priority: 45,
+					title: `Engine: ${data.engine}`,
+				},
+				undefined,
+				"engine",
+			),
+		);
+	}
+	const usage = runUsage(data);
+	return {
+		context:
+			source === "context" ? contextMeter(data.contextTokens, data.contextWindow) : undefined,
+		model: [span(shortModel(data.model), data.model ? undefined : "dim")],
+		extras: node(
+			"status",
+			{ role: "omp.composer.extras", transparent: true, grow: 1 },
+			facts,
+			"extras",
+		),
+		usage:
+			usage === undefined
+				? undefined
+				: node(
+						"text",
+						{
+							role: "omp.composer.usage",
+							text: usage,
+							wrap: "none",
+							title: "Last completed run",
+							actions: { click: `${STATUS_ACTION_PREFIX}cost` },
+						},
+						undefined,
+						"usage",
+					),
+	};
+}
+
+/** The composer's context hairline: share of the window, unknown without one. */
+function contextMeter(
+	tokens: number | undefined,
+	window: number | undefined,
+): NativeNode | undefined {
+	if (tokens === undefined || tokens < 0) return undefined;
+	const known = window !== undefined && window > 0;
+	const used = known ? Math.min(1, tokens / window) : null;
+	const lines = [
+		used === null ? "Context window unknown" : `Context ${Math.round(used * 100)}% used`,
+		known ? `${compact(tokens)} of ${compact(window)} tokens` : `${compact(tokens)} tokens`,
+	];
+	return node(
+		"meter",
+		{
+			role: "omp.composer.context",
+			value: used,
+			style: "bar",
+			thresholds: { warn: 0.75, bad: 0.9 },
+			...(used === null ? {} : { label: `${Math.round(used * 100)}%` }),
+			...(known ? { total: compact(window) } : {}),
+			title: lines.join("\n"),
+		},
+		undefined,
+		"context",
+	);
 }
 
 /** Drop the lowest-priority optional segments until the row fits. */

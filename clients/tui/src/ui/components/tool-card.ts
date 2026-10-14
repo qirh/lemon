@@ -27,7 +27,11 @@
  *     must never change again: they may already be in native scrollback.
  */
 
-import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import {
+	type NativeNode,
+	type NativeUiEvent,
+	rootToggleExpanded,
+} from "@oh-my-pi/pi-tui/native/node";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
@@ -36,7 +40,12 @@ import { toolLink } from "../../terminal/links.ts";
 import { nativeTool } from "../../terminal/native-tool.ts";
 import { getTheme, type Theme } from "../theme/theme.ts";
 import { buildToolView, type ToolCardState, type ToolView } from "../tool-view.ts";
-import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
+import {
+	AccordionComponent,
+	type AccordionState,
+	accordionSettings,
+	resolveAccordionState,
+} from "./accordion.ts";
 import { renderDiff } from "./diff.ts";
 
 /**
@@ -143,6 +152,8 @@ export class ToolCardComponent implements ToolBlockComponent {
 	#spinnerTimer: ReturnType<typeof setInterval> | undefined;
 
 	#version = 0;
+	/** The user opened this card; see {@link ToolCardComponent.expand}. */
+	#open = false;
 	/** Fingerprint of the header's inputs, for no-op detection in #applyView. */
 	#headerKey = "";
 	#cachedVersion = -1;
@@ -215,13 +226,28 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	toggleAccordion(): AccordionState {
+		// A native card folded to its preview reads as collapsed, so the key opens it first.
+		if (isNativeRendering() && this.#accordion.state === "expanded" && this.#nativeCollapsed()) {
+			this.expand();
+			return "expanded";
+		}
 		const state = this.#accordion.toggle();
+		this.#open = state === "expanded";
 		this.#version++;
 		return state;
 	}
 
+	/** Apply a default or global accordion state; a native card folds back to its preview. */
 	setAccordionState(state: AccordionState): void {
 		this.#accordion.setState(state);
+		this.#open = false;
+		this.#version++;
+	}
+
+	/** Open the card at the user's request: expanded rows, and a native card out of its preview. */
+	expand(): void {
+		this.#accordion.setState("expanded");
+		this.#open = true;
 		this.#version++;
 	}
 
@@ -246,6 +272,15 @@ export class ToolCardComponent implements ToolBlockComponent {
 
 	// -- render --------------------------------------------------------------
 
+	/**
+	 * Native cards fold to their preview like omp's (the full body is one
+	 * disclosure away) unless the user opened this one or Ctrl+T expanded them all.
+	 */
+	#nativeCollapsed(): boolean {
+		if (this.#accordion.state !== "expanded") return true;
+		return !this.#open && accordionSettings.override !== "expanded";
+	}
+
 	describe(): NativeNode {
 		this.#syncAnimation();
 		const version = this.getTranscriptBlockVersion();
@@ -253,7 +288,7 @@ export class ToolCardComponent implements ToolBlockComponent {
 			this.#native = nativeTool(
 				this.#block,
 				this.#view,
-				this.#accordion.state === "collapsed",
+				this.#nativeCollapsed(),
 				this.#elapsedMs(),
 			);
 			this.#nativeVersion = version;
@@ -262,8 +297,11 @@ export class ToolCardComponent implements ToolBlockComponent {
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type !== "toggle") return;
-		this.setAccordionState(event.collapsed ? "collapsed" : "expanded");
+		// Nested disclosures (an agent, a checklist phase) keep their terminal-local state.
+		const open = rootToggleExpanded(event);
+		if (open === undefined) return;
+		if (open) this.expand();
+		else this.setAccordionState("collapsed");
 		this.#requestRender?.(this);
 	}
 

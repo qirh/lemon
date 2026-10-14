@@ -64,6 +64,13 @@ sessions. The TUI still reuses the local daemon and authenticates normally.
 If the actions are absent, check Tern's plugin settings: installation preserves
 `plugins=false` and entries in `plugins_disabled`.
 
+In a Tern pane, `lemon tui` uses the same native surfaces as omp. The composer
+has clickable model and effort chips, a context meter and Send/Stop. Tool calls
+appear as structured cards: run boxes, diffs, file rows and checklists. Turns
+have Copy/usage footers, approvals have decision buttons, and pickers open as
+native sheets. See the [TUI guide](../../clients/tui/README.md#tern-and-modern-terminals)
+for the full list.
+
 Native file-tool cards carry editor locations. **⌘-click** an edit/read/patch
 target (**Ctrl-click** on PC) to open Tern's file block at the reported changed
 line or read offset; a plain click only folds the tool card. Resolved file paths,

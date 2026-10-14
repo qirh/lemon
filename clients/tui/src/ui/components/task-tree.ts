@@ -1,9 +1,29 @@
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
+import { card, EMPTY_NODE, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
-import { isTaskTerminal, type TaskTreeRow, taskElapsedMs } from "../../store/task-store.ts";
+import {
+	isTaskTerminal,
+	type TaskStatus,
+	type TaskTreeRow,
+	taskElapsedMs,
+} from "../../store/task-store.ts";
 import { taskDisplayText } from "../task-progress.ts";
 import { getTheme } from "../theme/theme.ts";
+
+/** The `agent` node's props, via pi-tui's node type (pi-wire is not a direct dependency). */
+type AgentProps = NonNullable<Extract<NativeNode, { k: "agent" }>["p"]>;
+
+const AGENT_STATUS: Record<TaskStatus, AgentProps["status"]> = {
+	queued: "pending",
+	running: "running",
+	cancelling: "running",
+	completed: "done",
+	error: "failed",
+	aborted: "aborted",
+	unknown: "idle",
+};
 
 /** A bounded live region; selection makes every remaining child reachable. */
 export const TASK_TREE_WINDOW = 4;
@@ -21,6 +41,7 @@ export class TaskTreeComponent implements Component {
 	#rows: readonly TaskTreeRow[] = [];
 	#selected = 0;
 	#visible = false;
+	#native: { rows: readonly TaskTreeRow[]; node: NativeNode } | undefined;
 
 	constructor(options: TaskTreeOptions) {
 		this.#options = options;
@@ -63,6 +84,59 @@ export class TaskTreeComponent implements Component {
 
 	invalidate(): void {
 		// No cached rows: theme, focus and elapsed time are read at render time.
+	}
+
+	/**
+	 * omp's task card (`omp.tool.task`) holding one `agent` node per child
+	 * (`omp.task.agent`) at its lineage depth: status, role, description,
+	 * terminal-clocked age while running (frozen time once finished) and the
+	 * current activity as its body. The terminal scrolls the whole tree, so
+	 * the row renderer's window does not apply.
+	 */
+	describe(): NativeNode {
+		if (!this.#visible) return EMPTY_NODE;
+		if (this.#native?.rows === this.#rows) return this.#native.node;
+		const rows = this.#rows;
+		const active = rows.filter((row) => !isTaskTerminal(row.task.status)).length;
+		const now = this.#options.now?.() ?? Date.now();
+		const agents: NativeNode[] = rows.map(({ task, depth }) => {
+			const id = taskDisplayText(task.taskId);
+			const ms = taskElapsedMs(task, now);
+			const props: AgentProps = {
+				name: id,
+				status: AGENT_STATUS[task.status],
+				role: "omp.task.agent",
+				...(task.agent ? { agent: task.agent } : {}),
+				...(task.description && task.description !== id ? { task: task.description } : {}),
+				stats: task.finishedAt !== undefined ? { took: ms } : { age: ms },
+				...(task.status === "cancelling"
+					? { badges: [{ text: "cancelling", tone: "warning" as const }] }
+					: {}),
+				...(depth > 0 ? { depth } : {}),
+				...(task.progress ? { collapsible: true, collapsed: false } : {}),
+			};
+			return node(
+				"agent",
+				props,
+				task.progress ? [text([span(task.progress, "muted")], { wrap: "word" })] : [],
+				task.taskId,
+			);
+		});
+		const described = card(
+			{
+				role: "omp.tool.task",
+				head: [
+					span("Tasks", "strong"),
+					span(` · ${rows.length} children · ${active} active`, "muted"),
+				],
+				status: active > 0 ? "running" : "done",
+			},
+			agents.length > 0
+				? agents
+				: [text([span("No child task updates in this session.", "dim")], { key: "empty" })],
+		);
+		this.#native = { rows, node: described };
+		return described;
 	}
 
 	render(width: number): readonly string[] {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import {
+	buildComposerFacts,
 	renderGauge,
 	renderStatusLine,
 	StatusBar,
@@ -248,5 +249,61 @@ describe("the component", () => {
 		const seen = reads;
 		await Bun.sleep(30);
 		expect(reads).toBe(seen);
+	});
+});
+
+describe("the TSP composer facts", () => {
+	const factKeys = (facts: ReturnType<typeof buildComposerFacts>) =>
+		(facts.extras.c ?? []).map((seg) => ("k" in seg ? seg.key : undefined));
+
+	test("a native terminal draws no status strip", () => {
+		const bar = new StatusBar({ data: () => data() });
+		expect(bar.describe().p).toMatchObject({ hidden: true });
+	});
+
+	test("the context meter reads this session's context and never the daily aggregate", () => {
+		const own = buildComposerFacts(data({ contextSource: "context" }));
+		expect(own.context?.p).toMatchObject({
+			role: "omp.composer.context",
+			value: 0.24,
+			label: "24%",
+			total: "200k",
+		});
+		expect(factKeys(own)).not.toContain("context");
+
+		const aggregate = buildComposerFacts(data({ contextSource: "aggregate" }));
+		expect(aggregate.context).toBeUndefined();
+		expect(factKeys(aggregate)).toContain("context");
+	});
+
+	test("model, activity, thinking and usage leave the facts for their own controls", () => {
+		const facts = buildComposerFacts(data({ busy: true, runTokens: 12_000, runCostUsd: 0.5 }));
+		expect(facts.model.map((span) => span.t).join("")).toBe("claude-sonnet-4");
+		expect(facts.usage?.p).toMatchObject({
+			role: "omp.composer.usage",
+			text: "last 12k tok $0.50",
+		});
+		expect(factKeys(facts)).toEqual([
+			"approvals",
+			"branch",
+			"unread",
+			"sessions",
+			"mode",
+			"session",
+			"engine",
+		]);
+	});
+
+	test("the same facts object comes back while nothing changed, and clicks reach the host", () => {
+		const actions: string[] = [];
+		const bar = new StatusBar({
+			data: () => data(),
+			onNativeAction: (action) => actions.push(action),
+		});
+		expect(bar.describeComposerFacts()).toBe(bar.describeComposerFacts());
+		for (const act of ["status.queue", "status.unknown", "thinking.select"]) {
+			bar.handleNativeEvent({ type: "action", key: "", act, mods: [] });
+		}
+		expect(actions).toEqual(["queue"]);
 	});
 });

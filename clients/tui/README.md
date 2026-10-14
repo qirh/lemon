@@ -179,6 +179,17 @@ in recall history. Configure Carly's agent command as `lemon tui` for this path.
 The final reply is published before the terminal is marked idle, so Carly's
 `wait` observes the complete answer rather than the last streaming fragment.
 
+In Tern the composer carries what the status line shows elsewhere, as omp's
+does: a context meter along its top edge (per-session context only), image
+attachments as chips with a remove control, and a bar with the model chip
+(click: model picker, as Ctrl+O), the thinking-effort chip (click: `/think`,
+as Shift+Tab), the session's status facts (clicking sessions/unread, queued,
+the submission mode or approvals opens the switcher, edits the queue, cycles
+the mode or runs `/approvals`), the last run's usage (click: `/cost`), and
+Send — Stop while the run is live, which aborts like Esc. An empty composer
+shows the session's title as its placeholder. No separate status strip is
+drawn; the row renderer keeps its status line.
+
 Tern's native **Run** button on shell fences in replies executes in the pane's
 working directory and displays the output below the fence; **Stop** interrupts
 that command. Execution belongs to Tern and always requires the user's Run
@@ -190,6 +201,37 @@ open editor panes automatically. Patch cards target the first surviving changed
 file. `lemon tern install` also provides palette actions to open a native TUI
 split in the focused pane's cwd or focus an existing Lemon pane; see the
 [Tern guide](../../docs/user-guide/tern.md).
+
+Transcript chrome uses omp's shared Tern roles. Prompts show their send time,
+attached images and a steered/redirected/interrupted badge. A finished turn has
+a footer with Copy, duration, tokens and cost as reported by the daemon. Failed
+runs and error notices are error frames with **Copy error** (and **Switch model**
+for runs). Thinking is a live spinner section that folds to "Thought for Ns".
+Compaction results render as a compaction divider. While a run works, the dock
+shows a working row whose **Stop** takes Esc's abort path. Queued prompts are
+pills with an **Edit** control, and approvals offer clickable decision buttons
+with the full action and a countdown. The Alt+A task tree is a card of subagent
+nodes. Copy writes the clipboard over OSC 52.
+
+Tool calls are omp's semantic tool cards rather than painted text: shell calls
+are run boxes (command, tail-following output, `Done`/`exit N` foot), edits and
+patches are native diffs with `+N −M` stats, reads are numbered code, grep,
+find and ls are file rows, web searches list linked sources, todos are a
+checklist and tasks are subagent rows. Cards fold to a short preview; open one
+from its head (or Ctrl+R), or all with Alt+O or Ctrl+T. Consecutive reads
+fold into one `Read N files` row group whose files open at the read offset.
+The tool inspector (`/output`, `/diff`) shows the full receipt as a native
+diff or output block.
+
+Pickers open as Tern's native picker sheets over the transcript rather than a
+painted full-screen box: the session switcher (cards with title, key, busy dot,
+unread/archived badges, model and age; **New session** / **Close session**
+buttons), the model picker (one list grouped by provider with provider marks,
+context column and the current model marked; **Make default** mirrors Ctrl+G),
+the command palette (grouped by kind, with the global key beside commands that
+have one), `/output` and every slash-command picker. Keys behave exactly as in
+the row renderer; a row click selects, a second click or the primary button is
+Enter, and Close is Esc. The startup banner becomes Tern's welcome card.
 
 Other terminals, or `PI_TUI_NATIVE=0`, use the row renderer. OSC 133 marks stay
 attached to prompt/reply rows as they enter scrollback. Markdown URLs,

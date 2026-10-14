@@ -37,6 +37,17 @@ const row = (overrides: Partial<SessionRow> = {}): SessionRow => ({
 	...overrides,
 });
 
+/** A TSP terminal that draws the `picker` kind. */
+const NATIVE = {
+	cols: 80,
+	dark: true,
+	reduceMotion: true,
+	supports: () => true,
+	feature: () => false,
+};
+
+const action = (act: string) => ({ type: "action" as const, key: "", act, mods: [] });
+
 interface SwitcherHarness {
 	switcher: SessionSwitcher;
 	store: AppStore;
@@ -340,6 +351,37 @@ describe("SessionSwitcher", () => {
 
 		expect(renderPlain(overlay.render(80))).not.toBe(before);
 		expect(harness.switched).toEqual([]);
+	});
+
+	test("on a native sheet, a row double-click switches and the buttons run the keys", async () => {
+		const harness = await bootSwitcher({
+			sessionKey: "tui-a",
+			stored: [{ sessionKey: "tui-b", updatedAtMs: 99 }],
+		});
+		await harness.switcher.open();
+		const overlay = harness.overlay();
+		const sheet = overlay.describe(NATIVE);
+		expect(sheet?.k).toBe("picker");
+		expect(sheet?.p).toMatchObject({ current: ["tui-a"], order: ["tui-b", "tui-a"] });
+
+		overlay.handleNativeEvent(action("new"));
+		expect(harness.switcher.promptMode).toBe(true);
+		// The prompt owns the pointer as it owns the keyboard.
+		overlay.handleNativeEvent({ type: "activate", key: "", item: "tui-b" });
+		expect(harness.switched).toEqual([]);
+		overlay.handleNativeEvent(action("close"));
+		expect(harness.switcher.promptMode).toBe(false);
+
+		overlay.handleNativeEvent({ type: "activate", key: "", item: "tui-b" });
+		await waitFor(() => harness.switched.length > 0, { what: "the switch" });
+		expect(harness.switched).toEqual(["tui-b"]);
+	});
+
+	test("the native Close session button asks the host to close the selected session", async () => {
+		const harness = await bootSwitcher({ sessionKey: "tui-a" });
+		await harness.switcher.open();
+		harness.overlay().handleNativeEvent(action("close-session"));
+		expect(harness.closed).toEqual(["tui-a"]);
 	});
 });
 

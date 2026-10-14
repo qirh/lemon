@@ -13,15 +13,13 @@
  * whatever is inside the window (the container re-renders on a version bump).
  */
 
-import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
-import { Text } from "@oh-my-pi/pi-tui/components/text";
-import { col } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { elapsed, node, span } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ReasoningBlock } from "../../store/transcript-model.ts";
 import { getTheme } from "../theme/theme.ts";
-import { getMarkdownTheme } from "../theme/tui-adapters.ts";
 import { AccordionComponent, type AccordionState, resolveAccordionState } from "./accordion.ts";
 
 export class ReasoningComponent implements Component {
@@ -29,10 +27,16 @@ export class ReasoningComponent implements Component {
 	#block: ReasoningBlock;
 	#text = "";
 	#live = true;
-	readonly #nativeHeading = new Text("", 0, 0);
-	readonly #nativeBody: Markdown;
+	/**
+	 * Client-observed thinking time. Only a block seen streaming has one; a
+	 * block born finished (history, a late join) never claims a duration.
+	 */
+	#clock: { start: number; end?: number } | undefined;
+	/** The terminal's own fold, mirrored back; a keyboard toggle hands control back to the accordion. */
+	#nativeCollapsed: boolean | undefined;
+	#nativeBody: { text: string; stream: boolean; node: NativeNode } | undefined;
 	#native: NativeNode | undefined;
-	#nativeVersion = -1;
+	#nativeKey = "";
 
 	#version = 0;
 	#cachedVersion = -1;
@@ -42,14 +46,11 @@ export class ReasoningComponent implements Component {
 
 	constructor(block: ReasoningBlock, options: { accordion?: AccordionState } = {}) {
 		this.#block = block;
-		this.#nativeBody = new Markdown("", 2, 0, getMarkdownTheme(), {
-			color: (text) => getTheme().fg("dim", text),
-		});
-		this.#nativeBody.transientRenderCache = true;
 		this.#accordion = new AccordionComponent(
 			options.accordion ?? resolveAccordionState("reasoning"),
 			{ indent: 2, wrap: true, moreHint: (hidden) => `+${hidden} more lines` },
 		);
+		if (block.phase !== "completed") this.#clock = { start: Date.now() };
 		this.update(block);
 	}
 
@@ -66,17 +67,21 @@ export class ReasoningComponent implements Component {
 		this.#block = block;
 		const live = block.phase !== "completed";
 		if (block.text === this.#text && live === this.#live) return;
+		if (this.#live && !live && this.#clock && this.#clock.end === undefined) {
+			this.#clock.end = Date.now();
+		}
 		this.#text = block.text;
 		this.#live = live;
-		this.#nativeBody.transientRenderCache = live;
 		this.#applyText();
 	}
 
 	toggleAccordion(): AccordionState {
+		this.#nativeCollapsed = undefined;
 		return this.#accordion.toggle();
 	}
 
 	setAccordionState(state: AccordionState): void {
+		this.#nativeCollapsed = undefined;
 		this.#accordion.setState(state);
 	}
 
@@ -92,18 +97,69 @@ export class ReasoningComponent implements Component {
 
 	// -- render --------------------------------------------------------------
 
+	/**
+	 * omp's thinking section: while the model thinks, `omp.thinking.live` with
+	 * the starburst spinner (`omp.thinking.spin`), "Thinking…" and a terminal-
+	 * clocked timer, open so the tail streams under its fade; once done,
+	 * `omp.thinking` headed "Thought for 12s", folded unless expanded. Hidden
+	 * keeps only the folded head.
+	 */
 	describe(): NativeNode {
-		const version = this.getTranscriptBlockVersion();
-		if (this.#native && this.#nativeVersion === version) return this.#native;
 		const state = this.#accordion.state;
-		const text = state === "hidden" ? "" : this.#text.trim();
-		this.#nativeHeading.setText(getTheme().fg("dim", this.#live ? "thinking…" : "thinking"));
-		this.#nativeBody.setText(state === "collapsed" ? (text.split(/\r?\n/, 1)[0] ?? "") : text);
-		this.#native = col(text ? [this.#nativeHeading, this.#nativeBody] : [this.#nativeHeading], {
-			role: "omp.thinking",
-		});
-		this.#nativeVersion = version;
+		const collapsed =
+			this.#nativeCollapsed ?? (this.#live ? state === "hidden" : state !== "expanded");
+		const key = `${this.getTranscriptBlockVersion()}|${collapsed}`;
+		if (this.#native && this.#nativeKey === key) return this.#native;
+		const clock = this.#clock;
+		const head = this.#live
+			? node(
+					"row",
+					{ gap: "sm" },
+					[
+						node("spinner", { style: "starburst", role: "omp.thinking.spin" }, undefined, "spin"),
+						node("text", { spans: [span("Thinking…", "muted")] }, undefined, "label"),
+						{ ...elapsed(Date.now() - (clock?.start ?? Date.now())), key: "elapsed" },
+					],
+					"head",
+				)
+			: node("text", { spans: [span(thoughtLabel(clock), "muted")] }, undefined, "head");
+		const body = state === "hidden" ? undefined : this.#describeBody();
+		const took = clock?.end === undefined ? undefined : Math.max(0, clock.end - clock.start);
+		this.#native = node(
+			"section",
+			{
+				role: this.#live ? "omp.thinking.live" : "omp.thinking",
+				collapsible: true,
+				collapsed,
+				...(took !== undefined ? { took } : {}),
+			},
+			body ? [head, body] : [head],
+		);
+		this.#nativeKey = key;
 		return this.#native;
+	}
+
+	/** The terminal folded or opened the section. */
+	handleNativeEvent(event: NativeUiEvent): void {
+		if (event.type !== "toggle" || event.key !== "") return;
+		this.#nativeCollapsed = event.collapsed;
+	}
+
+	#describeBody(): NativeNode | undefined {
+		const source = this.#text.trim();
+		if (!source) return undefined;
+		const stream = this.#live;
+		const cached = this.#nativeBody;
+		if (cached?.text === source && cached.stream === stream) return cached.node;
+		const plain = source.includes("\x1b") ? plainText(source) : source;
+		const body = node(
+			"md",
+			stream ? { text: plain, stream: true } : { text: plain },
+			undefined,
+			"body",
+		);
+		this.#nativeBody = { text: source, stream, node: body };
+		return body;
 	}
 
 	render(width: number): readonly string[] {
@@ -141,4 +197,13 @@ export class ReasoningComponent implements Component {
 		this.#accordion.setSummary(summary.length > 0 ? style(summary) : "");
 		this.#version++;
 	}
+}
+
+/** "Thought for 12s" when the thinking was watched start to finish, else "Thought". */
+function thoughtLabel(clock: { start: number; end?: number } | undefined): string {
+	if (clock?.end === undefined) return "Thought";
+	const seconds = Math.max(1, Math.round((clock.end - clock.start) / 1000));
+	return seconds < 60
+		? `Thought for ${seconds}s`
+		: `Thought for ${Math.floor(seconds / 60)}m${seconds % 60}s`;
 }
