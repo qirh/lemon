@@ -80,7 +80,11 @@ defmodule LemonWeb.Chat.Uploads do
           {:ok, data} ->
             {:ok,
              {:image, name,
-              %{"type" => "image", "mime_type" => entry.client_type, "data" => Base.encode64(data)}}}
+              %{
+                "type" => "image",
+                "mime_type" => entry.client_type,
+                "data" => Base.encode64(data)
+              }}}
 
           {:error, _} ->
             {:ok, {:failed, name}}
@@ -99,15 +103,22 @@ defmodule LemonWeb.Chat.Uploads do
 
   defp collect(results) do
     Enum.reduce(results, %{images: [], image_names: [], files: [], failed: []}, fn
-      {:image, name, image}, acc -> %{acc | images: acc.images ++ [image], image_names: acc.image_names ++ [name]}
-      {:file, name, path}, acc -> %{acc | files: acc.files ++ [%{name: name, path: path}]}
-      {:failed, name}, acc -> %{acc | failed: acc.failed ++ [name]}
+      {:image, name, image}, acc ->
+        %{acc | images: acc.images ++ [image], image_names: acc.image_names ++ [name]}
+
+      {:file, name, path}, acc ->
+        %{acc | files: acc.files ++ [%{name: name, path: path}]}
+
+      {:failed, name}, acc ->
+        %{acc | failed: acc.failed ++ [name]}
     end)
   end
 
   @doc "Prompt text sent to the agent: the message plus saved file paths."
   def submission_prompt(prompt, %{files: []} = attachments) do
-    if prompt == "" and attachments.images != [], do: "Describe the attached image(s).", else: prompt
+    if prompt == "" and attachments.images != [],
+      do: "Describe the attached image(s).",
+      else: prompt
   end
 
   def submission_prompt(prompt, %{files: files}) do

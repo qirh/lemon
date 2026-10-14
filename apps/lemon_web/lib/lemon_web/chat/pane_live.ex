@@ -28,34 +28,48 @@ defmodule LemonWeb.Chat.PaneLive do
 
   alias LemonCore.{Bus, NodeRegistry, SessionKey}
   alias LemonControlPlane.EventBridge
-  alias LemonWeb.Chat.{Backend, Components, Inspector, Setup, Subagents, Tool, Transcript, Uploads}
+
+  alias LemonWeb.Chat.{
+    Backend,
+    Components,
+    Inspector,
+    Setup,
+    Subagents,
+    Tool,
+    Transcript,
+    Uploads
+  }
+
   alias LemonWeb.{Rpc, SessionCwd}
 
   on_mount({__MODULE__, :require_operator})
 
   @doc """
   Operator check for a nested pane. Only the root LiveView can read
-  `connect_info`, so the pane inherits the access its authenticated parent
-  (`LemonWeb.ChatLive`, behind `LemonWeb.LiveAuth`) established via
-  `assign_new/3`; a pane joined without that parent has none and is refused.
-  With token auth the session marker is re-verified too, so a rotated token
-  also ends nested panes.
+  `connect_info`, so a pane relies on its parent (`LemonWeb.ChatLive`, which
+  `LemonWeb.LiveAuth` verifies on every mount):
+
+    * disconnected render: the parent's verified `operator_access` is
+      inherited through `assign_new/3`;
+    * connected mount: the signed child token binds the pane to the parent
+      process that rendered it (LiveView refuses the join when that parent is
+      gone), so a live `parent_pid` means an authenticated parent.
+
+  A pane rendered or joined any other way is refused.
   """
-  def on_mount(:require_operator, _params, session, socket) do
+  def on_mount(:require_operator, _params, _session, socket) do
     socket = Phoenix.Component.assign_new(socket, :operator_access, fn -> nil end)
 
-    verified? =
-      case LemonWeb.Auth.mode(nil) do
-        {:login, :token} ->
-          match?({:ok, :token}, LemonWeb.Auth.verify(session[LemonWeb.Auth.session_key()], nil))
+    cond do
+      socket.assigns.operator_access in [:token, :tokenless_loopback] ->
+        {:cont, socket}
 
-        _ ->
-          true
-      end
+      connected?(socket) and is_pid(socket.parent_pid) and Process.alive?(socket.parent_pid) ->
+        {:cont, Phoenix.Component.assign(socket, :operator_access, :inherited)}
 
-    if socket.assigns.operator_access in [:token, :tokenless_loopback] and verified?,
-      do: {:cont, socket},
-      else: {:halt, redirect(socket, to: "/login")}
+      true ->
+        {:halt, redirect(socket, to: "/login")}
+    end
   end
 
   @flush_ms 40
@@ -275,7 +289,10 @@ defmodule LemonWeb.Chat.PaneLive do
         {:noreply,
          socket
          |> assign(:submit_error, nil)
-         |> notice(:warning, "Lemon must confirm this session's run status before sending. Check status and try again.")}
+         |> notice(
+           :warning,
+           "Lemon must confirm this session's run status before sending. Check status and try again."
+         )}
 
       socket.assigns.run.status in [:running, :stopping] and mode in @control_modes ->
         submit_control(socket, prompt, mode)
@@ -298,7 +315,11 @@ defmodule LemonWeb.Chat.PaneLive do
 
       {:unavailable, socket} ->
         {:noreply,
-         notice(socket, :warning, "Lemon could not check the active run. Its last known state is unchanged; try again.")}
+         notice(
+           socket,
+           :warning,
+           "Lemon could not check the active run. Its last known state is unchanged; try again."
+         )}
     end
   end
 
@@ -325,29 +346,48 @@ defmodule LemonWeb.Chat.PaneLive do
 
           {:error, :outcome_unknown} ->
             {:noreply,
-             notice(socket, :warning, "Lemon could not confirm the stop request. Check the run status before trying again.")}
+             notice(
+               socket,
+               :warning,
+               "Lemon could not confirm the stop request. Check the run status before trying again."
+             )}
 
           {:error, _} ->
             {:noreply,
-             assign(socket, :submit_error, "Lemon could not stop that run. Check its status and try again.")}
+             assign(
+               socket,
+               :submit_error,
+               "Lemon could not stop that run. Check its status and try again."
+             )}
         end
     end
   end
 
-  def handle_event("dismiss-notice", _params, socket), do: {:noreply, assign(socket, :control_notice, nil)}
+  def handle_event("dismiss-notice", _params, socket),
+    do: {:noreply, assign(socket, :control_notice, nil)}
+
   def handle_event("dismiss-toast", _params, socket), do: {:noreply, assign(socket, :toast, nil)}
 
   # ── Events: approvals & plan ────────────────────────────────────────────
 
   def handle_event("resolve-approval", %{"id" => id, "decision" => decision}, socket)
       when decision in ~w(approve_once approve_session approve_global deny) do
-    {:noreply, resolve_approval(socket, id, decision)}
+    plan? = Enum.any?(socket.assigns.approvals, &(&1.id == id and &1.plan?))
+    text = if plan? and decision != "deny", do: "Plan approved. Lemon is implementing it."
+    {:noreply, resolve_approval(socket, id, decision, text)}
   end
 
   def handle_event("resolve-approval", _params, socket), do: {:noreply, socket}
 
   def handle_event("refine-plan", %{"id" => id}, socket) do
-    socket = resolve_approval(socket, id, "deny", "Plan sent back. Tell Lemon what to change and send it as a message.")
+    socket =
+      resolve_approval(
+        socket,
+        id,
+        "deny",
+        "Plan sent back. Tell Lemon what to change and send it as a message."
+      )
+
     {:noreply, push_event(socket, "chat:focus-composer", %{pane: socket.assigns.dom_key})}
   end
 
@@ -391,7 +431,8 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
-  def handle_event("close-inspector", _params, socket), do: {:noreply, assign(socket, :inspector_open, false)}
+  def handle_event("close-inspector", _params, socket),
+    do: {:noreply, assign(socket, :inspector_open, false)}
 
   def handle_event("refresh-context", _params, socket), do: {:noreply, load_context(socket)}
 
@@ -422,23 +463,29 @@ defmodule LemonWeb.Chat.PaneLive do
     socket =
       if is_list(socket.assigns.models),
         do: socket,
-        else: socket |> assign(:models, :loading) |> start_async(:models, fn -> Backend.models() end)
+        else:
+          socket |> assign(:models, :loading) |> start_async(:models, fn -> Backend.models() end)
 
     {:noreply, socket}
   end
 
-  def handle_event("close-model-picker", _params, socket), do: {:noreply, assign(socket, :model_picker, false)}
+  def handle_event("close-model-picker", _params, socket),
+    do: {:noreply, assign(socket, :model_picker, false)}
 
   def handle_event("model-filter", %{"filter" => filter}, socket),
     do: {:noreply, assign(socket, :model_filter, String.slice(filter, 0, 100))}
 
   def handle_event("pick-model", %{"model" => model}, socket) do
-    if is_list(socket.assigns.models) and Enum.any?(socket.assigns.models, &(model_value(&1) == model)) do
+    if is_list(socket.assigns.models) and
+         Enum.any?(socket.assigns.models, &(model_value(&1) == model)) do
       socket = assign(socket, :model_picker, false)
 
       case Backend.patch(socket.assigns.session_key, %{"model" => model}) do
         :ok ->
-          {:noreply, socket |> reload_meta() |> toast(:success, "Model set to #{model}. It applies from the next run.")}
+          {:noreply,
+           socket
+           |> reload_meta()
+           |> toast(:success, "Model set to #{model}. It applies from the next run.")}
 
         {:error, error} ->
           {:noreply, toast(socket, :danger, Rpc.message(error))}
@@ -471,8 +518,11 @@ defmodule LemonWeb.Chat.PaneLive do
 
   # ── Events: session actions ─────────────────────────────────────────────
 
-  def handle_event("start-rename", _params, socket), do: {:noreply, assign(socket, :renaming, true)}
-  def handle_event("cancel-rename", _params, socket), do: {:noreply, assign(socket, :renaming, false)}
+  def handle_event("start-rename", _params, socket),
+    do: {:noreply, assign(socket, :renaming, true)}
+
+  def handle_event("cancel-rename", _params, socket),
+    do: {:noreply, assign(socket, :renaming, false)}
 
   def handle_event("rename", %{"title" => title}, socket) do
     title = String.trim(title)
@@ -493,23 +543,46 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   def handle_event("set-pinned", %{"value" => value}, socket),
-    do: {:noreply, metadata(socket, %{"pinned" => value == "true"}, if(value == "true", do: "Pinned.", else: "Unpinned."))}
+    do:
+      {:noreply,
+       metadata(
+         socket,
+         %{"pinned" => value == "true"},
+         if(value == "true", do: "Pinned.", else: "Unpinned.")
+       )}
 
   def handle_event("set-archived", %{"value" => value}, socket),
-    do: {:noreply, metadata(socket, %{"archived" => value == "true"}, if(value == "true", do: "Archived.", else: "Restored."))}
+    do:
+      {:noreply,
+       metadata(
+         socket,
+         %{"archived" => value == "true"},
+         if(value == "true", do: "Archived.", else: "Restored.")
+       )}
 
   def handle_event("fork", params, socket) do
     socket = ensure_cwd(socket)
 
     case Backend.fork(socket.assigns.session_key, socket.assigns.cwd) do
       {:ok, child} ->
-        notify_parent(socket, {:open_session, child, if(params["split"] == "true", do: :split, else: :replace)})
+        SessionCwd.remember(child, socket.assigns.cwd)
+
+        notify_parent(
+          socket,
+          {:open_session, child, if(params["split"] == "true", do: :split, else: :replace),
+           socket.assigns.cwd}
+        )
+
         notify_parent(socket, :sessions_changed)
         {:noreply, toast(socket, :success, "Forked into a new session.")}
 
       {:error, {:outcome_unknown, _child}} ->
         {:noreply,
-         toast(socket, :warning, "Lemon could not confirm the fork. Check Sessions before trying again.")}
+         toast(
+           socket,
+           :warning,
+           "Lemon could not confirm the fork. Check Sessions before trying again."
+         )}
 
       {:error, error} ->
         {:noreply, toast(socket, :danger, Rpc.message(error))}
@@ -531,7 +604,8 @@ defmodule LemonWeb.Chat.PaneLive do
   # ── Async results ───────────────────────────────────────────────────────
 
   @impl true
-  def handle_async(:models, {:ok, {:ok, models}}, socket), do: {:noreply, assign(socket, :models, models)}
+  def handle_async(:models, {:ok, {:ok, models}}, socket),
+    do: {:noreply, assign(socket, :models, models)}
 
   def handle_async(:models, {:ok, {:error, error}}, socket),
     do: {:noreply, assign(socket, :models, {:error, Rpc.message(error)})}
@@ -543,10 +617,18 @@ defmodule LemonWeb.Chat.PaneLive do
     do: {:noreply, assign(socket, :context, %{status: :ok, data: data, error: nil})}
 
   def handle_async(:context, {:ok, {:error, error}}, socket),
-    do: {:noreply, assign(socket, :context, %{socket.assigns.context | status: :unavailable, error: Rpc.message(error)})}
+    do:
+      {:noreply,
+       assign(socket, :context, %{
+         socket.assigns.context
+         | status: :unavailable,
+           error: Rpc.message(error)
+       })}
 
   def handle_async(:context, {:exit, _}, socket),
-    do: {:noreply, assign(socket, :context, %{socket.assigns.context | status: :unavailable, error: nil})}
+    do:
+      {:noreply,
+       assign(socket, :context, %{socket.assigns.context | status: :unavailable, error: nil})}
 
   def handle_async(:plan, {:ok, {:ok, plan}}, socket),
     do: {:noreply, assign(socket, :plan, Map.put(plan, :error, nil))}
@@ -555,7 +637,9 @@ defmodule LemonWeb.Chat.PaneLive do
     do: {:noreply, assign(socket, :plan, %{socket.assigns.plan | error: Rpc.message(error)})}
 
   def handle_async(:plan, {:exit, _}, socket),
-    do: {:noreply, assign(socket, :plan, %{socket.assigns.plan | error: "Plan status is unavailable."})}
+    do:
+      {:noreply,
+       assign(socket, :plan, %{socket.assigns.plan | error: "Plan status is unavailable."})}
 
   def handle_async(:compact, {:ok, :ok}, socket) do
     {:noreply,
@@ -569,7 +653,9 @@ defmodule LemonWeb.Chat.PaneLive do
     do: {:noreply, socket |> assign(:compacting, false) |> toast(:danger, Rpc.message(error))}
 
   def handle_async(:compact, {:exit, _}, socket),
-    do: {:noreply, socket |> assign(:compacting, false) |> toast(:danger, "Compaction did not complete.")}
+    do:
+      {:noreply,
+       socket |> assign(:compacting, false) |> toast(:danger, "Compaction did not complete.")}
 
   # ── Bus events ──────────────────────────────────────────────────────────
 
@@ -579,18 +665,32 @@ defmodule LemonWeb.Chat.PaneLive do
   def handle_info(:refresh_subagents, socket),
     do: {:noreply, socket |> maybe_refresh_subagents() |> schedule_subagent_refresh()}
 
-  def handle_info(%LemonCore.Event{type: type}, socket) when type in [:config_reloaded, :secret_changed],
-    do: {:noreply, refresh_setup(socket)}
+  def handle_info(%LemonCore.Event{type: type}, socket)
+      when type in [:config_reloaded, :secret_changed],
+      do: {:noreply, refresh_setup(socket)}
 
   def handle_info(%LemonCore.Event{} = event, socket) do
     case safe_project(event) do
-      {"chat", %{"type" => "delta"} = payload} -> {:noreply, on_delta(socket, payload)}
-      {"agent", %{"type" => "started"} = payload} -> {:noreply, on_started(socket, payload)}
-      {"agent", %{"type" => "tool_use"} = payload} -> {:noreply, on_tool(socket, payload)}
-      {"agent", %{"type" => "completed"} = payload} -> {:noreply, on_completed(socket, payload, event)}
-      {"exec.approval.requested", payload} -> {:noreply, on_approval_requested(socket, payload)}
-      {"exec.approval.resolved", payload} -> {:noreply, on_approval_resolved(socket, payload)}
-      _ -> {:noreply, socket}
+      {"chat", %{"type" => "delta"} = payload} ->
+        {:noreply, on_delta(socket, payload)}
+
+      {"agent", %{"type" => "started"} = payload} ->
+        {:noreply, on_started(socket, payload)}
+
+      {"agent", %{"type" => "tool_use"} = payload} ->
+        {:noreply, on_tool(socket, payload)}
+
+      {"agent", %{"type" => "completed"} = payload} ->
+        {:noreply, on_completed(socket, payload, event)}
+
+      {"exec.approval.requested", payload} ->
+        {:noreply, on_approval_requested(socket, payload)}
+
+      {"exec.approval.resolved", payload} ->
+        {:noreply, on_approval_resolved(socket, payload)}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -631,7 +731,11 @@ defmodule LemonWeb.Chat.PaneLive do
           segments: Map.put(socket.assigns.segments, run_id, segment),
           dirty: MapSet.put(socket.assigns.dirty, run_id),
           streamed_runs: MapSet.put(socket.assigns.streamed_runs, run_id),
-          last_seq: if(is_integer(seq), do: Map.put(socket.assigns.last_seq, run_id, seq), else: socket.assigns.last_seq)
+          last_seq:
+            if(is_integer(seq),
+              do: Map.put(socket.assigns.last_seq, run_id, seq),
+              else: socket.assigns.last_seq
+            )
         )
         |> mark_running(run_id)
         |> schedule_flush()
@@ -650,14 +754,17 @@ defmodule LemonWeb.Chat.PaneLive do
 
       true ->
         queued =
-          if run_id != socket.assigns.run.run_id, do: Enum.drop(socket.assigns.queued, 1), else: socket.assigns.queued
+          if run_id != socket.assigns.run.run_id,
+            do: Enum.drop(socket.assigns.queued, 1),
+            else: socket.assigns.queued
 
         socket
         |> assign(
           run: %{status: :running, run_id: run_id, started_at_ms: now(), model: payload["model"]},
           last_run_id: run_id,
           queued: queued,
-          control_notice: nil
+          control_notice: nil,
+          approval_notice: nil
         )
         |> ensure_cwd()
         |> refresh_subagents()
@@ -666,8 +773,12 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp mark_running(socket, run_id) do
     case socket.assigns.run do
-      %{status: status} when status in [:idle, :unavailable] and is_binary(run_id) and run_id != "run" ->
-        assign(socket, run: %{status: :running, run_id: run_id, started_at_ms: now(), model: nil}, last_run_id: run_id)
+      %{status: status}
+      when status in [:idle, :unavailable] and is_binary(run_id) and run_id != "run" ->
+        assign(socket,
+          run: %{status: :running, run_id: run_id, started_at_ms: now(), model: nil},
+          last_run_id: run_id
+        )
 
       _ ->
         socket
@@ -734,19 +845,23 @@ defmodule LemonWeb.Chat.PaneLive do
           # Joined mid-run (mount/reconnect): replace the partial tail with the
           # whole answer instead of appending it a second time.
           segment && MapSet.member?(socket.assigns.resumed_runs, run_id) && is_binary(answer) &&
-              answer != segment.text && String.ends_with?(answer, segment.text) ->
+            answer != segment.text && String.ends_with?(answer, segment.text) ->
             socket
-            |> assign(:segments, Map.put(socket.assigns.segments, run_id, %{segment | text: answer}))
+            |> assign(
+              :segments,
+              Map.put(socket.assigns.segments, run_id, %{segment | text: answer})
+            )
             |> assign(:dirty, MapSet.put(socket.assigns.dirty, run_id))
             |> close_segment(run_id)
 
           true ->
             socket = close_segment(socket, run_id)
 
-            if not streamed? and is_binary(answer) and String.trim(answer) != "" and payload["ok"] != false,
-              do: insert(socket, Transcript.assistant_item(run_id, answer, false)),
-              else: socket
-          end
+            if not streamed? and is_binary(answer) and String.trim(answer) != "" and
+                 payload["ok"] != false,
+               do: insert(socket, Transcript.assistant_item(run_id, answer, false)),
+               else: socket
+        end
 
       ok? = payload["ok"] == true
       current? = socket.assigns.run.run_id in [nil, run_id]
@@ -757,7 +872,9 @@ defmodule LemonWeb.Chat.PaneLive do
         |> insert(
           Transcript.run_item(run_id, %{
             ok: ok?,
-            model: payload["model"] || (current? && socket.assigns.run.model) || socket.assigns.meta.model,
+            model:
+              payload["model"] || (current? && socket.assigns.run.model) ||
+                socket.assigns.meta.model,
             duration_ms: payload["durationMs"],
             usage: payload["usage"]
           })
@@ -778,7 +895,9 @@ defmodule LemonWeb.Chat.PaneLive do
       socket
       |> ensure_cwd()
       |> refresh_subagents()
-      |> then(fn socket -> if connected?(socket), do: socket |> load_context() |> load_plan(), else: socket end)
+      |> then(fn socket ->
+        if connected?(socket), do: socket |> load_context() |> load_plan(), else: socket
+      end)
     else
       socket
     end
@@ -807,9 +926,14 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp failure_text(event) do
     case failure_reason(event) do
-      :runtime -> "The run could not start because the execution runtime is unavailable. Check runtime status and try again."
-      :timeout -> "The run timed out before it finished. Try again or use a smaller request."
-      _ -> "The run did not finish. Check runtime status and try again."
+      :runtime ->
+        "The run could not start because the execution runtime is unavailable. Check runtime status and try again."
+
+      :timeout ->
+        "The run timed out before it finished. Try again or use a smaller request."
+
+      _ ->
+        "The run did not finish. Check runtime status and try again."
     end
   end
 
@@ -837,10 +961,22 @@ defmodule LemonWeb.Chat.PaneLive do
     reason = Tool.f(error, :reason) || Tool.f(error, :type) || error
 
     cond do
-      reason in @cancel_reasons -> :cancelled
-      reason in [:runtime_unavailable, :runtime_submission_failed, "runtime_unavailable", "runtime_submission_failed"] -> :runtime
-      reason in [:timeout, :timed_out, "timeout", "timed_out"] -> :timeout
-      true -> :other
+      reason in @cancel_reasons ->
+        :cancelled
+
+      reason in [
+        :runtime_unavailable,
+        :runtime_submission_failed,
+        "runtime_unavailable",
+        "runtime_submission_failed"
+      ] ->
+        :runtime
+
+      reason in [:timeout, :timed_out, "timeout", "timed_out"] ->
+        :timeout
+
+      true ->
+        :other
     end
   rescue
     _ -> :other
@@ -850,10 +986,17 @@ defmodule LemonWeb.Chat.PaneLive do
     approval = Components.approval_view(payload)
 
     cond do
-      payload["sessionKey"] != socket.assigns.session_key -> socket
-      not is_binary(approval.id) -> socket
-      Enum.any?(socket.assigns.approvals, &(&1.id == approval.id)) -> socket
-      true -> assign(socket, approvals: socket.assigns.approvals ++ [approval], approval_notice: nil)
+      payload["sessionKey"] != socket.assigns.session_key ->
+        socket
+
+      not is_binary(approval.id) ->
+        socket
+
+      Enum.any?(socket.assigns.approvals, &(&1.id == approval.id)) ->
+        socket
+
+      true ->
+        assign(socket, approvals: socket.assigns.approvals ++ [approval], approval_notice: nil)
     end
   end
 
@@ -899,8 +1042,11 @@ defmodule LemonWeb.Chat.PaneLive do
     socket = flush(socket)
 
     case Map.pop(socket.assigns.segments, run_id) do
-      {nil, _} -> socket
-      {segment, rest} -> socket |> assign(:segments, rest) |> insert(%{segment | streaming: false})
+      {nil, _} ->
+        socket
+
+      {segment, rest} ->
+        socket |> assign(:segments, rest) |> insert(%{segment | streaming: false})
     end
   end
 
@@ -920,16 +1066,29 @@ defmodule LemonWeb.Chat.PaneLive do
         {:noreply, assign(socket, :submit_error, "Enter guidance for the active run.")}
 
       byte_size(prompt) > NodeRegistry.max_control_text_bytes() ->
-        {:noreply, assign(socket, :submit_error, "Active-run guidance must be 16 KB or less. Shorten the message and try again.")}
+        {:noreply,
+         assign(
+           socket,
+           :submit_error,
+           "Active-run guidance must be 16 KB or less. Shorten the message and try again."
+         )}
 
       Uploads.entries?(socket) ->
         {:noreply,
-         assign(socket, :submit_error, "Active-run guidance is text only. Remove the attachment or send it after the run finishes.")}
+         assign(
+           socket,
+           :submit_error,
+           "Active-run guidance is text only. Remove the attachment or send it after the run finishes."
+         )}
 
       true ->
         case reconcile(socket) do
           {:ok, socket, active_run_id} ->
-            case Backend.send_prompt(socket.assigns.session_key, prompt, send_opts(socket, queue_mode: mode)) do
+            case Backend.send_prompt(
+                   socket.assigns.session_key,
+                   prompt,
+                   send_opts(socket, queue_mode: mode)
+                 ) do
               {:ok, _submission_id} ->
                 # The original run stays the stop target, not the submission id.
                 socket =
@@ -942,33 +1101,57 @@ defmodule LemonWeb.Chat.PaneLive do
 
                 socket =
                   if mode == :followup,
-                    do: assign(socket, :queued, socket.assigns.queued ++ [%{id: System.unique_integer([:positive]), text: prompt}]),
+                    do:
+                      assign(
+                        socket,
+                        :queued,
+                        socket.assigns.queued ++
+                          [%{id: System.unique_integer([:positive]), text: prompt}]
+                      ),
                     else: socket
 
                 {:noreply, socket}
 
               {:error, :outcome_unknown} ->
                 {:noreply,
-                 notice(socket, :warning, "Lemon could not confirm whether that guidance was sent. Check the transcript before sending it again.")}
+                 notice(
+                   socket,
+                   :warning,
+                   "Lemon could not confirm whether that guidance was sent. Check the transcript before sending it again."
+                 )}
 
               {:error, _} ->
-                {:noreply, notice(socket, :danger, "Lemon refused that active-run request. The message was not sent.")}
+                {:noreply,
+                 notice(
+                   socket,
+                   :danger,
+                   "Lemon refused that active-run request. The message was not sent."
+                 )}
             end
 
           {:none, socket} ->
             {:noreply,
-             notice(socket, :warning, "That run has already finished. Your message was not sent; send it as a new message instead.")}
+             notice(
+               socket,
+               :warning,
+               "That run has already finished. Your message was not sent; send it as a new message instead."
+             )}
 
           {:unavailable, socket} ->
             {:noreply,
-             notice(socket, :warning, "Lemon could not confirm whether that run is still active. Your message was not sent; check status and try again.")}
+             notice(
+               socket,
+               :warning,
+               "Lemon could not confirm whether that run is still active. Your message was not sent; check status and try again."
+             )}
         end
     end
   end
 
   defp submit_prompt(socket, prompt) do
     if Uploads.in_progress?(socket) do
-      {:noreply, assign(socket, :submit_error, "Please wait for uploads to finish before sending.")}
+      {:noreply,
+       assign(socket, :submit_error, "Please wait for uploads to finish before sending.")}
     else
       if prompt == "" and not Uploads.entries?(socket) do
         {:noreply, assign(socket, :submit_error, "Enter a message or attach a file.")}
@@ -992,7 +1175,9 @@ defmodule LemonWeb.Chat.PaneLive do
 
         {:noreply,
          socket
-         |> insert(Transcript.user_item(if(prompt == "", do: "(attachments)", else: prompt), names))
+         |> insert(
+           Transcript.user_item(if(prompt == "", do: "(attachments)", else: prompt), names)
+         )
          |> assign(
            run: %{status: :running, run_id: run_id, started_at_ms: now(), model: nil},
            last_run_id: run_id,
@@ -1003,15 +1188,25 @@ defmodule LemonWeb.Chat.PaneLive do
 
       {:error, :outcome_unknown} ->
         {:noreply,
-         notice(socket, :warning, "Lemon could not confirm whether that message was sent. Check the transcript before sending it again.")}
+         notice(
+           socket,
+           :warning,
+           "Lemon could not confirm whether that message was sent. Check the transcript before sending it again."
+         )}
 
       {:error, error} ->
         Logger.info("chat.send refused code=#{inspect(error.code)}")
 
         {:noreply,
          socket
-         |> notice_item("danger", "Lemon could not start that run. Check runtime status and try again.")
-         |> assign(:submit_error, "Lemon could not start that run. Check runtime status and try again.")}
+         |> notice_item(
+           "danger",
+           "Lemon could not start that run. Check runtime status and try again."
+         )
+         |> assign(
+           :submit_error,
+           "Lemon could not start that run. Check runtime status and try again."
+         )}
     end
   end
 
@@ -1056,7 +1251,9 @@ defmodule LemonWeb.Chat.PaneLive do
     end
   end
 
-  defp control_success(:followup), do: "Follow-up queued. It runs after the current work finishes."
+  defp control_success(:followup),
+    do: "Follow-up queued. It runs after the current work finishes."
+
   defp control_success(:steer), do: "Steer sent to the active run."
   defp control_success(:redirect), do: "Redirect sent. Completed tool work is kept."
 
@@ -1076,7 +1273,7 @@ defmodule LemonWeb.Chat.PaneLive do
 
   # The pending store, not the rendered list, decides whether an approval
   # belongs to this session, so a forged id for another session is refused.
-  defp resolve_approval(socket, id, decision, success_text \\ nil) do
+  defp resolve_approval(socket, id, decision, success_text) do
     key = socket.assigns.session_key
 
     pending? =
@@ -1176,7 +1373,9 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp schedule_subagent_refresh(socket) do
-    if connected?(socket), do: Process.send_after(self(), :refresh_subagents, @subagent_refresh_ms)
+    if connected?(socket),
+      do: Process.send_after(self(), :refresh_subagents, @subagent_refresh_ms)
+
     socket
   end
 
@@ -1207,7 +1406,10 @@ defmodule LemonWeb.Chat.PaneLive do
       :ok ->
         socket
         |> assign(:tool_policy, %{profile: profile, ask: ask?})
-        |> toast(:info, "Tool policy: #{profile_label(profile)}#{if ask?, do: " · ask before commands and edits"}")
+        |> toast(
+          :info,
+          "Tool policy: #{profile_label(profile)}#{if ask?, do: " · ask before commands and edits"}"
+        )
 
       {:error, error} ->
         toast(socket, :danger, Rpc.message(error))
@@ -1236,18 +1438,22 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp notice(socket, tone, text), do: assign(socket, :control_notice, %{tone: tone, text: text})
 
-  defp toast(socket, tone, text), do: assign(socket, :toast, %{tone: tone, text: text, id: System.unique_integer([:positive])})
+  defp toast(socket, tone, text),
+    do: assign(socket, :toast, %{tone: tone, text: text, id: System.unique_integer([:positive])})
 
   # Workspace-level effects (navigation, split, sidebar refresh) belong to the
   # parent `LemonWeb.ChatLive`.
   defp notify_parent(socket, message) do
-    if is_pid(socket.parent_pid), do: send(socket.parent_pid, {:chat_pane, socket.assigns.role, message})
+    if is_pid(socket.parent_pid),
+      do: send(socket.parent_pid, {:chat_pane, socket.assigns.role, message})
+
     :ok
   end
 
   defp now, do: System.system_time(:millisecond)
 
-  defp dom_key(key), do: :crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10)
+  defp dom_key(key),
+    do: :crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10)
 
   defp model_value(model), do: "#{model.provider}:#{model.id}"
 
@@ -1263,7 +1469,8 @@ defmodule LemonWeb.Chat.PaneLive do
 
     models
     |> Enum.filter(fn model ->
-      filter == "" or String.contains?(String.downcase("#{model.provider}:#{model.id} #{model.name}"), filter)
+      filter == "" or
+        String.contains?(String.downcase("#{model.provider}:#{model.id} #{model.name}"), filter)
     end)
     |> Enum.take(200)
   end
@@ -1305,15 +1512,25 @@ defmodule LemonWeb.Chat.PaneLive do
     """
   end
 
-  defp placeholder(%{run: %{status: :running}, control_mode: :followup}), do: "Queue a follow-up for after this run…"
-  defp placeholder(%{run: %{status: :running}, control_mode: :steer}), do: "Steer the current run…"
-  defp placeholder(%{run: %{status: :running}, control_mode: :redirect}), do: "Redirect: what should Lemon do instead?"
+  defp placeholder(%{run: %{status: :running}, control_mode: :followup}),
+    do: "Queue a follow-up for after this run…"
+
+  defp placeholder(%{run: %{status: :running}, control_mode: :steer}),
+    do: "Steer the current run…"
+
+  defp placeholder(%{run: %{status: :running}, control_mode: :redirect}),
+    do: "Redirect: what should Lemon do instead?"
+
   defp placeholder(%{run: %{status: :stopping}}), do: "Waiting for the run to stop…"
   defp placeholder(%{run: %{status: :unavailable}}), do: "Check run status before sending…"
-  defp placeholder(%{plan: %{mode: "plan"}}), do: "Describe what to plan… (read-only until you approve)"
+
+  defp placeholder(%{plan: %{mode: "plan"}}),
+    do: "Describe what to plan… (read-only until you approve)"
+
   defp placeholder(_), do: "Ask Lemon to do work…"
 
-  defp send_label(%{run: %{status: status}, control_mode: mode}) when status in [:running, :stopping] do
+  defp send_label(%{run: %{status: status}, control_mode: mode})
+       when status in [:running, :stopping] do
     case mode do
       :followup -> "Queue"
       :steer -> "Steer"
@@ -1369,7 +1586,7 @@ defmodule LemonWeb.Chat.PaneLive do
     >
       <section class="flex min-w-0 flex-1 flex-col" aria-label={"Chat: #{@title}"}>
         <%!-- Header --%>
-        <header class="shrink-0 border-b border-line bg-surface/80 backdrop-blur">
+        <header class="relative z-20 shrink-0 border-b border-line bg-surface">
           <div class="flex h-11 items-center gap-1.5 px-2 sm:px-3">
             <button
               :if={@role == "primary"}
@@ -1485,7 +1702,7 @@ defmodule LemonWeb.Chat.PaneLive do
           </div>
 
           <%!-- Routing toolbar: model, thinking, tools, context --%>
-          <div class="flex h-8 items-center gap-1 overflow-x-auto border-t border-line/60 px-2 text-xs scroll-thin sm:px-3">
+          <div class="flex h-8 min-w-0 items-center gap-1 border-t border-line/60 px-2 text-xs sm:px-3">
             <button
               type="button"
               id={"model-picker-btn-#{@dom_key}"}
@@ -1781,7 +1998,7 @@ defmodule LemonWeb.Chat.PaneLive do
 
       <%!-- Model picker --%>
       <.modal :if={@model_picker} id={"model-picker-#{@dom_key}"} show title="Choose a model" description="Applies to this session from the next run." on_cancel={JS.push("close-model-picker")}>
-        <form phx-change="model-filter" phx-submit="model-filter" class="mb-3">
+        <form id={"model-filter-#{@dom_key}"} phx-change="model-filter" phx-submit="model-filter" class="mb-3">
           <input
             name="filter"
             value={@model_filter}
@@ -1834,7 +2051,7 @@ defmodule LemonWeb.Chat.PaneLive do
         role="status"
         phx-hook="AutoDismiss"
         phx-click="dismiss-toast"
-        class={["pointer-events-auto fixed bottom-20 left-1/2 z-50 flex max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 cursor-pointer items-center gap-2 rounded-lg border bg-elevated px-3 py-2 text-[13px] shadow-pop animate-slide-up", tone_class(@toast.tone)]}
+        class={["pointer-events-auto fixed left-1/2 top-16 z-50 flex max-w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 cursor-pointer items-center gap-2 rounded-lg border bg-elevated px-3 py-2 text-[13px] shadow-pop animate-slide-up", tone_class(@toast.tone)]}
       >
         <span class="text-fg">{@toast.text}</span>
       </div>
@@ -1844,9 +2061,14 @@ defmodule LemonWeb.Chat.PaneLive do
 
   defp short_title(key) do
     case SessionKey.parse(key) do
-      %{kind: :main, agent_id: agent} -> "#{agent} · main"
-      %{agent_id: agent} -> "#{agent} · #{key |> String.split(":") |> List.last() |> String.slice(0, 12)}"
-      _ -> String.slice(key, 0, 40)
+      %{kind: :main, agent_id: agent} ->
+        "#{agent} · main"
+
+      %{agent_id: agent} ->
+        "#{agent} · #{key |> String.split(":") |> List.last() |> String.slice(0, 12)}"
+
+      _ ->
+        String.slice(key, 0, 40)
     end
   rescue
     _ -> String.slice(key, 0, 40)

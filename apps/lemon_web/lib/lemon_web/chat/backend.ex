@@ -98,9 +98,14 @@ defmodule LemonWeb.Chat.Backend do
   @spec abort(String.t()) :: :ok | {:error, :not_sent | :outcome_unknown}
   def abort(run_id) do
     case call("chat.abort", %{"runId" => run_id}) do
-      {:ok, %{"aborted" => true}} -> :ok
-      {:ok, %{"summary" => %{"dispatchStatus" => "outcome_unknown"}}} -> {:error, :outcome_unknown}
-      _ -> {:error, :not_sent}
+      {:ok, %{"aborted" => true}} ->
+        :ok
+
+      {:ok, %{"summary" => %{"dispatchStatus" => "outcome_unknown"}}} ->
+        {:error, :outcome_unknown}
+
+      _ ->
+        {:error, :not_sent}
     end
   end
 
@@ -275,7 +280,9 @@ defmodule LemonWeb.Chat.Backend do
 
     %{
       profile: string(field(policy, :profile)),
-      ask: is_map(approvals) and Enum.any?(approvals, fn {_tool, mode} -> to_string(mode) == "always" end)
+      ask:
+        is_map(approvals) and
+          Enum.any?(approvals, fn {_tool, mode} -> to_string(mode) == "always" end)
     }
   rescue
     _ -> %{profile: nil, ask: false}
@@ -387,12 +394,17 @@ defmodule LemonWeb.Chat.Backend do
   defp put_present(map, key, value), do: Map.put(map, key, value)
 
   defp string(value) when is_binary(value) and value != "", do: value
-  defp string(value) when is_atom(value) and value not in [nil, true, false], do: Atom.to_string(value)
+
+  defp string(value) when is_atom(value) and value not in [nil, true, false],
+    do: Atom.to_string(value)
+
   defp string(_), do: nil
 
   defp integer(value) when is_integer(value), do: value
   defp integer(_), do: nil
 
-  defp field(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  defp field(map, key) when is_map(map),
+    do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+
   defp field(_, _), do: nil
 end

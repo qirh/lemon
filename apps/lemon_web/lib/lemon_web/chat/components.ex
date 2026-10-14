@@ -269,7 +269,10 @@ defmodule LemonWeb.Chat.Components do
         added: added,
         removed: removed,
         exit_code: if(assigns.tool.type == :bash, do: Tool.exit_code(assigns.tool)),
-        count: if(assigns.tool.type == :search and assigns.tool.status != :running, do: Tool.search_count(assigns.tool)),
+        count:
+          if(assigns.tool.type == :search and assigns.tool.status != :running,
+            do: Tool.search_count(assigns.tool)
+          ),
         todos: if(assigns.tool.type == :todo, do: Tool.todos(assigns.tool), else: [])
       )
 
@@ -317,7 +320,13 @@ defmodule LemonWeb.Chat.Components do
 
   defp tool_body(%{tool: %{type: :read}} = assigns) do
     path = Tool.arg(assigns.tool, :path) || Tool.arg(assigns.tool, :file_path)
-    assigns = assign(assigns, path: path, language: Tool.language(path), range: Tool.line_range(assigns.tool))
+
+    assigns =
+      assign(assigns,
+        path: path,
+        language: Tool.language(path),
+        range: Tool.line_range(assigns.tool)
+      )
 
     ~H"""
     <p :if={@range} class="text-2xs text-subtle">{@range}</p>
@@ -521,7 +530,10 @@ defmodule LemonWeb.Chat.Components do
   end
 
   defp dom_digest(value),
-    do: :crypto.hash(:sha256, to_string(value)) |> Base.url_encode64(padding: false) |> binary_part(0, 12)
+    do:
+      :crypto.hash(:sha256, to_string(value))
+      |> Base.url_encode64(padding: false)
+      |> binary_part(0, 12)
 
   attr(:approval, :map, required: true)
 
@@ -586,7 +598,7 @@ defmodule LemonWeb.Chat.Components do
       <header class="flex items-center gap-2 border-b border-warning/20 bg-warning/[0.07] px-4 py-2.5">
         <.icon name="shield-alert" class="h-4 w-4 text-warning" />
         <h3 id={"#{@approval.dom_id}-title"} class="flex-1 text-[13px] font-semibold text-fg">
-          Approve <code class="rounded bg-surface-2 px-1 font-mono text-xs">{@approval.tool}</code>?
+          Allow <code class="rounded bg-surface-2 px-1 font-mono text-xs">{@approval.tool}</code> to run
         </h3>
         <span
           :if={@approval.expires_at_ms}

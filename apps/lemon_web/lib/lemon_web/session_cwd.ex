@@ -9,6 +9,10 @@ defmodule LemonWeb.SessionCwd do
   default workspace for operator-initiated runs (`LemonCore.Cwd.default_cwd/0`),
   which is also what `chat.send` uses when no `cwd` is given.
 
+  Sessions the web workspace starts or forks also have their workspace
+  remembered (`remember/2`, a small `LemonCore.Store` table) so a pane opened
+  before the first run — or a fork that has not run yet — still finds it.
+
   The value is an operator workspace path: show it only on operator chat
   surfaces, never in logs or management projections.
   """
@@ -26,7 +30,7 @@ defmodule LemonWeb.SessionCwd do
         end
 
       _ ->
-        :error
+        remembered(session_key)
     end
   rescue
     _ -> :error
@@ -35,6 +39,28 @@ defmodule LemonWeb.SessionCwd do
   end
 
   def recorded(_session_key), do: :error
+
+  @table :web_session_cwds
+
+  @doc "Remembers the workspace a web-started or forked session runs in."
+  @spec remember(String.t(), String.t() | nil) :: :ok
+  def remember(session_key, cwd) when is_binary(session_key) and is_binary(cwd) and cwd != "" do
+    _ = LemonCore.Store.put(@table, session_key, cwd)
+    :ok
+  rescue
+    _ -> :ok
+  catch
+    :exit, _ -> :ok
+  end
+
+  def remember(_session_key, _cwd), do: :ok
+
+  defp remembered(session_key) do
+    case LemonCore.Store.get(@table, session_key) do
+      cwd when is_binary(cwd) and cwd != "" -> {:ok, cwd}
+      _ -> :error
+    end
+  end
 
   @doc "The recorded workspace, else the default workspace for operator runs."
   @spec resolve(String.t()) :: String.t()
@@ -53,6 +79,8 @@ defmodule LemonWeb.SessionCwd do
     _ -> File.cwd!()
   end
 
-  defp field(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  defp field(map, key) when is_map(map),
+    do: Map.get(map, key) || Map.get(map, Atom.to_string(key))
+
   defp field(_value, _key), do: nil
 end

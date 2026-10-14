@@ -277,7 +277,9 @@ defmodule LemonWeb.Chat.Inspector do
 
   defp threshold(_), do: nil
 
-  defp headroom(%{"autoCompaction" => %{"headroomTokens" => h}}) when is_integer(h) and h > 0, do: h
+  defp headroom(%{"autoCompaction" => %{"headroomTokens" => h}}) when is_integer(h) and h > 0,
+    do: h
+
   defp headroom(_), do: nil
 
   defp source_label("usage"), do: "measured"
@@ -285,7 +287,9 @@ defmodule LemonWeb.Chat.Inspector do
   defp source_label(_), do: "estimate"
 
   @doc "Formats a percentage (`12.3%`)."
-  def format_percent(value) when is_number(value), do: "#{:erlang.float_to_binary(value * 1.0, decimals: 1)}%"
+  def format_percent(value) when is_number(value),
+    do: "#{:erlang.float_to_binary(value * 1.0, decimals: 1)}%"
+
   def format_percent(_), do: "—"
 
   defp node_tone("running"), do: "info"

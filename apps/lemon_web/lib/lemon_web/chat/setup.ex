@@ -30,7 +30,8 @@ defmodule LemonWeb.Chat.Setup do
     _ -> false
   end
 
-  def message, do: "Finish setup before chatting: run `lemon setup` in a terminal, then check again."
+  def message,
+    do: "Finish setup before chatting: run `lemon setup` in a terminal, then check again."
 
   defp unavailable do
     %{

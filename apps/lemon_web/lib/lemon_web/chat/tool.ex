@@ -79,7 +79,10 @@ defmodule LemonWeb.Chat.Tool do
           result: if(phase == "completed", do: content),
           partial: if(phase != "completed", do: content),
           details:
-            if(row["cancelled"] == true, do: Map.put_new(details, "cancelled", true), else: details),
+            if(row["cancelled"] == true,
+              do: Map.put_new(details, "cancelled", true),
+              else: details
+            ),
           result_meta: %{},
           message: nil,
           parent: nil,
@@ -125,6 +128,7 @@ defmodule LemonWeb.Chat.Tool do
 
   defp finalize(tool) do
     status = status(tool.phase, tool.ok, tool.details)
+
     Map.merge(tool, %{status: status, type: type(tool.name), notice: notice(tool.details, status)})
   end
 
@@ -224,7 +228,8 @@ defmodule LemonWeb.Chat.Tool do
   def subject(%{type: :web} = tool), do: arg(tool, :url) || arg(tool, :query) || tool.title
 
   def subject(%{type: :task} = tool) do
-    arg(tool, :description) || string(f(tool.details, :description)) || first_line(arg(tool, :prompt)) ||
+    arg(tool, :description) || string(f(tool.details, :description)) ||
+      first_line(arg(tool, :prompt)) ||
       tool.title
   end
 
@@ -386,7 +391,8 @@ defmodule LemonWeb.Chat.Tool do
     |> Enum.take(100)
     |> Enum.map(fn entry ->
       %{
-        content: string(f(entry, :content)) || string(f(entry, :title)) || string(f(entry, :text)) || "",
+        content:
+          string(f(entry, :content)) || string(f(entry, :title)) || string(f(entry, :text)) || "",
         status: string(f(entry, :status)) || "pending"
       }
     end)
@@ -496,7 +502,10 @@ defmodule LemonWeb.Chat.Tool do
   defp map(_), do: %{}
 
   defp string(value) when is_binary(value) and value != "", do: value
-  defp string(value) when is_atom(value) and value not in [nil, true, false], do: Atom.to_string(value)
+
+  defp string(value) when is_atom(value) and value not in [nil, true, false],
+    do: Atom.to_string(value)
+
   defp string(_), do: nil
 
   @doc false

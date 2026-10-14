@@ -51,33 +51,36 @@ defmodule LemonRouter.PolicyTest do
 
   describe "resolve_for_run/1" do
     test "returns empty map for basic params" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:main",
-        origin: :control_plane
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:main",
+          origin: :control_plane
+        })
 
       assert is_map(result)
     end
 
     test "returns empty map when no special policies are configured" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "default-agent",
-        session_key: "agent:default-agent:main",
-        origin: :control_plane
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "default-agent",
+          session_key: "agent:default-agent:main",
+          origin: :control_plane
+        })
 
       # Should return an empty map, not nil
       assert result == %{}
     end
 
     test "returns empty map for channel origin without channel context" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "channel-agent",
-        session_key: "agent:channel-agent:telegram:bot:dm:456",
-        origin: :channel,
-        channel_context: nil
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "channel-agent",
+          session_key: "agent:channel-agent:telegram:bot:dm:456",
+          origin: :channel,
+          channel_context: nil
+        })
 
       assert is_map(result)
     end
@@ -134,11 +137,12 @@ defmodule LemonRouter.PolicyTest do
 
     test "empty router policy does not wrap any tools" do
       # Simulate what happens in ToolRegistry
-      router_policy = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:main",
-        origin: :control_plane
-      })
+      router_policy =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:main",
+          origin: :control_plane
+        })
 
       # Empty policy means no tools require approval
       assert ToolPolicy.requires_approval?(router_policy, "bash") == false
@@ -148,11 +152,12 @@ defmodule LemonRouter.PolicyTest do
     end
 
     test "router policy can be merged with a restrictive policy" do
-      router_policy = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:main",
-        origin: :control_plane
-      })
+      router_policy =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:main",
+          origin: :control_plane
+        })
 
       restrictive_policy = %{require_approval: ["bash", "write"]}
 
@@ -161,6 +166,47 @@ defmodule LemonRouter.PolicyTest do
       assert ToolPolicy.requires_approval?(merged, "bash") == true
       assert ToolPolicy.requires_approval?(merged, "write") == true
       assert ToolPolicy.requires_approval?(merged, "read") == false
+    end
+
+    test "a sessions.patch tool policy reaches the run policy" do
+      session_key = "agent:policy_patch_#{System.unique_integer([:positive])}:main"
+      on_exit(fn -> LemonCore.PolicyStore.delete_session(session_key) end)
+
+      # The row `sessions.patch` writes: routing settings beside a wire-shaped tool policy.
+      :ok =
+        LemonCore.PolicyStore.put_session(session_key, %{
+          model: "openai:gpt-4o-mini",
+          thinking_level: "low",
+          tool_policy: %{"profile" => "full_access", "approvals" => %{"bash" => "always"}}
+        })
+
+      policy =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: session_key,
+          origin: :control_plane
+        })
+
+      assert ToolPolicy.requires_approval?(policy, "bash") == true
+      assert ToolPolicy.requires_approval?(policy, "read") == false
+      refute Map.has_key?(policy, :model)
+      refute Map.has_key?(policy, :thinking_level)
+      refute Map.has_key?(policy, :tool_policy)
+    end
+
+    test "legacy session rows with top-level policy keys keep working" do
+      session_key = "agent:policy_legacy_#{System.unique_integer([:positive])}:main"
+      on_exit(fn -> LemonCore.PolicyStore.delete_session(session_key) end)
+      :ok = LemonCore.PolicyStore.put_session(session_key, %{approvals: %{"write" => :always}})
+
+      policy =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: session_key,
+          origin: :control_plane
+        })
+
+      assert ToolPolicy.requires_approval?(policy, "write") == true
     end
   end
 end

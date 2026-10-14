@@ -71,7 +71,13 @@ defmodule LemonWeb.ChatLive do
   def handle_params(params, _uri, socket) do
     case socket.assigns.live_action do
       :home ->
-        {:noreply, assign(socket, session_key: nil, split_key: nil, page_title: "Chat · Lemon", page_heading: "Chat")}
+        {:noreply,
+         assign(socket,
+           session_key: nil,
+           split_key: nil,
+           page_title: "Chat · Lemon",
+           page_heading: "Chat"
+         )}
 
       :show ->
         key = params["session_key"]
@@ -197,9 +203,14 @@ defmodule LemonWeb.ChatLive do
 
   def handle_event("open-split", %{"key" => key}, socket) do
     cond do
-      not valid_key?(key) -> {:noreply, socket}
-      socket.assigns.session_key in [nil, key] -> {:noreply, push_patch(socket, to: chat_path(key, nil))}
-      true -> {:noreply, push_patch(socket, to: chat_path(socket.assigns.session_key, key))}
+      not valid_key?(key) ->
+        {:noreply, socket}
+
+      socket.assigns.session_key in [nil, key] ->
+        {:noreply, push_patch(socket, to: chat_path(key, nil))}
+
+      true ->
+        {:noreply, push_patch(socket, to: chat_path(socket.assigns.session_key, key))}
     end
   end
 
@@ -209,14 +220,17 @@ defmodule LemonWeb.ChatLive do
   def handle_event("sidebar-rename", %{"key" => key}, socket),
     do: {:noreply, assign(socket, :sidebar_rename, if(known?(socket, key), do: key))}
 
-  def handle_event("sidebar-rename-cancel", _params, socket), do: {:noreply, assign(socket, :sidebar_rename, nil)}
+  def handle_event("sidebar-rename-cancel", _params, socket),
+    do: {:noreply, assign(socket, :sidebar_rename, nil)}
 
   def handle_event("sidebar-rename-save", %{"key" => key, "title" => title}, socket) do
     title = String.trim(title)
 
     socket =
       if known?(socket, key) do
-        metadata(socket, key, %{"title" => if(title == "", do: nil, else: String.slice(title, 0, 160))})
+        metadata(socket, key, %{
+          "title" => if(title == "", do: nil, else: String.slice(title, 0, 160))
+        })
       else
         socket
       end
@@ -225,15 +239,28 @@ defmodule LemonWeb.ChatLive do
   end
 
   def handle_event("sidebar-pin", %{"key" => key, "value" => value}, socket),
-    do: {:noreply, if(known?(socket, key), do: metadata(socket, key, %{"pinned" => value == "true"}), else: socket)}
+    do:
+      {:noreply,
+       if(known?(socket, key),
+         do: metadata(socket, key, %{"pinned" => value == "true"}),
+         else: socket
+       )}
 
   def handle_event("sidebar-archive", %{"key" => key, "value" => value}, socket),
-    do: {:noreply, if(known?(socket, key), do: metadata(socket, key, %{"archived" => value == "true"}), else: socket)}
+    do:
+      {:noreply,
+       if(known?(socket, key),
+         do: metadata(socket, key, %{"archived" => value == "true"}),
+         else: socket
+       )}
 
   def handle_event("sidebar-fork", %{"key" => key} = params, socket) do
     if known?(socket, key) do
-      case Backend.fork(key, SessionCwd.resolve(key)) do
+      cwd = SessionCwd.resolve(key)
+
+      case Backend.fork(key, cwd) do
         {:ok, child} ->
+          SessionCwd.remember(child, cwd)
           split = if params["split"] == "true", do: child
           base = if split, do: socket.assigns.session_key || key, else: child
 
@@ -244,7 +271,12 @@ defmodule LemonWeb.ChatLive do
            |> push_patch(to: chat_path(base, if(base == child, do: nil, else: split)))}
 
         {:error, {:outcome_unknown, _}} ->
-          {:noreply, put_flash(socket, :error, "Lemon could not confirm the fork. Check Sessions before trying again.")}
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "Lemon could not confirm the fork. Check Sessions before trying again."
+           )}
 
         {:error, error} ->
           {:noreply, put_flash(socket, :error, Rpc.message(error))}
@@ -283,10 +315,15 @@ defmodule LemonWeb.ChatLive do
         {:noreply, assign(socket, :home, %{form | error: Setup.message()})}
 
       prompt == "" ->
-        {:noreply, assign(socket, :home, %{form | error: "Describe the work to start a session."})}
+        {:noreply,
+         assign(socket, :home, %{form | error: "Describe the work to start a session."})}
 
       cwd != "" and not (Path.type(cwd) == :absolute and File.dir?(cwd)) ->
-        {:noreply, assign(socket, :home, %{form | error: "The workspace must be an existing absolute directory."})}
+        {:noreply,
+         assign(socket, :home, %{
+           form
+           | error: "The workspace must be an existing absolute directory."
+         })}
 
       profile != "" and not Enum.any?(socket.assigns.profiles, &(&1.id == profile)) ->
         {:noreply, assign(socket, :home, %{form | error: "Choose a profile from the list."})}
@@ -294,10 +331,13 @@ defmodule LemonWeb.ChatLive do
       true ->
         agent_id = if profile == "", do: "default", else: profile
         key = new_session_key(agent_id)
-        opts = [cwd: if(cwd == "", do: nil, else: Path.expand(cwd)), agent_id: agent_id]
+        cwd = if cwd == "", do: nil, else: Path.expand(cwd)
+        opts = [cwd: cwd, agent_id: agent_id]
 
         case Backend.send_prompt(key, prompt, opts) do
           {:ok, _run_id} ->
+            SessionCwd.remember(key, cwd || SessionCwd.default())
+
             {:noreply,
              socket
              |> assign(:home, %{form | prompt: ""})
@@ -309,7 +349,8 @@ defmodule LemonWeb.ChatLive do
             {:noreply,
              assign(socket, :home, %{
                form
-               | error: "Lemon could not confirm whether the session started. Check recent sessions before trying again."
+               | error:
+                   "Lemon could not confirm whether the session started. Check recent sessions before trying again."
              })}
 
           {:error, error} ->
@@ -334,19 +375,24 @@ defmodule LemonWeb.ChatLive do
   def handle_info({:chat_pane, _role, :sessions_changed}, socket),
     do: {:noreply, socket |> load_sessions() |> load_active()}
 
-  def handle_info({:chat_pane, _role, {:open_session, key, :split}}, socket) do
-    if valid_key?(key),
-      do: {:noreply, socket |> load_sessions() |> push_patch(to: chat_path(socket.assigns.session_key || key, key))},
-      else: {:noreply, socket}
+  def handle_info({:chat_pane, _role, {:open_session, key, mode, _cwd}}, socket) do
+    cond do
+      not valid_key?(key) ->
+        {:noreply, socket}
+
+      mode == :split ->
+        {:noreply,
+         socket
+         |> load_sessions()
+         |> push_patch(to: chat_path(socket.assigns.session_key || key, key))}
+
+      true ->
+        {:noreply, socket |> load_sessions() |> push_patch(to: chat_path(key, nil))}
+    end
   end
 
-  def handle_info({:chat_pane, _role, {:open_session, key, _}}, socket) do
-    if valid_key?(key),
-      do: {:noreply, socket |> load_sessions() |> push_patch(to: chat_path(key, nil))},
-      else: {:noreply, socket}
-  end
-
-  def handle_info({:chat_pane, _role, {:toggle_split, _key, _role2}}, socket), do: {:noreply, toggle_split(socket)}
+  def handle_info({:chat_pane, _role, {:toggle_split, _key, _role2}}, socket),
+    do: {:noreply, toggle_split(socket)}
 
   def handle_info({:chat_pane, "secondary", {:close_pane, _}}, socket),
     do: {:noreply, push_patch(socket, to: chat_path(socket.assigns.session_key, nil))}
@@ -361,9 +407,14 @@ defmodule LemonWeb.ChatLive do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_async(:workspaces, {:ok, workspaces}, socket), do: {:noreply, assign(socket, :workspaces, workspaces)}
+  def handle_async(:workspaces, {:ok, workspaces}, socket),
+    do: {:noreply, assign(socket, :workspaces, workspaces)}
+
   def handle_async(:workspaces, _, socket), do: {:noreply, socket}
-  def handle_async(:profiles, {:ok, {:ok, profiles}}, socket), do: {:noreply, assign(socket, :profiles, profiles)}
+
+  def handle_async(:profiles, {:ok, {:ok, profiles}}, socket),
+    do: {:noreply, assign(socket, :profiles, profiles)}
+
   def handle_async(:profiles, _, socket), do: {:noreply, socket}
 
   defp toggle_split(socket) do
@@ -395,7 +446,9 @@ defmodule LemonWeb.ChatLive do
   defp chat_path(key, split), do: chat_path(key, nil) <> "?split=" <> URI.encode_www_form(split)
 
   defp pane_id(key, role),
-    do: "pane-#{role}-" <> (:crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10))
+    do:
+      "pane-#{role}-" <>
+        (:crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10))
 
   # ── Render ──────────────────────────────────────────────────────────────
 
@@ -436,7 +489,7 @@ defmodule LemonWeb.ChatLive do
             <.icon name="x" class="h-4 w-4" />
           </button>
         </div>
-        <form phx-change="search" phx-submit="search" class="shrink-0 p-2" role="search">
+        <form id="session-search-form" phx-change="search" phx-submit="search" class="shrink-0 p-2" role="search">
           <label for="session-search" class="sr-only">Search sessions</label>
           <div class="relative">
             <.icon name="search" class="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-subtle" />
@@ -574,11 +627,15 @@ defmodule LemonWeb.ChatLive do
   defp intro_for({key, prompt}, key), do: prompt
   defp intro_for(_intro, _key), do: nil
 
-  defp item_id(key), do: :crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10)
+  defp item_id(key),
+    do: :crypto.hash(:sha256, key) |> Base.url_encode64(padding: false) |> binary_part(0, 10)
 
   defp home(assigns) do
     active = Enum.filter(assigns.sessions, &Map.has_key?(assigns.active, &1.key))
-    recent = assigns.sessions |> Enum.reject(&Map.has_key?(assigns.active, &1.key)) |> Enum.take(8)
+
+    recent =
+      assigns.sessions |> Enum.reject(&Map.has_key?(assigns.active, &1.key)) |> Enum.take(8)
+
     assigns = assign(assigns, active_sessions: active, recent_sessions: recent)
 
     ~H"""

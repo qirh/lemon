@@ -95,11 +95,20 @@ defmodule LemonWeb.Chat.Transcript do
 
   @doc "A fresh assistant item for `run_id`."
   def assistant_item(run_id, text, streaming) do
-    %{id: unique("a"), kind: :assistant, text: text, streaming: streaming, run_id: run_id, ok: true, ts: now()}
+    %{
+      id: unique("a"),
+      kind: :assistant,
+      text: text,
+      streaming: streaming,
+      run_id: run_id,
+      ok: true,
+      ts: now()
+    }
   end
 
   @doc "A notice; `tone` is `info | success | warning | danger`."
-  def notice_item(tone, text), do: %{id: unique("n"), kind: :notice, tone: tone, text: text, ts: now()}
+  def notice_item(tone, text),
+    do: %{id: unique("n"), kind: :notice, tone: tone, text: text, ts: now()}
 
   @doc "A thinking item keyed by its reasoning action."
   def thinking_item(run_id, action_id, text, streaming) do
