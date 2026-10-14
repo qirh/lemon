@@ -4,6 +4,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
   alias LemonAgent.ModelRuntime.ProviderConfiguration
 
   @env_keys ~w(
+    LEMON_DEFAULT_THINKING_LEVEL
     HOME
     LEMON_DEFAULT_PROVIDER
     LEMON_DEFAULT_MODEL
@@ -239,5 +240,95 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
 
     assert message == "Provider configuration is not valid Lemon config"
     assert File.read!(ctx.config_path) == original
+  end
+
+  test "previews then applies the default model and thinking level under [defaults]", ctx do
+    File.write!(ctx.config_path, """
+    # defaults note
+    [defaults]
+    provider = "openai"
+    model = "gpt-5-mini"
+    """)
+
+    params = %{
+      "action" => "defaults.model",
+      "provider" => "anthropic",
+      "model" => "claude-sonnet-4-20250514",
+      "scope" => "project",
+      "projectDir" => ctx.project
+    }
+
+    assert {:ok, preview} = ProviderConfiguration.configure(params)
+    assert preview["changed"] == true
+    assert preview["destructive"] == false
+    assert preview["applied"] == false
+    assert preview["defaults"]["model"] == "gpt-5-mini"
+    assert preview["proposedDefaults"]["provider"] == "anthropic"
+    assert preview["proposedDefaults"]["model"] == "anthropic:claude-sonnet-4-20250514"
+    refute File.read!(ctx.config_path) =~ "anthropic"
+
+    assert {:ok, applied} =
+             ProviderConfiguration.configure(
+               Map.merge(params, %{
+                 "apply" => true,
+                 "expectedRevision" => preview["configRevision"]
+               })
+             )
+
+    assert applied["applied"] == true
+    content = File.read!(ctx.config_path)
+    assert content =~ "# defaults note"
+    assert content =~ ~s(provider = "anthropic")
+    assert content =~ ~s(model = "anthropic:claude-sonnet-4-20250514")
+
+    thinking = %{
+      "action" => "defaults.thinking_level",
+      "thinkingLevel" => "high",
+      "scope" => "project",
+      "projectDir" => ctx.project
+    }
+
+    assert {:ok, preview} = ProviderConfiguration.configure(thinking)
+    assert preview["proposedDefaults"]["thinkingLevel"] == "high"
+
+    assert {:ok, _} =
+             ProviderConfiguration.configure(
+               Map.merge(thinking, %{
+                 "apply" => true,
+                 "expectedRevision" => preview["configRevision"]
+               })
+             )
+
+    assert File.read!(ctx.config_path) =~ ~s(thinking_level = "high")
+  end
+
+  test "rejects unknown providers, malformed models and unsupported thinking levels", ctx do
+    File.write!(ctx.config_path, "# untouched\n")
+    base = %{"scope" => "project", "projectDir" => ctx.project, "apply" => true}
+
+    assert {:error, :invalid_provider, _} =
+             ProviderConfiguration.configure(
+               Map.merge(base, %{
+                 "action" => "defaults.model",
+                 "provider" => "nope",
+                 "model" => "x"
+               })
+             )
+
+    assert {:error, :invalid_model, _} =
+             ProviderConfiguration.configure(
+               Map.merge(base, %{
+                 "action" => "defaults.model",
+                 "provider" => "openai",
+                 "model" => "gpt 5\"\n[x]"
+               })
+             )
+
+    assert {:error, :invalid_thinking_level, _} =
+             ProviderConfiguration.configure(
+               Map.merge(base, %{"action" => "defaults.thinking_level", "thinkingLevel" => "max"})
+             )
+
+    assert File.read!(ctx.config_path) == "# untouched\n"
   end
 end

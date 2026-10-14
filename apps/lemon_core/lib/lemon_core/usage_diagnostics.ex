@@ -5,7 +5,9 @@ defmodule LemonCore.UsageDiagnostics do
 
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
-    summary = Keyword.get(opts, :summary) || LemonCore.UsageStore.get_summary(:current) || %{}
+    summary =
+      (Keyword.get(opts, :summary) || LemonCore.UsageStore.get_summary(:current) || %{})
+      |> current_day_summary()
 
     today =
       Keyword.get(opts, :today) ||
@@ -37,6 +39,17 @@ defmodule LemonCore.UsageDiagnostics do
     kind, reason ->
       unavailable(inspect({kind, reason}))
   end
+
+  # `LemonCore.UsageLedger` dates the `:current` summary and restarts it each
+  # UTC day; a summary left from an earlier day means nothing ran today.
+  defp current_day_summary(summary) when is_map(summary) do
+    case map_get(summary, :date) do
+      nil -> summary
+      date -> if date == Date.to_iso8601(Date.utc_today()), do: summary, else: %{}
+    end
+  end
+
+  defp current_day_summary(_summary), do: %{}
 
   defp unavailable(error) do
     %{

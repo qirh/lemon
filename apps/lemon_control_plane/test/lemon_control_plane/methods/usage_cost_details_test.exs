@@ -1,0 +1,115 @@
+defmodule LemonControlPlane.Methods.UsageCostDetailsTest do
+  use ExUnit.Case, async: false
+
+  alias LemonControlPlane.Methods.{UsageCost, UsageStatus}
+  alias LemonCore.{UsageLedger, UsageStore}
+
+  setup do
+    today = Date.utc_today() |> Date.to_iso8601()
+    previous_today = UsageStore.get_record(today)
+    previous_summary = UsageStore.get_summary(:current)
+    LemonCore.Store.delete(:usage_records, today)
+    LemonCore.Store.delete(:usage_data, :current)
+
+    on_exit(fn ->
+      if previous_today,
+        do: UsageStore.put_record(today, previous_today),
+        else: LemonCore.Store.delete(:usage_records, today)
+
+      if previous_summary,
+        do: UsageStore.put_summary(:current, previous_summary),
+        else: LemonCore.Store.delete(:usage_data, :current)
+    end)
+
+    %{today: today}
+  end
+
+  defp finalize(run_id, session_key, model, usage) do
+    UsageLedger.entry(run_id, session_key, %{
+      completed: %{ok: true, usage: usage, answer: "private answer"},
+      meta: %{model: model},
+      prompt: "private prompt"
+    })
+  end
+
+  test "finalized runs feed provider, model, session and daily projections", ctx do
+    :ok =
+      UsageLedger.record(
+        finalize("run-a", "agent:web:one", "openai:gpt-5", %{
+          input_tokens: 1_000,
+          output_tokens: 200,
+          cache_read_input_tokens: 500,
+          cost: %{total: 0.25}
+        })
+      )
+
+    :ok =
+      UsageLedger.record(
+        finalize("run-b", "agent:web:two", "anthropic:claude-x", %{input: 300, output: 50})
+      )
+
+    # A retried finalization of the same run is not counted twice.
+    :ok =
+      UsageLedger.record(
+        finalize("run-a", "agent:web:one", "openai:gpt-5", %{
+          input_tokens: 1_000,
+          output_tokens: 200
+        })
+      )
+
+    assert {:ok, result} =
+             UsageCost.handle(%{"startDate" => ctx.today, "endDate" => ctx.today}, %{})
+
+    assert result["totalRequests"] == 2
+    assert_in_delta result["totalCost"], 0.25, 1.0e-9
+
+    assert [openai, anthropic] = result["providers"]
+    assert openai["provider"] == "openai"
+    assert openai["inputTokens"] == 1_500
+    assert openai["outputTokens"] == 200
+
+    assert anthropic == %{
+             "provider" => "anthropic",
+             "cost" => 0.0,
+             "requests" => 1,
+             "inputTokens" => 300,
+             "outputTokens" => 50
+           }
+
+    assert [%{"provider" => "openai", "model" => "gpt-5", "requests" => 1} | _] = result["models"]
+    assert Enum.map(result["sessions"], & &1["sessionKey"]) == ["agent:web:one", "agent:web:two"]
+    assert Enum.all?(result["sessions"], &is_integer(&1["lastAtMs"]))
+    assert result["sessionsOmitted"] == 0
+
+    assert [%{"date" => date, "requests" => 2, "inputTokens" => 1_800, "outputTokens" => 250}] =
+             result["dailyUsage"]
+
+    assert date == ctx.today
+    refute inspect(result) =~ "private"
+
+    assert {:ok, status} = UsageStatus.handle(%{}, %{})
+    assert status["runs"] == 2
+    assert status["tokens"] == %{"input" => 1_800, "output" => 250}
+  end
+
+  test "a run without usage is ignored and the summary restarts each day" do
+    assert UsageLedger.entry("run-x", "s", %{completed: %{ok: true}, meta: %{}}) == nil
+
+    UsageStore.put_summary(:current, %{date: "2000-01-01", total_requests: 9, total_cost: 1.0})
+    assert {:ok, status} = UsageStatus.handle(%{}, %{})
+    assert status["runs"] == 0
+
+    :ok = UsageLedger.record(finalize("run-c", "s", "zai:glm", %{input: 10, output: 5}))
+    assert %{date: date, total_requests: 1} = UsageStore.get_summary(:current)
+    assert date == Date.to_iso8601(Date.utc_today())
+  end
+
+  test "reads at most a year of daily records" do
+    assert {:ok, result} =
+             UsageCost.handle(%{"startDate" => "1900-01-01", "endDate" => "2000-12-31"}, %{})
+
+    assert result["totalRequests"] == 0
+    assert result["providers"] == []
+    assert result["dailyUsage"] == []
+  end
+end
