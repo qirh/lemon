@@ -115,7 +115,12 @@ defmodule LemonWeb.WorkManagementLive do
     end
   end
 
-  def handle_event("close-runs", _, socket), do: {:noreply, assign(socket, runs_for: nil)}
+  # The drawer is hidden while a confirmation is open; a click-away that lands
+  # during its exit transition must not discard it.
+  def handle_event("close-runs", _, %{assigns: %{preview: nil}} = socket),
+    do: {:noreply, assign(socket, runs_for: nil)}
+
+  def handle_event("close-runs", _, socket), do: {:noreply, socket}
 
   def handle_event("preview", %{"kind" => kind, "id" => id, "action" => action} = params, socket) do
     previous = socket.assigns.work
@@ -588,7 +593,7 @@ defmodule LemonWeb.WorkManagementLive do
       </div>
 
       <.runs_drawer
-        :if={@runs_for && WorkProjection.target(@work, :cron, @runs_for)}
+        :if={@runs_for && !@preview && WorkProjection.target(@work, :cron, @runs_for)}
         job={WorkProjection.target(@work, :cron, @runs_for)}
         uncertain={@uncertain}
         now={@now}

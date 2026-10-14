@@ -340,6 +340,27 @@ defmodule LemonWeb.WorkManagementLiveTest do
     assert has_element?(view, "#work-empty")
   end
 
+  test "stopping a run from the drawer keeps the drawer open after confirmation", %{
+    conn: conn,
+    state: state
+  } do
+    {:ok, view, _} = live(conn, "/automation?tab=cron")
+    render_click(view, "open-runs", %{"id" => "cron_demo"})
+
+    render_click(view, "preview", %{
+      "kind" => "cron",
+      "id" => "cron_demo",
+      "action" => "abort",
+      "run" => "run_demo"
+    })
+
+    refute has_element?(view, "#work-runs-drawer")
+    render_click(view, "close-runs")
+    render_click(view, "confirm")
+    assert {CronManager, :abort_run, ["run_demo", _]} = Agent.get(state, &List.last(&1.calls))
+    assert has_element?(view, "#work-runs-drawer #work-run-run_demo", "aborted")
+  end
+
   test "stale preview and forged targets never reach mutation", %{conn: conn, state: state} do
     {:ok, view, _} = live(conn, "/automation")
     assert render_click(view, "confirm") =~ "Preview the exact action"
