@@ -40,6 +40,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `lemon model PROVIDER --status` shows the auth source, stored login, expiry
   and whether credentials are usable; `--logout` deletes the stored OAuth login
   and its config keys.
+- **TUI context breakdown.** `/context` (alias `/ctx`) shows where the focused
+  session's context window goes. It includes a per-category usage grid and table,
+  free space, auto-compaction headroom, the largest contributors, and whether the
+  figures were provider-reported or estimated. In Tern it renders as a native sheet.
+  The status-bar context gauge also uses the daemon's `sessions.context` measurement
+  for resumed sessions before their first run.
 
 ### Changed
 

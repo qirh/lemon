@@ -623,6 +623,73 @@ export interface SessionsCompactParams {
 	force?: boolean;
 }
 
+export interface SessionsContextParams {
+	sessionKey: string;
+	cwd: string;
+}
+
+/** `sessions.context` category ids, in the contract's fixed display order. */
+export type ContextCategoryId =
+	| "system_prompt"
+	| "tool_definitions"
+	| "skills"
+	| "context_files"
+	| "memory"
+	| "user_messages"
+	| "assistant_messages"
+	| "tool_results"
+	| "summaries"
+	| "unattributed";
+
+export interface ContextCategoryUsage {
+	id: ContextCategoryId;
+	label: string;
+	tokens: number;
+	/** Share of the window (1 decimal), or null when the window is unknown. */
+	percent: number | null;
+	items: number | undefined;
+}
+
+export interface ContextContributor {
+	/** Undefined when the daemon named a category this client does not know. */
+	category: ContextCategoryId | undefined;
+	label: string;
+	tokens: number;
+}
+
+export interface ContextAutoCompaction {
+	enabled: boolean;
+	thresholdTokens: number;
+	reserveTokens: number | undefined;
+	headroomTokens: number | undefined;
+}
+
+/**
+ * A validated `sessions.context` receipt. Unknown category ids are dropped;
+ * whatever they held is reported as {@link otherTokens} so the rows shown
+ * still sum to {@link usedTokens}.
+ */
+export interface SessionsContextResult {
+	sessionKey: string;
+	live: boolean;
+	/** How system prompt/tool overhead was measured. */
+	overhead: "live" | "snapshot" | "unavailable";
+	model: { provider: string | undefined; id: string } | null;
+	window: number | null;
+	usedTokens: number;
+	freeTokens: number | null;
+	percentUsed: number | null;
+	source: "usage" | "usage+estimate" | "estimate";
+	estimatedTokens: number | undefined;
+	autoCompaction: ContextAutoCompaction | null;
+	categories: ContextCategoryUsage[];
+	/** Tokens in categories this client does not know, so the shown rows stay honest. */
+	otherTokens: number;
+	top: ContextContributor[];
+	messageCount: number | undefined;
+	measuredAt: number | undefined;
+}
+
 export interface SessionsListParams {
 	limit?: number;
 	offset?: number;

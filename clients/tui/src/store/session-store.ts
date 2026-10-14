@@ -105,6 +105,11 @@ export class SessionStore {
 	contextWindow: number | undefined;
 	/** Token counts from this session's most recent completed run. */
 	usage: RunUsage | undefined;
+	/**
+	 * The daemon's own `sessions.context` measurement. Authoritative when taken;
+	 * the next completed run's usage supersedes it.
+	 */
+	contextMeasurement: { tokens: number; window: number | undefined } | undefined;
 	/** Reasoning effort, as last set through `/think`. */
 	thinkingLevel: string | undefined;
 	/** Tool-policy profile, as last set through `/toolpolicy`. */
@@ -187,6 +192,10 @@ export class SessionStore {
 		this.modelSource = source;
 		if (changed || provider !== undefined) this.provider = provider;
 		if (changed || contextWindow !== undefined) this.contextWindow = contextWindow;
+		// The measured total still describes the conversation; its window was the old model's.
+		if (changed && this.contextMeasurement) {
+			this.contextMeasurement = { tokens: this.contextMeasurement.tokens, window: undefined };
+		}
 		if (thinking !== undefined) this.thinkingLevel = thinking;
 
 		return (
@@ -201,6 +210,13 @@ export class SessionStore {
 	applyUsage(usage: RunUsage | null | undefined): void {
 		if (!usage) return;
 		this.usage = usage;
+		this.contextMeasurement = undefined;
+	}
+
+	/** Record a `sessions.context` total (and its window) for the gauge. */
+	applyContextMeasurement(tokens: number, window: number | null | undefined): void {
+		if (!Number.isFinite(tokens) || tokens < 0) return;
+		this.contextMeasurement = { tokens, window: positive(window) };
 	}
 
 	/** Record plan mode; `path` undefined keeps the known plan file, null forgets it. */
@@ -220,6 +236,7 @@ export class SessionStore {
 	 * Undefined here makes the status bar fall back to its honest `use N` label.
 	 */
 	get contextTokens(): number | undefined {
+		if (this.contextMeasurement) return this.contextMeasurement.tokens;
 		const usage = this.usage;
 		if (!usage) return undefined;
 		const context = positive(usage.contextTokens);
@@ -245,6 +262,7 @@ export class SessionStore {
 		this.activeRunId = undefined;
 		this.busy = false;
 		this.usage = undefined;
+		this.contextMeasurement = undefined;
 		this.unread = 0;
 	}
 
