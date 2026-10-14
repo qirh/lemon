@@ -221,9 +221,9 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
 
   test "validates Lemon config before replacing the target file", ctx do
     original = """
-    # legacy config must remain untouched on failure
-    [agent]
-    default_provider = "openai"
+    # removed sections must remain untouched on failure
+    [agents.default]
+    name = "Default"
     """
 
     File.write!(ctx.config_path, original)

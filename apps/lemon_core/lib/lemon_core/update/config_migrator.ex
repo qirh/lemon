@@ -6,9 +6,8 @@ defmodule LemonCore.Update.ConfigMigrator do
 
   | Old section | New location |
   |---|---|
-  | `[agent]` fields | `[defaults]` (provider, model, thinking_level) or `[runtime]` |
+  | `[agent]` and `[agent.<sub>]` | `[defaults]`, `[runtime]` and `[tui]` (see `LemonCore.Config.LegacyAgentMigration`) |
   | `[agents.<id>]` | `[profiles.<id>]` |
-  | `[agent.tools.*]` | `[runtime.tools.*]` |
   | `[tools.*]` | `[runtime.tools.*]` |
 
   Engine selection, custom engine configuration, and `[runtime.cli]` are not
@@ -21,8 +20,10 @@ defmodule LemonCore.Update.ConfigMigrator do
       {:needs_migration, issues} = ConfigMigrator.check(path)
 
       # Apply migration:
-      :ok = ConfigMigrator.migrate!(path)
+      {:ok, %{backup: backup, changes: changes}} = ConfigMigrator.migrate!(path)
   """
+
+  alias LemonCore.Config.LegacyAgentMigration
 
   @type issue :: String.t()
 
@@ -68,59 +69,41 @@ defmodule LemonCore.Update.ConfigMigrator do
   @doc """
   Applies automated config migration to `path` in-place.
 
-  Creates a backup at `<path>.pre-update-bak` before writing.
+  Before the file is replaced, its original bytes are copied to a new
+  `<path>.bak-<UTC timestamp>` with the same permissions; an existing backup is
+  never overwritten. The new content replaces the file atomically, and only
+  when the migrated settings pass removed-setting validation.
 
-  Returns `:ok` on success, `{:error, reason}` on failure.
+  Returns `{:ok, %{backup: path | nil, changes: [String.t()]}}` (`backup` is
+  `nil` when there was nothing to rewrite) or `{:error, reason}`.
   """
-  @spec migrate!(String.t()) :: :ok | {:error, term()}
+  @spec migrate!(String.t()) ::
+          {:ok, %{backup: String.t() | nil, changes: [String.t()]}} | {:error, term()}
   def migrate!(path) do
     expanded = Path.expand(path)
 
-    with {:ok, content} <- File.read(expanded),
-         {:ok, _settings} <- Toml.decode(content),
-         :ok <- backup!(expanded, content) do
-      migrated = apply_migrations(content)
-
-      case Toml.decode(migrated) do
-        {:ok, settings} ->
-          case LemonCore.Config.Validator.validate_deprecated_sections(settings) do
-            :ok ->
-              case File.write(expanded, migrated) do
-                :ok -> :ok
-                {:error, reason} -> {:error, {:write_failed, reason}}
-              end
-
-            {:error, errors} ->
-              {:error, {:manual_steps_required, errors}}
-          end
-
-        {:error, reason} ->
-          {:error, {:invalid_toml, reason}}
+    with {:ok, content} <- read(expanded),
+         {:ok, _settings} <- decode(content),
+         {:ok, migrated, changes} <- apply_migrations(content),
+         {:ok, settings} <- decode(migrated),
+         :ok <- validate_migrated(settings) do
+      if migrated == content do
+        {:ok, %{backup: nil, changes: []}}
+      else
+        with {:ok, backup} <- backup(expanded, content),
+             :ok <- atomic_write(expanded, migrated) do
+          {:ok, %{backup: backup, changes: changes}}
+        end
       end
     end
   end
-
-  @doc """
-  Returns the backup path for a given config path.
-  """
-  @spec backup_path(String.t()) :: String.t()
-  def backup_path(path), do: "#{Path.expand(path)}.pre-update-bak"
 
   # ──────────────────────────────────────────────────────────────────────────
   # Private helpers
   # ──────────────────────────────────────────────────────────────────────────
 
   defp load_toml(path) do
-    case File.read(Path.expand(path)) do
-      {:ok, content} ->
-        case Toml.decode(content) do
-          {:ok, settings} -> {:ok, settings}
-          {:error, reason} -> {:error, {:invalid_toml, reason}}
-        end
-
-      {:error, reason} ->
-        {:error, {:read_failed, reason}}
-    end
+    with {:ok, content} <- read(Path.expand(path)), do: decode(content)
   end
 
   defp detect_deprecated(settings) do
@@ -128,15 +111,11 @@ defmodule LemonCore.Update.ConfigMigrator do
       []
       |> maybe_add_issue(
         is_map(settings["agent"]),
-        "[agent] is deprecated. Move fields to [defaults] (provider, model, thinking_level) and [runtime]."
+        "[agent] is deprecated. Its fields move to [defaults] (provider, model, thinking_level), [tui] (theme) and [runtime] (everything else)."
       )
       |> maybe_add_issue(
         is_map(settings["agents"]),
         "[agents.<id>] is deprecated. Use [profiles.<id>] instead."
-      )
-      |> maybe_add_issue(
-        is_map(settings["agent"]) and is_map(get_in(settings, ["agent", "tools"])),
-        "[agent.tools.*] is deprecated. Use [runtime.tools.*] instead."
       )
       |> maybe_add_issue(
         is_map(settings["tools"]),
@@ -227,23 +206,54 @@ defmodule LemonCore.Update.ConfigMigrator do
   defp maybe_add_issue(acc, false, _), do: acc
   defp maybe_add_issue(acc, true, issue), do: [issue | acc]
 
-  defp backup!(path, content) do
-    bak = backup_path(path)
-
-    case File.write(bak, content) do
-      :ok -> :ok
-      {:error, reason} -> {:error, {:backup_failed, reason}}
+  defp read(path) do
+    case File.read(path) do
+      {:ok, content} -> {:ok, content}
+      {:error, reason} -> {:error, {:read_failed, reason}}
     end
   end
 
-  # Text-level TOML migration. Renames section headers to new names.
-  # This preserves comments and formatting, only touching deprecated headers.
+  defp decode(content) do
+    case Toml.decode(content) do
+      {:ok, settings} -> {:ok, settings}
+      {:error, reason} -> {:error, {:invalid_toml, reason}}
+    end
+  end
+
+  defp validate_migrated(settings) do
+    case LemonCore.Config.Validator.validate_deprecated_sections(settings) do
+      :ok -> :ok
+      {:error, errors} -> {:error, {:manual_steps_required, errors}}
+    end
+  end
+
+  # Text-level TOML migration. Renames section headers to new names and moves
+  # `[agent]` through `LegacyAgentMigration`, preserving comments and order.
   defp apply_migrations(content) do
-    content
-    |> migrate_agents_section()
-    |> migrate_tools_section()
-    |> migrate_agent_tools_section()
-    |> migrate_agent_section()
+    content = String.replace(content, "\r\n", "\n")
+
+    {renamed, renames} =
+      {content, []}
+      |> rename(&migrate_agents_section/1, "[agents.*] → [profiles.*]")
+      |> rename(&migrate_tools_section/1, "[tools.*] → [runtime.tools.*]")
+
+    case LegacyAgentMigration.migrate_content(renamed) do
+      {:ok, migrated, changes} ->
+        {:ok, migrated, Enum.reverse(renames) ++ changes}
+
+      :unchanged ->
+        {:ok, renamed, Enum.reverse(renames)}
+
+      {:error, reason} ->
+        {:error, {:manual_steps_required, [LegacyAgentMigration.format_error(reason)]}}
+    end
+  end
+
+  defp rename({content, changes}, fun, description) do
+    case fun.(content) do
+      ^content -> {content, changes}
+      renamed -> {renamed, [description | changes]}
+    end
   end
 
   # Renames [agents.x] → [profiles.x]
@@ -260,99 +270,56 @@ defmodule LemonCore.Update.ConfigMigrator do
     end
   end
 
-  # Renames [agent.tools.x] → [runtime.tools.x]
-  defp migrate_agent_tools_section(content) do
-    if Regex.match?(~r/^\[runtime\.tools/m, content) do
-      content
-    else
-      String.replace(content, ~r/^\[agent\.tools\b/m, "[runtime.tools")
+  defp backup(path, content) do
+    stamp =
+      DateTime.utc_now()
+      |> DateTime.truncate(:second)
+      |> DateTime.to_iso8601(:basic)
+
+    backup = unique_path("#{path}.bak-#{stamp}")
+
+    case write_with_mode(backup, content, existing_mode(path)) do
+      :ok -> {:ok, backup}
+      {:error, reason} -> {:error, {:backup_failed, reason}}
     end
   end
 
-  # Rewrites the standalone [agent] section:
-  #   - Fields provider/model/thinking_level move to [defaults]
-  #   - All other fields move to [runtime]
-  #   - The [agent] header itself is removed
-  #
-  # We do a line-by-line scan so we can route each key to the right section
-  # without relying on a full TOML parser (preserving comments and order).
-  defp migrate_agent_section(content) do
-    has_agent? = Regex.match?(~r/^\[agent\]/m, content)
-    has_defaults? = Regex.match?(~r/^\[defaults\]/m, content)
-    has_runtime? = Regex.match?(~r/^\[runtime\]/m, content)
+  defp unique_path(candidate) do
+    if File.exists?(candidate),
+      do: unique_path("#{candidate}-#{System.unique_integer([:positive])}"),
+      else: candidate
+  end
 
-    if has_agent? and (has_defaults? or has_runtime?) do
-      content
+  defp atomic_write(path, content) do
+    temp =
+      Path.join(
+        Path.dirname(path),
+        ".#{Path.basename(path)}.tmp-#{System.unique_integer([:positive])}"
+      )
+
+    with :ok <- write_with_mode(temp, content, existing_mode(path)),
+         :ok <- File.rename(temp, path) do
+      :ok
     else
-      migrate_agent_section_lines(content)
+      {:error, reason} ->
+        _ = File.rm(temp)
+        {:error, {:write_failed, reason}}
     end
   end
 
-  defp migrate_agent_section_lines(content) do
-    lines = String.split(content, "\n")
-
-    {result, pending_defaults, pending_runtime, _in_agent} =
-      Enum.reduce(lines, {[], [], [], false}, fn line, {acc, defaults, runtime, in_agent} ->
-        trimmed = String.trim(line)
-
-        cond do
-          # Start of [agent] section (not [agent.something])
-          Regex.match?(~r/^\[agent\]/, trimmed) ->
-            {acc, defaults, runtime, true}
-
-          # Start of another top-level section — flush buffered agent keys
-          in_agent and Regex.match?(~r/^\[/, trimmed) ->
-            flushed = flush_agent_keys(acc, defaults, runtime)
-            {flushed ++ [line], [], [], false}
-
-          # Inside [agent]: route keys to their new homes
-          in_agent ->
-            cond do
-              Regex.match?(~r/^(provider|model|thinking_level)\s*=/, trimmed) ->
-                {acc, defaults ++ [line], runtime, true}
-
-              # Comment or blank line inside [agent] — keep with runtime keys
-              trimmed == "" or String.starts_with?(trimmed, "#") ->
-                {acc, defaults, runtime ++ [line], true}
-
-              true ->
-                {acc, defaults, runtime ++ [line], true}
-            end
-
-          true ->
-            {acc ++ [line], defaults, runtime, false}
-        end
-      end)
-
-    # Flush any remaining buffered agent keys at EOF
-    final = flush_agent_keys(result, pending_defaults, pending_runtime)
-    Enum.join(final, "\n")
+  # The file is created empty and restricted before any content lands in it, so
+  # a private config is never briefly readable under the default umask.
+  defp write_with_mode(path, content, mode) do
+    with :ok <- File.write(path, "", [:binary, :exclusive]),
+         :ok <- File.chmod(path, mode) do
+      File.write(path, content, [:binary])
+    end
   end
 
-  defp flush_agent_keys(acc, [], []), do: acc
-
-  defp flush_agent_keys(acc, defaults, runtime) do
-    defaults_block =
-      if defaults != [] do
-        ["", "[defaults]"] ++ defaults
-      else
-        []
-      end
-
-    runtime_block =
-      if runtime != [] do
-        # Filter out blank-only lines to avoid empty [runtime] sections
-        non_blank = Enum.reject(runtime, &(String.trim(&1) == ""))
-
-        if non_blank != [] do
-          ["", "[runtime]"] ++ runtime
-        else
-          []
-        end
-      else
-        []
-      end
-
-    acc ++ defaults_block ++ runtime_block
+  defp existing_mode(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o777)
+      _ -> 0o600
+    end
   end
 end

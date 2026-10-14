@@ -159,11 +159,13 @@ describe("/theme", () => {
 		rmSync(home, { recursive: true, force: true });
 	});
 
-	test("installs a preference through the host and persists it", async () => {
+	test("installs a preference through the host and persists it as [tui] theme", async () => {
 		await runWired("/theme light");
 		expect(spy.preferences).toEqual(["light"]);
 		expect(spy.themeChanges).toBe(1);
-		expect(readFileSync(join(home, ".lemon", "config.toml"), "utf-8")).toContain('theme = "light"');
+		expect(readFileSync(join(home, ".lemon", "config.toml"), "utf-8")).toBe(
+			'[tui]\ntheme = "light"\n',
+		);
 	});
 
 	test("auto reports the appearance it resolved to", async () => {

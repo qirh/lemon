@@ -358,7 +358,6 @@ defmodule LemonCli.Setup.Gateway.Telegram do
 
   defp patch_gateway_config(content, secret_key, chat_ids) do
     content
-    |> ensure_gateway_table()
     |> TomlPatch.upsert_raw_line("gateway", "enable_telegram", "enable_telegram = true")
     |> TomlPatch.upsert_string("gateway.telegram", "bot_token_secret", secret_key)
     |> TomlPatch.upsert_raw_line(
@@ -366,25 +365,6 @@ defmodule LemonCli.Setup.Gateway.Telegram do
       "allowed_chat_ids",
       "allowed_chat_ids = [#{Enum.join(chat_ids, ", ")}]"
     )
-  end
-
-  # TomlPatch appends a missing table at the end of the file. When only
-  # `[gateway.*]` subtables exist, a trailing `[gateway]` would be a TOML
-  # redefinition error, so insert it before the first subtable instead.
-  defp ensure_gateway_table(content) do
-    if Regex.match?(~r/^\s*\[gateway\]\s*$/m, content) do
-      content
-    else
-      case Regex.run(~r/^\s*\[gateway\.[^\]]+\]\s*$/m, content, return: :index) do
-        [{index, _length}] ->
-          String.slice(content, 0, index) <>
-            "[gateway]\nenable_telegram = true\n\n" <>
-            String.slice(content, index, String.length(content) - index)
-
-        _ ->
-          content
-      end
-    end
   end
 
   defp write_config(path, content, io) do

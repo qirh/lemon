@@ -18,7 +18,7 @@ defmodule LemonCore.Setup.Readiness do
   `lemon doctor`; readiness never sends credentials over the network.
   """
 
-  alias LemonCore.Config.Modular
+  alias LemonCore.Config.{LegacyAgentMigration, Modular}
   alias LemonCore.Secrets
 
   @type step :: :config | :secrets | :provider
@@ -56,7 +56,7 @@ defmodule LemonCore.Setup.Readiness do
   def status(opts \\ []) do
     config_path = Keyword.get(opts, :config_path) || Modular.global_path()
     expanded = Path.expand(config_path)
-    settings = read_settings(expanded)
+    settings = expanded |> read_settings() |> LegacyAgentMigration.migrate_settings()
     secrets_status = Secrets.status()
 
     %{
@@ -81,10 +81,9 @@ defmodule LemonCore.Setup.Readiness do
 
   defp derive_provider(settings) do
     defaults = settings["defaults"] || %{}
-    legacy_agent = settings["agent"] || %{}
 
-    provider = normalize_optional_string(defaults["provider"] || legacy_agent["provider"])
-    model = normalize_optional_string(defaults["model"] || legacy_agent["model"])
+    provider = normalize_optional_string(defaults["provider"])
+    model = normalize_optional_string(defaults["model"])
 
     provider_cfg =
       provider &&

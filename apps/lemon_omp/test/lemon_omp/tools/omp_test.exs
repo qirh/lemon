@@ -1,0 +1,275 @@
+defmodule LemonOmp.Tools.OmpTest do
+  # Drives the fake omp through the agent tool; shares the live-session cap.
+  use ExUnit.Case, async: false
+
+  import LemonOmp.TestSupport
+
+  alias LemonAgent.Types.AgentToolResult
+  alias LemonAi.Types.TextContent
+  alias LemonOmp.Tools.Omp
+
+  setup do
+    use_fake_omp()
+    ws = workspace!()
+    key = "agent:omp-tool-test:#{System.unique_integer([:positive])}"
+    {:ok, ws: ws, key: key, tool: Omp.tool(ws, session_key: key)}
+  end
+
+  defp run(tool, params, on_update \\ nil, signal \\ nil),
+    do: tool.execute.("call-#{System.unique_integer([:positive])}", params, signal, on_update)
+
+  defp text(%AgentToolResult{content: [%TextContent{text: text}]}), do: text
+
+  defp assert_untrusted(%AgentToolResult{} = result) do
+    assert result.trust == :untrusted
+    assert %{trust_boundary: _} = result.details
+    result
+  end
+
+  test "describes itself as the omp tool" do
+    tool = Omp.tool()
+    assert tool.name == "omp"
+    assert "action" in tool.parameters["required"]
+
+    assert tool.parameters["properties"]["action"]["enum"] ==
+             ~w(start wait status list send cancel close resume discover)
+  end
+
+  test "start, status, list, send, cancel and close a session it owns", ctx do
+    result =
+      run(ctx.tool, %{"action" => "start", "prompt" => "HOLD for the tool"}) |> assert_untrusted()
+
+    refute result.is_error
+
+    assert %{"action" => "start", "session" => %{"id" => id, "status" => "running", "cwd" => cwd}} =
+             result.details
+
+    assert cwd == ctx.ws
+    assert text(result) =~ "Started omp session #{id}"
+    assert {:ok, %{"owner" => %{"kind" => "agent", "sessionKey" => key}}} = LemonOmp.get(id)
+    assert key == ctx.key
+
+    status = run(ctx.tool, %{"action" => "status", "id" => id}) |> assert_untrusted()
+    assert %{"action" => "status", "session" => %{"id" => ^id}} = status.details
+    assert text(status) =~ "omp session #{id}"
+    assert text(status) =~ "Status: running"
+
+    list = run(ctx.tool, %{"action" => "list"}) |> assert_untrusted()
+    assert %{"action" => "list", "sessions" => [%{"id" => ^id}]} = list.details
+    assert text(list) =~ "- #{id} [running] HOLD for the tool"
+
+    follow =
+      run(ctx.tool, %{"action" => "send", "id" => id, "message" => "later", "mode" => "follow_up"})
+
+    assert %{"action" => "send", "delivery" => "followUp", "session" => %{"id" => ^id}} =
+             assert_untrusted(follow).details
+
+    assert text(follow) =~ "delivered as followUp"
+
+    cancel = run(ctx.tool, %{"action" => "cancel", "id" => id}) |> assert_untrusted()
+    refute cancel.is_error
+    assert %{"action" => "cancel", "session" => %{"id" => ^id}} = cancel.details
+    assert %{"lastTurn" => "aborted"} = await_wire(id, &(&1["status"] == "idle"))
+
+    steer = run(ctx.tool, %{"action" => "send", "id" => id, "message" => "new work"})
+    assert %{"delivery" => "prompt"} = assert_untrusted(steer).details
+    await_wire(id, &(&1["result"] == "Done: new work"))
+
+    close = run(ctx.tool, %{"action" => "close", "id" => id}) |> assert_untrusted()
+    assert %{"action" => "close", "session" => %{"status" => "closed"}} = close.details
+    assert text(close) =~ "can be resumed later"
+
+    again =
+      run(ctx.tool, %{"action" => "send", "id" => id, "message" => "more"}) |> assert_untrusted()
+
+    assert again.is_error
+    assert %{"action" => "send", "error" => "not_running"} = again.details
+    assert text(again) == "omp send failed: " <> LemonOmp.error_message(:not_running)
+  end
+
+  test "start with wait streams progress until the turn settles", ctx do
+    parent = self()
+    on_update = fn %AgentToolResult{} = update -> send(parent, {:update, update}) end
+
+    result =
+      run(ctx.tool, %{"action" => "start", "prompt" => "a quick job", "wait" => true}, on_update)
+
+    assert_untrusted(result)
+
+    assert %{
+             "action" => "start",
+             "session" => %{"status" => "idle", "result" => "Done: a quick job"}
+           } = result.details
+
+    assert text(result) =~ "Last result:\nDone: a quick job"
+  end
+
+  test "wait streams updates through on_update and honours timeouts and aborts", ctx do
+    parent = self()
+    on_update = fn update -> send(parent, {:update, update}) end
+
+    %{"session" => %{"id" => id}} =
+      run(ctx.tool, %{"action" => "start", "prompt" => "HOLD please"}).details
+
+    signal = LemonAgent.AbortSignal.new()
+    :ok = LemonAgent.AbortSignal.abort(signal)
+    aborted = run(ctx.tool, %{"action" => "wait", "id" => id}, on_update, signal)
+    assert text(aborted) =~ "Stopped waiting; the omp session keeps running."
+
+    task =
+      Task.async(fn ->
+        run(ctx.tool, %{"action" => "wait", "id" => id, "timeout_seconds" => 5}, on_update)
+      end)
+
+    wait_until(fn ->
+      match?(
+        {:current_function, {LemonOmp, :wait_loop, 4}},
+        Process.info(task.pid, :current_function)
+      )
+    end)
+
+    assert {:ok, _} = LemonOmp.send_message(id, "wrap up", :steer)
+    result = Task.await(task, 7_000) |> assert_untrusted()
+
+    refute result.is_error
+
+    assert %{
+             "action" => "wait",
+             "session" => %{"status" => "idle", "result" => "Steered: wrap up"}
+           } = result.details
+
+    assert_received {:update,
+                     %AgentToolResult{
+                       trust: :untrusted,
+                       details: %{"action" => "wait", "session" => %{"id" => ^id}},
+                       content: [%TextContent{text: "omp " <> _}]
+                     }}
+  end
+
+  test "wait reports a session still running after the timeout", ctx do
+    %{"session" => %{"id" => id}} =
+      run(ctx.tool, %{"action" => "start", "prompt" => "HOLD long"}).details
+
+    # timeout_seconds is whole seconds; 1 is the minimum.
+    result = run(ctx.tool, %{"action" => "wait", "id" => id, "timeout_seconds" => 1})
+    assert text(result) =~ "Still running after 1s (omp keeps working)."
+    assert %{"session" => %{"status" => "running"}} = result.details
+  end
+
+  test "sessions of other conversations and the operator are not visible", ctx do
+    {:ok, %{"id" => foreign}} =
+      LemonOmp.start(%{"prompt" => "HOLD theirs", "cwd" => ctx.ws},
+        owner: %{kind: :agent, session_key: "agent:someone-else"}
+      )
+
+    {:ok, %{"id" => operator}} =
+      LemonOmp.start(%{"prompt" => "HOLD operator", "cwd" => workspace!()})
+
+    for id <- [foreign, operator], action <- ~w(status cancel close wait) do
+      result =
+        run(ctx.tool, %{"action" => action, "id" => id, "timeout_seconds" => 1})
+        |> assert_untrusted()
+
+      assert result.is_error
+      assert %{"action" => ^action, "error" => "not_found"} = result.details
+      assert text(result) == "omp #{action} failed: no such omp session."
+    end
+
+    send = run(ctx.tool, %{"action" => "send", "id" => foreign, "message" => "hijack"})
+    assert %{"error" => "not_found"} = send.details
+
+    assert text(run(ctx.tool, %{"action" => "list"})) ==
+             "No omp sessions started from this conversation."
+
+    assert {:ok, %{"status" => "running"}} = LemonOmp.get(foreign)
+    refute "abort" in Enum.map(received(ctx.ws), & &1["type"])
+  end
+
+  test "errors are safe is_error results", ctx do
+    for {params, code, message} <- [
+          {%{"action" => "explode"}, "invalid_params", "omp omp failed: action must be one of:"},
+          {%{}, "invalid_params", "omp omp failed: action must be one of:"},
+          {%{"action" => "status"}, "invalid_params",
+           "omp status failed: missing required parameters"},
+          {%{"action" => "send", "id" => "omp_x"}, "invalid_params",
+           "omp send failed: missing required"},
+          {%{"action" => "start"}, "invalid_prompt", "omp start failed: prompt must be"},
+          {%{"action" => "start", "prompt" => "x", "cwd" => "/definitely/not/here"},
+           "invalid_cwd", "omp start failed: cwd must be"},
+          {%{"action" => "send", "id" => "omp_x", "message" => ""}, "invalid_message",
+           "omp send failed: message must be"},
+          {%{"action" => "resume", "omp_session_id" => "../x"}, "invalid_params",
+           "omp resume failed: invalid"}
+        ] do
+      result = run(ctx.tool, params) |> assert_untrusted()
+      assert result.is_error, inspect(params)
+      assert result.details["error"] == code, inspect(params)
+      assert String.starts_with?(text(result), message), "#{inspect(params)}: #{text(result)}"
+    end
+
+    put_app_env(:executable, Path.join(ctx.ws, "no/omp"))
+    missing = run(ctx.tool, %{"action" => "start", "prompt" => "hi"})
+    assert %{"error" => "not_installed"} = missing.details
+    assert text(missing) =~ "omp is not installed"
+  end
+
+  test "an unacknowledged start names the kept session so it can be reconciled", ctx do
+    put_app_env(:command_timeout_ms, 300)
+    File.write!(Path.join(ctx.ws, ".fake_omp_mode"), "hang")
+
+    result = run(ctx.tool, %{"action" => "start", "prompt" => "anyone?"}) |> assert_untrusted()
+    assert result.is_error
+    assert %{"action" => "start", "error" => "outcome_unknown"} = result.details
+    assert [%{"id" => id}] = LemonOmp.list(owner: {:session_key, ctx.key})
+    assert text(result) =~ "session #{id} may already be working on it"
+
+    status = run(ctx.tool, %{"action" => "status", "id" => id})
+    refute status.is_error
+    assert text(status) =~ "Status: starting"
+  end
+
+  test "discover lists stored sessions for the workspace", ctx do
+    agent_dir = tmp_dir!("lemon_omp_tool_agent")
+    put_app_env(:agent_dir, agent_dir)
+
+    empty = run(ctx.tool, %{"action" => "discover"}) |> assert_untrusted()
+    assert %{"action" => "discover", "sessions" => []} = empty.details
+    assert text(empty) == "No stored omp sessions for #{ctx.ws}."
+
+    {out, 0} = System.cmd("/bin/pwd", ["-P"], cd: ctx.ws)
+    canonical = String.trim(out)
+
+    store =
+      Path.join([
+        agent_dir,
+        "sessions",
+        "--" <> String.replace(String.trim_leading(canonical, "/"), "/", "-") <> "--"
+      ])
+
+    File.mkdir_p!(store)
+
+    File.write!(
+      Path.join(store, "2026-10-13T10-00-00-000Z_01tool-0001.jsonl"),
+      Enum.map_join(
+        [
+          %{"type" => "title", "v" => 1, "title" => "Stored \e[1mwork\e[0m"},
+          %{"type" => "session", "id" => "01tool-0001", "cwd" => canonical},
+          %{"type" => "custom", "customType" => "session_exit"}
+        ],
+        "",
+        &(Jason.encode!(&1) <> "\n")
+      )
+    )
+
+    found = run(ctx.tool, %{"action" => "discover"}) |> assert_untrusted()
+
+    assert %{"action" => "discover", "sessions" => [%{"ompSessionId" => "01tool-0001"}]} =
+             found.details
+
+    assert text(found) =~ "- 01tool-0001 [empty] Stored work"
+
+    bad = run(ctx.tool, %{"action" => "discover", "cwd" => Path.join(ctx.ws, "missing")})
+    assert bad.is_error
+    assert %{"error" => "invalid_cwd"} = bad.details
+  end
+end
