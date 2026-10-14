@@ -34,6 +34,7 @@ defmodule LemonWeb.Router do
     pipe_through([:browser, :operator])
 
     get("/sessions/:session_key/export/:format", SessionExportController, :show)
+    get("/profiles/:id/export", ProfileExportController, :show)
 
     live_session :operator, on_mount: [{LemonWeb.LiveAuth, :require_operator}] do
       live("/", SessionLive, :index)
