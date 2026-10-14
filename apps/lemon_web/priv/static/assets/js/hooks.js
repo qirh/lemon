@@ -3,6 +3,7 @@
 
 import * as Theme from "/assets/js/theme.js"
 import {RuntimeHooks} from "/assets/js/runtime.js"
+import {Hooks as AutomationHooks} from "/assets/js/automation.js"
 
 let hljsPromise = null
 
@@ -182,5 +183,13 @@ export const ThemeSwitcher = {
   }
 }
 
-// Feature hooks register here (one import line per module).
-export const Hooks = {Highlight, CopyButton, AutoDismiss, Dropdown, ThemeSwitcher, ...RuntimeHooks}
+// Feature hooks register here (one import line per module, one spread per line).
+export const Hooks = {
+  Highlight,
+  CopyButton,
+  AutoDismiss,
+  Dropdown,
+  ThemeSwitcher,
+  ...RuntimeHooks,
+  ...AutomationHooks
+}

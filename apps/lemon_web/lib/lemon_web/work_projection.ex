@@ -3,15 +3,26 @@ defmodule LemonWeb.WorkProjection do
   Bounded, allowlisted operator projections over the canonical automation services.
 
   Private records exist only during a service call. Socket state contains safe IDs,
-  labels, counters, validated session keys and opaque revisions, never objectives,
-  prompts, execution options or result bodies. A failed lookup is not empty state.
+  labels, counters, enums, timestamps, validated session keys and opaque revisions,
+  never objectives, prompts, commands, execution options or result bodies. A failed
+  lookup is not empty state.
+
+  Writes (`execute/3`, `create_cron/1`, `update_cron/2`, `set_goal/1`) call the same
+  shared services the control plane uses. Every control on an existing record is
+  bound to the opaque revision the operator previewed and is refused when stale.
   """
 
   alias LemonAgent.Workspace.{GoalStore, KanbanStore}
-  alias LemonAutomation.{CronManager, GoalLoopManager, KanbanDispatcher}
+  alias LemonAutomation.{CronManager, CronSchedule, GoalLoopManager, KanbanDispatcher}
   alias LemonMemory.Safety
+  alias LemonWeb.CronText
 
   @limits %{boards: 12, goals: 25, cron: 25}
+  @card_limit 30
+  @run_limit 5
+  @prompt_max_bytes 16_000
+  @objective_max_bytes 8_000
+  @agent_regex ~r/\A[A-Za-z0-9_-]{1,64}\z/
 
   def snapshot(previous \\ %{}) do
     %{
@@ -56,6 +67,8 @@ defmodule LemonWeb.WorkProjection do
   end
 
   def limit(kind), do: Map.fetch!(@limits, kind)
+  def card_limit, do: @card_limit
+  def run_limit, do: @run_limit
 
   def target(snapshot, kind, id) when kind in [:boards, :goals, :cron] do
     case snapshot[kind] do
@@ -73,20 +86,30 @@ defmodule LemonWeb.WorkProjection do
   def actions(%{kind: :goals, runtime: "idle", status: "paused"}), do: ["resume"]
   def actions(%{kind: :cron, runtime: "unavailable"}), do: []
 
-  def actions(%{kind: :cron, status: status, runs: runs}) do
+  def actions(%{kind: :cron, status: status} = row) do
     schedule = if status == "enabled", do: ["pause"], else: ["resume"]
 
-    if Enum.any?(runs, &(&1.status in ["pending", "running", "reconciling"])),
+    if active_run?(row),
       do: schedule,
-      else: ["run" | schedule]
+      else: ["run" | schedule] ++ ["remove"]
   end
 
   def actions(_), do: []
 
+  @doc "Whether a cron row has a pending, running or reconciling invocation."
+  def active_run?(%{kind: :cron, runs: runs}),
+    do: Enum.any?(runs, &(&1.status in ["pending", "running", "reconciling"]))
+
+  def active_run?(_), do: false
+
   def execute(row, action, run_id \\ nil) do
+    guarded(fn -> mutate(row, action, run_id) end)
+  end
+
+  defp guarded(fun) do
     result =
       try do
-        mutate(row, action, run_id)
+        fun.()
       rescue
         _ -> {:error, :outcome_unknown}
       catch
@@ -137,6 +160,9 @@ defmodule LemonWeb.WorkProjection do
   defp mutate(%{kind: :cron} = row, action, _) when action in ["pause", "resume"],
     do: call(CronManager, :update, [row.id, %{enabled: action == "resume"}, row.revision])
 
+  defp mutate(%{kind: :cron} = row, "remove", _),
+    do: call(CronManager, :remove, [row.id, row.revision])
+
   defp mutate(%{kind: :cron} = row, "abort", run_id) do
     run = Enum.find(row.runs, &(&1.id == run_id and &1.abortable))
     if run, do: call(CronManager, :abort_run, [run.id, run.revision]), else: {:error, :stale}
@@ -144,11 +170,214 @@ defmodule LemonWeb.WorkProjection do
 
   defp mutate(_, _, _), do: {:error, :refused}
 
+  # ── Cron create / edit ────────────────────────────────────────────────────
+
+  @doc """
+  Validates a cron schedule draft and previews it: normalized expression,
+  human-readable text and the next three run times (ms). Errors are bounded,
+  operator-input-derived text.
+  """
+  def schedule_preview(schedule, timezone) do
+    timezone = timezone(timezone)
+
+    with {:ok, expression} <- normalize_schedule(schedule) do
+      next =
+        expression
+        |> CronSchedule.next_runs(timezone, count: 3)
+        |> Enum.map(&DateTime.to_unix(&1, :millisecond))
+
+      {:ok,
+       %{
+         expression: expression,
+         text: CronText.describe(expression),
+         zone: CronText.zone(timezone),
+         next: next
+       }}
+    end
+  end
+
+  defp normalize_schedule(value) when is_binary(value) and byte_size(value) <= 96 do
+    with {:ok, expression} <- CronSchedule.normalize(value),
+         {:ok, _} <- CronSchedule.parse(expression) do
+      {:ok, expression}
+    else
+      {:error, reason} -> {:error, bounded(reason)}
+    end
+  rescue
+    _ -> {:error, "Schedule is not valid."}
+  end
+
+  defp normalize_schedule(_), do: {:error, "Schedule is too long."}
+
+  @doc """
+  Validates a create/edit form. Returns `{:ok, attrs}` (prompt included only
+  when supplied; callers must not retain it) or `{:error, errors}` keyed by field.
+  `mode: :create` requires agent and prompt.
+  """
+  def validate_cron(params, mode) when mode in [:create, :edit] and is_map(params) do
+    name = params |> Map.get("name", "") |> to_string() |> String.trim()
+    agent = params |> Map.get("agent", "") |> to_string() |> String.trim()
+    prompt = params |> Map.get("prompt", "") |> to_string() |> String.trim()
+    timezone = timezone(params["timezone"])
+
+    errors =
+      []
+      |> check(:name, name == "", "Enter a name.")
+      |> check(:name, byte_size(name) > 96, "Use at most 96 characters.")
+      |> check(:name, String.contains?(name, ["\n", "\r"]), "Use a single line.")
+      |> check(
+        :agent,
+        mode == :create and not Regex.match?(@agent_regex, agent),
+        "Use an agent ID of letters, numbers, - or _."
+      )
+      |> check(:prompt, mode == :create and prompt == "", "Describe what the agent should do.")
+      |> check(:prompt, byte_size(prompt) > @prompt_max_bytes, "Prompt is too long (16 KB max).")
+
+    schedule = schedule_preview(params["schedule"] || "", timezone)
+
+    errors =
+      if match?({:error, _}, schedule),
+        do: [{:schedule, elem(schedule, 1)} | errors],
+        else: errors
+
+    timeout = minutes(params["timeout_minutes"])
+    errors = check(errors, :timeout_minutes, is_nil(timeout), "Choose a timeout.")
+
+    case errors do
+      [] ->
+        {:ok, preview} = schedule
+
+        attrs =
+          %{
+            name: name,
+            schedule: preview.expression,
+            timezone: timezone,
+            enabled: params["enabled"] in ["true", true],
+            timeout_ms: timeout * 60_000
+          }
+          |> then(&if(prompt != "", do: Map.put(&1, :prompt, prompt), else: &1))
+          |> then(
+            &if(mode == :create,
+              do: Map.merge(&1, %{agent_id: agent, session_key: "agent:#{agent}:main"}),
+              else: &1
+            )
+          )
+
+        {:ok, attrs}
+
+      errors ->
+        {:error, errors |> Enum.reverse() |> Enum.uniq_by(&elem(&1, 0)) |> Map.new()}
+    end
+  end
+
+  defp check(errors, field, true, message), do: [{field, message} | errors]
+  defp check(errors, _field, _false, _message), do: errors
+
+  defp minutes(value) do
+    case Integer.parse(to_string(value || "")) do
+      {n, ""} when n in 1..240 -> n
+      _ -> nil
+    end
+  end
+
+  @doc "Creates an agent cron job. Returns `{:ok, id}` or a safe error atom/message."
+  def create_cron(attrs) do
+    case safe_call(fn -> call(CronManager, :add, [attrs]) end) do
+      {:ok, %{id: id}} -> {:ok, required_id(id)}
+      {:error, reason} -> {:error, write_error(reason)}
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  @doc "Updates the exact previewed job revision. Prompt replaces only when supplied."
+  def update_cron(%{kind: :cron, id: id, revision: revision, mode: mode}, attrs) do
+    attrs = if mode == "agent", do: attrs, else: Map.delete(attrs, :prompt)
+
+    case safe_call(fn -> call(CronManager, :update, [id, attrs, revision]) end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, write_error(reason)}
+      _ -> {:error, :outcome_unknown}
+    end
+  end
+
+  @doc "Sets a durable goal for a session (write-only objective)."
+  def set_goal(params) when is_map(params) do
+    session = session(String.trim(to_string(params["session"] || "")))
+    objective = params |> Map.get("objective", "") |> to_string() |> String.trim()
+    budget = params["max_continuations"] |> to_string() |> String.trim()
+
+    budget =
+      case Integer.parse(budget) do
+        {n, ""} when n in 1..1000 -> n
+        _ when budget == "" -> nil
+        _ -> :invalid
+      end
+
+    errors =
+      []
+      |> check(:session, is_nil(session), "Enter a valid session key, e.g. agent:default:main.")
+      |> check(:objective, objective == "", "Describe the goal.")
+      |> check(
+        :objective,
+        byte_size(objective) > @objective_max_bytes,
+        "Goal is too long (8 KB max)."
+      )
+      |> check(:max_continuations, budget == :invalid, "Use a number from 1 to 1000.")
+
+    if errors == [] do
+      opts = if budget, do: [budget: %{"max_continuations" => budget}], else: []
+
+      case safe_call(fn -> call(GoalLoopManager, :set_goal, [session, objective, opts]) end) do
+        {:ok, _} -> {:ok, session}
+        {:error, :already_running} -> {:error, :already_running}
+        {:error, reason} -> {:error, write_error(reason)}
+        _ -> {:error, :outcome_unknown}
+      end
+    else
+      {:error, errors |> Enum.reverse() |> Enum.uniq_by(&elem(&1, 0)) |> Map.new()}
+    end
+  end
+
+  defp safe_call(fun) do
+    fun.()
+  rescue
+    _ -> {:error, :outcome_unknown}
+  catch
+    _, _ -> {:error, :outcome_unknown}
+  end
+
+  defp write_error(:stale), do: :stale
+  defp write_error(:not_found), do: :not_found
+  defp write_error(:outcome_unknown), do: :outcome_unknown
+  defp write_error({:invalid_schedule, _}), do: :invalid_schedule
+  defp write_error({:missing_keys, _}), do: :invalid
+  defp write_error({:invalid_target, _}), do: :invalid
+  defp write_error({:immutable_fields, _}), do: :invalid
+  defp write_error(_), do: :refused
+
+  @doc "Safe agent IDs for the create form (from `agents.list`)."
+  def agent_ids(payload) do
+    case payload do
+      %{"agents" => agents} when is_list(agents) ->
+        agents
+        |> Enum.map(&(is_map(&1) && (&1["id"] || &1["agentId"])))
+        |> Enum.filter(&(is_binary(&1) and Regex.match?(@agent_regex, &1)))
+        |> Enum.uniq()
+        |> Enum.take(50)
+
+      _ ->
+        []
+    end
+  end
+
+  # ── Projections ───────────────────────────────────────────────────────────
+
   defp board(raw) do
     id = required_id(raw.id)
 
     tasks =
-      call(KanbanStore, :list_tasks, [id, [limit: 30, strict: true]]) |> strict_rows(30, &card/1)
+      call(KanbanStore, :list_tasks, [id, [limit: @card_limit, strict: true]])
+      |> strict_rows(@card_limit, &card/1)
 
     runtime = runtime(fn -> call(KanbanDispatcher, :status, [id]) end, :dispatcher)
 
@@ -172,13 +401,19 @@ defmodule LemonWeb.WorkProjection do
   defp outcome(_), do: nil
 
   defp card(raw) do
+    meta = if is_map(raw[:meta]), do: raw[:meta], else: %{}
+
     %{
       id: required_id(raw.id),
       label: label(raw[:title]),
       status: label(raw[:status]),
+      priority: enum(raw[:priority], ~w(low normal high urgent)),
       session: session(raw[:session_key]),
-      result: outcome(get_in(raw, [:meta, "kanbanRun", "status"])),
-      workflow: workflow(get_in(raw, [:meta, "codingWorkflow"]))
+      result: outcome(get_in(meta, ["kanbanRun", "status"])),
+      attempt: count(get_in(meta, ["kanbanLease", "attempt"])),
+      needs_retry: Map.has_key?(meta, "lastFailure"),
+      updated_at_ms: timestamp_ms(raw[:updated_at_ms]),
+      workflow: workflow(meta["codingWorkflow"])
     }
   end
 
@@ -233,6 +468,10 @@ defmodule LemonWeb.WorkProjection do
 
   defp goal(raw) do
     key = session(raw[:session_key])
+    meta = if is_map(raw[:meta]), do: raw[:meta], else: %{}
+    loop = meta["goalLoop"] || %{}
+    loop = if is_map(loop), do: loop, else: %{}
+    budget = if is_map(raw[:budget]), do: raw[:budget], else: %{}
 
     runtime =
       if key,
@@ -244,12 +483,27 @@ defmodule LemonWeb.WorkProjection do
       id: required_id(raw.id),
       label: "Goal",
       session: key,
+      agent: agent(raw[:agent_id]),
       status: enum(raw[:status], ~w(active paused completed)),
       runtime: runtime.status,
       revision: runtime.revision,
       continuation_count: count(raw[:continuation_count]),
+      max_continuations: positive(budget["max_continuations"] || budget[:max_continuations]),
+      loop_status:
+        optional_enum(
+          loop["status"],
+          ~w(running reconciling stopped finished limit_reached error)
+        ),
+      last_action:
+        optional_enum(
+          get_in(loop, ["lastVerdict", "action"]),
+          ~w(continue done blocked needs_input)
+        ),
+      verdict_count: count(loop["verdictCount"]),
+      auto: get_in(loop, ["auto", "enabled"]) == true,
+      updated_at_ms: timestamp_ms(raw[:updated_at_ms]),
       running_count: runtime.count,
-      result: outcome(get_in(raw, [:meta, "lastResult", "status"]))
+      result: outcome(get_in(meta, ["lastResult", "status"]))
     }
   end
 
@@ -258,7 +512,8 @@ defmodule LemonWeb.WorkProjection do
 
     runs =
       section(fn ->
-        call(CronManager, :runs, [id, [limit: 5, strict: true]]) |> strict_rows(5, &run/1)
+        call(CronManager, :runs, [id, [limit: @run_limit, strict: true]])
+        |> strict_rows(@run_limit, &run/1)
       end)
 
     %{
@@ -270,9 +525,15 @@ defmodule LemonWeb.WorkProjection do
       revision: CronManager.control_revision(raw),
       runs: runs.items,
       session: session(raw.session_key),
+      mode: if(present?(Map.get(raw, :command)), do: "command", else: "agent"),
+      agent: agent(Map.get(raw, :agent_id)),
       schedule: schedule(raw.schedule),
+      schedule_text: CronText.describe(schedule(raw.schedule)),
+      timezone: timezone(Map.get(raw, :timezone)),
+      timeout_ms: timestamp_ms(Map.get(raw, :timeout_ms)),
       model: model(Map.get(raw, :model) || Map.get(raw, :captured_default_model)),
-      next_run: if(raw.enabled, do: timestamp(raw.next_run_at_ms), else: "Paused")
+      next_run_at_ms: if(raw.enabled, do: timestamp_ms(Map.get(raw, :next_run_at_ms))),
+      last_run_at_ms: timestamp_ms(Map.get(raw, :last_run_at_ms))
     }
   end
 
@@ -292,6 +553,8 @@ defmodule LemonWeb.WorkProjection do
       abortable:
         active and not unknown and meta[:abort_requested] != true and
           meta["abort_requested"] != true,
+      triggered_by: optional_enum(Map.get(raw, :triggered_by), ~w(schedule manual wake retry)),
+      started_at_ms: timestamp_ms(Map.get(raw, :started_at_ms)),
       duration_ms: count(raw.duration_ms),
       retry_attempt: count(meta[:retry_attempt] || meta["retry_attempt"]),
       session:
@@ -369,6 +632,12 @@ defmodule LemonWeb.WorkProjection do
 
   defp session(_), do: nil
 
+  defp agent(value) when is_binary(value) do
+    if Regex.match?(@agent_regex, value) and safe?(value), do: value, else: nil
+  end
+
+  defp agent(_), do: nil
+
   defp safe?(value), do: Safety.redact_for_operator(value, max_bytes: 256) == {value, 0}
 
   defp label(value) when is_binary(value) do
@@ -378,10 +647,32 @@ defmodule LemonWeb.WorkProjection do
   end
 
   defp label(_), do: "Untitled"
+
+  defp bounded(value) when is_binary(value),
+    do: LemonWeb.ManagementText.text(value, max_bytes: 160)
+
+  defp bounded(_), do: "Schedule is not valid."
+
   defp enum(value, allowed) when is_atom(value), do: enum(Atom.to_string(value), allowed)
   defp enum(value, allowed), do: if(value in allowed, do: value, else: "unknown")
+
+  defp optional_enum(nil, _allowed), do: nil
+
+  defp optional_enum(value, allowed) when is_atom(value),
+    do: optional_enum(Atom.to_string(value), allowed)
+
+  defp optional_enum(value, allowed), do: if(value in allowed, do: value)
+
   defp count(value) when is_integer(value) and value >= 0, do: value
   defp count(_), do: 0
+  defp positive(value) when is_integer(value) and value > 0, do: value
+  defp positive(_), do: nil
+  defp timestamp_ms(value) when is_integer(value) and value > 0, do: value
+  defp timestamp_ms(_), do: nil
+  defp timezone("local"), do: "local"
+  defp timezone(_), do: "UTC"
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_), do: false
 
   defp model(value) when is_binary(value) do
     if byte_size(value) in 1..96 and Regex.match?(~r/\A[A-Za-z0-9_.:-]+\z/, value) and
@@ -400,14 +691,6 @@ defmodule LemonWeb.WorkProjection do
 
   defp schedule(_), do: "Custom schedule"
 
-  defp timestamp(value) when is_integer(value) do
-    case DateTime.from_unix(value, :millisecond) do
-      {:ok, time} -> Calendar.strftime(time, "%b %d, %H:%M UTC")
-      _ -> "Not scheduled"
-    end
-  end
-
-  defp timestamp(_), do: "Not scheduled"
   defp unknown?(:outcome_unknown), do: true
   defp unknown?("outcome_unknown"), do: true
   defp unknown?(%{router_abort: status}) when status in [:unavailable, :rejected], do: true

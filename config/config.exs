@@ -18,7 +18,12 @@ config :phoenix, :filter_parameters, [
   "credential_ref",
   "credentialRef",
   "hosted_werewolf_",
-  "params"
+  "params",
+  # Private conversation and automation content typed into Lemon Web forms.
+  "prompt",
+  "objective",
+  "message",
+  "guidance"
 ]
 
 config :logger, :default_formatter,
