@@ -43,6 +43,8 @@ defmodule LemonOmp do
           | {:startup_failed, String.t()}
           | :startup_failed
           | :outcome_unknown
+          | {:outcome_unknown, String.t()}
+          | :invalid_message
           | :unavailable
 
   @doc "Bus topic carrying `:omp_session` events."
@@ -134,6 +136,12 @@ defmodule LemonOmp do
             # an idle process behind.
             :ok = Session.close(pid)
             error
+
+          {:error, :outcome_unknown} ->
+            # omp never acknowledged the prompt, so it may or may not run. Keep
+            # the process and hand back its fixed id so the caller can
+            # reconcile (status) or close it instead of retrying blind.
+            {:error, {:outcome_unknown, id}}
 
           result ->
             result
@@ -295,6 +303,10 @@ defmodule LemonOmp do
   def error_message({:startup_failed, message}), do: "omp failed to start: #{message}"
   def error_message(:startup_failed), do: "omp failed to start."
 
+  def error_message({:outcome_unknown, id}),
+    do:
+      "omp did not confirm the prompt in time; session #{id} may already be working on it. Check its status before retrying."
+
   def error_message(:outcome_unknown),
     do:
       "omp did not confirm the request in time; it may already have taken effect. Check the session status before retrying."
@@ -396,7 +408,14 @@ defmodule LemonOmp do
   defp clamp(_value, default, _max), do: default
 
   defp version(executable) do
-    key = {__MODULE__, :version, executable}
+    # Keyed by the binary's mtime so an upgraded omp reports its new version.
+    mtime =
+      case File.stat(executable, time: :posix) do
+        {:ok, %{mtime: mtime}} -> mtime
+        _ -> nil
+      end
+
+    key = {__MODULE__, :version, executable, mtime}
 
     case :persistent_term.get(key, :unknown) do
       :unknown ->

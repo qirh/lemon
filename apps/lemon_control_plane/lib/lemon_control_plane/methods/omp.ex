@@ -92,6 +92,17 @@ defmodule LemonControlPlane.Methods.OmpSupport do
      )}
   end
 
+  # A start whose prompt omp never acknowledged: the invocation exists and may
+  # be working, so return its fixed id for reconciliation.
+  def error({:outcome_unknown, id}, context) when is_binary(id) do
+    {:error,
+     Errors.error(
+       :unavailable,
+       LemonOmp.error_message({:outcome_unknown, id}),
+       Map.merge(context, %{"code" => "OMP_OUTCOME_UNKNOWN", "retrySafe" => false, "id" => id})
+     )}
+  end
+
   def error(reason, _context) do
     {code, public_code, details} = classify(reason)
 
