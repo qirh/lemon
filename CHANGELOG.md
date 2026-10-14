@@ -10,6 +10,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
+  control-plane methods and events as the TUI. Chat streams Markdown with
+  highlighted code, thinking blocks and rich tool cards (shell output and exit
+  status, diffs, reads, searches, todos, subagents), with attachments,
+  follow-up/steer/redirect queueing, stop, inline approvals, model/thinking/
+  tool-policy pickers, plan mode with Approve & execute / Refine, a context
+  usage inspector with Compact, a git Changes viewer, fork and split view. New
+  pages: omp, session manager, automation (kanban, goals, cron create/edit),
+  blueprints, skills, memory, MCP, nodes, models, usage, diagnostics and
+  settings; plus a ⌘K command palette with global search, `?` shortcut help,
+  `g` navigation chords, run/approval notifications, light/dark themes and
+  phone layouts. See [Use Lemon in a Browser](docs/user-guide/web.md).
+- Control-plane methods for the web UI: `sessions.changes` (git status and
+  bounded diffs of a session workspace), `doctor.run` (read-only `lemon doctor`
+  checks), skill, MCP and node listings and lifecycle actions, `usage.cost`
+  breakdowns by provider/model/session/day, and model pricing in
+  `models.list`. `ProviderConfiguration` can set the default model and thinking
+  level with the same preview/apply revision flow.
 - **Delegate work to omp.** Lemon can run tasks in
   [omp](https://github.com/can1357/oh-my-pi) sessions: ask in chat ("run this
   in omp"), use the TUI's `/omp` panel, or `lemon omp start`. Lemon starts omp
@@ -73,6 +91,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- **Lemon Web sign-in uses the operator token.** Every page now requires the
+  control-plane operator token (the launcher-managed token by default) through
+  a login page; `lemon web` signs in automatically via the URL fragment. The
+  separate `LEMON_WEB_ACCESS_TOKEN`, `?token=` login, the optional unauthenticated
+  chat route and the `/manage/*` pages are removed. Without a token the UI fails
+  closed unless tokenless loopback compatibility is explicitly enabled and the
+  peer is loopback; failed logins are throttled.
+
 - Anthropic OAuth sign-in no longer runs `claude setup-token` or copies Claude
   Code's credentials; a pasted setup token is still accepted.
   `LEMON_ANTHROPIC_CLAUDE_PATH` is removed.
@@ -98,6 +124,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   agent CLIs (`claude`, `codex`, `copilot`); an existing value is left as is.
 
 ### Fixed
+
+- `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;
+  the router previously merged the whole policy row instead of its tool policy.
+- Usage is recorded: `usage.status`/`usage.cost` were always zero because
+  finished runs were never added to a ledger. `logs.tail` now returns recent
+  runtime log lines from a bounded in-memory buffer.
 
 - The TUI no longer rewrites `~/.lemon/config.toml` with a deprecated `[agent]`
   table when you pick a default model (Ctrl+G / **Make default**) or run
