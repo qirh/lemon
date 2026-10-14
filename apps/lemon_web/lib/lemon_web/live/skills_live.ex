@@ -476,7 +476,7 @@ defmodule LemonWeb.SkillsLive do
               {"attention", "Needs setup", if(@attention_count > 0, do: @attention_count)}
             ]}
           />
-          <form phx-change="source" class="ml-auto">
+          <form id="skills-source-form" phx-change="source" class="ml-auto">
             <label for="skills-source" class="sr-only">Source</label>
             <select id="skills-source" name="source" class="input h-8 w-auto py-0 pr-8 text-xs">
               <option value="all" selected={@source == "all"}>All sources</option>
@@ -684,7 +684,7 @@ defmodule LemonWeb.SkillsLive do
           label="Search the Hermes catalog"
           class="w-full sm:w-72"
         />
-        <form phx-change="catalog_category">
+        <form id="catalog-category-form" phx-change="catalog_category">
           <label for="catalog-category" class="sr-only">Category</label>
           <select id="catalog-category" name="category" class="input h-8 w-auto py-0 pr-8 text-xs">
             <option value="all" selected={@category == "all"}>All categories</option>
