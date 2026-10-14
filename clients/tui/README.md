@@ -158,7 +158,19 @@ remains a legacy client-side alias; it does not configure the daemon.
 - Progressive-disclosure status bar: model and context gauge stay pinned;
   last-run token usage and reported USD cost are separate from context size,
   followed by git branch, connection state, submission mode and session counters.
-  Unknown cost is omitted, never estimated.
+  Unknown cost is omitted, never estimated. A focused session with stored history
+  but no run usage yet is measured once through `sessions.context`, and `/context`
+  refreshes the gauge with the daemon's measurement; a later run's usage supersedes it.
+- `/context` (or `/ctx`) opens a scrollable breakdown of the focused session's
+  context window: a 100-cell usage grid colored per category with free space dimmed,
+  per-category tokens and share of the window (system prompt, tools, skills, context
+  files, memory, messages, tool results, summaries), free space, auto-compaction
+  headroom, the largest contributors, and how the figures were measured. Splits
+  are ≈4 chars/token estimates scaled to the provider-reported total. In Tern the
+  panel is a native sheet whose meter matches the composer's context meter, split
+  by category, and clicking the composer meter opens it. It needs a daemon that
+  advertises `sessions.context`, is never queued offline, and says "No context
+  recorded yet" for a session that has not run a prompt.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
   support in overlays.
 - Native terminal integration: Tern pane detection, prompt/reply navigation
@@ -280,6 +292,7 @@ and control plane authoritative:
 | `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compact [focus instructions…]`, `/compress [focus instructions…]` | Manually compact the current session through `sessions.compact`, with optional instructions about what context to preserve. |
+| `/context`, `/ctx` | Show the focused session's context-window breakdown from `sessions.context`: usage grid, per-category tokens, free space, compaction headroom and largest contributors. Esc closes. |
 | `/plan [request…]` | Toggle plan mode for the focused session: the agent plans read-only, then asks for approval before executing. With a request, enter plan mode (if needed) and send it as the planning prompt. |
 | `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
 | `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |

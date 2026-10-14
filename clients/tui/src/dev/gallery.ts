@@ -13,18 +13,21 @@
  *   bun run gallery --state error            one state (repeatable, or a,b)
  *   bun run gallery --width 100              one width (repeatable, or 80,120)
  *   bun run gallery --plain                  strip ANSI (diffable output)
- *   bun run gallery --section diff           one section: tools|diff|shelf|accordion
+ *   bun run gallery --section diff           one section: tools|diff|shelf|accordion|context
  *   bun run gallery --list                   fixture names, states, sections
  */
 
 import { truncateToWidth, visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { parseSessionsContext } from "../protocol/context-usage.ts";
 import { AccordionComponent, type AccordionState } from "../ui/components/accordion.ts";
+import { ContextPanelComponent } from "../ui/components/context-panel.ts";
 import { renderDiff } from "../ui/components/diff.ts";
 import { ReasoningComponent } from "../ui/components/reasoning-block.ts";
 import { ToolCardComponent } from "../ui/components/tool-card.ts";
 import { ToolShelfComponent } from "../ui/components/tool-shelf.ts";
 import { getTheme, initTheme } from "../ui/theme/theme.ts";
 import { buildDiffText, serverDiffToRows, type ToolCardState } from "../ui/tool-view.ts";
+import { estimatedContextFixture, reportedContextFixture } from "./fixtures/context-fixtures.ts";
 import {
 	fixtureBlock,
 	reasoningFixtureBlock,
@@ -42,7 +45,7 @@ const STATE_LABELS: Record<ToolCardState, string> = {
 	unknown: "outcome unknown",
 };
 
-const SECTIONS = ["tools", "diff", "shelf", "accordion"] as const;
+const SECTIONS = ["tools", "diff", "shelf", "accordion", "context"] as const;
 type Section = (typeof SECTIONS)[number];
 
 /** Fixed clock so repeated runs are byte-identical (and diffable). */
@@ -132,8 +135,8 @@ export function parseGalleryArgs(argv: readonly string[]): GalleryOptions {
 	if (options.widths.length === 0) options.widths = [80, 120];
 	if (options.states.length === 0) options.states = [...STATES];
 	if (options.sections.length === 0) {
-		// `--tool` is a tool-section filter; the diff/shelf/accordion sections are
-		// not per-tool, so asking for one tool means asking for that section.
+		// `--tool` is a tool-section filter; the other sections are not per-tool,
+		// so asking for one tool means asking for that section.
 		options.sections = options.tool ? ["tools"] : [...SECTIONS];
 	}
 	return options;
@@ -287,6 +290,25 @@ export function renderAccordionSection(width: number): string[] {
 	return out;
 }
 
+/** The `/context` overlay, tall enough that nothing scrolls out of view. */
+export function renderContextSection(width: number): string[] {
+	const out: string[] = [...rule(`context panel @${width}`, width)];
+	const samples = [
+		{ label: "  provider-reported, live overhead", raw: reportedContextFixture("gallery") },
+		{ label: "  estimated, overhead not itemized", raw: estimatedContextFixture("gallery") },
+	];
+	for (const sample of samples) {
+		out.push(...subheading(sample.label, width));
+		const panel = new ContextPanelComponent(parseSessionsContext(sample.raw), {
+			rows: () => 200,
+			close: () => {},
+			repaint: () => {},
+		});
+		out.push(...panel.render(width));
+	}
+	return out;
+}
+
 export function renderGallery(options: GalleryOptions): string[] {
 	if (options.list) {
 		return [
@@ -302,6 +324,7 @@ export function renderGallery(options: GalleryOptions): string[] {
 		if (options.sections.includes("diff")) out.push(...renderDiffSection(width));
 		if (options.sections.includes("shelf")) out.push(...renderShelfSection(width));
 		if (options.sections.includes("accordion")) out.push(...renderAccordionSection(width));
+		if (options.sections.includes("context")) out.push(...renderContextSection(width));
 	}
 	return options.plain ? out.map(stripAnsi) : out;
 }

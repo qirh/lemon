@@ -85,6 +85,7 @@ const DEFAULT_METHODS = [
 	"sessions.reset",
 	"sessions.delete",
 	"sessions.compact",
+	"sessions.context",
 	"session.detail",
 	"commands.catalog",
 	"agents.list",
@@ -231,6 +232,19 @@ export class FakeControlPlane {
 	/** Never answer `method` — used to exercise request timeouts. */
 	silenceMethod(method: string): this {
 		return this.onMethod(method, () => NO_RESPONSE);
+	}
+
+	/**
+	 * Script `sessions.context` with wire receipts by session key (see
+	 * `fixtures/context-fixtures.ts`). Any other session answers NOT_FOUND, as a
+	 * session without durable history does on the real daemon.
+	 */
+	serveSessionContext(receipts: Readonly<Record<string, unknown>>): this {
+		return this.onMethod("sessions.context", (params: { sessionKey?: string }) => {
+			const key = params?.sessionKey;
+			if (typeof key === "string" && Object.hasOwn(receipts, key)) return receipts[key];
+			return errorResult("NOT_FOUND", "session not found");
+		});
 	}
 
 	/** Push an event frame to every connected socket. */

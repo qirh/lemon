@@ -511,6 +511,36 @@ describe("SessionStore context tokens", () => {
 	test("is undefined before any run has completed", () => {
 		expect(new SessionStore("s").contextTokens).toBeUndefined();
 	});
+
+	test("a sessions.context measurement wins until the next run reports usage", () => {
+		const session = new SessionStore("s");
+		session.applyUsage({ contextTokens: 5_000 });
+		session.applyContextMeasurement(45_210, 200_000);
+		expect(session.contextTokens).toBe(45_210);
+		expect(session.contextMeasurement).toEqual({ tokens: 45_210, window: 200_000 });
+		session.applyUsage({ contextTokens: 47_000 });
+		expect(session.contextTokens).toBe(47_000);
+		expect(session.contextMeasurement).toBeUndefined();
+	});
+
+	test("a model change keeps the measured total but drops its window", () => {
+		const session = new SessionStore("s");
+		session.setModel({ model: "claude-sonnet-4-5" }, "run");
+		session.applyContextMeasurement(1_000, 200_000);
+		session.setModel({ model: "gpt-4o" }, "local");
+		expect(session.contextMeasurement).toEqual({ tokens: 1_000, window: undefined });
+	});
+
+	test("ignores nonsense measurements and forgets them on reset", () => {
+		const session = new SessionStore("s");
+		session.applyContextMeasurement(-1, 200_000);
+		session.applyContextMeasurement(Number.NaN, 200_000);
+		expect(session.contextMeasurement).toBeUndefined();
+		session.applyContextMeasurement(0, null);
+		expect(session.contextTokens).toBe(0);
+		session.resetTranscript();
+		expect(session.contextMeasurement).toBeUndefined();
+	});
 });
 
 test("a notice seals text layout without hiding the later interrupt outcome", () => {

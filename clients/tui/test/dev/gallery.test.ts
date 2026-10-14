@@ -27,7 +27,7 @@ describe("argument parsing", () => {
 		const options = parseGalleryArgs([]);
 		expect(options.widths).toEqual([80, 120]);
 		expect(options.states).toEqual(["streaming", "running", "success", "error"]);
-		expect(options.sections).toEqual(["tools", "diff", "shelf", "accordion"]);
+		expect(options.sections).toEqual(["tools", "diff", "shelf", "accordion", "context"]);
 	});
 
 	test("accepts repeated and comma-separated values", () => {
@@ -98,7 +98,7 @@ describe("rendering", () => {
 	});
 
 	test("each section renders on its own", () => {
-		for (const section of ["tools", "diff", "shelf", "accordion"]) {
+		for (const section of ["tools", "diff", "shelf", "accordion", "context"]) {
 			const lines = renderGallery({
 				widths: [80],
 				states: ["success"],
