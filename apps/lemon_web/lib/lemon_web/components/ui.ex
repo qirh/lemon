@@ -844,7 +844,7 @@ defmodule LemonWeb.UI do
         aria-controls={"#{@id}-menu"}
         aria-label={@label}
         data-dropdown-trigger
-        class="contents"
+        class="inline-flex max-w-full items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
       >
         {render_slot(@trigger)}
       </button>

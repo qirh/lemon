@@ -165,7 +165,7 @@ defmodule LemonWeb.NodesLive do
         "active" -> {"success", "Session active"}
         "expired" -> {"warning", "Session expired"}
         "revoked" -> {"danger", "Revoked"}
-        "none" -> {"neutral", "Legacy session"}
+        "none" -> {"neutral", "No session"}
         _ -> {"neutral", "Unknown"}
       end
 
@@ -271,7 +271,7 @@ defmodule LemonWeb.NodesLive do
           <ul id="nodes-list" role="list" class="divide-y divide-line">
             <li :if={@shown == []} class="px-4 py-8 text-center text-[13px] text-muted">No nodes match.</li>
             <li :for={node <- @shown} id={"node-#{node["id"]}"} class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-              <div class="flex min-w-0 flex-1 items-center gap-3">
+              <div class="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
                 <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-surface-2 text-muted">
                   <.icon name="server" class="h-4 w-4" />
                 </span>

@@ -300,10 +300,10 @@ defmodule LemonWeb.McpLive do
                   <span class="tabular-nums text-fg">{server["toolCount"] || 0}</span> tools
                 </span>
                 <span :if={(server["resourceCount"] || 0) > 0} class="tabular-nums">
-                  {server["resourceCount"]} resources
+                  {server["resourceCount"]} {if server["resourceCount"] == 1, do: "resource", else: "resources"}
                 </span>
                 <span :if={(server["promptCount"] || 0) > 0} class="tabular-nums">
-                  {server["promptCount"]} prompts
+                  {server["promptCount"]} {if server["promptCount"] == 1, do: "prompt", else: "prompts"}
                 </span>
                 <span class="ml-auto">
                   <.badge tone={if server["approval"] == "always", do: "warning", else: "neutral"} icon="shield-check">
@@ -361,7 +361,7 @@ defmodule LemonWeb.McpLive do
           <h3 class="text-2xs font-semibold uppercase tracking-wide text-subtle">Published tools</h3>
           <span class="text-xs text-subtle">{length(@tools)}</span>
         </div>
-        <form :if={length(@tools) > 6} phx-change="tool_search" class="mb-2">
+        <form :if={length(@tools) > 6} id="mcp-tool-search-form" phx-change="tool_search" class="mb-2">
           <label for="mcp-tool-search" class="sr-only">Filter tools</label>
           <input
             id="mcp-tool-search"
@@ -384,7 +384,9 @@ defmodule LemonWeb.McpLive do
               <.badge :if={tool["kind"] != "tool"} tone="info">{tool["kind"]}</.badge>
             </div>
             <p :if={tool["description"]} class="mt-0.5 line-clamp-2 text-xs text-muted">{tool["description"]}</p>
-            <p class="mt-0.5 truncate font-mono text-2xs text-subtle" title="Name agents see">{tool["name"]}</p>
+            <p :if={tool["remoteName"]} class="mt-0.5 truncate font-mono text-2xs text-subtle" title="Name agents see">
+              {tool["name"]}
+            </p>
           </li>
           <li :if={@shown_tools == []} class="px-3 py-4 text-center text-xs text-muted">No tools match.</li>
         </ul>
