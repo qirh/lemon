@@ -159,7 +159,12 @@ defmodule LemonWeb.ManagementLiveTest do
           }
         end
 
-      invalid = %{run_id: "/private/repo", session_key: "agent:web_bounded:main", started_at_ms: 100}
+      invalid = %{
+        run_id: "/private/repo",
+        session_key: "agent:web_bounded:main",
+        started_at_ms: 100
+      }
+
       Application.put_env(:lemon_web, :active_runs_fun, fn -> {:ok, [invalid | runs]} end)
 
       {:ok, view, html} = live(conn, "/sessions")
@@ -286,30 +291,36 @@ defmodule LemonWeb.ManagementLiveTest do
 
       on_exit(fn -> SessionLifecycle.delete(session_key) end)
 
-      seed_session(session_key, run_id, "api_key=#{secret} launch checklist", "Bearer #{secret}", [
-        %{
-          __event__: :action_event,
-          action: %{
-            id: "tool-1",
-            title: "Inspect repository",
-            kind: :shell,
-            detail: %{token: secret, cwd: private_path}
+      seed_session(
+        session_key,
+        run_id,
+        "api_key=#{secret} launch checklist",
+        "Bearer #{secret}",
+        [
+          %{
+            __event__: :action_event,
+            action: %{
+              id: "tool-1",
+              title: "Inspect repository",
+              kind: :shell,
+              detail: %{token: secret, cwd: private_path}
+            },
+            phase: :started
           },
-          phase: :started
-        },
-        %{
-          __event__: :action_event,
-          action: %{
-            id: "tool-1",
-            title: "Inspect repository",
-            kind: :shell,
-            detail: %{token: secret, cwd: private_path}
-          },
-          phase: :completed,
-          ok: true,
-          message: "token=#{secret}"
-        }
-      ])
+          %{
+            __event__: :action_event,
+            action: %{
+              id: "tool-1",
+              title: "Inspect repository",
+              kind: :shell,
+              detail: %{token: secret, cwd: private_path}
+            },
+            phase: :completed,
+            ok: true,
+            message: "token=#{secret}"
+          }
+        ]
+      )
 
       assert {:ok, _session} =
                SessionLifecycle.patch(session_key, %{
@@ -359,6 +370,7 @@ defmodule LemonWeb.ManagementLiveTest do
       assert path == chat_path(child)
       assert flash["info"] =~ "Forked"
       assert SessionLifecycle.get(child)
+      assert LemonWeb.SessionCwd.recorded(child) == {:ok, cwd}
     end
 
     test "an uncertain fork outcome is reported and never retried", %{conn: conn} do

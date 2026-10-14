@@ -245,8 +245,18 @@ defmodule LemonWeb.ManagementLive do
       |> assign(:forking, key)
       |> assign(:prune, clear_prune_preview(socket.assigns.prune))
       |> start_async(:fork, fn ->
-        # The workspace is resolved inside the task so it never enters assigns.
-        Rpc.call("sessions.fork", %{"sessionKey" => key, "cwd" => SessionCwd.resolve(key)})
+        # The workspace is resolved inside the task so it never enters assigns;
+        # the child inherits it so chat resumes in the same workspace.
+        cwd = SessionCwd.resolve(key)
+
+        case Rpc.call("sessions.fork", %{"sessionKey" => key, "cwd" => cwd}) do
+          {:ok, %{"sessionKey" => child}} = ok when is_binary(child) ->
+            SessionCwd.remember(child, cwd)
+            ok
+
+          other ->
+            other
+        end
       end)
 
     {:noreply, socket}
@@ -408,7 +418,11 @@ defmodule LemonWeb.ManagementLive do
     end
   end
 
-  def handle_event("prune-confirm", _params, %{assigns: %{prune: %{preview: %{} = preview}}} = socket) do
+  def handle_event(
+        "prune-confirm",
+        _params,
+        %{assigns: %{prune: %{preview: %{} = preview}}} = socket
+      ) do
     case Rpc.call("sessions.prune", %{
            "olderThanMs" => preview.older_than_ms,
            "archivedOnly" => preview.archived_only,
@@ -422,9 +436,15 @@ defmodule LemonWeb.ManagementLive do
         {:noreply,
          socket
          |> assign(:prune, nil)
-         |> assign(:selected_keys, MapSet.difference(socket.assigns.selected_keys, MapSet.new(deleted)))
+         |> assign(
+           :selected_keys,
+           MapSet.difference(socket.assigns.selected_keys, MapSet.new(deleted))
+         )
          |> after_mutation()
-         |> put_flash(:info, "Pruned #{plural(length(deleted), "session")} and verified deletion.")}
+         |> put_flash(
+           :info,
+           "Pruned #{plural(length(deleted), "session")} and verified deletion."
+         )}
 
       {:error, %{code: :conflict}} ->
         {:noreply,
@@ -446,10 +466,21 @@ defmodule LemonWeb.ManagementLive do
   end
 
   def handle_event("prune-confirm", _params, socket) do
-    prune = socket.assigns.prune || %{days: "#{@default_prune_days}", archived_only: true, include_pinned: false, preview: nil}
+    prune =
+      socket.assigns.prune ||
+        %{
+          days: "#{@default_prune_days}",
+          archived_only: true,
+          include_pinned: false,
+          preview: nil
+        }
 
     {:noreply,
-     assign(socket, :prune, Map.put(prune, :error, "Preview the exact candidate set before pruning."))}
+     assign(
+       socket,
+       :prune,
+       Map.put(prune, :error, "Preview the exact candidate set before pruning.")
+     )}
   end
 
   # ── Async + timers ───────────────────────────────────────────────────────
@@ -1578,7 +1609,8 @@ defmodule LemonWeb.ManagementLive do
           active_runs_available?: true
         )
 
-      :error -> assign(socket, :active_runs_available?, false)
+      :error ->
+        assign(socket, :active_runs_available?, false)
     end
   end
 
@@ -1811,7 +1843,9 @@ defmodule LemonWeb.ManagementLive do
   defp sort_value(row, "agent"), do: row.agent_id || ""
   defp sort_value(row, _activity), do: row.updated_at_ms || 0
 
-  defp aria_sort(%{sort: sort, dir: dir}, sort), do: if(dir == "asc", do: "ascending", else: "descending")
+  defp aria_sort(%{sort: sort, dir: dir}, sort),
+    do: if(dir == "asc", do: "ascending", else: "descending")
+
   defp aria_sort(_filters, _sort), do: nil
 
   defp prune_draft(prune, params) do
