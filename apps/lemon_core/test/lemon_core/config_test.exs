@@ -323,18 +323,59 @@ defmodule LemonCore.ConfigTest do
     assert config.agents["default"].model == "openai:new-profile-model"
   end
 
-  test "deprecated [agent] section raises ValidationError", %{home: home} do
+  # Byte-for-byte the file the 2026.10.2 TUI wrote over a fresh setup when the
+  # model picker's "make default" was used. lemon_core's boot path
+  # (LemonCore.Application -> Logging.maybe_add_file_handler -> Config.load)
+  # must read it, or neither the runtime nor `lemon setup` can start.
+  test "boots against the TUI-written legacy config", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent]
+    default_provider = "openai"
+    default_model = "openai:gpt-5.1"
+
+    [control_plane]
+
+    [providers."anthropic"]
+    api_key_secret = "anthropic_api_key"
+
+    [providers."openai-codex"]
+    oauth_secret = "llm_openai_codex_api_key"
+    auth_source = "oauth"
+    """)
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert :skipped = LemonCore.Logging.maybe_add_file_handler(force?: true)
+
+      config = Config.load(nil, cache: false)
+      assert config.agent.default_provider == "openai"
+      assert config.agent.default_model == "openai:gpt-5.1"
+    end)
+
+    state = LemonCore.Setup.Readiness.status()
+    assert state.provider.provider == "openai"
+    assert state.provider.model == "openai:gpt-5.1"
+  end
+
+  test "a legacy [agent] section loads instead of failing boot", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
 
     File.write!(Path.join(global_dir, "config.toml"), """
     [agent]
     default_model = "anthropic:legacy-model"
+
+    [defaults]
+    provider = "anthropic"
     """)
 
-    assert_raise LemonCore.Config.ValidationError, ~r/deprecated/i, fn ->
-      Config.load()
-    end
+    ExUnit.CaptureLog.capture_log(fn ->
+      config = Config.load()
+      assert config.agent.default_model == "anthropic:legacy-model"
+      assert config.agent.default_provider == "anthropic"
+    end)
   end
 
   test "deprecated [agents] section raises ValidationError", %{home: home} do
@@ -665,19 +706,31 @@ defmodule LemonCore.ConfigTest do
            }
   end
 
-  test "the deprecated tool disclosure spellings hard-fail", %{home: home} do
+  test "the removed [tools.disclosure] spelling hard-fails", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
-    config_path = Path.join(global_dir, "config.toml")
 
-    for section <- ["agent.tools.disclosure", "tools.disclosure"] do
-      File.write!(config_path, """
-      [#{section}]
-      budget_tokens = 12000
-      """)
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [tools.disclosure]
+    budget_tokens = 12000
+    """)
 
-      assert_raise LemonCore.Config.ValidationError, fn -> Config.load() end
-    end
+    assert_raise LemonCore.Config.ValidationError, fn -> Config.load() end
+  end
+
+  test "the legacy [agent.tools.disclosure] spelling is read as [runtime.tools.disclosure]",
+       %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [agent.tools.disclosure]
+    budget_tokens = 9000
+    """)
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert Config.load().agent.tools.disclosure.budget_tokens == 9000
+    end)
   end
 
   test "tool disclosure declarations are shaped like the rest of the registry" do

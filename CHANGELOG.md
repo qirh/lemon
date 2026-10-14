@@ -10,15 +10,35 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **Delegate work to omp.** Lemon can run tasks in
+  [omp](https://github.com/can1357/oh-my-pi) sessions: ask in chat ("run this
+  in omp"), use the TUI's `/omp` panel, or `lemon omp start`. Lemon starts omp
+  in the workspace over its RPC protocol and reports live status — activity,
+  tools, todos, subagents, tokens and cost, latest output — and can steer,
+  queue follow-ups, cancel, close and resume sessions. `lemon omp discover`
+  lists omp's stored sessions for a workspace (read-only). omp output is
+  treated as untrusted data, control fails closed, omp processes end with the
+  runtime, and everything degrades to "omp is not installed" without the
+  binary. See [Delegating to omp](docs/user-guide/omp.md).
+- `lemon config migrate` rewrites deprecated sections (`[agent]`, `[agents.*]`,
+  `[tools.*]`) in the global and project config to the current schema, keeping
+  comments and a `config.toml.bak-<timestamp>` backup; `lemon setup` does the
+  same for an existing config.
+
 - **TUI startup logo.** `lemon` now opens with a block-glyph lemon painted in a
   yellow gradient with a green leaf, beside the version and key hints. It uses
   only `█ ▀ ▄` cells, so it renders in Tern and any UTF-8 terminal; ASCII
   locales and terminals narrower than 50 columns keep the one-line banner.
-- **`lvm` version switcher.** `bin/lvm` switches `~/.lemon/bin/lemon` between
-  installed releases (`lvm use 2026.10.2`) and a source checkout
-  (`lvm use local [checkout]`), installs and removes releases, and moves a
-  running runtime to the new selection. See
-  [Source development](docs/install.md#switching-between-releases-and-source-with-lvm).
+- **`lemonup` version switcher.** `bin/lemonup` switches `~/.lemon/bin/lemon`
+  between installed releases (`lemonup use 2026.10.2`) and a source checkout
+  (`lemonup use local [checkout]`), installs and removes releases, and moves a
+  running runtime to the new selection. `lemonup update` installs the latest
+  stable release if needed and activates it, from a release or from source.
+  `install.sh --resolve-version` prints the version an install would pick. It
+  was briefly `bin/lvm`, which collides with the Linux LVM2 command; replace a
+  `~/.lemon/bin/lvm` link with one to `bin/lemonup`. Selections made with the
+  old name are still recognized. See
+  [Source development](docs/install.md#switching-between-releases-and-source-with-lemonup).
 - **Tern-native TUI surfaces.** `lemon tui` in Tern now uses the same native
   surfaces as omp instead of painted rows. The composer shows a context meter,
   attachment chips, clickable model and effort chips, status facts, last-run
@@ -78,6 +98,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   agent CLIs (`claude`, `codex`, `copilot`); an existing value is left as is.
 
 ### Fixed
+
+- The TUI no longer rewrites `~/.lemon/config.toml` with a deprecated `[agent]`
+  table when you pick a default model (Ctrl+G / **Make default**) or run
+  `/theme`. That rewrite dropped `[defaults]`, `[runtime]`, `[gateway]` and
+  `[tui]`, and the `[agent]` table then stopped the runtime, `lemon setup` and
+  every test run from starting. The TUI now edits only `[defaults]
+  provider`/`model` and `[tui] theme` in place.
+- A config with a legacy `[agent]` table loads again: it is read as
+  `[defaults]`/`[runtime]`/`[tui]` with a warning (log, `lemon doctor`,
+  `lemon config validate`) instead of failing boot.
+- Fresh `lemon setup` no longer leaves an `[providers.anthropic]` reference to
+  a credential that does not exist when you sign in to another provider, and
+  non-interactive setup without `--model` no longer writes the model
+  `<provider>:fallback`.
+- Config edits by setup match table headers written with quoted keys
+  (`[providers."openai-codex"]`) instead of appending a duplicate table.
+- Umbrella tests run with an isolated `HOME`, so a personal
+  `~/.lemon/config.toml` can no longer fail or skew them.
 
 - Document reads (PDF and other converted formats) no longer report
   "Cannot start document backend" when the converter exits while its port is

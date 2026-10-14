@@ -697,6 +697,75 @@ defmodule LemonWeb.UI do
   end
 
   @doc """
+  Right-side drawer (sheet) for details. Same lifecycle as `modal/1`: render
+  with `:if` + `show`, or keep mounted and toggle with `show_modal/1` /
+  `hide_modal/1`. Full-width below 640px.
+  """
+  attr(:id, :string, required: true)
+  attr(:show, :boolean, default: false)
+  attr(:on_cancel, JS, default: %JS{})
+  attr(:title, :string, default: nil)
+  attr(:description, :string, default: nil)
+  attr(:width, :string, default: "sm:max-w-md")
+  slot(:inner_block, required: true)
+  slot(:footer)
+
+  def drawer(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      phx-mounted={@show && show_modal(@id)}
+      phx-remove={hide_modal(@id)}
+      data-cancel={JS.exec(@on_cancel, "phx-remove")}
+      class="relative z-50 hidden"
+    >
+      <div class="fixed inset-0 bg-black/30 animate-fade-in" aria-hidden="true" />
+      <div
+        class="fixed inset-y-0 right-0 flex w-full"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={@title && "#{@id}-title"}
+        aria-describedby={@description && "#{@id}-description"}
+      >
+        <.focus_wrap
+          id={"#{@id}-container"}
+          phx-window-keydown={JS.exec("data-cancel", to: "##{@id}")}
+          phx-key="escape"
+          phx-click-away={JS.exec("data-cancel", to: "##{@id}")}
+          class={[
+            "ml-auto flex h-full w-full flex-col border-l border-line bg-elevated shadow-overlay animate-slide-up",
+            @width
+          ]}
+        >
+          <div class="flex items-start justify-between gap-3 border-b border-line px-5 py-3.5">
+            <div class="min-w-0">
+              <h2 :if={@title} id={"#{@id}-title"} class="truncate text-[15px] font-semibold text-fg">
+                {@title}
+              </h2>
+              <p :if={@description} id={"#{@id}-description"} class="mt-0.5 text-[13px] text-muted">
+                {@description}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-ghost btn-icon btn-sm -mr-2"
+              phx-click={JS.exec("data-cancel", to: "##{@id}")}
+              aria-label="Close"
+            >
+              <.icon name="x" />
+            </button>
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto px-5 py-4 scroll-thin">{render_slot(@inner_block)}</div>
+          <div :if={@footer != []} class="flex flex-wrap items-center justify-end gap-2 border-t border-line px-5 py-3">
+            {render_slot(@footer)}
+          </div>
+        </.focus_wrap>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
   Preview-then-confirm dialog for destructive operations.
 
   The caller has already produced a server-side preview (kept in socket

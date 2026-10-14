@@ -83,6 +83,7 @@ import { CommandController, type DeliverOptions } from "./ui/controllers/command
 import { CommandPalette } from "./ui/controllers/command-palette.ts";
 import { EventController } from "./ui/controllers/event-controller.ts";
 import { InputController, LEMON_KEYBINDINGS } from "./ui/controllers/input-controller.ts";
+import { OmpController } from "./ui/controllers/omp-controller.ts";
 import { SelectorController } from "./ui/controllers/selector-controller.ts";
 import {
 	type ConfirmSpec,
@@ -158,6 +159,7 @@ export class AppShell {
 	readonly #host: CommandHost;
 	readonly #palette: CommandPalette;
 	readonly #taskTree: TaskTreeController;
+	readonly #omp: OmpController;
 	readonly #toolInspector: ToolInspector;
 	/** Native dock working row; paints nothing in the row renderer. */
 	readonly #working = new WorkingIndicatorComponent({
@@ -300,6 +302,18 @@ export class AppShell {
 			onBlur: () => this.#focusEditor(),
 		});
 		this.#taskTree.setSession(this.store.focusedKey);
+		this.#omp = new OmpController({
+			store: this.store.omp,
+			methods: this.methods,
+			client: this.client,
+			cwd: this.#cwd,
+			requestRender: () => this.tui.requestRender(),
+			onBlur: () => {
+				this.#omp.panel.focused = false;
+				this.#focusEditor();
+			},
+			notice: (text, level) => this.events.notice(text, level),
+		});
 		this.#modelPicker = new ModelPicker({
 			store: this.store,
 			methods: this.methods,
@@ -385,6 +399,7 @@ export class AppShell {
 			openCommandPalette: (mode) => this.#palette.open(undefined, mode),
 			isComposerEmpty: () => this.#editor.getText().length === 0,
 			toggleTaskTree: () => this.#toggleTaskTree(),
+			toggleOmpPanel: () => this.#toggleOmpPanel(),
 			toggleToolOutputs: () => {
 				this.events.toggleToolOutputs();
 			},
@@ -422,6 +437,7 @@ export class AppShell {
 		this.input.attach();
 		this.events.attach();
 		this.approvals.attach();
+		this.#omp.attach();
 		this.#disposers.push(
 			this.tui.addInputListener((data) => this.#terminalIntegration.handleInput(data)),
 			this.client.events.on("state", () => this.#renderConnection()),
@@ -493,12 +509,14 @@ export class AppShell {
 				if (sessionKey === this.store.focusedKey) this.syncQueuePanel();
 				this.#renderStatus();
 			}),
+			this.store.omp.events.on("changed", () => this.#renderStatus()),
 			() => this.#statusBar.dispose(),
 			() => this.selectors.dispose(),
 			() => this.approvals.dispose(),
 			() => this.input.dispose(),
 			() => this.#palette.close(),
 			() => this.#taskTree.dispose(),
+			() => this.#omp.dispose(),
 			() => this.#toolInspector.close(),
 		);
 		// Native transcript controls (Copy, Switch model) take their keys' paths.
@@ -548,6 +566,7 @@ export class AppShell {
 		this.bannerContainer.addChild(this.#connectionLine);
 		this.statusLineContainer.addChild(this.#statusBar);
 		this.statusContainer.addChild(this.#taskTree.panel);
+		this.statusContainer.addChild(this.#omp.panel);
 		this.statusContainer.addChild(this.#working);
 
 		// Slash-command and file-path completion in the prompt.
@@ -632,6 +651,7 @@ export class AppShell {
 			engine: session.engine,
 			queued: this.client.queued.length,
 			planMode: session.planMode,
+			ompBusy: this.store.omp.busyCount(),
 		};
 	}
 
@@ -707,6 +727,9 @@ export class AppShell {
 			case "context":
 				void this.submit("/context");
 				return;
+			case "omp":
+				this.#openOmpPanel();
+				return;
 		}
 	}
 
@@ -759,6 +782,26 @@ export class AppShell {
 		this.#taskTree.panel.focused = this.#taskTree.panel.visible;
 		if (this.#taskTree.panel.visible) this.tui.setFocus(this.#taskTree.panel);
 		else this.#focusEditor();
+		this.tui.requestRender();
+	}
+
+	/** Alt+M: show or hide the omp panel, taking the keyboard while it is open. */
+	#toggleOmpPanel(): void {
+		if (this.#omp.panel.visible) {
+			this.#omp.setVisible(false);
+			this.#omp.panel.focused = false;
+			this.#focusEditor();
+			return;
+		}
+		this.#openOmpPanel();
+	}
+
+	/** `/omp`, the composer's omp fact: open (or refocus) the panel. */
+	#openOmpPanel(): void {
+		this.#taskTree.panel.focused = false;
+		this.#omp.setVisible(true);
+		this.#omp.panel.focused = true;
+		this.tui.setFocus(this.#omp.panel);
 		this.tui.requestRender();
 	}
 
@@ -1344,6 +1387,7 @@ export class AppShell {
 			openModelPicker: () => this.#modelPicker.open(),
 			openCommandPalette: (query) => this.#palette.open(query),
 			toggleTaskTree: () => this.#toggleTaskTree(),
+			openOmpPanel: () => this.#openOmpPanel(),
 			openToolOutput: (mode) => this.#toolInspector.open(mode),
 			openContextPanel: (usage) => {
 				let close = () => {};

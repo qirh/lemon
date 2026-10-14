@@ -57,6 +57,8 @@ export interface StatusBarData {
 	queued: number;
 	/** The focused session's daemon plan mode; only `plan` earns a segment. */
 	planMode?: "plan" | "code";
+	/** omp delegate processes starting or working now, across every session. */
+	ompBusy?: number;
 }
 
 export type ContextSource = "context" | "aggregate";
@@ -75,6 +77,7 @@ type SegmentId =
 	| "sessions"
 	| "mode"
 	| "queued"
+	| "omp"
 	| "session";
 
 interface Segment {
@@ -104,7 +107,7 @@ export interface StatusBarOptions {
 }
 
 /** What a click on a composer fact asks the host to open or change. */
-export type StatusAction = "sessions" | "queue" | "mode" | "approvals" | "cost" | "context";
+export type StatusAction = "sessions" | "queue" | "mode" | "approvals" | "cost" | "context" | "omp";
 
 /**
  * The status facts the TSP prompt composer carries instead of a status strip
@@ -139,6 +142,7 @@ const STATUS_ACTIONS: ReadonlySet<string> = new Set<StatusAction>([
 	"approvals",
 	"cost",
 	"context",
+	"omp",
 ]);
 /** The facts the composer draws as its own controls rather than as segments. */
 const COMPOSER_HOMED: ReadonlySet<SegmentId> = new Set<SegmentId>([
@@ -153,6 +157,7 @@ const FACT_ACTIONS: Partial<Record<SegmentId, StatusAction>> = {
 	sessions: "sessions",
 	mode: "mode",
 	queued: "queue",
+	omp: "omp",
 };
 /** The composer carries the facts, so the TSP dock has no status strip. */
 const HIDDEN_STATUS: NativeNode = node("status", { hidden: true });
@@ -264,6 +269,7 @@ function cacheKey(data: StatusBarData): string {
 		data.engine,
 		data.queued,
 		data.planMode,
+		data.ompBusy,
 	].join("\0");
 }
 
@@ -376,6 +382,9 @@ export function buildSegments(data: StatusBarData): Segment[] {
 			slot: "info",
 			priority: 83,
 		});
+	}
+	if ((data.ompBusy ?? 0) > 0) {
+		segments.push({ id: "omp", text: `omp ${data.ompBusy}▶`, slot: "toolRunning", priority: 62 });
 	}
 	segments.push({ id: "session", text: data.sessionKey, slot: "muted", priority: 10 });
 

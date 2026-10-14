@@ -66,3 +66,7 @@ export function stripAnsi(text: string): string {
 export function renderPlain(lines: readonly string[]): string {
 	return lines.map((line) => stripAnsi(line).trimEnd()).join("\n");
 }
+
+/** C0/DEL bytes other than tab and newline: in colorless output they can only come from data. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: Detecting leaked terminal controls is the point.
+export const TERMINAL_CONTROLS = /[\u0000-\u0008\u000b-\u001f\u007f]/;

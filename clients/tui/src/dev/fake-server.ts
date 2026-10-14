@@ -9,6 +9,12 @@
 
 import type { ServerWebSocket } from "bun";
 import type { ProtocolErrorPayload, ReqFrame } from "../protocol/frames.ts";
+import { OMP_METHODS } from "../protocol/methods.ts";
+import {
+	OMP_DISCOVERED_FIXTURES,
+	OMP_SESSION_FIXTURES,
+	type OmpWire,
+} from "./fixtures/omp-fixtures.ts";
 
 /** Return this from a handler to leave the request unanswered (timeout tests). */
 export const NO_RESPONSE = Symbol("fake-server:no-response");
@@ -61,7 +67,7 @@ interface RequestWaiter {
 	resolve: (frame: ReqFrame) => void;
 }
 
-const DEFAULT_METHODS = [
+export const DEFAULT_METHODS = [
 	"chat.send",
 	"chat.abort",
 	"chat.history",
@@ -129,7 +135,7 @@ const DEFAULT_METHODS = [
 	"blueprints.activate",
 ];
 
-const DEFAULT_EVENTS = ["agent", "chat", "goal", "tick", "presence", "health", "shutdown"];
+export const DEFAULT_EVENTS = ["agent", "chat", "goal", "tick", "presence", "health", "shutdown"];
 
 export class FakeControlPlane {
 	readonly received: ReqFrame[] = [];
@@ -415,4 +421,154 @@ export class FakeControlPlane {
 	#sendError(socket: ServerWebSocket<SocketData>, id: string, error: ProtocolErrorPayload): void {
 		this.#send(socket, { type: "res", id, ok: false, error });
 	}
+}
+
+/** Default methods plus the omp delegate surface; pass as `methods` to advertise it. */
+export const OMP_FAKE_METHODS: readonly string[] = [...DEFAULT_METHODS, ...OMP_METHODS];
+/** Default events plus `omp.session`. */
+export const OMP_FAKE_EVENTS: readonly string[] = [...DEFAULT_EVENTS, "omp.session"];
+
+export interface OmpFakeOptions {
+	/** `omp.status.available`; false makes start/resume answer UNAVAILABLE. */
+	available?: boolean;
+	sessions?: readonly OmpWire[];
+	discovered?: readonly OmpWire[];
+}
+
+export interface OmpFake {
+	readonly sessions: Map<string, OmpWire>;
+	/** Change one session and push the matching `omp.session` event. */
+	update(id: string, patch: OmpWire, reason?: string): OmpWire;
+}
+
+/**
+ * Script every `omp.*` method against an in-memory set of delegate sessions
+ * (seeded from the recorded fixtures) and push `omp.session` events as they
+ * change, so the panel, `/omp` and the status badge can run offline:
+ * `FakeControlPlane.start({ methods: [...OMP_FAKE_METHODS], events: [...OMP_FAKE_EVENTS] })`.
+ */
+export function installOmpFixtures(
+	server: FakeControlPlane,
+	options: OmpFakeOptions = {},
+): OmpFake {
+	const available = options.available ?? true;
+	const sessions = new Map<string, OmpWire>();
+	for (const wire of options.sessions ?? OMP_SESSION_FIXTURES)
+		sessions.set(String(wire.id), { ...wire });
+	const discovered = options.discovered ?? OMP_DISCOVERED_FIXTURES;
+	let seq = 0;
+	const ended = (wire: OmpWire) => wire.status === "closed" || wire.status === "failed";
+	const update = (id: string, patch: OmpWire, reason = "updated") => {
+		const next = { ...sessions.get(id), ...patch, updatedAt: Date.now() };
+		sessions.set(id, next);
+		server.pushEvent("omp.session", { reason, session: next });
+		return next;
+	};
+	const launch = (
+		params: { prompt?: string; cwd?: string },
+		ompSessionId: string,
+		title: string,
+	) => {
+		const id = `omp_fake${String(++seq).padStart(6, "0")}`;
+		const now = Date.now();
+		const wire: OmpWire = {
+			...OMP_SESSION_FIXTURES[0],
+			id,
+			ompSessionId,
+			title,
+			cwd: params.cwd ?? null,
+			status: "running",
+			lastTurn: null,
+			activity: "Thinking",
+			startedAt: now,
+			updatedAt: now,
+			turns: 0,
+			toolCalls: 0,
+			activeTools: [],
+			recentTools: [],
+			todos: [],
+			subagents: [],
+			usage: null,
+			contextPercent: null,
+			lastText: null,
+			result: null,
+			error: null,
+		};
+		sessions.set(id, wire);
+		server.pushEvent("omp.session", { reason: "started", session: wire });
+		return { session: wire };
+	};
+	const find = (id: unknown) => (typeof id === "string" ? sessions.get(id) : undefined);
+	const notFound = (id: unknown) => errorResult("NOT_FOUND", `omp session ${String(id)} not found`);
+
+	server
+		.onMethod("omp.status", () => ({
+			available,
+			version: available ? "14.2.0" : null,
+			reason: available ? null : "not_installed",
+			live: [...sessions.values()].filter((wire) => !ended(wire)).length,
+			maxSessions: 8,
+		}))
+		.onMethod("omp.sessions.list", (params: { includeEnded?: boolean; limit?: number } = {}) => ({
+			sessions: [...sessions.values()]
+				.filter((wire) => params.includeEnded !== false || !ended(wire))
+				.slice(0, params.limit ?? 50),
+		}))
+		.onMethod("omp.sessions.get", (params: { id?: string }) => {
+			const wire = find(params?.id);
+			return wire
+				? { session: wire, summary: `omp ${wire.id}: ${wire.status}` }
+				: notFound(params?.id);
+		})
+		.onMethod("omp.sessions.discover", (params: { cwd?: string }) =>
+			params?.cwd ? { sessions: discovered } : errorResult("INVALID_PARAMS", "cwd is required"),
+		)
+		.onMethod("omp.sessions.start", (params: { prompt?: string; cwd?: string }) => {
+			if (!available) return errorResult("UNAVAILABLE", "omp is not installed");
+			if (!params?.prompt) return errorResult("INVALID_PARAMS", "prompt is required");
+			return launch(params, crypto.randomUUID(), params.prompt.split("\n")[0]!.slice(0, 120));
+		})
+		.onMethod("omp.sessions.resume", (params: { ompSessionId?: string; cwd?: string }) => {
+			if (!available) return errorResult("UNAVAILABLE", "omp is not installed");
+			const row = discovered.find((entry) => entry.ompSessionId === params?.ompSessionId);
+			if (!row) return notFound(params?.ompSessionId);
+			return launch(params, String(row.ompSessionId), String(row.title ?? ""));
+		})
+		.onMethod("omp.sessions.send", (params: { id?: string; message?: string; mode?: string }) => {
+			const wire = find(params?.id);
+			if (!wire) return notFound(params?.id);
+			if (ended(wire)) return errorResult("CONFLICT", "omp session is not running");
+			const delivery = wire.status === "idle" ? "prompt" : (params.mode ?? "steer");
+			update(String(wire.id), { status: "running", activity: "Thinking", lastTurn: null });
+			return { accepted: true, delivery };
+		})
+		.onMethod("omp.sessions.cancel", (params: { id?: string }) => {
+			const wire = find(params?.id);
+			if (!wire) return notFound(params?.id);
+			if (wire.status !== "running") return errorResult("CONFLICT", "no active turn");
+			update(
+				String(wire.id),
+				{ status: "idle", lastTurn: "aborted", activity: null, activeTools: [] },
+				"settled",
+			);
+			return { cancelled: true };
+		})
+		.onMethod("omp.sessions.close", (params: { id?: string }) => {
+			const wire = find(params?.id);
+			if (!wire) return notFound(params?.id);
+			const now = Date.now();
+			const closed = update(
+				String(wire.id),
+				{
+					status: "closed",
+					activity: null,
+					activeTools: [],
+					endedAt: now,
+					exit: { code: 0, reason: "closed" },
+				},
+				"exited",
+			);
+			return { session: closed };
+		});
+	return { sessions, update };
 }

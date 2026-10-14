@@ -228,6 +228,35 @@ defmodule LemonCli.CLITest do
     assert error =~ "Usage: lemon doctor [options]"
   end
 
+  test "config migrate rewrites a legacy [agent] config and is idempotent", %{tmp_dir: tmp_dir} do
+    config_path = Path.join([tmp_dir, "home", ".lemon", "config.toml"])
+    File.mkdir_p!(Path.dirname(config_path))
+    legacy = "[agent]\ndefault_provider = \"openai\"\ndefault_model = \"openai:gpt-5.1\"\n"
+    File.write!(config_path, legacy)
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["config", "migrate", "--project-dir", tmp_dir]) == 0
+      end)
+
+    assert output =~ "Migrated #{config_path}"
+    assert output =~ "agent.default_provider → defaults.provider"
+    assert [backup] = Path.wildcard(config_path <> ".bak-*")
+    assert File.read!(backup) == legacy
+
+    assert Toml.decode_file!(config_path) == %{
+             "defaults" => %{"provider" => "openai", "model" => "openai:gpt-5.1"}
+           }
+
+    again =
+      capture_io(fn ->
+        assert CLI.run(["config", "migrate", "--project-dir", tmp_dir]) == 0
+      end)
+
+    assert again =~ "already uses the current schema"
+    assert [^backup] = Path.wildcard(config_path <> ".bak-*")
+  end
+
   test "rejects unknown config options with config usage on stderr" do
     error =
       capture_io(:stderr, fn ->
@@ -235,7 +264,7 @@ defmodule LemonCli.CLITest do
       end)
 
     assert error =~ "Invalid options:"
-    assert error =~ "Usage: lemon config [validate|show] [options]"
+    assert error =~ "Usage: lemon config [validate|show|migrate] [options]"
     assert error =~ "--project-dir, -p PATH"
   end
 
@@ -246,7 +275,7 @@ defmodule LemonCli.CLITest do
       end)
 
     assert error =~ "Unsupported arguments: \"show\" \"unexpected\""
-    assert error =~ "Usage: lemon config [validate|show] [options]"
+    assert error =~ "Usage: lemon config [validate|show|migrate] [options]"
   end
 
   test "packaged secrets check uses the shared ordered catalog" do

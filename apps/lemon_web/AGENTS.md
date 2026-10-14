@@ -1,8 +1,11 @@
 # LemonWeb contributor guide
 
-The assistant's Phoenix LiveView app provides chat/resume and authenticated
-management. It calls shared runtime/lifecycle services, not a Web-only router,
-store or settings implementation. See [README](README.md) and
+The assistant's Phoenix LiveView app is an operator client of the control plane:
+LiveViews call `LemonControlPlane.Methods.Registry` in-process through
+`LemonWeb.Rpc` and project Bus events with `LemonControlPlane.EventBridge.project/1`,
+so they see the same schemas, scopes and bounded payloads as the TUI. Where a page
+uses a lifecycle service directly it is the same shared service, never a Web-only
+router, store or settings implementation. See [README](README.md) and
 [user guide](../../docs/user-guide/web.md).
 
 ## Chat lifecycle
@@ -28,14 +31,22 @@ store or settings implementation. See [README](README.md) and
 
 ## Authentication
 
-- Optional chat auth and required management auth are different pipelines. No
-  configured token may allow local chat, but required management returns 503.
-  Never move management routes into the optional pipeline.
-- Valid bearer/query auth establishes a hashed session marker. Query-token login
-  redirects server-side to the same path with only the token removed before
-  rendering; JavaScript cleanup is too late for history/referrer leakage.
-- Production cookie signing needs the configured secret key base. Avoid putting
-  credentials, private paths or raw service failures into assigns, logs or HTML.
+- Every route except `/login` and `/healthz` requires operator access, checked by
+  `LemonWeb.Plugs.RequireOperator` per request and `LemonWeb.LiveAuth` on every
+  LiveView mount (including the connected mount). There is no optional pipeline.
+- The only credential is the control-plane operator token
+  (`Authorize.configured_operator_token/0`). Login posts it from a form and
+  delegates the comparison to `Authorize.from_params/2`; non-operator session
+  tokens are refused. The session stores only a marker derived from the configured
+  token, so rotation logs every browser out. Never accept tokens in query strings
+  or headers for browser routes; `/login#token=` is read client-side only.
+- No configured token fails closed (503) unless tokenless loopback compatibility
+  is explicitly enabled and the actual socket peer (`conn.remote_ip` / LiveView
+  `peer_data`) is loopback. Never consult forwarded headers. Failed logins are
+  throttled per peer.
+- Production cookie signing/encryption needs the configured secret key base.
+  Avoid putting credentials, private paths or raw service failures into assigns,
+  logs or HTML.
 
 ## Management boundaries
 

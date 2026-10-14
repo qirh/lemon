@@ -488,12 +488,28 @@ Use only these top-level sections:
 - `logging`
 - `automation`
 
-Deprecated sections now fail validation and runtime loading:
+A deprecated `[agent]` table still loads, with a warning in the log, `lemon
+doctor` and `lemon config validate`. It is read exactly as if it had been
+moved:
 
-- `[agent]` -> move defaults to `[defaults]` and runtime settings to `[runtime]`
+| `[agent]` key | Read as |
+|---|---|
+| `default_provider`, `default_model`, `default_thinking_level` | `[defaults]` `provider`, `model`, `thinking_level` (an existing `[defaults]` key wins) |
+| `theme` | `[tui]` `theme` |
+| anything else, including `[agent.<sub>]` tables | `[runtime]` / `[runtime.<sub>]` (an existing `[runtime]` key wins) |
+
+`lemon config migrate` rewrites the global config and the current project's
+config this way, and `lemon setup` does the same when it finds an existing
+file. Both keep comments and unrelated tables, write the original to
+`config.toml.bak-<UTC timestamp>` first, and leave the file untouched when the
+rewrite cannot be verified (for example multi-line values inside `[agent]`).
+
+These sections fail validation and runtime loading:
+
 - `[agents.<id>]` -> move to `[profiles.<id>]`
-- `[agent.tools.*]` -> move to `[runtime.tools.*]`
 - `[tools.*]` -> move to `[runtime.tools.*]`
+
+`lemon config migrate` renames both headers as well.
 
 ## External secret sources
 

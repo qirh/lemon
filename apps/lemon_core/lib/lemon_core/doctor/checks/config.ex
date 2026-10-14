@@ -40,7 +40,21 @@ defmodule LemonCore.Doctor.Checks.Config do
     else
       case Modular.load_with_validation() do
         {:ok, _config} ->
-          Check.pass("config.global_valid", "Global config is valid TOML and passes validation.")
+          case Modular.deprecation_warnings() do
+            [] ->
+              Check.pass(
+                "config.global_valid",
+                "Global config is valid TOML and passes validation."
+              )
+
+            warnings ->
+              Check.warn(
+                "config.global_valid",
+                "Config uses deprecated settings:\n" <>
+                  Enum.map_join(warnings, "\n", &"  • #{&1}"),
+                "Run `lemon config migrate` to rewrite them; the original is kept as a backup."
+              )
+          end
 
         {:error, errors} ->
           message = "Config validation errors:\n" <> Enum.map_join(errors, "\n", &"  • #{&1}")
