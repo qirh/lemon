@@ -435,6 +435,36 @@ defmodule LemonCli.CommandRegistry do
       ]
     },
     %{
+      name: "omp",
+      summary: "Start, watch, and steer omp coding-agent sessions",
+      usage: "lemon omp <command> [args] [options]",
+      subcommands: [
+        %{name: "status", summary: "Show whether omp is installed and live-session counts"},
+        %{name: "list", summary: "List live omp sessions (--all includes ended ones)"},
+        %{name: "show", summary: "Summarize one session: show ID"},
+        %{name: "discover", summary: "List omp's stored sessions for a workspace"},
+        %{name: "start", summary: "Start omp on a prompt: start [options] PROMPT..."},
+        %{name: "send", summary: "Steer or follow up: send ID [--follow-up] MESSAGE..."},
+        %{name: "cancel", summary: "Abort the running turn; the session stays open"},
+        %{name: "close", summary: "End the omp process; it stays resumable"},
+        %{name: "resume", summary: "Reopen a stored session: resume OMP-ID [PROMPT...]"},
+        %{name: "watch", summary: "Follow a session until its turn settles"}
+      ],
+      options: [
+        option("--cwd PATH", ["--cwd"], "Workspace for start, resume, discover (default: .)"),
+        option("--model MODEL", ["--model"], "omp model for start or resume"),
+        option("--thinking LEVEL", ["--thinking"], "omp thinking level for start or resume"),
+        option("--follow-up", ["--follow-up"], "Queue a send after the running turn"),
+        option("--all", ["--all"], "Include ended sessions in list"),
+        option("--limit N", ["--limit"], "Bound list or discover rows (max 100)"),
+        option("--json", ["--json"], "Emit JSON")
+      ],
+      details: [
+        "omp runs inside the Lemon runtime, which starts first when needed. Without a subcommand, lemon omp lists live sessions. Text from omp is untrusted and printed with control characters removed.",
+        "Leaving watch (including Ctrl-C) never cancels the omp turn. A send or cancel reported as not retry-safe may already have taken effect; check `lemon omp show ID` before retrying."
+      ]
+    },
+    %{
       name: "learn",
       summary: "Review and confirm bounded learning from sources",
       usage: "lemon learn [review|confirm] <reference>... [options]",

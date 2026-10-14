@@ -132,6 +132,16 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ConfigSet,
     # Connect challenge (node pairing handshake)
     LemonControlPlane.Methods.ConnectChallenge,
+    # omp delegate sessions
+    LemonControlPlane.Methods.OmpStatus,
+    LemonControlPlane.Methods.OmpSessionsList,
+    LemonControlPlane.Methods.OmpSessionsGet,
+    LemonControlPlane.Methods.OmpSessionsDiscover,
+    LemonControlPlane.Methods.OmpSessionsStart,
+    LemonControlPlane.Methods.OmpSessionsResume,
+    LemonControlPlane.Methods.OmpSessionsSend,
+    LemonControlPlane.Methods.OmpSessionsCancel,
+    LemonControlPlane.Methods.OmpSessionsClose,
     # Usage
     LemonControlPlane.Methods.UsageStatus,
     LemonControlPlane.Methods.UsageCost

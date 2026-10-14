@@ -209,6 +209,7 @@ defmodule LemonCli.CLI do
   defp run_command("backup", args), do: run_backup(args)
   defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
   defp run_command("sessions", args), do: LemonCli.SessionsCommand.run(args)
+  defp run_command("omp", args), do: LemonCli.OmpCommand.run(args)
   defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
   defp run_command("update", args), do: LemonCli.UpdateCommand.run(args)
   defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
