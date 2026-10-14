@@ -57,6 +57,24 @@ defmodule CodingAgent.SystemPrompt do
   """
   @spec build(String.t(), opts()) :: String.t()
   def build(cwd, opts \\ %{}) do
+    cwd
+    |> build_sections(opts)
+    |> join_sections()
+  end
+
+  @typedoc """
+  One labelled piece of the prompt. `category` is its context-usage bucket
+  (`:system_prompt`, `:skills`, `:context_files` or `:memory`); `label` is a
+  bounded display name that never contains prompt text or absolute paths.
+  """
+  @type section :: %{category: atom(), label: String.t(), text: String.t()}
+
+  @doc """
+  The labelled sections `build/2` joins with blank lines, in prompt order.
+  `join_sections(build_sections(cwd, opts)) == build(cwd, opts)` byte for byte.
+  """
+  @spec build_sections(String.t(), opts()) :: [section()]
+  def build_sections(cwd, opts \\ %{}) do
     workspace_dir = Map.get(opts, :workspace_dir, Workspace.workspace_dir())
     max_chars = Map.get(opts, :bootstrap_max_chars, Workspace.default_max_chars())
     session_scope = normalize_session_scope(Map.get(opts, :session_scope, :main))
@@ -72,28 +90,48 @@ defmodule CodingAgent.SystemPrompt do
       )
       |> Enum.reject(&(&1.missing or empty?(&1.content)))
 
-    sections = [
-      "You are Lemon, a coding agent working in the user's workspace. " <>
-        "Complete the requested work end to end with the available tools. " <>
-        "Prioritize correctness, maintainability, and minimal scoped changes.",
-      build_coding_section(available_tools),
-      build_runtime_section(session_scope),
-      build_skills_section(cwd, skill_trace_opts, available_tools),
-      build_memory_workflow_section(session_scope, available_tools),
-      build_learning_workflow_section(session_scope, available_tools),
+    [
+      section(
+        :system_prompt,
+        "Identity",
+        "You are Lemon, a coding agent working in the user's workspace. " <>
+          "Complete the requested work end to end with the available tools. " <>
+          "Prioritize correctness, maintainability, and minimal scoped changes."
+      ),
+      section(:system_prompt, "Coding guidance", build_coding_section(available_tools)),
+      section(:system_prompt, "Runtime", build_runtime_section(session_scope)),
+      section(
+        :skills,
+        "Available skills",
+        build_skills_section(cwd, skill_trace_opts, available_tools)
+      ),
+      section(
+        :system_prompt,
+        "Memory guidance",
+        build_memory_workflow_section(session_scope, available_tools)
+      ),
+      section(
+        :system_prompt,
+        "Learning workflow",
+        build_learning_workflow_section(session_scope, available_tools)
+      ),
       # Contributed context lands after the workflow sections and before the
       # boundaries: what a satellite contributes is background about the user and
       # their situation, which belongs next to the workspace context that follows
       # rather than in the middle of the tool guidance above.
-      build_contributed_context_section(cwd, session_scope, skill_context, opts),
-      build_workspace_section(cwd, workspace_dir),
-      build_workspace_context_section(bootstrap_files)
+      contributed_context_sections(cwd, session_scope, skill_context, opts),
+      section(:system_prompt, "Workspace boundaries", build_workspace_section(cwd, workspace_dir)),
+      workspace_context_sections(bootstrap_files)
     ]
-
-    sections
-    |> Enum.reject(&empty?/1)
-    |> Enum.join("\n\n")
+    |> List.flatten()
+    |> Enum.reject(&empty?(&1.text))
   end
+
+  @doc "Join labelled sections exactly as the prompt is assembled."
+  @spec join_sections([section()]) :: String.t()
+  def join_sections(sections), do: Enum.map_join(sections, "\n\n", & &1.text)
+
+  defp section(category, label, text), do: %{category: category, label: label, text: text}
 
   # ============================================================================
   # Sections
@@ -265,9 +303,10 @@ defmodule CodingAgent.SystemPrompt do
 
   # Sections contributed through `LemonAgent.ContextRegistry` are rendered as
   # ordinary markdown headings so they read like every other part of the prompt.
-  # With nothing registered `collect/1` returns `[]`, this renders `""`, and
-  # `empty?/1` drops it from the section list — a build with no contributors is
-  # byte-for-byte the build it was before this section existed.
+  # With nothing registered `collect/1` returns `[]` and nothing is added — a
+  # build with no contributors is byte-for-byte the build it was before this
+  # section existed. Each contribution is its own `:memory` section: they are
+  # background about the user, joined with the same blank line as before.
   #
   # Only the `:system` half of what was contributed is rendered here. The other
   # half is volatile by construction and belongs after the last prompt-cache
@@ -276,12 +315,21 @@ defmodule CodingAgent.SystemPrompt do
   # dropped rather than defaulted into the prompt, because the failure mode this
   # split exists to prevent is exactly a volatile section quietly ending up in
   # the cached prefix.
-  defp build_contributed_context_section(cwd, session_scope, skill_context, opts) do
+  defp contributed_context_sections(cwd, session_scope, skill_context, opts) do
     cwd
     |> contributed_sections(session_scope, skill_context, opts)
     |> Enum.filter(&system_section?/1)
-    |> Enum.map_join("\n\n", fn %{title: title, body: body} -> "## #{title}\n\n#{body}" end)
+    |> Enum.map(fn %{title: title, body: body} ->
+      section(:memory, contributed_label(title), "## #{title}\n\n#{body}")
+    end)
   end
+
+  defp contributed_label(title) when is_binary(title) do
+    title = title |> String.replace(~r/[[:cntrl:]]+/u, " ") |> String.trim()
+    if title == "", do: "Contributed context", else: String.slice(title, 0, 60)
+  end
+
+  defp contributed_label(_title), do: "Contributed context"
 
   # A section that names no placement is a `:system` section. That is not a
   # convenience: `:placement` is optional in `t:LemonAgent.ContextRegistry.section_spec/0`
@@ -400,9 +448,13 @@ defmodule CodingAgent.SystemPrompt do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  defp build_workspace_context_section([]), do: ""
+  # USER.md and MEMORY.md are what `remember` writes, so they count as memory;
+  # the other assistant-home files are context files.
+  @memory_files ~w(user.md memory.md)
 
-  defp build_workspace_context_section(files) do
+  defp workspace_context_sections([]), do: []
+
+  defp workspace_context_sections(files) do
     has_soul =
       Enum.any?(files, fn file ->
         file.name |> String.downcase() == "soul.md"
@@ -424,19 +476,15 @@ defmodule CodingAgent.SystemPrompt do
         header
       end
 
-    body =
-      files
-      |> Enum.map(fn file ->
-        [
-          "## #{file.name}",
-          file.content
-        ]
-        |> Enum.join("\n")
-      end)
-      |> Enum.join("\n\n")
+    file_sections =
+      Enum.map(files, fn file ->
+        category =
+          if String.downcase(file.name) in @memory_files, do: :memory, else: :context_files
 
-    (header ++ ["", body])
-    |> Enum.join("\n")
+        section(category, "#{file.name} (assistant home)", "## #{file.name}\n#{file.content}")
+      end)
+
+    [section(:system_prompt, "Workspace files header", Enum.join(header, "\n")) | file_sections]
   end
 
   # ============================================================================

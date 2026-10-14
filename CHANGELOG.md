@@ -40,6 +40,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `lemon model PROVIDER --status` shows the auth source, stored login, expiry
   and whether credentials are usable; `--logout` deletes the stored OAuth login
   and its config keys.
+- **Context-window usage breakdown.** `/context` in the TUI (native Tern
+  surface and row renderer) and in ACP chat, and `lemon sessions context
+  <key>`, show how the next request spends the model's context window: system
+  prompt, tool definitions, skills, context files, memory, messages, tool
+  results, summaries and free space, with the largest contributors and the
+  auto-compaction threshold. All surfaces read the new read-scoped
+  `sessions.context` control-plane method; category splits are estimates scaled
+  to the provider-reported total.
 
 ### Changed
 

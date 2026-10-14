@@ -110,30 +110,46 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
-  def session_context_budget(session_key, cwd) do
+  @doc """
+  Per-category context-window usage for a live or durable native session. A
+  stopped session combines its durable history with the overhead profile its
+  last save recorded (see `CodingAgent.Session.ContextUsage`).
+  """
+  def session_context_usage(session_key, cwd) do
     case live_session(session_key) do
       nil ->
         with {:ok, path} <- native_session_path(session_key, cwd),
-             {:ok, session} <- CodingAgent.SessionManager.load_from_file(path) do
+             {:ok, session} <- load_native_session(path) do
           settings = CodingAgent.SettingsManager.load(session.header.cwd)
           context = CodingAgent.SessionManager.build_session_context(session)
-          model = CodingAgent.Session.ModelResolver.resolve_session_model(context.model, settings)
+          model = durable_model(context.model, settings)
           messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
 
-          budget =
-            CodingAgent.Session.ContextBudget.measure(
-              %{session_manager: session, model: model, settings_manager: settings},
-              %{messages: messages, system_prompt: nil, tools: []}
-            )
-
-          # Without a live prompt/tool snapshot, a post-compaction heuristic
-          # would omit overhead. Report unknown rather than a misleading count.
-          if budget.source == "estimate", do: {:error, :unavailable}, else: {:ok, budget}
+          CodingAgent.Session.ContextUsage.measure_durable(
+            %{session_manager: session, model: model, settings_manager: settings},
+            messages,
+            CodingAgent.Session.ContextUsage.stored_overhead(session.header.id)
+          )
         end
 
       pid ->
-        CodingAgent.Session.context_budget(pid)
+        CodingAgent.Session.context_usage(pid)
     end
+  end
+
+  defp load_native_session(path) do
+    case CodingAgent.SessionManager.load_from_file(path) do
+      {:error, :enoent} -> {:error, :session_not_found}
+      result -> result
+    end
+  end
+
+  # A model that is no longer registered still has history worth measuring;
+  # its window is then reported as unknown.
+  defp durable_model(model, settings) do
+    CodingAgent.Session.ModelResolver.resolve_session_model(model, settings)
+  rescue
+    ArgumentError -> nil
   end
 
   @doc "Explicitly allocate a durable empty native session without entering a mode or sending a prompt."
