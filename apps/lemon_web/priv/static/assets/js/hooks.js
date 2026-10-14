@@ -2,6 +2,8 @@
 // modules and are merged here so app.js has a single registry.
 
 import * as Theme from "/assets/js/theme.js"
+import {RuntimeHooks} from "/assets/js/runtime.js"
+import {Hooks as AutomationHooks} from "/assets/js/automation.js"
 import {SessionsHooks} from "/assets/js/sessions.js"
 
 let hljsPromise = null
@@ -182,5 +184,14 @@ export const ThemeSwitcher = {
   }
 }
 
-// Feature hooks register here (one import line per module).
-export const Hooks = {Highlight, CopyButton, AutoDismiss, Dropdown, ThemeSwitcher, ...SessionsHooks}
+// Feature hooks register here (one import line per module, one spread per line).
+export const Hooks = {
+  Highlight,
+  CopyButton,
+  AutoDismiss,
+  Dropdown,
+  ThemeSwitcher,
+  ...RuntimeHooks,
+  ...AutomationHooks,
+  ...SessionsHooks
+}

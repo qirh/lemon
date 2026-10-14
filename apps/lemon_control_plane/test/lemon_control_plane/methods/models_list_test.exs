@@ -50,6 +50,7 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
     assert model["supportsThinking"]
     assert model["supportsVision"]
     assert model["supportsStreaming"]
+    assert model["pricing"] == nil
     assert summary["total"] == 1
     assert summary["providers"] == ["openai-codex"]
     assert summary["visionModelCount"] == 1
@@ -61,5 +62,24 @@ defmodule LemonControlPlane.Methods.ModelsListTest do
     assert {:ok, %{"models" => [], "summary" => summary}} = ModelsList.handle(%{}, %{})
     assert summary["total"] == 0
     assert summary["providerCount"] == 0
+  end
+
+  test "projects per-million pricing when the catalog lists it" do
+    priced = %LemonAi.Types.Model{
+      provider: :openai,
+      id: "priced-model",
+      name: "Priced",
+      cost: %LemonAi.Types.ModelCost{input: 2.5, output: 10.0, cache_read: 1.25, cache_write: 0.0}
+    }
+
+    Application.put_env(:lemon_control_plane, :model_catalog, fn _opts -> [priced] end)
+    assert {:ok, %{"models" => [model]}} = ModelsList.handle(%{}, %{})
+
+    assert model["pricing"] == %{
+             "inputPerMillion" => 2.5,
+             "outputPerMillion" => 10.0,
+             "cacheReadPerMillion" => 1.25,
+             "cacheWritePerMillion" => 0.0
+           }
   end
 end

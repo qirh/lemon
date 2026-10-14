@@ -44,6 +44,33 @@ defmodule LemonWeb.WorkStoreReadsTest do
 
     assert {:reply, {:error, :stale}, ^state} =
              CronManager.handle_call({:run_now, job.id, revision}, nil, state)
+
+    assert {:reply, {:error, :stale}, ^state} =
+             CronManager.handle_call({:remove, job.id, revision}, nil, state)
+
+    assert {:reply, {:error, :not_found}, ^state} =
+             CronManager.handle_call({:remove, "cron_missing", revision}, nil, state)
+  end
+
+  test "cron manager removes only the exact inspected job revision" do
+    {:ok, job} =
+      CronManager.add(%{
+        name: "web remove guard",
+        schedule: "0 0 1 1 *",
+        agent_id: "default",
+        session_key: "agent:default:main",
+        prompt: "private prompt",
+        enabled: false
+      })
+
+    on_exit(fn -> CronManager.remove(job.id) end)
+    old = CronManager.control_revision(job)
+    {:ok, updated} = CronManager.update(job.id, %{name: "web remove guard renamed"})
+
+    assert {:error, :stale} = CronManager.remove(job.id, old)
+    assert Enum.any?(CronManager.list(), &(&1.id == job.id))
+    assert :ok = CronManager.remove(job.id, CronManager.control_revision(updated))
+    refute Enum.any?(CronManager.list(), &(&1.id == job.id))
   end
 
   test "goal manager refuses an old goal revision before start, stop or pause" do

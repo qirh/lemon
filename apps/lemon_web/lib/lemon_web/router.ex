@@ -46,6 +46,9 @@ defmodule LemonWeb.Router do
       live("/memory", MemoryManagementLive, :index)
       live("/profiles", ProfileManagementLive, :index)
       live("/models", ProviderManagementLive, :index)
+      live("/usage", UsageLive, :index)
+      live("/diagnostics", DiagnosticsLive, :index)
+      live("/settings", SettingsLive, :index)
     end
   end
 

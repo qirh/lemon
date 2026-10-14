@@ -6,11 +6,14 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
   import ExUnit.CaptureLog
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
+  import LemonWeb.Test.OperatorAuth
 
   alias LemonAutomation.{CronManager, CronStore}
   alias LemonCore.ProfileStore
 
-  setup do
+  setup :configure_operator_token
+
+  setup %{token: token} do
     marker = "PLANTED_WEB_BLUEPRINT_#{System.unique_integer([:positive, :monotonic])}"
 
     root =
@@ -27,7 +30,6 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
     profile_id = unique_id("web-profile")
     bundle_id = unique_id("web-bundle")
     automation_id = unique_id("web-job")
-    token = "web-blueprint-token-#{marker}"
 
     assert {:ok, profile} = ProfileStore.create(%{id: profile_id}, profile_opts)
 
@@ -37,11 +39,10 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
       )
 
     previous_web =
-      Map.new([:access_token, :blueprint_opts, :blueprint_catalog_fun], fn key ->
+      Map.new([:blueprint_opts, :blueprint_catalog_fun], fn key ->
         {key, Application.get_env(:lemon_web, key)}
       end)
 
-    Application.put_env(:lemon_web, :access_token, token)
     Application.put_env(:lemon_web, :blueprint_opts, profile_opts: profile_opts)
     Application.delete_env(:lemon_web, :blueprint_catalog_fun)
 
@@ -72,37 +73,33 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
     }
   end
 
-  test "route fails closed, strips query token, and is discoverable without leaking it", ctx do
-    Application.delete_env(:lemon_web, :access_token)
-
-    assert get(build_conn(), "/manage/blueprints") |> response(503) ==
-             "Management access token is not configured"
-
-    Application.put_env(:lemon_web, :access_token, ctx.token)
-    assert get(build_conn(), "/manage/blueprints?token=wrong") |> response(401) == "Unauthorized"
-
+  test "route requires operator login, drops query tokens and is in the rail", ctx do
     {conn, log} =
-      with_log(fn -> get(build_conn(), "/manage/blueprints?view=catalog&token=#{ctx.token}") end)
+      with_log(fn -> get(build_conn(), "/blueprints?view=catalog&token=#{ctx.token}") end)
 
-    assert redirected_to(conn, 302) == "/manage/blueprints?view=catalog"
-    refute response(conn, 302) =~ ctx.token
+    location = redirected_to(conn, 302)
+
+    assert URI.decode_query(URI.parse(location).query) == %{
+             "return_to" => "/blueprints?view=catalog"
+           }
+
+    refute location =~ ctx.token
     refute log =~ ctx.token
 
-    conn = conn |> recycle() |> get("/manage/blueprints?view=catalog")
-    html = html_response(conn, 200)
-    assert html =~ "Automation blueprints"
+    html = authenticated_conn(ctx.token) |> get("/blueprints?view=catalog") |> html_response(200)
+    assert html =~ "Blueprints"
+    assert html =~ ~s(href="/blueprints")
     assert Regex.match?(~r/<meta name="csrf-token" content="[^"]+"\s*\/?>/, html)
     refute html =~ ctx.token
     refute html =~ ctx.marker
     refute html =~ ctx.root
 
-    sessions_conn = get(build_conn(), "/manage?token=#{ctx.token}")
-    sessions_html = sessions_conn |> recycle() |> get("/manage") |> html_response(200)
-    assert sessions_html =~ ~s(href="/manage/blueprints")
+    clear_operator_token()
+    assert get(build_conn(), "/blueprints") |> response(503) =~ "operator token"
   end
 
   test "list, inspect, validate, and preview retain only content-free allowlisted state", ctx do
-    {:ok, view, html} = live(authenticated_conn(ctx.token), "/manage/blueprints")
+    {:ok, view, html} = live(authenticated_conn(ctx.token), "/blueprints")
 
     assert html =~ ctx.bundle_id
     refute_sensitive(html, ctx)
@@ -135,7 +132,7 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
 
   test "wrong digest mutates nothing, exact activation creates once, and replay is unchanged",
        ctx do
-    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/manage/blueprints")
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/blueprints")
     render_click(view, "inspect", %{"bundle" => ctx.bundle_id})
 
     previewed =
@@ -191,7 +188,7 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
 
   test "stale catalog content fails closed, clears preview, and preserves the profile draft",
        ctx do
-    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/manage/blueprints")
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/blueprints")
     render_click(view, "inspect", %{"bundle" => ctx.bundle_id})
 
     previewed =
@@ -217,7 +214,7 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
   end
 
   test "forged IDs and runtime errors stay bounded and content-free", ctx do
-    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/manage/blueprints")
+    {:ok, view, _html} = live(authenticated_conn(ctx.token), "/blueprints")
 
     forged = render_click(view, "inspect", %{"bundle" => "../#{ctx.bundle_id}"})
     assert forged =~ "no longer available"
@@ -231,7 +228,7 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
 
     {rendered, log} =
       with_log(fn ->
-        {:ok, failed_view, html} = live(authenticated_conn(ctx.token), "/manage/blueprints")
+        {:ok, failed_view, html} = live(authenticated_conn(ctx.token), "/blueprints")
         {html, formatted_live_view_state(failed_view)}
       end)
 
@@ -245,11 +242,7 @@ defmodule LemonWeb.BlueprintManagementLiveTest do
     refute log =~ ctx.root
   end
 
-  defp authenticated_conn(token) do
-    conn = get(build_conn(), "/manage/blueprints?token=#{token}")
-    assert redirected_to(conn, 302) == "/manage/blueprints"
-    conn |> recycle() |> get("/manage/blueprints")
-  end
+  defp authenticated_conn(token), do: log_in(build_conn(), token)
 
   defp matching_jobs(bundle_id) do
     CronManager.list()

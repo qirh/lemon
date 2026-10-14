@@ -556,7 +556,7 @@ defmodule LemonWeb.ManagementLive do
 
       {working_now(assigns)}
 
-      <.tabs active={@filters.status} label="Session status" class="mb-3 overflow-y-hidden">
+      <.tabs active={@filters.status} label="Session status" class="mb-3">
         <:tab
           id="active"
           label="Active"

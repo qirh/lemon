@@ -6,8 +6,12 @@ const token = (name) => `rgb(var(--${name}) / <alpha-value>)`
 module.exports = {
   content: ["../lib/**/*.{ex,heex}", "../priv/static/assets/js/**/*.js"],
   // LemonWeb.UI builds tone/variant classes from attributes ("badge-#{tone}",
-  // "btn-#{variant}"), which the content scanner cannot see.
-  safelist: [{pattern: /^(badge|btn)-(neutral|accent|success|warning|danger|info|plan|primary|secondary|ghost|danger-soft)$/}],
+  // "btn-#{variant}") and highlight.js adds `hljs-*` token classes at runtime;
+  // the content scanner can see neither.
+  safelist: [
+    {pattern: /^(badge|btn)-(neutral|accent|success|warning|danger|info|plan|primary|secondary|ghost|danger-soft)$/},
+    {pattern: /^hljs/}
+  ],
   darkMode: ["selector", '[data-theme="dark"]'],
   theme: {
     extend: {

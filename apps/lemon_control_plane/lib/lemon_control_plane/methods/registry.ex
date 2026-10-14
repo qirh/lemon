@@ -32,6 +32,7 @@ defmodule LemonControlPlane.Methods.Registry do
   @builtin_methods [
     LemonControlPlane.Methods.Health,
     LemonControlPlane.Methods.Status,
+    LemonControlPlane.Methods.DoctorRun,
     LemonControlPlane.Methods.Agent,
     LemonControlPlane.Methods.AgentWait,
     LemonControlPlane.Methods.AgentDirectoryList,

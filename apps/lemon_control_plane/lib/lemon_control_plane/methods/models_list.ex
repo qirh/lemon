@@ -63,7 +63,8 @@ defmodule LemonControlPlane.Methods.ModelsList do
       "maxOutput" => model.max_tokens,
       "supportsThinking" => model.reasoning || false,
       "supportsVision" => :image in model.input,
-      "supportsStreaming" => true
+      "supportsStreaming" => true,
+      "pricing" => pricing(Map.get(model, :cost))
     }
   end
 
@@ -90,12 +91,32 @@ defmodule LemonControlPlane.Methods.ModelsList do
           else: vision_field
         ),
       "supportsStreaming" =>
-        get_boolean_field(model, [:supports_streaming, "supportsStreaming"], true)
+        get_boolean_field(model, [:supports_streaming, "supportsStreaming"], true),
+      "pricing" => pricing(get_field(model, :cost))
     }
   end
 
   defp image_input?(input) when is_list(input), do: Enum.any?(input, &(&1 in [:image, "image"]))
   defp image_input?(_input), do: false
+
+  # USD per million tokens from the catalog; nil when the catalog lists no price.
+  defp pricing(%{__struct__: _} = cost), do: cost |> Map.from_struct() |> pricing()
+
+  defp pricing(cost) when is_map(cost) do
+    prices = %{
+      "inputPerMillion" => price(get_field(cost, :input)),
+      "outputPerMillion" => price(get_field(cost, :output)),
+      "cacheReadPerMillion" => price(get_field(cost, :cache_read)),
+      "cacheWritePerMillion" => price(get_field(cost, :cache_write))
+    }
+
+    if Enum.any?(Map.values(prices), &(is_number(&1) and &1 > 0)), do: prices
+  end
+
+  defp pricing(_cost), do: nil
+
+  defp price(value) when is_number(value) and value >= 0, do: value
+  defp price(_value), do: nil
 
   defp summarize_models(models, source) do
     providers =

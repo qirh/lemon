@@ -206,6 +206,12 @@ defmodule LemonAutomation.CronManager do
     GenServer.call(__MODULE__, {:remove, job_id}, @call_timeout_ms)
   end
 
+  @doc "Remove only the exact job revision inspected by an operator."
+  @spec remove(binary(), binary()) :: :ok | {:error, :not_found | :stale}
+  def remove(job_id, expected_revision) do
+    GenServer.call(__MODULE__, {:remove, job_id, expected_revision}, @call_timeout_ms)
+  end
+
   @doc """
   Trigger a job to run immediately.
   """
@@ -489,6 +495,20 @@ defmodule LemonAutomation.CronManager do
       {:ok, job} ->
         Logger.info("[CronManager] Removed job: #{job_id}")
         {:reply, :ok, delete_job(state, job)}
+
+      :error ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call({:remove, job_id, expected}, from, state) do
+    case Map.fetch(state.jobs, job_id) do
+      {:ok, job} ->
+        if expected == control_revision(job) do
+          handle_call({:remove, job_id}, from, state)
+        else
+          {:reply, {:error, :stale}, state}
+        end
 
       :error ->
         {:reply, {:error, :not_found}, state}

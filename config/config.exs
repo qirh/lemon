@@ -18,7 +18,12 @@ config :phoenix, :filter_parameters, [
   "credential_ref",
   "credentialRef",
   "hosted_werewolf_",
-  "params"
+  "params",
+  # Private conversation and automation content typed into Lemon Web forms.
+  "prompt",
+  "objective",
+  "message",
+  "guidance"
 ]
 
 config :logger, :default_formatter,
@@ -141,15 +146,16 @@ config :lemon_core, LemonCore.Secrets,
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
 #
 # The store is a storage primitive and must not name its collaborators, so the
-# runtime wires them here: run history and memory ingest attach as finalize-run
-# hooks, and run-history reads forward to the same provider. Channels register
-# their own cached tables at boot (see LemonChannels.Application).
+# runtime wires them here: run history, memory ingest and the usage ledger attach
+# as finalize-run hooks, and run-history reads forward to the same provider.
+# Channels register their own cached tables at boot (see LemonChannels.Application).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
   backend_opts: [],
   finalize_run_hooks: [
     {LemonCore.RunHistoryStore, :handle_finalize_run},
-    {LemonMemory.Ingest, :handle_finalize_run}
+    {LemonMemory.Ingest, :handle_finalize_run},
+    {LemonCore.UsageLedger, :handle_finalize_run}
   ],
   run_history_provider: LemonCore.RunHistoryStore
 
