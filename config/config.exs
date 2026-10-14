@@ -102,6 +102,7 @@ config :lemon_core, :env_registries, [
   LemonEvals.Env,
   LemonGateway.Env,
   LemonHoncho.Env,
+  LemonOmp.Env,
   LemonRouter.Env,
   LemonSkills.Env,
   LemonWeb.Env,
