@@ -877,14 +877,18 @@ defmodule LemonGateway.EngineLockTest do
 
   # Helper to start a fresh EngineLock for unit tests
   defp start_engine_lock(context) do
-    # Start a new EngineLock with a unique name for isolation
+    # Start a new EngineLock with a unique name for isolation. The test
+    # supervisor owns it: a lock linked to the test process dies with it, racing
+    # any on_exit stop.
     name = :"engine_lock_#{:erlang.unique_integer([:positive])}"
     opts = Map.get(context, :engine_lock_opts, %{})
-    {:ok, pid} = GenServer.start_link(Elixir.LemonGateway.EngineLock, opts, name: name)
 
-    on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
-    end)
+    pid =
+      start_supervised!(%{
+        id: name,
+        start: {GenServer, :start_link, [Elixir.LemonGateway.EngineLock, opts, [name: name]]},
+        restart: :temporary
+      })
 
     %{lock: pid, lock_name: name}
   end
