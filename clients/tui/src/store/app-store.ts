@@ -27,6 +27,8 @@ export interface AppStoreEventMap {
 	"blocks-changed": { key: string };
 	/** The default submission mode changed (`/mode`). */
 	"mode-changed": { mode: SubmissionMode };
+	/** A pending approval was answered, here or elsewhere. Follows `approvals-changed`. */
+	"approval-resolved": { approval: PendingApproval; decision?: string };
 }
 
 /**
@@ -141,6 +143,7 @@ export class AppStore {
 			pending.block.decision = decision;
 		}
 		this.events.emit("approvals-changed", { pending: this.approvals.size });
+		this.events.emit("approval-resolved", { approval: pending, decision });
 		return pending;
 	}
 

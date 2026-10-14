@@ -22,7 +22,7 @@ import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { actionBar, actionButton } from "@oh-my-pi/pi-tui/native/overlay";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
-import type { ApprovalRequestedEvent } from "../../protocol/types.ts";
+import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
 import { getTheme } from "../theme/theme.ts";
 import { WidthClamp } from "./width-safe.ts";
 
@@ -43,6 +43,25 @@ export const APPROVAL_OPTIONS: readonly ApprovalOption[] = [
 	{ key: "3", label: "allow always", decision: "approve_global" },
 	{ key: "4", label: "deny", decision: "deny" },
 ];
+
+/** Rows of plan Markdown shown before the rest is counted. */
+export const PLAN_PREVIEW_ROWS = 12;
+
+/**
+ * A plan proposal is either executed now or sent back; a session/agent/global
+ * scope would pre-approve plans nobody has read yet, so none is offered.
+ */
+export const PLAN_OPTIONS: readonly ApprovalOption[] = [
+	{ key: "1", label: "Approve and execute", decision: "approve_once" },
+	{ key: "2", label: "Refine plan", decision: "deny" },
+];
+
+/** The choices a request offers: plan proposals get their own pair. */
+export function approvalOptions(
+	event: ApprovalRequestedEvent | undefined,
+): readonly ApprovalOption[] {
+	return event?.tool === PROPOSE_PLAN_TOOL ? PLAN_OPTIONS : APPROVAL_OPTIONS;
+}
 
 export interface ApprovalPanelOptions {
 	/** A decision the user made here. */
@@ -84,7 +103,7 @@ export class ApprovalPanelComponent implements Component {
 	}
 
 	get selectedOption(): ApprovalOption {
-		return APPROVAL_OPTIONS[this.#selected]!;
+		return approvalOptions(this.#event)[this.#selected]!;
 	}
 
 	/** Put a request on screen. A different request resets the selection. */
@@ -115,7 +134,7 @@ export class ApprovalPanelComponent implements Component {
 			this.#options.onDecide("deny", event);
 			return;
 		}
-		const quick = APPROVAL_OPTIONS.find((option) => option.key === data);
+		const quick = approvalOptions(event).find((option) => option.key === data);
 		if (quick) {
 			this.#options.onDecide(quick.decision, event);
 			return;
@@ -159,21 +178,33 @@ export class ApprovalPanelComponent implements Component {
 	 * action — every line, wrapped, never clipped — the rationale and session,
 	 * then the decisions as `omp.btn` buttons in an `omp.actions` bar with the
 	 * expiry counting down terminal-side. A click takes the quick-pick digit's
-	 * path; the keyboard selection is the accented button.
+	 * path; the keyboard selection is the accented button. A plan proposal shows
+	 * its plan file and a bounded Markdown preview instead of the action, and
+	 * only its two decisions.
 	 */
 	describe(): NativeNode {
 		const event = this.#event;
 		if (!event) return EMPTY_NODE;
 		const cached = this.#native;
 		if (cached?.event === event && cached.selected === this.#selected) return cached.node;
-		const securityOverride = event.action?.security_override === true;
+		const plan = event.tool === PROPOSE_PLAN_TOOL;
+		const securityOverride = !plan && event.action?.security_override === true;
+		const path = plan && typeof event.action?.path === "string" ? event.action.path : "";
+		const details = plan
+			? [
+					...(path ? [`plan file: ${path}`] : []),
+					...planPreviewRows(typeof event.action?.plan === "string" ? event.action.plan : ""),
+				]
+			: describeAction(event.action).split("\n");
 		const children: NativeNode[] = [
 			node(
 				"text",
 				{
-					text: `${securityOverride ? "Security override" : "Approval required"} · ${event.tool ?? "tool"}`,
+					text: plan
+						? planTitle(event.action)
+						: `${securityOverride ? "Security override" : "Approval required"} · ${event.tool ?? "tool"}`,
 					role: "omp.approval.title",
-					tone: securityOverride ? "error" : "warning",
+					tone: plan ? "accent" : securityOverride ? "error" : "warning",
 				},
 				undefined,
 				"title",
@@ -181,11 +212,16 @@ export class ApprovalPanelComponent implements Component {
 			node(
 				"col",
 				{ role: "omp.approval.details" },
-				describeAction(event.action)
-					.split("\n")
-					.map((line, index) =>
-						node("text", { text: line, wrap: "word" }, undefined, String(index)),
+				details.map((line, index) =>
+					node(
+						"text",
+						plan && path && index === 0
+							? { spans: [span(line, "muted")], wrap: "word" }
+							: { text: line, wrap: "word" },
+						undefined,
+						String(index),
 					),
+				),
 				"details",
 			),
 		];
@@ -195,7 +231,7 @@ export class ApprovalPanelComponent implements Component {
 		if (event.sessionKey) {
 			children.push(text([span(event.sessionKey, "dim")], { truncate: "end", key: "session" }));
 		}
-		const buttons = APPROVAL_OPTIONS.map((option, index) =>
+		const buttons = approvalOptions(event).map((option, index) =>
 			actionButton(
 				(securityOverride ? securityOverrideLabel(option) : option.label).replace(/^./, (first) =>
 					first.toUpperCase(),
@@ -203,7 +239,8 @@ export class ApprovalPanelComponent implements Component {
 				option.decision,
 				{
 					keys: option.key,
-					...(option.decision === "deny"
+					// Refining a plan is a normal answer, not a refusal.
+					...(option.decision === "deny" && !plan
 						? { tone: "error" as const }
 						: index === this.#selected
 							? { tone: "accent" as const }
@@ -229,7 +266,7 @@ export class ApprovalPanelComponent implements Component {
 	handleNativeEvent(event: NativeUiEvent): void {
 		const pending = this.#event;
 		if (!pending || event.type !== "action") return;
-		const option = APPROVAL_OPTIONS.find((candidate) => candidate.decision === event.act);
+		const option = approvalOptions(pending).find((candidate) => candidate.decision === event.act);
 		if (option) this.#options.onDecide(option.decision, pending);
 	}
 
@@ -237,7 +274,7 @@ export class ApprovalPanelComponent implements Component {
 
 	#move(direction: -1 | 1): void {
 		const next = this.#selected + direction;
-		if (next < 0 || next >= APPROVAL_OPTIONS.length) return;
+		if (next < 0 || next >= approvalOptions(this.#event).length) return;
 		this.#selected = next;
 		this.#cachedRows = undefined;
 		this.#options.requestRender?.();
@@ -270,15 +307,29 @@ export class ApprovalPanelComponent implements Component {
 			),
 		);
 
-		const securityOverride = event.action?.security_override === true;
+		const plan = event.tool === PROPOSE_PLAN_TOOL;
+		const securityOverride = !plan && event.action?.security_override === true;
 		const title = truncateToWidth(
-			`${securityOverride ? "SECURITY OVERRIDE" : "approval required"} · ${event.tool ?? "tool"}`,
+			plan
+				? planTitle(event.action)
+				: `${securityOverride ? "SECURITY OVERRIDE" : "approval required"} · ${event.tool ?? "tool"}`,
 			inner,
 		);
-		line(title, theme.fg("warning", title));
+		line(title, theme.fg(plan ? "accent" : "warning", title));
 
-		for (const row of previewRows(describeAction(event.action), inner)) {
-			line(row, theme.fg("text", row));
+		if (plan) {
+			const path = typeof event.action?.path === "string" ? event.action.path : "";
+			if (path) {
+				for (const row of wrapTextWithAnsi(`plan file: ${path}`, inner)) {
+					line(row, theme.fg("muted", row));
+				}
+			}
+			const markdown = typeof event.action?.plan === "string" ? event.action.plan : "";
+			for (const row of planPreviewRows(markdown, inner)) line(row, theme.fg("text", row));
+		} else {
+			for (const row of previewRows(describeAction(event.action), inner)) {
+				line(row, theme.fg("text", row));
+			}
 		}
 
 		if (event.rationale) {
@@ -295,7 +346,8 @@ export class ApprovalPanelComponent implements Component {
 			line(clamped, theme.fg("dim", clamped));
 		}
 
-		for (const [index, option] of APPROVAL_OPTIONS.entries()) {
+		const options = approvalOptions(event);
+		for (const [index, option] of options.entries()) {
 			const marker = index === this.#selected ? theme.cursor : " ";
 			const label = securityOverride ? securityOverrideLabel(option) : option.label;
 			const text = truncateToWidth(`${marker} ${option.key}  ${label}`, inner);
@@ -303,11 +355,14 @@ export class ApprovalPanelComponent implements Component {
 				text,
 				index === this.#selected
 					? theme.fg("accent", text)
-					: theme.fg(option.decision === "deny" ? "error" : "text", text),
+					: theme.fg(option.decision === "deny" && !plan ? "error" : "text", text),
 			);
 		}
 
-		const hint = truncateToWidth("1-4 picks · ↑↓ then enter · esc denies", inner);
+		const hint = truncateToWidth(
+			`1-${options.length} picks · ↑↓ then enter · esc ${plan ? "refines" : "denies"}`,
+			inner,
+		);
 		line(hint, theme.fg("dim", hint));
 		rows.push(
 			theme.fg(
@@ -387,10 +442,13 @@ export class ApprovalRecordComponent implements Component {
 		const theme = getTheme();
 		const tool = this.#tool ?? "tool";
 		const denied = this.#decision === "deny";
-		const text = this.#decision
-			? `· approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
-			: `· approval requested for ${tool} (${this.#approvalId})`;
-		const slot = this.#decision ? (denied ? "error" : "success") : "warning";
+		const plan = this.#tool === PROPOSE_PLAN_TOOL;
+		const text = plan
+			? planRecordText(this.#approvalId, this.#decision)
+			: this.#decision
+				? `· approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
+				: `· approval requested for ${tool} (${this.#approvalId})`;
+		const slot = this.#decision ? (denied ? (plan ? "muted" : "error") : "success") : "warning";
 		const rows = [theme.fg(slot, truncateToWidth(` ${text}`, width))];
 		this.#cachedRows = rows;
 		this.#cachedWidth = width;
@@ -403,10 +461,15 @@ export class ApprovalRecordComponent implements Component {
 		if (this.#native?.version === this.#version) return this.#native.node;
 		const tool = this.#tool ?? "tool";
 		const denied = this.#decision === "deny";
-		const line = this.#decision
-			? `Approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
-			: `Approval requested for ${tool}`;
-		const tone = this.#decision ? (denied ? "error" : "success") : "warning";
+		const plan = this.#tool === PROPOSE_PLAN_TOOL;
+		const line = plan
+			? planRecordText(this.#approvalId, this.#decision).replace(/^· (.)/, (_, first: string) =>
+					first.toUpperCase(),
+				)
+			: this.#decision
+				? `Approval ${denied ? "denied" : "granted"} for ${tool} (${humanDecision(this.#decision)})`
+				: `Approval requested for ${tool}`;
+		const tone = this.#decision ? (denied ? (plan ? "muted" : "error") : "success") : "warning";
 		const described = node("text", {
 			spans: [span(line, tone)],
 			wrap: "word",
@@ -431,6 +494,56 @@ export class ApprovalRecordComponent implements Component {
 /** `approve_session` -> `session`; the daemon's wire word minus its prefix. */
 export function humanDecision(decision: string): string {
 	return decision.startsWith("approve_") ? decision.slice("approve_".length) : decision;
+}
+
+/** True for an approving decision, in either the resolve (`approve_once`) or event (`once`) vocabulary. */
+export function isApprovedDecision(decision: string | undefined): boolean {
+	return (
+		decision !== undefined &&
+		(decision.startsWith("approve_") || ["once", "session", "global"].includes(decision))
+	);
+}
+
+function planRecordText(approvalId: string, decision: string | undefined): string {
+	if (decision === undefined) return `· plan proposed — awaiting your decision (${approvalId})`;
+	if (decision === "deny") return "· plan sent back for refinement";
+	if (isApprovedDecision(decision)) return "· plan approved — executing";
+	return `· plan proposal closed (${decision})`;
+}
+
+/** `Plan proposal · <title>`, the title flattened to one line. */
+export function planTitle(action: Record<string, unknown> | undefined | null): string {
+	const title = typeof action?.title === "string" ? action.title.replace(/\s+/g, " ").trim() : "";
+	return `Plan proposal · ${title || "untitled plan"}`;
+}
+
+/**
+ * The head of a proposed plan's Markdown, capped at {@link PLAN_PREVIEW_ROWS}
+ * rows: wrapped to `width`, or source lines when the terminal wraps (the
+ * native surface). What does not fit is counted in source lines, the unit the
+ * plan file itself is read in. Control bytes are dropped: the text is agent
+ * output, and it is printed into the terminal verbatim otherwise.
+ */
+export function planPreviewRows(markdown: string, width?: number): string[] {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point.
+	const clean = markdown.replace(/\t/g, "  ").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, "");
+	const lines = clean.replace(/\s+$/, "").split("\n");
+	if (lines.length === 1 && lines[0] === "") return ["(empty plan)"];
+	const rows: string[] = [];
+	let shown = 0;
+	for (const source of lines) {
+		const wrapped = width === undefined ? [source] : wrapTextWithAnsi(source, width);
+		const room = PLAN_PREVIEW_ROWS - rows.length;
+		rows.push(...(wrapped.length === 0 ? [""] : wrapped).slice(0, room));
+		if (wrapped.length > room) break;
+		shown += 1;
+		if (rows.length >= PLAN_PREVIEW_ROWS) break;
+	}
+	if (shown < lines.length) {
+		const rest = lines.length - shown;
+		rows.push(`… ${rest} more line${rest === 1 ? "" : "s"} (${lines.length} total)`);
+	}
+	return rows;
 }
 
 /**

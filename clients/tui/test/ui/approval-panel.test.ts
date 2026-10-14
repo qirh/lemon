@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import type { ApprovalRequestedEvent } from "../../src/protocol/types.ts";
 import {
@@ -7,6 +8,9 @@ import {
 	ApprovalRecordComponent,
 	countdown,
 	describeAction,
+	isApprovedDecision,
+	PLAN_PREVIEW_ROWS,
+	planPreviewRows,
 	previewRows,
 } from "../../src/ui/components/approval-panel.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -152,6 +156,92 @@ describe("ApprovalPanelComponent", () => {
 	});
 });
 
+describe("plan proposals", () => {
+	const plan = (markdown: string, title = "Fix the API") =>
+		request({
+			approvalId: "ap-plan",
+			tool: "propose_plan",
+			action: { title, path: "/plans/fix-api-plan.md", plan: markdown },
+			rationale: `Approve plan "${title}" and start implementation?`,
+			expiresAtMs: null,
+		});
+
+	test("heads with the title and shows the plan file and Markdown", () => {
+		const { panel } = build(plan("# Fix the API\n\n- keep the public surface\n- add a test"));
+		const text = renderPlain(panel.render(80));
+		expect(text).toContain("Plan proposal · Fix the API");
+		expect(text).toContain("plan file: /plans/fix-api-plan.md");
+		expect(text).toContain("# Fix the API");
+		expect(text).toContain("- add a test");
+		expect(text).toContain('Approve plan "Fix the API" and start implementation?');
+		expect(text).toContain("1  Approve and execute");
+		expect(text).toContain("2  Refine plan");
+		expect(text).toContain("1-2 picks · ↑↓ then enter · esc refines");
+		for (const scoped of ["allow once", "allow for this session", "allow always", "3  ", "4  "]) {
+			expect(text).not.toContain(scoped);
+		}
+	});
+
+	test("offers exactly approve_once and deny; scope keys do nothing", () => {
+		const { panel, decisions } = build(plan("step"));
+		panel.handleInput("3");
+		panel.handleInput("4");
+		expect(decisions).toEqual([]);
+		panel.handleInput("1");
+		panel.handleInput("2");
+		expect(decisions).toEqual(["approve_once", "deny"]);
+	});
+
+	test("arrows stop at Refine plan and escape refines", () => {
+		const { panel, decisions } = build(plan("step"));
+		for (let i = 0; i < 5; i++) panel.handleInput("\x1b[B");
+		expect(panel.selectedOption).toMatchObject({ label: "Refine plan", decision: "deny" });
+		panel.handleInput("\r");
+		panel.handleInput("\x1b");
+		expect(decisions).toEqual(["deny", "deny"]);
+	});
+
+	test("a long plan is bounded and the rest counted in source lines", () => {
+		const markdown = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
+		const rows = planPreviewRows(markdown, 60);
+		expect(rows).toHaveLength(PLAN_PREVIEW_ROWS + 1);
+		expect(rows[0]).toBe("line 1");
+		expect(rows.at(-1)).toBe(`… ${40 - PLAN_PREVIEW_ROWS} more lines (40 total)`);
+		const { panel } = build(plan(markdown));
+		for (const width of [80, 40, 12]) {
+			for (const row of panel.render(width)) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+		}
+	});
+
+	test("a short plan is shown whole; an empty one says so; control bytes never reach the terminal", () => {
+		expect(planPreviewRows("a\nb\n\n", 40)).toEqual(["a", "b"]);
+		expect(planPreviewRows("  \n", 40)).toEqual(["(empty plan)"]);
+		expect(planPreviewRows("x\x1b]52;c;evil\x07y", 40)).toEqual(["x]52;c;evily"]);
+	});
+
+	test("the transcript record reads as a plan decision", () => {
+		const pending = new ApprovalRecordComponent("ap-plan", "propose_plan");
+		expect(renderPlain(pending.render(80))).toContain("plan proposed — awaiting your decision");
+		pending.annotate("approve_once");
+		expect(renderPlain(pending.render(80))).toContain("plan approved — executing");
+		const refined = new ApprovalRecordComponent("ap-plan", "propose_plan", "deny");
+		expect(renderPlain(refined.render(80))).toContain("plan sent back for refinement");
+		// Another client's resolution arrives in the event vocabulary.
+		expect(
+			renderPlain(new ApprovalRecordComponent("a", "propose_plan", "once").render(80)),
+		).toContain("plan approved — executing");
+	});
+
+	test("approval decisions are recognised in both vocabularies", () => {
+		for (const decision of ["approve_once", "approve_session", "once", "global"]) {
+			expect(isApprovedDecision(decision)).toBe(true);
+		}
+		for (const decision of ["deny", "expired", undefined]) {
+			expect(isApprovedDecision(decision)).toBe(false);
+		}
+	});
+});
+
 describe("describeAction", () => {
 	test("prefers a command, falls back to the map, never to nothing", () => {
 		expect(describeAction({ command: "ls -la" })).toBe("ls -la");
@@ -206,5 +296,72 @@ describe("ApprovalPanelComponent native buttons", () => {
 		});
 		panel.handleNativeEvent({ type: "action", key: "actions/bogus", act: "bogus", mods: [] });
 		expect(decisions).toEqual(["approve_session"]);
+	});
+
+	/** Every node in a described tree, depth first. */
+	function nodes(root: NativeNode): NativeNode[] {
+		const children = (root.c ?? []).filter((child): child is NativeNode => "k" in child);
+		return [root, ...children.flatMap(nodes)];
+	}
+
+	function buttons(root: NativeNode) {
+		return nodes(root)
+			.filter((entry) => entry.p && "role" in entry.p && entry.p.role === "omp.btn")
+			.map((entry) => ({
+				act: entry.p && "actions" in entry.p ? entry.p.actions?.click : undefined,
+				tone: entry.p && "tone" in entry.p ? entry.p.tone : undefined,
+				label: JSON.stringify(entry.c),
+			}));
+	}
+
+	test("a plan proposal offers exactly two clickable decisions", () => {
+		const markdown = Array.from({ length: 30 }, (_, i) => `- step ${i + 1}`).join("\n");
+		const { panel, decisions } = build(
+			request({
+				tool: "propose_plan",
+				action: { title: "Fix  the\nAPI", path: "/plans/fix-api-plan.md", plan: markdown },
+				rationale: 'Approve plan "Fix the API" and start implementation?',
+			}),
+		);
+		const described = panel.describe();
+		const json = JSON.stringify(described);
+		expect(json).toContain("Plan proposal · Fix the API");
+		expect(json).toContain("plan file: /plans/fix-api-plan.md");
+		expect(json).toContain("- step 1");
+		expect(json).toContain(`- step ${PLAN_PREVIEW_ROWS}"`);
+		expect(json).not.toContain(`- step ${PLAN_PREVIEW_ROWS + 1}"`);
+		expect(json).toContain(`… ${30 - PLAN_PREVIEW_ROWS} more lines (30 total)`);
+
+		const offered = buttons(described);
+		expect(offered.map((button) => button.act)).toEqual(["approve_once", "deny"]);
+		expect(offered[0]!.label).toContain("Approve and execute");
+		expect(offered[0]!.tone).toBe("accent");
+		expect(offered[1]!.label).toContain("Refine plan");
+		expect(offered[1]!.tone).toBeUndefined();
+
+		for (const act of ["approve_session", "approve_global", "deny", "approve_once"]) {
+			panel.handleNativeEvent({ type: "action", key: `actions/${act}`, act, mods: [] });
+		}
+		expect(decisions).toEqual(["deny", "approve_once"]);
+	});
+
+	test("other tools keep the four scoped buttons", () => {
+		const { panel } = build();
+		expect(buttons(panel.describe()).map((button) => button.act)).toEqual([
+			"approve_once",
+			"approve_session",
+			"approve_global",
+			"deny",
+		]);
+	});
+
+	test("the native transcript record reads as a plan decision", () => {
+		const record = new ApprovalRecordComponent("ap-plan", "propose_plan");
+		expect(JSON.stringify(record.describe())).toContain("Plan proposed — awaiting your decision");
+		record.annotate("deny");
+		expect(record.describe()).toMatchObject({ p: { tone: "muted" } });
+		expect(JSON.stringify(record.describe())).toContain("Plan sent back for refinement");
+		const approved = new ApprovalRecordComponent("ap-plan", "propose_plan", "approve_once");
+		expect(JSON.stringify(approved.describe())).toContain("Plan approved — executing");
 	});
 });

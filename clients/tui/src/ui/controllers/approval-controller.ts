@@ -21,7 +21,7 @@
 
 import type { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
-import type { ApprovalRequestedEvent } from "../../protocol/types.ts";
+import { type ApprovalRequestedEvent, PROPOSE_PLAN_TOOL } from "../../protocol/types.ts";
 import type { AppStore, PendingApproval } from "../../store/app-store.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import { ApprovalPanelComponent, humanDecision } from "../components/approval-panel.ts";
@@ -137,7 +137,11 @@ export class ApprovalController {
 		// Writes the store and annotates the transcript record in one place.
 		events.resolveApproval(approvalId, decision);
 		notice(
-			`${decision === "deny" ? "denied" : "approved"} ${pending.event.tool ?? "tool"} (${humanDecision(decision)})`,
+			pending.event.tool === PROPOSE_PLAN_TOOL
+				? decision === "deny"
+					? "plan sent back for refinement; plan mode stays on — tell the agent what to change"
+					: "plan approved — plan mode is off and the agent is executing it"
+				: `${decision === "deny" ? "denied" : "approved"} ${pending.event.tool ?? "tool"} (${humanDecision(decision)})`,
 		);
 		refreshStatus();
 		this.present();

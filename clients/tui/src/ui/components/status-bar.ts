@@ -55,11 +55,14 @@ export interface StatusBarData {
 	thinking?: string;
 	engine?: string;
 	queued: number;
+	/** The focused session's daemon plan mode; only `plan` earns a segment. */
+	planMode?: "plan" | "code";
 }
 
 export type ContextSource = "context" | "aggregate";
 
 type SegmentId =
+	| "plan"
 	| "model"
 	| "context"
 	| "connection"
@@ -259,6 +262,7 @@ function cacheKey(data: StatusBarData): string {
 		data.thinking,
 		data.engine,
 		data.queued,
+		data.planMode,
 	].join("\0");
 }
 
@@ -281,6 +285,11 @@ export function renderStatusLine(data: StatusBarData, width: number): string {
 
 export function buildSegments(data: StatusBarData): Segment[] {
 	const segments: Segment[] = [];
+	// Plan mode changes what the agent is allowed to do, so it leads the row and
+	// is the last optional segment to drop.
+	if (data.planMode === "plan") {
+		segments.push({ id: "plan", text: "plan", slot: "accent", priority: 95 });
+	}
 
 	segments.push({
 		id: "model",
@@ -411,6 +420,9 @@ export function buildComposerFacts(data: StatusBarData): ComposerFacts {
 					spans: styledSpans(theme.fg(segment.slot, text)),
 					priority: segment.priority,
 					...(action ? { actions: { click: `${STATUS_ACTION_PREFIX}${action}` } } : {}),
+					...(segment.id === "plan"
+						? { title: "Plan mode: read-only until you approve a proposed plan" }
+						: {}),
 				},
 				undefined,
 				segment.id,

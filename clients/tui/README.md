@@ -280,7 +280,7 @@ and control plane authoritative:
 | `/think`, `/reasoning`, Shift+Tab | Pick a thinking level without losing the current draft; an explicit level still applies directly. |
 | `/agents`, `/tasks` | Show the Lemon agent directory and active/recent subagent tasks. |
 | `/compact [focus instructions…]`, `/compress [focus instructions…]` | Manually compact the current session through `sessions.compact`, with optional instructions about what context to preserve. |
-| `/plan [status\|show\|enter [request…]\|approve\|discard]` | Inspect the native plan artifact, enter read-only planning, explicitly review and approve one revision, or discard planning without approval. |
+| `/plan [request…]` | Toggle plan mode for the focused session: the agent plans read-only, then asks for approval before executing. With a request, enter plan mode (if needed) and send it as the planning prompt. |
 | `/heartbeat every 30m <prompt>`, `/hb ...` | Create or replace the focused agent's heartbeat cron job (`heartbeat-<agent>`, runs in `agent:<agent>:main`) through `cron.list`/`cron.add`/`cron.update`. Intervals must be cron-exact: minutes dividing 60, hours dividing 24, or `1d` (daily, 09:00 server-local). Results reach your paired Telegram chat; a reply of exactly `HEARTBEAT_OK` is suppressed. `/heartbeat status`, `pause`, `resume`, and `clear` use `cron.list`, `cron.pause`, `cron.resume`, and `cron.remove`. |
 | `/bg <prompt>` or `/bg start <prompt>` | Start background work through `background.start`, inheriting the TUI's durable session key, cwd, model, and reasoning level. The full returned id is displayed intact for lifecycle commands. |
 | `/bg list [status]` | List durable background runs, optionally filtered by lifecycle status. |
@@ -313,33 +313,36 @@ Fresh startup and `/session new` sessions use canonical local channel-peer keys:
 automation goals and session views can validate and route them consistently.
 Explicit `--session` keys and resumed legacy `tui-…` sessions remain unchanged.
 
-### Planning and approval
+### Plan mode
 
-`/plan` (also `/plan status` or `/plan show`) fetches the native session's mode,
-plan status, revision, Markdown artifact path and full content. It also shows
-command usage. There is no separate TUI plan store.
+`/plan` toggles the focused session's native plan mode. While it is on, the
+agent can only read the project and write its own plan file (a session-private
+`<slug>-plan.md` outside the working tree), and the status line leads with an
+accent-coloured `plan` segment (in Tern's native composer chrome it is the
+first composer fact). There is no separate TUI plan store: the indicator is re-read
+through `sessions.plan` on connect, on session switch, after each `/plan`, after
+a plan proposal is answered, and when the focused session's run completes.
 
-Use `/plan enter` to enter read-only planning, then send your planning request
-normally. `/plan enter <request…>` enters planning first and sends that request
-through the ordinary prompt submission path only after the daemon confirms
-planning mode. The status is `draft` until a completed planning turn produces a
-`pending` immutable Markdown artifact. Planning does not itself approve code
-execution.
+`/plan <request…>` enters plan mode first when it is off (and only once the
+daemon confirms it), then sends the request intact through the ordinary prompt
+submission path; when plan mode is already on it just sends the request.
 
-Read the artifact with `/plan`, then use `/plan approve`. The command fetches
-and shows the current artifact again and opens a cancel-default confirmation
-picker identifying its exact revision. Choose “I reviewed this revision —
-approve” only after reading it; cancel to return to the full transcript if
-needed. Confirmation sends only that displayed revision. A stale or refused
-approval preserves the draft and never sends an execution prompt; use `/plan`
-and review again.
+When the plan is decision-complete the agent calls `propose_plan`. The approval
+panel shows `Plan proposal · <title>`, the plan file path and the first lines of
+the Markdown (the rest is counted), with exactly two choices — numbered keys in
+the row renderer, clickable buttons in Tern's native approval chrome:
 
-Approval changes the native status to `approved`, but **does not execute the
-plan**. When ready, send an explicit prompt such as `Execute the approved plan`;
-the native session supplies the approved plan as context. `/plan discard`
-instead leaves planning without approving or executing anything. Stop an active
-run before entering, approving or discarding a plan. Plan operations require a
-daemon advertising `sessions.plan` and are never queued offline.
+- **Approve and execute** (`approve_once`) turns plan mode off, restores the
+  full tool set and lets the agent implement the plan in the same run.
+- **Refine plan** (`deny`, also Esc) keeps plan mode on; the agent ends its turn
+  and waits for your feedback, which you send as a normal prompt.
+
+No session, agent or global scope applies to a plan proposal, and `/approve`
+refuses one. Running `/plan` while plan mode is on exits it without approving
+or executing anything; when the plan file already has content a cancel-default
+`Exit plan mode?` confirmation comes first. Stop an active run before toggling
+plan mode. Plan operations require a daemon advertising `sessions.plan` and are
+never queued offline.
 
 ### Manual compaction
 
