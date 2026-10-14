@@ -173,6 +173,10 @@ remains a legacy client-side alias; it does not configure the daemon.
   recorded yet" for a session that has not run a prompt.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
   support in overlays.
+- `/theme <name>` and the model picker's **Make default** (Ctrl+G) persist to
+  `~/.lemon/config.toml` as `[tui] theme` and `[defaults] provider`/`model`.
+  Only those keys are edited in place; comments and every other table are
+  kept, and the edit is refused if the result would not parse.
 - Native terminal integration: Tern pane detection, prompt/reply navigation
   marks (OSC 133), clickable URL and file references (OSC 8, including `#L42`
   line anchors), a session/status title, turn-completion and approval desktop

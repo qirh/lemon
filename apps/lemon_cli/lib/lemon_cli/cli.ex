@@ -27,6 +27,7 @@ defmodule LemonCli.CLI do
   alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Secrets.KeyRotation
   alias LemonCore.Secrets.MasterKey
+  alias LemonCore.Update.ConfigMigrator
   alias LemonCli.LocalRuntime
   alias LemonCli.CommandRegistry
 
@@ -496,9 +497,12 @@ defmodule LemonCli.CLI do
       {[], ["show"]} ->
         show_config(opts)
 
+      {[], ["migrate"]} ->
+        migrate_config(opts)
+
       {[], []} ->
         print_usage_error(
-          "Missing config command. Expected `validate` or `show`.",
+          "Missing config command. Expected `validate`, `show` or `migrate`.",
           &print_config_usage/1
         )
 
@@ -507,6 +511,50 @@ defmodule LemonCli.CLI do
           "Unsupported arguments: #{Enum.map_join(positional, " ", &inspect/1)}",
           &print_config_usage/1
         )
+    end
+  end
+
+  # Deliberately does not start :lemon_core: a config with removed settings
+  # would stop it from booting, and this command is how such a file is fixed.
+  defp migrate_config(opts) do
+    Application.load(:lemon_core)
+
+    paths =
+      [Modular.global_path(), Modular.project_path(opts[:project_dir] || File.cwd!())]
+      |> Enum.map(&Path.expand/1)
+      |> Enum.uniq()
+      |> Enum.filter(&File.exists?/1)
+
+    if paths == [] do
+      IO.puts("No config file to migrate (#{Path.expand(Modular.global_path())}).")
+      @exit_ok
+    else
+      paths
+      |> Enum.map(&migrate_config_file/1)
+      |> Enum.max()
+    end
+  end
+
+  defp migrate_config_file(path) do
+    with {:needs_migration, _issues} <- ConfigMigrator.check(path),
+         {:ok, %{backup: backup, changes: changes}} <- ConfigMigrator.migrate!(path) do
+      IO.puts("Migrated #{path}")
+      Enum.each(changes, &IO.puts("  #{&1}"))
+      IO.puts("  Backup: #{backup}")
+      @exit_ok
+    else
+      :ok ->
+        IO.puts("#{path}: already uses the current schema.")
+        @exit_ok
+
+      {:error, {:manual_steps_required, errors}} ->
+        IO.puts(:stderr, "#{path}: left unchanged; these settings need a manual edit:")
+        Enum.each(errors, &IO.puts(:stderr, "  • #{&1}"))
+        @exit_error
+
+      {:error, reason} ->
+        IO.puts(:stderr, "#{path}: migration failed: #{inspect(reason)}")
+        @exit_error
     end
   end
 
@@ -526,6 +574,10 @@ defmodule LemonCli.CLI do
     case Modular.load_with_validation(load_opts) do
       {:ok, config} ->
         IO.puts(IO.ANSI.format([:green, "✓ Configuration is valid", :reset]))
+
+        Enum.each(Modular.deprecation_warnings(load_opts), fn warning ->
+          IO.puts(:stderr, IO.ANSI.format([:yellow, "! #{warning}", :reset]))
+        end)
 
         if verbose? do
           print_config_summary(config)

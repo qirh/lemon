@@ -20,6 +20,20 @@ System.put_env(
   )
 )
 
+# Tests must never read or write the developer's real ~/.lemon. LemonCore.Paths
+# resolves config.toml, secrets and state from $HOME, and every umbrella app
+# (including LemonCore's config load) boots before any test_helper runs, so a
+# personal config could otherwise fail or skew the whole suite. Tests that need
+# a specific home still set HOME themselves and restore this one afterwards.
+lemon_test_home =
+  Path.join(
+    System.get_env("LEMON_TEST_TMPDIR") || System.tmp_dir!(),
+    "lemon_home_test_#{System.system_time(:millisecond)}_#{:erlang.unique_integer([:positive])}"
+  )
+
+File.mkdir_p!(lemon_test_home)
+System.put_env("HOME", lemon_test_home)
+
 # Tests must not depend on or mutate a developer's persistent state on disk.
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,

@@ -219,11 +219,15 @@ defmodule LemonCli.CommandRegistry do
     },
     %{
       name: "config",
-      summary: "Validate or show configuration",
-      usage: "lemon config [validate|show] [options]",
+      summary: "Validate, show or migrate configuration",
+      usage: "lemon config [validate|show|migrate] [options]",
       subcommands: [
         %{name: "validate", summary: "Validate the resolved configuration"},
-        %{name: "show", summary: "Show the resolved configuration summary"}
+        %{name: "show", summary: "Show the resolved configuration summary"},
+        %{
+          name: "migrate",
+          summary: "Rewrite deprecated sections in global and project config (keeps a backup)"
+        }
       ],
       options: [
         option("--verbose, -v", ["--verbose", "-v"], "Verbose output"),

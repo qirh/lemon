@@ -17,9 +17,9 @@ defmodule LemonCore.Config.TUI do
   - `LEMON_TUI_THEME`
   - `LEMON_TUI_DEBUG`
 
-  Note: The agent theme setting (under `[agent]`) is separate from the TUI theme.
-  The TUI theme controls the terminal interface appearance, while the agent theme
-  may affect agent behavior or output formatting.
+  The terminal client reads and writes `[tui] theme` itself (`/theme <name>`).
+  `[runtime] theme` is a separate runtime setting. A deprecated `[agent] theme`
+  is read as `[tui] theme` (see `LemonCore.Config.LegacyAgentMigration`).
   """
 
   alias LemonCore.Env

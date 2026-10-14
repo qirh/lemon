@@ -10,6 +10,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `lemon config migrate` rewrites deprecated sections (`[agent]`, `[agents.*]`,
+  `[tools.*]`) in the global and project config to the current schema, keeping
+  comments and a `config.toml.bak-<timestamp>` backup; `lemon setup` does the
+  same for an existing config.
+
 - **TUI startup logo.** `lemon` now opens with a block-glyph lemon painted in a
   yellow gradient with a green leaf, beside the version and key hints. It uses
   only `█ ▀ ▄` cells, so it renders in Tern and any UTF-8 terminal; ASCII
@@ -78,6 +83,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   agent CLIs (`claude`, `codex`, `copilot`); an existing value is left as is.
 
 ### Fixed
+
+- The TUI no longer rewrites `~/.lemon/config.toml` with a deprecated `[agent]`
+  table when you pick a default model (Ctrl+G / **Make default**) or run
+  `/theme`. That rewrite dropped `[defaults]`, `[runtime]`, `[gateway]` and
+  `[tui]`, and the `[agent]` table then stopped the runtime, `lemon setup` and
+  every test run from starting. The TUI now edits only `[defaults]
+  provider`/`model` and `[tui] theme` in place.
+- A config with a legacy `[agent]` table loads again: it is read as
+  `[defaults]`/`[runtime]`/`[tui]` with a warning (log, `lemon doctor`,
+  `lemon config validate`) instead of failing boot.
+- Fresh `lemon setup` no longer leaves an `[providers.anthropic]` reference to
+  a credential that does not exist when you sign in to another provider, and
+  non-interactive setup without `--model` no longer writes the model
+  `<provider>:fallback`.
+- Config edits by setup match table headers written with quoted keys
+  (`[providers."openai-codex"]`) instead of appending a duplicate table.
+- Umbrella tests run with an isolated `HOME`, so a personal
+  `~/.lemon/config.toml` can no longer fail or skew them.
 
 - Document reads (PDF and other converted formats) no longer report
   "Cannot start document backend" when the converter exits while its port is

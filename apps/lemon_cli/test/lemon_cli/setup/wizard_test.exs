@@ -187,6 +187,45 @@ defmodule LemonCli.Setup.WizardTest do
     end
   end
 
+  describe "run_full/3 — legacy config" do
+    test "rewrites a TUI-written [agent] table to the current schema, keeping a backup", %{
+      config_path: config_path
+    } do
+      legacy = """
+      [agent]
+      default_provider = "openai"
+      default_model = "openai:gpt-5.1"
+
+      [control_plane]
+
+      [providers."anthropic"]
+      api_key_secret = "anthropic_api_key"
+
+      [providers."openai-codex"]
+      oauth_secret = "llm_openai_codex_api_key"
+      auth_source = "oauth"
+      """
+
+      File.write!(config_path, legacy)
+      set_master_key_env()
+
+      io = recording_io()
+      Wizard.run_full([], io, non_interactive: true, config_path: config_path)
+
+      settings = Toml.decode_file!(config_path)
+      refute Map.has_key?(settings, "agent")
+      assert settings["defaults"] == %{"provider" => "openai", "model" => "openai:gpt-5.1"}
+      assert settings["providers"]["openai-codex"]["auth_source"] == "oauth"
+
+      assert [backup] = Path.wildcard(config_path <> ".bak-*")
+      assert File.read!(backup) == legacy
+
+      events = drain_events([])
+      assert info_event?(events, &String.contains?(&1, "agent.default_model → defaults.model"))
+      assert info_event?(events, &String.contains?(&1, "Backup: #{backup}"))
+    end
+  end
+
   describe "run_full/3 — complete state" do
     test "configured users are not reprompted and the wizard stays concise", %{
       config_path: config_path
@@ -323,6 +362,35 @@ defmodule LemonCli.Setup.WizardTest do
                  prefer_env: false,
                  env_fallback: false
                )
+    end
+  end
+
+  describe "run/3 — fresh non-interactive setup" do
+    test "writes a current-schema config whose default matches the onboarded provider", %{
+      config_path: path
+    } do
+      assert :ok =
+               Wizard.run(
+                 [
+                   "--non-interactive",
+                   "--provider",
+                   "openai",
+                   "--token",
+                   "wizard-test-token",
+                   "--skip-verify",
+                   "--config-path",
+                   path
+                 ],
+                 recording_io()
+               )
+
+      settings = Toml.decode_file!(path)
+      refute Map.has_key?(settings, "agent")
+      assert settings["defaults"]["provider"] == "openai"
+      assert "openai:" <> model = settings["defaults"]["model"]
+      refute model == "fallback"
+      assert Map.keys(settings["providers"]) == ["openai"]
+      assert {:ok, _config} = LemonCore.Config.Modular.validate_settings(settings)
     end
   end
 
