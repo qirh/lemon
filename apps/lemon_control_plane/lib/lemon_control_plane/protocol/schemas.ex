@@ -615,7 +615,27 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{
         "challenge" => :string
       }
-    }
+    },
+
+    # omp delegate sessions
+    "omp.status" => %{optional: %{}},
+    "omp.sessions.list" => %{optional: %{"includeEnded" => :boolean, "limit" => :integer}},
+    "omp.sessions.get" => %{required: %{"id" => :string}},
+    "omp.sessions.discover" => %{required: %{"cwd" => :string}, optional: %{"limit" => :integer}},
+    "omp.sessions.start" => %{
+      required: %{"prompt" => :string, "cwd" => :string},
+      optional: %{"model" => :string, "thinking" => :string}
+    },
+    "omp.sessions.resume" => %{
+      required: %{"ompSessionId" => :string, "cwd" => :string},
+      optional: %{"prompt" => :string, "model" => :string, "thinking" => :string}
+    },
+    "omp.sessions.send" => %{
+      required: %{"id" => :string, "message" => :string},
+      optional: %{"mode" => :string}
+    },
+    "omp.sessions.cancel" => %{required: %{"id" => :string}},
+    "omp.sessions.close" => %{required: %{"id" => :string}}
   }
 
   @event_schemas %{
@@ -644,6 +664,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "sessionKey" => :string,
         "agentId" => :string,
         "tool" => :string
+      }
+    },
+    "omp.session" => %{
+      required: %{
+        "reason" => :string,
+        "session" => :map
       }
     }
   }

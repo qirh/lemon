@@ -9,9 +9,9 @@ defmodule LemonCore.Config.ReadmeTest do
   describe "README examples" do
     test "Config.Agent.resolve/1 works as documented" do
       settings = %{
-        "agent" => %{
-          "default_provider" => "openai",
-          "default_model" => "gpt-4o"
+        "defaults" => %{
+          "provider" => "openai",
+          "model" => "gpt-4o"
         }
       }
 
@@ -128,8 +128,8 @@ defmodule LemonCore.Config.ReadmeTest do
       end)
 
       settings = %{
-        "agent" => %{
-          "default_model" => "claude-sonnet-4-20250514"
+        "defaults" => %{
+          "model" => "claude-sonnet-4-20250514"
         }
       }
 

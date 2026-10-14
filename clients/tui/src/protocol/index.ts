@@ -39,7 +39,8 @@ export {
 	type ServerFrame,
 	tryDecodeFrame,
 } from "./frames.ts";
-export { ControlPlaneMethods, METHOD, type MethodName } from "./methods.ts";
+export { ControlPlaneMethods, METHOD, type MethodName, OMP_METHODS } from "./methods.ts";
+export * from "./omp.ts";
 export type * from "./types.ts";
 export {
 	computeBackoffDelay,

@@ -98,4 +98,59 @@ defmodule LemonCore.Config.TomlPatchTest do
     refute patched =~ "[profiles.alpha]"
     refute patched =~ "[profiles.alpha.runtime]"
   end
+
+  test "matches a table header spelled with quoted keys instead of appending a duplicate" do
+    content = """
+    [providers."openai-codex"]
+    auth_source = "oauth"
+    """
+
+    patched =
+      TomlPatch.upsert_string(content, "providers.openai-codex", "oauth_secret", "llm_codex")
+
+    refute patched =~ "[providers.openai-codex]"
+
+    assert {:ok, %{"providers" => %{"openai-codex" => %{"oauth_secret" => "llm_codex"}}}} =
+             Toml.decode(patched)
+
+    assert TomlPatch.delete_key(patched, "providers.openai-codex", "auth_source") =~
+             ~s([providers."openai-codex"]\noauth_secret = "llm_codex")
+  end
+
+  test "inserts a missing parent table before its first subtable" do
+    content = """
+    [gateway.telegram]
+    bot_token_secret = "t"
+    """
+
+    patched = TomlPatch.upsert_raw_line(content, "gateway", "enable_telegram", "enable_telegram = true")
+
+    assert String.starts_with?(patched, "[gateway]\nenable_telegram = true\n\n[gateway.telegram]")
+    assert {:ok, %{"gateway" => %{"enable_telegram" => true, "telegram" => _}}} = Toml.decode(patched)
+  end
+
+  test "edits the right bytes after non-ASCII content" do
+    content = """
+    # café — configuration ✓
+    [defaults]
+    model = "old"
+
+    [tui]
+    theme = "lemon"
+    """
+
+    patched = TomlPatch.upsert_string(content, "defaults", "model", "new")
+
+    assert patched == String.replace(content, ~s(model = "old"), ~s(model = "new"))
+  end
+
+  test "parses dotted keys and table headers" do
+    assert {:ok, ["providers", "openai-codex"]} =
+             TomlPatch.parse_dotted_key(~s(providers . "openai-codex"))
+
+    assert {:ok, ["a", "b.c"]} = TomlPatch.parse_dotted_key("a.'b.c'")
+    assert :error = TomlPatch.parse_dotted_key("a..b")
+    assert {:ok, ["a"]} = TomlPatch.header_path("[a] # see [b]")
+    assert :error = TomlPatch.header_path("[[a]]")
+  end
 end

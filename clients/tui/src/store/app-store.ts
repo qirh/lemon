@@ -15,6 +15,7 @@ import type {
 	ModelsListResult,
 } from "../protocol/types.ts";
 import { Emitter } from "./events.ts";
+import { OmpStore } from "./omp-store.ts";
 import { QueueStore } from "./queue-store.ts";
 import { SessionStore } from "./session-store.ts";
 import type { ApprovalBlock } from "./transcript-model.ts";
@@ -63,6 +64,8 @@ export class AppStore {
 	readonly drafts = new Map<string, string>();
 	/** Prompts held client-side while a run is in flight, per session. */
 	readonly queue = new QueueStore();
+	/** omp delegate processes the daemon runs, across every Lemon session. */
+	readonly omp = new OmpStore();
 
 	connection: ConnectionState = "offline";
 	serverVersion: string | undefined;

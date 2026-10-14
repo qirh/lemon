@@ -278,3 +278,35 @@ test("consecutive settled reads fold into one native read group that opens to th
 	expect(opened.p).toMatchObject({ collapsed: false });
 	expect(nodes(opened).filter((n) => n.k === "section")).toHaveLength(2);
 });
+
+test("omp tool cards are agent nodes with sanitized omp text, live and settled", () => {
+	const omp = fixtureByName("omp");
+	if (!omp) throw new Error("no omp fixture");
+	const running = JSON.stringify(new ToolCardComponent(fixtureBlock(omp, "running")).describe());
+	expect(running).toContain('"k":"agent"');
+	expect(running).toContain("Fix the flaky reconnect test");
+	expect(running).toContain('"status":"running"');
+	const settled = JSON.stringify(new ToolCardComponent(fixtureBlock(omp, "success")).describe());
+	expect(settled).toContain('"status":"idle"');
+	expect(settled).toContain("The reconnect suite passed 20 consecutive runs.");
+	const hostile = JSON.stringify(
+		new ToolCardComponent(
+			block(
+				"omp",
+				{ action: "status", id: "omp_x" },
+				{
+					action: "status",
+					session: {
+						id: "omp_x",
+						title: "evil\u001b]0;owned\u0007 title",
+						status: "failed",
+						error: "bad\u001b[2J news",
+					},
+				},
+			),
+		).describe(),
+	);
+	expect(hostile).not.toMatch(/\\u001b|\\u0007/);
+	expect(hostile).toContain("evil title");
+	expect(hostile).toContain("bad news");
+});

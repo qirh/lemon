@@ -7,10 +7,11 @@
  * closing, so the picker behaves like a directory listing.
  *
  * Enter applies the model to the focused session (`sessions.patch`). Ctrl+G
- * toggles "also make it the default", which is written to the TUI's own config
- * file — the daemon's `config.set` is a free-form key/value store its router
- * never reads, so persisting there would look like it worked and change
- * nothing.
+ * toggles "also make it the default", which sets `[defaults] provider` and
+ * `model` in the daemon's `config.toml` — the keys `lemon setup provider
+ * --set-default` writes — editing those keys in place. The daemon's
+ * `config.set` is a free-form key/value store its router never reads, so
+ * persisting there would look like it worked and change nothing.
  *
  * On a native (TSP) surface the picker is one stage: every model, grouped by
  * provider under the sheet's group headings, with the provider's mark, the
@@ -21,7 +22,7 @@ import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { describeModel, ensureModels, type ModelEntry } from "../../commands/model.ts";
-import { saveConfigKey } from "../../config.ts";
+import { saveDefaultModel } from "../../config.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import type { AppStore } from "../../store/app-store.ts";
 import type { SessionStore } from "../../store/session-store.ts";
@@ -303,11 +304,9 @@ export class ModelPicker {
 		const entry = this.#entries.find(
 			(candidate) => `${candidate.provider}:${candidate.id}` === modelId,
 		);
+		const provider = entry?.provider ?? modelId.split(":", 1)[0]!;
 		try {
-			await saveConfigKey("agent", {
-				default_model: modelId,
-				default_provider: entry?.provider,
-			});
+			await saveDefaultModel(provider, modelId);
 			this.#host.notice(`default model: ${modelId}`);
 		} catch (error) {
 			this.#host.notice(

@@ -7,6 +7,28 @@
 
 import { homedir } from "node:os";
 import { relative, sep } from "node:path";
+import { stripVTControlCharacters } from "node:util";
+
+/**
+ * Untrusted output (tool receipts, delegate text) made safe to print: escape
+ * sequences and C0/DEL control bytes are removed; tabs and newlines stay.
+ */
+export function safeText(text: string): string {
+	return (
+		stripVTControlCharacters(text)
+			.replace(/\r\n/g, "\n")
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: Tool receipts must not inject terminal controls.
+			.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+	);
+}
+
+/** {@link safeText} as one line: every control or whitespace run becomes one space, bounded. */
+export function safeLine(text: string, maxLength = 200): string {
+	const line = stripVTControlCharacters(text)
+		.replace(/[\p{Cc}\s]+/gu, " ")
+		.trim();
+	return line.length > maxLength ? `${line.slice(0, maxLength - 1)}…` : line;
+}
 
 /**
  * Truncates text to a maximum length, adding "..." if truncated.

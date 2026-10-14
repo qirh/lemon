@@ -14,6 +14,23 @@
 import type { ControlPlaneClient, RequestOptions } from "./client.ts";
 import { parseSessionsContext } from "./context-usage.ts";
 import { MethodUnavailableError } from "./errors.ts";
+import {
+	type OmpCancelResult,
+	type OmpSendResult,
+	type OmpSessionResult,
+	type OmpSessionsDiscoverResult,
+	type OmpSessionsGetResult,
+	type OmpSessionsListParams,
+	type OmpSessionsListResult,
+	type OmpSessionsResumeParams,
+	type OmpSessionsSendParams,
+	type OmpSessionsStartParams,
+	type OmpStatus,
+	parseOmpDiscoveredList,
+	parseOmpSession,
+	parseOmpSessions,
+	parseOmpStatus,
+} from "./omp.ts";
 import type {
 	SessionRewindPreview,
 	SessionRewindResult,
@@ -142,7 +159,34 @@ export const METHOD = {
 	blueprintsValidate: "blueprints.validate",
 	blueprintsPreview: "blueprints.preview",
 	blueprintsActivate: "blueprints.activate",
+	ompStatus: "omp.status",
+	ompSessionsList: "omp.sessions.list",
+	ompSessionsGet: "omp.sessions.get",
+	ompSessionsDiscover: "omp.sessions.discover",
+	ompSessionsStart: "omp.sessions.start",
+	ompSessionsResume: "omp.sessions.resume",
+	ompSessionsSend: "omp.sessions.send",
+	ompSessionsCancel: "omp.sessions.cancel",
+	ompSessionsClose: "omp.sessions.close",
 } as const;
+
+/** Every `omp.*` method; a daemon advertising none of them has no omp integration. */
+export const OMP_METHODS: readonly string[] = [
+	METHOD.ompStatus,
+	METHOD.ompSessionsList,
+	METHOD.ompSessionsGet,
+	METHOD.ompSessionsDiscover,
+	METHOD.ompSessionsStart,
+	METHOD.ompSessionsResume,
+	METHOD.ompSessionsSend,
+	METHOD.ompSessionsCancel,
+	METHOD.ompSessionsClose,
+];
+
+/** Spawning (or resuming) an omp process waits for its RPC handshake. */
+export const OMP_START_REQUEST_TIMEOUT_MS = 60_000;
+/** A send is acknowledged only after omp itself accepted it. */
+export const OMP_SEND_REQUEST_TIMEOUT_MS = 30_000;
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD];
 
@@ -666,4 +710,122 @@ export class ControlPlaneMethods {
 			queueIfOffline: false,
 		});
 	}
+
+	// -- omp delegates --------------------------------------------------------
+	// Replies carry untrusted omp output; they are parsed defensively here and
+	// sanitized by whatever renders them. Mutations are never parked offline.
+
+	async ompStatus(options?: RequestOptions): Promise<OmpStatus> {
+		return parseOmpStatus(await this.#call(METHOD.ompStatus, {}, options));
+	}
+
+	async ompSessionsList(
+		params: OmpSessionsListParams = {},
+		options?: RequestOptions,
+	): Promise<OmpSessionsListResult> {
+		const result = await this.#call<{ sessions?: unknown }>(
+			METHOD.ompSessionsList,
+			params,
+			options,
+		);
+		return { sessions: parseOmpSessions(result?.sessions) };
+	}
+
+	async ompSessionsGet(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<OmpSessionsGetResult> {
+		const result = await this.#call<{ session?: unknown; summary?: unknown }>(
+			METHOD.ompSessionsGet,
+			params,
+			options,
+		);
+		return {
+			session: requireSession(result?.session, METHOD.ompSessionsGet),
+			summary: typeof result?.summary === "string" ? result.summary : null,
+		};
+	}
+
+	async ompSessionsDiscover(
+		params: { cwd: string; limit?: number },
+		options?: RequestOptions,
+	): Promise<OmpSessionsDiscoverResult> {
+		const result = await this.#call<{ sessions?: unknown }>(
+			METHOD.ompSessionsDiscover,
+			params,
+			options,
+		);
+		return { sessions: parseOmpDiscoveredList(result?.sessions) };
+	}
+
+	async ompSessionsStart(
+		params: OmpSessionsStartParams,
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsStart, params, {
+			timeoutMs: OMP_START_REQUEST_TIMEOUT_MS,
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsStart) };
+	}
+
+	async ompSessionsResume(
+		params: OmpSessionsResumeParams,
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsResume, params, {
+			timeoutMs: OMP_START_REQUEST_TIMEOUT_MS,
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsResume) };
+	}
+
+	async ompSessionsSend(
+		params: OmpSessionsSendParams,
+		options?: RequestOptions,
+	): Promise<OmpSendResult> {
+		const result = await this.#call<{ accepted?: unknown; delivery?: unknown }>(
+			METHOD.ompSessionsSend,
+			params,
+			{ timeoutMs: OMP_SEND_REQUEST_TIMEOUT_MS, ...options, queueIfOffline: false },
+		);
+		if (result?.accepted !== true) {
+			throw new Error(`${METHOD.ompSessionsSend} returned no acceptance receipt`);
+		}
+		return {
+			accepted: true,
+			delivery: typeof result.delivery === "string" ? result.delivery : null,
+		};
+	}
+
+	async ompSessionsCancel(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<OmpCancelResult> {
+		const result = await this.#call<{ cancelled?: unknown }>(METHOD.ompSessionsCancel, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return { cancelled: result?.cancelled === true };
+	}
+
+	async ompSessionsClose(
+		params: { id: string },
+		options?: RequestOptions,
+	): Promise<OmpSessionResult> {
+		const result = await this.#call<{ session?: unknown }>(METHOD.ompSessionsClose, params, {
+			...options,
+			queueIfOffline: false,
+		});
+		return { session: requireSession(result?.session, METHOD.ompSessionsClose) };
+	}
+}
+
+/** A mutation reply without a parseable session is not a receipt of success. */
+function requireSession(value: unknown, method: string) {
+	const session = parseOmpSession(value);
+	if (!session) throw new Error(`${method} returned no session`);
+	return session;
 }

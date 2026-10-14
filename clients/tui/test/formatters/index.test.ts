@@ -583,6 +583,7 @@ describe("FormatterRegistry", () => {
 				"grep",
 				"kill_process",
 				"ls",
+				"omp",
 				"patch",
 				"read",
 				"task",

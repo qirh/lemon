@@ -9,6 +9,11 @@ defmodule LemonCore.Update.ConfigMigratorTest do
     path
   end
 
+  defp cleanup(path) do
+    File.rm_rf(path)
+    Enum.each(Path.wildcard(path <> ".bak-*"), &File.rm_rf/1)
+  end
+
   describe "check/1" do
     test "returns :ok for clean config" do
       path = tmp_config("[defaults]\nprovider = \"anthropic\"\n")
@@ -175,7 +180,7 @@ defmodule LemonCore.Update.ConfigMigratorTest do
     test "migrate! refuses success when removed runner settings remain" do
       content = """
       [agent]
-      provider = "anthropic"
+      default_provider = "anthropic"
 
       [runtime.cli.codex]
       model = "gpt-4"
@@ -187,16 +192,18 @@ defmodule LemonCore.Update.ConfigMigratorTest do
         assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
 
         assert "The [runtime.cli] section has been removed; all subagent tasks run natively." in errors
+        assert File.read!(path) == content
+        assert Path.wildcard(path <> ".bak-*") == []
       after
-        File.rm_rf(path)
-        File.rm_rf(ConfigMigrator.backup_path(path))
+        cleanup(path)
       end
     end
 
-    test "skips [agent] migration when canonical tables already exist" do
+    test "migrates [agent] alongside existing canonical tables, keeping their values" do
       content = """
       [agent]
-      provider = "anthropic"
+      default_provider = "openai"
+      default_model = "legacy"
 
       [defaults]
       model = "claude-opus"
@@ -205,12 +212,16 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       path = tmp_config(content)
 
       try do
-        assert {:error, {:manual_steps_required, errors}} = ConfigMigrator.migrate!(path)
-        assert Enum.any?(errors, &String.contains?(&1, "[agent]"))
-        assert File.read!(path) == content
+        assert {:ok, %{backup: backup, changes: changes}} = ConfigMigrator.migrate!(path)
+        assert File.read!(backup) == content
+        assert "agent.default_model dropped: defaults.model is already set" in changes
+
+        assert {:ok, %{"defaults" => %{"provider" => "openai", "model" => "claude-opus"}} = d} =
+                 Toml.decode(File.read!(path))
+
+        refute Map.has_key?(d, "agent")
       after
-        File.rm_rf(path)
-        File.rm_rf(ConfigMigrator.backup_path(path))
+        cleanup(path)
       end
     end
 
@@ -225,13 +236,12 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       path = tmp_config(content)
 
       try do
-        assert :ok = ConfigMigrator.migrate!(path)
+        assert {:ok, %{changes: ["[agents.*] → [profiles.*]"]}} = ConfigMigrator.migrate!(path)
         migrated = File.read!(path)
         assert String.contains?(migrated, "[profiles.myagent]")
         refute String.contains?(migrated, "[agents.myagent]")
       after
-        File.rm_rf(path)
-        File.rm_rf(ConfigMigrator.backup_path(path))
+        cleanup(path)
       end
     end
 
@@ -240,33 +250,41 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       path = tmp_config(content)
 
       try do
-        assert :ok = ConfigMigrator.migrate!(path)
+        assert {:ok, _result} = ConfigMigrator.migrate!(path)
         migrated = File.read!(path)
         assert String.contains?(migrated, "[runtime.tools")
       after
-        File.rm_rf(path)
-        File.rm_rf(ConfigMigrator.backup_path(path))
+        cleanup(path)
       end
     end
 
-    test "creates a backup file" do
-      path = tmp_config("[agents.x]\nname = \"x\"\n")
+    test "creates a private, never-overwritten backup of the original bytes" do
+      content = "[agents.x]\nname = \"x\"\n"
+      path = tmp_config(content)
+      File.chmod!(path, 0o600)
 
       try do
-        ConfigMigrator.migrate!(path)
-        assert File.exists?(ConfigMigrator.backup_path(path))
+        assert {:ok, %{backup: backup}} = ConfigMigrator.migrate!(path)
+        assert String.starts_with?(backup, path <> ".bak-")
+        assert File.read!(backup) == content
+        assert Bitwise.band(File.stat!(backup).mode, 0o777) == 0o600
+        assert Bitwise.band(File.stat!(path).mode, 0o777) == 0o600
+
+        File.write!(path, content)
+        assert {:ok, %{backup: second}} = ConfigMigrator.migrate!(path)
+        assert second != backup
+        assert File.exists?(backup)
       after
-        File.rm_rf(path)
-        File.rm_rf(ConfigMigrator.backup_path(path))
+        cleanup(path)
       end
     end
 
-    test "migrates [agent] section: provider/model/thinking_level to [defaults], rest to [runtime]" do
+    test "migrates [agent] section: default_* to [defaults], rest to [runtime]" do
       content = """
       [agent]
-      provider = "anthropic"
-      model = "claude-opus"
-      thinking_level = "high"
+      default_provider = "anthropic"
+      default_model = "claude-opus"
+      default_thinking_level = "high"
       max_tokens = 4096
       timeout = 30
       """
@@ -274,7 +292,8 @@ defmodule LemonCore.Update.ConfigMigratorTest do
       path = tmp_config(content)
 
       try do
-        assert :ok = ConfigMigrator.migrate!(path)
+        assert {:ok, %{backup: backup}} = ConfigMigrator.migrate!(path)
+        assert File.read!(backup) == content
         migrated = File.read!(path)
 
         # [agent] header must be gone
@@ -294,8 +313,7 @@ defmodule LemonCore.Update.ConfigMigratorTest do
         # No deprecated sections remain
         assert :ok = ConfigMigrator.check(path)
       after
-        File.rm_rf(path)
-        File.rm_rf(ConfigMigrator.backup_path(path))
+        cleanup(path)
       end
     end
   end

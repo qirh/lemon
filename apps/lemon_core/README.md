@@ -95,6 +95,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Contract` | Validates configuration-injected modules for loadability and required behaviour callbacks |
 | `LemonCore.Config.Helpers` | Shared config parsing helpers |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts |
+| `LemonCore.Config.LegacyAgentMigration` | Maps a deprecated `[agent]` table onto `[defaults]`/`[runtime]`/`[tui]` (load alias and file rewrite) |
 | `LemonCore.ConfigCache` | ETS cache with mtime/size fingerprint-based invalidation |
 | `LemonCore.ConfigCacheError` | Raised when ConfigCache is unavailable |
 | `LemonCore.ConfigReloader` | Central reload orchestrator with digest diffing and Bus broadcast |

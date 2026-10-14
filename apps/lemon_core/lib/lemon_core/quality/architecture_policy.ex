@@ -40,6 +40,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_lsp,
       :lemon_media,
       :lemon_memory,
+      :lemon_omp,
       :lemon_router,
       :lemon_skills
     ],
@@ -65,6 +66,10 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     lemon_media: [:lemon_core],
     # test-only: lemon_skills hosts the moved LemonSkills.McpSource suite.
     lemon_mcp: [:lemon_core, :lemon_skills],
+    # The omp delegate driver implements the agent tool contract and registers
+    # its `omp` tool at boot; the coding product never names it. The control
+    # plane depends on it directly to expose `omp.*` methods.
+    lemon_omp: [:lemon_agent, :lemon_ai, :lemon_core],
     # The contract-test kit is a leaf: one (optional) dep per behaviour it
     # tests, and nothing in the platform depends on it outside test code. ai +
     # agent_core back the FakeLLM double, which drives a real agent loop.

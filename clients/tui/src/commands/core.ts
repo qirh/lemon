@@ -4,7 +4,7 @@
  * and neither touches the control plane.
  */
 
-import { saveConfigKey } from "../config.ts";
+import { saveTheme } from "../config.ts";
 import {
 	installAppearance,
 	normalizePreference,
@@ -155,7 +155,7 @@ export const themeCommand: SlashCommand = {
 				: `theme: ${peekTheme()?.name ?? requested}`,
 		);
 		try {
-			await saveConfigKey("agent", { theme: requested });
+			await saveTheme(requested);
 		} catch (error) {
 			ctx.ui.notice(`theme not persisted: ${describeError(error)}`, "warning");
 		}

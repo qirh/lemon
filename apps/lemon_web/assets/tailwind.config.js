@@ -5,6 +5,9 @@ const token = (name) => `rgb(var(--${name}) / <alpha-value>)`
 
 module.exports = {
   content: ["../lib/**/*.{ex,heex}", "../priv/static/assets/js/**/*.js"],
+  // LemonWeb.UI builds tone/variant classes from attributes ("badge-#{tone}",
+  // "btn-#{variant}"), which the content scanner cannot see.
+  safelist: [{pattern: /^(badge|btn)-(neutral|accent|success|warning|danger|info|plan|primary|secondary|ghost|danger-soft)$/}],
   darkMode: ["selector", '[data-theme="dark"]'],
   theme: {
     extend: {

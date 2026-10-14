@@ -3,6 +3,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { ModelPicker } from "../../src/ui/components/model-picker.ts";
 import type { PickerOverlay } from "../../src/ui/components/pickers.ts";
@@ -138,6 +141,49 @@ describe("applying", () => {
 		});
 		expect(harness.store.focused.model).toBe("anthropic:claude-sonnet-4");
 		expect(harness.host.statusRefreshes).toBeGreaterThan(0);
+	});
+
+	test("Make default writes [defaults] and keeps the rest of config.toml", async () => {
+		const previousHome = process.env.HOME;
+		const home = mkdtempSync(join(tmpdir(), "lemon-tui-default-"));
+		process.env.HOME = home;
+		try {
+			mkdirSync(join(home, ".lemon"));
+			const original = [
+				"# setup wrote this",
+				"[defaults]",
+				'provider = "openai-codex"',
+				'model = "openai-codex:gpt-5"',
+				"",
+				'[providers."openai-codex"]',
+				'oauth_secret = "llm_openai_codex_api_key"',
+				"",
+				"[gateway]",
+				"max_concurrent_runs = 2",
+				"",
+			].join("\n");
+			writeFileSync(join(home, ".lemon", "config.toml"), original);
+
+			const picker = makePicker();
+			await picker.open();
+			current().handleInput("openai");
+			current().handleInput(ENTER);
+			current().handleInput(CTRL_G);
+			current().handleInput(ENTER);
+			await waitFor(() => harness.host.text.includes("default model: openai:gpt-4o"));
+
+			const written = readFileSync(join(home, ".lemon", "config.toml"), "utf-8");
+			expect(written).toBe(
+				original
+					.replace('provider = "openai-codex"', 'provider = "openai"')
+					.replace('model = "openai-codex:gpt-5"', 'model = "openai:gpt-4o"'),
+			);
+			expect(written).not.toContain("[agent]");
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			rmSync(home, { recursive: true, force: true });
+		}
 	});
 
 	test("Ctrl+G toggles the global persist hint", async () => {

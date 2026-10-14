@@ -1,10 +1,9 @@
-import { stripVTControlCharacters } from "node:util";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { ansi, col, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import type { Component } from "@oh-my-pi/pi-tui/tui";
 import { truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/utils";
-import { extractText } from "../../formatters/base.ts";
+import { extractText, safeText } from "../../formatters/base.ts";
 import type { ToolBlock } from "../../store/transcript-model.ts";
 import { diffNode } from "../../terminal/native-tool-view.ts";
 import { getTheme } from "../theme/theme.ts";
@@ -159,13 +158,4 @@ export class ToolOutputComponent implements Component {
 			receipt || this.#block.message || this.#view.body.join("\n") || "No output has arrived yet.",
 		);
 	}
-}
-
-function safeText(text: string): string {
-	return (
-		stripVTControlCharacters(text)
-			.replace(/\r\n/g, "\n")
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: Tool receipts must not inject terminal controls.
-			.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
-	);
 }
