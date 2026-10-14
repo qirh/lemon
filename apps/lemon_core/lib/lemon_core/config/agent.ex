@@ -8,8 +8,9 @@ defmodule LemonCore.Config.Agent do
 
   ## Configuration
 
-  Preferred configuration is loaded from `[defaults]` + `[runtime]`.
-  Legacy `[agent]` remains supported for backward compatibility.
+  Configuration is loaded from `[defaults]` + `[runtime]`. A legacy `[agent]`
+  table is mapped onto those sections by `LemonCore.Config.Modular` before this
+  module resolves them (see `LemonCore.Config.LegacyAgentMigration`).
 
       [defaults]
       provider = "anthropic"
@@ -126,11 +127,10 @@ defmodule LemonCore.Config.Agent do
   # Private functions for resolving each config section
 
   defp normalize_agent_settings(settings) when is_map(settings) do
-    legacy_agent = ensure_map(settings["agent"])
     runtime = ensure_map(settings["runtime"])
     defaults = ensure_map(settings["defaults"])
 
-    deep_merge(legacy_agent, runtime)
+    runtime
     |> maybe_put("default_provider", defaults["provider"])
     |> maybe_put("default_model", defaults["model"])
     |> maybe_put("default_thinking_level", defaults["thinking_level"])
@@ -447,18 +447,6 @@ defmodule LemonCore.Config.Agent do
 
   defp ensure_map(map) when is_map(map), do: map
   defp ensure_map(_), do: %{}
-
-  defp deep_merge(base, override) when is_map(base) and is_map(override) do
-    Map.merge(base, override, fn _key, base_val, override_val ->
-      if is_map(base_val) and is_map(override_val) do
-        deep_merge(base_val, override_val)
-      else
-        override_val
-      end
-    end)
-  end
-
-  defp deep_merge(_base, override), do: override
 
   @doc """
   Returns the default agent configuration as a map.

@@ -20,6 +20,7 @@ import { SessionStore } from "../../store/session-store.ts";
 import type { ReasoningBlock, ToolBlock } from "../../store/transcript-model.ts";
 import { toToolPhase } from "../../store/transcript-model.ts";
 import type { ToolCardState } from "../../ui/tool-view.ts";
+import { ompSessionWire } from "./omp-fixtures.ts";
 
 export interface ToolFixture {
 	/** Gallery key, matched by `--tool`. */
@@ -411,6 +412,52 @@ export const TOOL_FIXTURES: ToolFixture[] = [
 			result: "browser driver not running",
 			result_meta: { error_type: "unavailable", tool_name: "browser_navigate" },
 		},
+	},
+	{
+		name: "omp",
+		kind: "tool",
+		title: "omp",
+		started: {
+			name: "omp",
+			args: { action: "start", prompt: "Fix the flaky reconnect test", wait: true },
+		},
+		updated: {
+			name: "omp",
+			args: { action: "start", prompt: "Fix the flaky reconnect test", wait: true },
+			partial_result: {
+				content: [{ type: "text", text: "omp omp_3f9a1c2b7d4e: running (todos 2/4)" }],
+				details: { action: "start", session: ompSessionWire() },
+			},
+		},
+		completed: {
+			name: "omp",
+			args: { action: "start", prompt: "Fix the flaky reconnect test", wait: true },
+			result: "omp omp_3f9a1c2b7d4e idle (completed) after 4 turns.",
+			details: {
+				action: "start",
+				session: ompSessionWire({
+					status: "idle",
+					lastTurn: "completed",
+					activity: null,
+					activeTools: [],
+					turns: 4,
+					todos: [
+						{ phase: "Fix", content: "Make the watchdog deterministic", status: "completed" },
+						{ phase: "Fix", content: "Run the suite 20 times", status: "completed" },
+					],
+					result:
+						"The watchdog now arms after the handshake.\nThe reconnect suite passed 20 consecutive runs.",
+				}),
+			},
+		},
+		failed: {
+			name: "omp",
+			args: { action: "start", prompt: "Fix the flaky reconnect test" },
+			result: "omp start failed: omp is not installed on this host.",
+			details: { action: "start", error: "not_installed" },
+			result_meta: { error_type: "tool_error", tool_name: "omp" },
+		},
+		failedMessage: "omp is not installed",
 	},
 	{
 		name: "unknown",

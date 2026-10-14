@@ -18,6 +18,7 @@ defmodule LemonControlPlane.EventBridge do
   - `system` - System events (shutdown, health, tick)
   - `nodes` - Node pairing events
   - `presence` - Presence events
+  - `omp` (`LemonOmp.bus_topic/0`) - omp delegate session snapshots
 
   ## Event Mapping
 
@@ -65,6 +66,7 @@ defmodule LemonControlPlane.EventBridge do
   | :task_timeout            | task.timeout              |
   | :task_aborted            | task.aborted              |
   | :run_graph_changed       | run.graph.changed         |
+  | :omp_session             | omp.session               |
   """
 
   use GenServer
@@ -128,7 +130,7 @@ defmodule LemonControlPlane.EventBridge do
     # No ad hoc startup needed here.
 
     # Subscribe to static topics
-    Enum.each(@bus_topics, &Bus.subscribe/1)
+    Enum.each([LemonOmp.bus_topic() | @bus_topics], &Bus.subscribe/1)
 
     # Initialize state version counters
     state_versions = Map.new(@state_version_keys, fn key -> {key, 0} end)
@@ -813,6 +815,13 @@ defmodule LemonControlPlane.EventBridge do
        "event" => payload[:event],
        "timestampMs" => payload[:timestamp_ms] || System.system_time(:millisecond)
      }}
+  end
+
+  # omp delegate snapshots are already bounded, JSON-safe wire maps (`LemonOmp`
+  # projects them); forward them unchanged.
+  defp map_event_type(:omp_session, %{"reason" => reason, "session" => session}, _meta)
+       when is_binary(reason) and is_map(session) do
+    {"omp.session", %{"reason" => reason, "session" => session}}
   end
 
   # Catch-all for unmapped events.

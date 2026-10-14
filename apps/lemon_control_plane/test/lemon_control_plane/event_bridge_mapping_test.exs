@@ -267,7 +267,9 @@ defmodule LemonControlPlane.EventBridgeMappingTest do
         # :approval_resolved
         "exec.approval.resolved",
         # :channel_delivery
-        "channel.delivery"
+        "channel.delivery",
+        # :omp_session
+        "omp.session"
       ]
 
       for event <- mapped_events do

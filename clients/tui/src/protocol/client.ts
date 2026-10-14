@@ -549,6 +549,7 @@ const KNOWN_EVENTS = new Set<string>([
 	"exec.approval.requested",
 	"exec.approval.resolved",
 	"channel.delivery",
+	"omp.session",
 ]);
 
 function isKnownEvent(name: string): boolean {

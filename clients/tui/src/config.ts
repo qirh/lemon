@@ -1,86 +1,24 @@
-import * as fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 /**
- * Provider configuration
+ * The slice of Lemon's `config.toml` the TUI reads. The file belongs to the
+ * daemon (`LemonCore.Config`); the TUI reads its own presentation settings and
+ * edits single keys in place, never re-serializing the file.
  */
-export interface ProviderConfig {
-	api_key?: string;
-	base_url?: string;
-}
-
-/**
- * Control plane configuration (remote/server mode)
- *
- * Example (~/.lemon/config.toml):
- * [control_plane]
- * ws_url = "ws://localhost:4040/ws"
- * token = "..."
- * role = "operator"
- * scopes = ["read", "write"]
- * client_id = "lemon-tui"
- */
-export interface ControlPlaneConfig {
-	ws_url?: string;
-	token?: string;
-	role?: string;
-	scopes?: string[];
-	client_id?: string;
-}
-
-/**
- * Main Lemon configuration file structure (~/.lemon/config.toml)
- */
-export interface AgentConfig {
-	default_provider?: string;
-	default_model?: string;
-	/** Theme name the TUI installs at startup (`/theme <name>` writes it). */
-	theme?: string;
-}
-
 export interface LemonConfig {
-	providers?: Record<string, ProviderConfig>;
-	agent?: AgentConfig;
-	control_plane?: ControlPlaneConfig;
+	/** Daemon-wide defaults; the model picker's "make default" writes here. */
+	defaults?: {
+		provider?: string;
+		model?: string;
+		thinking_level?: string;
+	};
+	/** Terminal presentation settings (`/theme <name>` writes `theme`). */
+	tui?: {
+		theme?: string;
+	};
 }
-
-/**
- * Resolved configuration after merging config file + env vars + CLI args
- */
-export interface ResolvedConfig {
-	provider: string;
-	model: string;
-	apiKey?: string;
-	baseUrl?: string;
-	wsUrl?: string;
-	wsToken?: string;
-	wsRole?: string;
-	wsScopes?: string[];
-	wsClientId?: string;
-}
-
-export function parseModelSpec(model?: string): { provider?: string; model?: string } {
-	if (!model) {
-		return {};
-	}
-	const parts = model.split(":");
-	if (parts.length >= 2) {
-		const provider = parts.shift() || undefined;
-		const modelId = parts.join(":") || undefined;
-		return { provider, model: modelId };
-	}
-	return { model };
-}
-
-const DEFAULT_CONFIG: LemonConfig = {
-	providers: {},
-	agent: {
-		default_provider: "anthropic",
-		default_model: "claude-sonnet-4-20250514",
-	},
-};
 
 /**
  * Get the config directory path (~/.lemon/)
@@ -109,84 +47,37 @@ export function getProjectConfigPath(cwd: string): string {
 	return path.join(cwd, ".lemon", "config.toml");
 }
 
-async function loadProjectConfig(cwd: string): Promise<Partial<LemonConfig>> {
-	const configPath = getProjectConfigPath(cwd);
-
-	try {
-		const content = await fsPromises.readFile(configPath, "utf-8");
-		return Bun.TOML.parse(content) as LemonConfig;
-	} catch (err) {
-		if (isMissingFileError(err)) return {};
-		throw configLoadError(configPath, err);
-	}
-}
-
-function loadProjectConfigSync(cwd: string): Partial<LemonConfig> {
-	const configPath = getProjectConfigPath(cwd);
-
-	try {
-		const content = fs.readFileSync(configPath, "utf-8");
-		return Bun.TOML.parse(content) as LemonConfig;
-	} catch (err) {
-		if (isMissingFileError(err)) return {};
-		throw configLoadError(configPath, err);
-	}
-}
-
 /**
- * Load config from file, returns defaults if file doesn't exist
+ * Load the global config, overlaid with the project config when `cwd` is
+ * given. A missing file is an empty config; an unreadable or invalid one throws.
  */
 export async function loadConfig(cwd?: string): Promise<LemonConfig> {
-	const configPath = getConfigPath();
+	const global = await readConfigFile(getConfigPath());
+	if (!cwd) return global;
+	const project = await readConfigFile(getProjectConfigPath(cwd));
+	return {
+		defaults: { ...global.defaults, ...project.defaults },
+		tui: { ...global.tui, ...project.tui },
+	};
+}
 
+async function readConfigFile(configPath: string): Promise<LemonConfig> {
+	const content = await readOptional(configPath);
+	if (content === undefined) return {};
 	try {
-		const content = await fsPromises.readFile(configPath, "utf-8");
-		const parsed = Bun.TOML.parse(content) as LemonConfig;
-		const merged = mergeConfig(DEFAULT_CONFIG, parsed);
-		if (cwd) {
-			return mergeConfig(merged, await loadProjectConfig(cwd));
-		}
-		return merged;
+		return Bun.TOML.parse(content) as LemonConfig;
 	} catch (err) {
-		if (isMissingFileError(err)) {
-			if (cwd) {
-				return mergeConfig(DEFAULT_CONFIG, await loadProjectConfig(cwd));
-			}
-			return { ...DEFAULT_CONFIG };
-		}
 		throw configLoadError(configPath, err);
 	}
 }
 
-/**
- * Load config synchronously (for startup) - returns defaults on error
- */
-export function loadConfigSync(cwd?: string): LemonConfig {
-	const configPath = getConfigPath();
-
+async function readOptional(configPath: string): Promise<string | undefined> {
 	try {
-		const content = fs.readFileSync(configPath, "utf-8");
-		const parsed = Bun.TOML.parse(content) as LemonConfig;
-		const merged = mergeConfig(DEFAULT_CONFIG, parsed);
-		if (cwd) {
-			return mergeConfig(merged, loadProjectConfigSync(cwd));
-		}
-		return merged;
+		return await fsPromises.readFile(configPath, "utf-8");
 	} catch (err) {
-		if (isMissingFileError(err)) {
-			if (cwd) {
-				return mergeConfig(DEFAULT_CONFIG, loadProjectConfigSync(cwd));
-			}
-			return { ...DEFAULT_CONFIG };
-		}
+		if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return undefined;
 		throw configLoadError(configPath, err);
 	}
-}
-
-function isMissingFileError(err: unknown): boolean {
-	return (
-		typeof err === "object" && err !== null && (err as NodeJS.ErrnoException).code === "ENOENT"
-	);
 }
 
 function configLoadError(configPath: string, err: unknown): Error {
@@ -195,168 +86,160 @@ function configLoadError(configPath: string, err: unknown): Error {
 }
 
 /**
- * Save config to file, creates directory if needed
+ * Persist the daemon's default model: `[defaults] provider` and `model`, the
+ * same keys `lemon setup provider --set-default` writes. `model` is the
+ * picker's `provider:id` selector.
  */
-export async function saveConfig(config: LemonConfig): Promise<void> {
+export async function saveDefaultModel(provider: string, model: string): Promise<void> {
+	await patchConfig([
+		{ table: "defaults", key: "provider", value: provider },
+		{ table: "defaults", key: "model", value: model },
+	]);
+}
+
+/** Persist the TUI theme preference as `[tui] theme`. */
+export async function saveTheme(theme: string): Promise<void> {
+	await patchConfig([{ table: "tui", key: "theme", value: theme }]);
+}
+
+interface StringPatch {
+	table: string;
+	key: string;
+	value: string;
+}
+
+/**
+ * Upsert string keys in the global config without touching anything else:
+ * comments, unknown tables and key order survive. The patched text must still
+ * parse before it atomically replaces the file, which keeps its permissions
+ * (a new file is created private, like the daemon's).
+ */
+async function patchConfig(patches: StringPatch[]): Promise<void> {
 	const configPath = getConfigPath();
-	const configDir = getConfigDir();
-
-	// Create directory if it doesn't exist
-	await fsPromises.mkdir(configDir, { recursive: true });
-
-	// Write config file
-	await fsPromises.writeFile(configPath, stringifyToml(config), "utf-8");
-}
-
-function stringifyToml(config: LemonConfig): string {
-	const lines: string[] = [];
-
-	if (config.agent) {
-		lines.push("[agent]");
-		appendTomlValues(lines, config.agent);
+	const original = (await readOptional(configPath)) ?? "";
+	const patched = patches.reduce(
+		(content, { table, key, value }) => upsertTomlString(content, table, key, value),
+		original,
+	);
+	try {
+		Bun.TOML.parse(patched);
+	} catch (err) {
+		throw new Error(
+			`Refusing to write ${configPath}: the edit would not parse (${err instanceof Error ? err.message : String(err)})`,
+		);
 	}
-
-	if (config.control_plane) {
-		if (lines.length) lines.push("");
-		lines.push("[control_plane]");
-		appendTomlValues(lines, config.control_plane);
-	}
-
-	for (const [name, provider] of Object.entries(config.providers ?? {})) {
-		if (lines.length) lines.push("");
-		lines.push(`[providers.${JSON.stringify(name)}]`);
-		appendTomlValues(lines, provider);
-	}
-
-	return `${lines.join("\n")}\n`;
-}
-
-function appendTomlValues(lines: string[], values: object): void {
-	for (const [key, value] of Object.entries(values)) {
-		if (value !== undefined) lines.push(`${key} = ${JSON.stringify(value)}`);
+	await fsPromises.mkdir(path.dirname(configPath), { recursive: true });
+	const mode = await fsPromises.stat(configPath).then(
+		(stat) => stat.mode & 0o777,
+		() => 0o600,
+	);
+	const temp = path.join(
+		path.dirname(configPath),
+		`.${path.basename(configPath)}.tmp-${process.pid}-${Date.now()}`,
+	);
+	try {
+		await fsPromises.writeFile(temp, patched, { encoding: "utf-8", mode });
+		await fsPromises.chmod(temp, mode);
+		await fsPromises.rename(temp, configPath);
+	} catch (err) {
+		await fsPromises.rm(temp, { force: true });
+		throw err;
 	}
 }
 
-/**
- * Deep merge two config objects
- */
-function mergeConfig(base: LemonConfig, override: Partial<LemonConfig>): LemonConfig {
-	const overrideAgent = override.agent ?? {};
-
-	return {
-		providers: { ...base.providers, ...override.providers },
-		agent: {
-			...base.agent,
-			...overrideAgent,
-		},
-		control_plane: { ...base.control_plane, ...override.control_plane },
-	};
-}
+// ── Targeted TOML edits (the TypeScript twin of `LemonCore.Config.TomlPatch`) ──
 
 /**
- * Map provider name to environment variable prefix
+ * A `[table]` header: quoted segments or anything but brackets and quotes, so
+ * `[a] # see [b]` and `[[array]]` are told apart.
  */
-function getEnvPrefix(provider: string): string {
-	const prefixes: Record<string, string> = {
-		anthropic: "ANTHROPIC",
-		openai: "OPENAI",
-		google: "GOOGLE",
-		kimi: "KIMI",
-	};
-	return prefixes[provider] || provider.toUpperCase();
-}
+const HEADER = /^\s*\[((?:"(?:[^"\\]|\\.)*"|'[^']*'|[^[\]'"])+)\]\s*(?:#.*)?$/;
+/** Any table or array-of-tables header: the end of the current section. */
+const BOUNDARY = /^\s*\[.*\]\s*(?:#.*)?$/;
 
 /**
- * Resolve the final configuration by merging:
- * 1. Config file (lowest priority)
- * 2. Environment variables
- * 3. CLI args (highest priority)
- *
- * @param cliArgs - Command line arguments that override everything
+ * Parse a dotted TOML key into segments: `providers."openai-codex"` and
+ * `providers.openai-codex` are both `["providers", "openai-codex"]`.
  */
-export function resolveConfig(cliArgs?: {
-	provider?: string;
-	model?: string;
-	baseUrl?: string;
-	cwd?: string;
-}): ResolvedConfig {
-	const config = loadConfigSync(cliArgs?.cwd);
-	const agentConfig = config.agent || {};
-	const controlPlaneConfig = config.control_plane || {};
-
-	// Determine provider (CLI > env > config)
-	const provider =
-		cliArgs?.provider ||
-		process.env.LEMON_DEFAULT_PROVIDER ||
-		agentConfig.default_provider ||
-		"anthropic";
-
-	// Determine model (CLI > env > config)
-	const model =
-		cliArgs?.model ||
-		process.env.LEMON_DEFAULT_MODEL ||
-		agentConfig.default_model ||
-		"claude-sonnet-4-20250514";
-
-	// Get provider-specific config
-	const providerConfig = config.providers?.[provider] || {};
-	const envPrefix = getEnvPrefix(provider);
-
-	// Determine API key (env > config)
-	// Note: env vars take precedence for API keys (security best practice)
-	const apiKey = process.env[`${envPrefix}_API_KEY`] || providerConfig.api_key;
-
-	// Determine base URL (CLI > env > config)
-	const baseUrl =
-		cliArgs?.baseUrl || process.env[`${envPrefix}_BASE_URL`] || providerConfig.base_url;
-
-	const wsUrl = process.env.LEMON_WS_URL || controlPlaneConfig.ws_url;
-	const wsToken = process.env.LEMON_WS_TOKEN || controlPlaneConfig.token;
-	const wsRole = process.env.LEMON_WS_ROLE || controlPlaneConfig.role;
-	const wsScopes = process.env.LEMON_WS_SCOPES
-		? process.env.LEMON_WS_SCOPES.split(",")
-				.map((s) => s.trim())
-				.filter(Boolean)
-		: controlPlaneConfig.scopes;
-	const wsClientId = process.env.LEMON_WS_CLIENT_ID || controlPlaneConfig.client_id;
-
-	return {
-		provider,
-		model,
-		apiKey,
-		baseUrl,
-		wsUrl,
-		wsToken,
-		wsRole,
-		wsScopes,
-		wsClientId,
-	};
-}
-
-/**
- * Get the model string in "provider:model" format
- */
-export function getModelString(config: ResolvedConfig): string {
-	return `${config.provider}:${config.model}`;
-}
-
-/**
- * Save a single config key (for runtime updates like theme changes)
- */
-export async function saveConfigKey<K extends keyof LemonConfig>(
-	key: K,
-	value: LemonConfig[K],
-): Promise<void> {
-	const config = await loadConfig();
-	if (key === "agent" && typeof value === "object" && value) {
-		config.agent = { ...(config.agent || {}), ...(value as AgentConfig) };
-	} else if (key === "providers" && typeof value === "object" && value) {
-		config.providers = {
-			...(config.providers || {}),
-			...(value as Record<string, ProviderConfig>),
-		};
-	} else {
-		(config as any)[key] = value;
+export function parseDottedKey(raw: string): string[] | undefined {
+	const segments: string[] = [];
+	let rest = raw.trim();
+	while (true) {
+		const match =
+			/^"((?:[^"\\]|\\.)*)"/.exec(rest) ?? /^'([^']*)'/.exec(rest) ?? /^[A-Za-z0-9_-]+/.exec(rest);
+		if (!match) return undefined;
+		const [whole, inner] = match;
+		segments.push(
+			inner === undefined
+				? whole
+				: whole.startsWith('"')
+					? inner.replace(/\\(["\\])/g, "$1")
+					: inner,
+		);
+		rest = rest.slice(match[0].length).trimStart();
+		if (rest === "") return segments;
+		if (!rest.startsWith(".")) return undefined;
+		rest = rest.slice(1).trimStart();
 	}
-	await saveConfig(config);
+}
+
+function headerPath(line: string): string[] | undefined {
+	const match = HEADER.exec(line);
+	return match ? parseDottedKey(match[1]!) : undefined;
+}
+
+/**
+ * Set `key = "value"` in `[table]`, replacing an existing assignment or
+ * appending one to the section. A missing table is added in front of its first
+ * `[table.child]` (a parent may not follow its children) or at the end.
+ */
+export function upsertTomlString(
+	content: string,
+	table: string,
+	key: string,
+	value: string,
+): string {
+	const target = parseDottedKey(table);
+	if (!target) throw new Error(`invalid TOML table name: ${table}`);
+	const line = `${key} = ${JSON.stringify(value)}`;
+	const lines = content.replace(/\r\n/g, "\n").split("\n");
+	// Each header's path when it is under `target` (the table itself or a child).
+	const under = lines.map((candidate) => {
+		const found = headerPath(candidate);
+		return found &&
+			found.length >= target.length &&
+			target.every((segment, i) => found[i] === segment)
+			? found
+			: undefined;
+	});
+
+	const header = under.findIndex((found) => found?.length === target.length);
+	if (header === -1) {
+		const block = [`[${table}]`, line];
+		const child = under.findIndex((found) => found !== undefined);
+		if (child !== -1) {
+			lines.splice(child, 0, ...block, "");
+			return lines.join("\n");
+		}
+		const body = lines.join("\n");
+		if (body.trim() === "") return `${block.join("\n")}\n`;
+		return `${body.endsWith("\n") ? body : `${body}\n`}\n${block.join("\n")}\n`;
+	}
+
+	let end = lines.findIndex((candidate, i) => i > header && BOUNDARY.test(candidate));
+	if (end === -1) end = lines.length;
+	const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const assignment = new RegExp(`^\\s*${escapedKey}\\s*=`);
+	const existing = lines.findIndex(
+		(candidate, i) => i > header && i < end && assignment.test(candidate),
+	);
+	if (existing !== -1) {
+		lines[existing] = line;
+		return lines.join("\n");
+	}
+	// After the section's last non-blank line, so a blank separator stays put.
+	let insertAt = end;
+	while (insertAt - 1 > header && lines[insertAt - 1]!.trim() === "") insertAt -= 1;
+	lines.splice(insertAt, 0, line);
+	return lines.join("\n");
 }

@@ -31,6 +31,7 @@ import {
 	tasksCommand,
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { ompCommand } from "./omp.ts";
 import { planCommand } from "./plan.ts";
 import { profileCommand, profilesCommand } from "./profiles.ts";
 import { CommandRegistry } from "./registry.ts";
@@ -108,6 +109,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		runsCommand,
 		agentsCommand,
 		tasksCommand,
+		ompCommand,
 		goalCommand,
 
 		approvalsCommand,

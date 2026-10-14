@@ -887,6 +887,36 @@ else
   fi
 fi
 
+# 8b. --resolve-version prints only the version an install would pick, unpinned
+#     or pinned, and installs nothing. stderr (curl progress) is kept apart.
+resolve_home="$work_dir/home-resolve"
+mkdir -p "$resolve_home"
+
+resolve_version() {
+  env -i \
+    HOME="$resolve_home" \
+    PATH="$PATH" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LEMON_INSTALL_BASE_URL="$base_url" \
+    LEMON_INSTALL_IGNORE_GLIBC=0 \
+    "$@" \
+    sh "$INSTALL_SH" --resolve-version 2>>"$work_dir/resolve.log"
+}
+
+if resolved="$(resolve_version)" && [ "$resolved" = "9999.1.0" ] &&
+  pinned="$(resolve_version LEMON_VERSION=9999.2.0)" && [ "$pinned" = "9999.2.0" ]; then
+  ok "--resolve-version prints the unpinned and pinned versions"
+else
+  fail "--resolve-version printed '${resolved:-}' / '${pinned:-}', expected 9999.1.0 / 9999.2.0"
+  cat "$work_dir/resolve.log" >&2
+fi
+
+if [ -z "$(ls -A "$resolve_home/.lemon/versions" 2>/dev/null)" ] && [ ! -e "$resolve_home/.lemon/bin/lemon" ]; then
+  ok "--resolve-version installs nothing"
+else
+  fail "--resolve-version changed $resolve_home/.lemon"
+fi
+
 # 9. Unsupported platforms are refused. install.sh resolves `uname` through
 #    PATH, so a stub in front of PATH exercises the real detection branch.
 fake_bin="$work_dir/fakebin"
