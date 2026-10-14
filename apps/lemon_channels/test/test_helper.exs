@@ -48,6 +48,9 @@ _ = Application.stop(:lemon_gateway)
 
 ExUnit.start(capture_log: true)
 
+# An umbrella `mix test` runs every later app suite in this VM, and this
+# callback runs after each of them too: restart everything it stops, or the
+# later suites see a stopped lemon_channels.
 ExUnit.after_suite(fn _ ->
   _ = Application.stop(:lemon_channels)
   _ = Application.stop(:lemon_gateway)
@@ -57,4 +60,5 @@ ExUnit.after_suite(fn _ ->
   Application.delete_env(:lemon_channels, :adapters)
 
   {:ok, _} = Application.ensure_all_started(:lemon_gateway)
+  {:ok, _} = Application.ensure_all_started(:lemon_channels)
 end)

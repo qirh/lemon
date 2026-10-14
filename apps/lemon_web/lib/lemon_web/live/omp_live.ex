@@ -1003,7 +1003,7 @@ defmodule LemonWeb.OmpLive do
         socket
 
       {true, interval, pending} ->
-        if pending, do: Process.cancel_timer(elem(pending, 0))
+        _ = if pending, do: Process.cancel_timer(elem(pending, 0))
         assign(socket, tick_ref: {Process.send_after(self(), :tick, interval), interval})
     end
   end

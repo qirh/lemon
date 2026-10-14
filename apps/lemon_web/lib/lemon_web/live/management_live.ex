@@ -37,7 +37,7 @@ defmodule LemonWeb.ManagementLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Process.send_after(self(), :tick, @refresh_interval_ms)
+    _ = if connected?(socket), do: Process.send_after(self(), :tick, @refresh_interval_ms)
 
     {:ok,
      socket
@@ -1864,8 +1864,6 @@ defmodule LemonWeb.ManagementLive do
       _ -> {:error, :invalid_days}
     end
   end
-
-  defp parse_prune_days(_value), do: {:error, :invalid_days}
 
   defp normalize_session_key(value) when is_binary(value) do
     case String.trim(value) do

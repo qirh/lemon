@@ -38,7 +38,6 @@ defmodule LemonWeb.Rpc do
     case Registry.dispatch(method, params || %{}, ctx) do
       {:ok, payload} -> {:ok, payload}
       {:error, reason} -> {:error, normalize_error(reason)}
-      other -> {:error, normalize_error(other)}
     end
   catch
     :exit, _reason ->

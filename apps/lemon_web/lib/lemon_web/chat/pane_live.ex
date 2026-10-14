@@ -1024,7 +1024,7 @@ defmodule LemonWeb.Chat.PaneLive do
   defp schedule_flush(socket), do: socket
 
   defp flush(socket) do
-    if socket.assigns.flush_timer, do: Process.cancel_timer(socket.assigns.flush_timer)
+    _ = if socket.assigns.flush_timer, do: Process.cancel_timer(socket.assigns.flush_timer)
 
     socket.assigns.dirty
     |> Enum.reduce(socket, fn run_id, socket ->
@@ -1373,8 +1373,9 @@ defmodule LemonWeb.Chat.PaneLive do
   end
 
   defp schedule_subagent_refresh(socket) do
-    if connected?(socket),
-      do: Process.send_after(self(), :refresh_subagents, @subagent_refresh_ms)
+    _ =
+      if connected?(socket),
+        do: Process.send_after(self(), :refresh_subagents, @subagent_refresh_ms)
 
     socket
   end

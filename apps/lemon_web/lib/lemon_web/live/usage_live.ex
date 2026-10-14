@@ -20,7 +20,7 @@ defmodule LemonWeb.UsageLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: schedule_refresh()
+    _ = if connected?(socket), do: schedule_refresh()
 
     {:ok,
      assign(socket,

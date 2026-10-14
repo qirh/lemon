@@ -166,53 +166,30 @@ defmodule LemonControlPlane.Methods.Status do
     }
   end
 
-  # Helper to get presence counts - returns defaults if presence not available
   defp get_presence_counts do
-    try do
-      case Process.whereis(LemonControlPlane.Presence) do
-        nil ->
-          %{total: 0, operators: 0, nodes: 0}
-
-        pid when is_pid(pid) ->
-          LemonControlPlane.Presence.counts()
-      end
-    rescue
-      _ -> %{total: 0, operators: 0, nodes: 0}
-    end
+    optional(%{total: 0, operators: 0, nodes: 0}, &LemonControlPlane.Presence.counts/0)
   end
 
-  # Helper to get run counts - returns defaults if router not available
   # LemonRouter.counts/0 always returns the full shape, zeroed when the router
   # is not running.
   defp get_run_counts, do: LemonRouter.counts()
 
-  # Helper to get channel status - returns defaults if not available
   defp get_channel_status do
-    try do
-      case Code.ensure_loaded(LemonChannels.Registry) do
-        {:module, _} ->
-          LemonChannels.Registry.status()
-
-        _ ->
-          %{configured: [], connected: []}
-      end
-    rescue
-      _ -> %{configured: [], connected: []}
-    end
+    optional(%{configured: [], connected: []}, &LemonChannels.Registry.status/0)
   end
 
-  # Helper to get skills status - returns defaults if not available
   defp get_skills_status do
-    try do
-      case Code.ensure_loaded(LemonSkills.Registry) do
-        {:module, _} ->
-          LemonSkills.Registry.counts()
+    optional(%{installed: 0, enabled: 0}, &LemonSkills.Registry.counts/0)
+  end
 
-        _ ->
-          %{installed: 0, enabled: 0}
-      end
-    rescue
-      _ -> %{installed: 0, enabled: 0}
-    end
+  # Presence, channels and skills are reported as empty while their server is
+  # not running. A call to a stopped or restarting GenServer exits rather than
+  # raises, and that exit must not fail the whole status request.
+  defp optional(default, fun) do
+    fun.()
+  rescue
+    _ -> default
+  catch
+    :exit, _ -> default
   end
 end

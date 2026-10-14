@@ -651,8 +651,6 @@ defmodule LemonWeb.WorkProjection do
   defp bounded(value) when is_binary(value),
     do: LemonWeb.ManagementText.text(value, max_bytes: 160)
 
-  defp bounded(_), do: "Schedule is not valid."
-
   defp enum(value, allowed) when is_atom(value), do: enum(Atom.to_string(value), allowed)
   defp enum(value, allowed), do: if(value in allowed, do: value, else: "unknown")
 

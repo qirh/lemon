@@ -26,11 +26,12 @@ defmodule LemonWeb.WorkManagementLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket) do
-      Bus.subscribe("cron")
-      Bus.subscribe("goals")
-      Process.send_after(self(), :work_tick, @tick_ms)
-    end
+    _ =
+      if connected?(socket) do
+        Bus.subscribe("cron")
+        Bus.subscribe("goals")
+        Process.send_after(self(), :work_tick, @tick_ms)
+      end
 
     {:ok,
      assign(socket,

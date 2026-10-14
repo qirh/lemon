@@ -22,10 +22,11 @@ defmodule LemonWeb.NodesLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket) do
-      LemonCore.Bus.subscribe("nodes")
-      Process.send_after(self(), :poll, @poll_ms)
-    end
+    _ =
+      if connected?(socket) do
+        LemonCore.Bus.subscribe("nodes")
+        Process.send_after(self(), :poll, @poll_ms)
+      end
 
     {:ok,
      socket

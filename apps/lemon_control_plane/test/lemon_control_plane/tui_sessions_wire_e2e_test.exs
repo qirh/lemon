@@ -90,6 +90,8 @@ defmodule LemonControlPlane.TuiSessionsWireE2ETest do
       System.cmd(
         bun,
         [
+          # Run against the lockfile-pinned clients/tui install, never auto-install.
+          "--no-install",
           proof_client,
           "ws://127.0.0.1:#{port}/ws",
           @operator_token,

@@ -19,7 +19,7 @@ defmodule LemonWeb.McpLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Process.send_after(self(), :poll, @poll_ms)
+    _ = if connected?(socket), do: Process.send_after(self(), :poll, @poll_ms)
 
     {:ok,
      socket
