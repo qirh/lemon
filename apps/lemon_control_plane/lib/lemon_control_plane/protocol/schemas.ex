@@ -22,6 +22,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # System/health methods
     "health" => %{optional: %{}},
     "status" => %{optional: %{}},
+    "doctor.run" => %{optional: %{}},
     "logs.tail" => %{
       optional: %{
         "limit" => :integer,

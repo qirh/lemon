@@ -11,6 +11,7 @@ defmodule LemonCore.Application do
   - `LemonCore.NodeRegistry` - Live named execution-node registry and invocation broker
   - LemonCore.ConfigCache - Configuration caching service
   - LemonCore.Store - Key-value storage backend
+  - `LemonCore.UsageLedger` - Serialized per-run usage/cost aggregation (finalize-run hook)
   - `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source tasks
   - `LemonCore.Secrets.SourceCache` - Bounded optional process-local source cache
   - LemonCore.RunHistoryStore - Per-session run history (separate SQLite DB)
@@ -67,6 +68,7 @@ defmodule LemonCore.Application do
         LemonCore.NodeRegistry,
         {LemonCore.ConfigCache, config_cache_opts},
         LemonCore.Store,
+        LemonCore.UsageLedger,
         {Task.Supervisor, name: LemonCore.Secrets.SourceTaskSupervisor},
         LemonCore.Secrets.SourceCache
       ] ++

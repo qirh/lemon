@@ -1,12 +1,18 @@
 defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
   @moduledoc """
-  Comment-preserving provider fallback and credential-pool configuration.
+  Comment-preserving provider routing and default-model configuration.
 
   This is the single mutation boundary used by packaged/source CLI and control
-  plane operator surfaces. It edits only `runtime.provider_routing`, validates
-  the resulting TOML before an atomic same-directory replacement, and returns
-  redacted routing metadata. Credential references are accepted for targeted
-  pool edits but are never included in results or errors.
+  plane operator surfaces. It edits only `runtime.provider_routing` (fallbacks
+  and credential pools) and the `[defaults]` `provider`/`model`/`thinking_level`
+  keys new sessions start from, validates the resulting TOML before an atomic
+  same-directory replacement, and returns redacted routing metadata plus the
+  effective and proposed defaults. Credential references are accepted for
+  targeted pool edits but are never included in results or errors.
+
+  Actions: `fallback.add|remove|clear`, `pool.upsert|delete`,
+  `pool.credential.add|remove|clear`, `defaults.model` (`provider`, `model`) and
+  `defaults.thinking_level` (`thinkingLevel`: #{Enum.join(~w(off minimal low medium high xhigh), ", ")}).
 
   Mutations default to preview-only. Callers must pass `apply: true`; destructive
   actions additionally require the operation-specific confirmation value
@@ -25,6 +31,9 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
   @secret_ref_regex ~r/^secret:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
   @env_ref_regex ~r/^env:[A-Za-z_][A-Za-z0-9_]{0,127}$/
   @strategies ~w(priority round_robin)
+  @thinking_levels ~w(off minimal low medium high xhigh)
+  @model_regex ~r/^[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}$/
+  @defaults_table "defaults"
 
   @type result :: {:ok, map()} | {:error, atom(), String.t()}
 
@@ -63,7 +72,8 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
          {:ok, decoded} <- decode_config(original),
          {:ok, mutation} <- mutate(action, params, original, decoded),
          {:ok, decoded_after} <- decode_config(mutation.content),
-         {:ok, proposed} <- validate_candidate(decoded_after, target, project_dir),
+         {:ok, proposed, proposed_defaults} <-
+           validate_candidate(decoded_after, target, project_dir),
          :ok <- validate_confirmation(mutation, params),
          :ok <- maybe_write(mutation, target.path, params) do
       effective =
@@ -85,6 +95,8 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
          "confirmation" => confirmation_summary(mutation),
          "routingConfig" => snapshot(effective),
          "proposedRoutingConfig" => proposed,
+         "defaults" => defaults_snapshot(effective),
+         "proposedDefaults" => proposed_defaults,
          "cleanup" => cleanup()
        }}
     end
@@ -204,6 +216,30 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
     end
   end
 
+  defp mutate("defaults.model", params, content, _decoded) do
+    with {:ok, provider} <- required_provider(params),
+         {:ok, model} <- required_model(params, provider) do
+      updated =
+        content
+        |> TomlPatch.upsert_string(@defaults_table, "provider", provider)
+        |> TomlPatch.upsert_string(@defaults_table, "model", "#{provider}:#{model}")
+
+      {:ok, mutation(content, updated, false, nil)}
+    end
+  end
+
+  defp mutate("defaults.thinking_level", params, content, _decoded) do
+    case param(params, "thinkingLevel") do
+      level when level in @thinking_levels ->
+        updated = TomlPatch.upsert_string(content, @defaults_table, "thinking_level", level)
+        {:ok, mutation(content, updated, false, nil)}
+
+      _ ->
+        {:error, :invalid_thinking_level,
+         "Thinking level must be one of #{Enum.join(@thinking_levels, ", ")}"}
+    end
+  end
+
   defp mutate(_action, _params, _content, _decoded) do
     {:error, :invalid_action, "Unsupported provider configuration action"}
   end
@@ -306,12 +342,45 @@ defmodule LemonAgent.ModelRuntime.ProviderConfiguration do
   defp validate_candidate(decoded, target, project_dir) do
     with {:ok, settings} <- candidate_settings(decoded, target, project_dir),
          {:ok, modular} <- Modular.validate_settings(settings) do
-      {:ok, modular.agent.provider_routing |> routing_snapshot()}
+      {:ok, modular.agent.provider_routing |> routing_snapshot(), defaults_snapshot(modular)}
     else
       _ -> {:error, :invalid_config, "Provider configuration is not valid Lemon config"}
     end
   rescue
     _ -> {:error, :invalid_config, "Provider configuration is not valid Lemon config"}
+  end
+
+  @doc "Effective `[defaults]` (provider, model, thinking level) from a loaded config."
+  @spec defaults_snapshot(Config.t() | map()) :: map()
+  def defaults_snapshot(%{agent: agent}) when is_map(agent) do
+    %{
+      "provider" => agent |> map_value(:default_provider) |> safe_default(),
+      "model" => agent |> map_value(:default_model) |> safe_default(),
+      "thinkingLevel" => agent |> map_value(:default_thinking_level) |> safe_default()
+    }
+  end
+
+  def defaults_snapshot(_), do: %{"provider" => nil, "model" => nil, "thinkingLevel" => nil}
+
+  defp safe_default(value) when is_atom(value) and not is_nil(value),
+    do: safe_default(Atom.to_string(value))
+
+  defp safe_default(value) when is_binary(value) do
+    if Regex.match?(@model_regex, value), do: value, else: nil
+  end
+
+  defp safe_default(_), do: nil
+
+  # Bare catalog ids ("gpt-5", "anthropic/claude-x" on routers) or the same id
+  # already prefixed with the chosen provider.
+  defp required_model(params, provider) do
+    with {:ok, value} <- required_string(params, "model"),
+         value <- String.replace_prefix(value, provider <> ":", ""),
+         true <- Regex.match?(@model_regex, value) do
+      {:ok, value}
+    else
+      _ -> {:error, :invalid_model, "Model must be a catalog model id"}
+    end
   end
 
   defp candidate_settings(decoded, %{scope: "project"}, _project_dir) do

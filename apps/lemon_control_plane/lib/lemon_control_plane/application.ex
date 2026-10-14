@@ -11,6 +11,8 @@ defmodule LemonControlPlane.Application do
 
     children =
       [
+        # Bounded in-memory log tail backing `logs.tail`
+        LemonControlPlane.LogRing,
         # Method registry (ETS-backed for fast lookup)
         LemonControlPlane.Methods.Registry,
         # Presence tracker for connected clients
