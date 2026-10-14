@@ -5,7 +5,7 @@
  * tool arguments and results into human-readable displays for the TUI.
  * The default registry covers Lemon's native tools by exact name: read, write,
  * edit, patch, bash, bash_output, kill_process, grep, find, ls, todo, task,
- * agent, webfetch, websearch, and the browser_* tools. Anything else falls back
+ * agent, omp, webfetch, websearch, and the browser_* tools. Anything else falls back
  * to generic JSON/text formatting.
  */
 
@@ -16,6 +16,7 @@ import { browserFormatter } from "./browser.js";
 import { editFormatter } from "./edit.js";
 import { findFormatter, lsFormatter } from "./find.js";
 import { grepFormatter } from "./grep.js";
+import { ompFormatter } from "./omp.js";
 import { patchFormatter } from "./patch.js";
 import { readFormatter } from "./read.js";
 import { taskFormatter } from "./task.js";
@@ -310,6 +311,7 @@ defaultRegistry.register(webFetchFormatter);
 defaultRegistry.register(webSearchFormatter);
 defaultRegistry.register(todoFormatter);
 defaultRegistry.register(taskFormatter);
+defaultRegistry.register(ompFormatter);
 defaultRegistry.register(browserFormatter);
 
 export * from "./base.js";

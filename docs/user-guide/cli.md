@@ -55,6 +55,7 @@ packaged releases:
 | `blueprints` | Source and release | Starts the local runtime through the launcher if it is not healthy. |
 | `profile` | Source and release | `profile chat` starts the local runtime through the launcher if it is not healthy. |
 | `backup`, `context`, `sessions`, `learn` | Source and release | Manage backups, bounded context, durable sessions, and learning. |
+| `omp` | Source and release | Start, watch, steer, and resume omp coding-agent sessions owned by the runtime; starts the local runtime through the launcher if it is not healthy. |
 | `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |
 | `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
@@ -469,6 +470,35 @@ A mismatch is a usage error and does not mutate state. The lifecycle service
 deletes canonical run history last, verifies all core-owned state is gone, and
 restores recoverable ancillary metadata if final deletion or verification
 fails.
+
+## omp delegate sessions
+
+`lemon omp` drives omp (oh-my-pi) coding-agent processes that the runtime owns,
+through the authenticated control plane (`omp.*` methods; see the
+[omp guide](omp.md)). Every subcommand accepts `--json`; text that came from omp
+is printed with terminal control characters removed.
+
+```bash
+lemon omp status                         # installed?, version, live/max sessions
+lemon omp list [--all] [--limit N]       # live sessions; --all adds ended ones
+lemon omp show omp_3f9a1c2b7d4e          # bounded plain-text summary
+lemon omp start [--cwd PATH] [--model M] [--thinking LEVEL] fix the flaky test
+lemon omp watch omp_3f9a1c2b7d4e         # follow until the turn settles
+lemon omp send omp_3f9a1c2b7d4e [--follow-up] also update the docs
+lemon omp cancel omp_3f9a1c2b7d4e        # abort the turn; the process stays open
+lemon omp close omp_3f9a1c2b7d4e         # end the process; it stays resumable
+lemon omp discover [--cwd PATH] [--limit N]
+lemon omp resume 01a137e9 [--cwd PATH] [prompt...]
+```
+
+`--cwd` defaults to the current directory. `send` steers the running turn
+(`--follow-up` queues the message after it) and starts a new turn on an idle
+session; messages are limited to 16 KiB. `watch` follows `omp.session` events,
+re-reading the session every two seconds when none arrive; leaving it, including
+with Ctrl-C, never cancels the turn. A send, cancel, or start reported as not
+retry-safe may already have taken effect: check `lemon omp show ID` before
+retrying. When omp is not installed, `status` says so and `start` fails with
+`UNAVAILABLE`; set `LEMON_OMP_BIN` for a non-`PATH` install.
 
 ## Shell completion
 

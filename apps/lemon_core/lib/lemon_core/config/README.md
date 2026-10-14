@@ -140,10 +140,12 @@ Environment variable parsing utilities:
 
 Agent behavior configuration:
 
-Preferred source sections:
+Source sections:
 - `[defaults]` for model/provider/thinking defaults
 - `[runtime]` for compaction/retry/shell/tools/extensions/theme
-- Legacy `[agent]` remains supported as an alias
+- A deprecated `[agent]` table still loads, with a warning: `LegacyAgentMigration`
+  maps it onto `[defaults]`, `[runtime]` and `[tui]` (theme) before resolution,
+  and `lemon config migrate` (or `lemon setup`) rewrites the file
 
 - `default_provider` - Default LLM provider
 - `default_model` - Default model identifier

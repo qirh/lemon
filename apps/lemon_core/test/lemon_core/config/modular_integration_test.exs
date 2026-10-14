@@ -344,18 +344,33 @@ defmodule LemonCore.Config.ModularIntegrationTest do
   end
 
   describe "deprecated sections" do
-    test "raises on [agent] section", %{mock_home: mock_home} do
+    test "loads a legacy [agent] section as its canonical sections, with a warning",
+         %{mock_home: mock_home} do
       global_config = Path.join(mock_home, ".lemon")
       File.mkdir_p!(global_config)
 
       File.write!(Path.join(global_config, "config.toml"), """
       [agent]
-      default_model = "test-model"
+      default_provider = "openai"
+      default_model = "openai:test-model"
+      theme = "light"
+      max_tool_turns = 40
       """)
 
-      assert_raise ValidationError, ~r/deprecated/i, fn ->
-        Modular.load()
-      end
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          config = Modular.load()
+
+          assert config.agent.default_provider == "openai"
+          assert config.agent.default_model == "openai:test-model"
+          assert config.agent.max_tool_turns == 40
+          assert config.tui.theme == "light"
+        end)
+
+      assert log =~ "[agent] is deprecated"
+      assert log =~ "lemon config migrate"
+      assert [warning] = Modular.deprecation_warnings()
+      assert warning =~ "[agent] is deprecated"
     end
 
     test "raises on [agents] section", %{mock_home: mock_home} do

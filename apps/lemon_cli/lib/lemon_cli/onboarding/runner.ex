@@ -780,6 +780,11 @@ defmodule LemonCli.Onboarding.Runner do
           :cancel ->
             :cancel
 
+          # Non-interactive runs install a selector that always asks for the
+          # prompt path; it must not be mistaken for a selected value.
+          :fallback ->
+            :fallback
+
           {:error, reason} ->
             io.error.(
               "Interactive onboarding UI unavailable (#{format_selector_error(reason)}). Falling back to prompt mode."

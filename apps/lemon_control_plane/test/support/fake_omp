@@ -1,0 +1,62 @@
+#!/bin/sh
+# Test stand-in for `omp --mode rpc` (newline-delimited JSON over stdio).
+#
+# Every command gets a success response. Prompt-like commands are steered by
+# markers in the message text:
+#   HOLD    - start a turn and keep it running until `abort`
+#   NO_ACK  - never answer (the host times out: outcome unknown)
+#   REJECT  - answer with success:false
+# Any other prompt runs a complete turn. Exits on stdin EOF.
+
+if [ "$1" = "--version" ]; then
+  echo "omp 9.9.9-test"
+  exit 0
+fi
+
+emit() { printf '%s\n' "$1"; }
+
+respond() {
+  emit "{\"id\":\"$1\",\"type\":\"response\",\"command\":\"$2\",\"success\":true}"
+}
+
+finish_turn() {
+  emit '{"type":"agent_end","messages":[]}'
+  emit "{\"type\":\"prompt_result\",\"status\":\"$1\"}"
+}
+
+emit '{"type":"ready","protocolVersion":1,"supportedProtocolVersions":[1,2],"maxFrameBytes":1048576,"maxReassembledFrameBytes":67108864}'
+
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  type=$(printf '%s' "$line" | sed -n 's/.*"type":"\([^"]*\)".*/\1/p')
+
+  case "$line" in
+    *NO_ACK*) continue ;;
+    *REJECT*)
+      emit "{\"id\":\"$id\",\"type\":\"response\",\"command\":\"$type\",\"success\":false,\"error\":\"fake omp refused\"}"
+      continue
+      ;;
+  esac
+
+  case "$type" in
+    prompt)
+      respond "$id" "$type"
+      emit '{"type":"agent_start"}'
+
+      case "$line" in
+        *HOLD*) ;;
+        *)
+          emit '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"fake omp done"}],"stopReason":"stop"}}'
+          finish_turn completed
+          ;;
+      esac
+      ;;
+    abort)
+      respond "$id" "$type"
+      finish_turn aborted
+      ;;
+    *)
+      respond "$id" "$type"
+      ;;
+  esac
+done

@@ -23,14 +23,11 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
       assert :ok = Modular.check_deprecated_sections!(%{})
     end
 
-    test "raises when [agent] section is present" do
-      settings = %{
-        "agent" => %{"default_model" => "claude-sonnet-4"}
-      }
-
-      assert_raise ValidationError, ~r/\[agent\] is deprecated/, fn ->
-        Modular.check_deprecated_sections!(settings)
-      end
+    test "does not reject the legacy [agent] alias" do
+      assert :ok =
+               Modular.check_deprecated_sections!(%{
+                 "agent" => %{"default_model" => "claude-sonnet-4", "tools" => %{"web" => %{}}}
+               })
     end
 
     test "raises when [agents] section is present" do
@@ -43,31 +40,10 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
       end
     end
 
-    test "raises when [agent.tools] is present" do
-      settings = %{
-        "agent" => %{
-          "tools" => %{
-            "web" => %{"search" => %{"provider" => "brave"}}
-          }
-        }
-      }
-
-      error =
-        assert_raise ValidationError, fn ->
-          Modular.check_deprecated_sections!(settings)
-        end
-
-      assert Enum.any?(error.errors, &String.contains?(&1, "[agent.tools.*] is deprecated"))
-      assert Enum.any?(error.errors, &String.contains?(&1, "[agent] is deprecated"))
-    end
-
     test "collects multiple deprecation errors" do
       settings = %{
-        "agent" => %{
-          "default_model" => "test",
-          "tools" => %{"web" => %{}}
-        },
-        "agents" => %{"default" => %{}}
+        "agents" => %{"default" => %{}},
+        "tools" => %{"web" => %{}}
       }
 
       error =
@@ -75,7 +51,7 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
           Modular.check_deprecated_sections!(settings)
         end
 
-      assert length(error.errors) == 3
+      assert length(error.errors) == 2
     end
 
     test "raises when top-level [tools] section is present" do
@@ -86,14 +62,6 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
       assert_raise ValidationError, ~r/\[tools\.\*\] is deprecated/, fn ->
         Modular.check_deprecated_sections!(settings)
       end
-    end
-
-    test "does not raise when agent key is not a map" do
-      settings = %{
-        "agent" => "not-a-map"
-      }
-
-      assert :ok = Modular.check_deprecated_sections!(settings)
     end
   end
 
@@ -106,15 +74,6 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
                })
     end
 
-    test "returns error tuple for [agent] section" do
-      assert {:error, errors} =
-               Validator.validate_deprecated_sections(%{
-                 "agent" => %{"default_model" => "test"}
-               })
-
-      assert Enum.any?(errors, &String.contains?(&1, "[agent] is deprecated"))
-    end
-
     test "returns error tuple for [agents] section" do
       assert {:error, errors} =
                Validator.validate_deprecated_sections(%{
@@ -124,16 +83,6 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
       assert Enum.any?(errors, &String.contains?(&1, "[agents.<id>] is deprecated"))
     end
 
-    test "returns error tuple for [agent.tools] section" do
-      assert {:error, errors} =
-               Validator.validate_deprecated_sections(%{
-                 "agent" => %{"tools" => %{"web" => %{}}}
-               })
-
-      assert Enum.any?(errors, &String.contains?(&1, "[agent.tools.*] is deprecated"))
-      assert Enum.any?(errors, &String.contains?(&1, "[agent] is deprecated"))
-    end
-
     test "returns error tuple for top-level [tools] section" do
       assert {:error, errors} =
                Validator.validate_deprecated_sections(%{
@@ -141,6 +90,38 @@ defmodule LemonCore.Config.DeprecatedSectionsTest do
                })
 
       assert Enum.any?(errors, &String.contains?(&1, "[tools.*] is deprecated"))
+    end
+  end
+
+  describe "Validator.deprecation_warnings/1" do
+    test "warns about a legacy [agent] table and names the migration command" do
+      assert [warning] = Validator.deprecation_warnings(%{"agent" => %{"theme" => "dark"}})
+      assert warning =~ "[agent] is deprecated"
+      assert warning =~ "lemon config migrate"
+    end
+
+    test "is empty for canonical settings or a non-table agent key" do
+      assert [] = Validator.deprecation_warnings(%{"defaults" => %{"model" => "x"}})
+      assert [] = Validator.deprecation_warnings(%{"agent" => "not-a-map"})
+    end
+  end
+
+  describe "Modular.validate_settings/1" do
+    test "accepts a legacy [agent] table as its canonical sections" do
+      assert {:ok, config} =
+               Modular.validate_settings(%{
+                 "agent" => %{"default_provider" => "openai", "default_model" => "openai:gpt-5"}
+               })
+
+      assert config.agent.default_provider == "openai"
+      assert config.agent.default_model == "openai:gpt-5"
+    end
+
+    test "rejects [runtime.cli] reached through a legacy [agent.cli] table" do
+      assert {:error, errors} =
+               Modular.validate_settings(%{"agent" => %{"cli" => %{"codex" => %{}}}})
+
+      assert Enum.any?(errors, &String.contains?(&1, "[runtime.cli]"))
     end
   end
 end

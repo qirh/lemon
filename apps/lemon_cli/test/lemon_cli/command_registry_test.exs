@@ -5,7 +5,7 @@ defmodule LemonCli.CommandRegistryTest do
 
   alias LemonCli.{CLI, CommandRegistry, CompletionCommand}
 
-  @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers blueprints profile backup context sessions learn update completion migrate node version send media models policy skill usage)
+  @runtime_families ~w(setup model gateway doctor config mcp secrets channels providers blueprints profile backup context sessions omp learn update completion migrate node version send media models policy skill usage)
   @lifecycle ~w(tui web start run daemon stop restart status)
   @release_only ~w(remote eval rpc)
 
@@ -48,6 +48,7 @@ defmodule LemonCli.CommandRegistryTest do
       assert first =~ "prune"
       assert first =~ "rollback"
       assert first =~ "confirm"
+      assert first =~ "follow-up"
       refute first =~ "LEMON_SECRETS_MASTER_KEY"
     end
   end
