@@ -262,7 +262,9 @@ defmodule LemonWeb.ProfileManagementLive do
         <:meta>
           <.badge>{@profile_count} durable</.badge>
           <.badge tone="accent">{Map.get(@availability_counts, "local", 0)} local</.badge>
-          <.badge tone="success">{Map.get(@availability_counts, "online", 0)} online</.badge>
+          <.badge :if={Map.get(@availability_counts, "online", 0) > 0} tone="success">
+            {Map.get(@availability_counts, "online", 0)} online
+          </.badge>
           <.badge :if={Map.get(@availability_counts, "offline", 0) > 0} tone="warning">
             {Map.get(@availability_counts, "offline", 0)} offline
           </.badge>
@@ -369,7 +371,10 @@ defmodule LemonWeb.ProfileManagementLive do
       </.card>
 
       <div class="grid gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]">
-        <section aria-labelledby="profile-list-title" class="card flex min-h-0 flex-col">
+        <section
+          aria-labelledby="profile-list-title"
+          class="card flex min-h-0 flex-col lg:self-start"
+        >
           <div class="card-header">
             <h2 id="profile-list-title" class="text-[13px] font-semibold text-fg">Roster</h2>
             <span class="text-xs text-muted">{length(@filtered_profiles)} of {@profile_count}</span>

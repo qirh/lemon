@@ -556,7 +556,7 @@ defmodule LemonWeb.ManagementLive do
 
       {working_now(assigns)}
 
-      <.tabs active={@filters.status} label="Session status" class="mb-3">
+      <.tabs active={@filters.status} label="Session status" class="mb-3 overflow-y-hidden">
         <:tab
           id="active"
           label="Active"
@@ -665,7 +665,7 @@ defmodule LemonWeb.ManagementLive do
 
       <section
         id="session-list"
-        class="card overflow-hidden"
+        class="card"
         aria-label="Sessions"
         phx-hook="SessionsTable"
       >
@@ -683,7 +683,7 @@ defmodule LemonWeb.ManagementLive do
             </.button>
           </.empty_state>
         </div>
-        <div :if={@sessions != []} class="overflow-x-auto scroll-thin">
+        <div :if={@sessions != []}>
           <table class="table" id="sessions-table">
             <thead>
               <tr>
@@ -700,7 +700,7 @@ defmodule LemonWeb.ManagementLive do
                 <th aria-sort={aria_sort(@filters, "title")}>
                   <.sort_button filters={@filters} by="title" label="Session" />
                 </th>
-                <th>Status</th>
+                <th class="hidden sm:table-cell">Status</th>
                 <th class="hidden lg:table-cell" aria-sort={aria_sort(@filters, "agent")}>
                   <.sort_button filters={@filters} by="agent" label="Agent" />
                 </th>
@@ -737,7 +737,7 @@ defmodule LemonWeb.ManagementLive do
                     class="h-3.5 w-3.5 rounded border-line-strong bg-surface text-accent focus:ring-ring/40"
                   />
                 </td>
-                <td class="max-w-0 w-full min-w-[12rem]">
+                <td class="w-full min-w-[7rem] max-w-0 sm:min-w-[12rem]">
                   <%= if @renaming == session.session_key do %>
                     <.rename_form
                       id={"rename-#{dom_id(session.session_key)}"}
@@ -747,6 +747,12 @@ defmodule LemonWeb.ManagementLive do
                     />
                   <% else %>
                     <div class="flex min-w-0 items-center gap-1.5">
+                      <.status_dot
+                        :if={MapSet.member?(@running, session.session_key)}
+                        tone="success"
+                        pulse
+                        class="sm:hidden"
+                      />
                       <.icon
                         :if={session.pinned}
                         name="pin"
@@ -767,7 +773,7 @@ defmodule LemonWeb.ManagementLive do
                     <p class="truncate font-mono text-2xs text-subtle">{session.session_key}</p>
                   <% end %>
                 </td>
-                <td class="whitespace-nowrap">
+                <td class="hidden whitespace-nowrap sm:table-cell">
                   <.status_badge
                     running={MapSet.member?(@running, session.session_key)}
                     archived={session.archived}
@@ -953,11 +959,14 @@ defmodule LemonWeb.ManagementLive do
           id={"run-#{dom_id(run.run_id)}"}
           class="card"
         >
-          <header class="card-header">
+          <header class="card-header flex-wrap gap-y-1.5">
             <div class="flex min-w-0 items-center gap-2">
               <.status_dot tone={run_tone(run.ok)} />
-              <span class="text-[13px] font-semibold text-fg">Run {index}</span>
-              <time class="text-xs text-muted" title={format_time(run.started_at_ms)}>
+              <span class="whitespace-nowrap text-[13px] font-semibold text-fg">Run {index}</span>
+              <time
+                class="whitespace-nowrap text-xs text-muted"
+                title={format_time(run.started_at_ms)}
+              >
                 {relative_time(run.started_at_ms)}
               </time>
             </div>
@@ -970,9 +979,7 @@ defmodule LemonWeb.ManagementLive do
           <div class="card-body space-y-3">
             <div>
               <h3 class="mb-1 text-2xs font-semibold uppercase tracking-wide text-subtle">Prompt</h3>
-              <p class="whitespace-pre-wrap break-words text-[13px] text-fg">
-                {run.prompt || "Not recorded."}
-              </p>
+              <p class="whitespace-pre-wrap break-words text-[13px] text-fg" phx-no-format>{run.prompt || "Not recorded."}</p>
             </div>
             <div :if={run.tools != []}>
               <h3 class="mb-1 text-2xs font-semibold uppercase tracking-wide text-subtle">
@@ -1000,9 +1007,11 @@ defmodule LemonWeb.ManagementLive do
                         language="json"
                         max_height="max-h-72"
                       />
-                      <p :if={tool.message} class="whitespace-pre-wrap break-words text-xs text-muted">
-                        {tool.message}
-                      </p>
+                      <p
+                        :if={tool.message}
+                        class="whitespace-pre-wrap break-words text-xs text-muted"
+                        phx-no-format
+                      >{tool.message}</p>
                     </div>
                   </details>
                 </li>
@@ -1127,7 +1136,7 @@ defmodule LemonWeb.ManagementLive do
         <li
           :for={run <- @active_runs}
           id={"active-#{dom_id(run.run_id)}"}
-          class="card flex items-center gap-3 px-3 py-2"
+          class="card flex min-w-0 items-center gap-3 px-3 py-2"
         >
           <.status_dot tone="success" pulse={@active_runs_available?} />
           <div class="min-w-0 flex-1">
@@ -1265,7 +1274,6 @@ defmodule LemonWeb.ManagementLive do
           phx-click="prune-confirm"
           disabled={is_nil(@prune.preview) or @prune.preview.count == 0}
           mutation
-          phx-disable-with="Pruning…"
         >
           {prune_confirm_label(@prune.preview)}
         </.button>
