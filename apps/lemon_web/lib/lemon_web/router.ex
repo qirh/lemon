@@ -36,8 +36,8 @@ defmodule LemonWeb.Router do
     get("/sessions/:session_key/export/:format", SessionExportController, :show)
 
     live_session :operator, on_mount: [{LemonWeb.LiveAuth, :require_operator}] do
-      live("/", SessionLive, :index)
-      live("/chat/:session_key", SessionLive, :show)
+      live("/", ChatLive, :home)
+      live("/chat/:session_key", ChatLive, :show)
       live("/sessions", ManagementLive, :index)
       live("/sessions/:session_key", ManagementLive, :show)
       live("/automation", WorkManagementLive, :index)

@@ -1,16 +1,17 @@
-defmodule LemonWeb.SubagentTree do
+defmodule LemonWeb.Chat.Subagents do
   @moduledoc """
-  Read-only, content-free projection of the registered agent's task/run graph.
+  Read-only, content-free projection of the session's task/run graph for the
+  chat inspector's Subagents tab.
 
   The current session establishes ownership; only its selected run's children
   and their actual graph/task descendants are followed. No task descriptions,
   prompts, results, working directories or metadata enter the returned view.
   The tree is capped at 50 nodes and eight levels, including cycle protection.
+  A delegated child session links to its own chat workspace.
   """
 
   alias LemonCore.SessionKey
   alias LemonMemory.Safety
-  alias LemonWeb.Live.Components.Payload
 
   @max_nodes 50
   @max_depth 8
@@ -140,7 +141,7 @@ defmodule LemonWeb.SubagentTree do
 
   defp session_path(key) when is_binary(key) do
     if byte_size(key) <= 256 and SessionKey.valid?(key) and identifier(key) == key,
-      do: "/sessions/" <> URI.encode_www_form(key),
+      do: "/chat/" <> URI.encode_www_form(key),
       else: nil
   end
 
@@ -157,7 +158,7 @@ defmodule LemonWeb.SubagentTree do
   defp status(value) when value in @statuses, do: value
   defp status(_), do: "unknown"
 
-  defp field(value, key), do: Payload.fetch(value, key)
+  defp field(value, key), do: LemonWeb.Chat.Tool.f(value, key)
 
   # Optional runtime seam: the web app does not depend on the coding product.
   defp runtime(function, args) do
