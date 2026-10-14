@@ -126,6 +126,8 @@ export interface CommandHost {
 	openModelPicker?(): void | Promise<void>;
 	openCommandPalette?(query?: string): void | Promise<void>;
 	toggleTaskTree?(): void;
+	/** Open (and focus) the omp delegate panel. */
+	openOmpPanel?(): void;
 	openToolOutput?(mode: "output" | "diff"): void;
 	/** Show one `sessions.context` breakdown in a dismissible panel. */
 	openContextPanel?(usage: SessionsContextResult): void;

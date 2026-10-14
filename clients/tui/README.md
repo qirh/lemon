@@ -77,6 +77,14 @@ remains a legacy client-side alias; it does not configure the daemon.
   lineage, role, current activity, elapsed time, and independent terminal states.
   Arrow keys scroll the bounded panel; Escape returns to the draft. Completed
   launch receipts never imply that their children have finished.
+- Alt+M or `/omp` opens the omp delegate panel: live and recent omp (oh-my-pi)
+  processes the daemon runs, with status, activity, tools, todos, subagents,
+  usage/cost/context and their latest text; Enter shows detail, `s`/`f` steer or
+  follow up, `c` cancels the turn, `x` closes, `r` refreshes, `d` resumes a stored
+  session for this directory. `/omp run <prompt>` starts one in the chat's working
+  directory and `/omp status` summarises them; the status line shows `omp N▶`
+  while any run. Mutations are never queued offline and report refusals or
+  unknown outcomes honestly; omp text is rendered as inert plain text.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown).
 - Four submission modes while the agent is busy: `queue` (client-side,
