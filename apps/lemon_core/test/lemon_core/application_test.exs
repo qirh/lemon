@@ -98,11 +98,12 @@ defmodule LemonCore.ApplicationTest do
       assert LemonCore.ConfigReloader.Watcher in child_ids
     end
 
-    test "supervisor has exactly 10 children" do
+    test "supervisor has exactly 11 children" do
       supervisor_pid = Process.whereis(LemonCore.Supervisor)
       children = Supervisor.which_children(supervisor_pid)
 
-      assert length(children) == 10
+      # Includes LemonCore.UsageLedger, which records finished-run usage.
+      assert length(children) == 11
     end
 
     test "children include both workers and supervisors" do
