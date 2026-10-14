@@ -173,7 +173,7 @@ defmodule LemonRouter.RunProcessTest do
 
     def track_generated_images(state, _action_event), do: state
     def track_requested_send_files(state, _action_event), do: state
-    def finalize_meta(_state), do: raise("artifact finalize boom")
+    def finalize_meta(_state, _answer), do: raise("artifact finalize boom")
   end
 
   setup do

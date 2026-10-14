@@ -763,15 +763,12 @@ defmodule LemonRouter.RunProcess do
   defp artifact_tracker(%{artifact_tracker: mod}) when is_atom(mod), do: mod
   defp artifact_tracker(_state), do: ArtifactTracker
 
+  # Trackers implement finalize_meta/2. Probing with function_exported?/3 was
+  # wrong: it is false until the module is loaded, so the first finalized run
+  # after boot silently dropped final-answer MEDIA directives.
   defp safe_finalize_meta(state, event) do
-    tracker = artifact_tracker(state)
     answer = CompactionTrigger.extract_completed_answer(event)
-
-    if function_exported?(tracker, :finalize_meta, 2) do
-      tracker.finalize_meta(state, answer)
-    else
-      tracker.finalize_meta(state)
-    end
+    artifact_tracker(state).finalize_meta(state, answer)
   rescue
     error ->
       Introspection.record(
